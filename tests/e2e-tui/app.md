@@ -59,7 +59,7 @@ are in scope; no unread badge is expected in today's room sidebar.
 
 ## Cases (run order)
 
-Run APP-01..11, LINK-01..09, then APP-12..22 in that order. Each case is independent.
+Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is independent.
 
 ### APP-01 — First start and empty conversation
 
@@ -200,33 +200,33 @@ Run APP-01..11, LINK-01..09, then APP-12..22 in that order. Each case is indepen
 
 ## Chat history links
 
-Basis: [PR #22](https://github.com/asura1234/bus/pull/22), product head `db60322a`.
-Independent run `runner-20261011-192530` at `a61d26bc`: all nine LINK cases PASS.
+Basis: [PR #22](https://github.com/asura1234/bus/pull/22), product head `775ad481` (base `6ee03203`), source rechecked 2026-10-12.
+Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases PASS. The reviewed assertions below await a new run.
 
-**Shared setup/evidence for LINK-01..09:** apply the run contract and R/A/P recipes above to each case's own room/selected worker(s). Fixed agent-authored fixtures use fake alpha and beta: `bus send --room ROOM --as alpha --to beta --text TEXT` in that scratch session. Developer messages use the composer; no generated reply is required.
+**Shared setup/evidence for LINK-01..10:** apply the run contract and R/A/P recipes above to each case's own room/selected worker(s). Fixed agent-authored fixtures use fake alpha and beta: `bus send --room ROOM --as alpha --to beta --text TEXT` in that scratch session. Developer messages use the composer; no generated reply is required.
 
-- Prepare short existing absolute files F/G with whitespace-free paths, author-agent PWD W with relative.txt, an existing scratch-owned `~/P` fixture beneath Bus's effective home H, and absent W/missing.txt. Record H and actual targets; keep link tokens on one displayed row at 120×40; use only scratch-owned files.
+- Prepare short existing absolute non-executable text documents F/G, with a space in G's filename (e.g. report with space.txt), author-agent PWD W with relative.txt, an existing scratch-owned `~/P` fixture beneath Bus's effective home H, and absent W/missing.txt. Record H and actual targets; keep link tokens on one displayed row at 120×40; use only scratch-owned files.
 - Text-link blue is RGB(90,150,255), underlined. Allow 5 seconds after a path first becomes visible for existence-check styling; initial unlinked styling is allowed. This is a QA wait budget, not a product deadline; record elapsed time.
-- Plain click means left press/release on the same visible text/filename/thumbnail cell, without dragging or modifiers. Compare recorded effects before/after each gesture: exactly one **recorded effect: open with target X**, with no extra opens. Browser windows/opener exit codes alone are insufficient. Capture scratch author/PWD/attachment state and each step's specified evidence; unavailable evidence or fixtures remain SKIP with reason under the run contract.
+- Plain click means left press/release on the same visible text/filename/thumbnail cell, without dragging or modifiers. Compare recorded effects before/after each gesture: each positive click records exactly one opener request with the specified target and operation (normal open or reveal); negative gestures record neither. Normal document opens have no reveal flag. Browser windows/opener exit codes alone are insufficient. Capture scratch author/PWD/attachment state and each step's specified evidence; unavailable evidence or fixtures remain SKIP with reason under the run contract.
 
 ### LINK-01 — HTTP and HTTPS styling and plain-click opening
 
-**Preconditions/setup:** own room/worker; send `link http://example.test/a end` and `link https://example.test/b?q=1 end` as separate short developer messages.
+**Preconditions/setup:** own room/worker; send `link http://example.test/a end`, `link https://example.test/b?q=1 end`, and `https://en.wikipedia.org/wiki/Function_(mathematics)` as separate developer messages; keep the complete URL on one row.
 
-1. Inspect history → both complete URL tokens blue + underlined; no 📎 added.
-2. Plain-click each URL → recorded effect: open with target that exact URL once, including scheme/query.
+1. Inspect history → all three complete URL tokens blue + underlined, including both balanced parentheses; no 📎 added.
+2. Plain-click each URL → recorded effect: open with target that exact full URL once, including scheme/query and `(mathematics)` for the third.
 3. Click neighbouring ordinary text → no recorded open effect; composer remains usable.
 
-**Evidence:** step 1: cells/screenshot judged by the runner; steps 2–3: recorded open effects/absence, history text. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** both schemes look clickable and open only their exact target.
+**Evidence:** step 1: cells/screenshot judged by the runner; steps 2–3: recorded open effects/absence, history text. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** both schemes look clickable; balanced parentheses remain in the exact opened URL.
 
-### LINK-02 — Existing absolute paths, punctuation and line references
+### LINK-02 — Existing paths, quoted spaces, punctuation and line references
 
-**Preconditions/setup:** own room/worker; send short rows containing `F`, `"F"`, `(F),`, `F:12` and `F:12:3`, substituting F's actual path.
+**Preconditions/setup:** own room/worker; send short rows containing `F`, `"F"`, `(F),`, `F:12`, `F:12:3`, and `"G"`, substituting actual paths; G has spaces in its filename and its whole quoted path fits on one row.
 
-1. Inspect settled history → path tokens blue + underlined, including :12/:12:3; surrounding quotes/brackets and trailing sentence punctuation stay outside target.
-2. Plain-click each path/reference → recorded effect: open with target absolute F, excluding quotes/brackets, comma and line/column suffix.
+1. Inspect settled history → path tokens blue + underlined, including :12/:12:3 and all of G's characters/spaces as one link; surrounding quotes/brackets and trailing sentence punctuation stay outside target.
+2. Plain-click each path/reference, including within each word of G's filename → the five F variants each record one normal open of absolute F; each click within G records one normal open of the entire absolute G, with spaces intact and quotes excluded. Line/column suffixes are excluded from F's target.
 
-**Evidence:** step 1: cells/screenshot judged by the runner, fixture existence; step 2: five recorded open effects with target F. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** decoration/suffixes never change the file opened.
+**Evidence:** step 1: cells/screenshot judged by the runner, fixture existence; step 2: exact recorded targets and normal-open operation per click. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** quoted spaces stay in one file target; decoration/suffixes never change that target.
 
 ### LINK-03 — Relative and home paths use the correct base
 
@@ -240,12 +240,12 @@ Independent run `runner-20261011-192530` at `a61d26bc`: all nine LINK cases PASS
 
 ### LINK-04 — Individual paths inside files: [...] lists
 
-**Preconditions/setup:** own room/worker; send `files: ["F", "G"]` as message text, substituting short existing absolute paths; this is not the attachment picker.
+**Preconditions/setup:** own room/worker; send `files: ["F", "G"]` as message text, substituting short existing absolute paths, with spaces in G's filename. Keep the entire list on one displayed row; this is not the attachment picker.
 
-1. Inspect history → F and G separately blue + underlined; list remains readable, no 📎 or attachment control added below composer.
-2. Plain-click each path → recorded effect: open with target F then G; neither opens the entire list, a quoted string or the other file.
+1. Inspect history → F and the whole G (including spaces) separately blue + underlined; list remains readable, surrounding quotes/punctuation outside the links, no 📎 or attachment control added below composer.
+2. Plain-click F, then each word of G's filename → one recorded normal open per click, with exact absolute F or entire G respectively; neither opens the list, a partial word, quoted string or the other file.
 
-**Evidence:** step 1: cells/screenshot judged by the runner including composer bottom; step 2: recorded open effects with targets F/G. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** each list member has its own correct target.
+**Evidence:** step 1: cells/screenshot judged by the runner including composer bottom; step 2: recorded normal-open requests with complete F/G targets. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** each list member has its own complete target, including quoted filename spaces.
 
 ### LINK-05 — Link style wins inside inline and fenced code
 
@@ -256,32 +256,35 @@ Independent run `runner-20261011-192530` at `a61d26bc`: all nine LINK cases PASS
 
 **Evidence:** step 1: cells/screenshot judged by the runner; step 2: recorded open effects with F/F/URL targets; raw history. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** code formatting preserves correct links and non-link code style.
 
-### LINK-06 — Sent file attachments: style, position, hover and opening
+### LINK-06 — File attachment names: hover, selection and bounded opening
 
-**Preconditions/setup:** own room/worker selected; attach F and G via Ctrl+O, type `attached files`, send. Fake worker need not reply.
+**Preconditions/setup:** own room/worker selected; attach F and G one at a time via Ctrl+O, type `attached files`, send. Keep each full attachment name visible with blank cells beside it; fake worker need not reply.
 
 1. Inspect history → attachment names directly under their message, blue + underlined, with no square brackets or 📎; blank row separates attachments from any reply/placeholder. No new link UI appears beneath composer.
-2. Hover F's attachment name → full F path visible; move away, plain-click name → recorded effect: open with target actual F; repeat G → actual G.
+2. Hover F's name → full F path visible; move to blank space beside it on the same row → full-path hover disappears. Plain-click that blank space → no recorded open/reveal. Repeat for G.
+3. Drag across each complete attachment name with distinct press/release cells → selection visible; release copies exactly that filename as plain text, including G's spaces; no recorded open/reveal.
+4. Plain-click each name → one recorded normal open with target actual F or G respectively; the target matches its stored attachment path.
 
-**Evidence:** step 1: cells/screenshot judged by the runner; step 2: hover text and recorded open effects with F/G targets; state files. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** attachments are placed with their message and open their real files.
+**Evidence:** step 1: cells/screenshot judged by the runner; step 2: pointer/name/blank-cell positions, hover text/absence and recorded effects/absence; step 3: selection cells, exact copied text and effects/absence; step 4: recorded normal opens with F/G targets; scratch attachment state. SKIP with reason for unavailable evidence. **Pass criteria:** only names show their hover and open; blank space opens nothing; dragging copies without opening.
 
-### LINK-07 — Image thumbnail and filename fallback open the saved image
+### LINK-07 — Image thumbnail and filename fallback have bounded click areas
 
-**Preconditions/setup:** independent subruns with their own room/selected worker: graphics-enabled host and host without image support. Paste a known PNG with Ctrl+V and send; state identifies saved copy I inside scratch Bus attachments. Retain reference PNG; no generated answer needed.
+**Preconditions/setup:** independent subruns with their own room/selected worker: graphics-enabled host and host without image support. Paste a known PNG with Ctrl+V and send; state identifies saved copy I inside scratch Bus attachments. Keep the whole thumbnail visible with blank cells beside its right edge on the same rows; retain reference PNG.
 
-1. Graphics subrun: inspect history → expected thumbnail under its message, no caption, blue border, underline or 📎; plain-click inside picture → recorded effect: open with target I once. Evidence: screenshot judged by the runner and recorded open effect; SKIP with reason if either cannot be captured.
-2. Text-only subrun: inspect history → image filename blue + underlined, no brackets or 📎; hover reveals I; plain-click filename → recorded effect: open with target I once. Evidence: filename cells/hover text and recorded open effect; SKIP with reason if the runner cannot capture this evidence or supply clipboard pixels.
+1. Graphics subrun: inspect history → expected thumbnail under its message, no caption, blue border, underline or 📎. Plain-click inside the picture's own cells → one recorded normal open with target I. Plain-click blank space beside the picture on the same row → no recorded open/reveal. Evidence: screenshot judged by the runner identifying picture bounds/click positions and recorded opener requests/absence; SKIP with reason if unavailable.
+2. Text-only subrun: inspect history → image filename blue + underlined, no brackets or 📎; hover over the name reveals I; plain-click filename → one recorded normal open with target I. Evidence: filename cells/hover text and recorded open effect; SKIP with reason if the runner cannot capture this evidence or supply clipboard pixels.
 
-**Evidence:** step-specific evidence above and saved-copy pixel identity. **Pass criteria:** both presentations open the saved image; blue/underline applies to filename fallback, never the thumbnail pixels. Unavailable subruns remain SKIP with reason.
+**Evidence:** step-specific evidence above and saved-copy pixel identity. **Pass criteria:** picture cells and filename fallback open the saved image; blank cells beside the picture open nothing. Blue/underline applies to filename fallback. Unavailable subruns remain SKIP with reason.
 
-### LINK-08 — Dragging a link selects and copies without opening
+### LINK-08 — Dragging copies; a press outside a link cannot open it
 
 **Preconditions/setup:** own room/worker; send short `before F after` and `https://example.test/copy` as developer messages.
 
-1. Drag across F with distinct press/release cells → text selection visible, no recorded open effect; release copies selected text as plain text.
-2. Drag across entire URL → clipboard contains exact URL without markup/📎; no recorded open effect. Plain-click URL afterward → recorded effect: open with target that URL once.
+1. Press the left mouse button on ordinary `before` text, then release over F with no intervening drag → no recorded open/reveal. Repeat with a press on ordinary text and release over the URL → no recorded open/reveal.
+2. Drag across F with distinct press/release cells → text selection visible, no recorded open/reveal; release copies selected text as plain text.
+3. Drag across entire URL → clipboard contains exact URL without markup/📎; no recorded open/reveal. Plain-click URL afterward → recorded effect: open with target that URL once.
 
-**Evidence:** steps 1–2: selection cells/screenshot judged by the runner, exact copied text, recorded open effects/absence per gesture. SKIP with reason for assertions whose clipboard/effect evidence cannot be captured. **Pass criteria:** dragging copies without opening; plain click still opens.
+**Evidence:** step 1: press/release cell positions and recorded effects/absence for each gesture; steps 2–3: selection cells/screenshot judged by the runner, exact copied text and recorded effects/absence per gesture. SKIP with reason for unavailable evidence. **Pass criteria:** opening requires a click starting and ending on that link; dragging copies without opening.
 
 ### LINK-09 — Negative targets and links after navigation
 
@@ -292,6 +295,17 @@ Independent run `runner-20261011-192530` at `a61d26bc`: all nine LINK cases PASS
 3. Type `/help`, Enter, scroll guide → `Click a link` guidance present; Esc returns.
 
 **Evidence:** steps 1–2: cells/screenshots judged by the runner and recorded open effects/absence; step 3: guide text. SKIP with reason if the runner cannot capture a step's evidence. **Pass criteria:** unsupported targets do not open; visible links keep correct click locations.
+
+### LINK-10 — Executable and app paths reveal without launching
+
+**Preconditions/setup:** own room/selected worker; prepare scratch-owned absolute paths: E, a harmless script with no launcher extension and a Unix execute bit; C, a .command file without an execute bit; A, a minimal .app bundle; and F, a plain text document without execute bits. Any runnable fixture would only create its own initially absent scratch marker if executed; record fixture identities, permissions and marker paths. Send their paths as developer messages, keeping each on one row. On non-Unix hosts SKIP the execute-bit fixture with reason; keep other assertions independent. Require captured opener arguments/operation; no real application needs to launch.
+
+1. Inspect settled history → all existing fixture paths blue + underlined; markers absent before clicking.
+2. Plain-click E → exactly one recorded opener request: reveal E in the file manager, with no normal-open request for E and no execution marker. On macOS the recorded `open` arguments are `-R` followed by the entire absolute E path.
+3. Plain-click C then A → one reveal request for each complete path, no normal-open request for either and no execution markers; macOS records `open -R PATH` for each. The .command fixture remains protected even without an execute bit.
+4. Plain-click F → one normal-open request for exact absolute F (on macOS `open F`, without `-R`); no launch/reveal request for another fixture and all execution markers stay absent.
+
+**Evidence:** step 1: styled cells and fixture permissions/identity/marker state; steps 2–4: before/after recorded opener operation, ordered arguments and targets, plus absent execution markers. A target alone cannot distinguish reveal from launch; SKIP with reason if the runner cannot capture arguments/operation or a fixture. **Pass criteria:** executable/launcher paths only reveal; none is opened/run, and the ordinary document still requests a normal open. On Windows reveal selects the path in Explorer; on Linux it opens the containing directory rather than the file. Record that platform's equivalent reveal request.
 
 ## Remaining whole-app cases
 
@@ -436,8 +450,9 @@ Independent run `runner-20261011-192530` at `a61d26bc`: all nine LINK cases PASS
 - **Clipboard / screenshots:** require actual clipboard/saved pixels where tested and screenshots judged by the runner for visual claims; affected assertions are SKIP with reason if the runner cannot capture evidence, not product failures.
 - **Notifications / sound / unread:** terminal-visible notices and recorded effects are in scope; record sound with its chosen sound target and message/room context. Desktop banners are excluded; today's room sidebar renders no unread badge (`client/notifications.rs`, `rooms/{toast,ring}.rs`, `rooms/render/sidebar.rs`). Unavailable evidence is SKIP with reason.
 - **Wording:** use developer for the person operating Bus; retain actual UI strings such as `You` unchanged.
-- **Thumbnail style:** #22 renders the picture without filename/caption or link decoration; its rows open the saved image. Only filename fallback gets blue RGB(90,150,255) + underline (`history/exchange.rs`, `links.rs`); no 📎 in either presentation.
+- **Thumbnail style:** #22 renders the picture without filename/caption or link decoration; only its picture cells open the saved image; blank cells beside it do not. Only filename fallback gets blue RGB(90,150,255) + underline (`history/exchange.rs`, `links.rs`); no 📎 in either presentation.
 - **Relative paths:** agent-authored paths join author PWD without canonicalizing; relative paths authored by a developer or Bus remain unlinked. Absolute and ~/ paths work for either author; ~/ uses the scratch Bus process's effective home (`history/exchange.rs::link_scope`, `links.rs::candidate`).
 - **Timing:** a background existence check completes before path styling/opening; results appear on the UI tick (100 ms idle, 10 ms pending commands). There is no product deadline; use a 5-second QA wait after first visibility, then report a captured styling timeout with elapsed time (`links.rs::PathProbe`, `ui.rs`). URLs need no existence check.
-- **Evidence:** "opened" means a recorded opener request with the unchanged URL or absolute path X, not a `file://` conversion or proof that an external app displayed it (`effects.rs`). Screenshots are judged by the runner; unavailable clipboard/pixels/effects → affected step SKIP with reason. Desktop banners are out of scope; terminal-visible notices/recorded effects remain in scope.
+- **Evidence:** a normal open records the unchanged URL or absolute path X; a reveal records the platform's reveal operation/arguments (macOS `open -R X`). Capture arguments so reveal and normal open are distinguishable; neither requires an external application display (`effects.rs`, `platform/desktop/{macos,linux}.rs`, `platform/windows/desktop.rs`). Screenshots are judged by the runner; unavailable clipboard/pixels/effects → affected step SKIP with reason. Desktop banners are out of scope; terminal-visible notices/recorded effects remain in scope.
 - **Link boundaries:** hidden-label Markdown links and paths split across rows are outside clickable-link acceptance; LINK-09 checks that hidden labels do not open.
+- **Click boundaries / launchers:** filename hover/click areas cover the name, thumbnail clicks cover picture cells, and opening requires a press/release on the same link with no selection. Quoted paths retain spaces and URLs retain balanced parentheses (`render/history_links.rs`, `selection.rs`, `links.rs`). Executable regular files on Unix and launcher extensions such as .app/.command reveal in the file manager instead of opening/running (`effects.rs`, `platform/fs.rs`).
