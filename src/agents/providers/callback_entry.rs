@@ -6,6 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The Bus server's pid, set on every pane. Its child is the pane shell, so a hook
+/// can tell the pane's own agent from a provider that agent started.
+pub(crate) const BUS_SERVER_PID_ENV_VAR: &str = "HERDR_SERVER_PID";
+
 /// Process composition supplies the inherited spool log root and logging policy.
 pub(crate) fn dispatch(
     args: &[String],
@@ -103,7 +107,7 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
 /// child of the Bus server that `HERDR_SERVER_PID` names. A pane started by an older
 /// server has no such variable, and its hooks keep counting as the agent's.
 fn runs_under_nested_provider(ancestry: &[crate::platform::ProcessInstance]) -> bool {
-    let Some(server) = std::env::var(crate::terminal::runtime::spawn::BUS_SERVER_PID_ENV_VAR)
+    let Some(server) = std::env::var(BUS_SERVER_PID_ENV_VAR)
         .ok()
         .and_then(|pid| pid.parse::<u32>().ok())
     else {
