@@ -13,6 +13,13 @@ pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(3);
 pub(super) const WORKER_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(2);
+/// The control socket in a session's data directory. Every session runs it;
+/// the `--dev` flag only decides which methods answer.
+pub(crate) const SOCKET_NAME: &str = "control.sock";
+pub(super) const LOCK_NAME: &str = "control.lock";
+/// The socket name of a Bus started by a build from before every session ran
+/// the control socket. Such a Bus keeps it until it is restarted.
+pub(super) const LEGACY_SOCKET_NAME: &str = "dev-control.sock";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Request {

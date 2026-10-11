@@ -1,9 +1,9 @@
-//! Opt-in socket listener, owned lease and bounded client state machine.
+//! Socket listener, owned lease and bounded client state machine.
 #[cfg(test)]
 use super::client::{request, request_with_timeout};
 use super::protocol::{
-    encode, poll_write, ControlledStream, Frame, FrameError, IO_TIMEOUT, MAX_REQUEST_BYTES,
-    MAX_RESPONSE_BYTES, POLL_INTERVAL, WORKER_TIMEOUT,
+    encode, poll_write, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME, WORKER_TIMEOUT,
 };
 pub(crate) use super::protocol::{DevCall, Request, Response};
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
@@ -55,27 +55,19 @@ impl Drop for Server {
 }
 
 pub(crate) fn start(
-    enabled: bool,
     data_dir: &Path,
     commands: SyncSender<(u64, BusCommand)>,
-) -> Result<Option<Server>, String> {
-    if !enabled {
-        return Ok(None);
-    }
+) -> Result<Server, String> {
     storage_io::private_dir(data_dir).map_err(|e| e.to_string())?;
     ipc::validate_private_socket_directory(data_dir)
         .map_err(|e| format!("control_private_directory: {e}"))?;
-    let lease = storage_io::lock(&data_dir.join("dev-control.lock"))
-        .map_err(|e| format!("Cannot own Bus development endpoint: {e}"))?;
-    let path = data_dir.join("dev-control.sock");
+    let lease = storage_io::lock(&data_dir.join(LOCK_NAME))
+        .map_err(|e| format!("Cannot own Bus control endpoint: {e}"))?;
+    let path = data_dir.join(SOCKET_NAME);
     ipc::reclaim_stale_private_socket(&path, IO_TIMEOUT)
-        .map_err(|e| format!("Cannot prepare Bus development endpoint: {e}"))?;
-    let listener = ipc::bind_private_local_listener(&path).map_err(|e| {
-        format!(
-            "Cannot bind Bus development endpoint {}: {e}",
-            path.display()
-        )
-    })?;
+        .map_err(|e| format!("Cannot prepare Bus control endpoint: {e}"))?;
+    let listener = ipc::bind_private_local_listener(&path)
+        .map_err(|e| format!("Cannot bind Bus control endpoint {}: {e}", path.display()))?;
     let socket = OwnedSocket {
         identity: ipc::socket_file_identity(&path).map_err(|e| e.to_string())?,
         path,
@@ -87,15 +79,15 @@ pub(crate) fn start(
     let stopped = Arc::new(AtomicBool::new(false));
     let stop = Arc::clone(&stopped);
     let thread = thread::Builder::new()
-        .name("bus-dev-control".into())
+        .name("bus-control".into())
         .spawn(move || serve(listener, commands, stop))
         .map_err(|e| e.to_string())?;
-    Ok(Some(Server {
+    Ok(Server {
         stopped,
         thread: Some(thread),
         _socket: socket,
         _lease: lease,
-    }))
+    })
 }
 
 fn serve(
@@ -117,7 +109,7 @@ fn serve(
                         if client.respond(Response::failure(
                             "",
                             "server_busy",
-                            "Development connection limit reached",
+                            "Control connection limit reached",
                         )) {
                             clients.push(client);
                         }
@@ -130,7 +122,7 @@ fn serve(
                     tracing::warn!(
                         event = "bus.dev.transport.failed",
                         stage = "accept",
-                        "Development control listener failed"
+                        "Control listener failed"
                     );
                     return;
                 }

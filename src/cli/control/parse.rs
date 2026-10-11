@@ -1,4 +1,4 @@
-//! Developer command grammar and request shape.
+//! Control command grammar and request shape.
 use clap::{builder::NonEmptyStringValueParser, Arg, ArgAction, ArgMatches, Command};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -126,7 +126,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
     }
     let (name, args) = matches
         .subcommand()
-        .ok_or_else(|| "a developer command is required".to_owned())?;
+        .ok_or_else(|| "a command is required".to_owned())?;
     let mut wait_timeout = None;
     let mut follow = false;
     let (method, params) = match name {
@@ -182,7 +182,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
             )
         }
         "history" => ("room.history", json!({"room": required(args, "room")?})),
-        _ => return Err("unknown developer command".into()),
+        _ => return Err("unknown command".into()),
     };
     Ok(ParsedCommand {
         method,

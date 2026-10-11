@@ -28,7 +28,7 @@ impl TestDir {
         Self(dir)
     }
     fn socket(&self) -> PathBuf {
-        self.0.join("dev-control.sock")
+        self.0.join("control.sock")
     }
 }
 impl Drop for TestDir {
@@ -69,12 +69,35 @@ fn read_response_open(stream: &mut ipc::LocalStream) -> Response {
     }
 }
 
+#[cfg(unix)]
 #[test]
-fn disabled_control_does_not_create_directory_or_listener() {
+fn every_session_listens_on_control_sock() {
     let dir = TestDir::new();
     let (tx, _rx) = mpsc::sync_channel(1);
-    assert!(start(false, &dir.0, tx).unwrap().is_none());
-    assert!(!dir.0.exists());
+    let _server = start(&dir.0, tx).unwrap();
+    assert!(dir.socket().exists());
+    assert!(!dir.0.join("dev-control.sock").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn client_reaches_a_bus_still_on_the_legacy_socket_name() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(1);
+    let _server = start(&dir.0, tx).unwrap();
+    // A Bus started before the rename listens on dev-control.sock.
+    std::fs::rename(dir.socket(), dir.0.join("dev-control.sock")).unwrap();
+    let worker = thread::spawn(move || {
+        let (_, BusCommand::Dev(call)) = rx.recv().unwrap() else {
+            panic!("expected a control call")
+        };
+        call.reply
+            .send(Response::success(&call.request.id, json!({"legacy": true})))
+            .unwrap();
+    });
+    let response = request(&dir.0, &call("legacy")).unwrap();
+    assert_eq!(response.result, json!({"legacy": true}));
+    worker.join().unwrap();
 }
 
 #[test]
@@ -95,7 +118,7 @@ fn client_cannot_enable_target_or_remove_existing_endpoint() {
 fn roundtrip_returns_exact_worker_outcome_with_disjoint_command_ids() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(2);
-    let server = start(true, &dir.0, tx).unwrap().unwrap();
+    let server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
         for expected_id in ["snapshot", "bad-command"] {
             let (command_id, BusCommand::Dev(dev)) =
@@ -132,7 +155,7 @@ fn roundtrip_returns_exact_worker_outcome_with_disjoint_command_ids() {
 fn malformed_and_idle_clients_do_not_delay_healthy_requests() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(2);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let _idle = ipc::connect_local_stream(&dir.socket()).unwrap();
     let mut malformed = ipc::connect_local_stream(&dir.socket()).unwrap();
     malformed.write_all(b"{secret invalid json}\n").unwrap();
@@ -160,7 +183,7 @@ fn malformed_and_idle_clients_do_not_delay_healthy_requests() {
 fn oversized_request_is_rejected_without_coordinator_dispatch() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(1);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let mut stream = ipc::connect_local_stream(&dir.socket()).unwrap();
     stream.write_all(&vec![b'x'; 256 * 1024 + 1]).unwrap();
     let response = read_response(stream);
@@ -177,7 +200,7 @@ fn oversized_request_is_rejected_without_coordinator_dispatch() {
 fn full_or_disconnected_coordinator_returns_explicit_error() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(0);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     assert_eq!(
         request(&dir.0, &call("full")).unwrap().error.unwrap().code,
         "coordinator_busy"
@@ -193,7 +216,7 @@ fn full_or_disconnected_coordinator_returns_explicit_error() {
 fn oversized_worker_response_is_replaced_with_bounded_error() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(1);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
         let (_, BusCommand::Dev(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
             panic!()
@@ -215,9 +238,9 @@ fn oversized_worker_response_is_replaced_with_bounded_error() {
 fn second_server_cannot_replace_a_live_listener() {
     let dir = TestDir::new();
     let (tx, _rx) = mpsc::sync_channel(1);
-    let _server = start(true, &dir.0, tx.clone()).unwrap().unwrap();
+    let _server = start(&dir.0, tx.clone()).unwrap();
     let before = ipc::socket_file_identity(&dir.socket()).unwrap();
-    assert!(start(true, &dir.0, tx).is_err());
+    assert!(start(&dir.0, tx).is_err());
     assert_eq!(ipc::socket_file_identity(&dir.socket()).unwrap(), before);
 }
 
@@ -225,7 +248,7 @@ fn second_server_cannot_replace_a_live_listener() {
 fn dropping_server_cancels_idle_clients_and_preserves_replacement_endpoint() {
     let dir = TestDir::new();
     let (tx, _rx) = mpsc::sync_channel(1);
-    let server = start(true, &dir.0, tx).unwrap().unwrap();
+    let server = start(&dir.0, tx).unwrap();
     let _idle = ipc::connect_local_stream(&dir.socket()).unwrap();
     std::fs::rename(dir.socket(), dir.0.join("old.sock")).unwrap();
     std::fs::write(dir.socket(), b"replacement endpoint").unwrap();
@@ -242,7 +265,7 @@ fn dropping_server_cancels_idle_clients_and_preserves_replacement_endpoint() {
 fn idle_request_expires_without_dispatch() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(1);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let idle = ipc::connect_local_stream(&dir.socket()).unwrap();
     assert_eq!(read_response(idle).error.unwrap().code, "request_timeout");
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
@@ -252,7 +275,7 @@ fn idle_request_expires_without_dispatch() {
 fn unanswered_coordinator_request_has_finite_deadline() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(1);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let result = request(&dir.0, &call("never-finished")).unwrap();
     assert_eq!(result.error.unwrap().code, "coordinator_timeout");
     let (_, BusCommand::Dev(dev)) = rx.try_recv().unwrap() else {
@@ -268,7 +291,7 @@ fn unanswered_coordinator_request_has_finite_deadline() {
 fn active_connection_limit_rejects_excess_clients() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(16);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let mut clients = Vec::new();
     let mut pending = Vec::new();
     for id in 0..16 {
@@ -291,7 +314,7 @@ fn active_connection_limit_rejects_excess_clients() {
 fn caller_deadline_bounds_an_unanswered_request() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(1);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let path = dir.0.clone();
     let started = Instant::now();
     let client = thread::spawn(move || {
@@ -311,7 +334,7 @@ fn caller_deadline_bounds_an_unanswered_request() {
 fn client_rejects_a_response_for_another_request() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(1);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
         let (_, BusCommand::Dev(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
             panic!()
@@ -333,7 +356,7 @@ fn client_rejects_a_response_for_another_request() {
 fn completed_responses_remain_counted_until_peers_close() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(16);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     let mut clients = Vec::new();
     for id in 0..16 {
         let mut stream = ipc::connect_local_stream(&dir.socket()).unwrap();
@@ -367,7 +390,7 @@ fn startup_reclaims_a_closed_listener_after_obtaining_its_lease() {
         "fixture must retain the crashed listener endpoint"
     );
     let (tx, _rx) = mpsc::sync_channel(0);
-    let _server = start(true, &dir.0, tx).unwrap().unwrap();
+    let _server = start(&dir.0, tx).unwrap();
     assert_eq!(
         request(&dir.0, &call("recovered"))
             .unwrap()
@@ -385,7 +408,7 @@ fn startup_preserves_a_live_listener_without_our_lease() {
     let _listener = ipc::bind_private_local_listener(&dir.socket()).unwrap();
     let identity = ipc::socket_file_identity(&dir.socket()).unwrap();
     let (tx, _rx) = mpsc::sync_channel(0);
-    assert!(start(true, &dir.0, tx).is_err());
+    assert!(start(&dir.0, tx).is_err());
     assert_eq!(ipc::socket_file_identity(&dir.socket()).unwrap(), identity);
 }
 
@@ -395,6 +418,6 @@ fn startup_preserves_a_non_socket_endpoint_file() {
     storage_io::private_dir(&dir.0).unwrap();
     std::fs::write(dir.socket(), b"user data").unwrap();
     let (tx, _rx) = mpsc::sync_channel(0);
-    assert!(start(true, &dir.0, tx).is_err());
+    assert!(start(&dir.0, tx).is_err());
     assert_eq!(std::fs::read(dir.socket()).unwrap(), b"user data");
 }

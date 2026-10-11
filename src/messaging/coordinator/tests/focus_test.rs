@@ -102,7 +102,7 @@ fn dev_focus_rejects_normal_mode_missing_target_and_disconnected_ui() {
         &request("disabled", "agent.focus", json!({"agent":"cursor1"})),
         Some(&events),
     );
-    assert_eq!(response.error.unwrap().code, "dev_disabled");
+    assert_eq!(response.error.unwrap().code, "dev_tools_disabled");
     worker.dev_enabled = true;
     let response = worker.dev_response_with_events(
         &request("missing", "room.focus", json!({"room":"missing"})),

@@ -79,18 +79,105 @@ fn room_sound_requires_exactly_one_of_on_or_off() {
     ] {
         assert!(command(args).is_err(), "{args:?}");
     }
-    assert!(HELP.contains("room sound ROOM (--on | --off) [--sound NAME]"));
-    assert!(HELP.contains("settings room-sound (--on | --off) [--sound NAME]"));
-    assert!(HELP.contains("\n  sounds\n"));
+    assert!(DEV_HELP.contains("room sound ROOM (--on | --off) [--sound NAME]"));
+    assert!(DEV_HELP.contains("settings room-sound (--on | --off) [--sound NAME]"));
+    assert!(DEV_HELP.contains("\n  sounds\n"));
+}
+
+/// One sample command line per control method, so the tier table, the parser
+/// and both help texts are checked against each other method by method.
+const SAMPLES: &[&[&str]] = &[
+    &["state"],
+    &["settings"],
+    &["room", "create", "r"],
+    &["room", "rename", "r", "s"],
+    &["room", "notes", "r", "--text", "t"],
+    &["room", "delete", "r", "--confirm"],
+    &["history", "--room", "r"],
+    &[
+        "agent",
+        "add",
+        "--room",
+        "r",
+        "--name",
+        "a",
+        "--provider",
+        "codex",
+        "--pwd",
+        "/w",
+    ],
+    &["agent", "read", "a", "--source", "visible"],
+    &["agent", "dialog", "a"],
+    &[
+        "agent",
+        "choose",
+        "a",
+        "--option",
+        "1",
+        "--fingerprint",
+        "f",
+    ],
+    &["agent", "answer", "a", "--skip", "--fingerprint", "f"],
+    &["agent", "clear", "a"],
+    &["agent", "rename", "a", "b"],
+    &["agent", "setup-confirm", "a", "--confirm"],
+    &["agent", "delete", "a", "--confirm"],
+    &["send", "--room", "r", "--to", "a", "--text", "t"],
+    &["message", "status", "1"],
+    &["request", "recover", "1", "--confirm"],
+    &["room", "focus", "r"],
+    &["room", "seen", "r"],
+    &["room", "sound", "r", "--on"],
+    &["agent", "focus", "a"],
+    &["agent", "details", "a", "--on"],
+    &["settings", "color-blind", "--on"],
+    &["settings", "room-sound", "--on"],
+    &["sounds"],
+    &["quit"],
+    &["diagnostics"],
+];
+
+#[test]
+fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() {
+    use crate::messaging::coordinator::{dev_tier_mentions, Tier, METHODS};
+    assert_eq!(SAMPLES.len(), METHODS.len());
+    for spec in METHODS {
+        let sample = SAMPLES
+            .iter()
+            .find(|args| command(args).is_ok_and(|c| c.method == spec.method))
+            .unwrap_or_else(|| panic!("no sample parses into {}", spec.method));
+        assert!(sample.join(" ").starts_with(spec.command), "{sample:?}");
+        let line = format!("\n  {}", spec.command);
+        match spec.tier {
+            Tier::Agent => assert!(
+                AGENT_HELP.contains(&line),
+                "{} missing from bus --help",
+                spec.command
+            ),
+            Tier::Dev => {
+                assert!(
+                    DEV_HELP.contains(&line),
+                    "{} missing from bus --dev --help",
+                    spec.command
+                );
+                assert!(
+                    !AGENT_HELP.contains(&line),
+                    "{} is a dev tool in bus --help",
+                    spec.command
+                );
+            }
+        }
+    }
+    assert_eq!(dev_tier_mentions(AGENT_HELP), Vec::<String>::new());
 }
 
 #[test]
 fn orchestrators_have_no_reassign_command() {
     assert!(command(&["agent", "orchestrate", "claude-orch", "--none"]).is_err());
-    assert!(!HELP.contains("agent orchestrate AGENT"));
-    assert!(HELP.contains("exactly one work room for its whole life"));
-    assert!(HELP.contains("[--orchestrates ROOM]"));
-    assert!(HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH]"));
+    assert!(!AGENT_HELP.contains("agent orchestrate AGENT"));
+    assert!(AGENT_HELP.contains("exactly one work room for its whole life"));
+    assert!(AGENT_HELP.contains("[--orchestrates ROOM]"));
+    assert!(AGENT_HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH]"));
 }
 
 #[test]
@@ -862,7 +949,7 @@ fn send_async_rejects_a_message_to_the_human() {
             .unwrap()
             .follow
     );
-    assert!(HELP.contains("[--queue] [--async]"));
+    assert!(AGENT_HELP.contains("[--queue] [--async]"));
 }
 
 #[test]
@@ -1006,7 +1093,7 @@ fn send_queue_asks_for_an_own_turn_and_is_omitted_otherwise() {
     assert_eq!(queued.params["queue"], true);
     let steering = command(&["send", "--room", "r", "--to", "a", "--text", "t"]).unwrap();
     assert!(steering.params.get("queue").is_none());
-    assert!(HELP.contains("[--as AGENT] [--queue]"));
+    assert!(AGENT_HELP.contains("[--as AGENT] [--queue]"));
 }
 
 #[test]

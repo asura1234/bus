@@ -1,6 +1,6 @@
 //! Coordinator worker ownership.
 use super::{
-    dev_control, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BusCommand, BusEvent,
+    control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BusCommand, BusEvent,
     BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf, RequestId,
     RuntimeStatus, StoragePause, Transport,
 };
@@ -30,7 +30,7 @@ pub(super) struct Worker {
     pub(super) dev_enabled: bool,
     /// Mutation receipts by request ID, so a retried request replays its
     /// response instead of running twice. Oldest first in `dev_receipt_order`.
-    pub(super) dev_receipts: BTreeMap<String, dev_control::DevReceipt>,
+    pub(super) dev_receipts: BTreeMap<String, control_dispatch::DevReceipt>,
     pub(super) dev_receipt_order: std::collections::VecDeque<String>,
     pub(super) dev_receipt_bytes: usize,
     /// How long a receipt is kept before it may be evicted to make room.
@@ -87,7 +87,7 @@ impl Worker {
             dev_receipts: BTreeMap::new(),
             dev_receipt_order: std::collections::VecDeque::new(),
             dev_receipt_bytes: 0,
-            dev_receipt_retention: dev_control::DEV_RECEIPT_RETENTION,
+            dev_receipt_retention: control_dispatch::DEV_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
             settings_path: None,
             sound_dirs: None,
@@ -330,7 +330,7 @@ fn collect_delivery_commands(
 
 fn interrupts_delivery(command: &BusCommand) -> bool {
     match command {
-        BusCommand::Dev(call) => dev_control::is_mutation(&call.request.method),
+        BusCommand::Dev(call) => control_dispatch::is_mutation(&call.request.method),
         _ => true,
     }
 }

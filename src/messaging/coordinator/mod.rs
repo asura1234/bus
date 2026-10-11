@@ -13,7 +13,7 @@ mod callback_runtime;
 #[path = "commands.rs"]
 mod commands;
 #[path = "control/mod.rs"]
-mod dev_control;
+mod control_dispatch;
 #[path = "dialogs.rs"]
 mod dialogs;
 pub(crate) mod resume;
@@ -142,7 +142,7 @@ pub(crate) struct BusSnapshot {
 }
 
 pub(crate) struct BusHandle {
-    _dev_control: Option<control::Server>,
+    _control: Option<control::Server>,
     commands: mpsc::SyncSender<(u64, BusCommand)>,
     snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     events: mpsc::Receiver<BusEvent>,
@@ -166,7 +166,7 @@ impl BusHandle {
         let (_, events) = mpsc::channel();
         (
             Self {
-                _dev_control: None,
+                _control: None,
                 commands,
                 snapshots: Arc::new(Mutex::new(snapshot)),
                 events,
@@ -205,7 +205,7 @@ impl BusHandle {
         std::thread::spawn(move || worker.run(receiver, event_tx, shared));
         (
             Self {
-                _dev_control: None,
+                _control: None,
                 commands: commands.clone(),
                 snapshots,
                 events,
@@ -224,7 +224,9 @@ impl BusHandle {
         }
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
-        let dev_control = control::start(worker.dev_enabled, &data_dir, commands.clone())?;
+        // Every session runs the control socket; `dev_enabled` only gates
+        // the dev-tier methods.
+        let control = control::start(&data_dir, commands.clone())?;
         let (event_tx, events) = mpsc::channel();
         let shared = Arc::clone(&snapshots);
         std::thread::Builder::new()
@@ -232,7 +234,7 @@ impl BusHandle {
             .spawn(move || worker.run(receiver, event_tx, shared))
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            _dev_control: dev_control,
+            _control: Some(control),
             commands,
             snapshots,
             events,
@@ -267,4 +269,6 @@ mod tests;
 use crate::agents::providers::launch;
 use crate::agents::providers::spool as callbacks;
 pub(crate) use agents::AddAgent;
+#[cfg(test)]
+pub(crate) use control_dispatch::{dev_tier_mentions, Tier, METHODS};
 pub(crate) mod usage;

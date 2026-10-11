@@ -65,7 +65,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     }
     std::env::remove_var("BUS_DEV_EXISTING_SERVER");
     if invocation.action == Action::Help {
-        print_help();
+        print_help(dev);
         return Ok(());
     }
 
