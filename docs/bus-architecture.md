@@ -295,7 +295,7 @@ dependency rule, and an import-boundary check in `tools/quality` fails the gate 
 flowchart TD
   main --> cli & server & client & agents & devtools
   cli --> client & devtools & messaging & protocol & platform
-  devtools --> terminal & messaging & protocol & platform
+  devtools --> terminal & messaging & agents & protocol & platform
   client --> messaging & agents & protocol & platform
   server --> terminal & messaging & agents & protocol & platform
   messaging --> agents & protocol & platform
@@ -401,7 +401,8 @@ the coordinator in its process but only through `BusHandle`.
 
 **devtools**. Test tooling that drives Bus itself, starting with the TUI driver, compiled only with the `dev-tools` feature: a
 release build has none of it. Every driver session is a fresh Bus the
-driver starts in a generated `/tmp` data directory; nothing in `devtools` attaches to an existing session.
+driver starts in a generated `/tmp` data directory; nothing in `devtools` attaches to an existing session. Its fake providers
+follow `agents`' model of each provider (such as which draft lines Claude lifts as images), so the two cannot drift.
 
 **cli**. The `bus` command: session pick, server start and same-build check, client launch, `stop`, and the control commands.
 
