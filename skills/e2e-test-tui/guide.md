@@ -44,11 +44,12 @@ you saw. You do not decide what the product should do, and you never change the 
 - The add-agent form: providers are hits `provider:claude|codex|cursor`; its PWD field starts
   as `~/`.
 - Attaching: Ctrl+O opens the path form, which starts with `~/`: clear it (Ctrl+A, Ctrl+K),
-  type one absolute path, Enter. A paste into that form lands after the `~/`. To attach several
-  files at once, paste their absolute paths, separated by spaces, into the composer with no
-  form open. `fixture clipboard-image` then Ctrl+V in the composer pastes an image. Bus stores an attached image
-  under a content-hash name (`paste-<hash>.png`), so the original file name never shows for
-  images: assert `[paste-`, the delivered `files`, or the picture itself.
+  type one absolute path, Enter. The form takes exactly one path: a paste lands after the `~/`,
+  and space-separated paths are read as one (an error chip). To attach several files at once,
+  paste their absolute paths, separated by spaces, into the composer with no form open.
+  `fixture clipboard-image` then Ctrl+V in the composer pastes an image. Bus stores an attached
+  image under a content-hash name (`paste-<hash>.png`), so the original file name never shows
+  for images: assert `[paste-`, the delivered `files`, or the picture itself.
 - Fixtures: `fixture image --pattern quadrants|red-diagonal|blue-circle --file F`,
   `fixture file --file F [--text T]`; files land in the session's work dir
   (`/tmp/bus-tui/<name>/work`), which is also the scratch workspace for agents' PWD.
