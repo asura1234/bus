@@ -29,8 +29,7 @@ every work room at once and saves it for rooms created later. Bus launches and r
 creation read them.
 agent details and settings color-blind set the TUI toggles; state shows both.
 quit queues the TUI's save-and-quit (as Ctrl+Q); its receipt only attests queuing.
-quit leaves the session server and its agents running for bus resume; to end them, run
-bus stop, which stops the server, closes every agent pane and prints
-{"stopped":true}, or {"stopped":false} when no server was running.
+The UI saves unsent drafts, then stops the session's server and every agent pane, as
+bus stop does, and exits; bus resume relaunches each agent into its saved conversation.
 diagnostics shows Bus's internals: version, storage pause, coordinator error, data and log
 paths, and each agent's status, wait reason, detail, runtime identity and current request.
