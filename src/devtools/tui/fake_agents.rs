@@ -6,6 +6,7 @@
 //! a process called `claude` (or `codex`, `cursor-agent`). The fake Claude
 //! fires Bus's own hooks from the `--settings` file Bus passes it, draws a
 //! Claude-like prompt box, and answers every prompt with `fake reply: <prompt>`.
+use crate::agents::providers::claude_code::hooks::claude_lifted_images;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -138,32 +139,19 @@ impl FakeAgent {
         self.hook("SessionStart", json!({"source": "startup"}));
     }
 
-    /// Draws an empty prompt box under the transcript and remembers where its
-    /// first line starts, so a draft can be redrawn in place.
+    /// Draws an empty prompt box under the transcript.
     fn draw_prompt(&self, draft: &str) {
         let rule = "─".repeat(60);
         let mut out = std::io::stdout();
-        let _ = write!(out, "\r\n{rule}\r\n\x1b7");
+        let _ = write!(out, "\r\n{rule}\r\n");
         let _ = out.flush();
         self.redraw(draft);
     }
 
-    /// Redraws the prompt line the way Claude Code shows a draft: image lines
-    /// as leading `[Image #N]` chips, the other lines after them.
-    /// Continuation lines are indented under the `❯`, as Claude Code draws them.
     fn redraw(&self, draft: &str) {
         let (shown, _) = lift_images(draft, self.images);
-        let lines = shown.split('\n').count();
-        let rule = "─".repeat(60);
         let mut out = std::io::stdout();
-        let _ = write!(
-            out,
-            "\x1b8\x1b[J❯ {}\r\n{rule}\r\n  ? for shortcuts · fake {}\x1b[{}A\r\x1b[{}C",
-            shown.replace('\n', "\r\n  "),
-            self.provider,
-            1 + lines,
-            2 + shown.rsplit('\n').next().unwrap_or("").chars().count()
-        );
+        let _ = write!(out, "{}", prompt_box(&shown, &self.provider));
         let _ = out.flush();
     }
 
@@ -171,8 +159,7 @@ impl FakeAgent {
         self.turns += 1;
         let turn = format!("{}-{}", self.session, self.turns);
         let mut out = std::io::stdout();
-        // Replace the box with the submitted prompt, as Claude Code does.
-        let _ = write!(out, "\x1b8\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "));
+        let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
         self.hook(
             "UserPromptSubmit",
@@ -244,37 +231,41 @@ pub(super) fn kill_line(draft: &mut String) {
     }
 }
 
-/// Claude Code turns each draft line that is one quoted image path into an
-/// image attachment: one leading `[Image #N]` per image (numbered after the
-/// session's earlier images), then the other non-blank lines. Returns that
-/// prompt and how many images it lifted.
+/// The prompt box redrawn in place the way Claude Code shows a draft: image
+/// lines already lifted into leading `[Image #N]` chips, continuation lines
+/// indented under the `❯`. It starts and ends with the cursor on the box's
+/// first row: moving relative to the cursor, never to a saved position, keeps
+/// the box in place when drawing it scrolls a full pane.
+pub(super) fn prompt_box(shown: &str, provider: &str) -> String {
+    let lines = shown.split('\n').count();
+    let rule = "─".repeat(60);
+    format!(
+        "\r\x1b[J❯ {}\r\n{rule}\r\n  ? for shortcuts · fake {provider}\x1b[{}A\r\x1b[{}C",
+        shown.replace('\n', "\r\n  "),
+        1 + lines,
+        2 + shown.rsplit('\n').next().unwrap_or("").chars().count()
+    )
+}
+
+/// Replaces the box (the cursor is on its first row) with the submitted
+/// prompt, as Claude Code does.
+pub(super) fn submitted(prompt: &str) -> String {
+    format!("\r\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "))
+}
+
+/// The draft as Claude Code submits it: lines Bus expects Claude to lift as
+/// images become leading `[Image #N]` chips (numbered after the session's
+/// earlier images), followed by the other non-blank lines. Returns that prompt
+/// and how many images it lifted.
 pub(super) fn lift_images(draft: &str, earlier: usize) -> (String, usize) {
-    let is_image = |line: &str| {
-        line.len() > 2
-            && line.starts_with('"')
-            && line.ends_with('"')
-            && std::path::Path::new(&line[1..line.len() - 1])
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| {
-                    ["png", "jpg", "jpeg", "gif", "webp"]
-                        .iter()
-                        .any(|image| e.eq_ignore_ascii_case(image))
-                })
-    };
-    let lines: Vec<&str> = draft.split('\n').collect();
-    let images = lines.iter().filter(|line| is_image(line)).count();
-    let chips: String = (1..=images)
-        .map(|n| format!("[Image #{}]", earlier + n))
-        .collect();
+    let (images, rest) = claude_lifted_images(draft);
     if images == 0 {
         return (draft.to_owned(), 0);
     }
-    let rest: Vec<&str> = lines
-        .into_iter()
-        .filter(|line| !is_image(line) && !line.trim().is_empty())
+    let chips: String = (1..=images)
+        .map(|n| format!("[Image #{}]", earlier + n))
         .collect();
-    (format!("{chips}{}", rest.join("\n")), images)
+    (format!("{chips}{rest}"), images)
 }
 
 /// A prompt containing `fake:work N` keeps the fake busy for N seconds (at

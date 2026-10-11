@@ -94,3 +94,56 @@ fn repeated_kills_clear_a_multi_line_draft() {
         ]
     );
 }
+
+#[test]
+fn a_full_pane_keeps_one_prompt_box_while_typing_and_after_submit() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 12).unwrap();
+    let rows = |screen: &Screen| -> Vec<String> {
+        screen
+            .grid()
+            .cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .map(|row| row.trim_end().to_owned())
+            .collect()
+    };
+    let boxes = |screen: &Screen| -> Vec<String> {
+        rows(screen)
+            .into_iter()
+            .filter(|row| row.starts_with('❯'))
+            .collect()
+    };
+    let open_box = format!("\r\n{}\r\n", "─".repeat(60));
+    for line in 0..30 {
+        screen.feed(format!("transcript {line}\r\n").as_bytes());
+    }
+    screen.feed(open_box.as_bytes());
+    for draft in ["", "h", "he", "hey"] {
+        screen.feed(prompt_box(draft, "claude").as_bytes());
+    }
+    assert_eq!(boxes(&screen), vec!["❯ hey"], "{:#?}", rows(&screen));
+
+    screen.feed(submitted("hey").as_bytes());
+    assert!(boxes(&screen).is_empty(), "{:#?}", rows(&screen));
+    assert!(rows(&screen).contains(&"> hey".to_owned()));
+
+    screen.feed(b"\xe2\x8f\xba fake reply: hey\r\n");
+    screen.feed(open_box.as_bytes());
+    screen.feed(prompt_box("", "claude").as_bytes());
+    assert_eq!(boxes(&screen), vec!["❯"], "{:#?}", rows(&screen));
+}
+
+#[test]
+fn the_fake_lifts_exactly_the_lines_bus_expects_claude_to_lift() {
+    // An unescaped inner quote makes the line two quoted strings, not one path.
+    let draft = "\"/tmp/a\" and \"/tmp/b.png\"";
+    assert_eq!(lift_images(draft, 0), (draft.to_owned(), 0));
+    let escaped = "\"/tmp/a \\\"b\\\".png\"";
+    assert_eq!(lift_images(escaped, 0), ("[Image #1]".to_owned(), 1));
+}
