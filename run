@@ -78,10 +78,11 @@ case "${1:-}" in
     tui)
         shift
         cd "$REPO_ROOT"
-        # The dev variant, as ./run dev builds it, but into its own target dir
-        # unless one is set: a scratch Bus never runs from, and ./run tui never
-        # rebuilds, the target/debug binary the developer's Bus runs.
-        binary=$(CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target/tui-driver}" \
+        # The dev variant, as ./run dev builds it, but always into a
+        # tui-driver dir of its own, even under an inherited target dir that
+        # ./run dev shares: a scratch Bus never runs from, and ./run tui never
+        # rebuilds, the debug binary the developer's Bus runs.
+        binary=$(CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/tui-driver" \
             build_bus --bin bus --features dev-tools) || exit $?
         exec "$binary" --dev tui "$@"
         ;;
