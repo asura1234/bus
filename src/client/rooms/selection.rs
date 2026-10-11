@@ -109,7 +109,9 @@ impl BusUi {
                 if region == Region::History {
                     let point = self.history_point(column, row, false);
                     self.history_selection = Some((point, point));
-                    self.pressed_link = self.link_at(column, row).cloned();
+                    self.pressed_link = self
+                        .link_at(column, row)
+                        .map(|(_, target)| ((column, row), target.clone()));
                 } else {
                     let offset = self.editor_offset(region, column, row, false);
                     self.action(if region == Region::Notes {
@@ -139,13 +141,7 @@ impl BusUi {
                     return false;
                 };
                 if region == Region::History {
-                    if self
-                        .pressed_link
-                        .as_ref()
-                        .is_some_and(|(rect, _)| !rect.contains((column, row).into()))
-                    {
-                        self.pressed_link = None;
-                    }
+                    self.cancel_moved_click(column, row);
                     if let Some((anchor, _)) = self.history_selection {
                         let before = self.history_point(column, row, false);
                         let head = if before >= anchor {
@@ -190,8 +186,20 @@ impl BusUi {
         }
     }
 
+    /// Any motion makes the gesture a drag, even where it selects no text,
+    /// as across a picture.
+    fn cancel_moved_click(&mut self, column: u16, row: u16) {
+        if self
+            .pressed_link
+            .as_ref()
+            .is_some_and(|(cell, _)| *cell != (column, row))
+        {
+            self.pressed_link = None;
+        }
+    }
+
     /// A click that selected nothing opens the link under it: the button
-    /// went down and came up on the same link without leaving it. The press
+    /// went down and came up on the same cell of a link without moving. The press
     /// still starts a selection, so dragging across a link selects and
     /// copies it as plain text.
     fn open_clicked_link(&mut self, column: u16, row: u16, outcome: &mut ClientShellInput) {
@@ -202,9 +210,7 @@ impl BusUi {
         {
             return;
         }
-        if let Some((_, target)) =
-            pressed.filter(|pressed| self.link_at(column, row) == Some(pressed))
-        {
+        if let Some((_, target)) = pressed.filter(|(cell, _)| *cell == (column, row)) {
             outcome.actions.push(match target {
                 Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url),
                 Target::Path(path) => ClientShellAction::OpenPath(path),

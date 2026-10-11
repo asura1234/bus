@@ -283,3 +283,32 @@ fn a_picture_opens_from_its_own_cells_only() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dragging_within_a_picture_does_not_open_it() {
+    let dir = thumbnail_dir("picture-drag-link");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(thumbnails::Protocol::Iterm2);
+    ui.thumbnails.set_protocol(thumbnails::Protocol::Iterm2);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+    let picture = ui.view.thumbnails[0].clone();
+    assert!(picture.cols > 3);
+    let mut all = actions(&mut ui, MouseEventKind::Down(Left), picture.x, picture.y);
+    all.extend(actions(
+        &mut ui,
+        MouseEventKind::Drag(Left),
+        picture.x + 3,
+        picture.y,
+    ));
+    all.extend(actions(
+        &mut ui,
+        MouseEventKind::Up(Left),
+        picture.x + 3,
+        picture.y,
+    ));
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(opened(&all), None, "a thumbnail drag is not a click");
+}

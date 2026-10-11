@@ -109,8 +109,8 @@ pub(in crate::client) struct BusUi {
     pub(super) drag: Option<super::selection::Region>,
     /// History selection as (anchor, head); editor selections live in `Editor`.
     pub(super) history_selection: Option<(super::selection::Point, super::selection::Point)>,
-    /// The history link the left button went down on, until it moves off it.
-    pub(super) pressed_link: Option<(ratatui::layout::Rect, super::links::Target)>,
+    /// The cell and history link the left button went down on, until it moves.
+    pub(super) pressed_link: Option<((u16, u16), super::links::Target)>,
     pub(super) recipient_scroll: u16,
     pub(super) sidebar_scroll: usize,
     pub(super) file_scroll: usize,
