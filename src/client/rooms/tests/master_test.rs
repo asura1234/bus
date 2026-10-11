@@ -647,7 +647,7 @@ fn orchestrators_are_green_in_work_room_messages_in_both_palettes() {
         .submit_message_from(work, draft(worker), Author::Agent(orchestrator), 5)
         .unwrap();
     state
-        .submit_message_from(master, draft(orchestrator), Author::Human, 5)
+        .submit_message_from(master, draft(orchestrator), Author::Developer, 5)
         .unwrap();
     let mut ui = BusUi::new(Arc::new(BusSnapshot {
         state,

@@ -165,7 +165,7 @@ fn worker(
 }
 
 /// Messages `author` sent in `room`: (recipients, text), oldest first. A
-/// message to the Human has no recipients.
+/// message to the developer has no recipients.
 fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>, String)> {
     let mut sent: BTreeMap<PromptId, (Vec<AgentId>, String)> = worker
         .state
@@ -313,7 +313,7 @@ fn the_same_blocked_screen_is_not_reported_again_after_a_flicker() {
 }
 
 #[test]
-fn without_an_orchestrator_the_blocked_worker_tells_the_human() {
+fn without_an_orchestrator_the_blocked_worker_tells_the_developer() {
     let (mut worker, agent, room, _, screen, dir) = worker(false);
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
@@ -321,7 +321,7 @@ fn without_an_orchestrator_the_blocked_worker_tells_the_human() {
         sent_by(&worker, room, agent),
         [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
     );
-    // An agent's message to the Human is news: it counts as unread.
+    // An agent's message to the developer is news: it counts as unread.
     assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
     assert_eq!(worker.state.requests().count(), 0);
     assert_bus_sent_nothing(&worker);
@@ -330,7 +330,7 @@ fn without_an_orchestrator_the_blocked_worker_tells_the_human() {
 }
 
 #[test]
-fn a_blocked_orchestrator_tells_the_human_once_in_master() {
+fn a_blocked_orchestrator_tells_the_developer_once_in_master() {
     for wait in ["dialog-id", "question-id", "trust-id", BLOCKED] {
         let (mut worker, _, room, orchestrator, _, dir) = worker(true);
         let orchestrator = orchestrator.unwrap();

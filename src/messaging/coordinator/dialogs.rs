@@ -13,7 +13,7 @@ pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
 /// The one text for every blocker. Bus is not an agent and adds no details:
-/// the orchestrator (or the Human) looks at the agent's terminal instead.
+/// the orchestrator (or the developer) looks at the agent's terminal instead.
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
@@ -83,8 +83,8 @@ impl Worker {
 
 /// The blocked agent's own message in its work room: to the room's
 /// orchestrator, which delivers it like any agent message and wakes the
-/// orchestrator, or else to the Human. A blocked MASTER orchestrator tells
-/// the Human directly, since MASTER cannot itself be orchestrated.
+/// orchestrator, or else to the developer. A blocked MASTER orchestrator tells
+/// the developer directly, since MASTER cannot itself be orchestrated.
 fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
     let room = agent.room_id;
@@ -112,7 +112,7 @@ fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<
             )
             .map(|_| ()),
         None => state
-            .post_to_human(room, id, BLOCKED_MESSAGE.to_owned(), Vec::new(), now)
+            .post_to_developer(room, id, BLOCKED_MESSAGE.to_owned(), Vec::new(), now)
             .map(|_| ()),
     }
     .map_err(|error| error.to_string())

@@ -25,7 +25,7 @@ impl BusUi {
     }
 
     /// MASTER has no notes: they are a work room's status board, and MASTER is
-    /// where the human talks to orchestrators.
+    /// where the developer talks to orchestrators.
     pub(in crate::client::rooms) fn room_has_notes(&self) -> bool {
         self.room
             .and_then(|id| self.snapshot.state.room(id))

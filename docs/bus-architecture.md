@@ -262,7 +262,7 @@ Files are split by ownership, not by helper.
       `focus_test.rs`, `chat_search_test.rs`
 - `cli/`: the `bus` command
   - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
-  - `control.rs` (control commands used by orchestrators and humans), `help.rs`, `tests/{parse_test,execute_test}.rs`
+  - `control.rs` (control commands used by orchestrators and the developer), `help.rs`, `tests/{parse_test,execute_test}.rs`
 
 Local test moves use literal includes where needed to retain their full S9b names. In particular, CLI stop/guidance tests keep
 `utils::paths::tests`, the runtime PTY setup case keeps `terminal::pty::spawn::unix::tests`, and graphics tests keep their Kitty
@@ -399,11 +399,11 @@ installed `share/bus` default directory, runtime source-file lookup or user-file
 remain supported. `orchestration/README.md` documents the source-to-emitted filename map, the placeholders Bus fills
 (`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), and the control CLI as the only way to drive Bus.
 
-S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph is enforced, including grouped/aliased/relative paths and physical owners reached through re-exports. Unknown paths fail; generated or procedural macro expansion still requires compiler verification. S13 uses Bus operational branding while retaining the explicitly documented live session directory/socket/log names, injected runtime keys, native session source identifiers and serialized enum tags. The callback command and executable path stay unchanged through the human-controlled cutover.
+S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph is enforced, including grouped/aliased/relative paths and physical owners reached through re-exports. Unknown paths fail; generated or procedural macro expansion still requires compiler verification. S13 uses Bus operational branding while retaining the explicitly documented live session directory/socket/log names, injected runtime keys, native session source identifiers and serialized enum tags. The callback command and executable path stay unchanged through the developer-controlled cutover.
 
 ## S13 live-session compatibility
 
-Bus branding and build/debug knobs use Bus names. No startup migration is introduced. The human cutover must reuse the same HOME, local session ID and callback executable path. These retained literals preserve the existing session and injected agents:
+Bus branding and build/debug knobs use Bus names. No startup migration is introduced. The developer's cutover must reuse the same HOME, local session ID and callback executable path. These retained literals preserve the existing session and injected agents:
 
 | Contract | Retained spelling |
 | --- | --- |

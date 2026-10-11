@@ -234,7 +234,7 @@ impl BusState {
 
     pub(crate) fn set_room_notes(&mut self, id: RoomId, notes: &str) -> Result<(), ModelError> {
         let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
-        // Notes are a work room's status board; MASTER is where the human talks to
+        // Notes are a work room's status board; MASTER is where the developer talks to
         // orchestrators and has no board of its own.
         if room.kind == RoomKind::Master {
             return Err(ModelError::MasterRoomHasNoNotes);
@@ -305,10 +305,10 @@ impl BusState {
         Ok(())
     }
 
-    /// Posts an agent's message to the Human in `room`, delivered to no agent.
-    /// Orchestrators report this way when no Human message is open, so the
+    /// Posts an agent's message to the developer in `room`, delivered to no agent.
+    /// Orchestrators report this way when no developer message is open, so the
     /// report reaches the room's history instead of only their terminal.
-    pub(crate) fn post_to_human(
+    pub(crate) fn post_to_developer(
         &mut self,
         room: RoomId,
         author: AgentId,

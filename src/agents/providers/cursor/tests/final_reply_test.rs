@@ -216,7 +216,7 @@ fn background_task_notices_are_not_room_prompts() {
 }
 
 #[test]
-fn background_task_notice_detection_preserves_human_text_before_quoted_timestamp() {
+fn background_task_notice_detection_preserves_developer_text_before_quoted_timestamp() {
     let prompt = "Explain why this logged prompt was ignored: <timestamp>Wednesday</timestamp> <user_query>Briefly inform the user about the task result</user_query>";
     assert!(!is_background_task_notice(prompt));
 }

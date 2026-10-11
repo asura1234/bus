@@ -8,15 +8,15 @@ fn claude_messages_reach_an_unbound_busy_turn_without_waiting_for_idle() {
         fixture.consume();
         fixture.status(status);
         let started = std::time::Instant::now();
-        let request = fixture.send("human correction", false);
+        let request = fixture.send("developer correction", false);
         fixture.deliver();
         assert_eq!(
             fixture.typed(),
-            [("human correction".to_owned(), true)],
+            [("developer correction".to_owned(), true)],
             "{status:?}: do not wait for the own-turn grace or an idle poll"
         );
         assert!(started.elapsed() < Duration::from_secs(1));
-        fixture.started("own-turn", "human correction");
+        fixture.started("own-turn", "developer correction");
         fixture.stopped("own-turn", "correction applied");
         fixture.consume();
         fixture.status(RuntimeStatus::Idle);
@@ -55,7 +55,7 @@ fn an_own_turn_does_not_bypass_blocked_unavailable_or_dialog_readiness() {
         fixture.started("own-turn", "a task notification");
         fixture.consume();
         fixture.status(status);
-        fixture.send("human correction", false);
+        fixture.send("developer correction", false);
         fixture.deliver();
         assert!(fixture.typed().is_empty(), "{status:?}");
     }
@@ -67,7 +67,7 @@ fn an_own_turn_does_not_bypass_blocked_unavailable_or_dialog_readiness() {
         .state
         .observe_dialog(fixture.agent, true)
         .unwrap();
-    fixture.send("human correction", false);
+    fixture.send("developer correction", false);
     fixture.deliver();
     assert!(fixture.typed().is_empty());
 }
@@ -146,7 +146,7 @@ fn coalesced_cross_room_reply_is_published_in_every_members_room() {
     .unwrap();
     fixture.agent = orchestrator;
     fixture.room = master;
-    let member = fixture.send("human follow-up", false);
+    let member = fixture.send("developer follow-up", false);
     fixture.deliver();
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();

@@ -570,7 +570,7 @@ fn codex_pending_question_requires_a_live_queue_and_empty_composer() {
         screen.replace("Queued follow-up inputs", "Transcript excerpt"),
         screen.replace("⇧← to answer", "enter to continue"),
         screen.replace("? 1 question", "? 0 questions"),
-        screen.replace("› Ask Codex to do anything", "› human draft"),
+        screen.replace("› Ask Codex to do anything", "› developer draft"),
         format!("{screen}\n• New output\n"),
         screen.replace("? 1 question", "? unknown question"),
     ] {
@@ -580,7 +580,7 @@ fn codex_pending_question_requires_a_live_queue_and_empty_composer() {
         "› Ask Codex to do anything\n• Queued follow-up inputs\n? 1 question · 12s\n⇧← to answer\n";
     assert!(codex_question_pending(below));
     assert!(!codex_question_pending(
-        &below.replace("Ask Codex to do anything", "human draft")
+        &below.replace("Ask Codex to do anything", "developer draft")
     ));
 }
 

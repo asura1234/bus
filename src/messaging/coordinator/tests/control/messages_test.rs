@@ -311,19 +311,19 @@ fn dev_send_as_records_agent_author_and_skips_it_for_all() {
         json!({"agent": codex})
     );
 
-    let human = call(
+    let developer = call(
         &mut worker,
         "as-default",
         "message.send",
         json!({"room":"test","to":["codex1"],"text":"hi"}),
     );
-    assert!(human.ok, "{human:?}");
-    let message = PromptId(human.result["message_id"].as_u64().unwrap());
+    assert!(developer.ok, "{developer:?}");
+    let message = PromptId(developer.result["message_id"].as_u64().unwrap());
     assert!(worker
         .state
         .requests()
         .filter(|r| r.prompt.id == message)
-        .all(|r| r.prompt.author == Author::Human));
+        .all(|r| r.prompt.author == Author::Developer));
 
     for (id, to, author, expected) in [
         (
@@ -510,7 +510,7 @@ fn dev_send_as_an_ambiguous_room_agent_name_never_falls_back_to_the_orchestrator
 }
 
 #[test]
-fn dev_send_to_human_posts_an_orchestrator_report_in_master_history() {
+fn dev_send_to_developer_posts_an_orchestrator_report_in_master_history() {
     let (mut worker, room, _codex, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
     let orchestrator = worker
@@ -588,7 +588,7 @@ fn dev_send_to_human_posts_an_orchestrator_report_in_master_history() {
 }
 
 #[test]
-fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_human_kept() {
+fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_developer_kept() {
     let (mut worker, _room, _codex, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
     let orchestrator = worker
@@ -597,7 +597,7 @@ fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_human_kept
         .unwrap();
     worker
         .state
-        .post_to_human(master, orchestrator, "first report".into(), Vec::new(), 1)
+        .post_to_developer(master, orchestrator, "first report".into(), Vec::new(), 1)
         .unwrap();
     let mut saved = serde_json::to_value(&worker.state).unwrap();
     let notices = &mut saved["rooms"][master.0.to_string()]["notices"];

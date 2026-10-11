@@ -2,9 +2,9 @@
 
 <!--
 A workflow is a living plan for one room (one unit of work). The orchestrator
-drafts it with the human before kickoff, follows it, and rewrites it whenever
+drafts it with the developer before kickoff, follows it, and rewrites it whenever
 the plan stops matching reality: a step fails, a gate cannot be met, or the
-human changes the requirements. Nothing executes this file. It is a shared
+developer changes the requirements. Nothing executes this file. It is a shared
 picture of the work, not a script.
 
 Keep it short. Replace every <placeholder>. Delete sections that do not apply.
@@ -12,7 +12,7 @@ Keep it short. Replace every <placeholder>. Delete sections that do not apply.
 
 ## Goal
 
-<What done looks like, in one or two sentences, and how the human will check it.>
+<What done looks like, in one or two sentences, and how the developer will check it.>
 
 ## Non-goals
 
@@ -21,14 +21,14 @@ Keep it short. Replace every <placeholder>. Delete sections that do not apply.
 ## Graph
 
 <!--
-Nodes are agent tasks, diamonds are decisions, red nodes wait for the human.
+Nodes are agent tasks, diamonds are decisions, red nodes wait for the developer.
 Group parallel work in a subgraph. Label edges with the condition that takes
 them. Mark the node the room is currently on with :::current.
 -->
 
 ```mermaid
 flowchart TD
-    start([Request: <one line>]):::human
+    start([Request: <one line>]):::developer
     start --> research
 
     subgraph explore [1. Explore]
@@ -46,14 +46,14 @@ flowchart TD
     end
 
     pick -- yes --> plan
-    pick -- no --> rethink[Orchestrator + human: rethink approach]:::human
+    pick -- no --> rethink[Orchestrator + developer: rethink approach]:::developer
     rethink --> research
 
     subgraph build [3. Build]
         plan[<agent>: plan] --> implement[<agent>: implement, open PR]
     end
 
-    implement --> verify1[Human: manual check]:::human
+    implement --> verify1[Developer: manual check]:::developer
     verify1 -- behavior wrong --> plan
     verify1 -- ok --> review
 
@@ -64,11 +64,11 @@ flowchart TD
         fix --> review
     end
 
-    ready -- yes --> verify2[Human: regression test]:::human
+    ready -- yes --> verify2[Developer: regression test]:::developer
     verify2 -- problem --> fix
     verify2 -- ok --> done([Merge])
 
-    classDef human fill:#fde2e4,stroke:#c9184a
+    classDef developer fill:#fde2e4,stroke:#c9184a
     classDef current stroke-width:3px,stroke:#2563eb
 ```
 
@@ -96,11 +96,11 @@ weekly allowance falls below about 25%.
 
 ## Decision rules
 
-- <What the orchestrator may decide alone, and what must go to the human.>
-- If reviewers or best-of-N candidates disagree sharply, stop and ask the human.
+- <What the orchestrator may decide alone, and what must go to the developer.>
+- If reviewers or best-of-N candidates disagree sharply, stop and ask the developer.
 
 ## Log
 
 <!-- Newest first. One line per change to this workflow, with the reason. -->
 
-- <date>: Drafted with the human.
+- <date>: Drafted with the developer.

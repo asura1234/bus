@@ -594,13 +594,13 @@ fn dev_send_as_counts_the_agent_message_as_unread_in_a_room_out_of_view() {
         .create_agent(room, "claude1", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
     assert_ne!(worker.state.visible_room(), Some(room));
-    let human = call(
+    let developer = call(
         &mut worker,
-        "unread-human",
+        "unread-developer",
         "message.send",
-        json!({"room":"test","to":["codex1"],"text":"from the human"}),
+        json!({"room":"test","to":["codex1"],"text":"from the developer"}),
     );
-    assert!(human.ok, "{human:?}");
+    assert!(developer.ok, "{developer:?}");
     assert_eq!(worker.state.room(room).unwrap().unread_count, 0);
 
     let agent = call(

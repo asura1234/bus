@@ -7,7 +7,7 @@ use super::{
 };
 
 impl BusState {
-    /// Queue an automation prompt without changing the room's human-owned draft.
+    /// Queue an automation prompt without changing the room's developer-owned draft.
     pub(crate) fn submit_message_from(
         &mut self,
         room: RoomId,
@@ -51,16 +51,16 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Human, now_ms, false)
+        self.submit_draft_from(room, Author::Developer, now_ms, false)
     }
 
-    /// Sends the Human's draft to wait for each idle agent and its own turn.
+    /// Sends the developer's draft to wait for each idle agent and its own turn.
     pub(crate) fn submit_draft_queued(
         &mut self,
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Human, now_ms, true)
+        self.submit_draft_from(room, Author::Developer, now_ms, true)
     }
 
     fn submit_draft_from(
@@ -146,8 +146,8 @@ impl BusState {
             .ok_or(ModelError::UnknownRoom(room))?;
         // Bus dialog notices are delivery-only (see `Request::delivery_only`).
         if prompt.author != Author::Bus {
-            // An agent's message is news for the Human, like a reply; their own is not.
-            if prompt.author != Author::Human && self.visible_room != Some(room) {
+            // An agent's message is news for the developer, like a reply; their own is not.
+            if prompt.author != Author::Developer && self.visible_room != Some(room) {
                 room_state.unread_count = room_state.unread_count.saturating_add(1);
             }
             room_state.latest_prompt = Some(prompt);
@@ -610,7 +610,7 @@ impl BusState {
 
     fn sender_name(&self, author: &Author) -> String {
         match author {
-            Author::Human => "the human".into(),
+            Author::Developer => "the developer".into(),
             Author::Bus => "Bus".into(),
             Author::Agent(id) => self
                 .agents

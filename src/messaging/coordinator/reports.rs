@@ -1,8 +1,8 @@
-//! An orchestrator's report to the Human. When a MASTER orchestrator ends a
+//! An orchestrator's report to the developer. When a MASTER orchestrator ends a
 //! turn that no message in MASTER started (a background command exited, a
 //! worker messaged it, a worker said it is blocked), that turn's final text is
 //! its report, so Bus shows it in MASTER as the orchestrator's own message to
-//! the Human. Bus authors nothing: the text is the agent's.
+//! the developer. Bus authors nothing: the text is the agent's.
 use super::{
     AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection,
     ProviderCallback, RoomId,
@@ -88,7 +88,7 @@ pub(super) fn post_report(
     });
     if reports && !already_posted {
         if let Err(error) =
-            state.post_to_human(report.master, report.agent, report.text, Vec::new(), now_ms)
+            state.post_to_developer(report.master, report.agent, report.text, Vec::new(), now_ms)
         {
             tracing::warn!(event = "bus.report.failed", agent_id = report.agent.0, %error,
                 "Orchestrator report not shown in MASTER");

@@ -86,7 +86,7 @@ pub(super) const ORCHESTRATES_FIELD: usize = 4;
 pub(super) const PROMPT_FIELD: usize = 5;
 
 /// A MASTER agent's system prompt and the text Bus last filled in, so a
-/// change of room or name re-fills it only until the human edits it.
+/// change of room or name re-fills it only until the developer edits it.
 #[derive(Clone, Debug)]
 pub(super) struct PromptField {
     pub editor: Editor,
@@ -106,7 +106,7 @@ impl Form {
     }
 
     /// Fills the default orchestrator prompt for the form's name and `room`,
-    /// unless the human has edited the prompt since Bus last filled it.
+    /// unless the developer has edited the prompt since Bus last filled it.
     pub fn refill_prompt(&mut self, room: Option<(String, RoomId)>, docs: &std::path::Path) {
         let Self::Agent {
             name,

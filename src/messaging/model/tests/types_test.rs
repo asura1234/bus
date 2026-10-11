@@ -198,7 +198,7 @@ fn claude_image_placeholder_matches_when_text_before_the_image_ends_in_whitespac
     for text in ["Look ", "Look\t", "Look \t\r\n"] {
         let prompt = Prompt {
             id: PromptId(1),
-            author: Author::Human,
+            author: Author::Developer,
             text: text.into(),
             files: vec![PathBuf::from("/tmp/a.png")],
             recipient_ids: AgentRecipients::default(),

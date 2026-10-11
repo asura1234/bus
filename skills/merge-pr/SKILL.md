@@ -140,7 +140,7 @@ WHILE (`checkCount == 0` OR pending is nonempty) AND waited < max_wait:
 IF waited >= max_wait AND pending is still nonempty
   STOP and report the jobs still running. Do not treat "not finished yet" as green.
 IF waited >= max_wait AND `checkCount == 0`
-  STOP: no check registered even by timeout means this PR never triggered the gates, which needs a human look.
+  STOP: no check registered even by timeout means this PR never triggered the gates, which needs the developer's look.
 
 ========== 4. Attribute each red CI check ==========
 

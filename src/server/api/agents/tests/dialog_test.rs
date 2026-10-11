@@ -78,7 +78,7 @@ async fn agent_dialog_answer_sends_nothing_for_changed_identity_screen_or_invali
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let edited = format!(
         "\x1b[2J\x1b[H{}",
-        String::from_utf8_lossy(CODEX_TEXT_DIALOG).replace("Type your answer", "human edit")
+        String::from_utf8_lossy(CODEX_TEXT_DIALOG).replace("Type your answer", "developer edit")
     );
     app.lookup_runtime_sender(0, pane)
         .unwrap()

@@ -19,7 +19,9 @@ id_type!(RequestId);
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Author {
-    Human,
+    /// Saved as `"human"`; renaming the value would break existing history.
+    #[serde(rename = "human")]
+    Developer,
     Agent(AgentId),
     /// Bus itself, such as a notice that an agent waits on a dialog.
     Bus,
@@ -158,7 +160,7 @@ pub(crate) struct Draft {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Prompt {
     pub(crate) id: PromptId,
-    #[serde(default = "human_author")]
+    #[serde(default = "developer_author")]
     pub(crate) author: Author,
     pub(crate) text: String,
     pub(crate) files: Vec<PathBuf>,
@@ -169,8 +171,8 @@ pub(crate) struct Prompt {
     pub(crate) compaction_limit_notice: bool,
 }
 
-fn human_author() -> Author {
-    Author::Human
+fn developer_author() -> Author {
+    Author::Developer
 }
 
 impl Prompt {
@@ -218,7 +220,7 @@ pub(crate) struct Room {
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
-    /// Agent messages to the Human (`post_to_human`); they have no recipients.
+    /// Agent messages to the developer (`post_to_developer`); they have no recipients.
     /// Bus is not an agent and never posts here: notices older versions saved
     /// as "Bus" are dropped on load.
     #[serde(
@@ -232,7 +234,7 @@ pub(crate) struct Room {
     pub(crate) deletion_pending: bool,
     #[serde(default)]
     pub(crate) kind: RoomKind,
-    /// The Human's per-room sound notification choice. Unset rooms follow their
+    /// The developer's per-room sound notification choice. Unset rooms follow their
     /// kind: MASTER rings, work rooms stay silent. Read it with `sound_enabled`.
     #[serde(default)]
     pub(crate) sound: Option<bool>,
@@ -263,7 +265,7 @@ impl Room {
 }
 
 /// A session's rooms are units of work plus exactly one MASTER room, where the
-/// orchestrator agents of those rooms live and talk to the Human.
+/// orchestrator agents of those rooms live and talk to the developer.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RoomKind {
@@ -273,8 +275,8 @@ pub(crate) enum RoomKind {
 }
 
 pub(crate) const MASTER_ROOM_NAME: &str = "MASTER";
-/// The `send --to` selector for a message to the Human; no agent may take it.
-pub(crate) const HUMAN_RECIPIENT: &str = "human";
+/// The `send --to` selector for a message to the developer; no agent may take it.
+pub(crate) const DEVELOPER_RECIPIENT: &str = "human";
 /// Never produced by the ID allocator, which starts at 1, so adding MASTER to a
 /// saved session neither collides with nor renumbers anything.
 pub(super) const MASTER_ROOM_ID: RoomId = RoomId(0);
@@ -431,7 +433,7 @@ pub(crate) struct Request {
 
 impl Request {
     /// A Bus-authored request is a dialog notice for a room's orchestrator. It is
-    /// delivered to that agent like any message but is noise for the Human, who
+    /// delivered to that agent like any message but is noise for the developer, who
     /// watches the agent's terminal instead: it never shows in room history,
     /// previews, unread counts or rings.
     pub(crate) fn delivery_only(&self) -> bool {
@@ -631,7 +633,7 @@ impl std::fmt::Display for ModelError {
             ),
             Self::ReservedAgentName => write!(
                 formatter,
-                "The name {HUMAN_RECIPIENT} is reserved for messages to the human"
+                "The name {DEVELOPER_RECIPIENT} is reserved for messages to the developer"
             ),
             Self::OrchestratorOutsideMaster(agent) => write!(
                 formatter,

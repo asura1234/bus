@@ -99,7 +99,7 @@ impl BusUi {
 
     /// Agent notices (such as a turn that ended without a captured reply)
     /// stay in message status and history; the client log records each new
-    /// one. Only errors the human must act on become a toast.
+    /// one. Only errors the developer must act on become a toast.
     fn agent_notices(&self) -> Option<String> {
         let room = self.room?;
         let notices = self

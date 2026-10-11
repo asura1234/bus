@@ -79,7 +79,7 @@ impl BusState {
             request.prompt.compaction_limit_notice = true;
             request.prompt.id
         } else {
-            let prompt = self.post_to_human(room, id, text, Vec::new(), now_ms)?;
+            let prompt = self.post_to_developer(room, id, text, Vec::new(), now_ms)?;
             if let Some(saved) = self
                 .rooms
                 .get_mut(&room)

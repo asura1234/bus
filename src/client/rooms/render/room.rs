@@ -236,7 +236,7 @@ impl BusUi {
         }
         // The notes box grows with its text up to a quarter of the window,
         // keeps one row for the F3 prompt, and scrolls beyond that. History
-        // takes the rows below it. MASTER has no notes (the human talks to
+        // takes the rows below it. MASTER has no notes (the developer talks to
         // orchestrators there; status boards live in work rooms), so its
         // history starts right under the room name.
         let has_notes = room.kind != RoomKind::Master;

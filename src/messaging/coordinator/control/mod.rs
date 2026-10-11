@@ -185,7 +185,7 @@ impl Worker {
     }
 
     fn dev_command(&mut self, command: BusCommand) -> Result<Value, String> {
-        // Do not send navigation side effects to the human's TUI event queue.
+        // Do not send navigation side effects to the developer's TUI event queue.
         let (tx, rx) = mpsc::channel();
         self.command(command, &tx)?;
         for event in rx.try_iter() {

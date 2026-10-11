@@ -243,7 +243,7 @@ fn late_old_identical_codex_final_cannot_bind_and_matched_provider_error_release
 fn an_unstarted_request_is_released_when_the_agent_begins_another_turn_of_its_own() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let request = unstarted(&mut worker, agent, room, &dir);
-    let next = queue(&mut worker, room, agent, "Human message");
+    let next = queue(&mut worker, room, agent, "Developer message");
     record(
         &dir,
         Provider::ClaudeCode,

@@ -239,7 +239,7 @@ class EndToEndArgumentTests(unittest.TestCase):
 
 class EndToEndEnvironmentTests(unittest.TestCase):
     def test_inherited_bus_herdr_and_claude_code_variables_are_scrubbed(self):
-        env = e2e.scrubbed_env({"PATH": "/bin", "HOME": "/home/me", "BUS_DATA_DIR": "/human", "BUS_DEV": "1",
+        env = e2e.scrubbed_env({"PATH": "/bin", "HOME": "/home/me", "BUS_DATA_DIR": "/developer", "BUS_DEV": "1",
                                 "HERDR_SOCKET_PATH": "/sock", "HERDR_ENV": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
                                 "CLAUDECODE": "1", "CODEX_HOME": "/codex"}, "/run/data")
         self.assertEqual(env, {"PATH": "/bin", "HOME": "/home/me", "CODEX_HOME": "/codex",
@@ -296,7 +296,7 @@ class EndToEndDialogTests(unittest.TestCase):
         self.assertIn("run_in_background", e2e.background_prompt("T"))
         # Claude Code drops blank lines once it lifts an attached image; the prompt keeps one.
         self.assertIn("\n\nReply with exactly T and nothing else.", e2e.attachment_prompt("T"))
-        # Orchestrators run the test command themselves only when the human says so.
+        # Orchestrators run the test command themselves only when the developer says so.
         for prompt in (e2e.steering_task, e2e.background_prompt):
             self.assertNotIn("I authorize", prompt("T"))
             self.assertIn("I authorize", prompt("T", True))
