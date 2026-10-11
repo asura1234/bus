@@ -458,6 +458,21 @@ fn reads_still_work_after_a_quit() {
     }
     let (code, value) = tui(&session.0, &["press", "enter"]);
     assert_eq!(code, 3, "input after quit: {value}");
+    // The output Bus wrote while quitting, terminal restore included, is
+    // already in pty.raw before `stop`.
+    let run = PathBuf::from(
+        session.ok(&["status"])["run_dir"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
+    let raw = std::fs::read(run.join("pty.raw")).unwrap();
+    let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"Stopping Bus"), "pty.raw lacks the quit message");
+    assert!(
+        has(b"\x1b[?1049l"),
+        "pty.raw lacks the alternate-screen exit"
+    );
 }
 
 #[test]

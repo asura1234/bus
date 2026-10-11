@@ -70,10 +70,10 @@ left edge. Prefer `--text` targets to raw coordinates.
 
 Artifacts: each session writes a run folder with `trace.ndjson` (every
 request and its result), `pty.cast` (asciicast of the terminal, input and
-output), `pty.raw` (the exact output bytes), `shots/` (screenshots) and, after
-`stop`, the Bus logs and `effects.ndjson` (every recorded effect). Inside a Bus
-checkout it lives under `temp/tui-driver/runs/`, otherwise under
-`~/.local/state/bus/tui-runs/`.
+output), `pty.raw` (the exact output bytes, on disk as soon as Bus writes
+them), `shots/` (screenshots) and, after `stop`, the Bus logs and
+`effects.ndjson` (every recorded effect). Inside a Bus checkout it lives under
+`temp/tui-driver/runs/`, otherwise under `~/.local/state/bus/tui-runs/`.
 
 Verbs: start, stop, status, list, bus, snapshot, find, cells, screenshot,
 hits, type, paste, press, click, hover, drag, scroll, resize, focus, wait,
