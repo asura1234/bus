@@ -50,6 +50,32 @@ fn evaluate_loaded_manifest(input: DetectionInput<'_>, loaded: &LoadedManifest) 
     }
 }
 
+/// An agent's self-update chooser that Bus answers itself for agents it
+/// launched: pick the option whose label starts with `choose`, and treat the
+/// agent exiting with `success` on screen as an installed update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AutoUpdate {
+    pub(crate) choose: String,
+    pub(crate) success: String,
+}
+
+/// The self-update chooser `screen` shows, when its winning rule is one.
+pub(crate) fn auto_update(agent: AgentKind, screen: &str) -> Option<AutoUpdate> {
+    let loaded = load_manifest(agent)?;
+    let input = DetectionInput {
+        screen,
+        osc_title: "",
+        osc_progress: "",
+    };
+    let update = matched_manifest_rule(input, &loaded)?
+        .auto_update
+        .as_ref()?;
+    Some(AutoUpdate {
+        choose: update.choose.clone(),
+        success: update.success.clone(),
+    })
+}
+
 pub fn should_skip_state_update(agent: AgentKind, screen_content: &str) -> bool {
     detect_with_osc(
         agent,

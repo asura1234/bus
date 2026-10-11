@@ -46,6 +46,16 @@ pub(super) struct ManifestRule {
     pub(super) regex: Vec<String>,
     #[serde(default)]
     pub(super) line_regex: Vec<String>,
+    /// The rule is the agent's own self-update chooser, which Bus answers
+    /// for agents it launched; see `AutoUpdate`.
+    pub(super) auto_update: Option<ManifestAutoUpdate>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManifestAutoUpdate {
+    pub(super) choose: String,
+    pub(super) success: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -90,6 +90,11 @@ impl App {
         };
 
         let terminal_cwd_reported = matches!(ev, TerminalEvent::TerminalCwdReported { .. });
+        // An agent's screen state or exit may move its self-update along.
+        let agent_state_changed = matches!(
+            ev,
+            TerminalEvent::StateChanged { .. } | TerminalEvent::PaneDied { .. }
+        );
         let previous_toast = self.state.toast.clone();
         let pane_updates = self.state.handle_app_event(ev);
         if checkpointed_pane_exit {
@@ -125,6 +130,9 @@ impl App {
 
         self.sync_toast_deadline(previous_toast);
         self.shutdown_detached_terminal_runtimes();
+        if agent_state_changed {
+            self.supervise_self_updates(std::time::Instant::now());
+        }
         pane_updates
     }
 

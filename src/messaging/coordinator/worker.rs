@@ -21,6 +21,9 @@ pub(super) struct Worker {
     pub(super) branch_checks: BTreeMap<AgentId, std::time::Instant>,
     /// Each agent's latest dialog wait and how many polls it has held.
     pub(super) dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
+    /// The update failure each agent's terminal reported and Bus shows as its
+    /// error, so the error clears once the update is over.
+    pub(super) update_errors: BTreeMap<AgentId, String>,
     pub(super) delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
     /// When each agent's provider last failed to show a pasted prompt, which
     /// the server then withdrew; the retry waits `PROMPT_NOT_SHOWN_RETRY`.
@@ -80,6 +83,7 @@ impl Worker {
             storage_pause: None,
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
+            update_errors: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),

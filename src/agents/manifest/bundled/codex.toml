@@ -1,16 +1,17 @@
 id = "codex"
-version = "2026.10.08.1"
+version = "2026.10.11.1"
 min_engine_version = 3
-updated_at = "2026-10-08T14:00:00Z"
+updated_at = "2026-10-11T00:00:00Z"
 
 # "Update now" replaces the Codex UI with the package manager it runs, while the
 # node launcher keeps the pane's process looking like Codex. Without this rule
 # the updater's output fell through to the idle fallback (or the stale OSC
-# title), so Bus showed an agent that was gone as Idle. A relaunched Codex
-# draws its prompt below this text, which ends the match.
+# title), so Bus showed an agent that was gone as Idle. Working, so queued
+# messages wait through a slow install instead of being closed as stalled. A
+# relaunched Codex draws its prompt below this text, which ends the match.
 [[rules]]
 id = "self_update_running"
-state = "unknown"
+state = "working"
 priority = 1200
 region = "after_last_prompt_marker"
 line_regex = ['^\s*Updating Codex via `[^`]+`']
@@ -90,14 +91,24 @@ all = [
   { regex = ['Press enter to continue\s*\z'] },
 ]
 
+# Bus answers this chooser itself for agents it launched: it picks "Update
+# now", and once Codex exits with the success line, types the same launch
+# command again (src/server/terminals/self_update.rs). Codex 0.162 draws
+# "Update available ·" with an "enter continue · esc skip" footer; older
+# releases drew "Update available!" with "Press enter to continue".
 [[rules]]
 id = "startup_update"
 state = "blocked"
 priority = 950
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true
-contains = ["Update available!", "Update now"]
-regex = ['Skip\s+until\s+next\s+version', 'Press enter to continue\s*\z']
+auto_update = { choose = "Update now", success = "Update ran successfully" }
+contains = ["Update available", "Update now"]
+regex = ['Skip\s+until\s+next\s+version']
+any = [
+  { regex = ['Press enter to continue\s*\z'] },
+  { regex = ['(?m)^\s*enter\s+continue\s+·\s+esc\s+skip\s*\z'] },
+]
 
 # Codex 0.154.0 hook UIs consume terminal input while their controls are open.
 # Require both the chooser/table and its footer, not historical warning text.
