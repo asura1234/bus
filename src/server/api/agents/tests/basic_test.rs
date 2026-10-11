@@ -75,6 +75,7 @@ fn claude_agent_with_input(
         crate::agents::resume::catalog::AgentSessionRef::id("session"),
         Some(1),
         None,
+        &[],
     );
     let (runtime, writes) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 2);
@@ -119,6 +120,7 @@ fn app_with_dialog(
             crate::agents::resume::catalog::AgentSessionRef::id(session),
             Some(1),
             None,
+            &[],
         );
     }
     let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);

@@ -1216,6 +1216,7 @@ async fn full_internal_event_queue_eventually_applies_working_to_idle_transition
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
     assert_eq!(
@@ -1238,6 +1239,7 @@ async fn full_internal_event_queue_eventually_applies_working_to_idle_transition
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
     tokio::pin!(send);

@@ -20,6 +20,8 @@ pub enum TerminalEvent {
     AgentProcessDetected {
         pane_id: PaneId,
         agent: AgentKind,
+        /// The previous agent job leader this process replaced, once that one is gone.
+        replaced: Option<crate::platform::ProcessInstance>,
         observed_at: Instant,
     },
     /// Fallback detector state changed in a pane.
@@ -29,6 +31,9 @@ pub enum TerminalEvent {
         state: AgentState,
         visible_blocker: bool,
         process_exited: bool,
+        /// With `process_exited`, the agent job leader that exited, once that
+        /// process is gone; `None` while it lives on (suspended) or is unknown.
+        exited_process: Option<crate::platform::ProcessInstance>,
         observed_at: Instant,
     },
     /// Agent session identity was reported.
@@ -39,6 +44,8 @@ pub enum TerminalEvent {
         seq: Option<u64>,
         session_ref: Option<crate::agents::resume::catalog::AgentSessionRef>,
         session_start_source: Option<String>,
+        /// The reporting hook's process chain below the pane shell.
+        reporter: Vec<crate::platform::ProcessInstance>,
     },
     /// A pane child emitted one or more executable BEL characters.
     /// The host-facing process forwards them to its outer terminal.

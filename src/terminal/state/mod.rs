@@ -4,7 +4,7 @@ mod sessions;
 
 pub(crate) use detection::stabilize_agent_detection;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -95,6 +95,14 @@ pub struct TerminalState {
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
+    /// Leaders the detector saw exit or be replaced. A session report from any of
+    /// them is a late callback of a dead process and must not rebind its session.
+    /// Kept across respawn; bounded because only recent exits can still have
+    /// callbacks in flight.
+    retired_agent_processes: VecDeque<crate::platform::ProcessInstance>,
+    /// The hook process chain (below the pane shell) whose report bound
+    /// `persisted_agent_session`; empty when no chain was reported.
+    session_reporter: Vec<crate::platform::ProcessInstance>,
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agents::resume::catalog::AgentResumePlan>,
 }
@@ -120,6 +128,8 @@ impl TerminalState {
             launch_argv: None,
             respawn_shell_on_exit: false,
             recent_agent_process_exit: None,
+            retired_agent_processes: VecDeque::new(),
+            session_reporter: Vec::new(),
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
         }
@@ -261,4 +271,5 @@ mod tests {
     include!("tests/sessions_test.rs");
     include!("tests/session_replacement_test.rs");
     include!("tests/managed_agent_test.rs");
+    include!("tests/process_identity_test.rs");
 }

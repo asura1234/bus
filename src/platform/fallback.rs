@@ -127,6 +127,14 @@ pub fn session_processes(_child_pid: u32) -> Vec<u32> {
 pub fn signal_processes(_pids: &[u32], _signal: Signal) {}
 
 /// Unsupported platform stub.
+pub(crate) fn process_birth(_pid: u32) -> Option<u64> {
+    None
+}
+
+pub(crate) fn process_parent(_pid: u32) -> Option<u32> {
+    None
+}
+
 pub fn process_exists(_pid: u32) -> bool {
     false
 }

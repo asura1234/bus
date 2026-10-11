@@ -297,6 +297,24 @@ pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
+/// Fields after the parenthesized command of `/proc/<pid>/stat`, which may contain spaces.
+fn stat_fields_after_comm(pid: u32) -> Option<Vec<String>> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    Some(rest.split_whitespace().map(str::to_owned).collect())
+}
+
+/// Start time in clock ticks since boot (`starttime`); stable for the life of the process.
+pub(crate) fn process_birth(pid: u32) -> Option<u64> {
+    // After (comm): state(0) ppid(1) ... starttime(19)
+    stat_fields_after_comm(pid)?.get(19)?.parse().ok()
+}
+
+pub(crate) fn process_parent(pid: u32) -> Option<u32> {
+    let parent: u32 = stat_fields_after_comm(pid)?.get(1)?.parse().ok()?;
+    (parent > 0).then_some(parent)
+}
+
 fn process_pgrp_and_comm(pid: u32) -> Option<(i32, String)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     process_pgrp_and_comm_from_stat(&stat)

@@ -285,6 +285,7 @@ impl Worker {
                     agent_session_id: Some(session.clone()),
                     agent_session_path: None,
                     session_start_source: Some("startup".into()),
+                    reporter: reporting_processes(record),
                 },
             ))
             .map_err(|e| e.message)?;
@@ -427,6 +428,7 @@ impl Worker {
                     agent_session_id: Some(session.to_owned()),
                     agent_session_path: None,
                     session_start_source: Some(source.unwrap_or_else(|| "new".into())),
+                    reporter: reporting_processes(record),
                 },
             ))
             .map_err(|e| e.message)?;
@@ -762,3 +764,16 @@ fn callback(
 #[cfg(test)]
 #[path = "tests/callbacks_test.rs"]
 mod tests;
+
+/// The hook's process chain, so the server can refuse a report from an agent
+/// process it saw exit.
+fn reporting_processes(record: &callbacks::Record) -> Vec<schema::ReportingProcess> {
+    record
+        .reporter
+        .iter()
+        .map(|process| schema::ReportingProcess {
+            pid: process.pid,
+            birth: process.birth,
+        })
+        .collect()
+}

@@ -195,10 +195,11 @@ impl AppState {
             TerminalEvent::AgentProcessDetected {
                 pane_id,
                 agent,
+                replaced,
                 observed_at,
             } => self
                 .update_terminal_state(pane_id, |terminal| {
-                    Some(terminal.set_detected_agent_process_at(agent, observed_at))
+                    Some(terminal.set_detected_agent_process_at(agent, replaced, observed_at))
                 })
                 .into_iter()
                 .collect(),
@@ -208,6 +209,7 @@ impl AppState {
                 state,
                 visible_blocker,
                 process_exited,
+                exited_process,
                 observed_at,
             } => self
                 .update_terminal_state(pane_id, |terminal| {
@@ -216,6 +218,7 @@ impl AppState {
                         state,
                         visible_blocker,
                         process_exited,
+                        exited_process,
                         observed_at,
                     ))
                 })
@@ -228,6 +231,7 @@ impl AppState {
                 seq,
                 session_ref,
                 session_start_source,
+                reporter,
             } => self
                 .update_terminal_state(pane_id, |terminal| {
                     terminal.set_agent_session_ref_for_session_start(
@@ -236,6 +240,7 @@ impl AppState {
                         session_ref,
                         seq,
                         session_start_source,
+                        &reporter,
                     )
                 })
                 .into_iter()
@@ -387,6 +392,7 @@ impl AppState {
                     AgentState::Idle,
                     false,
                     true,
+                    None,
                     observed_at,
                 ))
             },

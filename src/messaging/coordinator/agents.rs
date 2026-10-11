@@ -458,6 +458,7 @@ impl Worker {
                 agent_session_id: Some(session),
                 agent_session_path: None,
                 session_start_source: Some("resume".into()),
+                reporter: Vec::new(),
             },
         )) {
             Ok(_) => Ok(()),

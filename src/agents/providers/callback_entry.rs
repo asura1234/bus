@@ -70,10 +70,24 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         return Err(io::Error::other("Bus callback exceeds 2 MiB"));
     }
     let value = serde_json::from_slice(&bytes)?;
-    if matches!(spool::parse(provider, &value), Ok(spool::Parsed::Ignore)) {
+    let parsed = spool::parse(provider, &value);
+    if matches!(parsed, Ok(spool::Parsed::Ignore)) {
         tracing::debug!(event = "bus.callback.ignored", provider = ?provider,
             reason = "not_interactive_or_unhandled", "Hook does not represent a terminal reply");
         return Ok(());
     }
-    spool::append(Path::new(&dir), &launch.to_string_lossy(), provider, value)
+    // A session start names its process chain so the server can tell a late report
+    // from an exited agent apart from its replacement's.
+    let reporter = if matches!(parsed, Ok(spool::Parsed::Session { .. })) {
+        crate::platform::process_ancestry(std::process::id())
+    } else {
+        Vec::new()
+    };
+    spool::append(
+        Path::new(&dir),
+        &launch.to_string_lossy(),
+        provider,
+        value,
+        &reporter,
+    )
 }

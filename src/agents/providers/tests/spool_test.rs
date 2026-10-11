@@ -161,7 +161,7 @@ mod tests {
         .unwrap();
         let writers: Vec<_> = (0..12).map(|i| {
             let dir = dir.clone();
-            std::thread::spawn(move || append(&dir,"launch",Provider::Cursor,json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":format!("t{i}"),"text":"final"})).unwrap())
+            std::thread::spawn(move || append(&dir,"launch",Provider::Cursor,json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":format!("t{i}"),"text":"final"}),&[]).unwrap())
         }).collect();
         for writer in writers {
             writer.join().unwrap();
@@ -174,10 +174,10 @@ mod tests {
             "launch",
             Provider::Cursor,
             captured[0].1.value.clone(),
-        )
+            &[],)
         .unwrap();
         assert_eq!(records(&dir).unwrap().len(), 12);
-        assert!(append(&dir, "wrong-launch", Provider::Cursor, json!({})).is_err());
+        assert!(append(&dir, "wrong-launch", Provider::Cursor, json!({}), &[]).is_err());
         assert_eq!(
             parse(
                 Provider::Cursor,
@@ -219,7 +219,7 @@ mod tests {
             json!({"agent_id":9,"provider":"claude_code","launch_id":"launch"})
         );
         let payload = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p","last_assistant_message":"reply"});
-        append(&dir, "launch", Provider::ClaudeCode, payload.clone()).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, payload.clone(), &[]).unwrap();
         let captured = records(&dir).unwrap();
         assert_eq!(captured.len(), 1);
         let wire: serde_json::Value =
@@ -240,6 +240,60 @@ mod tests {
     }
 
     #[test]
+    fn session_start_records_from_different_processes_are_kept_apart() {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-reporter");
+        initialize(
+            &dir,
+            &Manifest {
+                routing_key: RoutingKey(1),
+                provider: Provider::ClaudeCode,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        let old = [crate::platform::ProcessInstance { pid: 100, birth: 1 }];
+        let new = [crate::platform::ProcessInstance { pid: 200, birth: 2 }];
+        // A restart that resumes the same conversation sends identical bytes; while
+        // the exited process's record is still pending, it must not swallow this one.
+        let start = json!({"hook_event_name":"SessionStart","session_id":"s","source":"resume"});
+        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, start, &new).unwrap();
+        // Other callbacks keep the existing one-record-per-payload dedupe.
+        let stop = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p","last_assistant_message":"reply"});
+        append(&dir, "launch", Provider::ClaudeCode, stop.clone(), &old).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, stop, &new).unwrap();
+        let captured = records(&dir).unwrap();
+        let reporters: Vec<_> = captured.iter().map(|(_, record)| record.reporter.clone()).collect();
+        assert_eq!(reporters, vec![old.to_vec(), new.to_vec(), old.to_vec()]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_record_spooled_before_reporters_existed_still_parses() {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-legacy-record");
+        initialize(
+            &dir,
+            &Manifest {
+                routing_key: RoutingKey(1),
+                provider: Provider::Codex,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        let legacy = json!({
+            "id":"legacy","sequence":1,"at_ms":1,
+            "manifest":{"agent_id":1,"provider":"codex","launch_id":"launch"},
+            "value":{"hook_event_name":"SessionStart","session_id":"s","source":"startup","transcript_path":"/tmp/r.jsonl"}
+        });
+        std::fs::write(dir.join("event-legacy.json"), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let captured = records(&dir).unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].1.reporter.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn neutral_spool_rejects_provider_mismatch_and_sequence_overflow_without_events() {
         let dir =
             crate::utils::test_temp::unique_temp_path("bus-neutral-spool-overflow");
@@ -252,10 +306,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(append(&dir, "launch", Provider::Codex, json!({})).is_err());
+        assert!(append(&dir, "launch", Provider::Codex, json!({}), &[]).is_err());
         assert_eq!(boundary(&dir).unwrap(), 0);
         std::fs::write(dir.join("sequence"), u64::MAX.to_string()).unwrap();
-        assert!(append(&dir, "launch", Provider::Cursor, json!({})).is_err());
+        assert!(append(&dir, "launch", Provider::Cursor, json!({}), &[]).is_err());
         assert_eq!(boundary(&dir).unwrap(), u64::MAX);
         assert!(records(&dir).unwrap().is_empty());
         std::fs::remove_dir_all(dir).unwrap();

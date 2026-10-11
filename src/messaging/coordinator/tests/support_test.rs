@@ -309,7 +309,14 @@ pub(super) fn record(dir: &std::path::Path, provider: Provider, mut value: serde
             .entry("transcript_path")
             .or_insert(json!("/tmp/bus-root-transcript.jsonl"));
     }
-    callbacks::append(&dir.join("callbacks/launch"), "launch", provider, value).unwrap();
+    callbacks::append(
+        &dir.join("callbacks/launch"),
+        "launch",
+        provider,
+        value,
+        &[],
+    )
+    .unwrap();
 }
 
 pub(super) fn open_saved_document(document: serde_json::Value) -> (Worker, PathBuf) {

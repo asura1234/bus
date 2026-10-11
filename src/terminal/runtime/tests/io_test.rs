@@ -276,6 +276,7 @@ async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
         AgentState::Idle,
         false,
         false,
+        None,
         std::time::Instant::now(),
     );
     tokio::pin!(publish);
@@ -313,7 +314,7 @@ async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
             state: AgentState::Idle,
             visible_blocker: false,
             process_exited: false,
-            observed_at: _,
+            exited_process: None, observed_at: _,
         } if delivered_pane == pane_id
     ));
 }

@@ -590,3 +590,81 @@ async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visibl
         "a returned foreground shell must publish the restored agent's exit even if its transcript viewer remains: {result:?}",
     );
 }
+
+fn spawn_waiting_process() -> std::process::Child {
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "ping -n 30 127.0.0.1 > NUL"]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = std::process::Command::new("sleep");
+        command.arg("30");
+        command
+    };
+    command.spawn().expect("spawn a waiting process")
+}
+
+#[test]
+fn a_new_leader_under_the_same_agent_names_the_exited_one_as_replaced() {
+    let mut old = spawn_waiting_process();
+    let mut leader = None;
+    assert_eq!(
+        track_agent_leader(&mut leader, Some(AgentKind::Codex), true, Some(old.id())),
+        None
+    );
+    let old_instance = leader.expect("the first leader is named");
+    old.kill().unwrap();
+    old.wait().unwrap();
+
+    let mut new = spawn_waiting_process();
+    let replaced = track_agent_leader(&mut leader, Some(AgentKind::Codex), true, Some(new.id()));
+    let new_instance = leader;
+    new.kill().unwrap();
+    new.wait().unwrap();
+
+    assert_eq!(replaced, Some(old_instance));
+    assert_ne!(new_instance, Some(old_instance));
+}
+
+#[test]
+fn a_leader_that_is_still_alive_is_never_named_replaced() {
+    let mut first = spawn_waiting_process();
+    let mut second = spawn_waiting_process();
+    let mut leader = None;
+    track_agent_leader(&mut leader, Some(AgentKind::Claude), true, Some(first.id()));
+    let replaced = track_agent_leader(
+        &mut leader,
+        Some(AgentKind::Claude),
+        true,
+        Some(second.id()),
+    );
+    for child in [&mut first, &mut second] {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+    assert_eq!(replaced, None);
+}
+
+#[test]
+fn a_pending_exit_keeps_its_leader_until_the_agent_is_cleared() {
+    let mut process = spawn_waiting_process();
+    let mut leader = None;
+    track_agent_leader(
+        &mut leader,
+        Some(AgentKind::Codex),
+        true,
+        Some(process.id()),
+    );
+    let named = leader;
+    process.kill().unwrap();
+    process.wait().unwrap();
+
+    // The shell is in front but the exit is not published yet.
+    assert_eq!(track_agent_leader(&mut leader, None, true, Some(1)), None);
+    assert_eq!(leader, named);
+    track_agent_leader(&mut leader, None, false, Some(1));
+    assert_eq!(leader, None);
+}

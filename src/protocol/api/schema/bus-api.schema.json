@@ -2082,6 +2082,13 @@
             "pane_id": {
               "type": "string"
             },
+            "reporter": {
+              "description": "The reporting hook process and its ancestors, nearest first. The server\nuses it to refuse a late report from an agent process that has exited.",
+              "items": {
+                "$ref": "#/schemas/request/$defs/ReportingProcess"
+              },
+              "type": "array"
+            },
             "seq": {
               "format": "uint64",
               "minimum": 0,
@@ -2444,6 +2451,26 @@
             "detection"
           ],
           "type": "string"
+        },
+        "ReportingProcess": {
+          "description": "One process incarnation: its pid and an opaque OS start stamp.",
+          "properties": {
+            "birth": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pid",
+            "birth"
+          ],
+          "type": "object"
         },
         "SplitDirection": {
           "enum": [

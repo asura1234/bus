@@ -448,3 +448,30 @@ impl AgentDetectionPresence {
         }
     }
 }
+
+/// Follows the identified agent job's leader by incarnation. Returns the previous
+/// leader when a different one took its place and the previous one is gone.
+pub(super) fn track_agent_leader(
+    leader: &mut Option<crate::platform::ProcessInstance>,
+    identified_agent: Option<AgentKind>,
+    agent_present: bool,
+    process_group_id: Option<u32>,
+) -> Option<crate::platform::ProcessInstance> {
+    if identified_agent.is_none() {
+        // An exit keeps its leader until the exit is published.
+        if !agent_present {
+            *leader = None;
+        }
+        return None;
+    }
+    let current = process_group_id.and_then(|pid| match *leader {
+        Some(known) if known.pid == pid => Some(known),
+        _ => crate::platform::process_instance(pid),
+    })?;
+    let previous = leader.replace(current);
+    previous.filter(|previous| *previous != current && !process_is_alive(*previous))
+}
+
+pub(super) fn process_is_alive(process: crate::platform::ProcessInstance) -> bool {
+    crate::platform::process_instance(process.pid) == Some(process)
+}

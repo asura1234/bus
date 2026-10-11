@@ -70,6 +70,7 @@ fn idle_agent_exit_emits_release_event_without_a_state_change() {
             state: AgentState::Idle,
             visible_blocker: false,
             process_exited: true,
+            exited_process: None,
             observed_at: std::time::Instant::now(),
         });
 
@@ -166,6 +167,7 @@ fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
     app.state.toast = Some(crate::server::app_state::ToastNotification {
@@ -185,6 +187,7 @@ fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
 

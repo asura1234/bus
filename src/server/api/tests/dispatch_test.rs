@@ -152,6 +152,7 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
     app.handle_internal_event(TerminalEvent::StateChanged {
@@ -160,6 +161,7 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
 
@@ -246,6 +248,7 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
     app.handle_internal_event(TerminalEvent::StateChanged {
@@ -254,6 +257,7 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
 
@@ -419,6 +423,7 @@ fn windows_powershell_exit_after_agent_process_exit_respawns_shell() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: true,
+        exited_process: None,
         observed_at: std::time::Instant::now(),
     });
 

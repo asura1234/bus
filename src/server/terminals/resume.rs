@@ -363,6 +363,7 @@ impl App {
                 crate::agents::AgentState::Unknown,
                 false,
                 false,
+                None,
                 Instant::now(),
             );
         }

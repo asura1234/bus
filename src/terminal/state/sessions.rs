@@ -8,6 +8,7 @@ impl TerminalState {
         session: crate::agents::resume::catalog::PersistedAgentSession,
     ) {
         self.persisted_agent_session = Some(session);
+        self.session_reporter.clear();
     }
 
     pub fn set_agent_session_ref_for_session_start(
@@ -17,8 +18,24 @@ impl TerminalState {
         session_ref: Option<crate::agents::resume::catalog::AgentSessionRef>,
         seq: Option<u64>,
         session_start_source: Option<String>,
+        reporter: &[crate::platform::ProcessInstance],
     ) -> Option<TerminalStateMutation> {
         let session_ref = session_ref?;
+        // Checked before the sequence so a dead process's late callback cannot
+        // consume a number the replacement process still needs.
+        if reporter
+            .iter()
+            .any(|process| self.retired_agent_processes.contains(process))
+        {
+            return None;
+        }
+        // Chains are trimmed below the pane shell, so two reports share a process
+        // exactly when they come from the same agent job.
+        let reported_by_new_process = !reporter.is_empty()
+            && !self.session_reporter.is_empty()
+            && !reporter
+                .iter()
+                .any(|process| self.session_reporter.contains(process));
         let known_agent = crate::agents::parse_agent_label(&agent_label);
         let process_present = known_agent.is_some()
             && self.detected_agent == known_agent
@@ -62,14 +79,15 @@ impl TerminalState {
         if owner_conflicts && !foreground_takeover_allowed {
             return None;
         }
-        if self
-            .conflicting_same_owner_session_ref(
-                &source,
-                &agent_label,
-                &session_ref,
-                session_start_source.as_deref(),
-            )
-            .is_some()
+        if !reported_by_new_process
+            && self
+                .conflicting_same_owner_session_ref(
+                    &source,
+                    &agent_label,
+                    &session_ref,
+                    session_start_source.as_deref(),
+                )
+                .is_some()
         {
             return None;
         }
@@ -90,6 +108,7 @@ impl TerminalState {
             self.managed_agent_launch_session = None;
         }
         self.persisted_agent_session = Some(persisted_session);
+        self.session_reporter = reporter.to_vec();
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
