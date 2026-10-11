@@ -484,3 +484,58 @@ fn a_root_inside_a_live_data_dir_is_refused_however_it_is_spelled() {
         "start touched a live Bus data dir through an alias"
     );
 }
+
+#[test]
+fn a_root_override_with_dot_components_is_refused_before_anything_is_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = PathBuf::from(format!("/tmp/bus-tui-it-dots{}", std::process::id()));
+    let live = base.join("live");
+    let actual_root = live.join("d");
+    std::fs::create_dir_all(&actual_root).unwrap();
+    std::fs::set_permissions(&actual_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(live.join("state.json"), b"{\"sentinel\":true}").unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(live.join("control.sock")).unwrap();
+    let missing = base.join("m");
+    let snapshot = || {
+        let mode = std::fs::metadata(&actual_root)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let names: Vec<_> = std::fs::read_dir(&actual_root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        (mode, names)
+    };
+    let before = snapshot();
+    let canonical = live.canonicalize().unwrap();
+    let mut results = Vec::new();
+    // `m` is missing, so `m/..` cannot be resolved; and a relative root.
+    for requested in [
+        format!("{}/m/../live/d", base.display()),
+        format!("{}/./live/d", base.display()),
+        "relative/root".to_owned(),
+    ] {
+        let name = session_name("dots");
+        let (code, reply) = parse(tui_raw(
+            &name,
+            &["start", "--run-dir", run_dir().to_str().unwrap()],
+            &[
+                ("BUS_TUI_ROOT", requested.as_str()),
+                ("BUS_DATA_DIR", canonical.to_str().unwrap()),
+            ],
+        ));
+        if code == 0 {
+            let _ = tui_raw(&name, &["stop"], &[("BUS_TUI_ROOT", requested.as_str())]);
+        }
+        results.push((requested, code, reply, snapshot(), missing.exists()));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    for (requested, code, reply, after, created) in results {
+        assert_eq!(code, 1, "{requested}: {reply}");
+        assert_eq!(reply["error"]["code"], "refused", "{requested}: {reply}");
+        assert_eq!(after, before, "{requested} changed the live data dir");
+        assert!(!created, "{requested} created its missing component");
+    }
+}

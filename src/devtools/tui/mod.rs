@@ -34,6 +34,10 @@ const SESSION_ENV: &str = "BUS_TUI_SESSION";
 
 /// Entry of `bus --dev tui ARGS`; returns the process exit code.
 pub(crate) fn run(args: &[String]) -> i32 {
+    // Before anything else: a malformed root is refused, never reinterpreted.
+    if let Err(message) = session::root_override() {
+        return emit(&failure("refused", message));
+    }
     match args.first().map(String::as_str) {
         None | Some("--help" | "-h" | "help") => {
             write_out(&args::help_overview(HELP));
@@ -203,13 +207,16 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         return Ok(failure("refused", message));
     }
     let root = session::driver_root();
-    if let Err(message) =
+    let paths = SessionPaths::new(&root, name);
+    // Every guard that needs no lock runs before the first write.
+    if let Err(refusal) =
         session::ensure_root_isolated(&root, &session::inherited_env(), &session::bus_homes())
+            .map_err(|message| failure("refused", message))
+            .and_then(|()| target_guards(&paths, &session::inherited_env()))
     {
-        return Ok(failure("refused", message));
+        return Ok(refusal);
     }
     session::create_private_dir(&root).map_err(|e| e.to_string())?;
-    let paths = SessionPaths::new(&root, name);
     let claim = session::Claim::new(name);
     {
         let _root_lock = session::lock_root(&root).map_err(|e| e.to_string())?;
@@ -295,6 +302,15 @@ fn stop_leftovers(paths: &SessionPaths, binary: &Path, token: &str) {
 
 /// Every guard that keeps a new session away from live Bus instances. The
 /// caller holds the root lock, so the checks and the claim are one step.
+/// The session directory's own guards: no inherited locator, Bus home or
+/// live Bus there.
+fn target_guards(paths: &SessionPaths, inherited: &[(String, OsString)]) -> Result<(), Value> {
+    session::ensure_env_does_not_point_at(&paths.dir, inherited)
+        .and_then(|()| session::ensure_outside_bus_homes(&paths.dir, &session::bus_homes()))
+        .and_then(|()| session::ensure_not_live_bus(&paths.data_dir()))
+        .map_err(|message| failure("refused", message))
+}
+
 fn prepare_target(
     root: &Path,
     paths: &SessionPaths,
@@ -320,10 +336,7 @@ fn prepare_target(
             ),
         ));
     }
-    session::ensure_env_does_not_point_at(&paths.dir, inherited)
-        .and_then(|()| session::ensure_outside_bus_homes(&paths.dir, &session::bus_homes()))
-        .and_then(|()| session::ensure_not_live_bus(&paths.data_dir()))
-        .map_err(|message| failure("refused", message))?;
+    target_guards(paths, inherited)?;
     if paths.dir.exists() {
         if !paths.is_driver_dir() {
             return Err(failure(

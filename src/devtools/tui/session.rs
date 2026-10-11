@@ -244,10 +244,8 @@ impl SessionPaths {
 /// `/tmp` because macOS `$TMPDIR` is long enough to push Bus's sockets past
 /// the `sockaddr_un` limit.
 pub(super) fn driver_root() -> PathBuf {
-    if let Some(root) = std::env::var_os(ROOT_ENV)
-        .map(PathBuf::from)
-        .filter(|root| root.is_absolute())
-    {
+    // `bus --dev tui` refuses a malformed override before any verb runs.
+    if let Ok(Some(root)) = root_override() {
         return root;
     }
     #[cfg(unix)]
@@ -304,6 +302,26 @@ pub(super) fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// `$BUS_TUI_ROOT`, when set: refused unless absolute and free of `.` and
+/// `..` components, so it names one directory however much of it exists.
+pub(super) fn root_override() -> Result<Option<PathBuf>, String> {
+    let Some(value) = std::env::var_os(ROOT_ENV) else {
+        return Ok(None);
+    };
+    let root = PathBuf::from(&value);
+    let dotted = value
+        .to_string_lossy()
+        .split(std::path::is_separator)
+        .any(|part| part == "." || part == "..");
+    if !root.is_absolute() || dotted {
+        return Err(format!(
+            "refusing {ROOT_ENV}={}: it must be an absolute path without . or .. components",
+            root.display()
+        ));
+    }
+    Ok(Some(root))
+}
+
 /// Refuses a driver root that is, contains or sits inside a Bus location
 /// (an inherited locator, a Bus home, a live data dir), and an existing
 /// `$BUS_TUI_ROOT` the driver did not create. Runs before `start` creates,
@@ -316,7 +334,7 @@ pub(super) fn ensure_root_isolated(
     ensure_env_does_not_point_at(root, inherited)?;
     ensure_outside_bus_homes(root, homes)?;
     // The root, or any directory above it, must not be a live Bus's data dir.
-    for dir in resolve_existing(root).ancestors() {
+    for dir in resolve_existing(root)?.ancestors() {
         ensure_not_live_bus(dir)?;
     }
     let overridden = std::env::var_os(ROOT_ENV).is_some_and(|value| Path::new(&value) == root);
@@ -488,31 +506,33 @@ pub(super) fn ensure_not_live_bus(data_dir: &Path) -> Result<(), String> {
 
 /// The path with symlinks and aliases (macOS `/tmp` is `/private/tmp`)
 /// resolved: its deepest existing ancestor canonicalized, the missing rest
-/// appended. Creates nothing.
-pub(super) fn resolve_existing(path: &Path) -> PathBuf {
+/// appended. Creates nothing. A path that cannot be resolved this way (no
+/// existing ancestor, or `.`/`..` in its missing part) is an error, never
+/// compared as spelled.
+pub(super) fn resolve_existing(path: &Path) -> Result<PathBuf, String> {
+    let unresolvable = || format!("cannot resolve {}", path.display());
     let mut missing = Vec::new();
     let mut existing = path;
     loop {
         if let Ok(resolved) = existing.canonicalize() {
-            return missing
+            return Ok(missing
                 .iter()
                 .rev()
-                .fold(resolved, |path, part| path.join(part));
+                .fold(resolved, |path, part| path.join(part)));
         }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                missing.push(name.to_owned());
-                existing = parent;
-            }
-            _ => return path.to_path_buf(),
-        }
+        let name = match existing.components().next_back() {
+            Some(std::path::Component::Normal(name)) => name,
+            _ => return Err(unresolvable()),
+        };
+        missing.push(name.to_owned());
+        existing = existing.parent().ok_or_else(unresolvable)?;
     }
 }
 
 /// Whether one path contains the other, however each is spelled.
-fn overlaps(a: &Path, b: &Path) -> bool {
-    let (a, b) = (resolve_existing(a), resolve_existing(b));
-    a.starts_with(&b) || b.starts_with(&a)
+fn overlaps(a: &Path, b: &Path) -> Result<bool, String> {
+    let (a, b) = (resolve_existing(a)?, resolve_existing(b)?);
+    Ok(a.starts_with(&b) || b.starts_with(&a))
 }
 
 /// Refuses inherited locator variables that point inside the target, which
@@ -526,7 +546,7 @@ pub(super) fn ensure_env_does_not_point_at(
             continue;
         }
         let path = PathBuf::from(value);
-        if overlaps(&path, target) {
+        if overlaps(&path, target)? {
             return Err(format!(
                 "refusing to start: inherited {key}={} points at the driver's target {}",
                 path.display(),
@@ -541,7 +561,7 @@ pub(super) fn ensure_env_does_not_point_at(
 /// platform config directory), even though the driver never generates one.
 pub(super) fn ensure_outside_bus_homes(target: &Path, homes: &[PathBuf]) -> Result<(), String> {
     for home in homes {
-        if overlaps(home, target) {
+        if overlaps(home, target)? {
             return Err(format!(
                 "refusing to use {}: it overlaps the Bus home {}",
                 target.display(),

@@ -306,10 +306,10 @@ fn resolving_follows_aliases_without_creating_anything() {
     let (base, pairs) = aliased_dirs("resolve");
     for (real, alias) in &pairs {
         let canonical = real.canonicalize().unwrap();
-        assert_eq!(resolve_existing(alias), canonical);
+        assert_eq!(resolve_existing(alias).unwrap(), canonical);
         let missing = alias.join("not").join("yet");
         assert_eq!(
-            resolve_existing(&missing),
+            resolve_existing(&missing).unwrap(),
             canonical.join("not").join("yet")
         );
         assert!(!real.join("not").exists());
@@ -338,5 +338,22 @@ fn root_guards_see_through_path_aliases() {
         assert!(refusal.contains("live Bus"), "{refusal}");
         assert!(!root.exists());
     }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_path_that_cannot_be_resolved_is_an_error_not_its_spelling() {
+    let base = temp_root("unresolved");
+    create_private_dir(&base).unwrap();
+    // `m` is missing, so `m/..` cannot be resolved without guessing.
+    let dotted = base.join("m").join("..").join("live");
+    assert!(resolve_existing(&dotted).is_err());
+    assert!(!base.join("m").exists());
+    let locator = vec![("BUS_DATA_DIR".to_owned(), base.clone().into_os_string())];
+    assert!(ensure_env_does_not_point_at(&dotted, &locator).is_err());
+    assert!(ensure_outside_bus_homes(&dotted, &[]).is_ok());
+    assert!(ensure_outside_bus_homes(&dotted, std::slice::from_ref(&base)).is_err());
+    assert!(ensure_root_isolated(&dotted, &[], &[]).is_err());
+    assert!(resolve_existing(Path::new("relative")).is_err());
     let _ = std::fs::remove_dir_all(&base);
 }
