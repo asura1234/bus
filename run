@@ -19,30 +19,39 @@ usage() {
     echo "  ./run dev-control agent read 3 --source recent --lines 80" >&2
 }
 
-# Cargo writes where CARGO_TARGET_DIR (or CARGO_BUILD_TARGET_DIR) points, so
-# launch that fresh build, never a stale one under target/.
-cargo_target_dir() {
-    printf '%s\n' "${CARGO_TARGET_DIR:-${CARGO_BUILD_TARGET_DIR:-$REPO_ROOT/target}}"
+# Build bus and print the executable Cargo reports for it. Cargo alone knows
+# its target dir (CARGO_TARGET_DIR, build.target-dir in any config, ...), so
+# launching its report never runs a stale binary from somewhere else.
+build_bus() {
+    local output executable
+    output=$(cargo build --locked --message-format=json-render-diagnostics "$@") || return $?
+    executable=$(printf '%s\n' "$output" | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1)
+    if [[ -z "$executable" ]]; then
+        echo "Cargo reported no bus executable for this build." >&2
+        return 1
+    fi
+    printf '%s\n' "$executable"
 }
 
 case "${1:-}" in
     dev)
         shift
         cd "$REPO_ROOT"
-        cargo build --locked --bin bus --features dev-tools
-        exec "$(cargo_target_dir)/debug/bus" --dev "$@"
+        binary=$(build_bus --bin bus --features dev-tools) || exit $?
+        exec "$binary" --dev "$@"
         ;;
     prod)
         shift
         cd "$REPO_ROOT"
-        cargo build --locked --release --bin bus
-        exec "$(cargo_target_dir)/release/bus" "$@"
+        binary=$(build_bus --release --bin bus) || exit $?
+        exec "$binary" "$@"
         ;;
     dev-control)
         shift
         cd "$REPO_ROOT"
-        # Always the default debug build, as the live Bus runs it: agents set
-        # CARGO_TARGET_DIR for their own builds, which must not become the CLI.
+        # The default debug build, which ./run dev uses when no target dir is
+        # set: agents set CARGO_TARGET_DIR for their own builds, which must not
+        # become the CLI that talks to the live Bus.
         binary="$REPO_ROOT/target/debug/bus"
         if [[ ! -x "$binary" ]]; then
             echo "Bus debug binary is missing; run './run dev' (or 'cargo build --locked --bin bus --features dev-tools') once before dev-control." >&2

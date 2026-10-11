@@ -201,12 +201,9 @@ fn release_builds_leave_dev_tools_off_and_dev_builds_turn_it_on() {
     assert!(!read("packaging/nix/package.nix").contains("buildFeatures"));
     assert!(!read("justfile").contains("dev-tools"));
     let run = read("run");
+    assert!(run.contains("build_bus --release --bin bus)"), "prod");
     assert!(
-        run.contains("cargo build --locked --release --bin bus\n"),
-        "prod"
-    );
-    assert!(
-        run.contains("cargo build --locked --bin bus --features dev-tools\n"),
+        run.contains("build_bus --bin bus --features dev-tools)"),
         "dev"
     );
     let cutover = read("tools/cutover.sh");
