@@ -108,6 +108,26 @@ class CutoverTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, str(Path.home() / ".local/share/bus/sessions/0123456789abcdef"))
 
+    def test_candidate_is_built_as_the_dev_variant_it_resumes_with_dev(self):
+        fake_bin = self.root / "fake-bin"
+        fake_bin.mkdir()
+        args_file = self.root / "cargo-args"
+        cargo = fake_bin / "cargo"
+        cargo.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$FAKE_CARGO_ARGS"\n')
+        cargo.chmod(0o700)
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1" 0123456789abcdef; build_candidate "$2" "$3"',
+             "cutover-test", str(Path(cutover.__file__).with_suffix(".sh")),
+             str(self.root / "target"), str(self.root / "build.log")],
+            env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                 "FAKE_CARGO_ARGS": str(args_file)},
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = args_file.read_text().splitlines()
+        self.assertIn("--features", args, "cutover resumes with --dev, so it must install the dev variant")
+        self.assertEqual(args[args.index("--features") + 1], "dev-tools")
+
     def run_cutover(self, outcome):
         repo = self.root / "repo"
         (repo / "tools").mkdir(parents=True)

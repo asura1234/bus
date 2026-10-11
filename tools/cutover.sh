@@ -98,7 +98,7 @@ backup_session() {
 
 build_candidate() {
     local target_dir=$1 log=$2 status
-    if env -u BUS_UPDATE_API_SCHEMA -u CARGO_BUILD_TARGET CARGO_TARGET_DIR="$target_dir" BUS_BUILD_CHANNEL=dev BUS_BUILD_ID="$bus_cutover_verified_head" LIBGHOSTTY_VT_SIMD=true cargo build --locked --bin bus >"$log" 2>&1; then
+    if env -u BUS_UPDATE_API_SCHEMA -u CARGO_BUILD_TARGET CARGO_TARGET_DIR="$target_dir" BUS_BUILD_CHANNEL=dev BUS_BUILD_ID="$bus_cutover_verified_head" LIBGHOSTTY_VT_SIMD=true cargo build --locked --bin bus --features dev-tools >"$log" 2>&1; then
         return 0
     else
         status=$?
