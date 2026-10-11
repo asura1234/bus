@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 /// Red, blue, yellow and cyan quadrants, clockwise from the top left.
-const QUADRANTS: [[u8; 3]; 4] = [[220, 40, 40], [40, 90, 220], [40, 200, 220], [230, 210, 40]];
+const QUADRANTS: [[u8; 3]; 4] = [[220, 40, 40], [40, 90, 220], [230, 210, 40], [40, 200, 220]];
 const IMAGE_W: u32 = 160;
 const IMAGE_H: u32 = 100;
 
@@ -78,3 +78,7 @@ fn write_image(path: &Path) -> Result<u64, String> {
     std::fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(bytes.len() as u64)
 }
+
+#[cfg(test)]
+#[path = "tests/fixtures_test.rs"]
+mod tests;
