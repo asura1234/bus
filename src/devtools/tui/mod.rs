@@ -211,7 +211,8 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
 
     let log = std::fs::File::create(paths.host_log()).map_err(|e| e.to_string())?;
     let mut host = std::process::Command::new(&binary);
-    host.args(["--dev", "tui", "__host", "--name", name])
+    host.current_dir(&paths.dir)
+        .args(["--dev", "tui", "__host", "--name", name])
         .args(["--size", &format!("{cols}x{rows}")])
         .arg("--run-dir")
         .arg(&run_dir)
@@ -342,6 +343,12 @@ pub(super) fn bus_command(
     timeout: Duration,
 ) -> CommandOutput {
     let mut command = std::process::Command::new(binary);
+    // Run from the session directory, never the caller's checkout.
+    if let Some((_, data_dir)) = env.iter().find(|(key, _)| key == "BUS_DATA_DIR") {
+        if let Some(session_dir) = Path::new(data_dir).parent() {
+            command.current_dir(session_dir);
+        }
+    }
     command
         .args(args)
         .env_clear()

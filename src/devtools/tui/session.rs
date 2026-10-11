@@ -50,6 +50,9 @@ const INHERITED_VARS: &[&str] = &[
     "TEMP",
     "TMP",
     "PROGRAMDATA",
+    // Coverage runs: instrumented processes write profiles where the gate collects
+    // them instead of into their working directory.
+    "LLVM_PROFILE_FILE",
     "ProgramFiles",
     "ProgramFiles(x86)",
 ];
