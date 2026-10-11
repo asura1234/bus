@@ -22,6 +22,7 @@ IF BUS_DATA_DIR, BUS_SESSION_ID or any HERDR_* is set in your environment
 Run: ./run tui list
 IF it fails: STOP with its output; the build is broken, nothing was tested.
 T = the driver command: `./run tui` (each call rebuilds only if sources changed)
+Every driver call for a case names its session: `T <verb> --name <name> ...`.
 
 -- Start the report from the doc; never write case or step headings by hand.
 Run:

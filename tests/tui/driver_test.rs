@@ -6,7 +6,7 @@
 #![cfg(all(target_os = "macos", feature = "dev-tools"))]
 
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Each test drives its own session; names stay unique across test processes.
@@ -434,6 +434,81 @@ fn stop_reports_when_effect_recording_cannot_be_archived() {
         kept.contains("fixture.aiff"),
         "the original recording must survive a failed archive: {stopped}"
     );
+}
+
+/// Attaches the session's `notes.txt` fixture the way the skill guide says:
+/// Ctrl+O, clear the form's `~/`, type the absolute path, Enter.
+fn attach_notes_with_the_file_form(session: &Session) -> String {
+    let fixture = session.ok(&["fixture", "file", "--file", "notes.txt"]);
+    let path = fixture["path"].as_str().unwrap().to_owned();
+    session.ok(&["press", "ctrl+o"]);
+    session.ok(&["wait", "--text", "Local file path"]);
+    session.ok(&["press", "ctrl+a"]);
+    session.ok(&["press", "ctrl+k"]);
+    session.ok(&["type", &path]);
+    session.ok(&["press", "enter"]);
+    session.ok(&[
+        "wait",
+        "--text",
+        "Local file path",
+        "--gone",
+        "--timeout",
+        "5s",
+    ]);
+    session.ok(&["wait", "--text", "[notes.txt", "--timeout", "5s"]);
+    path
+}
+
+#[test]
+fn hovering_a_draft_attachment_chip_shows_its_full_path() {
+    let session = Session::start("hov");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let path = attach_notes_with_the_file_form(&session);
+    let hits = session.ok(&["hits"]);
+    let names: Vec<&str> = hits["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|hit| hit["name"].as_str())
+        .collect();
+    // A draft chip is `remove-file:NAME`; `file:NAME` is a history attachment.
+    assert!(names.contains(&"remove-file:notes.txt"), "{names:?}");
+    assert!(!names.contains(&"file:notes.txt"), "{names:?}");
+    session.ok(&["hover", "--hit", "remove-file:notes.txt"]);
+    let dir = Path::new(&path).parent().unwrap().file_name().unwrap();
+    let (code, value) = tui(
+        &session.0,
+        &[
+            "wait",
+            "--text",
+            &format!("{}/notes.txt", dir.to_str().unwrap()),
+            "--timeout",
+            "3s",
+        ],
+    );
+    assert_eq!(code, 0, "full path not shown after hover: {value}");
+}
+
+#[test]
+fn the_file_form_attaches_a_typed_absolute_path() {
+    let session = Session::start("pst");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    attach_notes_with_the_file_form(&session);
+}
+
+#[test]
+fn pasting_an_absolute_path_into_the_composer_attaches_it() {
+    let session = Session::start("psc");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let fixture = session.ok(&["fixture", "file", "--file", "notes.txt"]);
+    let path = fixture["path"].as_str().unwrap().to_owned();
+    session.ok(&["click", "--hit", "composer"]);
+    session.ok(&["paste", &path]);
+    let (code, value) = tui(
+        &session.0,
+        &["wait", "--text", "[notes.txt", "--timeout", "5s"],
+    );
+    assert_eq!(code, 0, "composer paste of a path: {value}");
 }
 
 #[test]

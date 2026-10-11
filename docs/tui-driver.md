@@ -60,7 +60,7 @@ Exit codes:
 
 After Bus exits (Ctrl+Q, a crash), `status`, `snapshot`, `find`, `cells`,
 `screenshot`, `effects` and `clipboard` still read the last screen and the
-records; input verbs exit 3.
+records, and `stop` still cleans up; every other verb exits 3.
 
 Sessions: every verb takes `--name NAME` (default `s1`, or `$BUS_TUI_SESSION`).
 At most 4 sessions run at once.

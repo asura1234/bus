@@ -38,12 +38,15 @@ you saw. You do not decide what the product should do, and you never change the 
 ## Driving notes (Bus as of the driver's layer 3)
 
 - Settings opens by mouse only: `click --hit settings`. Rows are hits too (`color-blind`,
-  `sound:ROOM`, `sound-next:ROOM`, `compaction-limit:up`). Colour-blind mode changes only agent
-  identity colours, slightly (e.g. `#dd00ff` to `#dd33ff`): compare `cells`, do not eyeball.
+  `sound:ROOM`, `sound-next:ROOM`, `compaction-limit:up`). Colour-blind mode swaps agent identity
+  colours for a separate accessible palette, some barely different (`#dd00ff` to `#dd33ff`),
+  some far apart (`#aa7733` to `#eebbff`): compare `cells`, do not eyeball.
 - The add-agent form: providers are hits `provider:claude|codex|cursor`; its PWD field starts
   as `~/`.
-- Attaching: Ctrl+O opens the path form; pasting absolute paths separated by spaces attaches
-  them; `fixture clipboard-image` then Ctrl+V pastes an image. Bus stores an attached image
+- Attaching: Ctrl+O opens the path form, which starts with `~/`: clear it (Ctrl+A, Ctrl+K),
+  type one absolute path, Enter. A paste into that form lands after the `~/`. To attach several
+  files at once, paste their absolute paths, separated by spaces, into the composer with no
+  form open. `fixture clipboard-image` then Ctrl+V in the composer pastes an image. Bus stores an attached image
   under a content-hash name (`paste-<hash>.png`), so the original file name never shows for
   images: assert `[paste-`, the delivered `files`, or the picture itself.
 - Fixtures: `fixture image --pattern quadrants|red-diagonal|blue-circle --file F`,
@@ -55,7 +58,9 @@ you saw. You do not decide what the product should do, and you never change the 
 - Fake agents answer each delivered prompt a moment later with `fake reply: <prompt>`. The
   echo adds find matches and pushes history, so let deliveries settle (`bus history` shows
   every request `replied`) before judging counts, positions or drags.
-- Hover details (a chip's full path): `hover --hit file:NAME` or `--text`, then read the screen.
+- Hover details (a chip's full path): a draft chip in the composer is `hover --hit
+  remove-file:NAME`, an attachment in history is `hover --hit file:NAME`; or `--text`. Then
+  read the screen.
 - Opens: links and files Bus opens are `open` effects with the exact target; nothing opens.
 - Real screenshots need macOS, Ghostty in /Applications and Screen Recording permission; a
   window flashes briefly. If the grid does not fit the screen the driver says so; resize the
