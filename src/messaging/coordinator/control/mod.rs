@@ -1,4 +1,4 @@
-//! Dev receipts, validation and routing on the existing single-writer coordinator.
+//! Control receipts, tiers, validation and routing on the existing single-writer coordinator.
 mod agents;
 mod dialogs;
 mod inspect;
@@ -21,12 +21,12 @@ use crate::messaging::model::MASTER_ROOM_NAME;
 use serde_json::{json, Value};
 
 /// Receipts younger than this are never evicted, so a retry within it replays.
-pub(super) const DEV_RECEIPT_RETENTION: Duration = Duration::from_secs(10 * 60);
+pub(super) const CONTROL_RECEIPT_RETENTION: Duration = Duration::from_secs(10 * 60);
 /// At most this many receipts are kept inside the retention window.
-const DEV_RECEIPT_LIMIT: usize = 1024;
+const CONTROL_RECEIPT_LIMIT: usize = 1024;
 
 /// A committed mutation's response, replayed for a retry with the same ID.
-pub(super) struct DevReceipt {
+pub(super) struct ControlReceipt {
     request: ControlRequest,
     response: Response,
     at: std::time::Instant,
@@ -35,11 +35,11 @@ pub(super) struct DevReceipt {
 
 impl Worker {
     #[cfg(test)]
-    fn dev_response(&mut self, request: &ControlRequest) -> Response {
-        self.dev_response_with_events(request, None)
+    fn control_response(&mut self, request: &ControlRequest) -> Response {
+        self.control_response_with_events(request, None)
     }
 
-    pub(super) fn dev_response_with_events(
+    pub(super) fn control_response_with_events(
         &mut self,
         request: &ControlRequest,
         events: Option<&mpsc::Sender<BusEvent>>,
@@ -51,7 +51,7 @@ impl Worker {
                 "Request ID must contain 1–128 bytes",
             );
         }
-        if let Some(receipt) = self.dev_receipts.get(&request.id) {
+        if let Some(receipt) = self.control_receipts.get(&request.id) {
             return if receipt.request.method == request.method
                 && receipt.request.params == request.params
             {
@@ -102,13 +102,13 @@ impl Worker {
                 "Explicit --confirm is required",
             );
         }
-        let reserve = match self.reserve_dev_receipt(request, mutation) {
+        let reserve = match self.reserve_control_receipt(request, mutation) {
             Ok(reserve) => reserve,
             Err(response) => return response,
         };
-        let _span = tracing::info_span!("bus.dev.command", control_request_id = %request.id, method = %request.method).entered();
+        let _span = tracing::info_span!("bus.control.command", control_request_id = %request.id, method = %request.method).entered();
         let started = std::time::Instant::now();
-        let response = match self.dev_execute(&request.method, &request.params, events) {
+        let response = match self.control_execute(&request.method, &request.params, events) {
             Ok(result) => Response::success(&request.id, result),
             Err(error) => {
                 // Detailed domain diagnostics remain available via state and log IDs.
@@ -120,17 +120,17 @@ impl Worker {
             }
         };
         tracing::info!(
-            event = "bus.dev.command.result",
+            event = "bus.control.command.result",
             ok = response.ok,
             elapsed_ms = started.elapsed().as_millis() as u64,
-            "Bus dev command finished"
+            "Bus control command finished"
         );
         if mutation {
-            self.dev_receipt_bytes = self.dev_receipt_bytes.saturating_add(reserve);
-            self.dev_receipt_order.push_back(request.id.clone());
-            self.dev_receipts.insert(
+            self.control_receipt_bytes = self.control_receipt_bytes.saturating_add(reserve);
+            self.control_receipt_order.push_back(request.id.clone());
+            self.control_receipts.insert(
                 request.id.clone(),
-                DevReceipt {
+                ControlReceipt {
                     request: request.clone(),
                     response: response.clone(),
                     at: std::time::Instant::now(),
@@ -141,7 +141,7 @@ impl Worker {
         response
     }
 
-    fn reserve_dev_receipt(
+    fn reserve_control_receipt(
         &mut self,
         request: &ControlRequest,
         mutation: bool,
@@ -161,37 +161,37 @@ impl Worker {
             .map_or(usize::MAX, |v| v.len())
             .saturating_add(4096);
         if mutation {
-            self.evict_expired_dev_receipts();
+            self.evict_expired_control_receipts();
         }
         if mutation
-            && (self.dev_receipts.len() >= DEV_RECEIPT_LIMIT
-                || self.dev_receipt_bytes.saturating_add(reserve) > 8 * 1024 * 1024)
+            && (self.control_receipts.len() >= CONTROL_RECEIPT_LIMIT
+                || self.control_receipt_bytes.saturating_add(reserve) > 8 * 1024 * 1024)
         {
             return Err(Response::failure(
                 &request.id,
                 "receipt_capacity",
-                "Dev mutation receipt limit reached; restart when safe",
+                "Control mutation receipt limit reached; restart when safe",
             ));
         }
         Ok(reserve)
     }
 
-    fn evict_expired_dev_receipts(&mut self) {
-        while let Some(id) = self.dev_receipt_order.front() {
-            let Some(receipt) = self.dev_receipts.get(id) else {
-                self.dev_receipt_order.pop_front();
+    fn evict_expired_control_receipts(&mut self) {
+        while let Some(id) = self.control_receipt_order.front() {
+            let Some(receipt) = self.control_receipts.get(id) else {
+                self.control_receipt_order.pop_front();
                 continue;
             };
-            if receipt.at.elapsed() < self.dev_receipt_retention {
+            if receipt.at.elapsed() < self.control_receipt_retention {
                 break;
             }
-            self.dev_receipt_bytes = self.dev_receipt_bytes.saturating_sub(receipt.bytes);
-            self.dev_receipts.remove(id);
-            self.dev_receipt_order.pop_front();
+            self.control_receipt_bytes = self.control_receipt_bytes.saturating_sub(receipt.bytes);
+            self.control_receipts.remove(id);
+            self.control_receipt_order.pop_front();
         }
     }
 
-    fn dev_command(&mut self, command: BusCommand) -> Result<Value, String> {
+    fn control_command(&mut self, command: BusCommand) -> Result<Value, String> {
         // Do not send navigation side effects to the human's TUI event queue.
         let (tx, rx) = mpsc::channel();
         self.command(command, &tx)?;
@@ -215,7 +215,7 @@ impl Worker {
         Ok(json!({"updated":true}))
     }
 
-    fn dev_execute(
+    fn control_execute(
         &mut self,
         method: &str,
         p: &Value,

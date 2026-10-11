@@ -42,7 +42,7 @@ fn fixture() -> (Worker, RoomId, AgentId, PathBuf) {
 }
 
 fn call(worker: &mut Worker, id: &str, method: &str, params: serde_json::Value) -> Response {
-    worker.dev_response(&ControlRequest {
+    worker.control_response(&ControlRequest {
         id: id.into(),
         method: method.into(),
         params,

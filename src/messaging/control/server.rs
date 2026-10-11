@@ -5,7 +5,7 @@ use super::protocol::{
     encode, poll_write, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
     MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME, WORKER_TIMEOUT,
 };
-pub(crate) use super::protocol::{DevCall, Request, Response};
+pub(crate) use super::protocol::{ControlCall, Request, Response};
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
 use crate::platform::ipc;
 use interprocess::local_socket::{traits::Listener as _, ListenerNonblockingMode};
@@ -24,7 +24,7 @@ use std::{
 };
 
 const MAX_CLIENTS: usize = 16;
-const DEV_COMMAND_BIT: u64 = 1 << 63;
+const CONTROL_COMMAND_BIT: u64 = 1 << 63;
 
 pub(crate) struct Server {
     stopped: Arc<AtomicBool>,
@@ -96,7 +96,7 @@ fn serve(
     stopped: Arc<AtomicBool>,
 ) {
     let mut clients = Vec::new();
-    let mut next_id = DEV_COMMAND_BIT;
+    let mut next_id = CONTROL_COMMAND_BIT;
     while !stopped.load(Ordering::Acquire) {
         // Limit accept work per pass so connection floods cannot starve existing calls.
         for _ in 0..MAX_CLIENTS {
@@ -120,7 +120,7 @@ fn serve(
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => {
                     tracing::warn!(
-                        event = "bus.dev.transport.failed",
+                        event = "bus.control.transport.failed",
                         stage = "accept",
                         "Control listener failed"
                     );
@@ -274,8 +274,11 @@ impl Client {
         let id = request.id.clone();
         let (reply, receiver) = mpsc::sync_channel(1);
         let command_id = *next_id;
-        *next_id = next_id.wrapping_add(1) | DEV_COMMAND_BIT;
-        match commands.try_send((command_id, BusCommand::Dev(DevCall { request, reply }))) {
+        *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;
+        match commands.try_send((
+            command_id,
+            BusCommand::Control(ControlCall { request, reply }),
+        )) {
             Ok(()) => {
                 self.state = State::Waiting {
                     id,

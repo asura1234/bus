@@ -171,6 +171,16 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
     assert_eq!(dev_tier_mentions(AGENT_HELP), Vec::<String>::new());
 }
 
+/// `DEV_HELP` is compiled in from docs/dev-tools.md, so every source closure
+/// that builds Bus must carry that file.
+#[test]
+fn the_dev_help_source_ships_with_the_cargo_and_nix_sources() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |path: &str| std::fs::read_to_string(repo.join(path)).unwrap();
+    assert!(read("Cargo.toml").contains("\"docs/dev-tools.md\""));
+    assert!(read("packaging/nix/package.nix").contains("../../docs/dev-tools.md"));
+}
+
 #[test]
 fn orchestrators_have_no_reassign_command() {
     assert!(command(&["agent", "orchestrate", "claude-orch", "--none"]).is_err());
@@ -1332,4 +1342,34 @@ fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy
     assert!(pauses[5..]
         .iter()
         .all(|pause| *pause == Duration::from_secs(2)));
+}
+
+/// `bus --help` hides the dev tier, but clap's own errors for an incomplete
+/// or mistyped agent-tier command should not advertise dev tools either.
+#[test]
+fn parse_errors_do_not_advertise_dev_tools() {
+    for args in [
+        &["room"][..],
+        &["agent"][..],
+        &["settings", "x"][..],
+        &["room", "focs", "r"][..],
+    ] {
+        let error = command(args).unwrap_err();
+        for dev in [
+            "focus",
+            "seen",
+            "sound",
+            "details",
+            "color-blind",
+            "room-sound",
+            "diagnostics",
+            "sounds",
+            "quit",
+        ] {
+            assert!(
+                !error.contains(dev),
+                "{args:?} names dev tool {dev}: {error}"
+            );
+        }
+    }
 }
