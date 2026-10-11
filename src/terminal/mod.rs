@@ -11,5 +11,6 @@ pub(crate) use history::{merge_scrolled_up, snapshot_text, ScreenSnapshot, Upwar
 pub(crate) use registry::TerminalRuntimeRegistry;
 pub use runtime::TerminalRuntime;
 pub use state::{
-    EffectivePresentation, EffectiveStateChange, TerminalState, TerminalStateMutation,
+    EffectivePresentation, EffectiveStateChange, SelfUpdate, SelfUpdatePhase, TerminalState,
+    TerminalStateMutation,
 };

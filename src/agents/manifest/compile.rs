@@ -73,6 +73,20 @@ fn validate_manifest(manifest: &AgentManifest) -> Result<(), String> {
                 rule.id, TOP_NON_EMPTY_LINES_ENGINE_VERSION
             ));
         }
+        if let Some(update) = &rule.auto_update {
+            if update.choose.trim().is_empty() || update.success.trim().is_empty() {
+                return Err(format!(
+                    "rule {} needs a non-empty auto_update choose and success",
+                    rule.id
+                ));
+            }
+            if rule.state != Some(ManifestState::Blocked) {
+                return Err(format!(
+                    "rule {} uses auto_update without state = \"blocked\"",
+                    rule.id
+                ));
+            }
+        }
         validate_rule_gate(rule, &mut complexity)
             .map_err(|err| format!("rule {} has invalid matcher gates: {err}", rule.id))?;
     }

@@ -192,6 +192,7 @@ impl TerminalState {
         self.agent_name = None;
         self.agent_name_owner = None;
         self.managed_agent = None;
+        self.managed_agent_args = None;
     }
 
     pub(super) fn reconcile_agent_name_owner(

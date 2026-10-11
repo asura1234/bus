@@ -237,6 +237,37 @@ mod status_tests {
     }
 
     #[test]
+    fn a_failed_self_update_shows_its_error_until_the_chooser_is_answered() {
+        let error = "Bus could not install the codex update (npm failed). Answer the update prompt in bus-r1-a2's terminal; queued messages wait until then.";
+        let mut failed = pane_listing(Some("codex"), "blocked");
+        if let Ok(ResponseResult::AgentList { agents }) = &mut failed {
+            agents[0].dialog_id = Some("chooser".into());
+            agents[0].update_error = Some(error.into());
+        }
+        let failed_again = failed.clone();
+        let (mut worker, agent, room, dir, _) = fixture(
+            Provider::Codex,
+            vec![failed, failed_again, pane_listing(Some("codex"), "idle")],
+        );
+        let shown = |worker: &Worker| worker.state.agent(agent).unwrap().actionable_error.clone();
+        worker.poll().unwrap();
+        assert_eq!(shown(&worker).as_deref(), Some(error));
+        let request = queue(&mut worker, room, agent, "waits for the chooser");
+        worker.poll().unwrap();
+        assert_eq!(shown(&worker).as_deref(), Some(error));
+        assert_eq!(
+            worker
+                .state
+                .stall_reason(worker.state.request(request).unwrap(), u64::MAX),
+            None
+        );
+        worker.poll().unwrap();
+        assert_eq!(shown(&worker), None);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn an_agent_whose_provider_is_not_running_is_unavailable_until_it_returns() {
         let no_agents = Ok(ResponseResult::AgentList { agents: Vec::new() });
         let (mut worker, agent, room, dir, calls) = fixture(

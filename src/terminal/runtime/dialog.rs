@@ -92,6 +92,26 @@ impl TerminalRuntime {
         ))
     }
 
+    /// Choose the live dialog option whose label starts with `label`. The
+    /// choice re-checks the dialog under the content lock, so a screen that
+    /// changed in between is `Stale` and gets no keys.
+    pub(crate) fn try_choose_dialog_option_labeled(
+        &self,
+        label: &str,
+    ) -> Result<DialogChoice, String> {
+        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi()) else {
+            return Ok(DialogChoice::Stale);
+        };
+        let Some(option) = dialog
+            .options
+            .iter()
+            .find(|option| option.label.starts_with(label))
+        else {
+            return Ok(DialogChoice::Unreachable);
+        };
+        self.try_choose_dialog_option(&dialog.digest(), option.number)
+    }
+
     pub(crate) fn try_answer_dialog(
         &self,
         expected_digest: &str,

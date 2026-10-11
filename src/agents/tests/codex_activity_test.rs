@@ -108,9 +108,11 @@ fn codex_running_its_own_updater_is_not_idle() {
         "Updating Codex via `npm install -g @openai/codex`...\n",
         "⠙\n",
     );
-    // The stale Codex title must not read as idle either.
+    // The stale Codex title must not read as idle either. Working, not
+    // Unknown: an install can outlast the queued-message stall timeout, and
+    // Bus waits on a working agent instead of closing its queue.
     let result = codex_detection(updating, "bus");
-    assert_eq!(result.state, AgentState::Unknown);
+    assert_eq!(result.state, AgentState::Working);
     assert!(!result.skip_state_update, "the change must be published");
 
     // Once Codex is back, its prompt sits below the old update line.
