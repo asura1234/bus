@@ -49,6 +49,10 @@ path = "tests/cli/cli_test.rs"
 name = "room-screen"
 path = "tests/client/room_screen_test.rs"
 
+[[test]]
+name = "tui-driver"
+path = "tests/tui/driver_test.rs"
+
 [features]
 # Test tooling compiled only into the dev variant (`./run dev`): the TUI
 # driver and any dependency that exists only for it. Release builds
