@@ -381,3 +381,56 @@ fn waits_report_a_bus_that_exited() {
         );
     }
 }
+
+#[test]
+fn a_refused_root_override_leaves_the_directory_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = PathBuf::from(format!("/tmp/bus-tui-it-root{}", std::process::id()));
+    let live = base.join("live-data");
+    let foreign = base.join("foreign");
+    for dir in [&live, &foreign] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("state.json"), b"{\"sentinel\":true}").unwrap();
+    }
+    let _listener = std::os::unix::net::UnixListener::bind(live.join("control.sock")).unwrap();
+    let snapshot = |dir: &PathBuf| {
+        let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        names.sort();
+        (mode, names)
+    };
+    let runs = run_dir();
+    let cases = [
+        // An inherited live Bus data dir as the root.
+        (&live, vec![("BUS_DATA_DIR", live.to_str().unwrap())]),
+        // A directory with someone else's files in it.
+        (&foreign, vec![]),
+    ];
+    let mut results = Vec::new();
+    for (dir, extra) in cases {
+        let before = snapshot(dir);
+        let mut env = vec![("BUS_TUI_ROOT", dir.to_str().unwrap())];
+        env.extend(extra);
+        let (code, reply) = parse(tui_raw(
+            &session_name("root"),
+            &["start", "--run-dir", runs.to_str().unwrap()],
+            &env,
+        ));
+        results.push((dir.clone(), code, reply, before, snapshot(dir)));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    for (dir, code, reply, before, after) in results {
+        assert_eq!(code, 1, "{}: {reply}", dir.display());
+        assert_eq!(reply["error"]["code"], "refused", "{reply}");
+        assert_eq!(
+            after,
+            before,
+            "{} was changed by a refused start",
+            dir.display()
+        );
+    }
+}

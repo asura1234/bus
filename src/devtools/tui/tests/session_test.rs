@@ -258,3 +258,29 @@ fn teardown_signals_only_processes_carrying_the_session_token() {
         assert_eq!(found, vec![owned.id()]);
     }
 }
+
+#[test]
+fn a_driver_root_must_be_isolated_before_start_touches_it() {
+    // An inherited live Bus data dir used as the root: refused, untouched.
+    let live = temp_root("rootlive");
+    create_private_dir(&live).unwrap();
+    std::fs::write(live.join("state.json"), b"{}").unwrap();
+    let _listener = crate::platform::ipc::bind_local_listener(&live.join("control.sock")).unwrap();
+    let before = std::fs::read_dir(&live).unwrap().count();
+    let pointing = vec![("BUS_DATA_DIR".to_owned(), live.clone().into_os_string())];
+    assert!(ensure_root_isolated(&live, &pointing, &[]).is_err());
+    assert!(ensure_root_isolated(&live, &[], &[]).is_err());
+    assert_eq!(std::fs::read_dir(&live).unwrap().count(), before);
+    assert!(!live.join(ROOT_LOCK).exists());
+    let _ = std::fs::remove_dir_all(&live);
+    // A Bus home, or a root inside one, is refused.
+    let home = PathBuf::from("/Users/me/.local/share/bus");
+    assert!(ensure_root_isolated(&home.join("x"), &[], std::slice::from_ref(&home)).is_err());
+    // A missing root, or one the driver made, is fine.
+    let fresh = temp_root("rootfresh");
+    assert!(ensure_root_isolated(&fresh, &[], &[]).is_ok());
+    create_private_dir(&fresh).unwrap();
+    drop(lock_root(&fresh).unwrap());
+    assert!(ensure_root_isolated(&fresh, &[], &[]).is_ok());
+    let _ = std::fs::remove_dir_all(&fresh);
+}

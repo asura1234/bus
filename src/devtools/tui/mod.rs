@@ -203,6 +203,11 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         return Ok(failure("refused", message));
     }
     let root = session::driver_root();
+    if let Err(message) =
+        session::ensure_root_isolated(&root, &session::inherited_env(), &session::bus_homes())
+    {
+        return Ok(failure("refused", message));
+    }
     session::create_private_dir(&root).map_err(|e| e.to_string())?;
     let paths = SessionPaths::new(&root, name);
     let claim = session::Claim::new(name);

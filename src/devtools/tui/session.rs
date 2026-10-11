@@ -304,6 +304,36 @@ pub(super) fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// Refuses a driver root that is, contains or sits inside a Bus location
+/// (an inherited locator, a Bus home, a live data dir), and an existing
+/// `$BUS_TUI_ROOT` the driver did not create. Runs before `start` creates,
+/// chmods or locks anything in the root.
+pub(super) fn ensure_root_isolated(
+    root: &Path,
+    inherited: &[(String, OsString)],
+    homes: &[PathBuf],
+) -> Result<(), String> {
+    ensure_env_does_not_point_at(root, inherited)?;
+    ensure_outside_bus_homes(root, homes)?;
+    ensure_not_live_bus(root)?;
+    let overridden = std::env::var_os(ROOT_ENV).is_some_and(|value| Path::new(&value) == root);
+    let entries = std::fs::read_dir(root).map(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>()
+    });
+    match entries {
+        Ok(names) if overridden && !names.is_empty() && !names.iter().any(|n| n == ROOT_LOCK) => {
+            Err(format!(
+                "refusing {ROOT_ENV}={}: it already holds files the driver did not create; use a new or empty directory",
+                root.display()
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Holds the root lock while a `start` checks and claims a name, so two
 /// starts never both judge the same directory stale or free.
 pub(super) fn lock_root(root: &Path) -> std::io::Result<std::fs::File> {
