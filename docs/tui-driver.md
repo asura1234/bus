@@ -58,6 +58,10 @@ Exit codes:
 - 2: usage error (run the verb with `--help`)
 - 3: no session, or the Bus under it died
 
+After Bus exits (Ctrl+Q, a crash), `status`, `snapshot`, `find`, `cells`,
+`screenshot`, `effects` and `clipboard` still read the last screen and the
+records; input verbs exit 3.
+
 Sessions: every verb takes `--name NAME` (default `s1`, or `$BUS_TUI_SESSION`).
 At most 4 sessions run at once.
 
@@ -67,16 +71,17 @@ left edge. Prefer `--text` targets to raw coordinates.
 Artifacts: each session writes a run folder with `trace.ndjson` (every
 request and its result), `pty.cast` (asciicast of the terminal, input and
 output), `pty.raw` (the exact output bytes), `shots/` (screenshots) and, after
-`stop`, the Bus logs. Inside a Bus checkout it lives under
-`temp/tui-driver/runs/`, otherwise under `~/.local/state/bus/tui-runs/`.
+`stop`, the Bus logs and `effects.ndjson` (every recorded effect). Inside a Bus
+checkout it lives under `temp/tui-driver/runs/`, otherwise under
+`~/.local/state/bus/tui-runs/`.
 
 Verbs: start, stop, status, list, bus, snapshot, find, cells, screenshot,
-hits, type, paste, press, click, drag, scroll, resize, focus, wait, expect,
-effects, clipboard, fixture, journey, gc.
+hits, type, paste, press, click, hover, drag, scroll, resize, focus, wait,
+expect, effects, clipboard, fixture, journey, gc.
 
-Targets: click, scroll and `wait --style` take a cell `ROW COL`, a visible
-text `--text TEXT [--regex] [--nth N] [--rows A-B]`, or a named region of the
-room UI `--hit NAME` (see `hits`). Prefer `--hit`, then `--text`.
+Targets: click, hover, scroll and `wait --style` take a cell `ROW COL`, a
+visible text `--text TEXT [--regex] [--nth N] [--rows A-B]`, or a named
+region of the room UI `--hit NAME` (see `hits`). Prefer `--hit`, then `--text`.
 Run `bus --dev tui VERB --help` for one verb.
 
 ### start
@@ -189,6 +194,12 @@ terminal negotiated, so Esc never waits out a timeout.
 Clicks a cell, or the middle of a visible text match. A text that matches
 more than once needs `--nth N` or `--rows`. `--double` sends two clicks
 inside Bus's double-click window.
+
+### hover
+`hover (ROW COL | --text TEXT | --hit NAME)`
+
+Moves the pointer onto a target with no button down, as a mouse does before
+a click, so tooltips and hover details show.
 
 ### drag
 `drag ROW1 COL1 ROW2 COL2 | --from-text A --to-text B [--button B] [--mods M]`

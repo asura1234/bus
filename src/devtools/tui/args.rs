@@ -230,7 +230,7 @@ pub(super) fn command(verb: &str, parsed: &mut Parsed) -> Result<Command, String
             }
             Command::Press { keys }
         }
-        "click" | "drag" | "scroll" => pointer_command(verb, parsed)?,
+        "click" | "drag" | "scroll" | "hover" => pointer_command(verb, parsed)?,
         "resize" => {
             let (cols, rows) = parse_size(&parsed.positional().ok_or("usage: resize COLSxROWS")?)?;
             Command::Resize { cols, rows }
@@ -297,6 +297,9 @@ fn pointer_command(verb: &str, parsed: &mut Parsed) -> Result<Command, String> {
                 mods,
             }
         }
+        "hover" => Command::Hover {
+            target: target(parsed, "--text")?,
+        },
         "scroll" => {
             let (up, notches) = match (parsed.take_value("--up"), parsed.take_value("--down")) {
                 (Some(n), None) => (true, number(&n, "--up")?),

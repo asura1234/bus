@@ -442,6 +442,11 @@ impl Host {
             &self.info.data_dir,
             &self.info.run_dir.join("logs")
         ));
+        // The effect log lives in the session dir, which stop removes; keep it.
+        let _ = std::fs::copy(
+            self.paths.effects_log(),
+            self.info.run_dir.join("effects.ndjson"),
+        );
         let leftovers = super::session::pids_owned(&self.paths.dir, &self.token);
         for pid in &leftovers {
             super::session::terminate(*pid);

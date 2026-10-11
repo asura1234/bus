@@ -277,6 +277,7 @@ fn help_comes_from_the_doc_sections() {
         "effects",
         "fixture",
         "focus",
+        "hover",
     ] {
         assert!(
             help_for(shipped, verb).is_some(),

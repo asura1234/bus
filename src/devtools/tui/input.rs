@@ -126,6 +126,11 @@ pub(super) fn click(row: u16, col: u16, button: Button, mods: Mods) -> Vec<u8> {
     bytes
 }
 
+/// The pointer moving onto a cell with no button down (SGR motion, code 35).
+pub(super) fn hover(row: u16, col: u16) -> Vec<u8> {
+    sgr(35, row, col, true)
+}
+
 /// Press at `from`, move through a few cells, release at `to`.
 pub(super) fn drag(from: (u16, u16), to: (u16, u16), button: Button, mods: Mods) -> Vec<Vec<u8>> {
     let code = button.code() + mods.bits();

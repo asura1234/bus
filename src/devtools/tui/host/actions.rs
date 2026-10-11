@@ -107,8 +107,19 @@ impl Host {
     }
 
     pub(super) fn handle(&mut self, command: Command) -> Value {
+        // After Bus exits, the last screen and the records stay readable.
         if let Some(reason) = self.exited() {
-            if !matches!(command, Command::Stop | Command::Status) {
+            if !matches!(
+                command,
+                Command::Stop
+                    | Command::Status
+                    | Command::Snapshot { .. }
+                    | Command::Find { .. }
+                    | Command::Cells { .. }
+                    | Command::Clipboard
+                    | Command::Effects { .. }
+                    | Command::Screenshot { .. }
+            ) {
                 return failure("bus_exited", reason);
             }
         }
@@ -157,6 +168,14 @@ impl Host {
                 notches,
                 mods,
             } => self.scroll(&target, up, notches, &mods),
+            Command::Hover { target } => match self.resolve(&target) {
+                Ok((row, col)) => {
+                    let mut response = self.act(&[input::hover(row, col)], Duration::ZERO);
+                    response["at"] = json!([row, col]);
+                    response
+                }
+                Err(error) => error,
+            },
             Command::Resize { cols, rows } => self.resize(cols, rows),
             Command::WaitText { .. }
             | Command::WaitStable { .. }
