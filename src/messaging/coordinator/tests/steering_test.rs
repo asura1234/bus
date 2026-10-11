@@ -162,6 +162,7 @@ impl Fixture {
             self.provider,
             value,
             &[],
+            false,
         )
         .unwrap();
     }

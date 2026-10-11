@@ -359,3 +359,99 @@ fn an_unbound_launch_still_reserves_its_adopted_session() {
         "{result:?}"
     );
 }
+
+#[test]
+fn a_nested_provider_run_by_a_live_agent_leaves_the_agent_untouched() {
+    // An agent that runs `claude -p` or `codex exec` itself starts a provider that
+    // inherits its launch environment, so that provider's hooks land in the agent's
+    // spool under the child's own session.
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        let (mut worker, agent, _room, dir, calls) = fixture(provider, vec![]);
+        for value in [
+            json!({"hook_event_name":"SessionStart","session_id":"child","source":"startup"}),
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"child","prompt_id":"p","turn_id":"p","prompt":"nested"}),
+            json!({"hook_event_name":"Stop","session_id":"child","prompt_id":"p","turn_id":"p","last_assistant_message":"nested reply"}),
+        ] {
+            nested_record(&dir, provider, value);
+        }
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+        let kept = agent_of(&worker, agent);
+        assert_eq!(
+            kept.runtime_identity.session_id.as_deref(),
+            Some("session"),
+            "{provider:?}"
+        );
+        assert!(!kept.session_binding_invalidated, "{provider:?}");
+        assert_eq!(kept.status, RuntimeStatus::Idle, "{provider:?}");
+        assert!(kept.actionable_error.is_none(), "{provider:?}");
+        assert!(calls.lock().unwrap().is_empty(), "{provider:?}");
+        assert!(
+            callbacks::records(&dir.join("callbacks/launch"))
+                .unwrap()
+                .is_empty(),
+            "{provider:?}: nested callbacks are consumed, not retained"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn an_unrequested_session_change_by_the_agent_itself_still_invalidates_it() {
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        let (mut worker, agent, _room, dir, _) = fixture(provider, vec![]);
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"SessionStart","session_id":"other","source":"clear"}),
+        );
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+        let refused = agent_of(&worker, agent);
+        assert!(refused.session_binding_invalidated, "{provider:?}");
+        assert_eq!(refused.status, RuntimeStatus::Unavailable, "{provider:?}");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn deletion_reconciles_the_agent_session_past_a_nested_provider_session_start() {
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        let (mut worker, agent, _room, dir, _) = fixture(provider, vec![]);
+        let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity)
+            .unwrap();
+        worker.state.prepare_delete_agent(agent).unwrap();
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"SessionStart","session_id":"native-session","source":"startup"}),
+        );
+        nested_record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"SessionStart","session_id":"child","source":"startup"}),
+        );
+        assert!(
+            worker.reconcile_deleting_initial_session(agent).unwrap(),
+            "{provider:?}"
+        );
+        assert_eq!(
+            agent_of(&worker, agent)
+                .runtime_identity
+                .session_id
+                .as_deref(),
+            Some("native-session"),
+            "{provider:?}"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

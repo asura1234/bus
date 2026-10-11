@@ -161,7 +161,7 @@ mod tests {
         .unwrap();
         let writers: Vec<_> = (0..12).map(|i| {
             let dir = dir.clone();
-            std::thread::spawn(move || append(&dir,"launch",Provider::Cursor,json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":format!("t{i}"),"text":"final"}),&[]).unwrap())
+            std::thread::spawn(move || append(&dir,"launch",Provider::Cursor,json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":format!("t{i}"),"text":"final"}),&[],false).unwrap())
         }).collect();
         for writer in writers {
             writer.join().unwrap();
@@ -174,10 +174,12 @@ mod tests {
             "launch",
             Provider::Cursor,
             captured[0].1.value.clone(),
-            &[],)
+            &[],
+            false,
+        )
         .unwrap();
         assert_eq!(records(&dir).unwrap().len(), 12);
-        assert!(append(&dir, "wrong-launch", Provider::Cursor, json!({}), &[]).is_err());
+        assert!(append(&dir, "wrong-launch", Provider::Cursor, json!({}), &[], false).is_err());
         assert_eq!(
             parse(
                 Provider::Cursor,
@@ -219,7 +221,7 @@ mod tests {
             json!({"agent_id":9,"provider":"claude_code","launch_id":"launch"})
         );
         let payload = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p","last_assistant_message":"reply"});
-        append(&dir, "launch", Provider::ClaudeCode, payload.clone(), &[]).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, payload.clone(), &[], false).unwrap();
         let captured = records(&dir).unwrap();
         assert_eq!(captured.len(), 1);
         let wire: serde_json::Value =
@@ -256,13 +258,13 @@ mod tests {
         // A restart that resumes the same conversation sends identical bytes; while
         // the exited process's record is still pending, it must not swallow this one.
         let start = json!({"hook_event_name":"SessionStart","session_id":"s","source":"resume"});
-        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old).unwrap();
-        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old).unwrap();
-        append(&dir, "launch", Provider::ClaudeCode, start, &new).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old, false).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old, false).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, start, &new, false).unwrap();
         // Other callbacks keep the existing one-record-per-payload dedupe.
         let stop = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p","last_assistant_message":"reply"});
-        append(&dir, "launch", Provider::ClaudeCode, stop.clone(), &old).unwrap();
-        append(&dir, "launch", Provider::ClaudeCode, stop, &new).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, stop.clone(), &old, false).unwrap();
+        append(&dir, "launch", Provider::ClaudeCode, stop, &new, false).unwrap();
         let captured = records(&dir).unwrap();
         let reporters: Vec<_> = captured.iter().map(|(_, record)| record.reporter.clone()).collect();
         assert_eq!(reporters, vec![old.to_vec(), new.to_vec(), old.to_vec()]);
@@ -306,10 +308,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(append(&dir, "launch", Provider::Codex, json!({}), &[]).is_err());
+        assert!(append(&dir, "launch", Provider::Codex, json!({}), &[], false).is_err());
         assert_eq!(boundary(&dir).unwrap(), 0);
         std::fs::write(dir.join("sequence"), u64::MAX.to_string()).unwrap();
-        assert!(append(&dir, "launch", Provider::Cursor, json!({}), &[]).is_err());
+        assert!(append(&dir, "launch", Provider::Cursor, json!({}), &[], false).is_err());
         assert_eq!(boundary(&dir).unwrap(), u64::MAX);
         assert!(records(&dir).unwrap().is_empty());
         std::fs::remove_dir_all(dir).unwrap();

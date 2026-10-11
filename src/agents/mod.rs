@@ -37,4 +37,4 @@ mod tests {
 }
 
 pub(crate) mod providers;
-pub(crate) use self::identify::process_agent_hint;
+pub(crate) use self::identify::{process_agent_hint, provider_process, runs_nested_provider};

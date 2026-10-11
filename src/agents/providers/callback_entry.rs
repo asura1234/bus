@@ -6,6 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The Bus server's pid, set on every pane. Its child is the pane shell, so a hook
+/// can tell the pane's own agent from a provider that agent started.
+pub(crate) const BUS_SERVER_PID_ENV_VAR: &str = "HERDR_SERVER_PID";
+
 /// Process composition supplies the inherited spool log root and logging policy.
 pub(crate) fn dispatch(
     args: &[String],
@@ -76,10 +80,16 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
             reason = "not_interactive_or_unhandled", "Hook does not represent a terminal reply");
         return Ok(());
     }
+    let ancestry = crate::platform::process_ancestry(std::process::id());
+    let nested_provider = runs_under_nested_provider(&ancestry);
+    if nested_provider {
+        tracing::info!(event = "bus.callback.nested_provider", provider = ?provider,
+            "Hook ran under a provider the agent started; the agent ignores it");
+    }
     // A session start names its process chain so the server can tell a late report
     // from an exited agent apart from its replacement's.
     let reporter = if matches!(parsed, Ok(spool::Parsed::Session { .. })) {
-        crate::platform::process_ancestry(std::process::id())
+        ancestry
     } else {
         Vec::new()
     };
@@ -89,5 +99,34 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         provider,
         value,
         &reporter,
+        nested_provider,
     )
+}
+
+/// Whether more than one provider runs between this hook and its pane's shell, the
+/// child of the Bus server that `HERDR_SERVER_PID` names. A pane started by an older
+/// server has no such variable, and its hooks keep counting as the agent's.
+fn runs_under_nested_provider(ancestry: &[crate::platform::ProcessInstance]) -> bool {
+    let Some(server) = std::env::var(BUS_SERVER_PID_ENV_VAR)
+        .ok()
+        .and_then(|pid| pid.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    let Some(ancestors) = ancestry
+        .iter()
+        .position(|process| process.pid == server)
+        .and_then(|server| ancestry.get(1..server))
+    else {
+        return false;
+    };
+    let providers: Vec<_> = ancestors
+        .iter()
+        .map(|process| {
+            crate::platform::process_info(process.pid)
+                .as_ref()
+                .and_then(crate::agents::provider_process)
+        })
+        .collect();
+    crate::agents::runs_nested_provider(&providers)
 }

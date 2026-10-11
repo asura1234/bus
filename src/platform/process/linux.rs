@@ -267,18 +267,27 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
     if pgrp as u32 != process_group_id {
         return None;
     }
-
-    let argv = process_argv(process_group_id);
     Some(ForegroundJob {
         process_group_id,
-        processes: vec![ForegroundProcess {
-            pid: process_group_id,
-            name,
-            argv0: None,
-            cmdline: argv.as_ref().map(|parts| parts.join(" ")),
-            argv,
-        }],
+        processes: vec![process_info_named(process_group_id, name)],
     })
+}
+
+/// The name and command line of any process, whatever its process group.
+pub(crate) fn process_info(pid: u32) -> Option<ForegroundProcess> {
+    let (_, name) = process_pgrp_and_comm(pid)?;
+    Some(process_info_named(pid, name))
+}
+
+fn process_info_named(pid: u32, name: String) -> ForegroundProcess {
+    let argv = process_argv(pid);
+    ForegroundProcess {
+        pid,
+        name,
+        argv0: None,
+        cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+        argv,
+    }
 }
 
 pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {

@@ -383,6 +383,10 @@ pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     if let Ok(executable) = std::env::current_exe() {
         cmd.env("HERDR_BIN_PATH", executable);
     }
+    cmd.env(
+        crate::agents::providers::callback_entry::BUS_SERVER_PID_ENV_VAR,
+        std::process::id().to_string(),
+    );
 }
 
 #[cfg(unix)]

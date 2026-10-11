@@ -48,6 +48,13 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
     })
 }
 
+/// The name and command line of any process.
+pub(crate) fn process_info(pid: u32) -> Option<crate::platform::ForegroundProcess> {
+    cached_foreground_processes()
+        .entry(pid)
+        .map(foreground_process_from_entry)
+}
+
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
     let process_parameters = read_process_parameters(process.0)?;

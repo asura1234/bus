@@ -299,7 +299,21 @@ impl Transport for NativeBoundClose {
     }
 }
 
-pub(super) fn record(dir: &std::path::Path, provider: Provider, mut value: serde_json::Value) {
+pub(super) fn record(dir: &std::path::Path, provider: Provider, value: serde_json::Value) {
+    spool_record(dir, provider, value, false);
+}
+
+/// A callback from a provider the agent started itself, which inherited its launch.
+pub(super) fn nested_record(dir: &std::path::Path, provider: Provider, value: serde_json::Value) {
+    spool_record(dir, provider, value, true);
+}
+
+fn spool_record(
+    dir: &std::path::Path,
+    provider: Provider,
+    mut value: serde_json::Value,
+    nested_provider: bool,
+) {
     if provider == Provider::Codex {
         // Root interactive Codex callbacks have a transcript; explicit null
         // fixtures model its title/memory background sessions instead.
@@ -315,6 +329,7 @@ pub(super) fn record(dir: &std::path::Path, provider: Provider, mut value: serde
         provider,
         value,
         &[],
+        nested_provider,
     )
     .unwrap();
 }

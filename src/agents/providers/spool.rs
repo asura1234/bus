@@ -55,6 +55,11 @@ pub(crate) struct Record {
     /// Records spooled by an older Bus have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) reporter: Vec<crate::platform::ProcessInstance>,
+    /// The hook ran under a provider that the launch's agent started itself (say a
+    /// `claude -p` from its shell tool), which inherited the launch's environment.
+    /// Such a callback is not the agent's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) nested_provider: bool,
 }
 
 pub(crate) fn initialize(dir: &Path, manifest: &Manifest) -> io::Result<()> {
@@ -81,6 +86,7 @@ pub(crate) fn append(
     provider: ProviderKind,
     value: Value,
     reporter: &[crate::platform::ProcessInstance],
+    nested_provider: bool,
 ) -> io::Result<()> {
     let manifest: Manifest = serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
     if manifest.launch_id != launch || manifest.provider != provider {
@@ -113,6 +119,7 @@ pub(crate) fn append(
         manifest,
         value,
         reporter: reporter.to_vec(),
+        nested_provider,
     };
     files::atomic_write(&path, &serde_json::to_vec(&record)?)?;
     tracing::info!(event = "bus.callback.spooled", callback_id = %record.id,
