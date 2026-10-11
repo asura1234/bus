@@ -44,6 +44,9 @@ struct Host {
     master: Box<dyn MasterPty + Send>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     trace: Arc<Mutex<Trace>>,
+    token: String,
+    /// Locked for the host's life: the session is owned while it is.
+    _owner: std::fs::File,
 }
 
 pub(super) struct HostOptions {
@@ -51,28 +54,52 @@ pub(super) struct HostOptions {
     pub cols: u16,
     pub rows: u16,
     pub run_dir: PathBuf,
+    pub token: String,
 }
 
 /// Entry of the hidden `bus --dev tui __host` process.
 pub(super) fn run(root: &Path, options: HostOptions) -> i32 {
     let paths = SessionPaths::new(root, &options.name);
-    match start(&paths, &options) {
-        Ok(host) => host.serve(),
+    // Before anything else: a host that does not own its session must not
+    // touch it, not even to report an error into it.
+    let owner = match paths.take_ownership(&options.token) {
+        Ok(owner) => owner,
         Err(error) => {
-            let _ = std::fs::write(paths.dir.join("host.error"), &error);
             eprintln!("bus tui host: {error}");
-            1
+            return 1;
+        }
+    };
+    let failed = |error: String| {
+        let _ = std::fs::write(paths.dir.join("host.error"), &error);
+        eprintln!("bus tui host: {error}");
+        1
+    };
+    let mut host = match start(&paths, &options, owner) {
+        Ok(host) => host,
+        Err(error) => return failed(error),
+    };
+    match host.ready() {
+        Ok(()) => host.serve(),
+        Err(error) => {
+            // The Bus client may already have started its server.
+            host.teardown();
+            failed(error)
         }
     }
 }
 
-fn start(paths: &SessionPaths, options: &HostOptions) -> Result<Host, String> {
+fn start(
+    paths: &SessionPaths,
+    options: &HostOptions,
+    owner: std::fs::File,
+) -> Result<Host, String> {
     let binary = std::env::current_exe().map_err(|e| e.to_string())?;
-    let env = scratch_env(paths, &super::session::inherited_env());
+    let env = scratch_env(paths, &options.token, &super::session::inherited_env());
     super::fake_agents::install(&paths.bin_dir(), &binary).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&options.run_dir).map_err(|e| e.to_string())?;
     let trace = Trace::open(&options.run_dir, options.cols, options.rows)
         .map_err(|e| format!("cannot open run dir {}: {e}", options.run_dir.display()))?;
+    let screen = Screen::new(options.cols, options.rows).map_err(|e| e.to_string())?;
 
     let pair = native_pty_system()
         .openpty(pty_size(options.cols, options.rows))
@@ -90,13 +117,22 @@ fn start(paths: &SessionPaths, options: &HostOptions) -> Result<Host, String> {
         .map_err(|e| format!("cannot spawn bus: {e}"))?;
     drop(pair.slave);
     let bus_pid = child.process_id();
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(
-        pair.master.take_writer().map_err(|e| e.to_string())?,
-    ));
+    let (reader, writer) = match pair
+        .master
+        .try_clone_reader()
+        .and_then(|reader| Ok((reader, pair.master.take_writer()?)))
+    {
+        Ok(pipes) => pipes,
+        Err(error) => {
+            let mut child = child;
+            let _ = child.kill();
+            return Err(error.to_string());
+        }
+    };
+    let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(writer));
     let output = Arc::new((
         Mutex::new(Output {
-            screen: Screen::new(options.cols, options.rows).map_err(|e| e.to_string())?,
+            screen,
             frames: 0,
             seq: 0,
             last_output: Instant::now(),
@@ -120,7 +156,7 @@ fn start(paths: &SessionPaths, options: &HostOptions) -> Result<Host, String> {
         binary,
         size: (options.cols, options.rows),
     };
-    let host = Host {
+    Ok(Host {
         paths: paths.clone(),
         info,
         env,
@@ -129,12 +165,9 @@ fn start(paths: &SessionPaths, options: &HostOptions) -> Result<Host, String> {
         master: pair.master,
         child,
         trace,
-    };
-    host.wait_ready()?;
-    host.paths
-        .write_info(&host.info)
-        .map_err(|e| e.to_string())?;
-    Ok(host)
+        token: options.token.clone(),
+        _owner: owner,
+    })
 }
 
 fn pty_size(cols: u16, rows: u16) -> PtySize {
@@ -239,7 +272,13 @@ impl Host {
                     self.grid().text()
                 ));
             }
-            let state = self.bus(&["state"]);
+            // Bounded per call, so the host gives up before `start` does.
+            let state = bus_command(
+                &self.info.binary,
+                &self.env,
+                &["state"],
+                Duration::from_secs(5),
+            );
             if state.ok() {
                 break;
             }
@@ -382,7 +421,7 @@ impl Host {
             &self.info.data_dir,
             &self.info.run_dir.join("logs")
         ));
-        let leftovers = super::session::pids_holding(&self.paths.dir);
+        let leftovers = super::session::pids_owned(&self.paths.dir, &self.token);
         for pid in &leftovers {
             super::session::terminate(*pid);
         }

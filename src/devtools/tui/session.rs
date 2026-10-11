@@ -16,8 +16,18 @@ pub(super) const DEFAULT_NAME: &str = "s1";
 /// Lets the integration tests drive the cargo-built `target/debug/bus`.
 pub(super) const ALLOW_TARGET_DEBUG_ENV: &str = "BUS_TUI_ALLOW_TARGET_DEBUG";
 /// Marks a directory as created by the driver, so stale cleanup never
-/// removes anything else.
+/// removes anything else. It holds the session's [`Claim`].
 const MARKER: &str = "bus-tui-session";
+/// Held locked by the session's host for its whole life.
+const OWNER_LOCK: &str = "owner.lock";
+/// Serializes claiming names under the driver root.
+const ROOT_LOCK: &str = ".start.lock";
+/// Carries the session's claim token into every process the scratch Bus
+/// starts, so teardown signals only those.
+pub(super) const OWNER_ENV: &str = "BUS_TUI_OWNER";
+/// Moves the driver root, so test suites never share the cap with other
+/// drivers on the machine. Must be absolute and short (sockets live under it).
+pub(super) const ROOT_ENV: &str = "BUS_TUI_ROOT";
 
 /// Variables that name another Bus or its sockets. They are never passed to
 /// the spawned instance, and refused outright when they point at the target.
@@ -66,6 +76,33 @@ pub(super) struct SessionInfo {
     pub run_dir: PathBuf,
     pub binary: PathBuf,
     pub size: (u16, u16),
+}
+
+/// Who reserved a session directory: the token its host must present, and
+/// the `start` process that waits for that host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct Claim {
+    pub token: String,
+    pub claimant: u32,
+}
+
+impl Claim {
+    pub fn new(name: &str) -> Self {
+        use sha2::Digest as _;
+        let seed = format!(
+            "{name}-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        );
+        let token = sha2::Sha256::digest(seed.as_bytes())[..16]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Self {
+            token,
+            claimant: std::process::id(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -126,10 +163,18 @@ impl SessionPaths {
         self.dir.join(MARKER).is_file()
     }
 
-    /// Creates the private session directory and its marker.
-    pub fn create(&self) -> std::io::Result<()> {
+    pub fn read_claim(&self) -> Option<Claim> {
+        let text = std::fs::read_to_string(self.dir.join(MARKER)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Reserves the session: creates its private directory, which must not
+    /// exist yet, and writes the claim into the marker.
+    pub fn claim(&self, claim: &Claim) -> std::io::Result<()> {
+        std::fs::create_dir(&self.dir)?;
         create_private_dir(&self.dir)?;
-        std::fs::write(self.dir.join(MARKER), b"")?;
+        let text = serde_json::to_string(claim).map_err(std::io::Error::other)?;
+        std::fs::write(self.dir.join(MARKER), text)?;
         for dir in [
             self.data_dir(),
             self.work_dir(),
@@ -139,6 +184,50 @@ impl SessionPaths {
             create_private_dir(&dir)?;
         }
         Ok(())
+    }
+
+    /// True while someone owns the session: its `start` still waits for the
+    /// host, or a host holds the owner lock. Only an unowned dir is stale.
+    pub fn owned(&self) -> bool {
+        if self
+            .read_claim()
+            .is_some_and(|claim| process_alive(claim.claimant))
+        {
+            return true;
+        }
+        let Ok(lock) = std::fs::File::open(self.dir.join(OWNER_LOCK)) else {
+            return false;
+        };
+        match lock.try_lock() {
+            Ok(()) => false,
+            Err(std::fs::TryLockError::WouldBlock) => true,
+            // Unknown: treat it as owned, so it is never cleared.
+            Err(std::fs::TryLockError::Error(_)) => true,
+        }
+    }
+
+    /// The host's side of the claim: refuses unless `token` matches the claim
+    /// and no other host owns the session, before the host touches anything.
+    /// The returned file keeps the owner lock until the host exits.
+    pub fn take_ownership(&self, token: &str) -> Result<std::fs::File, String> {
+        match self.read_claim() {
+            Some(claim) if claim.token == token => {}
+            _ => {
+                return Err(format!(
+                    "{} is not claimed for this host; sessions start only through `start`",
+                    self.dir.display()
+                ))
+            }
+        }
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join(OWNER_LOCK))
+            .map_err(|e| e.to_string())?;
+        lock.try_lock()
+            .map_err(|_| format!("session {:?} already has a host", self.name))?;
+        Ok(lock)
     }
 
     /// Removes a session directory the driver created. Refuses anything without
@@ -151,9 +240,16 @@ impl SessionPaths {
     }
 }
 
-/// The fixed driver root. Unix uses `/tmp` because macOS `$TMPDIR` is long
-/// enough to push Bus's sockets past the `sockaddr_un` limit.
+/// The driver root, `$BUS_TUI_ROOT` when set to an absolute path. Unix uses
+/// `/tmp` because macOS `$TMPDIR` is long enough to push Bus's sockets past
+/// the `sockaddr_un` limit.
 pub(super) fn driver_root() -> PathBuf {
+    if let Some(root) = std::env::var_os(ROOT_ENV)
+        .map(PathBuf::from)
+        .filter(|root| root.is_absolute())
+    {
+        return root;
+    }
     #[cfg(unix)]
     {
         PathBuf::from("/tmp/bus-tui")
@@ -208,6 +304,35 @@ pub(super) fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// Holds the root lock while a `start` checks and claims a name, so two
+/// starts never both judge the same directory stale or free.
+pub(super) fn lock_root(root: &Path) -> std::io::Result<std::fs::File> {
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join(ROOT_LOCK))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+/// Names of every session someone owns, including ones still starting.
+pub(super) fn owned_sessions(root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            let paths = SessionPaths::new(root, name);
+            paths.is_driver_dir() && paths.owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 /// A session is live while its host process runs.
 pub(super) fn session_alive(paths: &SessionPaths) -> bool {
     paths
@@ -232,8 +357,23 @@ pub(super) fn live_sessions(root: &Path) -> Vec<SessionInfo> {
     sessions
 }
 
-/// Processes other than this one with a file open under `dir`. Used after
-/// `bus stop` so a session never leaves a server or agent behind.
+/// Processes the session started (they carry its owner token) that still
+/// hold something under `dir`. Used after `bus stop` so a session never
+/// leaves a server or agent behind, and never signals anything else.
+pub(super) fn pids_owned(dir: &Path, token: &str) -> Vec<u32> {
+    let marker = format!("{OWNER_ENV}={token}");
+    pids_holding(dir)
+        .into_iter()
+        .filter(|pid| {
+            crate::platform::process_environment(*pid).is_some_and(|env| {
+                env.split(|byte| *byte == 0)
+                    .any(|record| record == marker.as_bytes())
+            })
+        })
+        .collect()
+}
+
+/// Processes other than this one with a file open under `dir`.
 pub(super) fn pids_holding(dir: &Path) -> Vec<u32> {
     #[cfg(unix)]
     {
@@ -272,14 +412,24 @@ pub(super) fn terminate(pid: u32) {
     }
 }
 
-/// Sockets a running Bus serves from its data directory.
+/// Sockets a running Bus serves from its data directory. Bus runs its herdr
+/// server as a named session (`--session bus`), whose sockets live under
+/// `herdr-config/sessions/NAME`; the unnamed layout is checked too.
 fn bus_socket_candidates(data_dir: &Path) -> Vec<PathBuf> {
-    vec![
+    let herdr = data_dir.join("herdr-config");
+    let mut herdr_dirs = vec![herdr.clone()];
+    if let Ok(entries) = std::fs::read_dir(herdr.join("sessions")) {
+        herdr_dirs.extend(entries.filter_map(Result::ok).map(|entry| entry.path()));
+    }
+    let mut candidates = vec![
         data_dir.join("control.sock"),
         data_dir.join("dev-control.sock"),
-        data_dir.join("herdr-config").join("herdr.sock"),
-        data_dir.join("herdr-config").join("herdr-client.sock"),
-    ]
+    ];
+    for dir in herdr_dirs {
+        candidates.push(dir.join("herdr.sock"));
+        candidates.push(dir.join("herdr-client.sock"));
+    }
+    candidates
 }
 
 fn socket_answers(path: &Path) -> bool {
@@ -378,6 +528,7 @@ pub(super) fn ensure_binary_allowed(binary: &Path, allow_target_debug: bool) -> 
 /// basics plus the session's own locations. No inherited Bus variable survives.
 pub(super) fn scratch_env(
     paths: &SessionPaths,
+    token: &str,
     inherited: &[(String, OsString)],
 ) -> Vec<(String, OsString)> {
     let mut env: Vec<(String, OsString)> = inherited
@@ -406,6 +557,7 @@ pub(super) fn scratch_env(
         ("SSH_TTY".into(), "/dev/null".into()),
         // Lets the provider names in `bin_dir` act as fake agents.
         (super::fake_agents::FAKE_AGENT_ENV.into(), "1".into()),
+        (OWNER_ENV.into(), token.into()),
     ]);
     #[cfg(unix)]
     env.push(("SHELL".into(), "/bin/sh".into()));

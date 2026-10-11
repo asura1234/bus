@@ -26,7 +26,9 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 const HELP: &str = include_str!("../../../docs/tui-driver.md");
-const HOST_START_TIMEOUT: Duration = Duration::from_secs(60);
+/// Longer than the host's own readiness limit, so the host gives up and
+/// tears down first.
+const HOST_START_TIMEOUT: Duration = Duration::from_secs(90);
 /// Selects the session when a verb has no `--name`.
 const SESSION_ENV: &str = "BUS_TUI_SESSION";
 
@@ -189,7 +191,10 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         Some(size) => args::parse_size(&size)?,
         None => (160, 45),
     };
-    let run_root = parsed.take_value("--run-dir").map(PathBuf::from);
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    // The host runs in the session dir, which stop deletes; a relative
+    // --run-dir means the caller's cwd.
+    let run_root = parsed.take_value("--run-dir").map(|dir| cwd.join(dir));
     parsed.finish()?;
     let started = Instant::now();
     let binary = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -200,11 +205,14 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     let root = session::driver_root();
     session::create_private_dir(&root).map_err(|e| e.to_string())?;
     let paths = SessionPaths::new(&root, name);
-    if let Err(refusal) = prepare_target(&root, &paths, &session::inherited_env()) {
-        return Ok(refusal);
+    let claim = session::Claim::new(name);
+    {
+        let _root_lock = session::lock_root(&root).map_err(|e| e.to_string())?;
+        if let Err(refusal) = prepare_target(&root, &paths, &session::inherited_env()) {
+            return Ok(refusal);
+        }
+        paths.claim(&claim).map_err(|e| e.to_string())?;
     }
-    paths.create().map_err(|e| e.to_string())?;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| root.clone());
     let run_dir = run_root
         .unwrap_or_else(|| session::default_runs_root(&cwd))
         .join(format!("{name}-{}", timestamp()));
@@ -214,15 +222,20 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     host.current_dir(&paths.dir)
         .args(["--dev", "tui", "__host", "--name", name])
         .args(["--size", &format!("{cols}x{rows}")])
+        .args(["--token", &claim.token])
         .arg("--run-dir")
         .arg(&run_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log);
     crate::platform::detach_server_daemon_command(&mut host);
-    let mut child = host
-        .spawn()
-        .map_err(|e| format!("cannot start host: {e}"))?;
+    let mut child = match host.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = paths.remove();
+            return Err(format!("cannot start host: {error}"));
+        }
+    };
 
     let deadline = Instant::now() + HOST_START_TIMEOUT;
     loop {
@@ -233,8 +246,23 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         }
         let error = std::fs::read_to_string(paths.dir.join("host.error")).ok();
         let exited = child.try_wait().ok().flatten().is_some();
-        if error.is_some() || exited || Instant::now() > deadline {
-            let _ = child.kill();
+        let timed_out = Instant::now() > deadline;
+        if error.is_some() || exited || timed_out {
+            // A failing host tears its Bus down before it reports; give it
+            // the time to exit. Only a host that hangs is killed, and then
+            // the CLI stops what it started in its place.
+            let exit_by = Instant::now() + Duration::from_secs(20);
+            while !timed_out
+                && child.try_wait().ok().flatten().is_none()
+                && Instant::now() < exit_by
+            {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+                let _ = child.wait();
+                stop_leftovers(&paths, &binary, &claim.token);
+            }
             let detail = error.unwrap_or_else(|| {
                 std::fs::read_to_string(paths.host_log())
                     .map(|log| log.lines().rev().take(20).collect::<Vec<_>>().join("\n"))
@@ -250,14 +278,25 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     }
 }
 
-/// Every guard that keeps a new session away from live Bus instances.
+/// Stops the scratch server and the processes of a session whose host was
+/// killed, so none outlives its deleted directory.
+fn stop_leftovers(paths: &SessionPaths, binary: &Path, token: &str) {
+    let env = session::scratch_env(paths, token, &session::inherited_env());
+    let _ = bus_command(binary, &env, &["stop"], Duration::from_secs(10));
+    for pid in session::pids_owned(&paths.dir, token) {
+        session::terminate(pid);
+    }
+}
+
+/// Every guard that keeps a new session away from live Bus instances. The
+/// caller holds the root lock, so the checks and the claim are one step.
 fn prepare_target(
     root: &Path,
     paths: &SessionPaths,
     inherited: &[(String, OsString)],
 ) -> Result<(), Value> {
-    let live = session::live_sessions(root);
-    if live.iter().any(|info| info.name == paths.name) {
+    let owned = session::owned_sessions(root);
+    if owned.contains(&paths.name) {
         return Err(failure(
             "refused",
             format!(
@@ -266,16 +305,13 @@ fn prepare_target(
             ),
         ));
     }
-    if live.len() >= session::MAX_SESSIONS {
+    if owned.len() >= session::MAX_SESSIONS {
         return Err(failure(
             "refused",
             format!(
                 "{} driver sessions are running ({}); stop one first",
-                live.len(),
-                live.iter()
-                    .map(|i| i.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                owned.len(),
+                owned.join(", ")
             ),
         ));
     }
@@ -391,9 +427,13 @@ fn session_env(name: &str) -> Result<(PathBuf, Vec<(String, OsString)>), Value> 
         .read_info()
         .filter(|info| session::process_alive(info.host_pid))
         .ok_or_else(|| failure("no_session", format!("no running driver session {name:?}")))?;
+    let token = paths
+        .read_claim()
+        .map(|claim| claim.token)
+        .unwrap_or_default();
     Ok((
         info.binary,
-        session::scratch_env(&paths, &session::inherited_env()),
+        session::scratch_env(&paths, &token, &session::inherited_env()),
     ))
 }
 
@@ -541,12 +581,12 @@ fn gc(parsed: &mut args::Parsed) -> Result<Value, String> {
         .map(|v| args::parse_duration(&v))
         .transpose()?
         .unwrap_or(Duration::from_secs(7 * 24 * 3600));
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    // Absolute, like the run dirs `start` records, so live ones match.
     let root = parsed
         .take_value("--run-dir")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            session::default_runs_root(&std::env::current_dir().unwrap_or_default())
-        });
+        .map(|dir| cwd.join(dir))
+        .unwrap_or_else(|| session::default_runs_root(&cwd));
     parsed.finish()?;
     let live: Vec<PathBuf> = session::live_sessions(&session::driver_root())
         .into_iter()
@@ -585,12 +625,17 @@ fn run_host(args: &[String]) -> i32 {
         session::validate_name(&name)?;
         let (cols, rows) = args::parse_size(&parsed.take_value("--size").ok_or("missing --size")?)?;
         let run_dir = PathBuf::from(parsed.take_value("--run-dir").ok_or("missing --run-dir")?);
+        if !run_dir.is_absolute() {
+            return Err("--run-dir must be absolute".into());
+        }
+        let token = parsed.take_value("--token").ok_or("missing --token")?;
         parsed.finish()?;
         Ok(host::HostOptions {
             name,
             cols,
             rows,
             run_dir,
+            token,
         })
     })();
     match options {

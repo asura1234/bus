@@ -86,7 +86,7 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
     .into_iter()
     .map(|(k, v)| (k.to_owned(), OsString::from(v)))
     .collect();
-    let env = scratch_env(&paths, &inherited);
+    let env = scratch_env(&paths, "tok", &inherited);
     let get = |key: &str| env.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
     assert_eq!(
         get("BUS_DATA_DIR"),
@@ -105,7 +105,8 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
         .starts_with("/tmp/bus-tui/s1/bin"));
     assert_eq!(get("TERM"), Some(OsString::from("xterm-256color")));
     assert!(env.iter().all(|(k, _)| !k.starts_with("HERDR_")));
-    let without_path = scratch_env(&paths, &[]);
+    assert_eq!(get(OWNER_ENV), Some(OsString::from("tok")));
+    let without_path = scratch_env(&paths, "tok", &[]);
     assert!(without_path.iter().any(|(k, _)| k == "PATH"));
 }
 
@@ -115,8 +116,13 @@ fn session_directories_are_created_marked_and_removed() {
     let paths = SessionPaths::new(&root, "s1");
     assert!(!paths.is_driver_dir());
     assert!(paths.remove().is_ok());
-    paths.create().unwrap();
+    create_private_dir(&root).unwrap();
+    let claim = Claim::new("s1");
+    paths.claim(&claim).unwrap();
     assert!(paths.is_driver_dir());
+    assert_eq!(paths.read_claim(), Some(claim.clone()));
+    // A name is claimed once; the second claim fails instead of sharing it.
+    assert!(paths.claim(&Claim::new("s1")).is_err());
     assert!(paths.read_info().is_none());
     let info = SessionInfo {
         name: "s1".into(),
@@ -149,4 +155,106 @@ fn processes_and_run_roots() {
     assert!(default_runs_root(Path::new("/")).ends_with("bus/tui-runs"));
     assert!(pids_holding(Path::new("/nonexistent-bus-tui-dir")).is_empty());
     assert!(driver_root().ends_with("bus-tui"));
+}
+
+#[test]
+fn a_session_is_owned_by_its_start_then_by_its_host_lock() {
+    let root = temp_root("owner");
+    let paths = SessionPaths::new(&root, "s1");
+    create_private_dir(&root).unwrap();
+    // Claimed by a live `start` (this process): owned while it starts.
+    let claim = Claim::new("s1");
+    paths.claim(&claim).unwrap();
+    assert!(paths.owned());
+    assert_eq!(owned_sessions(&root), vec!["s1".to_owned()]);
+    // A host with the wrong token touches nothing.
+    assert!(paths.take_ownership("wrong").is_err());
+    // The claimant is gone: owned only while the host holds its lock.
+    let orphan = Claim {
+        token: claim.token.clone(),
+        claimant: u32::MAX / 2,
+    };
+    std::fs::write(
+        paths.dir.join(MARKER),
+        serde_json::to_string(&orphan).unwrap(),
+    )
+    .unwrap();
+    assert!(!paths.owned());
+    let lock = paths.take_ownership(&claim.token).unwrap();
+    assert!(paths.owned());
+    // A second host for the same session is refused.
+    assert!(paths.take_ownership(&claim.token).is_err());
+    drop(lock);
+    assert!(!paths.owned());
+    assert!(owned_sessions(&root).is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_second_start_never_clears_a_same_named_session_whose_host_is_still_starting() {
+    // A host writes session.json only after its Bus answers `bus state`;
+    // until then its `start` holds the claim.
+    let root = temp_root("starting");
+    create_private_dir(&root).unwrap();
+    let paths = SessionPaths::new(&root, "s1");
+    paths.claim(&Claim::new("s1")).unwrap();
+    let state = paths.data_dir().join("state.json");
+    std::fs::write(&state, b"{}").unwrap();
+    let second = super::super::prepare_target(&root, &paths, &[]);
+    let kept = state.exists();
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(second.is_err() && kept, "{second:?}");
+}
+
+#[test]
+fn refuses_a_target_whose_herdr_server_still_answers() {
+    // Bus always runs `--session bus`, so its herdr API socket lives under sessions/bus.
+    let root = temp_root("herdr");
+    let data = root.join("data");
+    let api = data.join("herdr-config").join("sessions").join("bus");
+    create_private_dir(&api).unwrap();
+    let _listener = crate::platform::ipc::bind_local_listener(&api.join("herdr.sock")).unwrap();
+    let result = ensure_not_live_bus(&data);
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(
+        result.is_err(),
+        "a live herdr API socket in the target was not detected"
+    );
+}
+
+#[test]
+fn teardown_signals_only_processes_carrying_the_session_token() {
+    let root = temp_root("sweep");
+    create_private_dir(&root).unwrap();
+    // Both hold the directory as their cwd; only one was started by the session.
+    let spawn = |token: Option<&str>| {
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("30").current_dir(&root);
+        if let Some(token) = token {
+            command.env(OWNER_ENV, token);
+        }
+        command.spawn().unwrap()
+    };
+    let mut owned = spawn(Some("tok-a"));
+    let mut foreign = spawn(None);
+    let mut other = spawn(Some("tok-b"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while pids_holding(&root).len() < 3 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let found = pids_owned(&root, "tok-a");
+    let readable =
+        crate::platform::process_environment(owned.id()).is_some_and(|env| !env.is_empty());
+    for child in [&mut owned, &mut foreign, &mut other] {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(!found.contains(&foreign.id()), "{found:?}");
+    assert!(!found.contains(&other.id()), "{found:?}");
+    // macOS hides a platform binary's environment (and sandboxes may deny
+    // it); then nothing is signalled, which is the safe side.
+    if readable {
+        assert_eq!(found, vec![owned.id()]);
+    }
 }
