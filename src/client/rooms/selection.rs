@@ -2,6 +2,7 @@
 //! anchored to text positions rather than screen cells, so they survive
 //! scrolling; releasing the button copies the selected text to the host
 //! clipboard. History selections cover exactly the dragged characters.
+use super::links::Target;
 use super::render::{cell_offset, wrap_ranges, Action};
 use super::BusUi;
 use crate::client::compositor::{ClientShellAction, ClientShellInput};
@@ -161,8 +162,11 @@ impl BusUi {
                 true
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if self.drag.take().is_none() {
+                let Some(region) = self.drag.take() else {
                     return false;
+                };
+                if region == Region::History {
+                    self.open_clicked_link(column, row, outcome);
                 }
                 match self.selected_text() {
                     Some(text) => outcome
@@ -173,6 +177,29 @@ impl BusUi {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// A click that selected nothing opens the link under it. The press
+    /// still starts a selection, so dragging across a link selects and
+    /// copies it as plain text.
+    fn open_clicked_link(&self, column: u16, row: u16, outcome: &mut ClientShellInput) {
+        if self
+            .history_selection
+            .is_none_or(|(anchor, head)| anchor != head)
+        {
+            return;
+        }
+        if let Some((_, target)) = self
+            .view
+            .history_links
+            .iter()
+            .find(|(rect, _)| rect.contains((column, row).into()))
+        {
+            outcome.actions.push(match target {
+                Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url.clone()),
+                Target::Path(path) => ClientShellAction::OpenPath(path.clone()),
+            });
         }
     }
 

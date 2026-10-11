@@ -43,7 +43,8 @@ pub(super) enum Action {
     Recipient(Option<crate::messaging::model::AgentId>),
     Files,
     RemoveFile(std::path::PathBuf),
-    FileDetail(std::path::PathBuf),
+    /// A message attachment; clicking opens it in its default app.
+    OpenFile(std::path::PathBuf),
     Details(crate::messaging::model::AgentId),
     Quote(crate::messaging::model::RequestId),
     Field(usize),
@@ -114,6 +115,8 @@ pub(super) struct View {
     pub notes_rows: usize,
     /// Text columns of the visible history rows.
     pub history_text: Rect,
+    /// Clickable URLs and paths in the visible history rows.
+    pub history_links: Vec<(Rect, super::links::Target)>,
     /// The chat search panel above the history; empty while it is closed.
     pub search_box: Rect,
     /// The bordered query field inside `search_box`, after the "Find" label.

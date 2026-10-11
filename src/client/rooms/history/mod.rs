@@ -43,7 +43,16 @@ pub(super) struct Line {
     pub copy_from: usize,
     /// Row `row` of an image thumbnail drawn over these blank cells.
     pub thumbnail: Option<ThumbnailRow>,
+    /// Message text rows, whose URLs and file paths are clickable.
+    pub links: Option<LinkScope>,
     anchor: RowAnchor,
+}
+
+/// Relative paths in a message resolve against `cwd`, its authoring agent's
+/// working directory; the human and Bus have none.
+#[derive(Clone)]
+pub(super) struct LinkScope {
+    pub cwd: Option<Arc<std::path::Path>>,
 }
 
 #[derive(Clone)]

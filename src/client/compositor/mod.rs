@@ -188,6 +188,8 @@ pub(crate) enum ClientShellAction {
     ClipboardWrite(Vec<u8>),
     EditComposer,
     OpenSafeWebUrl(String),
+    /// A local file or directory, opened in its default app.
+    OpenPath(std::path::PathBuf),
     ReplayMouse(Vec<crossterm::event::MouseEvent>),
 }
 
