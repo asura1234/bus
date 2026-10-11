@@ -1,7 +1,8 @@
 //! Read/write one request against an existing private control endpoint.
 use super::protocol::{
     encode, poll_write, ControlledStream, Frame, FrameError, Request, Response, IO_TIMEOUT,
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, WORKER_TIMEOUT,
+    LEGACY_SOCKET_NAME, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME,
+    WORKER_TIMEOUT,
 };
 use crate::platform::ipc;
 use std::{
@@ -27,7 +28,7 @@ pub(crate) fn request_with_timeout(
         return Err("invalid_request: id and method must be nonempty".into());
     }
     ipc::validate_private_socket_directory(data_dir).map_err(|e| {
-        format!("control_unavailable: connect to a private existing bus --dev data directory: {e}")
+        format!("control_unavailable: connect to a private existing Bus data directory: {e}")
     })?;
     let bytes = encode(request, MAX_REQUEST_BYTES)
         .map_err(|_| "request_too_large: request exceeds 256 KiB".to_string())?;
@@ -35,11 +36,11 @@ pub(crate) fn request_with_timeout(
     if remaining.is_zero() {
         return Err("request_timeout: request deadline elapsed".into());
     }
-    let stream = ipc::connect_local_stream_timeout(
-        &data_dir.join("dev-control.sock"),
-        remaining.min(IO_TIMEOUT),
-    )
-    .map_err(|e| format!("control_unavailable: connect to an existing bus --dev instance: {e}"))?;
+    let stream =
+        ipc::connect_local_stream_timeout(&socket_path(data_dir), remaining.min(IO_TIMEOUT))
+            .map_err(|e| {
+                format!("control_unavailable: connect to an existing Bus instance: {e}")
+            })?;
     let mut stream = ControlledStream(stream);
     let mut offset = 0;
     let write_deadline = deadline.min(Instant::now() + IO_TIMEOUT);
@@ -76,5 +77,19 @@ pub(crate) fn request_with_timeout(
             return Err("response_timeout: response deadline elapsed".into());
         }
         thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// The session's control socket. A Bus started by an older build still
+/// listens on the legacy name until restarted, and agents inside it keep
+/// using newer CLI builds meanwhile, so fall back to that name when only it
+/// exists.
+fn socket_path(data_dir: &Path) -> std::path::PathBuf {
+    let current = data_dir.join(SOCKET_NAME);
+    let legacy = data_dir.join(LEGACY_SOCKET_NAME);
+    if current.symlink_metadata().is_err() && legacy.symlink_metadata().is_ok() {
+        legacy
+    } else {
+        current
     }
 }

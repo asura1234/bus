@@ -62,7 +62,7 @@ class CutoverTests(unittest.TestCase):
         (source / "state.json").write_text("saved state")
         (source / "coordinator.lock").touch()
         (source / "state-link").symlink_to("state.json")
-        socket_path = source / "dev-control.sock"
+        socket_path = source / "control.sock"
         socket_path.touch()
         real_lstat = Path.lstat
 
@@ -76,7 +76,7 @@ class CutoverTests(unittest.TestCase):
         self.assertEqual((self.root / "backup/state.json").read_text(), "saved state")
         self.assertTrue((self.root / "backup/coordinator.lock").exists())
         self.assertTrue((self.root / "backup/state-link").is_symlink())
-        self.assertFalse((self.root / "backup/dev-control.sock").exists())
+        self.assertFalse((self.root / "backup/control.sock").exists())
 
     def test_wait_does_not_reinspect_removed_socket_paths(self):
         self.manifest.write_text('{"pids":{"123":"old"},"groups":{"123":"old"}}')

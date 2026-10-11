@@ -44,13 +44,6 @@ impl Worker {
         request: &ControlRequest,
         events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Response {
-        if !self.dev_enabled {
-            return Response::failure(
-                &request.id,
-                "dev_disabled",
-                "Start Bus with --dev to enable control",
-            );
-        }
         if request.id.is_empty() || request.id.len() > 128 {
             return Response::failure(
                 &request.id,
@@ -71,9 +64,23 @@ impl Worker {
                 )
             };
         }
-        let Some((fields, mutation)) = dev_method_fields(request.method.as_str()) else {
+        let Some(&MethodSpec {
+            command,
+            fields,
+            mutation,
+            tier,
+            ..
+        }) = method_spec(request.method.as_str())
+        else {
             return Response::failure(&request.id, "unknown_method", "Unknown Bus control method");
         };
+        if tier == Tier::Dev && !self.dev_enabled {
+            return Response::failure(
+                &request.id,
+                "dev_tools_disabled",
+                format!("`{command}` is a dev tool; this session was not started with --dev"),
+            );
+        }
         let Some(params) = request.params.as_object() else {
             return Response::failure(
                 &request.id,
@@ -293,48 +300,222 @@ mod tests;
 mod focus_tests;
 
 pub(super) fn is_mutation(method: &str) -> bool {
-    dev_method_fields(method).is_some_and(|(_, mutation)| mutation)
+    method_spec(method).is_some_and(|spec| spec.mutation)
 }
 
-fn dev_method_fields(method: &str) -> Option<(&'static [&'static str], bool)> {
-    Some(match method {
-        "state" | "diagnostics" | "sounds" | "settings" => (&[], false),
-        "room.create" => (&["name"], true),
-        "room.rename" => (&["room", "name"], true),
-        "room.notes" => (&["room", "text"], true),
-        "room.delete" => (&["room", "confirm"], true),
-        "room.focus" => (&["room"], true),
-        "room.seen" => (&["room"], true),
-        "room.sound" => (&["room", "on", "sound"], true),
-        "agent.rename" => (&["agent", "name"], true),
-        "agent.details" => (&["agent", "on"], true),
-        "settings.color_blind" => (&["on"], true),
-        "settings.room_sound" => (&["on", "sound"], true),
-        "bus.quit" => (&[], true),
-        "agent.add" => (
-            &[
-                "room",
-                "name",
-                "provider",
-                "cwd",
-                "extra_args",
-                "consent_project_hooks",
-                "orchestrates",
-                "system_prompt",
-            ],
-            true,
-        ),
-        "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
-        "agent.read" => (&["agent", "source", "lines"], false),
-        "agent.dialog.observe" => (&["agent"], false),
-        "agent.dialog.choose" => (&["agent", "option", "fingerprint"], true),
-        "agent.dialog.answer" => (&["agent", "text", "skip", "fingerprint"], true),
-        "agent.focus" => (&["agent"], true),
-        "agent.clear" => (&["agent"], true),
-        "message.send" => (&["room", "to", "text", "files", "as", "queue"], true),
-        "message.status" => (&["message"], false),
-        "request.recover" => (&["request", "confirm"], true),
-        "room.history" => (&["room"], false),
-        _ => return None,
-    })
+/// Who a control method answers. Agent-tier methods answer in every session;
+/// dev-tier methods inspect or drive Bus's own UI and internals, so they
+/// answer only in a session started with `--dev`. The gate keeps them out of
+/// normal sessions' agents and help text; it is not a security boundary, since
+/// any process of the same user can reach the private socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tier {
+    Agent,
+    Dev,
+}
+
+/// One control method: its CLI command words, allowed parameters, whether a
+/// retry replays a receipt, and its tier.
+pub(crate) struct MethodSpec {
+    pub(crate) method: &'static str,
+    pub(crate) command: &'static str,
+    pub(crate) fields: &'static [&'static str],
+    pub(crate) mutation: bool,
+    pub(crate) tier: Tier,
+}
+
+const fn spec(
+    method: &'static str,
+    command: &'static str,
+    fields: &'static [&'static str],
+    mutation: bool,
+    tier: Tier,
+) -> MethodSpec {
+    MethodSpec {
+        method,
+        command,
+        fields,
+        mutation,
+        tier,
+    }
+}
+
+/// Every control method. A method missing here is refused as unknown, so a new
+/// one cannot ship without a tier. Dev-tier methods from `src/devtools` (the
+/// TUI driver's `ui hits` / `ui screen`) are registered in this table too.
+pub(crate) const METHODS: &[MethodSpec] = &[
+    spec("state", "state", &[], false, Tier::Agent),
+    spec("settings", "settings", &[], false, Tier::Agent),
+    spec("room.create", "room create", &["name"], true, Tier::Agent),
+    spec(
+        "room.rename",
+        "room rename",
+        &["room", "name"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "room.notes",
+        "room notes",
+        &["room", "text"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "room.delete",
+        "room delete",
+        &["room", "confirm"],
+        true,
+        Tier::Agent,
+    ),
+    spec("room.history", "history", &["room"], false, Tier::Agent),
+    spec(
+        "agent.add",
+        "agent add",
+        &[
+            "room",
+            "name",
+            "provider",
+            "cwd",
+            "extra_args",
+            "consent_project_hooks",
+            "orchestrates",
+            "system_prompt",
+        ],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.read",
+        "agent read",
+        &["agent", "source", "lines"],
+        false,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.dialog.observe",
+        "agent dialog",
+        &["agent"],
+        false,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.dialog.choose",
+        "agent choose",
+        &["agent", "option", "fingerprint"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.dialog.answer",
+        "agent answer",
+        &["agent", "text", "skip", "fingerprint"],
+        true,
+        Tier::Agent,
+    ),
+    spec("agent.clear", "agent clear", &["agent"], true, Tier::Agent),
+    spec(
+        "agent.rename",
+        "agent rename",
+        &["agent", "name"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.setup-confirm",
+        "agent setup-confirm",
+        &["agent", "confirm"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.delete",
+        "agent delete",
+        &["agent", "confirm"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "message.send",
+        "send",
+        &["room", "to", "text", "files", "as", "queue"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "message.status",
+        "message status",
+        &["message"],
+        false,
+        Tier::Agent,
+    ),
+    spec(
+        "request.recover",
+        "request recover",
+        &["request", "confirm"],
+        true,
+        Tier::Agent,
+    ),
+    // Dev tier: the human's view and preferences, and Bus's own internals.
+    spec("room.focus", "room focus", &["room"], true, Tier::Dev),
+    spec("room.seen", "room seen", &["room"], true, Tier::Dev),
+    spec(
+        "room.sound",
+        "room sound",
+        &["room", "on", "sound"],
+        true,
+        Tier::Dev,
+    ),
+    spec("agent.focus", "agent focus", &["agent"], true, Tier::Dev),
+    spec(
+        "agent.details",
+        "agent details",
+        &["agent", "on"],
+        true,
+        Tier::Dev,
+    ),
+    spec(
+        "settings.color_blind",
+        "settings color-blind",
+        &["on"],
+        true,
+        Tier::Dev,
+    ),
+    spec(
+        "settings.room_sound",
+        "settings room-sound",
+        &["on", "sound"],
+        true,
+        Tier::Dev,
+    ),
+    spec("sounds", "sounds", &[], false, Tier::Dev),
+    spec("bus.quit", "quit", &[], true, Tier::Dev),
+    spec("diagnostics", "diagnostics", &[], false, Tier::Dev),
+];
+
+/// Every place `text` names a dev-tier command the way docs and help do
+/// (`bus room focus`, `` `room focus` ``, or a help line), plus any
+/// `diagnostics` at all, since that command is dev tier as a whole.
+#[cfg(test)]
+pub(crate) fn dev_tier_mentions(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = METHODS
+        .iter()
+        .filter(|spec| spec.tier == Tier::Dev)
+        .flat_map(|spec| {
+            [
+                format!("bus {}", spec.command),
+                format!("`{}`", spec.command),
+                format!("\n  {}", spec.command),
+            ]
+        })
+        .filter(|pattern| text.contains(pattern.as_str()))
+        .collect();
+    if text.contains("diagnostics") {
+        found.push("diagnostics".into());
+    }
+    found
+}
+
+pub(crate) fn method_spec(method: &str) -> Option<&'static MethodSpec> {
+    METHODS.iter().find(|spec| spec.method == method)
 }

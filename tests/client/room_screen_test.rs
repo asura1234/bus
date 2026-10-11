@@ -39,3 +39,37 @@ fn a_screen_switch_repaints_stale_cells_in_the_right_margin() {
         client.screen.margin()
     );
 }
+
+/// Every session answers the agent tier; dev tools answer only when the
+/// session itself was started with --dev, whatever flag the command passes.
+#[test]
+fn a_session_without_dev_answers_agent_commands_and_refuses_dev_tools() {
+    let client =
+        room_screen_client::RoomClient::spawn_without_dev(room_screen_client::unique_test_dir());
+    let response = |output: &std::process::Output| -> serde_json::Value {
+        serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)))
+    };
+    let state = client.cli(&["state"]);
+    assert!(
+        state.status.success(),
+        "{}",
+        String::from_utf8_lossy(&state.stderr)
+    );
+    let state = response(&state);
+    assert!(state["result"]["agents"].is_array(), "{state}");
+    client.control("room.create", serde_json::json!({"name":"plain"}));
+
+    for args in [
+        &["room", "focus", "plain"][..],
+        &["--dev", "diagnostics"][..],
+    ] {
+        let refused = client.cli(args);
+        assert!(!refused.status.success(), "{args:?}");
+        assert_eq!(
+            response(&refused)["error"]["code"],
+            "dev_tools_disabled",
+            "{args:?}"
+        );
+    }
+}

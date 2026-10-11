@@ -338,3 +338,37 @@ fn fill_never_completes_a_placeholder_from_inserted_text() {
         assert_eq!(fill(template, &values), expected, "{template}");
     }
 }
+
+/// Agents read only these docs, so none of them may teach a dev-tier command
+/// or tell agents to start Bus with `--dev`: every session answers the agent
+/// tier, and dev tools stay in `bus --dev --help` and the repo's docs/.
+#[test]
+fn docs_written_for_agents_name_no_dev_tool_and_no_dev_flag() {
+    let data = temp_root("tiers");
+    let root = write_docs(&data).unwrap();
+    let mut pending = vec![root];
+    let mut texts = vec![("prompt.md".to_owned(), DEFAULT_PROMPT.to_owned())];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                texts.push((
+                    path.display().to_string(),
+                    std::fs::read_to_string(&path).unwrap(),
+                ));
+            }
+        }
+    }
+    assert!(texts.len() > DOCS.len(), "{texts:?}");
+    for (name, text) in &texts {
+        assert_eq!(
+            crate::messaging::coordinator::dev_tier_mentions(text),
+            Vec::<String>::new(),
+            "{name}"
+        );
+        assert!(!text.contains("--dev"), "{name} mentions --dev");
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
