@@ -28,9 +28,13 @@ class RunLauncherTests(unittest.TestCase):
         (self.root / "run").chmod(0o755)
         self._write_executable(
             self.bin_dir / "cargo",
+            # Like Cargo, report the bin artifact on stdout for the launcher.
             """#!/bin/sh
 printf '%s\\n' "$@" > "$FAKE_CARGO_ARGS"
 printf '%s\\n' "$PWD" > "$FAKE_CARGO_CWD"
+profile=debug
+for arg in "$@"; do [ "$arg" = --release ] && profile=release; done
+printf '{"reason":"compiler-artifact","executable":"%s"}\\n' "$PWD/target/$profile/bus"
 exit "${FAKE_CARGO_EXIT:-0}"
 """,
         )
@@ -85,7 +89,7 @@ printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.cargo_args.read_text(encoding="utf-8").splitlines(),
-            ["build", "--locked", "--bin", "bus", "--features", "dev-tools"],
+            ["build", "--locked", "--message-format=json-render-diagnostics", "--bin", "bus", "--features", "dev-tools"],
         )
         self.assertEqual(self.cargo_cwd.read_text(encoding="utf-8").strip(), str(self.root))
         self.assertEqual(
@@ -99,7 +103,7 @@ printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.cargo_args.read_text(encoding="utf-8").splitlines(),
-            ["build", "--locked", "--release", "--bin", "bus"],
+            ["build", "--locked", "--message-format=json-render-diagnostics", "--release", "--bin", "bus"],
         )
         self.assertEqual(
             self.bus_args.read_text(encoding="utf-8").splitlines(),
@@ -124,6 +128,7 @@ cat > "$CARGO_TARGET_DIR/release/bus" <<'BUS'
 { echo fresh-release; printf '%s\\n' "$@"; } > "$FAKE_BUS_ARGS"
 BUS
 chmod +x "$CARGO_TARGET_DIR/release/bus"
+printf '{"reason":"compiler-artifact","executable":"%s"}\\n' "$CARGO_TARGET_DIR/release/bus"
 """,
         )
         result = subprocess.run(
@@ -147,6 +152,49 @@ chmod +x "$CARGO_TARGET_DIR/release/bus"
             ["fresh-release", "--paths"],
             "prod must launch what Cargo just built, not a stale default-target binary",
         )
+
+    def test_prod_resolves_a_relative_cargo_target_dir_from_the_repo_like_cargo(self) -> None:
+        self._write_executable(
+            self.bin_dir / "cargo",
+            """#!/bin/sh
+set -eu
+mkdir -p "$PWD/$CARGO_TARGET_DIR/release"
+cat > "$PWD/$CARGO_TARGET_DIR/release/bus" <<'BUS'
+#!/bin/sh
+{ echo relative-release; printf '%s\\n' "$@"; } > "$FAKE_BUS_ARGS"
+BUS
+chmod +x "$PWD/$CARGO_TARGET_DIR/release/bus"
+printf '{"reason":"compiler-artifact","executable":"%s"}\\n' "$PWD/$CARGO_TARGET_DIR/release/bus"
+""",
+        )
+        result = subprocess.run(
+            [str(self.root / "run"), "prod", "--paths"],
+            cwd=self.root.parent,
+            env={
+                **os.environ,
+                "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "CARGO_TARGET_DIR": "relative-build",
+                "FAKE_BUS_ARGS": str(self.bus_args),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["relative-release", "--paths"],
+        )
+
+    def test_a_build_without_a_reported_executable_launches_nothing(self) -> None:
+        self._write_executable(self.bin_dir / "cargo", "#!/bin/sh\nexit 0\n")
+        for mode in ("dev", "prod"):
+            with self.subTest(mode=mode):
+                result = self._run(mode)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("Cargo reported no bus executable", result.stderr)
+                self.assertFalse(self.bus_args.exists())
 
     def test_dev_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
         result = self._run("dev", cargo_exit=17)
