@@ -43,6 +43,8 @@ rustPlatform.buildRustPackage {
         # The orchestrator embeds its prompt, docs and workflows at compile time.
         ../../orchestration
         ../../workflows
+        # `bus --dev --help` compiles in the dev-tools doc.
+        ../../docs/dev-tools.md
         ../../src
         # Registered tests and unit fixtures are compile-time Cargo inputs too.
         ../../tests
