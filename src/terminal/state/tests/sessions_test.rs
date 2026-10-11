@@ -9,7 +9,7 @@ fn a_stale_session_sequence_is_ignored() {
             Some(session_id("first")),
             Some(2),
             None,
-        )
+            &[],)
         .is_some());
     assert!(terminal
         .set_agent_session_ref_for_session_start(
@@ -18,7 +18,7 @@ fn a_stale_session_sequence_is_ignored() {
             Some(session_id("older")),
             Some(2),
             None,
-        )
+            &[],)
         .is_none());
     assert_eq!(
         terminal.persisted_agent_session.unwrap().session_ref.value,

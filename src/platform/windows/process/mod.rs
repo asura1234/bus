@@ -97,6 +97,23 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     }
 }
 
+/// Creation FILETIME of a still-running process; stable for its lifetime.
+pub(crate) fn process_birth(pid: u32) -> Option<u64> {
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    let mut exit_code = 0;
+    if unsafe { GetExitCodeProcess(process.0, &mut exit_code) } == 0 || exit_code != STILL_ACTIVE {
+        return None;
+    }
+    crate::platform::windows::process::peb::process_creation_time(process.0)
+}
+
+/// ToolHelp keeps a parent pid after the parent exits; `process_ancestry` rejects a
+/// reused one by its later creation time.
+pub(crate) fn process_parent(pid: u32) -> Option<u32> {
+    let parent = cached_foreground_processes().entry(pid)?.parent_pid;
+    (parent > 0).then_some(parent)
+}
+
 pub fn process_exists(pid: u32) -> bool {
     let Some(process) = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else {
         return false;

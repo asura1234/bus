@@ -14,7 +14,7 @@ fn claude_resume_replaces_the_persisted_session() {
             Some(session_id("new")),
             Some(1),
             Some("resume".into()),
-        )
+            &[],)
         .unwrap();
     assert!(mutation.session_ref_changed);
     assert_eq!(
@@ -38,7 +38,7 @@ fn claude_startup_does_not_replace_an_existing_session() {
             Some(session_id("new")),
             Some(1),
             Some("startup".into()),
-        )
+            &[],)
         .is_none());
     assert_eq!(
         terminal.persisted_agent_session.unwrap().session_ref.value,
@@ -61,6 +61,6 @@ fn a_different_owner_does_not_replace_the_session_without_the_foreground_agent()
             Some(session_id("claude")),
             Some(1),
             None,
-        )
+            &[],)
         .is_none());
 }

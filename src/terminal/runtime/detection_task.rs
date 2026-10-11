@@ -19,10 +19,12 @@ use crate::terminal::runtime::detection_process::foreground_group_changed;
 use crate::terminal::runtime::detection_process::foreground_shell_agent_action;
 use crate::terminal::runtime::detection_process::probe_foreground_process;
 use crate::terminal::runtime::detection_process::process_group_for_change_tracking;
+use crate::terminal::runtime::detection_process::process_is_alive;
 #[cfg(windows)]
 use crate::terminal::runtime::detection_process::should_observe_foreground_process_group;
 use crate::terminal::runtime::detection_process::should_probe_foreground_job;
 use crate::terminal::runtime::detection_process::sync_content_change_acquisition;
+use crate::terminal::runtime::detection_process::track_agent_leader;
 use crate::terminal::runtime::detection_process::AgentDetectionPresence;
 use crate::terminal::runtime::detection_process::ForegroundShellAgentAction;
 use crate::terminal::runtime::detection_process::ProcessProbeInput;
@@ -46,6 +48,7 @@ pub(super) async fn publish_state_changed_event(
     state: AgentState,
     visible_blocker: bool,
     process_exited: bool,
+    exited_process: Option<crate::platform::ProcessInstance>,
     observed_at: std::time::Instant,
 ) {
     // This runs on the async detector task, not the PTY reader thread.
@@ -58,6 +61,7 @@ pub(super) async fn publish_state_changed_event(
             state,
             visible_blocker,
             process_exited,
+            exited_process,
             observed_at,
         })
         .await
@@ -74,12 +78,14 @@ pub(super) async fn publish_agent_process_detected_event(
     state_events: mpsc::Sender<TerminalEvent>,
     pane_id: PaneId,
     agent: AgentKind,
+    replaced: Option<crate::platform::ProcessInstance>,
     observed_at: std::time::Instant,
 ) {
     if let Err(e) = state_events
         .send(TerminalEvent::AgentProcessDetected {
             pane_id,
             agent,
+            replaced,
             observed_at,
         })
         .await
@@ -99,6 +105,8 @@ pub(super) struct AgentDetectionPublishUpdate {
     pub(super) visible_blocker: bool,
     pub(super) visible_working: bool,
     pub(super) process_exited: bool,
+    /// With `process_exited`, the exited agent job leader once that process is gone.
+    pub(super) exited_process: Option<crate::platform::ProcessInstance>,
 }
 
 pub(super) async fn apply_agent_detection_publish_update(
@@ -133,6 +141,7 @@ pub(super) async fn apply_agent_detection_publish_update(
         update.state,
         update.visible_blocker,
         update.process_exited,
+        update.exited_process,
         observed_at,
     )
     .await;
@@ -199,6 +208,8 @@ struct DetectionState {
     last_detection_text: String,
     last_screen_scan_detection_content_seq: Option<u64>,
     agent_startup_grace_until: Option<Instant>,
+    /// The identified agent job's leader process, kept until its exit is published.
+    agent_leader: Option<crate::platform::ProcessInstance>,
     pending_idle: PendingIdleConfirmation,
 }
 
@@ -224,6 +235,7 @@ impl DetectionState {
             last_detection_text: String::new(),
             last_screen_scan_detection_content_seq: None,
             agent_startup_grace_until: None,
+            agent_leader: None,
             pending_idle: PendingIdleConfirmation::default(),
         }
     }
@@ -400,18 +412,31 @@ impl DetectionTask {
         }
         status.pending_restore_probe = false;
 
-        if changed {
+        let replaced = track_agent_leader(
+            &mut status.agent_leader,
+            new_agent,
+            status.agent_presence.current_agent().is_some(),
+            process_group_id,
+        );
+        // A new leader under the same agent kind is a restart the shell never saw.
+        let restarted = replaced.is_some() && !changed && previous_agent == new_agent;
+        if changed || restarted {
             self.accept_agent_transition(
                 status,
                 previous_agent,
-                foreground_action,
+                if restarted {
+                    ForegroundShellAgentAction::ReportReplacementProcess
+                } else {
+                    foreground_action
+                },
                 process_name,
                 process_group_id,
+                replaced,
                 now,
             )
             .await;
         }
-        changed
+        changed || restarted
     }
 
     async fn accept_agent_transition(
@@ -421,6 +446,7 @@ impl DetectionTask {
         foreground_action: ForegroundShellAgentAction,
         process_name: Option<String>,
         process_group_id: Option<u32>,
+        replaced: Option<crate::platform::ProcessInstance>,
         now: Instant,
     ) {
         let agent = status.agent_presence.current_agent();
@@ -445,6 +471,7 @@ impl DetectionTask {
                     self.state_events.clone(),
                     self.pane_id,
                     agent,
+                    replaced,
                     now,
                 )
                 .await;
@@ -589,6 +616,12 @@ impl DetectionTask {
                 visible_working,
                 process_exited: publish_process_exited,
             } => {
+                // The exited job leader is named only once it is gone: a suspended
+                // agent can come back and must keep reporting its session.
+                let exited_process = publish_process_exited
+                    .then(|| status.agent_leader.take())
+                    .flatten()
+                    .filter(|leader| !process_is_alive(*leader));
                 apply_agent_detection_publish_update(
                     self.state_events.clone(),
                     self.pane_id,
@@ -599,6 +632,7 @@ impl DetectionTask {
                         visible_blocker,
                         visible_working,
                         process_exited: publish_process_exited,
+                        exited_process,
                     },
                     now,
                     &mut status.state,

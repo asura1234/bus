@@ -53,6 +53,8 @@ use detection_process::should_probe_foreground_job;
 #[cfg(test)]
 use detection_process::sync_content_change_acquisition;
 #[cfg(test)]
+use detection_process::track_agent_leader;
+#[cfg(test)]
 use detection_process::AgentDetectionPresence;
 #[cfg(test)]
 use detection_process::ForegroundShellAgentAction;

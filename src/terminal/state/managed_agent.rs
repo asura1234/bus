@@ -9,6 +9,7 @@ impl TerminalState {
         session: crate::agents::resume::catalog::PersistedAgentSession,
     ) {
         self.persisted_agent_session = Some(session.clone());
+        self.session_reporter.clear();
         self.managed_agent_launch_session = Some(session);
     }
 
@@ -188,6 +189,7 @@ impl TerminalState {
             .is_some_and(|session| self.persisted_agent_session.as_ref() == Some(session))
         {
             self.persisted_agent_session = None;
+            self.session_reporter.clear();
         }
         self.agent_name = None;
         self.agent_name_owner = None;

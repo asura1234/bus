@@ -115,6 +115,17 @@ pub struct PaneReportAgentSessionParams {
     pub agent_session_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_source: Option<String>,
+    /// The reporting hook process and its ancestors, nearest first. The server
+    /// uses it to refuse a late report from an agent process that has exited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reporter: Vec<ReportingProcess>,
+}
+
+/// One process incarnation: its pid and an opaque OS start stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ReportingProcess {
+    pub pid: u32,
+    pub birth: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -66,7 +66,7 @@ fn delayed_background_waiting_is_cleared_when_pane_dies() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
     let deadline = state.next_pending_agent_notification_deadline().unwrap();
     state.handle_app_event(TerminalEvent::PaneDied {

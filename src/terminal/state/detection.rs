@@ -12,15 +12,23 @@ impl TerminalState {
     pub fn set_detected_agent_process_at(
         &mut self,
         agent: AgentKind,
+        replaced: Option<crate::platform::ProcessInstance>,
         now: Instant,
     ) -> TerminalStateMutation {
-        let mutation = self.set_detected_state_with_screen_signals_at(
+        let previous_session = self.current_session_identity_for_persistence();
+        if let Some(replaced) = replaced {
+            self.retire_agent_process(replaced);
+        }
+        let mut mutation = self.set_detected_state_with_screen_signals_at(
             Some(agent),
             AgentState::Unknown,
             false,
             false,
+            None,
             now,
         );
+        mutation.session_ref_changed =
+            previous_session != self.current_session_identity_for_persistence();
         // A replacement after a reported exit is a new process too; its first
         // idle screen is readiness, not finished work.
         self.agent_process_acquisition_pending = true;
@@ -64,6 +72,7 @@ impl TerminalState {
             fallback_state,
             visible_blocker,
             process_exited,
+            None,
             Instant::now(),
         )
         .effective_state_change
@@ -75,6 +84,7 @@ impl TerminalState {
         fallback_state: AgentState,
         _visible_blocker: bool,
         process_exited: bool,
+        exited_process: Option<crate::platform::ProcessInstance>,
         now: Instant,
     ) -> TerminalStateMutation {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
@@ -97,12 +107,24 @@ impl TerminalState {
                     observed_at: now,
                 });
             }
-            if self
-                .persisted_agent_session
-                .as_ref()
-                .is_some_and(|session| crate::agents::parse_agent_label(&session.agent) == agent)
+            // An exit names its leader only once that process is gone. Then it
+            // clears just the session that process reported, never a newer one.
+            let reported_by_another_process = exited_process.is_some_and(|exited| {
+                !self.session_reporter.is_empty() && !self.session_reporter.contains(&exited)
+            });
+            if let Some(exited) = exited_process {
+                self.retire_agent_process(exited);
+            }
+            if !reported_by_another_process
+                && self
+                    .persisted_agent_session
+                    .as_ref()
+                    .is_some_and(|session| {
+                        crate::agents::parse_agent_label(&session.agent) == agent
+                    })
             {
                 self.persisted_agent_session = None;
+                self.session_reporter.clear();
             }
         } else if agent.is_some() {
             self.recent_agent_process_exit = None;
@@ -124,6 +146,20 @@ impl TerminalState {
         }
     }
 
+    fn retire_agent_process(&mut self, process: crate::platform::ProcessInstance) {
+        const RETIRED_AGENT_PROCESS_LIMIT: usize = 8;
+        if !self.retired_agent_processes.contains(&process) {
+            if self.retired_agent_processes.len() == RETIRED_AGENT_PROCESS_LIMIT {
+                self.retired_agent_processes.pop_front();
+            }
+            self.retired_agent_processes.push_back(process);
+        }
+        if self.session_reporter.contains(&process) {
+            self.persisted_agent_session = None;
+            self.session_reporter.clear();
+        }
+    }
+
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
@@ -133,6 +169,7 @@ impl TerminalState {
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
+        self.session_reporter.clear();
         self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
         self.clear_agent_name();

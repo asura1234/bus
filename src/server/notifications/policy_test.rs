@@ -32,7 +32,7 @@ fn state_changed_idle_in_background_marks_unseen() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let pane = state.workspaces[1].panes.get(&bg_pane_id).unwrap();
@@ -64,7 +64,7 @@ fn active_tab_completion_marks_pane_seen() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let terminal = state.terminals.get(&terminal_id).unwrap();
@@ -85,7 +85,7 @@ fn initial_idle_in_background_stays_seen() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let pane = state.workspaces[1].panes.get(&bg_pane_id).unwrap();
@@ -105,7 +105,7 @@ fn idle_after_known_unknown_agent_in_background_marks_done() {
         state: AgentState::Unknown,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
     state.handle_app_event(TerminalEvent::StateChanged {
         pane_id: bg_pane_id,
@@ -113,7 +113,7 @@ fn idle_after_known_unknown_agent_in_background_marks_done() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let pane = state.workspaces[1].panes.get(&bg_pane_id).unwrap();
@@ -130,7 +130,7 @@ fn first_idle_after_process_detection_is_not_completion() {
     state.handle_app_event(TerminalEvent::AgentProcessDetected {
         pane_id,
         agent: AgentKind::Pi,
-        observed_at: Instant::now(),
+        replaced: None, observed_at: Instant::now(),
     });
     let direct_idle = state
         .handle_app_event(TerminalEvent::StateChanged {
@@ -139,7 +139,7 @@ fn first_idle_after_process_detection_is_not_completion() {
             state: AgentState::Idle,
             visible_blocker: false,
             process_exited: false,
-            observed_at: Instant::now(),
+            exited_process: None, observed_at: Instant::now(),
         })
         .pop()
         .expect("direct idle state update");
@@ -148,7 +148,7 @@ fn first_idle_after_process_detection_is_not_completion() {
     state.handle_app_event(TerminalEvent::AgentProcessDetected {
         pane_id,
         agent: AgentKind::Pi,
-        observed_at: Instant::now(),
+        replaced: None, observed_at: Instant::now(),
     });
     for agent_state in [AgentState::Working, AgentState::Blocked] {
         state.handle_app_event(TerminalEvent::StateChanged {
@@ -157,7 +157,7 @@ fn first_idle_after_process_detection_is_not_completion() {
             state: agent_state,
             visible_blocker: agent_state == AgentState::Blocked,
             process_exited: false,
-            observed_at: Instant::now(),
+            exited_process: None, observed_at: Instant::now(),
         });
     }
     let update = state
@@ -167,7 +167,7 @@ fn first_idle_after_process_detection_is_not_completion() {
             state: AgentState::Idle,
             visible_blocker: false,
             process_exited: false,
-            observed_at: Instant::now(),
+            exited_process: None, observed_at: Instant::now(),
         })
         .pop()
         .expect("idle state update");
@@ -182,7 +182,7 @@ fn first_idle_after_process_detection_is_not_completion() {
     state.handle_app_event(TerminalEvent::AgentProcessDetected {
         pane_id,
         agent: AgentKind::Codex,
-        observed_at: Instant::now(),
+        replaced: None, observed_at: Instant::now(),
     });
     state.handle_app_event(TerminalEvent::StateChanged {
         pane_id,
@@ -190,7 +190,7 @@ fn first_idle_after_process_detection_is_not_completion() {
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
-        observed_at: Instant::now(),
+        exited_process: None, observed_at: Instant::now(),
     });
     let exit_update = state
         .handle_app_event(TerminalEvent::StateChanged {
@@ -199,7 +199,7 @@ fn first_idle_after_process_detection_is_not_completion() {
             state: AgentState::Idle,
             visible_blocker: false,
             process_exited: true,
-            observed_at: Instant::now(),
+            exited_process: None, observed_at: Instant::now(),
         })
         .pop()
         .expect("process exit update");
@@ -219,7 +219,7 @@ fn background_waiting_sets_attention_toast() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let toast = state.toast.as_ref().unwrap();
@@ -242,7 +242,7 @@ fn delayed_background_waiting_schedules_before_toast() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     assert!(state.toast.is_none());
@@ -273,7 +273,7 @@ fn delayed_background_waiting_cancels_when_agent_resumes_working() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
     let deadline = state.next_pending_agent_notification_deadline().unwrap();
 
@@ -283,7 +283,7 @@ fn delayed_background_waiting_cancels_when_agent_resumes_working() {
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     assert!(state.pending_agent_notifications.is_empty());
@@ -305,7 +305,7 @@ fn delayed_background_waiting_is_suppressed_if_pane_becomes_active() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
     let deadline = state.next_pending_agent_notification_deadline().unwrap();
     state.active = Some(1);
@@ -329,7 +329,7 @@ fn delayed_active_tab_unfocused_keeps_client_notification_available() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let deadline = state.next_pending_agent_notification_deadline().unwrap();
@@ -361,7 +361,7 @@ fn background_idle_sets_finished_toast() {
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let toast = state.toast.as_ref().unwrap();
@@ -389,7 +389,7 @@ fn background_toast_includes_tab_name_when_workspace_has_multiple_tabs() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let toast = state.toast.as_ref().unwrap();
@@ -414,7 +414,7 @@ fn background_tab_in_active_workspace_still_sets_toast() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let toast = state.toast.as_ref().unwrap();
@@ -436,7 +436,7 @@ fn active_workspace_active_tab_does_not_set_toast() {
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     assert!(state.toast.is_none());
@@ -456,7 +456,7 @@ fn active_workspace_active_tab_keeps_herdr_toast_suppressed_when_outer_terminal_
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     assert!(state.toast.is_none());
@@ -475,7 +475,7 @@ fn replacement_process_first_idle_does_not_report_work_completion() {
     let mut terminal =
         crate::terminal::TerminalState::new(crate::utils::ids::TerminalId::alloc(), "/tmp".into());
     let now = std::time::Instant::now();
-    terminal.set_detected_agent_process_at(AgentKind::Codex, now);
+    terminal.set_detected_agent_process_at(AgentKind::Codex, None, now);
     terminal.finish_agent_process_acquisition();
     terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     assert!(terminal.finish_agent_process_acquisition());
@@ -486,13 +486,13 @@ fn replacement_process_first_idle_does_not_report_work_completion() {
         AgentState::Idle,
         false,
         true,
-        now + std::time::Duration::from_secs(1),
-    );
+        None,
+        now + std::time::Duration::from_secs(1),);
     terminal.finish_agent_process_acquisition();
 
     // The detector recognizes a new Codex before publishing a clear-agent event.
     terminal
-        .set_detected_agent_process_at(AgentKind::Codex, now + std::time::Duration::from_secs(2));
+        .set_detected_agent_process_at(AgentKind::Codex, None, now + std::time::Duration::from_secs(2));
     terminal.finish_agent_process_acquisition();
     let change = terminal
         .set_detected_state(Some(AgentKind::Codex), AgentState::Idle)

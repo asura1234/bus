@@ -120,7 +120,7 @@ fn state_changed_updates_pane() {
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
-        observed_at: std::time::Instant::now(),
+        exited_process: None, observed_at: std::time::Instant::now(),
     });
 
     let terminal_id = state.workspaces[0]

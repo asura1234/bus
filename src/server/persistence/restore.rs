@@ -492,6 +492,7 @@ fn restored_pending_agent_terminal(
             AgentState::Idle,
             false,
             false,
+            None,
             std::time::Instant::now(),
         );
     }

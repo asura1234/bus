@@ -51,6 +51,10 @@ pub(crate) struct Record {
     pub(crate) at_ms: u64,
     pub(crate) manifest: Manifest,
     pub(crate) value: Value,
+    /// The hook process and its ancestors, nearest first, for a session start.
+    /// Records spooled by an older Bus have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) reporter: Vec<crate::platform::ProcessInstance>,
 }
 
 pub(crate) fn initialize(dir: &Path, manifest: &Manifest) -> io::Result<()> {
@@ -76,13 +80,22 @@ pub(crate) fn append(
     launch: &str,
     provider: ProviderKind,
     value: Value,
+    reporter: &[crate::platform::ProcessInstance],
 ) -> io::Result<()> {
     let manifest: Manifest = serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
     if manifest.launch_id != launch || manifest.provider != provider {
         return Err(io::Error::other("Bus callback launch identity mismatch"));
     }
     let _lease = append_lock(&dir.join("append.lock"))?;
-    let id = digest(&serde_json::to_vec(&(launch, &value))?);
+    // Identical hooks share one spool file, so a hook retry counts once. A session
+    // start also keys on its process chain: a restart resuming the same conversation
+    // sends the exited process's bytes, and must not be folded into its record.
+    let id =
+        if !reporter.is_empty() && matches!(parse(provider, &value), Ok(Parsed::Session { .. })) {
+            digest(&serde_json::to_vec(&(launch, &value, reporter))?)
+        } else {
+            digest(&serde_json::to_vec(&(launch, &value))?)
+        };
     let path = dir.join(format!("event-{id}.json"));
     if path.exists() {
         tracing::debug!(event = "bus.callback.duplicate", callback_id = %id, "Callback already spooled");
@@ -99,6 +112,7 @@ pub(crate) fn append(
         at_ms: now_ms(),
         manifest,
         value,
+        reporter: reporter.to_vec(),
     };
     files::atomic_write(&path, &serde_json::to_vec(&record)?)?;
     tracing::info!(event = "bus.callback.spooled", callback_id = %record.id,

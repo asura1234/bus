@@ -13,6 +13,7 @@ fn record(sequence: u64, provider: ProviderKind, value: Value) -> callbacks::Rec
             launch_id: "launch".into(),
         },
         value,
+        reporter: Vec::new(),
     }
 }
 

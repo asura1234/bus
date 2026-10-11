@@ -97,7 +97,7 @@ impl Fixture {
             json!({"hook_event_name":"UserPromptSubmit","session_id":session,"prompt_id":turn,"prompt":prompt}),
             json!({"hook_event_name":"Stop","session_id":session,"prompt_id":turn,"last_assistant_message":reply}),
         ] {
-            callbacks::append(&spool, launch, Provider::ClaudeCode, value).unwrap();
+            callbacks::append(&spool, launch, Provider::ClaudeCode, value, &[]).unwrap();
         }
         self.worker.consume_callbacks(agent, &spool).unwrap();
     }
@@ -274,7 +274,7 @@ fn an_unprompted_cursor_orchestrator_turn_is_reported_in_master() {
         json!({"hook_event_name":"afterAgentResponse","conversation_id":"session-orch","generation_id":"own","text":"Gate passed."}),
         json!({"hook_event_name":"stop","conversation_id":"session-orch","generation_id":"own","status":"completed"}),
     ] {
-        callbacks::append(&spool, "orch", Provider::Cursor, value).unwrap();
+        callbacks::append(&spool, "orch", Provider::Cursor, value, &[]).unwrap();
     }
     bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
     assert_eq!(bus.reports(), ["Gate passed."]);

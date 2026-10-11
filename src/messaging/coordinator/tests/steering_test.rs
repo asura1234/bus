@@ -161,6 +161,7 @@ impl Fixture {
             "launch",
             self.provider,
             value,
+            &[],
         )
         .unwrap();
     }

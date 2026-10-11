@@ -126,6 +126,7 @@ fn api_pane_report_agent_session_preserves_session_identity_and_detected_state()
                 agent_session_id: Some("codex-session".into()),
                 agent_session_path: None,
                 session_start_source: Some(" startup ".into()),
+                reporter: Vec::new(),
             },
         ),
     });
@@ -165,6 +166,7 @@ fn api_pane_report_agent_session_rejects_missing_panes_and_empty_agents() {
                     agent_session_id: Some("codex-session".into()),
                     agent_session_path: None,
                     session_start_source: Some("startup".into()),
+                    reporter: Vec::new(),
                 },
             ),
         });
@@ -175,4 +177,29 @@ fn api_pane_report_agent_session_rejects_missing_panes_and_empty_agents() {
             .persisted_agent_session
             .is_none());
     }
+}
+
+#[test]
+fn a_session_reporter_is_trimmed_to_the_agent_job_below_the_pane_shell() {
+    use crate::protocol::api::schema::ReportingProcess;
+    let process = |pid: u32| ReportingProcess {
+        pid,
+        birth: u64::from(pid) + 1,
+    };
+    let chain = [
+        process(300),
+        process(301),
+        process(100),
+        process(50),
+        process(1),
+    ];
+    let job: Vec<_> = super::session::reporter_below_pane_shell(&chain, Some(50))
+        .into_iter()
+        .map(|instance| (instance.pid, instance.birth))
+        .collect();
+    assert_eq!(job, vec![(300, 301), (301, 302), (100, 101)]);
+
+    // A chain from another pane, or a pane without a running shell, proves nothing.
+    assert!(super::session::reporter_below_pane_shell(&chain, Some(77)).is_empty());
+    assert!(super::session::reporter_below_pane_shell(&chain, None).is_empty());
 }

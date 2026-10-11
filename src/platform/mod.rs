@@ -18,6 +18,44 @@ pub struct ForegroundJob {
     pub processes: Vec<ForegroundProcess>,
 }
 
+/// One process incarnation: its pid plus the OS start stamp, so a reused pid
+/// never matches an earlier process. `birth` is opaque; compare it only for equality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ProcessInstance {
+    pub pid: u32,
+    pub birth: u64,
+}
+
+/// The live incarnation of `pid`, or `None` once it has exited or cannot be read.
+pub fn process_instance(pid: u32) -> Option<ProcessInstance> {
+    (pid > 0)
+        .then(|| process_birth(pid))
+        .flatten()
+        .map(|birth| ProcessInstance { pid, birth })
+}
+
+/// `pid` and its ancestors, nearest first. The walk stops at an unreadable process,
+/// and at a parent born after its child (the parent pid was reused).
+pub fn process_ancestry(pid: u32) -> Vec<ProcessInstance> {
+    const MAX_DEPTH: usize = 64;
+    let mut chain = Vec::new();
+    let mut current = process_instance(pid);
+    while let Some(process) = current {
+        if chain.len() == MAX_DEPTH
+            || chain
+                .iter()
+                .any(|seen: &ProcessInstance| seen.pid == process.pid)
+        {
+            break;
+        }
+        chain.push(process);
+        current = process_parent(process.pid)
+            .and_then(process_instance)
+            .filter(|parent| parent.birth <= process.birth);
+    }
+    chain
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
     Hangup,
@@ -315,6 +353,16 @@ fn child_exit_classification_only_checkpoints_interruptions() {
     assert_eq!(classify_child_exit(&status), ChildExitReason::Interrupted);
     assert!(classify_child_exit(&status).requires_session_checkpoint());
     assert!(!ChildExitReason::WaitFailed.requires_session_checkpoint());
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+mod process_identity_tests {
+    use super::*;
+
+    include!("tests/process_identity_test.rs");
 }
 
 #[cfg(all(test, unix))]

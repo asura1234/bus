@@ -48,8 +48,10 @@ use process::peb::next_pane_runtime_marker;
 use process::peb::process_runtime_marker;
 #[cfg(test)]
 use process::peb::PANE_RUNTIME_MARKER_ENV_VAR;
+pub(crate) use process::process_birth;
 pub use process::process_cwd;
 pub use process::process_exists;
+pub(crate) use process::process_parent;
 pub use process::session_processes;
 #[cfg(test)]
 use process::session_processes_from_snapshot;

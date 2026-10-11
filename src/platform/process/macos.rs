@@ -515,6 +515,17 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     }
 }
 
+/// Start time in microseconds since the epoch; stable for the life of the process.
+pub(crate) fn process_birth(pid: u32) -> Option<u64> {
+    let info = process_bsdinfo(pid)?;
+    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+}
+
+pub(crate) fn process_parent(pid: u32) -> Option<u32> {
+    let parent = process_bsdinfo(pid)?.pbi_ppid;
+    (parent > 0).then_some(parent)
+}
+
 pub fn process_exists(pid: u32) -> bool {
     if pid == 0 {
         return false;

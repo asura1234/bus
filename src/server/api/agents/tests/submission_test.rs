@@ -32,6 +32,7 @@ fn provider_fixture(
             crate::agents::resume::catalog::AgentSessionRef::id("session"),
             Some(1),
             None,
+            &[],
         );
     }
     let (runtime, writes) =
