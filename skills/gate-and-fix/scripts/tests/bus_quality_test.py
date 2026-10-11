@@ -306,11 +306,15 @@ class BusQualityTest(unittest.TestCase):
                 patch.object(quality, "run", return_value=1) as run,
             ):
                 self.assertEqual(quality.integration(), 1)
-                argv = run.call_args.args
+                targets, unit = (call.args for call in run.call_args_list)
                 expected = ("cargo", "nextest", "run") if nextest else ("cargo", "test")
-                self.assertEqual(argv[: len(expected)], expected)
-                self.assertIn("dev-tools", argv)
-                self.assertEqual(argv[argv.index("--test") + 1], "cli")
+                for argv in (targets, unit):
+                    self.assertEqual(argv[: len(expected)], expected)
+                    self.assertIn("dev-tools", argv)
+                tested = [targets[i + 1] for i, arg in enumerate(targets) if arg == "--test"]
+                self.assertEqual(tested, ["cli", "tui-driver"])
+                self.assertEqual(unit[unit.index("--bin") + 1], "bus")
+                self.assertTrue(any("devtools::" in arg for arg in unit), unit)
                 self.assertFalse(save.call_args.args[0]["integration"])
 
     def test_lint_rejects_an_empty_python_inventory_instead_of_scanning_the_cwd(self):
