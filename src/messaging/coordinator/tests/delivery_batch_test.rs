@@ -91,7 +91,7 @@ fn claude_coalesced_paste_with_adjacent_input_completes_every_joined_message() {
     fixture.status(RuntimeStatus::Idle);
     for id in [first, second, third] {
         let message = fixture.request(id).prompt.id;
-        let status = fixture.worker.dev_message(message).unwrap();
+        let status = fixture.worker.control_message(message).unwrap();
         assert_eq!(status["requests"][0]["stage"], "replied", "{status}");
         assert_eq!(status["requests"][0]["reply"]["text"], "all three answered");
     }

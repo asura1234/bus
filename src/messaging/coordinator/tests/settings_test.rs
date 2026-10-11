@@ -59,7 +59,7 @@ fn create_room(worker: &mut Worker, name: &str) -> RoomId {
 
 fn call(worker: &mut Worker, id: &str, method: &str, params: Value) -> ControlResponse {
     let (events, _receiver) = mpsc::channel();
-    worker.dev_response_with_events(
+    worker.control_response_with_events(
         &ControlRequest {
             id: id.into(),
             method: method.into(),

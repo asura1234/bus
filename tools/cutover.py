@@ -63,7 +63,8 @@ def processes() -> dict:
 
 
 def session_roots(root: Path) -> set:
-    paths = [root / "coordinator.lock", root / "dev-control.lock", *root.rglob("*.sock")]
+    # dev-control.lock is the lock name a Bus from before control.lock still holds.
+    paths = [root / "coordinator.lock", root / "control.lock", root / "dev-control.lock", *root.rglob("*.sock")]
     paths = sorted({str(path) for path in paths if path.exists()})
     if not paths:
         return set()

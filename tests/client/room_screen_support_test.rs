@@ -27,7 +27,7 @@ pub(super) fn unique_test_dir() -> PathBuf {
 }
 
 fn control_stream(root: &Path) -> std::io::Result<Stream> {
-    let path = root.join("dev-control.sock");
+    let path = root.join("control.sock");
     #[cfg(unix)]
     let name = {
         use interprocess::local_socket::GenericFilePath;
@@ -72,6 +72,15 @@ pub(super) struct RoomClient {
 
 impl RoomClient {
     pub(super) fn spawn(base: PathBuf) -> Self {
+        Self::spawn_session(base, true)
+    }
+
+    /// A normal session: control runs, but dev tools stay off.
+    pub(super) fn spawn_without_dev(base: PathBuf) -> Self {
+        Self::spawn_session(base, false)
+    }
+
+    fn spawn_session(base: PathBuf, dev: bool) -> Self {
         let runtime = base.join("runtime");
         let config = base.join("config");
         // Let Bus create its private root; do not precreate a shared control directory.
@@ -87,7 +96,9 @@ impl RoomClient {
             })
             .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
-        command.arg("--dev");
+        if dev {
+            command.arg("--dev");
+        }
         command.env("BUS_DATA_DIR", &runtime);
         command.env("XDG_RUNTIME_DIR", &runtime);
         command.env("XDG_CONFIG_HOME", &config);
@@ -98,6 +109,7 @@ impl RoomClient {
         command.env("TERM", "xterm-256color");
         for key in [
             "BUS_SESSION_ID",
+            "BUS_DEV",
             "BUS_DEV_EXISTING_SERVER",
             "HERDR_ENV",
             "HERDR_SESSION",
@@ -133,10 +145,7 @@ impl RoomClient {
             if control_stream(&runtime).is_ok() {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "isolated dev control did not start"
-            );
+            assert!(Instant::now() < deadline, "isolated control did not start");
             thread::sleep(Duration::from_millis(25));
         }
         // The server socket precedes the client's asynchronous default-room
@@ -148,16 +157,16 @@ impl RoomClient {
     }
 
     pub(super) fn control(&self, method: &str, params: Value) {
-        let mut command = scoped_command(&self.base);
+        let mut args = Vec::new();
         match method {
             "room.create" => {
-                command.args(["room", "create", params["name"].as_str().unwrap()]);
+                args.extend(["room", "create", params["name"].as_str().unwrap()]);
             }
             "room.focus" => {
-                command.args(["room", "focus", params["room"].as_str().unwrap()]);
+                args.extend(["room", "focus", params["room"].as_str().unwrap()]);
             }
             "room.notes" => {
-                command.args([
+                args.extend([
                     "room",
                     "notes",
                     params["room"].as_str().unwrap(),
@@ -167,7 +176,18 @@ impl RoomClient {
             }
             _ => panic!("unsupported room-screen fixture command {method}"),
         }
-        let mut child = command
+        let output = self.cli(&args);
+        assert!(
+            output.status.success(),
+            "{method}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Run one `bus` command against this fixture's session only.
+    pub(super) fn cli(&self, args: &[&str]) -> std::process::Output {
+        let mut child = scoped_command(&self.base)
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -181,16 +201,11 @@ impl RoomClient {
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("isolated control command timed out: {method}");
+                panic!("isolated control command timed out: {args:?}");
             }
             thread::sleep(Duration::from_millis(25));
         }
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{method}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        child.wait_with_output().unwrap()
     }
 
     pub(super) fn observe(&mut self, needle: &str) {

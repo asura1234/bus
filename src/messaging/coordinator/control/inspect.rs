@@ -14,7 +14,7 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "state" => Ok(
-                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::platform::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::platform::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().map(agent_json).collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json()}),
             ),
             "diagnostics" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_pause.is_some(),"storage_repair_required":matches!(self.storage_pause.as_ref(),Some(super::super::StoragePause::NeedsRepair)),"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::messaging::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
@@ -62,8 +62,8 @@ impl Worker {
                     .map_err(|_| "Bus UI event channel disconnected")?;
                 Ok(json!({"stage":"queued"}))
             }
-            "agent.read" => self.dev_read(
-                self.dev_agent(required(p, "agent")?, None)?,
+            "agent.read" => self.control_read(
+                self.control_agent(required(p, "agent")?, None)?,
                 optional_text(p, "source")?,
                 optional_u32(p, "lines")?,
             ),
@@ -111,13 +111,13 @@ impl Worker {
         }
     }
 
-    pub(in crate::messaging::coordinator) fn dev_read(
+    pub(in crate::messaging::coordinator) fn control_read(
         &mut self,
         id: AgentId,
         source: Option<&str>,
         lines: Option<u32>,
     ) -> Result<Value, String> {
-        let read_source = dev_read_source(source, lines)?;
+        let read_source = control_read_source(source, lines)?;
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let target = agent
             .runtime_identity
@@ -216,6 +216,14 @@ impl Worker {
     }
 }
 
+/// A `state` agent entry: the stored agent plus why a queued message would
+/// wait on it, which orchestrators need now that `diagnostics` is dev tier.
+fn agent_json(agent: &crate::messaging::model::RoomAgent) -> Value {
+    let mut value = json!(agent);
+    value["wait_reason"] = json!(crate::messaging::diagnostics::wait_reason(agent));
+    value
+}
+
 /// How the running Bus was built: `debug` for a development build (`./run dev`,
 /// `cargo build`), `release` for an optimized build, plus the binary's path.
 fn build_json() -> Value {
@@ -225,7 +233,10 @@ fn build_json() -> Value {
     })
 }
 
-fn dev_read_source(source: Option<&str>, lines: Option<u32>) -> Result<schema::ReadSource, String> {
+fn control_read_source(
+    source: Option<&str>,
+    lines: Option<u32>,
+) -> Result<schema::ReadSource, String> {
     let read_source = match source {
         Some("recent") => schema::ReadSource::Recent,
         Some("visible") => schema::ReadSource::Visible,

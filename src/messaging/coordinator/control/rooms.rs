@@ -14,14 +14,14 @@ impl Worker {
         match method {
             "agent.focus" | "room.focus" => {
                 let (room, agent) = if method == "agent.focus" {
-                    let id = self.dev_agent(required(p, "agent")?, None)?;
+                    let id = self.control_agent(required(p, "agent")?, None)?;
                     let agent = self.state.agent(id).ok_or("Unknown agent")?;
                     if agent.runtime_identity.pane_id.is_none() {
                         return Err("Agent has no terminal; inspect its launch error".into());
                     }
                     (agent.room_id, Some(id))
                 } else {
-                    (self.dev_room(required(p, "room")?)?, None)
+                    (self.control_room(required(p, "room")?)?, None)
                 };
                 // Navigation is client presentation state. The UI uses its normal
                 // focus command path; this receipt only attests enqueueing.
@@ -35,20 +35,22 @@ impl Worker {
                 }
                 Ok(result)
             }
-            "room.create" => self.dev_command(BusCommand::CreateRoom(required(p, "name")?.into())),
-            "room.rename" => self.dev_command(BusCommand::RenameRoom(
-                self.dev_room(required(p, "room")?)?,
+            "room.create" => {
+                self.control_command(BusCommand::CreateRoom(required(p, "name")?.into()))
+            }
+            "room.rename" => self.control_command(BusCommand::RenameRoom(
+                self.control_room(required(p, "room")?)?,
                 required(p, "name")?.into(),
             )),
-            "room.notes" => self.dev_command(BusCommand::SetNotes(
-                self.dev_room(required(p, "room")?)?,
+            "room.notes" => self.control_command(BusCommand::SetNotes(
+                self.control_room(required(p, "room")?)?,
                 optional_text(p, "text")?.ok_or("Missing text")?.into(),
             )),
-            "room.seen" => self.dev_command(BusCommand::MarkRoomSeen(
-                self.dev_room(required(p, "room")?)?,
+            "room.seen" => self.control_command(BusCommand::MarkRoomSeen(
+                self.control_room(required(p, "room")?)?,
             )),
             "room.sound" => {
-                let room = self.dev_room(required(p, "room")?)?;
+                let room = self.control_room(required(p, "room")?)?;
                 let on = p
                     .get("on")
                     .and_then(Value::as_bool)
@@ -57,15 +59,15 @@ impl Worker {
                 // sound leaves the room as it was.
                 let name = self.sound_choice(p)?;
                 if let Some(name) = name {
-                    self.dev_command(BusCommand::SetRoomSoundName(room, name))?;
+                    self.control_command(BusCommand::SetRoomSoundName(room, name))?;
                 }
-                self.dev_command(BusCommand::SetRoomSound(room, on))
+                self.control_command(BusCommand::SetRoomSound(room, on))
             }
-            "room.delete" => {
-                self.dev_command(BusCommand::DeleteRoom(self.dev_room(required(p, "room")?)?))
-            }
+            "room.delete" => self.control_command(BusCommand::DeleteRoom(
+                self.control_room(required(p, "room")?)?,
+            )),
             "room.history" => {
-                let room = self.dev_room(required(p, "room")?)?;
+                let room = self.control_room(required(p, "room")?)?;
                 let now = super::super::io::now_ms();
                 self.expire_queued_requests(now)?;
                 let messages = self
@@ -75,14 +77,14 @@ impl Worker {
                     .map(|r| (r.prompt.id, &r.prompt))
                     .collect::<BTreeMap<_, _>>();
                 Ok(
-                    json!({"room_id":room,"messages":messages.iter().map(|(id,prompt)|json!({"prompt":prompt,"delivery":self.dev_message_at(*id, now).ok()})).collect::<Vec<_>>()}),
+                    json!({"room_id":room,"messages":messages.iter().map(|(id,prompt)|json!({"prompt":prompt,"delivery":self.control_message_at(*id, now).ok()})).collect::<Vec<_>>()}),
                 )
             }
             _ => Err("Unknown method".into()),
         }
     }
 
-    pub(in crate::messaging::coordinator) fn dev_room(
+    pub(in crate::messaging::coordinator) fn control_room(
         &self,
         selector: &str,
     ) -> Result<RoomId, String> {

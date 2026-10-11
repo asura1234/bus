@@ -59,7 +59,7 @@ fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
         "agent.focus",
         json!({"agent":agent.0.to_string()}),
     );
-    let response = worker.dev_response_with_events(&call, Some(&events));
+    let response = worker.control_response_with_events(&call, Some(&events));
     assert!(response.ok, "{response:?}");
     assert_eq!(
         response.result,
@@ -71,14 +71,16 @@ fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
     } if selected == room && target == agent)
     );
     assert_eq!(
-        worker.dev_response_with_events(&call, Some(&events)).result,
+        worker
+            .control_response_with_events(&call, Some(&events))
+            .result,
         response.result
     );
     assert!(
         receiver.try_recv().is_err(),
         "Retry must not switch the user's view again"
     );
-    let response = worker.dev_response_with_events(
+    let response = worker.control_response_with_events(
         &request("room-focus", "room.focus", json!({"room":"review"})),
         Some(&events),
     );
@@ -98,20 +100,20 @@ fn dev_focus_rejects_normal_mode_missing_target_and_disconnected_ui() {
     let (mut worker, _room, agent, dir) = fixture();
     let (events, receiver) = mpsc::channel();
     worker.dev_enabled = false;
-    let response = worker.dev_response_with_events(
+    let response = worker.control_response_with_events(
         &request("disabled", "agent.focus", json!({"agent":"cursor1"})),
         Some(&events),
     );
-    assert_eq!(response.error.unwrap().code, "dev_disabled");
+    assert_eq!(response.error.unwrap().code, "dev_tools_disabled");
     worker.dev_enabled = true;
-    let response = worker.dev_response_with_events(
+    let response = worker.control_response_with_events(
         &request("missing", "room.focus", json!({"room":"missing"})),
         Some(&events),
     );
     assert!(!response.ok);
     assert!(receiver.try_recv().is_err());
     drop(receiver);
-    let response = worker.dev_response_with_events(
+    let response = worker.control_response_with_events(
         &request(
             "disconnected",
             "agent.focus",
@@ -130,22 +132,22 @@ fn dev_quit_and_settings_reach_the_ui_and_state_reports_them() {
     let (mut worker, _room, agent, dir) = fixture();
     let (events, receiver) = mpsc::channel();
     let quit = request("quit", "bus.quit", json!({}));
-    let response = worker.dev_response_with_events(&quit, Some(&events));
+    let response = worker.control_response_with_events(&quit, Some(&events));
     assert_eq!(response.result, json!({"stage":"queued"}));
     assert!(matches!(
         receiver.try_recv().unwrap(),
         BusEvent::DevQuitRequested
     ));
-    worker.dev_response_with_events(&quit, Some(&events));
+    worker.control_response_with_events(&quit, Some(&events));
     assert!(receiver.try_recv().is_err(), "a retry must not quit twice");
     let unavailable =
-        worker.dev_response_with_events(&request("quit-2", "bus.quit", json!({})), None);
+        worker.control_response_with_events(&request("quit-2", "bus.quit", json!({})), None);
     assert!(!unavailable.ok);
 
     let path = dir.join("settings").join("settings.json");
     let state = |worker: &mut Worker, id: &str| {
         worker
-            .dev_response_with_events(&request(id, "state", json!({})), None)
+            .control_response_with_events(&request(id, "state", json!({})), None)
             .result
     };
     assert_eq!(state(&mut worker, "s0")["settings"], Value::Null);
@@ -154,7 +156,7 @@ fn dev_quit_and_settings_reach_the_ui_and_state_reports_them() {
         state(&mut worker, "s1")["settings"]["color_blind_mode"],
         false
     );
-    let on = worker.dev_response_with_events(
+    let on = worker.control_response_with_events(
         &request("cb-on", "settings.color_blind", json!({"on": true})),
         Some(&events),
     );
@@ -173,7 +175,7 @@ fn dev_quit_and_settings_reach_the_ui_and_state_reports_them() {
         true
     );
 
-    let details = worker.dev_response_with_events(
+    let details = worker.control_response_with_events(
         &request(
             "details",
             "agent.details",

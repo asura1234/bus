@@ -268,7 +268,7 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
         assert_eq!(fixture.error(), None, "{provider:?}");
         let status = fixture
             .worker
-            .dev_message(fixture.request(correction).prompt.id)
+            .control_message(fixture.request(correction).prompt.id)
             .unwrap();
         assert_eq!(status["complete"], true);
         assert_eq!(status["requests"][0]["group"], lead.0);

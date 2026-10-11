@@ -437,7 +437,7 @@ fn saved_work_room_named_master_keeps_its_notes_when_addressed_by_name() {
 fn a_long_session_of_mutations_never_hits_a_permanent_receipt_limit() {
     let (mut worker, _room, _agent, dir) = fixture();
     // Retries within the retention window replay; older receipts make room.
-    worker.dev_receipt_retention = Duration::ZERO;
+    worker.control_receipt_retention = Duration::ZERO;
     for index in 0..1100 {
         let seen = call(
             &mut worker,
@@ -447,9 +447,9 @@ fn a_long_session_of_mutations_never_hits_a_permanent_receipt_limit() {
         );
         assert!(seen.ok, "{index}: {seen:?}");
     }
-    assert!(worker.dev_receipts.len() <= 1);
+    assert!(worker.control_receipts.len() <= 1);
 
-    worker.dev_receipt_retention = Duration::from_secs(600);
+    worker.control_receipt_retention = Duration::from_secs(600);
     let first = call(&mut worker, "kept", "room.seen", json!({"room":"test"}));
     assert!(first.ok, "{first:?}");
     let conflict = call(&mut worker, "kept", "room.seen", json!({"room":"other"}));

@@ -71,7 +71,9 @@ compiled-in documentation library.
 
 ## Control CLI
 
-Run Bus with `--dev` to enable the control socket. Orchestrators drive Bus
+Every session runs the control socket and answers the agent-tier commands;
+dev tools answer only in a session started with `--dev` (`docs/dev-tools.md`).
+Orchestrators drive Bus
 through the control CLI documented in `how-to-bus-cli.md`; they do not edit
 room state files or use the server API directly. Send work as the orchestrator
 with `bus send --room ROOM --as AGENT --to WORKER --async --text TEXT`, and

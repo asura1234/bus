@@ -211,8 +211,9 @@ only for an unrelated task that should get a turn and a reply of its own.
   `--text`). Decide, answer, and check the reported `outcome`; nothing follows
   when the dialog closes.
   Ask the human before approving anything destructive or outward-facing.
-- **Stuck requests:** check `bus message status`, `bus diagnostics` and
-  `bus agent read` before `bus request recover`.
+- **Stuck requests:** check `bus message status` (each request's `stage` and
+  `reason`), the agent's `wait_reason` in `bus state`, and `bus agent read`
+  before `bus request recover`.
 - **Delivery is not completion.** Wait for `complete: true` from `bus wait` or
   `bus message status`.
 

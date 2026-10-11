@@ -20,8 +20,83 @@ fn dev_selectors_confirmation_and_normal_mode_fail_closed() {
     assert_eq!(delete.error.unwrap().code, "confirmation_required");
     assert!(worker.state.room(room).is_some());
     worker.dev_enabled = false;
-    let normal = call(&mut worker, "disabled", "state", json!({}));
-    assert_eq!(normal.error.unwrap().code, "dev_disabled");
+    let normal = call(&mut worker, "disabled", "diagnostics", json!({}));
+    assert_eq!(normal.error.unwrap().code, "dev_tools_disabled");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Walks the whole tier table: a session without --dev answers every
+/// agent-tier method and refuses every dev-tier one; with --dev it answers both.
+#[test]
+fn a_session_without_dev_refuses_exactly_the_dev_tier() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    for dev in [false, true] {
+        worker.dev_enabled = dev;
+        for spec in METHODS {
+            let id = format!("tier-{dev}-{}", spec.method);
+            // Empty parameters fail validation in most methods; only the gate matters here.
+            let response = call(&mut worker, &id, spec.method, json!({}));
+            let refused = response
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "dev_tools_disabled");
+            assert_eq!(
+                refused,
+                !dev && spec.tier == Tier::Dev,
+                "{} (dev={dev}): {response:?}",
+                spec.method
+            );
+        }
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_tier_table_names_each_method_and_command_once() {
+    let mut methods = BTreeSet::new();
+    let mut commands = BTreeSet::new();
+    for spec in METHODS {
+        assert!(methods.insert(spec.method), "{} twice", spec.method);
+        assert!(commands.insert(spec.command), "{} twice", spec.command);
+    }
+    for dev in [
+        "room.focus",
+        "room.seen",
+        "room.sound",
+        "agent.focus",
+        "agent.details",
+        "settings.color_blind",
+        "settings.room_sound",
+        "sounds",
+        "bus.quit",
+        "diagnostics",
+    ] {
+        assert_eq!(method_spec(dev).unwrap().tier, Tier::Dev, "{dev}");
+    }
+    for agent in [
+        "state",
+        "agent.read",
+        "request.recover",
+        "agent.setup-confirm",
+        "room.delete",
+    ] {
+        assert_eq!(method_spec(agent).unwrap().tier, Tier::Agent, "{agent}");
+    }
+}
+
+#[test]
+fn state_shows_each_agents_wait_reason() {
+    let (mut worker, _room, codex, dir) = fixture();
+    worker.dev_enabled = false;
+    let state = call(&mut worker, "state", "state", json!({}));
+    assert!(state.ok, "{state:?}");
+    let agent = &state.result["agents"][0];
+    assert_eq!(agent["id"], json!(codex));
+    let expected = crate::messaging::diagnostics::wait_reason(worker.state.agent(codex).unwrap());
+    assert!(expected.is_some(), "a fresh agent waits on its session");
+    assert_eq!(agent["wait_reason"], json!(expected));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -686,12 +761,12 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
         .unwrap();
     let request = |status: &serde_json::Value| status["requests"][0].clone();
 
-    let fresh = request(&worker.dev_message_at(message, now).unwrap());
+    let fresh = request(&worker.control_message_at(message, now).unwrap());
     assert_eq!(fresh["stage"], "queued");
     assert!(fresh["stalled_from"].is_null());
 
     let later = now + crate::messaging::model::QUEUED_STALL_MS;
-    let stalled = request(&worker.dev_message_at(message, later).unwrap());
+    let stalled = request(&worker.control_message_at(message, later).unwrap());
     assert_eq!(stalled["stage"], "stalled", "{stalled}");
     assert_eq!(stalled["stalled_from"], "queued");
     let expected = crate::messaging::diagnostics::wait_reason(worker.state.agent(codex).unwrap());
@@ -706,7 +781,7 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
         .observe_status(codex, RuntimeStatus::Blocked, later)
         .unwrap();
     let much_later = later + crate::messaging::model::BLOCKED_STALL_MS;
-    let blocked = request(&worker.dev_message_at(message, much_later).unwrap());
+    let blocked = request(&worker.control_message_at(message, much_later).unwrap());
     assert_eq!(blocked["stage"], "queued", "{blocked}");
     assert_eq!(blocked["reason"], "blocked_unanswered");
 

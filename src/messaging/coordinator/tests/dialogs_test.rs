@@ -529,7 +529,7 @@ fn message_status_names_recipients_waiting_on_a_dialog() {
         .unwrap()[0];
     worker.save(state).unwrap();
     let message = worker.state.request(request).unwrap().prompt.id;
-    let status = |worker: &mut Worker| worker.dev_message(message).unwrap();
+    let status = |worker: &mut Worker| worker.control_message(message).unwrap();
     assert_eq!(status(&mut worker)["waiting_on_dialog"], json!([]));
     screen.lock().unwrap().dialog = true;
     worker.poll().unwrap();
