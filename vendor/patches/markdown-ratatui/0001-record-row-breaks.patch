@@ -2,8 +2,7 @@ diff --git a/vendor/markdown-ratatui/src/layout.rs b/vendor/markdown-ratatui/src
 index da83c433..daa0ab83 100644
 --- a/vendor/markdown-ratatui/src/layout.rs
 +++ b/vendor/markdown-ratatui/src/layout.rs
-@@ -251,6 +251,38 @@ impl CellRange {
-         self.start..self.end
+@@ -252,4 +252,36 @@ impl CellRange {
      }
  }
 +/// How a prepared row continues the row above it.
@@ -40,25 +39,19 @@ index da83c433..daa0ab83 100644
 +}
  #[derive(Clone, Debug)]
  pub(crate) struct Run {
-     pub text: String,
-@@ -266,6 +298,7 @@ pub(crate) struct Run {
- pub struct Layout {
+@@ -267,4 +299,5 @@ pub struct Layout {
      width: u16,
      pub(crate) lines: Vec<Vec<Run>>,
 +    breaks: Vec<RowBreak>,
      links: Vec<LinkPosition>,
      headings: Vec<HeadingPosition>,
-     pub(crate) selected: Style,
-@@ -289,6 +322,7 @@ impl Layout {
-             layout: Self {
+@@ -290,4 +323,5 @@ impl Layout {
                  width,
                  lines: Vec::new(),
 +                breaks: Vec::new(),
                  links: Vec::new(),
                  headings: Vec::new(),
-                 selected: options.theme.selected,
-@@ -331,6 +365,11 @@ impl Layout {
-     pub fn links(&self) -> &[LinkPosition] {
+@@ -332,4 +366,9 @@ impl Layout {
          &self.links
      }
 +    /// Returns how each prepared row breaks from the row above it, in row
@@ -68,9 +61,7 @@ index da83c433..daa0ab83 100644
 +    }
      /// Returns heading anchors and their document-relative rows.
      pub fn headings(&self) -> &[HeadingPosition] {
-         &self.headings
-@@ -373,11 +412,15 @@ fn push_run(line: &mut Vec<Run>, value: Run) {
- }
+@@ -374,4 +413,7 @@ fn push_run(line: &mut Vec<Run>, value: Run) {
  impl Builder<'_> {
      fn push(&mut self, line: Vec<Run>) -> Result<(), LayoutError> {
 +        self.push_row(line, RowBreak::default())
@@ -78,15 +69,13 @@ index da83c433..daa0ab83 100644
 +    fn push_row(&mut self, line: Vec<Run>, row: RowBreak) -> Result<(), LayoutError> {
          let limit = self.options.line_limit;
          if self.layout.lines.len() >= limit.get() {
-             return Err(LayoutError::TooManyLines { limit });
+@@ -379,4 +421,5 @@ impl Builder<'_> {
          }
          self.layout.lines.push(line);
 +        self.layout.breaks.push(row);
          Ok(())
      }
-     fn text(
-@@ -401,27 +444,70 @@ impl Builder<'_> {
-         let first = prefix(first);
+@@ -402,25 +445,68 @@ impl Builder<'_> {
          let continuation = prefix(continuation);
          let mut line = vec![run(first.clone(), self.options.theme.muted)];
 +        let mut row = RowBreak {
@@ -170,9 +159,7 @@ index da83c433..daa0ab83 100644
 +                        row_empty = true;
                          skipped = false;
                          continue;
-                     }
-@@ -440,23 +526,27 @@ impl Builder<'_> {
-                             skipped = true;
+@@ -441,7 +527,8 @@ impl Builder<'_> {
                              continue;
                          }
 -                        self.push(std::mem::take(&mut line))?;
@@ -182,7 +169,7 @@ index da83c433..daa0ab83 100644
 +                        row = next_row(RowWrap::Continuation);
                      }
                      push_run(
-                         &mut line,
+@@ -449,13 +536,16 @@ impl Builder<'_> {
                          Run {
                              text: g.to_owned(),
 -                            style: segment.style,
@@ -202,9 +189,7 @@ index da83c433..daa0ab83 100644
 +        self.push_row(line, row)
      }
      fn blocks(&mut self, blocks: &[Block], prefix: &str) -> Result<(), LayoutError> {
-         let theme = &self.options.theme;
-@@ -648,6 +738,27 @@ impl Builder<'_> {
-         Ok(())
+@@ -649,4 +739,25 @@ impl Builder<'_> {
      }
  }
 +/// Whether two adjacent word-boundary pieces belong to one unbreakable token:
@@ -230,17 +215,14 @@ index da83c433..daa0ab83 100644
 +}
  fn inlines_join(cells: &[TableCell], style: Style, theme: &Theme) -> Vec<Run> {
      let mut runs = Vec::new();
-     for (i, cell) in cells.iter().enumerate() {
 diff --git a/vendor/markdown-ratatui/src/lib.rs b/vendor/markdown-ratatui/src/lib.rs
 index 745e3d36..046be57f 100644
 --- a/vendor/markdown-ratatui/src/lib.rs
 +++ b/vendor/markdown-ratatui/src/lib.rs
-@@ -7,7 +7,7 @@ mod widget;
- 
+@@ -8,5 +8,5 @@ mod widget;
  pub use layout::{
      CellRange, CodePolicy, DocumentRow, HeadingPosition, Layout, LayoutError, LayoutOptions,
 -    LineLimit, LineLimitError, LinkPosition, TablePolicy, Theme,
 +    LineLimit, LineLimitError, LinkPosition, RowBreak, RowWrap, TablePolicy, Theme,
  };
  pub use markdown_model::{Document, HeadingId, LinkId, ParseError};
- use std::sync::Arc;
