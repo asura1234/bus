@@ -12,6 +12,8 @@ use unicode_width::UnicodeWidthStr;
 
 /// `CSI ? 2026 l`: the client ends every frame with it.
 const FRAME_END: &[u8] = b"\x1b[?2026l";
+/// `CSI ? 2026 h`: the client starts every frame with it.
+const FRAME_BEGIN: &[u8] = b"\x1b[?2026h";
 
 pub(super) struct Screen {
     pane: GhosttyPaneTerminal,
@@ -20,6 +22,8 @@ pub(super) struct Screen {
     cols: u16,
     rows: u16,
     frame_tail: Vec<u8>,
+    /// The last complete frame, kept while the next one is being drawn.
+    complete: Option<Grid>,
 }
 
 pub(super) struct Feed {
@@ -72,6 +76,7 @@ impl Screen {
             cols,
             rows,
             frame_tail: Vec::new(),
+            complete: None,
         };
         screen.resize(cols, rows);
         Ok(screen)
@@ -79,21 +84,44 @@ impl Screen {
 
     pub fn feed(&mut self, bytes: &[u8]) -> Feed {
         let frames = count_frame_ends(&mut self.frame_tail, bytes);
-        let result = self
-            .pane
-            .process_pty_bytes(self.pane_id, 0, bytes, &self.responses, |_| None);
-        Feed {
-            responses: result.terminal_responses,
-            clipboard_writes: result.clipboard_writes,
-            bells: result.terminal_bells,
+        let mut feed = Feed {
+            responses: Vec::new(),
+            clipboard_writes: Vec::new(),
+            bells: 0,
             frames,
+        };
+        // Feed up to each frame start; when one starts after a complete
+        // screen, keep that screen for readers until the new frame ends.
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            let cut = rest
+                .windows(FRAME_BEGIN.len())
+                .skip(1)
+                .position(|window| window == FRAME_BEGIN)
+                .map_or(rest.len(), |at| at + 1);
+            let (segment, tail) = rest.split_at(cut);
+            if segment.starts_with(FRAME_BEGIN) && !self.pane.synchronized_output_active() {
+                self.complete = Some(self.render());
+            }
+            let result =
+                self.pane
+                    .process_pty_bytes(self.pane_id, 0, segment, &self.responses, |_| None);
+            feed.responses.extend(result.terminal_responses);
+            feed.clipboard_writes.extend(result.clipboard_writes);
+            feed.bells = feed.bells.saturating_add(result.terminal_bells);
+            rest = tail;
         }
+        if !self.pane.synchronized_output_active() {
+            self.complete = None;
+        }
+        feed
     }
 
     /// Resizes the screen the way a host terminal does: no pane reflow replay.
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.cols = cols;
         self.rows = rows;
+        self.complete = None;
         if let Ok(mut core) = self.pane.core.lock() {
             let _ = core
                 .terminal
@@ -111,7 +139,13 @@ impl Screen {
             .unwrap_or(crate::protocol::keys::KeyboardProtocol::Legacy)
     }
 
+    /// The screen as of the last complete frame: a frame still being drawn
+    /// (synchronized output on) is never shown half done.
     pub fn grid(&self) -> Grid {
+        self.complete.clone().unwrap_or_else(|| self.render())
+    }
+
+    fn render(&self) -> Grid {
         let area = Rect::new(0, 0, self.cols, self.rows);
         let Ok(mut terminal) = ratatui::Terminal::new(TestBackend::new(self.cols, self.rows));
         let drawn = terminal.draw(|frame| self.pane.render(frame, area, false));

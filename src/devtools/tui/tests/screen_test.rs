@@ -91,6 +91,19 @@ fn blank_grids_and_text_join_rows() {
 }
 
 #[test]
+fn a_frame_still_being_drawn_is_not_shown_half_done() {
+    let mut screen = Screen::new(20, 2).unwrap();
+    screen.feed(b"\x1b[?2026hOLD\x1b[?2026l");
+    screen.feed(b"\x1b[?2026h\x1b[1;1HNEW");
+    assert_eq!(screen.grid().row_text(0), "OLD");
+    screen.feed(b"\x1b[?2026l");
+    assert_eq!(screen.grid().row_text(0), "NEW");
+    // Two frames in one read: the finished second one is what readers see.
+    screen.feed(b"\x1b[?2026h\x1b[1;1HONE\x1b[?2026l\x1b[?2026h\x1b[1;1HTWO\x1b[?2026l");
+    assert_eq!(screen.grid().row_text(0), "TWO");
+}
+
+#[test]
 fn asciicast_output_keeps_a_character_split_across_reads() {
     let dir = std::env::temp_dir().join(format!("screen-test-cast-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
