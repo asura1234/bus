@@ -6,8 +6,9 @@
 /// One string literal of the fake provider, the driver's reference text
 /// (compiled in as its help), the driver module's symbol path, the
 /// screenshot mirror's window title, the bundled screenshot font, the effect
-/// recorder's variable, and the room UI's dev-only `ui hits` module.
-const DRIVER_MARKERS: [&str; 7] = [
+/// recorder's variable, the room UI's dev-only `ui hits` module, and the
+/// control method that parses and answers it.
+const DRIVER_MARKERS: [&str; 8] = [
     "fake reply: ",
     "drive a scratch Bus through its real terminal",
     "8devtools3tui",
@@ -15,6 +16,7 @@ const DRIVER_MARKERS: [&str; 7] = [
     "DejaVu Sans Mono",
     "BUS_TUI_EFFECTS",
     "7ui_hits",
+    "ui.hits",
 ];
 
 fn markers_in_built_binary() -> Vec<&'static str> {

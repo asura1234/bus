@@ -33,7 +33,7 @@ fn subcommand(name: &'static str) -> Command {
 }
 
 fn cli() -> Command {
-    subcommand("bus")
+    let command = subcommand("bus")
         .no_binary_name(true)
         .subcommand_required(true)
         .arg(value_arg("request-id").long("request-id").global(true))
@@ -45,8 +45,11 @@ fn cli() -> Command {
                 .subcommand(toggle("room-sound").arg(value_arg("sound").long("sound"))),
         )
         .subcommand(subcommand("diagnostics"))
-        .subcommand(subcommand("sounds"))
-        .subcommand(ui_cli())
+        .subcommand(subcommand("sounds"));
+    // `ui hits` exists only in the dev variant, with the TUI driver it serves.
+    #[cfg(feature = "dev-tools")]
+    let command = command.subcommand(subcommand("ui").subcommand(subcommand("hits")));
+    command
         .subcommand(room_cli())
         .subcommand(agent_cli())
         .subcommand(
@@ -150,6 +153,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         },
         "diagnostics" => ("diagnostics", json!({})),
         "sounds" => ("sounds", json!({})),
+        #[cfg(feature = "dev-tools")]
         "ui" => match args.subcommand() {
             Some(("hits", _)) => ("ui.hits", json!({})),
             _ => return Err("unknown ui command".into()),
@@ -196,14 +200,6 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         wait_timeout,
         follow,
     })
-}
-
-/// `ui hits` exists only in the dev variant, with the TUI driver it serves.
-fn ui_cli() -> Command {
-    let ui = subcommand("ui");
-    #[cfg(feature = "dev-tools")]
-    let ui = ui.subcommand(subcommand("hits"));
-    ui
 }
 
 fn room_cli() -> Command {
