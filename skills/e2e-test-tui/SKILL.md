@@ -33,7 +33,8 @@ report = its stdout line; run_dir = dirname(report)
 FOR EACH case in the report, in order:
   name = case ID lowercased (e.g. app-07)
   Run: T start --name <name> --size <doc size, default 120x40> --run-dir <run_dir>/sessions
-  IF start fails: mark every step of the case FAIL with the start error; continue.
+  IF start fails: leave Session `none` and mark every step of the case FAIL, the start error as
+    Evidence and Seen, `none` for Trace and Screenshot; continue.
   Record the start output's run_dir as the case's `Session`.
   Do the case's preconditions/setup with the doc's recipes, through the UI the doc names.
     Use `T bus --name <name> ...` only where the doc allows fixtures or read-only state.

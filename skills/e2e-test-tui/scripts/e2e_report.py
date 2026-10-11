@@ -17,6 +17,9 @@ from pathlib import Path
 
 RESULTS = ("PASS", "FAIL", "SKIP", "PENDING")
 FAULTS = ("product", "test-doc", "skill-driver")
+# Evidence that names nothing seen: refused on every step.
+PLACEHOLDERS = {"", "-", "—", "none", "none yet", "n/a", "na", "tbd", "todo", "pending", "ok",
+                "pass", "passed", "yes", "done", "as expected", "matches", "same", "see above"}
 FAIL_FIELDS = ("Expected", "Seen", "Trace", "Screenshot", "Effects", "Fault guess", "Fault evidence")
 CASE_HEADING = re.compile(r"^### (?P<id>[A-Z][A-Z0-9]*-\d+) — (?P<title>.+)$")
 STEP_LINE = re.compile(r"^(?P<n>\d+)\. ")
@@ -95,6 +98,23 @@ def unquote(value: str) -> str:
     return value[1:-1] if len(value) > 1 and value[0] == value[-1] == "`" else value
 
 
+def placeholder(value: str) -> bool:
+    return unquote(value.strip()).strip(" .`").lower() in PLACEHOLDERS
+
+
+def session_error(case_id: str, session: str, results: list[str]) -> str | None:
+    """A case that passed or skipped anything must name the run folder its
+    driver session left; only a case that failed every step (its start failed
+    before any session existed) may say `none`."""
+    if placeholder(session):
+        if results and all(result == "FAIL" for result in results):
+            return None
+        return f"{case_id}: Session names no driver run folder"
+    if not (Path(unquote(session.strip())) / "trace.ndjson").is_file():
+        return f"{case_id}: Session {session} has no trace.ndjson"
+    return None
+
+
 def check(report: str, cases: list[Case]) -> tuple[list[str], list[str]]:
     """Returns (errors, summary lines)."""
     errors: list[str] = []
@@ -121,8 +141,6 @@ def check(report: str, cases: list[Case]) -> tuple[list[str], list[str]]:
             errors.append(f"{case.id}: steps {numbers} differ from the doc's {case.steps}")
             continue
         session = dict(fields_of(section.split("\n### ", 1)[0].splitlines())).get("Session", "")
-        if unquote(session) in ("", "none"):
-            errors.append(f"{case.id}: Session names no driver run folder")
         results = []
         for number, step in zip(numbers, steps):
             where = f"{case.id} step {number}"
@@ -140,8 +158,8 @@ def check(report: str, cases: list[Case]) -> tuple[list[str], list[str]]:
                 continue
             if result == "PENDING":
                 errors.append(f"{where}: still PENDING")
-            if not values.get("Evidence") or values["Evidence"] == "none yet":
-                errors.append(f"{where}: Evidence is empty")
+            if placeholder(values.get("Evidence", "")):
+                errors.append(f"{where}: Evidence names nothing that was seen")
             extra_fail = [name for name in FAIL_FIELDS if name in values]
             if result == "FAIL":
                 missing = [name for name in FAIL_FIELDS if not values.get(name)]
@@ -155,6 +173,8 @@ def check(report: str, cases: list[Case]) -> tuple[list[str], list[str]]:
                 errors.append(f"{where}: SKIP needs a Reason")
             if result != "SKIP" and "Reason" in values:
                 errors.append(f"{where}: only SKIP steps carry a Reason")
+        if problem := session_error(case.id, session, results):
+            errors.append(problem)
         summary.append(f"{case.id} {case_result(results)}")
     return errors, summary
 

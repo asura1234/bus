@@ -15,7 +15,7 @@ between those two calls; it never adds, removes or reorders cases or steps.
 
 ## <CASE-ID> — <case title from the doc>
 
-- Session: `<driver run folder of this case's scratch session>`
+- Session: `<absolute path of this case's driver run folder, or none if start failed>`
 
 ### Step <n>
 
@@ -42,7 +42,11 @@ Rules `check` enforces:
 - The doc has at least one numbered step per case; `init` and `check` refuse a case with none.
 - Every case listed in `Cases` has exactly one `##` section, in that order, and every step the
   doc numbers for it has exactly one `### Step <n>` section, in order.
-- Every case names its driver run folder in `Session` (not `none`).
+- Every case names its driver run folder in `Session`, and that folder holds `trace.ndjson`.
+  Only a case whose `start` failed may say `none`, and then every one of its steps is FAIL with
+  the start error as Evidence and Seen, and `none` for Trace and Screenshot.
+- `Evidence` names something seen: placeholders such as `none`, `n/a`, `-`, `ok` or
+  `as expected` are refused on every step.
 - No field appears twice within a step.
 - `Result` is one of the four values; `PENDING` (written by `init`) fails `check`.
 - `Evidence` is non-empty for every step. `FAIL` steps carry every FAIL field; `SKIP` steps carry
