@@ -7,13 +7,18 @@ conditions. It is test tooling: only the dev variant (cargo feature
 `--dev`. A release build (`./run prod`, `just build`, npm) refuses `tui`.
 
 In the Bus repository, run `./run tui VERB …`. It builds the dev variant of
-your working tree into `target/tui-driver` (or `$CARGO_TARGET_DIR`) and runs
-`--dev tui` from there, never touching `target/debug`. Everywhere else, run
-`bus --dev tui VERB …` from a dev-variant build.
+your working tree into `target/tui-driver` (or `$CARGO_TARGET_DIR/tui-driver`)
+and runs `--dev tui` from there, never touching a `debug` binary that
+`./run dev` builds. Everywhere else, run `bus --dev tui VERB …` from a
+dev-variant build other than the developer's `target/debug/bus`, which
+`start` refuses (cargo's own tests opt in with `BUS_TUI_ALLOW_TARGET_DEBUG=1`).
 
 Every session is a new Bus the driver starts itself. That Bus gets its own
-generated data directory under `/tmp/bus-tui/NAME/`, its own server and its
-own terminal. No verb attaches to an existing session. `start` refuses a
+generated data directory under `/tmp/bus-tui/NAME/` (`$BUS_TUI_ROOT/NAME/`
+when that is set to an absolute path, as the driver's own tests do), its own
+server and its own terminal. No verb attaches to an existing session. `start`
+claims NAME atomically and its host refuses to run for a session it does not
+own, so a second start or host never touches a running one. `start` refuses a
 target that a live Bus already serves, refuses when an inherited `BUS_*` or
 `HERDR_*` variable points at the target, and hands the scratch Bus none of
 the inherited Bus variables.
@@ -23,8 +28,9 @@ its PATH, so agents never start a real provider. The fake Claude fires Bus's
 real hooks and answers each prompt with `fake reply: <prompt>`. A prompt
 containing `fake:work N` keeps it Working for N seconds first.
 
-Output: every verb prints one JSON line on stdout. A failure also prints
-`error: CODE message` on stderr.
+Output: every verb prints one JSON line on stdout, except `journey` (one
+line per step, then the result), `bus` (Bus's own output) and
+`snapshot --plain`. A failure also prints `error: CODE message` on stderr.
 
 Exit codes:
 
@@ -53,16 +59,19 @@ Run `bus --dev tui VERB --help` for one verb.
 
 Starts a fresh scratch Bus (default size 160x45) and waits until it answers
 `bus state` and has drawn its first room. Prints the session status with
-`ready_ms`. Refused when the session name is already running, when 4
-sessions run, when the target belongs to a live Bus, or when inherited
-`BUS_*`/`HERDR_*` variables point at it.
+`ready_ms`. A relative `--run-dir` is taken from the current directory.
+Refused when the session name is running or still starting, when 4 sessions
+run, when the target belongs to a live Bus, when inherited
+`BUS_*`/`HERDR_*` variables point at it, or when the binary is
+`target/debug/bus`. A start that fails stops whatever its Bus started.
 
 ### stop
 `stop [--name NAME]`
 
-Quits the scratch Bus, stops its server, kills anything still holding the
-session directory, copies the Bus logs into the run folder and removes the
-session directory. Prints the run folder.
+Quits the scratch Bus, stops its server, terminates processes the session
+started that still hold its directory (never anything else, including the
+caller), copies the Bus logs into the run folder and removes the session
+directory. Prints the run folder.
 
 ### status
 `status [--name NAME]`
@@ -87,7 +96,9 @@ set up state; drive the behaviour under test with real input.
 `snapshot [--rows A-B] [--plain]`
 
 The screen as numbered text rows (`  7│ text`), plus the cursor, size and
-frame `seq`. `--plain` prints just the rows, for reading.
+frame `seq`. `--plain` prints just the rows, for reading; it is not
+available as a journey step. A frame Bus is still drawing is never shown:
+every screen read sees the last complete frame.
 
 ### find
 `find TEXT [--regex] [--rows A-B]`
@@ -102,20 +113,22 @@ Cells with their symbol, `fg`/`bg` colours (`#rrggbb`, `idx:N` or
 hyperlink. Use it for colour questions.
 
 ### type
-`type TEXT`
+`type [--] TEXT`
 
-Types text as keystrokes.
+Types text as keystrokes. Put `--` before text that starts with `--`.
 
 ### paste
-`paste TEXT`
+`paste [--] TEXT`
 
-Pastes text, bracketed when the client enabled bracketed paste.
+Pastes text, bracketed when the client enabled bracketed paste. Put `--`
+before text that starts with `--`.
 
 ### press
 `press KEY [KEY …]`
 
 Presses keys in order: `enter`, `esc`, `tab`, `shift+tab`, `backspace`,
-`up`, `down`, `left`, `right`, `f1`…`f12`, `space`, letters, and chords such
+`up`, `down`, `left`, `right`, `pageup`, `pagedown`, `home`, `end`,
+`delete`, `insert`, `f1`…`f12`, `space`, letters, and chords such
 as `ctrl+n`, `ctrl+shift+r`, `alt+up`. Keys are encoded the way Bus's
 terminal negotiated, so Esc never waits out a timeout.
 
@@ -147,11 +160,13 @@ Resizes the terminal; Bus relays out.
 `wait --text TEXT [--regex] [--gone] [--rows A-B] [--timeout 10s]`
 `wait --stable 300ms [--rows A-B] [--timeout 10s]`
 `wait --state 'PATH OP VALUE' [--timeout 10s]`
-`wait --message ID [--timeout 60s]`
+`wait --message ID [--timeout 10s]`
 
 Waits for text to appear (or with `--gone`, to disappear), for rows to stay
 unchanged, for `bus state` to match, or for a message to settle. Exit 1 on
-timeout, with a screen excerpt or the actual state value. Never sleep
+timeout, with a screen excerpt or the actual state value; exit 3 when the
+scratch Bus exits during the wait (a dead Bus's last screen is never
+"stable", and an unreadable state never matches). Never sleep
 instead. Scope `--stable` with `--rows`: agent spinners and toasts keep the
 whole screen moving.
 
