@@ -31,6 +31,8 @@ let
     xcbuild
   ];
 in
+# The release variant: no cargo features are enabled, so the `dev-tools` test tooling
+# (the TUI driver) is not compiled in.
 rustPlatform.buildRustPackage {
   pname = "bus";
   version = manifest.package.version;

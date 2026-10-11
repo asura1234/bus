@@ -40,6 +40,12 @@ exit "${FAKE_CARGO_EXIT:-0}"
 printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
 """,
         )
+        self._write_executable(
+            self.root / "target" / "release" / "bus",
+            """#!/bin/sh
+{ echo release; printf '%s\\n' "$@"; } > "$FAKE_BUS_ARGS"
+""",
+        )
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -73,13 +79,32 @@ printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.cargo_args.read_text(encoding="utf-8").splitlines(),
-            ["build", "--locked", "--bin", "bus"],
+            ["build", "--locked", "--bin", "bus", "--features", "dev-tools"],
         )
         self.assertEqual(self.cargo_cwd.read_text(encoding="utf-8").strip(), str(self.root))
         self.assertEqual(
             self.bus_args.read_text(encoding="utf-8").splitlines(),
             ["--dev", "resume", "--last"],
         )
+
+    def test_prod_builds_the_release_variant_without_dev_tools_then_launches_it(self) -> None:
+        result = self._run("prod", "resume", "--last")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.cargo_args.read_text(encoding="utf-8").splitlines(),
+            ["build", "--locked", "--release", "--bin", "bus"],
+        )
+        self.assertEqual(
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["release", "resume", "--last"],
+        )
+
+    def test_prod_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
+        result = self._run("prod", cargo_exit=9)
+
+        self.assertEqual(result.returncode, 9)
+        self.assertFalse(self.bus_args.exists())
 
     def test_dev_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
         result = self._run("dev", cargo_exit=17)

@@ -181,6 +181,32 @@ fn the_dev_help_source_ships_with_the_cargo_and_nix_sources() {
     assert!(read("packaging/nix/package.nix").contains("../../docs/dev-tools.md"));
 }
 
+/// Release builds ship without the `dev-tools` test tooling: it stays off by
+/// default, and only `./run dev` turns it on.
+#[test]
+fn only_the_dev_launcher_builds_the_dev_tools_variant() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |path: &str| std::fs::read_to_string(repo.join(path)).unwrap();
+    let manifest: toml::Value = toml::from_str(&read("Cargo.toml")).unwrap();
+    let features = &manifest["features"];
+    assert!(features.get("dev-tools").is_some());
+    assert!(features.get("default").is_none_or(|default| {
+        !default
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f.as_str() == Some("dev-tools"))
+    }));
+    assert!(!read("packaging/nix/package.nix").contains("buildFeatures"));
+    assert!(!read("justfile").contains("dev-tools"));
+    let run = read("run");
+    assert_eq!(
+        run.matches("--features dev-tools").count(),
+        1,
+        "only ./run dev"
+    );
+}
+
 #[test]
 fn orchestrators_have_no_reassign_command() {
     assert!(command(&["agent", "orchestrate", "claude-orch", "--none"]).is_err());

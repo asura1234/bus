@@ -67,7 +67,7 @@ install-hooks:
     chmod +x .githooks/commit-msg
     @echo "installed git hooks from .githooks"
 
-# Build release binary
+# Build the release variant (no test-tooling feature), as npm and Nix ship it
 build:
     cargo build --release --locked
 

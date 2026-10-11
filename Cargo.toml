@@ -49,6 +49,13 @@ path = "tests/cli/cli_test.rs"
 name = "room-screen"
 path = "tests/client/room_screen_test.rs"
 
+[features]
+# Test tooling compiled only into the dev variant (`./run dev`): the TUI
+# driver and any dependency that exists only for it. Release builds
+# (`./run prod`, `just build`, Nix, npm) leave it off. The runtime `--dev`
+# flag is separate: it gates dev-tier control commands in either variant.
+dev-tools = []
+
 [dependencies]
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
