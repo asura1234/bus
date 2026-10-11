@@ -375,6 +375,10 @@ pub(crate) const BUS_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 
 pub(crate) const BUS_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 
+/// The Bus server's pid. Its child is the pane shell, so a provider hook can tell
+/// the pane's own agent from a provider that agent started.
+pub(crate) const BUS_SERVER_PID_ENV_VAR: &str = "HERDR_SERVER_PID";
+
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(
         crate::protocol::api::SOCKET_PATH_ENV_VAR,
@@ -383,6 +387,7 @@ pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     if let Ok(executable) = std::env::current_exe() {
         cmd.env("HERDR_BIN_PATH", executable);
     }
+    cmd.env(BUS_SERVER_PID_ENV_VAR, std::process::id().to_string());
 }
 
 #[cfg(unix)]

@@ -41,6 +41,44 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     best.map(|(_, agent, name)| (agent, name))
 }
 
+/// A provider process in a hook's ancestry: the provider's own executable, or a
+/// runtime or shell that starts it (`node …/bin/codex`, `cmd /c claude`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProviderProcess {
+    pub(crate) agent: AgentKind,
+    pub(crate) launcher: bool,
+}
+
+pub(crate) fn provider_process(
+    process: &crate::platform::ForegroundProcess,
+) -> Option<ProviderProcess> {
+    let agent = identify_agent(&normalized_process_name(process))?;
+    let effective = process.argv0.as_deref().unwrap_or(&process.name);
+    Some(ProviderProcess {
+        agent,
+        launcher: is_generic_runtime_or_shell(&effective.to_lowercase()),
+    })
+}
+
+/// Whether a hook's ancestors, nearest first and ending at its pane's shell, hold
+/// more than one running provider: the hook then belongs to a provider that an
+/// agent started itself (say a `claude -p` run from its shell tool), not to the
+/// agent. A launcher directly above its own provider, as npm's `node …/codex`
+/// above the native `codex`, is the same running provider.
+pub(crate) fn runs_nested_provider(ancestors: &[Option<ProviderProcess>]) -> bool {
+    let mut providers = 0;
+    let mut below = None;
+    for process in ancestors {
+        if let Some(process) = process {
+            if !(process.launcher && below == Some(process.agent)) {
+                providers += 1;
+            }
+        }
+        below = process.map(|process| process.agent);
+    }
+    providers > 1
+}
+
 // ---------------------------------------------------------------------------
 
 /// Get the foreground job for a given child PID.

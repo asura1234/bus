@@ -799,3 +799,110 @@ fn parse_agent_env_hint_ignores_missing_or_unknown_agents() {
         None
     );
 }
+
+/// One process in a hook's ancestry: its name and argv.
+type ChainProcess<'a> = (&'a str, &'a [&'a str]);
+
+fn hook_ancestors(chain: &[ChainProcess]) -> Vec<Option<super::identify::ProviderProcess>> {
+    chain
+        .iter()
+        .enumerate()
+        .map(|(pid, (name, argv))| {
+            super::identify::provider_process(&foreground_process(pid as u32, name, argv))
+        })
+        .collect()
+}
+
+#[test]
+fn a_hook_under_the_pane_agent_alone_is_not_nested() {
+    // Chains run from the hook's parent up to the pane shell, nearest first.
+    let zsh: ChainProcess = ("zsh", &["-zsh"]);
+    let cases: [(&str, Vec<ChainProcess>); 5] = [
+        ("claude", vec![("claude", &["claude"]), zsh]),
+        (
+            "claude installed as a versioned binary",
+            vec![("2.1.296", &["claude", "--resume", "x"]), zsh],
+        ),
+        (
+            "npm codex: node launcher above the native codex",
+            vec![
+                ("codex", &["/opt/homebrew/lib/node_modules/@openai/codex/vendor/codex"]),
+                ("node", &["node", "/opt/homebrew/bin/codex"]),
+                zsh,
+            ],
+        ),
+        (
+            "windows claude through its cmd shim and bash hook shells",
+            vec![
+                ("bash.exe", &["bash.exe", "-c", "bus.exe --bus-callback claude-hook"]),
+                ("bash.exe", &["bash.exe"]),
+                ("claude.exe", &["claude.exe"]),
+                ("cmd.exe", &["cmd.exe", "/d", "/s", "/c", "claude"]),
+                ("powershell.exe", &["powershell.exe", "-NoLogo"]),
+            ],
+        ),
+        (
+            "windows codex through node and its cmd shim",
+            vec![
+                ("pwsh.exe", &["pwsh.exe", "-Command", "bus.exe --bus-callback codex-hook"]),
+                ("codex.exe", &["codex.exe"]),
+                (
+                    "node.exe",
+                    &[
+                        "node.exe",
+                        r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js",
+                    ],
+                ),
+                ("cmd.exe", &["cmd.exe", "/d", "/s", "/c", "codex"]),
+                ("powershell.exe", &["powershell.exe", "-NoLogo"]),
+            ],
+        ),
+    ];
+    for (case, chain) in cases {
+        assert!(
+            !super::identify::runs_nested_provider(&hook_ancestors(&chain)),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn a_hook_under_a_provider_the_agent_started_is_nested() {
+    let zsh: ChainProcess = ("zsh", &["-zsh"]);
+    let tool_shell: ChainProcess = ("zsh", &["/bin/zsh", "-c", "-l", "claude -p hi"]);
+    let cases: [(&str, Vec<ChainProcess>); 4] = [
+        (
+            "claude -p from claude's shell tool",
+            vec![("claude", &["claude", "-p", "hi"]), tool_shell, ("claude", &["claude"]), zsh],
+        ),
+        (
+            "npm codex exec from npm codex",
+            vec![
+                ("codex", &["/opt/homebrew/lib/node_modules/@openai/codex/vendor/codex", "exec"]),
+                ("node", &["node", "/opt/homebrew/bin/codex", "exec", "hi"]),
+                ("codex", &["/opt/homebrew/lib/node_modules/@openai/codex/vendor/codex"]),
+                ("node", &["node", "/opt/homebrew/bin/codex"]),
+                zsh,
+            ],
+        ),
+        (
+            "native codex exec run directly by native codex",
+            vec![("codex", &["codex", "exec", "hi"]), ("codex", &["codex"]), zsh],
+        ),
+        (
+            "claude -p run directly by npm codex",
+            vec![
+                ("claude", &["claude", "-p", "hi"]),
+                ("codex", &["/opt/homebrew/lib/node_modules/@openai/codex/vendor/codex"]),
+                ("node", &["node", "/opt/homebrew/bin/codex"]),
+                zsh,
+            ],
+        ),
+    ];
+    for (case, chain) in cases {
+        assert!(
+            super::identify::runs_nested_provider(&hook_ancestors(&chain)),
+            "{case}"
+        );
+    }
+}

@@ -14,6 +14,7 @@ fn record(sequence: u64, provider: ProviderKind, value: Value) -> callbacks::Rec
         },
         value,
         reporter: Vec::new(),
+        nested_provider: false,
     }
 }
 

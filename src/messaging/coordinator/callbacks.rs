@@ -42,7 +42,11 @@ impl Worker {
         let records = callbacks::records(&self.data_dir.join("callbacks").join(launch))
             .map_err(|e| e.to_string())?;
         let mut sessions = BTreeSet::new();
-        for (_, record) in records {
+        // A nested provider's session start names the child's session, not this launch's.
+        for (_, record) in records
+            .into_iter()
+            .filter(|(_, record)| !record.nested_provider)
+        {
             let Ok(Parsed::Session { session, .. }) =
                 callbacks::parse(agent.provider, &record.value)
             else {
@@ -627,6 +631,19 @@ impl Worker {
             callback_id = %record.id, sequence = record.sequence,
             launch_id = %record.manifest.launch_id)
         .entered();
+        // A provider the agent started itself (say a `claude -p` from its shell tool)
+        // inherited the launch and spooled its own session here. It neither replaces
+        // the agent's session nor proves the agent lost it.
+        if record.nested_provider {
+            tracing::info!(
+                event = "bus.callback.ignored",
+                reason = "nested_provider",
+                "Callback came from a provider the agent started"
+            );
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
+            return Ok(CallbackFlow::Next);
+        }
         let parsed = match self.parse_observed_callback(id, record)? {
             ControlFlow::Continue(parsed) => parsed,
             ControlFlow::Break(flow) => return Ok(flow),
