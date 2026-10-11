@@ -1,6 +1,6 @@
-//! `fixture`: files to send through a scratch Bus. An image whose four
-//! coloured quadrants are easy to recognise in a screenshot, a text file, and
-//! the image the clipboard stand-in hands to Bus's Ctrl+V image paste.
+//! `fixture`: files to send through a scratch Bus. Images easy to recognise in
+//! a screenshot (four coloured quadrants, a red diagonal, a blue circle), a
+//! text file, and the image the clipboard stand-in hands to Bus's Ctrl+V.
 use super::session::SessionPaths;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -10,12 +10,32 @@ const QUADRANTS: [[u8; 3]; 4] = [[220, 40, 40], [40, 90, 220], [230, 210, 40], [
 const IMAGE_W: u32 = 160;
 const IMAGE_H: u32 = 100;
 
+pub(super) const USAGE: &str = "usage: fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P]";
+
 pub(super) fn create(
     paths: &SessionPaths,
     kind: &str,
     name: Option<String>,
     text: Option<String>,
+    pattern: Option<String>,
 ) -> Result<Value, String> {
+    // Each kind takes only its own flags, so a misplaced one is never ignored.
+    let (takes_file, takes_text, takes_pattern) = match kind {
+        "image" => (true, false, true),
+        "file" => (true, true, false),
+        "clipboard-image" => (false, false, true),
+        _ => (true, true, true),
+    };
+    for (given, takes, flag) in [
+        (name.is_some(), takes_file, "--file"),
+        (text.is_some(), takes_text, "--text"),
+        (pattern.is_some(), takes_pattern, "--pattern"),
+    ] {
+        if given && !takes {
+            return Err(format!("{kind} takes no {flag}; {USAGE}"));
+        }
+    }
+    let pattern = Pattern::parse(pattern.as_deref())?;
     if name
         .as_deref()
         .is_some_and(|n| n.is_empty() || n.starts_with('.') || n.contains(['/', '\\']))
@@ -27,14 +47,11 @@ pub(super) fn create(
             let path = paths
                 .work_dir()
                 .join(name.unwrap_or_else(|| "fixture-image.png".into()));
-            (path.clone(), write_image(&path)?)
+            (path.clone(), write_image(&path, pattern)?)
         }
         "clipboard-image" => {
-            if name.is_some() {
-                return Err("clipboard-image takes no --file".into());
-            }
             let path = paths.clipboard_image();
-            (path.clone(), write_image(&path)?)
+            (path.clone(), write_image(&path, pattern)?)
         }
         "file" => {
             let path = paths
@@ -53,17 +70,59 @@ pub(super) fn create(
     Ok(json!({"ok": true, "kind": kind, "path": path, "bytes": size}))
 }
 
-fn write_image(path: &Path) -> Result<u64, String> {
+#[derive(Clone, Copy)]
+enum Pattern {
+    Quadrants,
+    RedDiagonal,
+    BlueCircle,
+}
+
+const WHITE: [u8; 3] = [245, 245, 245];
+
+impl Pattern {
+    fn parse(name: Option<&str>) -> Result<Self, String> {
+        match name.unwrap_or("quadrants") {
+            "quadrants" => Ok(Self::Quadrants),
+            "red-diagonal" => Ok(Self::RedDiagonal),
+            "blue-circle" => Ok(Self::BlueCircle),
+            other => Err(format!(
+                "unknown --pattern {other:?}; use quadrants, red-diagonal or blue-circle"
+            )),
+        }
+    }
+
+    fn color(self, x: u32, y: u32) -> [u8; 3] {
+        let (fx, fy) = (x as f32 / IMAGE_W as f32, y as f32 / IMAGE_H as f32);
+        match self {
+            Self::Quadrants => {
+                let quadrant = match (x < IMAGE_W / 2, y < IMAGE_H / 2) {
+                    (true, true) => 0,
+                    (false, true) => 1,
+                    (false, false) => 2,
+                    (true, false) => 3,
+                };
+                QUADRANTS[quadrant]
+            }
+            // A thick red band from the top left to the bottom right on white.
+            Self::RedDiagonal if (fx - fy).abs() < 0.15 => QUADRANTS[0],
+            // A filled blue circle in the middle on white.
+            Self::BlueCircle
+                if ((fx - 0.5) * IMAGE_W as f32).powi(2)
+                    + ((fy - 0.5) * IMAGE_H as f32).powi(2)
+                    < (0.4 * IMAGE_H as f32).powi(2) =>
+            {
+                QUADRANTS[1]
+            }
+            Self::RedDiagonal | Self::BlueCircle => WHITE,
+        }
+    }
+}
+
+fn write_image(path: &Path, pattern: Pattern) -> Result<u64, String> {
     let mut pixels = Vec::with_capacity((IMAGE_W * IMAGE_H * 3) as usize);
     for y in 0..IMAGE_H {
         for x in 0..IMAGE_W {
-            let quadrant = match (x < IMAGE_W / 2, y < IMAGE_H / 2) {
-                (true, true) => 0,
-                (false, true) => 1,
-                (false, false) => 2,
-                (true, false) => 3,
-            };
-            pixels.extend_from_slice(&QUADRANTS[quadrant]);
+            pixels.extend_from_slice(&pattern.color(x, y));
         }
     }
     let mut bytes = Vec::new();

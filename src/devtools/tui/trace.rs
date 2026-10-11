@@ -64,6 +64,10 @@ impl Trace {
         if !joined.is_empty() {
             self.event("o", &String::from_utf8_lossy(&joined));
         }
+        // Readers (and `screenshot --real`) see every byte as soon as Bus
+        // wrote it, not only after `stop`.
+        let _ = self.raw.flush();
+        let _ = self.cast.flush();
     }
 
     pub fn input(&mut self, bytes: &[u8]) {

@@ -76,6 +76,10 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
         ("PATH", "/usr/bin"),
         ("HOME", "/Users/me"),
         ("LC_ALL", "C"),
+        ("LC_TERMINAL", "iTerm2"),
+        ("LC_TERMINAL_VERSION", "3.7.3"),
+        ("CLAUDE_CONFIG_DIR", "/Users/me/.claude"),
+        ("CODEX_HOME", "/Users/me/.codex"),
         ("BUS_DATA_DIR", "/Users/me/.local/share/bus/live"),
         ("BUS_SESSION_ID", "live"),
         ("HERDR_SOCKET_PATH", "/live/herdr.sock"),
@@ -97,8 +101,14 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
     assert!(get("CLAUDECODE").is_none());
     assert!(get("TERM_PROGRAM").is_none());
     assert!(get("TMUX").is_none());
-    assert_eq!(get("HOME"), Some(OsString::from("/Users/me")));
+    // The developer's home and their terminal's identity stay out of the scratch Bus.
+    assert_eq!(get("HOME"), Some(OsString::from("/tmp/bus-tui/s1/home")));
     assert_eq!(get("LC_ALL"), Some(OsString::from("C")));
+    assert!(get("LC_TERMINAL").is_none());
+    assert!(get("LC_TERMINAL_VERSION").is_none());
+    // Provider config locations would point the scratch agents at the developer's settings.
+    assert!(get("CLAUDE_CONFIG_DIR").is_none());
+    assert!(get("CODEX_HOME").is_none());
     assert!(get("PATH")
         .unwrap()
         .to_string_lossy()
@@ -117,6 +127,19 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
     );
     let without_path = scratch_env(&paths, "tok", &[]);
     assert!(without_path.iter().any(|(k, _)| k == "PATH"));
+}
+
+#[test]
+fn only_the_graphics_choice_names_a_picture_terminal() {
+    let paths = SessionPaths::new(Path::new("/tmp/bus-tui"), "s1");
+    let has = |graphics: Graphics, key: &str| graphics.env(&paths).iter().any(|(k, _)| k == key);
+    // Bus picks Kitty pictures when GHOSTTY_RESOURCES_DIR is set
+    // (client/rooms/render/thumbnails.rs); nothing inherited can.
+    assert!(has(Graphics::Kitty, "GHOSTTY_RESOURCES_DIR"));
+    assert!(Graphics::None.env(&paths).is_empty());
+    assert_eq!(Graphics::default(), Graphics::Kitty);
+    assert_eq!(Graphics::parse("none"), Ok(Graphics::None));
+    assert!(Graphics::parse("iterm2").is_err());
 }
 
 #[test]
@@ -141,6 +164,8 @@ fn session_directories_are_created_marked_and_removed() {
         run_dir: root.join("run"),
         binary: "/bin/bus".into(),
         size: (80, 24),
+        home: paths.home_dir(),
+        graphics: Graphics::None,
     };
     paths.write_info(&info).unwrap();
     assert_eq!(paths.read_info(), Some(info.clone()));

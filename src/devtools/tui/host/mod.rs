@@ -63,6 +63,7 @@ pub(super) struct HostOptions {
     pub rows: u16,
     pub run_dir: PathBuf,
     pub token: String,
+    pub graphics: super::session::Graphics,
 }
 
 /// Entry of the hidden `bus --dev tui __host` process.
@@ -115,7 +116,7 @@ fn start(
     let mut command = CommandBuilder::new(&binary);
     command.arg("--dev");
     command.env_clear();
-    for (key, value) in &env {
+    for (key, value) in env.iter().chain(&options.graphics.env(paths)) {
         command.env(key, value);
     }
     command.cwd(paths.work_dir());
@@ -169,6 +170,8 @@ fn start(
         run_dir: options.run_dir.clone(),
         binary,
         size: (options.cols, options.rows),
+        home: paths.home_dir(),
+        graphics: options.graphics,
     };
     Ok(Host {
         paths: paths.clone(),
@@ -246,10 +249,17 @@ fn spawn_pump(
         }
         let (lock, ready) = &*output;
         if let Ok(mut out) = lock.lock() {
-            out.exited.get_or_insert_with(|| "terminal closed".into());
+            out.exited.get_or_insert_with(|| TERMINAL_CLOSED.into());
         }
         ready.notify_all();
     });
+}
+
+/// Why the session ended when only its terminal closed, before Bus's status is known.
+const TERMINAL_CLOSED: &str = "terminal closed";
+
+fn exit_reason(status: portable_pty::ExitStatus) -> String {
+    format!("bus exited ({status:?})")
 }
 
 fn spawn_reaper(
@@ -265,7 +275,7 @@ fn spawn_reaper(
         if let Ok(Some(status)) = status {
             let (lock, ready) = &*output;
             if let Ok(mut out) = lock.lock() {
-                out.exited = Some(format!("bus exited ({status:?})"));
+                out.exited = Some(exit_reason(status));
             }
             ready.notify_all();
             return;
@@ -323,7 +333,28 @@ impl Host {
     }
 
     fn exited(&self) -> Option<String> {
-        self.output.0.lock().ok().and_then(|out| out.exited.clone())
+        let reason = self
+            .output
+            .0
+            .lock()
+            .ok()
+            .and_then(|out| out.exited.clone())?;
+        if reason != TERMINAL_CLOSED {
+            return Some(reason);
+        }
+        // The terminal closes a moment before the reaper's next poll sees Bus
+        // exit; ask Bus itself, so a quit reports its exit status, not only EOF.
+        for _ in 0..25 {
+            if let Ok(Ok(Some(status))) = self.child.lock().map(|mut child| child.try_wait()) {
+                let reason = exit_reason(status);
+                if let Ok(mut out) = self.output.0.lock() {
+                    out.exited = Some(reason.clone());
+                }
+                return Some(reason);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Some(reason)
     }
 
     fn grid(&self) -> Grid {
@@ -414,7 +445,9 @@ impl Host {
             let _ = stream.flush();
             if stop {
                 drop(stream);
-                let _ = self.paths.remove();
+                if response["ok"] == true {
+                    let _ = self.paths.remove();
+                }
                 return 0;
             }
         }
@@ -442,6 +475,20 @@ impl Host {
             &self.info.data_dir,
             &self.info.run_dir.join("logs")
         ));
+        // The effect log lives in the session dir, which stop removes; keep
+        // it. If the copy fails, say so and leave the session dir in place.
+        let (from, to) = (
+            self.paths.effects_log(),
+            self.info.run_dir.join("effects.ndjson"),
+        );
+        if from.exists() {
+            if let Err(error) = std::fs::copy(&from, &to) {
+                report["ok"] = json!(false);
+                report["error"] = json!({"code": "effects_not_kept", "message": format!(
+                    "could not copy {} to {}: {error}; the session dir is kept until the next start of this session",
+                    from.display(), to.display())});
+            }
+        }
         let leftovers = super::session::pids_owned(&self.paths.dir, &self.token);
         for pid in &leftovers {
             super::session::terminate(*pid);

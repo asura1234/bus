@@ -39,10 +39,10 @@ const LOCATOR_VARS: &[&str] = &[
     "HERDR_CONFIG_PATH",
 ];
 
-/// The only inherited variables the scratch Bus sees; everything else,
-/// including every `BUS_*`, `HERDR_*`, `CLAUDE*` and terminal identity, is dropped.
+/// The only inherited variables the scratch Bus sees, with the locale's
+/// `LC_*`; everything else, including `HOME`, every `BUS_*`, `HERDR_*`,
+/// `CLAUDE*` and terminal identity, is dropped.
 const INHERITED_VARS: &[&str] = &[
-    "HOME",
     "USER",
     "LOGNAME",
     "PATH",
@@ -76,6 +76,10 @@ pub(super) struct SessionInfo {
     pub run_dir: PathBuf,
     pub binary: PathBuf,
     pub size: (u16, u16),
+    #[serde(default)]
+    pub home: PathBuf,
+    #[serde(default)]
+    pub graphics: Graphics,
 }
 
 /// Who reserved a session directory: the token its host must present, and
@@ -135,6 +139,12 @@ impl SessionPaths {
         self.dir.join("xdg")
     }
 
+    /// The scratch Bus's `HOME`, so nothing it lists or writes under `~` is the
+    /// developer's.
+    pub fn home_dir(&self) -> PathBuf {
+        self.dir.join("home")
+    }
+
     pub fn socket(&self) -> PathBuf {
         self.dir.join("d.sock")
     }
@@ -190,6 +200,7 @@ impl SessionPaths {
             self.work_dir(),
             self.bin_dir(),
             self.xdg_dir(),
+            self.home_dir(),
         ] {
             create_private_dir(&dir)?;
         }
@@ -616,6 +627,45 @@ pub(super) fn ensure_binary_allowed(binary: &Path, allow_target_debug: bool) -> 
     Ok(())
 }
 
+/// How the scratch Bus draws pictures in its terminal; never taken from the
+/// runner's own terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Graphics {
+    /// Kitty graphics, which the driver's screen and `screenshot --real` show.
+    #[default]
+    Kitty,
+    /// No picture protocol: Bus shows attachments as file names.
+    None,
+}
+
+impl Graphics {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "kitty" => Ok(Self::Kitty),
+            "none" => Ok(Self::None),
+            other => Err(format!("unknown --graphics {other:?}; use kitty or none")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Kitty => "kitty",
+            Self::None => "none",
+        }
+    }
+
+    /// The variables that make Bus pick this protocol. Bus reads
+    /// `GHOSTTY_RESOURCES_DIR` only to choose Kitty pictures, unlike
+    /// `TERM_PROGRAM`, which also changes keys and notifications.
+    pub fn env(self, paths: &SessionPaths) -> Vec<(String, OsString)> {
+        match self {
+            Self::Kitty => vec![("GHOSTTY_RESOURCES_DIR".into(), paths.home_dir().into())],
+            Self::None => Vec::new(),
+        }
+    }
+}
+
 /// The complete environment of the spawned Bus: an allow-list of inherited
 /// basics plus the session's own locations. No inherited Bus variable survives.
 pub(super) fn scratch_env(
@@ -625,7 +675,12 @@ pub(super) fn scratch_env(
 ) -> Vec<(String, OsString)> {
     let mut env: Vec<(String, OsString)> = inherited
         .iter()
-        .filter(|(key, _)| INHERITED_VARS.contains(&key.as_str()) || key.starts_with("LC_"))
+        .filter(|(key, _)| {
+            INHERITED_VARS.contains(&key.as_str())
+                // iTerm2 names itself in LC_TERMINAL*, which would pick Bus's
+                // picture protocol from the runner's terminal.
+                || (key.starts_with("LC_") && !key.starts_with("LC_TERMINAL"))
+        })
         .cloned()
         .collect();
     if let Some((_, path)) = env.iter_mut().find(|(key, _)| key == "PATH") {
@@ -639,6 +694,7 @@ pub(super) fn scratch_env(
     let xdg = paths.xdg_dir();
     env.extend([
         ("BUS_DATA_DIR".into(), paths.data_dir().into()),
+        ("HOME".into(), paths.home_dir().into()),
         ("TERM".into(), "xterm-256color".into()),
         ("COLORTERM".into(), "truecolor".into()),
         ("XDG_CONFIG_HOME".into(), xdg.join("config").into()),

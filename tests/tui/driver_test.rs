@@ -6,7 +6,7 @@
 #![cfg(all(target_os = "macos", feature = "dev-tools"))]
 
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Each test drives its own session; names stay unique across test processes.
@@ -384,6 +384,351 @@ fn waits_report_a_bus_that_exited() {
             "wait --state {predicate} after Bus exited: {value}"
         );
     }
+}
+
+#[test]
+fn a_quit_reports_the_exit_status_of_bus() {
+    let session = Session::start("quit");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["press", "ctrl+q"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        let (_, status) = tui(&session.0, &["status"]);
+        if status["alive"] == false || std::time::Instant::now() > deadline {
+            break status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    // The first status without Bus already says how it exited, not only that
+    // its terminal closed.
+    assert!(
+        status["exited"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("bus exited"),
+        "{status}"
+    );
+}
+
+#[test]
+fn stop_reports_when_effect_recording_cannot_be_archived() {
+    let session = Session::start("archive");
+    let status = session.ok(&["status"]);
+    let artifact_dir = PathBuf::from(status["run_dir"].as_str().unwrap());
+    let recording = session_dir(&session.0).join("effects.ndjson");
+    std::fs::write(
+        &recording,
+        b"{\"kind\":\"sound\",\"target\":\"fixture.aiff\",\"at_ms\":1}\n",
+    )
+    .unwrap();
+    // A directory at the destination deterministically makes the copy fail.
+    let destination = artifact_dir.join("effects.ndjson");
+    std::fs::create_dir(&destination).unwrap();
+    let (code, stopped) = tui(&session.0, &["stop"]);
+    let kept = std::fs::read_to_string(&recording).unwrap_or_default();
+    std::fs::remove_dir(&destination).unwrap();
+    let _ = std::fs::remove_dir_all(session_dir(&session.0));
+    assert_ne!(code, 0, "{stopped}");
+    assert_eq!(stopped["error"]["code"], "effects_not_kept", "{stopped}");
+    assert!(
+        kept.contains("fixture.aiff"),
+        "the original recording must survive a failed archive: {stopped}"
+    );
+}
+
+#[test]
+fn reads_still_work_after_a_quit() {
+    let session = Session::start("aq");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["press", "ctrl+q"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while tui(&session.0, &["status"]).1["alive"] != false {
+        assert!(std::time::Instant::now() < deadline, "Bus did not exit");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    for read in [
+        &["snapshot", "--plain"][..],
+        &["find", "Stopping"][..],
+        &["cells", "0", "0"][..],
+        &["screenshot"][..],
+        &["effects"][..],
+        &["clipboard"][..],
+    ] {
+        session.ok(read);
+    }
+    let (code, value) = tui(&session.0, &["press", "enter"]);
+    assert_eq!(code, 3, "input after quit: {value}");
+    // The output Bus wrote while quitting, terminal restore included, is
+    // already in pty.raw before `stop`.
+    let run = PathBuf::from(
+        session.ok(&["status"])["run_dir"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
+    let raw = std::fs::read(run.join("pty.raw")).unwrap();
+    let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"Stopping Bus"), "pty.raw lacks the quit message");
+    assert!(
+        has(b"\x1b[?1049l"),
+        "pty.raw lacks the alternate-screen exit"
+    );
+}
+
+#[test]
+fn nth_counts_matches_from_one() {
+    let session = Session::start("nth");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let first = session.ok(&["find", "bus"])["matches"][0].clone();
+    // `--nth 1` is the first match in reading order.
+    let hovered = session.ok(&["hover", "--text", "bus", "--nth", "1"]);
+    assert_eq!(hovered["at"][0], first["row"], "{hovered} vs {first}");
+    let (code, value) = tui(&session.0, &["hover", "--text", "bus", "--nth", "99"]);
+    assert_eq!(code, 1, "{value}");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--nth counts from 1"),
+        "{value}"
+    );
+}
+
+#[test]
+fn stop_keeps_the_recorded_effects_in_the_run_dir() {
+    let session = Session::start("ek");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["fixture", "clipboard-image"]);
+    session.ok(&["click", "--hit", "composer"]);
+    session.ok(&["press", "ctrl+v"]);
+    session.ok(&["wait", "--effect", "clipboard_image"]);
+    let stopped = session.ok(&["stop"]);
+    let kept = PathBuf::from(stopped["run_dir"].as_str().unwrap()).join("effects.ndjson");
+    let text = std::fs::read_to_string(&kept).unwrap_or_default();
+    assert!(
+        text.contains("clipboard_image"),
+        "{}: {text:?}",
+        kept.display()
+    );
+}
+
+/// Attaches the session's `notes.txt` fixture the way the skill guide says:
+/// Ctrl+O, clear the form's `~/`, type the absolute path, Enter.
+fn attach_notes_with_the_file_form(session: &Session) -> String {
+    let fixture = session.ok(&["fixture", "file", "--file", "notes.txt"]);
+    let path = fixture["path"].as_str().unwrap().to_owned();
+    session.ok(&["press", "ctrl+o"]);
+    session.ok(&["wait", "--text", "Local file path"]);
+    session.ok(&["press", "ctrl+a"]);
+    session.ok(&["press", "ctrl+k"]);
+    session.ok(&["type", &path]);
+    session.ok(&["press", "enter"]);
+    session.ok(&[
+        "wait",
+        "--text",
+        "Local file path",
+        "--gone",
+        "--timeout",
+        "5s",
+    ]);
+    session.ok(&["wait", "--text", "[notes.txt", "--timeout", "5s"]);
+    path
+}
+
+#[test]
+fn hovering_a_draft_attachment_chip_shows_its_full_path() {
+    let session = Session::start("hov");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let path = attach_notes_with_the_file_form(&session);
+    let hits = session.ok(&["hits"]);
+    let names: Vec<&str> = hits["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|hit| hit["name"].as_str())
+        .collect();
+    // A draft chip is `remove-file:NAME`; `file:NAME` is a history attachment.
+    assert!(names.contains(&"remove-file:notes.txt"), "{names:?}");
+    assert!(!names.contains(&"file:notes.txt"), "{names:?}");
+    session.ok(&["hover", "--hit", "remove-file:notes.txt"]);
+    let dir = Path::new(&path).parent().unwrap().file_name().unwrap();
+    let (code, value) = tui(
+        &session.0,
+        &[
+            "wait",
+            "--text",
+            &format!("{}/notes.txt", dir.to_str().unwrap()),
+            "--timeout",
+            "3s",
+        ],
+    );
+    assert_eq!(code, 0, "full path not shown after hover: {value}");
+}
+
+#[test]
+fn the_file_form_attaches_a_typed_absolute_path() {
+    let session = Session::start("pst");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    attach_notes_with_the_file_form(&session);
+}
+
+#[test]
+fn pasting_an_absolute_path_into_the_composer_attaches_it() {
+    let session = Session::start("psc");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let fixture = session.ok(&["fixture", "file", "--file", "notes.txt"]);
+    let path = fixture["path"].as_str().unwrap().to_owned();
+    session.ok(&["click", "--hit", "composer"]);
+    session.ok(&["paste", &path]);
+    let (code, value) = tui(
+        &session.0,
+        &["wait", "--text", "[notes.txt", "--timeout", "5s"],
+    );
+    assert_eq!(code, 0, "composer paste of a path: {value}");
+}
+
+#[test]
+fn the_scratch_bus_lists_its_own_home_not_the_developers() {
+    let session = Session::start("home");
+    let status = session.ok(&["status"]);
+    let home = PathBuf::from(status["home"].as_str().unwrap());
+    assert_eq!(home, session_dir(&session.0).join("home"), "{status}");
+    assert_eq!(status["graphics"], "kitty", "the default: {status}");
+    std::fs::write(home.join("scratch-home-marker.txt"), b"x").unwrap();
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    // The file form starts at `~/` and suggests what is there.
+    session.ok(&["press", "ctrl+o"]);
+    session.ok(&[
+        "wait",
+        "--text",
+        "scratch-home-marker.txt",
+        "--timeout",
+        "5s",
+    ]);
+}
+
+#[test]
+fn start_takes_the_graphics_identity_and_refuses_unknown_ones() {
+    let name = session_name("gfx");
+    let runs = run_dir();
+    let (code, status) = tui(
+        &name,
+        &[
+            "start",
+            "--graphics",
+            "none",
+            "--size",
+            "100x30",
+            "--run-dir",
+            runs.to_str().unwrap(),
+        ],
+    );
+    let session = Session(name);
+    assert_eq!(code, 0, "{status}");
+    assert_eq!(session.ok(&["status"])["graphics"], "none");
+    let (code, refused) = tui(&session_name("gfx2"), &["start", "--graphics", "iterm2"]);
+    assert_eq!(code, 2, "{refused}");
+}
+
+#[test]
+fn caller_home_stays_out_of_file_suggestions_and_agent_settings() {
+    fn files_under(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files.extend(files_under(&path));
+            } else if path.is_file() {
+                files.push((path.clone(), std::fs::read(path).unwrap()));
+            }
+        }
+        files.sort();
+        files
+    }
+
+    let name = session_name("prefs");
+    let runs = run_dir();
+    let caller_home = runs.join("caller-home-homeprefs");
+    std::fs::create_dir_all(caller_home.join(".claude")).unwrap();
+    std::fs::write(caller_home.join("caller-home-marker.txt"), b"private").unwrap();
+    std::fs::write(
+        caller_home.join(".claude/settings.json"),
+        br#"{"statusLine":{"type":"command","command":"echo caller-home-must-not-be-read"}}"#,
+    )
+    .unwrap();
+    let before = files_under(&caller_home);
+    let mut start = bus(&name);
+    start.env("HOME", &caller_home);
+    start.env("CLAUDE_CONFIG_DIR", caller_home.join(".claude"));
+    start.env("LC_TERMINAL", "iTerm2");
+    start.env("LC_TERMINAL_VERSION", "3.7.3");
+    start.args(["--dev", "tui", "start", "--name", &name, "--run-dir"]);
+    start.arg(&runs);
+    let (code, status) = parse(start.output().unwrap());
+    let session = Session(name);
+    assert_eq!(code, 0, "{status}");
+    let scratch_home = session_dir(&session.0).join("home");
+    assert_eq!(status["home"], scratch_home.to_str().unwrap());
+    std::fs::write(scratch_home.join("scratch-home-marker.txt"), b"public").unwrap();
+    session.ok(&["press", "ctrl+o"]);
+    session.ok(&["wait", "--text", "scratch-home-marker.txt"]);
+    assert!(!session
+        .ok(&["snapshot"])
+        .to_string()
+        .contains("caller-home-marker"));
+    session.ok(&["press", "esc"]);
+
+    let added = bus(&session.0)
+        .env("HOME", &caller_home)
+        .env("CLAUDE_CONFIG_DIR", caller_home.join(".claude"))
+        .args(["--dev", "tui", "bus", "--name", &session.0])
+        .args([
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "home-agent",
+            "--provider",
+            "claude",
+            "--pwd",
+            "~",
+        ])
+        .output()
+        .unwrap();
+    assert!(added.status.success(), "{added:?}");
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    let state = bus_state(&session);
+    let agents = state["agents"].as_array().unwrap();
+    assert_eq!(
+        agents[0]["cwd"],
+        scratch_home.canonicalize().unwrap().to_str().unwrap(),
+        "{state}"
+    );
+    let data = session_dir(&session.0).join("data");
+    let saved: Vec<_> = files_under(&data)
+        .into_iter()
+        .filter(|(path, _)| path.file_name().unwrap() == "claude-statusline.json")
+        .collect();
+    assert_eq!(
+        saved.len(),
+        1,
+        "statusline settings should have been captured"
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&saved[0].1).unwrap(),
+        serde_json::json!({})
+    );
+    let (code, stopped) = tui(&session.0, &["stop"]);
+    assert_eq!(code, 0, "{stopped}");
+    assert_eq!(files_under(&caller_home), before, "caller HOME was written");
+    std::fs::remove_dir_all(caller_home).unwrap();
 }
 
 #[test]

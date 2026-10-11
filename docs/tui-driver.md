@@ -58,6 +58,10 @@ Exit codes:
 - 2: usage error (run the verb with `--help`)
 - 3: no session, or the Bus under it died
 
+After Bus exits (Ctrl+Q, a crash), `status`, `snapshot`, `find`, `cells`,
+`screenshot`, `effects` and `clipboard` still read the last screen and the
+records, and `stop` still cleans up; every other verb exits 3.
+
 Sessions: every verb takes `--name NAME` (default `s1`, or `$BUS_TUI_SESSION`).
 At most 4 sessions run at once.
 
@@ -66,25 +70,35 @@ left edge. Prefer `--text` targets to raw coordinates.
 
 Artifacts: each session writes a run folder with `trace.ndjson` (every
 request and its result), `pty.cast` (asciicast of the terminal, input and
-output), `pty.raw` (the exact output bytes), `shots/` (screenshots) and, after
-`stop`, the Bus logs. Inside a Bus checkout it lives under
+output), `pty.raw` (the exact output bytes, on disk as soon as Bus writes
+them), `shots/` (screenshots) and, after `stop`, the Bus logs and
+`effects.ndjson` (every recorded effect). Inside a Bus checkout it lives under
 `temp/tui-driver/runs/`, otherwise under `~/.local/state/bus/tui-runs/`.
 
 Verbs: start, stop, status, list, bus, snapshot, find, cells, screenshot,
-hits, type, paste, press, click, drag, scroll, resize, focus, wait, expect,
-effects, clipboard, fixture, journey, gc.
+hits, type, paste, press, click, hover, drag, scroll, resize, focus, wait,
+expect, effects, clipboard, fixture, journey, gc.
 
-Targets: click, scroll and `wait --style` take a cell `ROW COL`, a visible
-text `--text TEXT [--regex] [--nth N] [--rows A-B]`, or a named region of the
-room UI `--hit NAME` (see `hits`). Prefer `--hit`, then `--text`.
+Targets: click, hover, scroll and `wait --style` take a cell `ROW COL`, a
+visible text `--text TEXT [--regex] [--nth N] [--rows A-B]`, or a named
+region of the room UI `--hit NAME` (see `hits`). Prefer `--hit`, then
+`--text`. `--nth N` picks the Nth match counting from 1 (`--nth 1` is the
+first), in reading order: top to bottom, then left to right.
 Run `bus --dev tui VERB --help` for one verb.
 
 ### start
-`start [--name NAME] [--size COLSxROWS] [--run-dir DIR]`
+`start [--name NAME] [--size COLSxROWS] [--run-dir DIR] [--graphics kitty|none]`
 
 Starts a fresh scratch Bus (default size 160x45) and waits until it answers
 `bus state` and has drawn its first room. Prints the session status with
 `ready_ms`. A relative `--run-dir` is taken from the current directory.
+The scratch Bus gets its own empty `HOME` (`home/` in the session directory,
+`status` prints it), so `~`, the file form's suggestions and anything Bus
+writes under `~` never touch the developer's home; the caller's terminal
+identity (`TERM_PROGRAM`, `LC_TERMINAL`, ...) is dropped. `--graphics` picks
+how Bus draws pictures instead: `kitty` (default) draws them with the Kitty
+graphics protocol, which the driver's screen and `screenshot --real` show;
+`none` makes Bus show attachments as file names.
 Refused when the session name is running or still starting, when 4 sessions
 run, when the target belongs to a live Bus, when inherited
 `BUS_*`/`HERDR_*` variables point at it, or when the binary is
@@ -95,8 +109,10 @@ run, when the target belongs to a live Bus, when inherited
 
 Quits the scratch Bus, stops its server, terminates processes the session
 started that still hold its directory (never anything else, including the
-caller), copies the Bus logs into the run folder and removes the session
-directory. Prints the run folder.
+caller), copies the Bus logs and `effects.ndjson` into the run folder and
+removes the session directory. Prints the run folder. If the effect log cannot
+be copied, `stop` fails with `effects_not_kept` and leaves the session directory
+(and the log in it) until the next `start` of that session.
 
 ### status
 `status [--name NAME]`
@@ -187,8 +203,14 @@ terminal negotiated, so Esc never waits out a timeout.
 `click (ROW COL | --text TEXT [--regex] [--nth N] [--rows A-B]) [--double] [--button left|middle|right] [--mods shift,alt,ctrl]`
 
 Clicks a cell, or the middle of a visible text match. A text that matches
-more than once needs `--nth N` or `--rows`. `--double` sends two clicks
-inside Bus's double-click window.
+more than once needs `--nth N` (counting from 1, in reading order) or
+`--rows`. `--double` sends two clicks inside Bus's double-click window.
+
+### hover
+`hover (ROW COL | --text TEXT | --hit NAME)`
+
+Moves the pointer onto a target with no button down, as a mouse does before
+a click, so tooltips and hover details show.
 
 ### drag
 `drag ROW1 COL1 ROW2 COL2 | --from-text A --to-text B [--button B] [--mods M]`
@@ -264,11 +286,13 @@ or 777 in Bus's output). `since_last_input` is the index the next
 Every copy Bus made in this session (OSC 52).
 
 ### fixture
-`fixture image|file|clipboard-image [--file FILE] [--text TEXT]`
+`fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P]`
 
-Writes a file for the session to send and prints its path: `image` is a PNG
-with red, blue, yellow and cyan quadrants (clockwise from the top left), easy
-to recognise in a screenshot; `file` is a text file. Both go into the
+Writes a file for the session to send and prints its path: `image` is a
+160x100 PNG easy to recognise in a screenshot, by `--pattern`: `quadrants`
+(default: red, blue, yellow and cyan, clockwise from the top left),
+`red-diagonal` (a red band from top left to bottom right on white) or
+`blue-circle` (a blue disc on white); `file` is a text file. Both go into the
 session's work directory. `clipboard-image` sets the image that Ctrl+V in the
 composer pastes.
 

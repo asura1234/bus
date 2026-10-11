@@ -145,7 +145,7 @@ fn rows_flag(parsed: &mut Parsed) -> Result<Option<(u16, u16)>, String> {
 }
 
 /// A target from `--hit NAME`, `--text T [--regex] [--nth N] [--rows A-B]`,
-/// else `ROW COL`.
+/// else `ROW COL`. `--nth` counts matches from 1 in reading order.
 fn target(parsed: &mut Parsed, text_flag: &str) -> Result<Target, String> {
     if let Some(name) = parsed.take_value("--hit") {
         return Ok(Target::Hit { name });
@@ -153,9 +153,11 @@ fn target(parsed: &mut Parsed, text_flag: &str) -> Result<Target, String> {
     if let Some(text) = parsed.take_value(text_flag) {
         let nth = parsed
             .take_value("--nth")
-            .map(|n| {
-                n.parse::<usize>()
-                    .map_err(|_| "--nth must be a number".to_string())
+            .map(|n| match n.parse::<usize>() {
+                Ok(n) if n >= 1 => Ok(n),
+                _ => Err(format!(
+                    "--nth {n:?}: give the match number counting from 1 (1 = first, in reading order)"
+                )),
             })
             .transpose()?;
         return Ok(Target::Text {
@@ -230,7 +232,7 @@ pub(super) fn command(verb: &str, parsed: &mut Parsed) -> Result<Command, String
             }
             Command::Press { keys }
         }
-        "click" | "drag" | "scroll" => pointer_command(verb, parsed)?,
+        "click" | "drag" | "scroll" | "hover" => pointer_command(verb, parsed)?,
         "resize" => {
             let (cols, rows) = parse_size(&parsed.positional().ok_or("usage: resize COLSxROWS")?)?;
             Command::Resize { cols, rows }
@@ -297,6 +299,9 @@ fn pointer_command(verb: &str, parsed: &mut Parsed) -> Result<Command, String> {
                 mods,
             }
         }
+        "hover" => Command::Hover {
+            target: target(parsed, "--text")?,
+        },
         "scroll" => {
             let (up, notches) = match (parsed.take_value("--up"), parsed.take_value("--down")) {
                 (Some(n), None) => (true, number(&n, "--up")?),

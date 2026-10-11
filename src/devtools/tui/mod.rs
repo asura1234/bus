@@ -214,6 +214,11 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     // The host runs in the session dir, which stop deletes; a relative
     // --run-dir means the caller's cwd.
     let run_root = parsed.take_value("--run-dir").map(|dir| cwd.join(dir));
+    let graphics = parsed
+        .take_value("--graphics")
+        .map(|value| session::Graphics::parse(&value))
+        .transpose()?
+        .unwrap_or_default();
     parsed.finish()?;
     if let Some(message) = effects::unsupported_os(std::env::consts::OS) {
         return Ok(failure("refused", message));
@@ -253,6 +258,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         .args(["--dev", "tui", "__host", "--name", name])
         .args(["--size", &format!("{cols}x{rows}")])
         .args(["--token", &claim.token])
+        .args(["--graphics", graphics.as_str()])
         .arg("--run-dir")
         .arg(&run_dir)
         .stdin(Stdio::null())
@@ -377,7 +383,9 @@ fn stop(name: &str) -> Value {
     let paths = paths(name);
     let info = paths.read_info();
     let response = request(name, &Command::Stop);
-    if response["ok"].as_bool() == Some(true) {
+    // The host answered, so it is shutting down, even when it reports a
+    // problem with what it kept.
+    if response["run_dir"].is_string() {
         if let Some(info) = info {
             let deadline = Instant::now() + Duration::from_secs(10);
             while session::process_alive(info.host_pid) && Instant::now() < deadline {
@@ -701,6 +709,11 @@ fn run_host(args: &[String]) -> i32 {
             return Err("--run-dir must be absolute".into());
         }
         let token = parsed.take_value("--token").ok_or("missing --token")?;
+        let graphics = parsed
+            .take_value("--graphics")
+            .map(|value| session::Graphics::parse(&value))
+            .transpose()?
+            .unwrap_or_default();
         parsed.finish()?;
         Ok(host::HostOptions {
             name,
@@ -708,6 +721,7 @@ fn run_host(args: &[String]) -> i32 {
             rows,
             run_dir,
             token,
+            graphics,
         })
     })();
     match options {
@@ -719,14 +733,14 @@ fn run_host(args: &[String]) -> i32 {
     }
 }
 
-/// `fixture KIND [--file FILE] [--text TEXT]`: files for the session to send.
+/// `fixture KIND [flags]`: files for the session to send; `fixtures::USAGE`
+/// lists the flags each kind takes.
 /// The file name has its own flag because `--name` selects the session.
 fn fixture(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
-    let kind = parsed
-        .positional()
-        .ok_or("usage: fixture image|file|clipboard-image [--file FILE] [--text TEXT]")?;
+    let kind = parsed.positional().ok_or(fixtures::USAGE)?;
     let file = parsed.take_value("--file");
     let text = parsed.take_value("--text");
+    let pattern = parsed.take_value("--pattern");
     parsed.finish()?;
     let paths = paths(name);
     if !session::session_alive(&paths) {
@@ -735,7 +749,7 @@ fn fixture(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
             format!("no running driver session {name:?}"),
         ));
     }
-    fixtures::create(&paths, &kind, file, text)
+    fixtures::create(&paths, &kind, file, text, pattern)
 }
 
 /// Runs inside the `screenshot --real` mirror window.

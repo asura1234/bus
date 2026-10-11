@@ -25,6 +25,7 @@ maintenance-test:
     {{python}} skills/pr/scripts/tests/pr_format_check_test.py
     {{python}} skills/review-pr/scripts/tests/review_round_test.py
     {{python}} skills/split-pr/scripts/tests/split_plan_test.py
+    {{python}} skills/e2e-test-tui/scripts/tests/e2e_report_test.py
 
 # Live message round trips with real Claude Code, Codex and Cursor; spends model usage (e.g. `just e2e --providers claude`)
 e2e *args:

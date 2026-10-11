@@ -84,6 +84,9 @@ pub(super) enum Command {
         button: String,
         mods: String,
     },
+    Hover {
+        target: Target,
+    },
     Scroll {
         target: Target,
         up: bool,

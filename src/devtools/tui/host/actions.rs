@@ -81,6 +81,15 @@ impl Host {
                 let needle = needle(text, *regex)?;
                 let matches = screen::find(&grid, &needle, *rows);
                 let chosen = match nth {
+                    Some(n) if *n > matches.len() && !matches.is_empty() => {
+                        return Err(failure(
+                            "not_found",
+                            format!(
+                                "--nth {n}: only {} matches for {text:?} (--nth counts from 1)",
+                                matches.len()
+                            ),
+                        ))
+                    }
                     Some(n) => matches.get(n.saturating_sub(1)),
                     None if matches.len() == 1 => matches.first(),
                     None if matches.is_empty() => None,
@@ -88,7 +97,7 @@ impl Host {
                         return Err(failure(
                             "ambiguous",
                             format!(
-                                "{} matches for {text:?} at {}; pass --nth N or narrow with --rows",
+                                "{} matches for {text:?} at {}; pass --nth N (1 = first, in reading order) or narrow with --rows",
                                 matches.len(),
                                 matches
                                     .iter()
@@ -107,8 +116,19 @@ impl Host {
     }
 
     pub(super) fn handle(&mut self, command: Command) -> Value {
+        // After Bus exits, the last screen and the records stay readable.
         if let Some(reason) = self.exited() {
-            if !matches!(command, Command::Stop | Command::Status) {
+            if !matches!(
+                command,
+                Command::Stop
+                    | Command::Status
+                    | Command::Snapshot { .. }
+                    | Command::Find { .. }
+                    | Command::Cells { .. }
+                    | Command::Clipboard
+                    | Command::Effects { .. }
+                    | Command::Screenshot { .. }
+            ) {
                 return failure("bus_exited", reason);
             }
         }
@@ -157,6 +177,14 @@ impl Host {
                 notches,
                 mods,
             } => self.scroll(&target, up, notches, &mods),
+            Command::Hover { target } => match self.resolve(&target) {
+                Ok((row, col)) => {
+                    let mut response = self.act(&[input::hover(row, col)], Duration::ZERO);
+                    response["at"] = json!([row, col]);
+                    response
+                }
+                Err(error) => error,
+            },
             Command::Resize { cols, rows } => self.resize(cols, rows),
             Command::WaitText { .. }
             | Command::WaitStable { .. }
@@ -193,7 +221,8 @@ impl Host {
                "bus_pid": self.info.bus_pid, "alive": self.exited().is_none(),
                "exited": self.exited(), "size": self.info.size, "seq": frames,
                "data_dir": self.info.data_dir, "run_dir": self.info.run_dir,
-               "binary": self.info.binary})
+               "binary": self.info.binary, "home": self.info.home,
+               "graphics": self.info.graphics})
     }
 
     fn snapshot(&self, rows: Option<(u16, u16)>) -> Value {
