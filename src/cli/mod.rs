@@ -54,9 +54,8 @@ fn print_paths(root: &std::path::Path, base: &std::path::Path, dev: bool) -> io:
     Ok(())
 }
 
-pub(crate) fn run(args: &[String]) -> io::Result<()> {
-    let invocation = parse_invocation(args).map_err(io::Error::other)?;
-    let dev = invocation.dev;
+/// `--dev` reaches the server, coordinator and logging through the environment.
+fn apply_dev_environment(dev: bool) {
     if dev {
         std::env::set_var("BUS_DEV", "1");
         std::env::set_var("BUS_LOG", crate::utils::logging::DEV_FILTER);
@@ -64,6 +63,12 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         std::env::remove_var("BUS_DEV");
     }
     std::env::remove_var("BUS_DEV_EXISTING_SERVER");
+}
+
+pub(crate) fn run(args: &[String]) -> io::Result<()> {
+    let invocation = parse_invocation(args).map_err(io::Error::other)?;
+    let dev = invocation.dev;
+    apply_dev_environment(dev);
     if invocation.action == Action::Help {
         print_help(dev);
         return Ok(());
