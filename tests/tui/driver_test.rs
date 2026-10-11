@@ -436,6 +436,48 @@ fn stop_reports_when_effect_recording_cannot_be_archived() {
     );
 }
 
+#[test]
+fn reads_still_work_after_a_quit() {
+    let session = Session::start("aq");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["press", "ctrl+q"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while tui(&session.0, &["status"]).1["alive"] != false {
+        assert!(std::time::Instant::now() < deadline, "Bus did not exit");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    for read in [
+        &["snapshot", "--plain"][..],
+        &["find", "Stopping"][..],
+        &["cells", "0", "0"][..],
+        &["screenshot"][..],
+        &["effects"][..],
+        &["clipboard"][..],
+    ] {
+        session.ok(read);
+    }
+    let (code, value) = tui(&session.0, &["press", "enter"]);
+    assert_eq!(code, 3, "input after quit: {value}");
+}
+
+#[test]
+fn stop_keeps_the_recorded_effects_in_the_run_dir() {
+    let session = Session::start("ek");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["fixture", "clipboard-image"]);
+    session.ok(&["click", "--hit", "composer"]);
+    session.ok(&["press", "ctrl+v"]);
+    session.ok(&["wait", "--effect", "clipboard_image"]);
+    let stopped = session.ok(&["stop"]);
+    let kept = PathBuf::from(stopped["run_dir"].as_str().unwrap()).join("effects.ndjson");
+    let text = std::fs::read_to_string(&kept).unwrap_or_default();
+    assert!(
+        text.contains("clipboard_image"),
+        "{}: {text:?}",
+        kept.display()
+    );
+}
+
 /// Attaches the session's `notes.txt` fixture the way the skill guide says:
 /// Ctrl+O, clear the form's `~/`, type the absolute path, Enter.
 fn attach_notes_with_the_file_form(session: &Session) -> String {
