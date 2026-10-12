@@ -7,7 +7,6 @@ use std::path::Path;
 /// A timer or a perf-thread wake-up this late marks a window as slow.
 const SLOW_MS: f64 = 100.0;
 const ROLES: [&str; 2] = ["client", "server"];
-const ROTATED_FILES: usize = 3;
 const DEFAULT_SINCE_MS: u64 = 30 * 60_000;
 
 pub(super) fn run(data_dir: &Path, args: &[String]) -> std::io::Result<()> {
@@ -66,18 +65,18 @@ fn parse_since(args: &[String]) -> Result<Option<u64>, String> {
     }
 }
 
-/// Every record of both roles, rotated generations included, from `from_ms` on.
+/// Every record of both roles, archives included, from `from_ms` on.
 fn read_records(data_dir: &Path, from_ms: Option<u64>) -> Vec<Value> {
     let dir = data_dir.join("perf");
     let mut records: Vec<Value> = ROLES
         .iter()
         .flat_map(|role| {
-            (1..=ROTATED_FILES)
-                .rev()
-                .map(move |generation| format!("{role}.jsonl.{generation}"))
-                .chain(std::iter::once(format!("{role}.jsonl")))
+            let live = dir.join(format!("{role}.jsonl"));
+            crate::utils::logging::archived_files(&live)
+                .into_iter()
+                .chain(std::iter::once(live))
         })
-        .filter_map(|name| std::fs::read_to_string(dir.join(name)).ok())
+        .filter_map(|path| read_text(&path))
         .flat_map(|text| {
             text.lines()
                 .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -87,6 +86,20 @@ fn read_records(data_dir: &Path, from_ms: Option<u64>) -> Vec<Value> {
         .collect();
     records.sort_by_key(ts);
     records
+}
+
+/// A live file, or an archive the log writer may already have gzipped.
+fn read_text(path: &Path) -> Option<String> {
+    use std::io::Read as _;
+    let bytes = std::fs::read(path).ok()?;
+    if path.extension().is_some_and(|ext| ext == "gz") {
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(&bytes[..])
+            .read_to_string(&mut text)
+            .ok()?;
+        return Some(text);
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn ts(record: &Value) -> u64 {
@@ -112,14 +125,24 @@ fn summarize(records: &[Value], clock: fn(u64) -> String) -> String {
         " (a timer or the perf thread >= 100 ms)",
         &slow,
     );
-    for role in ROLES {
+    // Several clients can share a role file; peaks are per process.
+    let mut processes: Vec<(&str, u64)> = records
+        .iter()
+        .filter(|record| record["kind"] == "window")
+        .map(|record| (text(&record["role"]), record["pid"].as_u64().unwrap_or(0)))
+        .collect();
+    processes.sort_by_key(|(role, pid)| (ROLES.iter().position(|r| r == role), *pid));
+    processes.dedup();
+    for (role, pid) in processes {
         let windows: Vec<&Value> = records
             .iter()
-            .filter(|record| record["kind"] == "window" && record["role"] == role)
+            .filter(|record| {
+                record["kind"] == "window"
+                    && record["role"] == role
+                    && record["pid"].as_u64().unwrap_or(0) == pid
+            })
             .collect();
-        if !windows.is_empty() {
-            out.push_str(&peaks_line(role, &windows, clock));
-        }
+        out.push_str(&peaks_line(&format!("{role} pid {pid}"), &windows, clock));
     }
     out
 }
@@ -146,16 +169,13 @@ fn stall_line(record: &Value, clock: fn(u64) -> String) -> String {
     let stage = text(&record["stage"]);
     match record["state"].as_str() {
         Some("began") => format!("{head} blocked in {stage} ({busy} ms so far)"),
+        Some("moved") => format!("{head} still blocked, now in {stage} ({busy} ms so far)"),
         Some("ended") => format!("{head} resumed after {busy} ms ({stage})"),
-        Some("capture") => format!(
-            "{head} stacks captured after {busy} ms: perf/{}{}",
-            text(&record["file"]),
-            if record["ok"] == false {
-                " (capture failed)"
-            } else {
-                ""
-            }
+        Some("capture") if record["ok"] == true => format!(
+            "{head} stacks captured after {busy} ms in {stage}: perf/{}",
+            text(&record["file"])
         ),
+        Some("capture") => format!("{head} stack capture after {busy} ms in {stage} failed"),
         _ => format!("{head} {record}"),
     }
 }

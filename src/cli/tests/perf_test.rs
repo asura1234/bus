@@ -26,13 +26,13 @@ fn quiet_records_report_no_stalls_or_slow_windows_but_still_show_peaks() {
     let text = summarize(&records, clock);
     assert!(text.contains("stalls: none"), "{text}");
     assert!(text.contains("slow windows: none"), "{text}");
-    assert!(text.contains("client peaks:"), "{text}");
+    assert!(text.contains("client pid 7 peaks:"), "{text}");
     assert!(
         text.contains("fds 19 at t100"),
         "counts print as integers: {text}"
     );
     assert!(text.contains("cpu 10.0% at t100"), "{text}");
-    assert!(text.contains("server peaks:"), "{text}");
+    assert!(text.contains("server pid 7 peaks:"), "{text}");
 }
 
 #[test]
@@ -40,8 +40,14 @@ fn stalls_list_loop_stage_duration_and_stack_capture() {
     let records = vec![
         json!({"kind": "stall", "state": "began", "role": "client", "ts_ms": 200_000,
                "loop": "client.ui_loop", "stage": "present", "busy_ms": 260}),
+        json!({"kind": "stall", "state": "moved", "role": "client", "ts_ms": 201_000,
+               "loop": "client.ui_loop", "stage": "timer", "busy_ms": 1_000}),
         json!({"kind": "stall", "state": "capture", "role": "client", "ts_ms": 202_000,
-               "loop": "client.ui_loop", "busy_ms": 2_000, "file": "stall-x-client.txt", "ok": true}),
+               "loop": "client.ui_loop", "stage": "timer", "busy_ms": 2_000,
+               "file": "stall-x-client.txt", "ok": true}),
+        json!({"kind": "stall", "state": "capture", "role": "server", "ts_ms": 203_000,
+               "loop": "server.loop", "stage": "render", "busy_ms": 2_000,
+               "file": "stall-y-server.txt", "ok": false}),
         json!({"kind": "stall", "state": "ended", "role": "client", "ts_ms": 205_000,
                "loop": "client.ui_loop", "stage": "present", "busy_ms": 5_100}),
     ];
@@ -54,7 +60,22 @@ fn stalls_list_loop_stage_duration_and_stack_capture() {
         text.contains("t205 client client.ui_loop resumed after 5100 ms (present)"),
         "{text}"
     );
-    assert!(text.contains("perf/stall-x-client.txt"), "{text}");
+    assert!(
+        text.contains("t201 client client.ui_loop still blocked, now in timer (1000 ms so far)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("stacks captured after 2000 ms in timer: perf/stall-x-client.txt"),
+        "{text}"
+    );
+    assert!(
+        text.contains("t203 server server.loop stack capture after 2000 ms in render failed"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("stall-y-server.txt"),
+        "a failed capture points at no file: {text}"
+    );
 }
 
 #[test]
@@ -100,16 +121,42 @@ fn since_filter_and_rotated_files_are_read_in_time_order() {
     let perf = dir.join("perf");
     std::fs::create_dir_all(&perf).unwrap();
     let line = |ts: u64| format!("{}\n", window("server", ts, json!({})));
-    std::fs::write(perf.join("server.jsonl.1"), line(10)).unwrap();
+    // An archive the log writer already gzipped, and one it has not yet.
+    let gz =
+        std::fs::File::create(perf.join("server.jsonl.20260101T000000.000000000Z.gz")).unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(gz, flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, line(7).as_bytes()).unwrap();
+    encoder.finish().unwrap();
+    std::fs::write(
+        perf.join("server.jsonl.20260101T000001.000000000Z"),
+        line(10),
+    )
+    .unwrap();
     std::fs::write(perf.join("server.jsonl"), line(20) + "not json\n").unwrap();
     std::fs::write(perf.join("client.jsonl"), line(5)).unwrap();
 
     let all = read_records(&dir, None);
     let times: Vec<_> = all.iter().map(|r| r["ts_ms"].as_u64().unwrap()).collect();
-    assert_eq!(times, vec![5_000, 10_000, 20_000]);
+    assert_eq!(times, vec![5_000, 7_000, 10_000, 20_000]);
     let recent = read_records(&dir, Some(8_000));
     assert_eq!(recent.len(), 2);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn peaks_are_reported_per_process_when_clients_share_a_role_file() {
+    let mut quiet = window("client", 100, json!({"cpu_pct": 5.0}));
+    quiet["pid"] = json!(8);
+    let records = vec![window("client", 100, json!({"cpu_pct": 80.0})), quiet];
+    let text = summarize(&records, clock);
+    let line = |pid: u64| {
+        text.lines()
+            .find(|line| line.starts_with(&format!("client pid {pid} peaks:")))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_owned()
+    };
+    assert!(line(7).contains("cpu 80.0%"), "{text}");
+    assert!(line(8).contains("cpu 5.0%"), "{text}");
 }
 
 #[test]

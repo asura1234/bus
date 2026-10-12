@@ -45,3 +45,44 @@ fn stack_capture_is_unsupported_off_macos() {
         std::path::Path::new("/tmp/unused.txt")
     ));
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stack_capture_reports_failure_when_the_pid_cannot_be_sampled() {
+    let mut exited = std::process::Command::new("/usr/bin/true")
+        .spawn()
+        .expect("spawn");
+    let pid = exited.id();
+    exited.wait().expect("wait");
+    let dir = crate::utils::test_temp::unique_temp_path("bus-stack-capture-dead-pid");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("stall.txt");
+
+    let ok = capture_stacks(pid, &out);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let written = out.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!written, "sample cannot attach to an exited pid");
+    assert!(
+        !ok,
+        "a capture that wrote no stacks must not be reported as ok"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn open_fds_counts_only_the_descriptors_that_are_open() {
+    fn listed_fds() -> u32 {
+        // The directory read holds one descriptor of its own.
+        (std::fs::read_dir("/dev/fd").unwrap().count() as u32).saturating_sub(1)
+    }
+    let _held: Vec<_> = (0..10)
+        .map(|_| std::fs::File::open(std::env::current_exe().unwrap()).unwrap())
+        .collect();
+    let actual = listed_fds();
+    let reported = open_fds().expect("open fds on macOS");
+    assert!(
+        reported <= actual + 2,
+        "reported {reported} open fds, /dev/fd lists {actual}"
+    );
+}

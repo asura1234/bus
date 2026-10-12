@@ -12,7 +12,11 @@ fn options() -> PerfOptions {
         capture_after: Some(Duration::from_secs(2)),
         capture_cooldown: Duration::from_secs(600),
         max_bytes: 1024 * 1024,
-        retained_files: 2,
+        archive: crate::utils::logging::ArchivePolicy {
+            max_age: Duration::from_secs(3600),
+            max_total_bytes: 1024 * 1024,
+        },
+        retained_captures: 2,
     }
 }
 
@@ -54,6 +58,20 @@ fn recorder(name: &str, hooks: PerfHooks) -> (Recorder, std::path::PathBuf) {
     let dir = crate::utils::test_temp::unique_temp_path(name);
     let recorder = Recorder::open(&dir, "client", &options(), hooks).expect("open recorder");
     (recorder, dir)
+}
+
+/// A live or archived perf file; the archive worker may have gzipped it.
+fn read_perf_file(path: &Path) -> Option<String> {
+    use std::io::Read as _;
+    let bytes = std::fs::read(path).ok()?;
+    if path.extension().is_some_and(|ext| ext == "gz") {
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(&bytes[..])
+            .read_to_string(&mut text)
+            .ok()?;
+        return Some(text);
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn lines(path: &Path) -> Vec<serde_json::Value> {
@@ -215,6 +233,7 @@ fn watchdog_writes_stall_records_and_captures_stacks_once_per_cooldown() {
     );
     recorder.watch(start, t0 + 2_100_000, &registry);
     recorder.watch(start, t0 + 2_200_000, &registry);
+    recorder.wait_for_captures();
     assert_eq!(
         CAPTURES.load(Ordering::SeqCst),
         before + 1,
@@ -226,6 +245,7 @@ fn watchdog_writes_stall_records_and_captures_stacks_once_per_cooldown() {
     let second = WATCH.enter("present");
     let t1 = now_us();
     recorder.watch(start + Duration::from_secs(60), t1 + 2_500_000, &registry);
+    recorder.wait_for_captures();
     assert_eq!(
         CAPTURES.load(Ordering::SeqCst),
         before + 1,
@@ -242,6 +262,8 @@ fn watchdog_writes_stall_records_and_captures_stacks_once_per_cooldown() {
     assert_eq!(stalls[0]["stage"], "present");
     assert!(stalls[0]["busy_ms"].as_u64().unwrap() >= 300);
     assert_eq!(stalls[1]["state"], "capture");
+    assert_eq!(stalls[1]["stage"], "present");
+    assert_eq!(stalls[1]["ok"], true);
     let capture = stalls[1]["file"].as_str().unwrap();
     assert!(
         capture.starts_with("stall-") && capture.ends_with("-client.txt"),
@@ -381,4 +403,182 @@ fn high_machine_load_warns_at_most_once_a_minute() {
     assert!(!quiet.text().contains("perf.high_load"), "{}", quiet.text());
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(calm_dir);
+}
+
+#[test]
+fn stack_captures_prune_old_files_to_a_bounded_retention() {
+    fn write_capture(_pid: u32, path: &Path) -> bool {
+        std::fs::write(path, "stack frames\n").is_ok()
+    }
+    let (mut recorder, dir) = recorder(
+        "perf-capture-retention",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: write_capture,
+        },
+    );
+    for day in 1..=6 {
+        std::fs::write(
+            perf_dir(&dir).join(format!("stall-202601{day:02}T000000Z-client.txt")),
+            "old stack frames\n",
+        )
+        .unwrap();
+    }
+    recorder.capture("test.retention.loop", "present", 3_000);
+    recorder.wait_for_captures();
+    let captures = std::fs::read_dir(perf_dir(&dir))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("stall-"))
+        .count();
+    let retained = recorder.options.retained_captures;
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        captures <= retained,
+        "{captures} stack files remain despite {retained} retained captures"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[allow(deprecated)]
+fn process_sampling_releases_host_port_send_rights() {
+    unsafe extern "C" {
+        fn mach_port_get_refs(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+            right: u32,
+            refs: *mut u32,
+        ) -> libc::kern_return_t;
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
+    let host = unsafe { libc::mach_host_self() };
+    let refs = || {
+        let mut count = 0;
+        assert_eq!(
+            unsafe { mach_port_get_refs(libc::mach_task_self(), host, 0, &mut count) },
+            0
+        );
+        count
+    };
+    let before = refs();
+    for _ in 0..32 {
+        assert!(crate::platform::usage::self_usage().is_some());
+    }
+    let after = refs();
+    unsafe {
+        mach_port_deallocate(libc::mach_task_self(), host);
+    }
+    assert_eq!(
+        after, before,
+        "sampling must balance each mach_host_self send right"
+    );
+}
+
+#[test]
+fn two_client_processes_sharing_the_role_file_keep_each_others_latest_records() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-shared-role");
+    let small = PerfOptions {
+        max_bytes: 400,
+        ..options()
+    };
+    let hooks = PerfHooks {
+        sample: no_sample,
+        capture_stacks: no_capture,
+    };
+    let mut first = Recorder::open(&dir, "client", &small, hooks).expect("first client");
+    let mut second = Recorder::open(&dir, "client", &small, hooks).expect("second client");
+    second.append(&serde_json::json!({"kind": "probe", "who": "second", "n": 0}));
+    for n in 0..40 {
+        first.append(&serde_json::json!({"kind": "probe", "who": "first", "n": n}));
+    }
+    second.append(&serde_json::json!({"kind": "probe", "who": "second", "n": 1}));
+
+    let live = perf_dir(&dir).join("client.jsonl");
+    let found = std::iter::once(live.clone())
+        .chain(crate::utils::logging::archived_files(&live))
+        .filter_map(|path| read_perf_file(&path))
+        .flat_map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
+        .any(|line| line.contains(r#""n":1"#) && line.contains(r#""who":"second""#));
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        found,
+        "the second client's latest record is in no perf file"
+    );
+}
+
+#[test]
+fn a_stall_that_moves_on_and_stays_blocked_in_a_later_stage_names_that_stage() {
+    static WATCH: LoopWatch = LoopWatch::new("test.rec.moved");
+    let registry = Registry::new();
+    registry.add_watch(&WATCH);
+    let (mut recorder, dir) = recorder(
+        "perf-stall-moved",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    let start = Instant::now();
+    let guard = WATCH.enter("compose");
+    let t0 = now_us();
+    // Compose is a little slow and crosses the stall threshold...
+    recorder.watch(start, t0 + 300_000, &registry);
+    // ...then present blocks for the rest of the freeze.
+    guard.stage("present");
+    recorder.watch(start, t0 + 2_100_000, &registry);
+    recorder.watch(start, t0 + 60_000_000, &registry);
+    drop(guard);
+    recorder.watch(start, now_us(), &registry);
+
+    let records = lines(&perf_dir(&dir).join("client.jsonl"));
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        records
+            .iter()
+            .filter(|record| record["kind"] == "stall")
+            .any(|record| record["stage"] == "present"),
+        "no stall record names the stage the loop stayed blocked in: {records:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn append_failures_warn_once_and_recovery_reports_the_lost_records() {
+    let (mut recorder, dir) = recorder(
+        "perf-append-failure",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    let live = perf_dir(&dir).join("client.jsonl");
+    // A directory where the file was makes every reopen fail.
+    std::fs::remove_file(&live).unwrap();
+    std::fs::create_dir(&live).unwrap();
+    let failing = crate::utils::logging::test_capture::Capture::default();
+    failing.run(|| {
+        for n in 0..3 {
+            recorder.append(&serde_json::json!({"kind": "probe", "n": n}));
+        }
+    });
+    std::fs::remove_dir(&live).unwrap();
+    let recovered = crate::utils::logging::test_capture::Capture::default();
+    recovered.run(|| recorder.append(&serde_json::json!({"kind": "probe", "n": 3})));
+
+    let records = lines(&live);
+    let _ = std::fs::remove_dir_all(dir);
+    let failed = failing.text();
+    assert_eq!(failed.matches("perf.write_failed").count(), 1, "{failed}");
+    assert!(
+        failed.contains("role=\"client\"") || failed.contains("role=client"),
+        "{failed}"
+    );
+    let recovered = recovered.text();
+    assert!(recovered.contains("perf.write_recovered"), "{recovered}");
+    assert!(recovered.contains("lost_records=3"), "{recovered}");
+    assert_eq!(records.len(), 1, "{records:?}");
 }

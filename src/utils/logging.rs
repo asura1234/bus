@@ -146,20 +146,8 @@ struct RotatingFileMakeWriter {
 impl RotatingFileMakeWriter {
     fn new(dir: PathBuf, file_name: &str, options: &LoggingOptions) -> io::Result<Self> {
         fs::create_dir_all(&dir)?;
-        let path = dir.join(file_name);
-        let mut state = RotatingFileState {
-            path,
-            max_bytes: options.max_bytes,
-            retention: options.retention,
-            file: None,
-            current_size: 0,
-            disabled: false,
-            archive_signal: None,
-        };
-        if let Retention::Archive(policy) = options.retention {
-            state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
-        }
-        state.open_current_file()?;
+        let state =
+            RotatingFileState::open(dir.join(file_name), options.max_bytes, options.retention)?;
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
         })
@@ -276,16 +264,22 @@ impl Drop for SharedLogLock {
 }
 
 impl RotatingFileState {
-    pub(crate) fn open(path: PathBuf, max_bytes: u64, retained_files: usize) -> io::Result<Self> {
+    /// Opens `path` for appending. Archive retention also starts the worker that
+    /// compresses and prunes archives, and makes the file safe to share with
+    /// other processes that append to the same path.
+    pub(crate) fn open(path: PathBuf, max_bytes: u64, retention: Retention) -> io::Result<Self> {
         let mut state = Self {
             path,
             max_bytes,
-            retention: Retention::Generations(retained_files),
+            retention,
             file: None,
             current_size: 0,
             disabled: false,
             archive_signal: None,
         };
+        if let Retention::Archive(policy) = retention {
+            state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
+        }
         state.open_current_file()?;
         Ok(state)
     }
@@ -550,6 +544,14 @@ fn maintain_archives(path: &Path, policy: &ArchivePolicy, now: SystemTime) {
         }
     }
     prune_archives(archives, policy, now);
+}
+
+/// The archives Archive retention left for `path`, oldest first; a name ending
+/// in `.gz` is compressed.
+pub(crate) fn archived_files(path: &Path) -> Vec<PathBuf> {
+    let mut archives = list_archives(path);
+    archives.sort_by_key(|archive| archive.rotated_at);
+    archives.into_iter().map(|archive| archive.path).collect()
 }
 
 /// Archive names under `path`'s directory, one entry per archive. A plain

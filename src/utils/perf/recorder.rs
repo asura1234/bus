@@ -1,12 +1,15 @@
 //! The `bus-perf` thread: one JSONL window per interval and stall reports in between.
 //!
-//! Files live in `<session data dir>/perf/<role>.jsonl` and rotate like the logs. A
-//! line is either `{"kind":"window",...}` (process sample plus every metric active in
-//! the window) or `{"kind":"stall",...}` (a loop blocked past the threshold, its end,
-//! or a stack capture taken while it was still blocked).
+//! Files live in `<session data dir>/perf/<role>.jsonl`. Every process of a role
+//! appends to the same file through the dev log writer, which locks it and
+//! rotates it into gzipped, time-stamped archives. A line is either
+//! `{"kind":"window",...}` (process sample plus every metric active in the
+//! window) or `{"kind":"stall",...}` (a loop blocked past the threshold, a move
+//! to another stage while still blocked, its end, or a finished stack capture).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
@@ -15,7 +18,7 @@ use super::{
     context, global, now_us, publish_context, ContextSample, Field, Registry, StallEvent,
     StallKind, TimerWindow,
 };
-use crate::utils::logging::RotatingFileState;
+use crate::utils::logging::{ArchivePolicy, Retention, RotatingFileState};
 
 /// How often the watchdog looks for blocked loops.
 const WATCH_TICK: Duration = Duration::from_millis(100);
@@ -35,7 +38,10 @@ pub(crate) struct PerfOptions {
     pub(crate) capture_after: Option<Duration>,
     pub(crate) capture_cooldown: Duration,
     pub(crate) max_bytes: u64,
-    pub(crate) retained_files: usize,
+    /// Rotated perf files are kept within this age and total size.
+    pub(crate) archive: ArchivePolicy,
+    /// Stack capture files kept per role, the newest first.
+    pub(crate) retained_captures: usize,
 }
 
 impl PerfOptions {
@@ -62,7 +68,12 @@ impl PerfOptions {
             capture_after,
             capture_cooldown: Duration::from_secs(600),
             max_bytes: 5 * 1024 * 1024,
-            retained_files: 3,
+            // A role writes about 2 MB of windows an hour; archives compress ~10x.
+            archive: ArchivePolicy {
+                max_age: Duration::from_secs(72 * 60 * 60),
+                max_total_bytes: 64 * 1024 * 1024,
+            },
+            retained_captures: 5,
         }
     }
 }
@@ -84,7 +95,8 @@ pub(crate) struct ProcessUsage {
 #[derive(Clone, Copy)]
 pub(crate) struct PerfHooks {
     pub(crate) sample: fn() -> Option<ProcessUsage>,
-    /// Writes the stacks of process `pid` to the path; false when unsupported or failed.
+    /// Writes the stacks of process `pid` to the path, blocking until done; false
+    /// when unsupported or when no stacks were written. Runs off the watchdog.
     pub(crate) capture_stacks: fn(u32, &Path) -> bool,
 }
 
@@ -127,7 +139,23 @@ pub(super) struct Recorder {
     last_system_ticks: Option<(u64, u64)>,
     last_load_warn: Option<Instant>,
     last_capture: Option<Instant>,
+    captures: (
+        mpsc::Sender<FinishedCapture>,
+        mpsc::Receiver<FinishedCapture>,
+    ),
+    pending_captures: usize,
     wake_lag_max: Option<Duration>,
+    /// Records that failed to append since the last one that succeeded.
+    lost_records: u64,
+}
+
+/// A stack capture that ran on its own thread, reported back to the recorder.
+struct FinishedCapture {
+    loop_name: &'static str,
+    stage: &'static str,
+    busy_ms: u64,
+    file: String,
+    ok: bool,
 }
 
 impl Recorder {
@@ -142,7 +170,7 @@ impl Recorder {
         let out = RotatingFileState::open(
             dir.join(format!("{role}.jsonl")),
             options.max_bytes,
-            options.retained_files,
+            Retention::Archive(options.archive),
         )?;
         Ok(Self {
             role,
@@ -155,7 +183,10 @@ impl Recorder {
             last_system_ticks: None,
             last_load_warn: None,
             last_capture: None,
+            captures: mpsc::channel(),
+            pending_captures: 0,
             wake_lag_max: None,
+            lost_records: 0,
         })
     }
 
@@ -182,6 +213,9 @@ impl Recorder {
     }
 
     pub(super) fn watch(&mut self, now: Instant, now_us: u64, registry: &Registry) {
+        while let Ok(finished) = self.captures.1.try_recv() {
+            self.finish_capture(finished);
+        }
         for watch in registry.watches() {
             if let Some(event) = watch.check(now_us, self.options.stall_after) {
                 log_stall(&event);
@@ -200,35 +234,112 @@ impl Recorder {
                 .is_none_or(|last| now.duration_since(last) >= self.options.capture_cooldown);
             if due && cooled {
                 self.last_capture = Some(now);
-                self.capture(watch.name, ongoing_ms);
+                self.capture(watch.name, watch.stage(), ongoing_ms);
             }
         }
     }
 
-    fn capture(&mut self, loop_name: &'static str, busy_ms: u64) {
+    /// Starts a stack capture on its own thread: `sample` runs for seconds,
+    /// and the watchdog must keep writing windows meanwhile.
+    pub(super) fn capture(&mut self, loop_name: &'static str, stage: &'static str, busy_ms: u64) {
+        self.prune_captures();
         let file = format!("stall-{}-{}.txt", compact_timestamp(), self.role);
-        let ok = (self.hooks.capture_stacks)(self.pid, &self.dir.join(&file));
+        let (pid, path, hook) = (self.pid, self.dir.join(&file), self.hooks.capture_stacks);
+        let done = self.captures.0.clone();
+        let mut finished = FinishedCapture {
+            loop_name,
+            stage,
+            busy_ms,
+            file: file.clone(),
+            ok: false,
+        };
+        let spawned = std::thread::Builder::new()
+            .name("bus-perf-capture".into())
+            .spawn(move || {
+                finished.ok = hook(pid, &path);
+                let _ = done.send(finished);
+            });
+        match spawned {
+            Ok(_) => self.pending_captures += 1,
+            Err(_) => self.finish_capture(FinishedCapture {
+                loop_name,
+                stage,
+                busy_ms,
+                file,
+                ok: false,
+            }),
+        }
+    }
+
+    /// Records captures that already finished, waiting for those still running.
+    #[cfg(test)]
+    pub(super) fn wait_for_captures(&mut self) {
+        while self.pending_captures > 0 {
+            match self.captures.1.recv() {
+                Ok(finished) => self.finish_capture(finished),
+                Err(_) => return,
+            }
+        }
+    }
+
+    fn finish_capture(&mut self, finished: FinishedCapture) {
+        self.pending_captures = self.pending_captures.saturating_sub(1);
+        let FinishedCapture {
+            loop_name,
+            stage,
+            busy_ms,
+            file,
+            ok,
+        } = finished;
         tracing::warn!(
             event = "perf.stall.capture",
             loop_name,
+            stage,
             busy_ms,
             ok,
             file = %file,
-            "captured stacks of a blocked loop"
+            "stack capture finished"
         );
         let mut record = self.base("stall");
         record.insert("state".into(), json!("capture"));
         record.insert("loop".into(), json!(loop_name));
+        record.insert("stage".into(), json!(stage));
         record.insert("busy_ms".into(), json!(busy_ms));
         record.insert("file".into(), json!(file));
         record.insert("ok".into(), json!(ok));
         self.append(&Value::Object(record));
     }
 
+    /// Deletes this role's oldest stack captures so that, with the one about to
+    /// be written, at most `retained_captures` remain.
+    fn prune_captures(&self) {
+        let suffix = format!("-{}.txt", self.role);
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
+        let mut captures: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("stall-") && name.ends_with(&suffix)
+            })
+            .map(|entry| entry.path())
+            .collect();
+        // The UTC stamp in the name sorts oldest first.
+        captures.sort();
+        let keep = self.options.retained_captures.saturating_sub(1);
+        let excess = captures.len().saturating_sub(keep);
+        for old in &captures[..excess] {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+
     fn stall_record(&self, event: &StallEvent) -> Value {
         let mut record = self.base("stall");
         let state = match event.kind {
             StallKind::Began => "began",
+            StallKind::Moved => "moved",
             StallKind::Ended => "ended",
         };
         record.insert("state".into(), json!(state));
@@ -375,10 +486,34 @@ impl Recorder {
         record
     }
 
-    fn append(&mut self, record: &Value) {
+    /// Appends one record. A failure is logged once, and the recovery with the
+    /// number of records lost, so missing evidence is never mistaken for quiet.
+    pub(super) fn append(&mut self, record: &Value) {
         let mut line = record.to_string();
         line.push('\n');
-        let _ = self.out.append(line.as_bytes());
+        match self.out.append(line.as_bytes()) {
+            Ok(()) if self.lost_records > 0 => {
+                tracing::warn!(
+                    event = "perf.write_recovered",
+                    role = self.role,
+                    lost_records = self.lost_records,
+                    "perf records are being written again"
+                );
+                self.lost_records = 0;
+            }
+            Ok(()) => {}
+            Err(error) => {
+                if self.lost_records == 0 {
+                    tracing::warn!(
+                        event = "perf.write_failed",
+                        role = self.role,
+                        %error,
+                        "perf records are not being written"
+                    );
+                }
+                self.lost_records += 1;
+            }
+        }
     }
 }
 
@@ -399,6 +534,17 @@ fn log_stall(event: &StallEvent) {
             %load1,
             %sys_cpu_pct,
             "loop blocked"
+        ),
+        StallKind::Moved => tracing::warn!(
+            event = "perf.stall.stage",
+            loop_name = event.loop_name,
+            stage = event.stage,
+            busy_ms = event.busy_ms,
+            %cpu_pct,
+            %rss_mb,
+            %load1,
+            %sys_cpu_pct,
+            "blocked loop moved to another stage"
         ),
         StallKind::Ended => tracing::warn!(
             event = "perf.stall.end",

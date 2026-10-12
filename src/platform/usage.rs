@@ -71,32 +71,52 @@ fn memory_and_threads() -> Option<(u64, u32)> {
 
 #[cfg(target_os = "macos")]
 fn open_fds() -> Option<u32> {
-    // With no buffer, the call returns the bytes needed for every open descriptor.
-    let bytes = unsafe {
+    let pid = std::process::id() as libc::c_int;
+    // With no buffer the call returns the table's capacity in bytes, not the
+    // open count; only a listing says how many descriptors are open.
+    let capacity =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    if capacity <= 0 {
+        return None;
+    }
+    let entry = std::mem::size_of::<libc::proc_fdinfo>();
+    let mut fds: Vec<libc::proc_fdinfo> = Vec::with_capacity(capacity as usize / entry + 1);
+    let written = unsafe {
         libc::proc_pidinfo(
-            std::process::id() as libc::c_int,
+            pid,
             libc::PROC_PIDLISTFDS,
             0,
-            std::ptr::null_mut(),
-            0,
+            fds.as_mut_ptr().cast(),
+            (fds.capacity() * entry) as libc::c_int,
         )
     };
-    (bytes > 0).then(|| bytes as u32 / std::mem::size_of::<libc::proc_fdinfo>() as u32)
+    (written > 0).then(|| written as u32 / entry as u32)
 }
 
 #[cfg(target_os = "macos")]
 fn system_cpu_ticks() -> Option<(u64, u64)> {
     let mut info: libc::host_cpu_load_info = unsafe { std::mem::zeroed() };
     let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
+    unsafe extern "C" {
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
     let result = unsafe {
+        // Each call returns a send right of its own; release it, or the sampler
+        // adds one reference to the host port every second.
         #[allow(deprecated)]
         let host = libc::mach_host_self();
-        libc::host_statistics(
+        let result = libc::host_statistics(
             host,
             libc::HOST_CPU_LOAD_INFO,
             &mut info as *mut _ as libc::host_info_t,
             &mut count,
-        )
+        );
+        #[allow(deprecated)]
+        mach_port_deallocate(libc::mach_task_self(), host);
+        result
     };
     if result != libc::KERN_SUCCESS {
         return None;
@@ -169,23 +189,17 @@ fn swap_used_bytes() -> Option<u64> {
     Some(field("SwapTotal:")?.saturating_sub(field("SwapFree:")?) * 1024)
 }
 
-/// Starts a background stack capture of `pid` into `out`; macOS only.
+/// Samples the stacks of `pid` into `out`, blocking until `sample` exits
+/// (about 3 s plus symbolication); true only when it wrote stacks. macOS only.
 #[cfg(target_os = "macos")]
 pub(crate) fn capture_stacks(pid: u32, out: &Path) -> bool {
-    let mut command = stack_capture_command(pid, out);
-    command
+    let status = stack_capture_command(pid, out)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    match command.spawn() {
-        Ok(mut child) => std::thread::Builder::new()
-            .name("bus-perf-capture".into())
-            .spawn(move || {
-                let _ = child.wait();
-            })
-            .is_ok(),
-        Err(_) => false,
-    }
+        .stderr(std::process::Stdio::null())
+        .status();
+    status.is_ok_and(|status| status.success())
+        && std::fs::metadata(out).is_ok_and(|meta| meta.len() > 0)
 }
 
 #[cfg(target_os = "macos")]

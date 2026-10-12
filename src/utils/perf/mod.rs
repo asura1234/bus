@@ -253,11 +253,15 @@ pub(crate) struct LoopWatch {
     /// Busy time of the reported iteration, stored by the loop when it ends.
     reported_busy_us: AtomicU64,
     reported_stage: Mutex<&'static str>,
+    /// The stage the watchdog last reported for the ongoing stall.
+    latest_stage: Mutex<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StallKind {
     Began,
+    /// A reported stall is still blocking, now in another stage.
+    Moved,
     Ended,
 }
 
@@ -280,6 +284,7 @@ impl LoopWatch {
             reported: AtomicU64::new(0),
             reported_busy_us: AtomicU64::new(0),
             reported_stage: Mutex::new(""),
+            latest_stage: Mutex::new(""),
         }
     }
 
@@ -318,7 +323,8 @@ impl LoopWatch {
         &self.iterations
     }
 
-    /// Watchdog side: reports a newly blocked iteration or the end of a reported one.
+    /// Watchdog side: reports a newly blocked iteration, a reported one that
+    /// moved on to another stage while still blocking, or its end.
     pub(crate) fn check(&self, now: u64, threshold: Duration) -> Option<StallEvent> {
         let reported = self.reported.load(Ordering::Acquire);
         let busy_since = self.busy_since.load(Ordering::Acquire);
@@ -333,16 +339,27 @@ impl LoopWatch {
             let stage = self.reported_stage.lock().map_or("", |stage| *stage);
             return Some(self.event(StallKind::Ended, stage, busy_us));
         }
-        if busy_since == 0 || reported == busy_since {
+        if busy_since == 0 {
             return None;
+        }
+        if reported == busy_since {
+            let stage = self.stage();
+            let mut latest = self.latest_stage.lock().ok()?;
+            if *latest == stage {
+                return None;
+            }
+            *latest = stage;
+            return Some(self.event(StallKind::Moved, stage, now.saturating_sub(reported)));
         }
         let busy_us = now.saturating_sub(busy_since);
         if busy_us < u64::try_from(threshold.as_micros()).unwrap_or(u64::MAX) {
             return None;
         }
         let stage = self.stage();
-        if let Ok(mut reported_stage) = self.reported_stage.lock() {
-            *reported_stage = stage;
+        for slot in [&self.reported_stage, &self.latest_stage] {
+            if let Ok(mut reported_stage) = slot.lock() {
+                *reported_stage = stage;
+            }
         }
         self.reported.store(busy_since, Ordering::Release);
         Some(self.event(StallKind::Began, stage, busy_us))
