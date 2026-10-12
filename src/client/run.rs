@@ -26,12 +26,14 @@ use tracing::{info, warn};
 /// Runs the thin client and enters the main event loop.
 pub fn run_client(
     logging_options: crate::utils::logging::LoggingOptions,
+    perf_options: crate::utils::perf::PerfOptions,
     config_override: Option<fn(&mut crate::utils::config::Config)>,
     stop_server: fn() -> Result<(), String>,
 ) -> io::Result<()> {
     run_client_with_mode(
         "connecting to server",
         logging_options,
+        perf_options,
         config_override,
         stop_server,
     )
@@ -59,10 +61,17 @@ pub(super) struct ClientInputLifecycle {
 fn run_client_with_mode(
     log_message: &'static str,
     logging_options: crate::utils::logging::LoggingOptions,
+    perf_options: crate::utils::perf::PerfOptions,
     config_override: Option<fn(&mut crate::utils::config::Config)>,
     stop_server: fn() -> Result<(), String>,
 ) -> io::Result<()> {
     init_logging(&logging_options);
+    crate::utils::perf::start(
+        &crate::utils::paths::data_dir(),
+        "client",
+        &perf_options,
+        crate::platform::usage::perf_hooks(),
+    );
 
     let mut loaded_config = crate::utils::config::Config::load();
     if let Some(apply) = config_override {

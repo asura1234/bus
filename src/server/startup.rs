@@ -12,9 +12,16 @@ use crate::{server::app, utils::config};
 /// Run the headless server. This is the entry point called from main.rs.
 pub fn run_server(
     logging_options: crate::utils::logging::LoggingOptions,
+    perf_options: crate::utils::perf::PerfOptions,
     config_override: Option<fn(&mut config::Config)>,
 ) -> io::Result<()> {
     init_logging(&logging_options);
+    crate::utils::perf::start(
+        &crate::utils::paths::data_dir(),
+        "server",
+        &perf_options,
+        crate::platform::usage::perf_hooks(),
+    );
     crate::platform::raise_server_nofile_limit();
 
     let mut loaded_config = config::Config::load();

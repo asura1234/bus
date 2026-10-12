@@ -53,6 +53,10 @@ pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
 #[path = "tests/logging_options_test.rs"]
 mod logging_options_tests;
 
+pub(crate) fn perf_options() -> crate::utils::perf::PerfOptions {
+    crate::utils::perf::PerfOptions::from_lookup(|key| std::env::var(key).ok())
+}
+
 pub(crate) fn config_override() -> Option<fn(&mut crate::utils::config::Config)> {
     bus_data_dir()
         .is_some()

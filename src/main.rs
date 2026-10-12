@@ -55,13 +55,18 @@ fn main() -> io::Result<()> {
         // Hidden entry the client spawns for the persistent daemon.
         Some("server") if raw_args.len() == 2 => {
             configure_session(&raw_args);
-            server::main_loop::run_server(cli::logging_options(), cli::config_override())
+            server::main_loop::run_server(
+                cli::logging_options(),
+                cli::perf_options(),
+                cli::config_override(),
+            )
         }
         // Hidden entry that attaches a thin client to the running daemon.
         Some("client") if raw_args.len() == 2 => {
             configure_session(&raw_args);
             client::run_client(
                 cli::logging_options(),
+                cli::perf_options(),
                 cli::config_override(),
                 cli::stop::stop_active_server,
             )

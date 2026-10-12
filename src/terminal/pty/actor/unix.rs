@@ -530,6 +530,8 @@ impl PtyIoActorRunner {
                 false
             }
             Ok(n) => {
+                super::PTY_BYTES.add(n as u64);
+                let _read = super::PTY_READ.start();
                 let response_order = Arc::clone(&self.response_order);
                 let _order = response_order
                     .lock()

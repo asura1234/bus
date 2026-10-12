@@ -79,6 +79,18 @@ enum LoopEvent {
     RenderRequested,
 }
 
+impl LoopEvent {
+    fn stage(&self) -> &'static str {
+        match self {
+            Self::Timer => "timer",
+            Self::Internal(_) => "terminal_event",
+            Self::Api(_) => "api",
+            Self::ServerEvent(_) => "server_event",
+            Self::RenderRequested => "render_requested",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -300,15 +312,20 @@ impl HeadlessServer {
                 continue;
             }
 
+            let busy = super::perf::SERVER_LOOP.enter("drain");
             if !self.drain_loop_inputs(&mut needs_render, &mut needs_full_render)? {
                 continue;
             }
             let now = Instant::now();
+            busy.stage("schedule");
             self.schedule_loop_work(now, &mut needs_render, &mut needs_full_render);
+            busy.stage("render");
             if self.render_pending_loop_work(now, &mut needs_render, &mut needs_full_render) {
                 continue;
             }
+            drop(busy);
             let event = self.wait_for_loop_event(now, needs_render).await;
+            let _busy = super::perf::SERVER_LOOP.enter(event.stage());
             self.apply_loop_event(event, &mut needs_render, &mut needs_full_render);
         }
 
@@ -417,6 +434,7 @@ impl HeadlessServer {
                     && self.has_pending_presentation_work(*needs_full_render)))
         {
             crate::utils::render::prof::event("render.attempt");
+            let _render = super::perf::RENDER.start();
             let render_request = self.app.render_dirty.take();
             let pty_dirty = !render_request.pty_sources.is_empty();
             if pty_dirty {
@@ -536,7 +554,12 @@ impl HeadlessServer {
                 }
             }
             LoopEvent::Api(msg) => {
-                if self.handle_api_request_with_shutdown_check(*msg) {
+                super::perf::API_QUEUE.observe(self.app.api_rx.len() as u64);
+                let method = crate::protocol::api::api_method_name(&msg.request.method);
+                let started = Instant::now();
+                let changed = self.handle_api_request_with_shutdown_check(*msg);
+                super::perf::API.record_op(started.elapsed(), method);
+                if changed {
                     *needs_render = true;
                     *needs_full_render = true;
                 }
