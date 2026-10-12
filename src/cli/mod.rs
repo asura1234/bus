@@ -49,6 +49,10 @@ pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
     }
 }
 
+#[cfg(test)]
+#[path = "tests/logging_options_test.rs"]
+mod logging_options_tests;
+
 pub(crate) fn config_override() -> Option<fn(&mut crate::utils::config::Config)> {
     bus_data_dir()
         .is_some()

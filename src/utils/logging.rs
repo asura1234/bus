@@ -82,6 +82,23 @@ pub(crate) mod test_capture {
             String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
         }
     }
+
+    /// Runs `action` under `options` writing through the real rotating file
+    /// writer at `dir/file_name`, scoped to this thread.
+    pub(crate) fn run_to_file(
+        dir: std::path::PathBuf,
+        file_name: &str,
+        options: &super::LoggingOptions,
+        action: impl FnOnce(),
+    ) {
+        let writer = super::RotatingFileMakeWriter::new(dir, file_name, options).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(options.filter.clone())
+            .with_writer(writer)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, action);
+    }
 }
 
 pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str, options: &LoggingOptions) {
