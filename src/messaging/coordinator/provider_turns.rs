@@ -7,14 +7,15 @@ impl Worker {
     /// reply still run: each wakes a turn when it ends, and the last such turn
     /// carries the real reply. Shells already running then (say a hung
     /// `find /`) are listed by every later `Stop` and never hold a reply.
+    /// A held `Stop` also returns its interim text, which the hold cap delivers.
     pub(super) fn hold_for_started_shells(
         &mut self,
         id: AgentId,
         record: &callbacks::Record,
         parsed: Parsed,
-    ) -> Parsed {
+    ) -> (Parsed, Option<String>) {
         if record.manifest.provider != Provider::ClaudeCode {
-            return parsed;
+            return (parsed, None);
         }
         // A freshly started Claude process has no shells running.
         if matches!(&parsed, Parsed::Session { source: Some(source), .. } if source == "startup") {
@@ -26,7 +27,7 @@ impl Worker {
             text,
         } = parsed
         else {
-            return parsed;
+            return (parsed, None);
         };
         let running =
             crate::agents::providers::claude_code::hooks::claude_running_shells(&record.value);
@@ -46,14 +47,17 @@ impl Worker {
                 shells = ?started,
                 "Reply waits for shells this request started"
             );
-            return Parsed::BackgroundPending { session, turn };
+            return (Parsed::BackgroundPending { session, turn }, Some(text));
         }
         self.claude_settled_shells.insert(id, running);
-        Parsed::Final {
-            session,
-            turn,
-            text,
-        }
+        (
+            Parsed::Final {
+                session,
+                turn,
+                text,
+            },
+            None,
+        )
     }
 
     /// Codex writes rate limits into its rollout after each turn. Usage is

@@ -223,6 +223,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
         json!({
             "color_blind_mode": false,
             "max_compactions_per_agent": 5,
+            "background_shell_hold_minutes": 15,
             "master_sound": {"enabled": false, "name": "Blow"},
             "room_sound": {"enabled": true, "name": null},
         })

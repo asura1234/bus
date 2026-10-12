@@ -299,7 +299,17 @@ impl Worker {
         let mut state = self.state.clone();
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
+        let hold_cap_ms = u64::from(
+            self.settings_path
+                .as_deref()
+                .and_then(|path| crate::messaging::prefs::settings::load(path).ok())
+                .unwrap_or_default()
+                .background_shell_hold_minutes,
+        ) * 60_000;
         for (agent, observed_at_ms) in agents {
+            changed |= state
+                .release_shell_hold(agent, observed_at_ms, hold_cap_ms)
+                .is_some();
             let rollout = self.codex_rollouts.get(&agent);
             let provider_error = |request: &crate::messaging::model::Request| {
                 let turn = request.provider_turn_id.as_deref()?;

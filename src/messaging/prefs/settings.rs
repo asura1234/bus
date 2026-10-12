@@ -13,6 +13,7 @@ use crate::messaging::storage::{io, sessions as local_sessions};
 
 pub(crate) const MIN_COMPACTIONS_PER_AGENT: u32 = 1;
 pub(crate) const MAX_COMPACTIONS_PER_AGENT: u32 = 100;
+pub(crate) const MAX_BACKGROUND_SHELL_HOLD_MINUTES: u32 = 24 * 60;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
@@ -26,6 +27,10 @@ pub(crate) struct BusSettings {
     /// Notify the room when a worker reaches this many compactions.
     #[serde(deserialize_with = "deserialize_compaction_limit")]
     pub(crate) max_compactions_per_agent: u32,
+    /// How long a Claude reply waits for background shells its own turn
+    /// started; then the latest interim text is delivered as the reply.
+    #[serde(deserialize_with = "deserialize_shell_hold_minutes")]
+    pub(crate) background_shell_hold_minutes: u32,
 }
 
 impl Default for BusSettings {
@@ -38,6 +43,7 @@ impl Default for BusSettings {
             },
             room_sound: SoundPref::default(),
             max_compactions_per_agent: 5,
+            background_shell_hold_minutes: 15,
         }
     }
 }
@@ -57,6 +63,20 @@ where
     let value = u32::deserialize(deserializer)?;
     validate_compaction_limit(value).map_err(serde::de::Error::custom)?;
     Ok(value)
+}
+
+fn deserialize_shell_hold_minutes<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    if (1..=MAX_BACKGROUND_SHELL_HOLD_MINUTES).contains(&value) {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(
+            "background_shell_hold_minutes must be between 1 and 1440",
+        ))
+    }
 }
 
 /// A sound notification choice: on or off, and the system sound by name
@@ -178,6 +198,29 @@ mod tests {
         assert_eq!(load(&path), Ok(enabled));
         std::fs::write(&path, b"not json").unwrap();
         assert!(load(&path).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn background_shell_hold_defaults_to_fifteen_minutes_within_its_range() {
+        let root = std::env::temp_dir().join(format!(
+            "bus-settings-hold-{}-{}",
+            std::process::id(),
+            io::now_ns()
+        ));
+        let path = root.join("settings.json");
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(BusSettings::default().background_shell_hold_minutes, 15);
+        std::fs::write(&path, br#"{"background_shell_hold_minutes":2}"#).unwrap();
+        assert_eq!(load(&path).unwrap().background_shell_hold_minutes, 2);
+        for invalid in ["0", "1441"] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"background_shell_hold_minutes":{invalid}}}"#),
+            )
+            .unwrap();
+            assert!(load(&path).is_err(), "{invalid}");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

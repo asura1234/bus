@@ -1,5 +1,8 @@
 //! Close finished turns after giving their completion callbacks time to arrive.
-use super::{AgentId, BusState, Request, RequestId, RuntimeStatus, TURN_SETTLE_MS};
+use super::{
+    types::ShellHold, AgentId, BusState, PendingFinal, Request, RequestId, RuntimeStatus,
+    TURN_SETTLE_MS,
+};
 
 impl BusState {
     pub(super) fn note_turn_end(&mut self, agent: AgentId, now_ms: u64) {
@@ -19,6 +22,75 @@ impl BusState {
                 request.turn_ended_at_ms.get_or_insert(now_ms);
             }
         }
+    }
+
+    /// Record why the agent's current request is held: background shells its
+    /// own turn started. The cap counts from the first hold, on the status
+    /// clock that `release_shell_hold` reads; the newest interim text is what
+    /// the cap delivers.
+    pub(crate) fn hold_reply_for_shells(&mut self, agent: AgentId, interim: PendingFinal) {
+        let Some((id, observed_at_ms)) = self
+            .agents
+            .get(&agent)
+            .and_then(|a| Some((a.current_request?, a.observed_at_ms)))
+        else {
+            return;
+        };
+        let Some(request) = self
+            .requests
+            .get_mut(&id)
+            .filter(|request| request.awaiting_background)
+        else {
+            return;
+        };
+        let since_ms = request
+            .shell_hold
+            .as_ref()
+            .map_or(observed_at_ms, |hold| hold.since_ms);
+        request.shell_hold = Some(ShellHold { since_ms, interim });
+    }
+
+    /// Past `cap_ms` of holding for its shells, the request takes its newest
+    /// interim text as the reply, with reason `background_shells_timeout`, so
+    /// a shell that never exits cannot hold it and the agent's queue forever.
+    pub(crate) fn release_shell_hold(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+        cap_ms: u64,
+    ) -> Option<RequestId> {
+        let id = self.agents.get(&agent)?.current_request?;
+        let request = self.requests.get(&id)?;
+        let hold = request.shell_hold.as_ref()?;
+        if !request.awaiting_background
+            || request.settled()
+            || now_ms < hold.since_ms.saturating_add(cap_ms)
+        {
+            return None;
+        }
+        let interim = hold.interim.clone();
+        let mut closed = self.group_members(id);
+        closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
+        closed.push(id);
+        let request = self.requests.get_mut(&id)?;
+        request.awaiting_background = false;
+        request.pending_final = Some(interim);
+        if !self.complete_pending_final(agent, now_ms).ok()? {
+            return None;
+        }
+        for request in closed {
+            if let Some(request) = self.requests.get_mut(&request) {
+                request.failure_reason = Some("background_shells_timeout".into());
+            }
+        }
+        tracing::info!(
+            event = "bus.message.recovered",
+            request_id = id.0,
+            agent_id = agent.0,
+            reason = "background_shells_timeout",
+            "Held reply released at the background shell cap"
+        );
+        Some(id)
     }
 
     /// Run after callback consumption, so a final spooled at the deadline wins.

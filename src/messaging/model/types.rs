@@ -434,6 +434,17 @@ pub(crate) struct Request {
     /// A provider explicitly paused this turn for background work that will resume it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) awaiting_background: bool,
+    /// Held for background shells its own turn started, which may never exit;
+    /// past the hold cap its newest interim text becomes the reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shell_hold: Option<ShellHold>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ShellHold {
+    /// The first hold; wake turns that hold again do not restart the cap.
+    pub(crate) since_ms: u64,
+    pub(crate) interim: PendingFinal,
 }
 
 impl Request {

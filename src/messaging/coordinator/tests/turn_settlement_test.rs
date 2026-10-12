@@ -418,3 +418,114 @@ fn a_joined_codex_request_reports_the_provider_error_that_ended_its_turn() {
         "provider_error: Selected model is at capacity."
     );
 }
+
+const SHELL_HOLD_MS: u64 = 15 * 60 * 1000;
+
+/// Holds `fixture`'s request on one shell its turn started, as Claude reports
+/// it ("Waiting on the build."), and returns the request.
+fn held_on_a_started_shell(fixture: &mut Fixture) -> RequestId {
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(fixture, "build it", "turn-1");
+    fixture.record(claude_stop("turn-1", "Waiting on the build.", &["b1"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    lead
+}
+
+/// A shell the turn started that never exits (a dev server, say) must not hold
+/// the request and the agent's queue forever: at the cap (15 minutes by
+/// default) the latest interim text is the reply.
+#[test]
+fn a_claude_reply_held_past_the_shell_cap_is_delivered_as_its_interim_text() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let next = fixture.send("review the next change", true);
+    let message = fixture.request(lead).prompt.id;
+    fixture.now += SHELL_HOLD_MS - 10;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["turn_ended"], false, "{status}");
+
+    fixture.now += 10;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
+    assert_eq!(
+        status["requests"][0]["reason"], "background_shells_timeout",
+        "{status}"
+    );
+    // The agent's queue moves on.
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed().last().unwrap(),
+        &("review the next change".into(), false)
+    );
+    assert_eq!(fixture.request(next).phase, RequestPhase::Submitting);
+}
+
+/// The cap counts from the first hold; a shell finishing wakes a turn that may
+/// hold again with newer text, and that newer text is what the cap delivers.
+#[test]
+fn the_shell_cap_counts_from_the_first_hold_and_delivers_the_newest_interim_text() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.now += 5 * 60 * 1000;
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop(
+        "turn-2",
+        "Build done; waiting on the server.",
+        &["b2"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.now += SHELL_HOLD_MS - 5 * 60 * 1000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Build done; waiting on the server.")
+    );
+}
+
+/// The cap is the `background_shell_hold_minutes` Bus setting.
+#[test]
+fn the_shell_cap_is_the_background_shell_hold_minutes_setting() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let settings = fixture.dir.join("settings.json");
+    std::fs::write(&settings, br#"{"background_shell_hold_minutes":1}"#).unwrap();
+    fixture.worker.settings_path = Some(settings);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.now += 60 * 1000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+}

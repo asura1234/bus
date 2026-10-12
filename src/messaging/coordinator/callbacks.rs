@@ -8,6 +8,7 @@ use super::{
 #[cfg(test)]
 use super::{AgentRuntimeIdentity, Draft, Transport};
 use crate::agents::providers::{spool as callbacks, spool::Parsed, ProviderKind};
+use crate::messaging::model::PendingFinal;
 use std::ops::ControlFlow;
 
 type CallbackRecordResult = ControlFlow<(), (BusState, Option<ProviderCallback>, Vec<PathBuf>)>;
@@ -650,7 +651,7 @@ impl Worker {
             ControlFlow::Continue(parsed) => parsed,
             ControlFlow::Break(flow) => return Ok(flow),
         };
-        let parsed = self.hold_for_started_shells(id, record, parsed);
+        let (parsed, interim) = self.hold_for_started_shells(id, record, parsed);
         let state = self.state.clone();
         let state = match self.check_callback_session(id, dir, path, record, &parsed, state)? {
             ControlFlow::Continue(state) => state,
@@ -672,8 +673,18 @@ impl Worker {
                 ControlFlow::Break(()) => return Ok(CallbackFlow::Next),
             };
         if let Some(callback) = callback {
+            let interim = interim.map(|text| PendingFinal {
+                callback_id: callback.callback_id.clone(),
+                text,
+                received_at_ms: callback.occurred_at_ms,
+                provider_session_id: callback.provider_session_id.clone(),
+                provider_turn_id: callback.provider_turn_id.clone(),
+            });
             if !self.apply_request_callback(id, &mut state, callback)? {
                 return Ok(CallbackFlow::Next);
+            }
+            if let Some(interim) = interim {
+                state.hold_reply_for_shells(id, interim);
             }
         }
         self.save(state)?;
