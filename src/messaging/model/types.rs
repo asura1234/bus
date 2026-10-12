@@ -320,6 +320,11 @@ pub(crate) struct RoomAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dialog_answer: Option<u32>,
     pub(crate) actionable_error: Option<String>,
+    /// The update failure the agent's terminal reported, shown as
+    /// `actionable_error`. Saved, so the error still clears once the update is
+    /// over after a coordinator restart, and only that error is cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) update_error: Option<String>,
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
     pub(crate) hook_setup_confirmed: bool,

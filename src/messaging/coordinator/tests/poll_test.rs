@@ -320,3 +320,168 @@ mod status_tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+mod update_lifecycle_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn slow_startup_update_preserves_queued_messages_until_it_finishes() {
+        use crate::agents::{AgentKind, AgentState};
+        use crate::server::app::{App, AppPolicy};
+        use crate::server::workspaces::Workspace;
+        use crate::terminal::events::TerminalEvent;
+        let (_, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::utils::config::Config::default(),
+            AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::server::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("update")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 16);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        let public_pane = app.public_pane_id(0, pane).unwrap();
+        let start = app.handle_api_request(crate::protocol::api::schema::Request {
+            id: "start".into(),
+            method: Method::AgentStart(crate::protocol::api::schema::AgentStartParams {
+                name: "bus-r1-a2".into(),
+                kind: "codex".into(),
+                pane_id: public_pane,
+                args: vec![],
+                timeout_ms: Some(4000),
+            }),
+        });
+        assert!(start.contains("agent_started"), "{start}");
+        writes.try_recv().unwrap();
+        app.terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_process_pty_bytes(include_bytes!(
+                "../../../../tests/fixtures/codex-update/chooser-0.162.ansi"
+            ));
+        let now = std::time::Instant::now();
+        let event = |state, blocker| TerminalEvent::StateChanged {
+            pane_id: pane,
+            agent: Some(AgentKind::Codex),
+            state,
+            visible_blocker: blocker,
+            process_exited: false,
+            exited_process: None,
+            observed_at: now,
+        };
+        app.state.handle_app_event(event(AgentState::Blocked, true));
+        assert!(app.supervise_self_updates(now));
+        assert_eq!(writes.try_recv().unwrap(), bytes::Bytes::from_static(b"\r"));
+        app.terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_process_pty_bytes(
+                b"\x1b[2J\x1b[HUpdating Codex via `npm install -g @openai/codex`...\r\n",
+            );
+        app.state
+            .handle_app_event(event(AgentState::Working, false));
+        app.supervise_self_updates(now);
+        let listing = app.handle_api_request(crate::protocol::api::schema::Request {
+            id: "list".into(),
+            method: Method::AgentList(crate::protocol::api::schema::EmptyParams {}),
+        });
+        let response: crate::protocol::api::schema::SuccessResponse =
+            serde_json::from_str(&listing).unwrap();
+        let ResponseResult::AgentList { agents } = &response.result else {
+            panic!("{listing}")
+        };
+        let info = &agents[0];
+        assert_eq!(
+            info.agent_status,
+            crate::protocol::api::schema::AgentStatus::Working
+        );
+        assert!(info.dialog_id.is_none());
+        let identity = AgentRuntimeIdentity {
+            launch_id: Some("launch".into()),
+            terminal_id: Some(info.terminal_id.clone()),
+            pane_id: Some(info.pane_id.clone()),
+            session_id: None,
+        };
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![Ok(response.result)]);
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity)
+            .unwrap();
+        worker.save(worker.state.clone()).unwrap();
+        worker.poll().unwrap();
+        let request = queue(&mut worker, room, agent, "brief waits for the update");
+        let expired = worker
+            .state
+            .expire_stalled_queued_requests(io::now_ms() + 180_000)
+            .unwrap();
+        let phase = worker.state.request(request).unwrap().phase;
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(
+            expired.is_empty(),
+            "slow install expired queued requests: {expired:?}; phase={phase:?}"
+        );
+        assert_eq!(phase, RequestPhase::Queued);
+    }
+
+    #[test]
+    fn recovered_update_error_clears_after_coordinator_restart() {
+        let error = "Bus could not install the codex update (npm failed). Answer the update prompt in bus-r1-a2's terminal; queued messages wait until then.";
+        let listing = |failed: bool| {
+            let info: crate::protocol::api::schema::AgentInfo = serde_json::from_value(json!({
+                "terminal_id": "terminal", "pane_id": "pane", "agent": "codex",
+                "agent_status": if failed { "blocked" } else { "idle" },
+                "agent_session": {"source":"herdr:codex","agent":"codex","kind":"id","value":"session"},
+                "workspace_id":"w1","tab_id":"t1","focused":false,"interactive_ready":true,"revision":1,
+                "dialog_id": if failed {Some("chooser")} else {None},
+                "update_error": if failed {Some(error)} else {None},
+            })).unwrap();
+            Ok(ResponseResult::AgentList { agents: vec![info] })
+        };
+        let (mut worker, agent, _, dir, calls) = fixture(Provider::Codex, vec![listing(true)]);
+        worker.poll().unwrap();
+        assert_eq!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .as_deref(),
+            Some(error)
+        );
+        worker.save(worker.state.clone()).unwrap();
+        drop(worker);
+        let fake = FakeTransport {
+            replies: vec![listing(false)].into(),
+            calls,
+            state_path: dir.join("state.json"),
+        };
+        let mut reopened = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+        reopened.poll().unwrap();
+        assert_eq!(
+            reopened.state.agent(agent).unwrap().status,
+            RuntimeStatus::Idle
+        );
+        let actual = reopened
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .clone();
+        drop(reopened);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            actual, None,
+            "recovered agent must not retain a stale update failure"
+        );
+    }
+}
