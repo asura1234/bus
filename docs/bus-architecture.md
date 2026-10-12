@@ -85,7 +85,8 @@ Files are split by ownership, not by helper.
   - `ids.rs` (`PaneId`, `TerminalId`), `version.rs`, `paths.rs` (owns the path table for every on-disk
     file and socket under `BUS_DATA_DIR`, including `bus.sock`)
   - `perf/`: always-on perf metrics (`mod.rs`: atomic `Timer`/`Gauge`/`Counter` and the `LoopWatch` stall detector;
-    `recorder.rs`: the `bus-perf` thread writing `<session>/perf/<role>.jsonl` windows and stall records; `tests/`)
+    `recorder.rs`: the `bus-perf` thread writing `<session>/perf/<role>.jsonl` windows and stall records (began, moved,
+    capture, ended) through the shared, archiving log writer, plus a bounded set of `stall-*.txt` stack captures; `tests/`)
   - `logging.rs` (takes explicit filter/rotation/dev options from startup composition), `log_events.rs`, `env.rs` (shared inherited path/key facts), `time.rs`, `home_path.rs`, `url.rs` (safe web URL check)
   - `config/`: `mod.rs`, `load.rs` (TOML, live reload; an unknown key fails with a diagnostic), `session.rs`, `server.rs`,
     `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `interface.rs` (UI settings), `sound.rs` (ding paths),
@@ -101,7 +102,7 @@ Files are split by ownership, not by helper.
   - `unix.rs`, `daemon.rs`, `signals.rs`, `ipc.rs`: unix helpers, setsid and nofile, signals, local sockets
   - `fs.rs`: private dirs, locks and atomic replace primitives; each caller keeps its own write policy
   - `usage.rs`: this process's CPU time, RSS, threads and fds, machine load/CPU ticks/swap, and macOS stack capture for perf
-  - `tests/{process_linux_test,desktop_linux_test,process_macos_test,desktop_macos_test}.rs`
+  - `tests/{process_linux_test,desktop_linux_test,process_macos_test,desktop_macos_test,usage_test}.rs`
   - `sound/`: `mod.rs` (`play`, `play_named`), `player.rs` (OS players), `catalog.rs` (system sounds)
   - `windows/`: Windows backend
     - `mod.rs` (small helpers, re-exports), `fs.rs` (atomic replace, ACL'd dirs, long paths), `shell.rs` (cmd and PowerShell)
@@ -272,8 +273,8 @@ Files are split by ownership, not by helper.
       `history_markdown_test.rs`, `history_slots_test.rs`, `history_scroll_test.rs`, `keys_test.rs`, `master_test.rs`, `sound_test.rs`,
       `focus_test.rs`, `chat_search_test.rs`
 - `cli/`: the `bus` command
-  - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
-  - `control.rs` (control commands used by orchestrators and the developer), `perf.rs` (`bus perf`: reads perf files only), `help.rs`, `tests/{parse_test,execute_test}.rs`
+  - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`, `perf`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
+  - `control.rs` (control commands used by orchestrators and the developer), `perf.rs` (`bus perf`: reads perf files only), `help.rs`, `tests/{parse_test,execute_test,perf_test}.rs`
 - `devtools/`: test tooling that drives Bus itself; compiled only into the dev variant (cargo feature `dev-tools`) and run only
   behind `--dev`
   - `tui/`: `bus --dev tui`, the TUI driver (reference: `docs/tui-driver.md`): `mod.rs` (verbs, start/stop, waits), `args.rs`,
