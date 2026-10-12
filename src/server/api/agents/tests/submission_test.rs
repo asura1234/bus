@@ -110,6 +110,48 @@ pub(super) fn redraw(app: &App, kind: AgentKind, draft: &str) {
         .test_process_pty_bytes(screen(kind, draft).as_bytes());
 }
 
+#[tokio::test]
+async fn startup_controls_appearing_before_clear_are_definite_non_delivery() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_process_pty_bytes(screen(AgentKind::Codex, "").as_bytes());
+    let runtime = std::sync::Arc::new(std::sync::Mutex::new(runtime));
+    let runtime_for_redraw = runtime.clone();
+    let first = std::sync::atomic::AtomicBool::new(true);
+    let completion = runtime.lock().unwrap()
+        .queue_observed_input_submission(
+            Bytes::from_static(b"from bus"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01")],
+            Duration::ZERO,
+            None,
+            move |snapshot| {
+                let observation = if snapshot.contains("Hooks need review") {
+                    crate::terminal::runtime::InputObservation::Unavailable
+                } else {
+                    assert!(snapshot.contains('›'), "expected real empty composer: {snapshot}");
+                    crate::terminal::runtime::InputObservation::Empty
+                };
+                if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    runtime_for_redraw.lock().unwrap().test_process_pty_bytes(
+                        b"\x1b[2J\x1b[HHooks need review\r\n3 hooks are new or changed.\r\n\xe2\x80\xba 1. Review hooks\r\n2. Trust all and continue\r\n3. Continue without trusting (hooks won't run)\r\nPress enter to confirm or esc to go back\r\n",
+                    );
+                }
+                observation
+            },
+        )
+        .unwrap();
+    let error = completion
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert!(writes.try_recv().is_err(), "startup control received input");
+    assert!(
+        crate::terminal::runtime::PromptNotShown::is(&error),
+        "a refusal before any write must retain the queued message: {error}"
+    );
+}
+
 pub(super) fn start(app: &mut App, method: Method) -> std::sync::mpsc::Receiver<String> {
     let (tx, rx) = std::sync::mpsc::channel();
     assert!(app.handle_deferred_agent_api_request(
