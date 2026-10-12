@@ -1023,6 +1023,42 @@ fn async_followers_finish_a_settled_turn_whose_reply_was_not_captured() {
     assert!(outcome.is_ok(), "{response}");
 }
 
+#[test]
+fn waits_started_after_reply_not_captured_settlement_preserve_async_and_bounded_contracts() {
+    let mut closed = recipient(1, "abandoned", false);
+    closed["reason"] = json!("reply_not_captured");
+    closed["settling"] = json!(false);
+    let mut snapshot = status(vec![closed]);
+    snapshot["complete"] = json!(true);
+    for asynchronous in [true, false] {
+        let args = if asynchronous {
+            vec!["wait", "--message", "19", "--async"]
+        } else {
+            vec!["wait", "--message", "19", "--timeout", "60"]
+        };
+        let mut reads = 0;
+        let (outcome, response) = run_captured(&args, |request, _| {
+            reads += 1;
+            assert_eq!(reads, 1, "settled request must finish on its first read");
+            Ok(Response::success(&request.id, snapshot.clone()))
+        });
+        if asynchronous {
+            assert!(outcome.is_ok(), "{response}");
+        } else {
+            assert_eq!(exit_code(&outcome), Some(1), "{response}");
+            assert_eq!(response["error"]["code"], "message_abandoned");
+        }
+        assert_eq!(response["result"], snapshot);
+    }
+    let sent = follow_message(
+        "send-follow",
+        &json!(19),
+        &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+        &mut |_| panic!("settled turn must finish immediately"),
+    );
+    assert!(sent.ok);
+}
+
 fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {
     json!({"request_id": 40 + agent, "agent_id": agent, "agent_name": format!("a{agent}"),
         "stage": "stalled", "stalled_from": from, "reason": reason, "turn_ended": turn_ended})
@@ -1873,5 +1909,29 @@ fn async_wait_and_send_share_settlement_across_recipient_stages() {
                 sent.error.as_ref().map(|error| error.code.as_str())
             );
         }
+    }
+}
+
+/// revB-claude round 5 probe: a bounded wait on an abandoned request exits 1
+/// on master; e2e saw exit 0 for provider_error and reply_not_captured.
+#[test]
+fn rev_b_claude_r5_bounded_wait_fails_on_any_abandoned_request() {
+    for (reason, code) in [
+        (
+            "provider_error: Selected model is at capacity.",
+            "message_provider_error",
+        ),
+        ("reply_not_captured", "message_abandoned"),
+    ] {
+        let mut closed = recipient(1, "abandoned", false);
+        closed["reason"] = json!(reason);
+        let mut snapshot = status(vec![closed]);
+        snapshot["complete"] = json!(true);
+        let (outcome, response) = run_captured(
+            &["wait", "--message", "19", "--timeout", "5"],
+            |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+        );
+        assert_eq!(exit_code(&outcome), Some(1), "{reason}: {response}");
+        assert_eq!(response["error"]["code"], code, "{reason}: {response}");
     }
 }
