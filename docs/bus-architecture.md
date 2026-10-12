@@ -88,7 +88,7 @@ Files are split by ownership, not by helper.
     `recorder.rs`: the `bus-perf` thread writing `<session>/perf/<role>.jsonl` windows and stall records (began, moved,
     capture, ended) and a bounded set of `stall-*.txt` stack captures; `writer.rs`: the `bus-perf-writer` thread that appends
     them through the shared, archiving log writer from a bounded queue (the watchdog only queues and counts; the writer reports
-    losses once per overload and drains the queue on a normal exit within 2 s), so the watchdog never waits on a lock or log; `tests/`)
+    losses once per overload; on exit, the `start` guard or `perf::exit` stops the watchdog and drains within one 2 s deadline), so the watchdog never waits on a lock or log; `tests/`)
   - `logging.rs` (takes explicit filter/rotation/dev options from startup composition), `log_events.rs`, `env.rs` (shared inherited path/key facts), `time.rs`, `home_path.rs`, `url.rs` (safe web URL check)
   - `config/`: `mod.rs`, `load.rs` (TOML, live reload; an unknown key fails with a diagnostic), `session.rs`, `server.rs`,
     `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `interface.rs` (UI settings), `sound.rs` (ding paths),
