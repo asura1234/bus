@@ -237,6 +237,55 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
 }
 
 #[test]
+fn a_fake_codex_agent_gets_room_prompts_and_replies() {
+    let session = Session::start("codex");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let work = session_dir(&session.0).join("work");
+    let added = scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "c1",
+            "--provider",
+            "codex",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--consent-hooks",
+        ],
+    );
+    assert!(added.status.success(), "{added:?}");
+    assert!(work.join(".codex/hooks.json").is_file());
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+
+    // Bus types each prompt into the fake's Codex composer; its hooks reply.
+    for text in ["hello codex", "hello again"] {
+        let sent = scratch_bus(
+            &session,
+            &["send", "--room", "bus", "--to", "c1", "--text", text],
+        );
+        let receipt = String::from_utf8_lossy(&sent.stdout).to_string();
+        assert!(sent.status.success(), "{receipt}");
+        let receipt: Value = serde_json::from_str(receipt.trim()).unwrap();
+        let id = receipt["result"]["message_id"].to_string();
+        let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+        assert!(
+            settled.to_string().contains(&format!("fake reply: {text}")),
+            "the fake Codex should answer {text:?}: {settled}"
+        );
+    }
+}
+
+#[test]
 fn the_driver_refuses_to_touch_a_running_session() {
     let session = Session::start("guard");
     // The same name again would be the running session: refused.

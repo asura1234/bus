@@ -31,6 +31,14 @@ that is one quoted image path as a leading `[Image #N]`, and clears a line on
 Ctrl+K or Ctrl+U. A prompt containing `fake:work N` keeps it Working for N
 seconds first.
 
+The fake Codex answers the same way, the way Bus sees real Codex: it fires the
+hooks Bus writes to the project's `.codex/hooks.json` (the consent form on
+add), starts its session with the first prompt, draws Codex's `›` composer
+with its model line below, keeps image paths as text, and shows Codex's
+`• Working (Ns • esc to interrupt)` line for `fake:work N`. The fake Cursor is
+not a delivery target yet: it draws Claude's box and fires no hooks, so room
+prompts to it stay unsent.
+
 The same PATH holds recording stand-ins for `open`, `osascript`,
 `terminal-notifier` and `afplay`, the commands Bus uses on macOS to open links
 and files, show desktop notifications, read a clipboard image and play sounds.

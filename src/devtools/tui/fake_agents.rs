@@ -4,8 +4,11 @@
 //!
 //! Each fake is the `bus` binary itself under the provider's name, so Bus sees
 //! a process called `claude` (or `codex`, `cursor-agent`). The fake Claude
-//! fires Bus's own hooks from the `--settings` file Bus passes it, draws a
-//! Claude-like prompt box, and answers every prompt with `fake reply: <prompt>`.
+//! fires Bus's own hooks from the `--settings` file Bus passes it and draws a
+//! Claude-like prompt box. The fake Codex fires the hooks Bus writes to the
+//! project's `.codex/hooks.json`, draws Codex's `›` composer and, like Codex,
+//! starts its session with the first prompt. Both answer every prompt with
+//! `fake reply: <prompt>`.
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
 use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
@@ -67,13 +70,17 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
         let _ = writeln!(std::io::stdout(), "0.0.0 (bus tui fake {provider})");
         return 0;
     }
-    let hooks = settings_path(args)
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let hooks = hooks_path(provider, args, &cwd)
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .map(|settings| settings["hooks"].clone())
         .unwrap_or(Value::Null);
     let mut agent = FakeAgent::new(provider, hooks);
-    agent.session_start();
+    // Codex defers SessionStart to its first prompt; Bus delivers to it unbound.
+    if !agent.codex() {
+        agent.session_start();
+    }
     agent.draw_prompt("");
     if crossterm::terminal::enable_raw_mode().is_err() {
         return 1;
@@ -81,6 +88,19 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
     let code = agent.read_loop();
     let _ = crossterm::terminal::disable_raw_mode();
     code
+}
+
+/// Where the provider being played reads Bus's hooks: Claude from the
+/// `--settings` file Bus passes it, Codex from the nearest `.codex/hooks.json`
+/// at or above its directory, which Bus writes there before launching it.
+pub(super) fn hooks_path(provider: &str, args: &[String], cwd: &Path) -> Option<PathBuf> {
+    if provider == "codex" {
+        cwd.ancestors()
+            .map(|dir| dir.join(".codex/hooks.json"))
+            .find(|path| path.is_file())
+    } else {
+        settings_path(args)
+    }
 }
 
 fn settings_path(args: &[String]) -> Option<PathBuf> {
@@ -110,14 +130,34 @@ impl FakeAgent {
         }
     }
 
-    /// Runs Bus's hook command for `event` with `payload` on stdin.
-    fn hook(&self, event: &str, mut payload: Value) {
-        let Some(command) = self.hooks[event][0]["hooks"][0]["command"].as_str() else {
-            return;
-        };
+    fn codex(&self) -> bool {
+        self.provider == "codex"
+    }
+
+    /// `payload` for `event` as the played provider reports it. Codex names
+    /// its turn `turn_id` (Claude: `prompt_id`) and always names its rollout:
+    /// Bus ignores a Codex hook without one as a background session. The path
+    /// is no `rollout-*` file, so Bus reads no usage from it.
+    fn payload(&self, event: &str, turn: Option<&str>, mut payload: Value) -> Value {
         payload["hook_event_name"] = json!(event);
         payload["session_id"] = json!(self.session);
         payload["cwd"] = json!(std::env::current_dir().ok());
+        if let Some(turn) = turn {
+            payload[if self.codex() { "turn_id" } else { "prompt_id" }] = json!(turn);
+        }
+        if self.codex() {
+            let rollout = std::env::temp_dir().join(format!("fake-codex-{}.jsonl", self.session));
+            payload["transcript_path"] = json!(rollout);
+        }
+        payload
+    }
+
+    /// Runs Bus's hook command for `event` with its payload on stdin.
+    fn hook(&self, event: &str, turn: Option<&str>, payload: Value) {
+        let Some(command) = self.hooks[event][0]["hooks"][0]["command"].as_str() else {
+            return;
+        };
+        let payload = self.payload(event, turn, payload);
         let shell = if cfg!(windows) {
             ("cmd", "/C")
         } else {
@@ -139,20 +179,30 @@ impl FakeAgent {
     }
 
     fn session_start(&self) {
-        self.hook("SessionStart", json!({"source": "startup"}));
+        self.hook("SessionStart", None, json!({"source": "startup"}));
     }
 
-    /// Draws an empty prompt box under the transcript.
+    /// Draws an empty prompt under the transcript: Claude's box opens with a
+    /// rule, Codex's composer with a blank row.
     fn draw_prompt(&self, draft: &str) {
-        let rule = "─".repeat(60);
         let mut out = std::io::stdout();
-        let _ = write!(out, "\r\n{rule}\r\n");
+        let _ = write!(out, "{}", prompt_top(&self.provider));
         let _ = out.flush();
         self.redraw(draft);
     }
 
+    /// The draft as the played provider shows and submits it, with the images
+    /// it lifted: Claude lifts image lines into chips, Codex keeps them as text.
+    fn lift(&self, draft: &str) -> (String, usize) {
+        if self.codex() {
+            (draft.to_owned(), 0)
+        } else {
+            lift_images(draft, self.images)
+        }
+    }
+
     fn redraw(&self, draft: &str) {
-        let (shown, _) = lift_images(draft, self.images);
+        let (shown, _) = self.lift(draft);
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", prompt_box(&shown, &self.provider, cols));
@@ -161,23 +211,25 @@ impl FakeAgent {
 
     fn submit(&mut self, prompt: &str) {
         self.turns += 1;
+        if self.codex() && self.turns == 1 {
+            self.session_start();
+        }
         let turn = format!("{}-{}", self.session, self.turns);
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
-        self.hook(
-            "UserPromptSubmit",
-            json!({"prompt_id": turn, "prompt": prompt}),
-        );
+        self.hook("UserPromptSubmit", Some(&turn), json!({"prompt": prompt}));
         if let Some(seconds) = work_seconds(prompt) {
-            spin(seconds);
+            spin(seconds, self.codex());
         }
         let reply = format!("fake reply: {}", prompt.trim());
-        let _ = write!(out, "⏺ {}\r\n", reply.replace('\n', "\r\n  "));
+        let bullet = if self.codex() { '•' } else { '⏺' };
+        let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();
         self.hook(
             "Stop",
-            json!({"prompt_id": turn, "last_assistant_message": reply, "stop_hook_active": false}),
+            Some(&turn),
+            json!({"last_assistant_message": reply, "stop_hook_active": false}),
         );
         self.draw_prompt("");
     }
@@ -210,8 +262,7 @@ impl FakeAgent {
                         self.redraw(&draft);
                     }
                     Input::Enter if !draft.trim().is_empty() => {
-                        let (prompt, images) =
-                            lift_images(&std::mem::take(&mut draft), self.images);
+                        let (prompt, images) = self.lift(&std::mem::take(&mut draft));
                         self.images += images;
                         self.submit(&prompt);
                     }
@@ -235,24 +286,64 @@ pub(super) fn kill_line(draft: &mut String) {
     }
 }
 
-/// The prompt box redrawn in place the way Claude Code shows a draft: image
-/// lines already lifted into leading `[Image #N]` chips, continuation lines
-/// indented under the `❯`. It starts and ends with the cursor on the box's
-/// first row: moving relative to the cursor, never to a saved position, keeps
-/// the box in place when drawing it scrolls a full pane. The move counts the
-/// rows the box takes on a `cols`-wide pane, so lines that wrap count too.
+/// What opens a new prompt below the transcript, from the start of a line:
+/// a blank row and a rule for Claude Code, one blank row for Codex.
+pub(super) fn prompt_top(provider: &str) -> String {
+    if provider == "codex" {
+        "\r\n".into()
+    } else {
+        format!("\r\n{}\r\n", "─".repeat(60))
+    }
+}
+
+/// Codex's empty composer text, one Bus reads as an empty composer.
+const CODEX_PLACEHOLDER: &str = "Ask Codex to do anything";
+
+/// The prompt box redrawn in place the way the played provider shows a
+/// draft, continuation lines indented under its marker. Claude Code: `❯` over
+/// a rule and its hint, image lines already lifted into leading `[Image #N]`
+/// chips. Codex: a `›` composer with a dim placeholder when empty, then a
+/// blank row and its model line, which is where Bus stops reading the draft.
+/// It starts and ends with the cursor on the box's first row: moving relative
+/// to the cursor, never to a saved position, keeps the box in place when
+/// drawing it scrolls a full pane. The move counts the rows the box takes on
+/// a `cols`-wide pane, so lines that wrap count too.
 pub(super) fn prompt_box(shown: &str, provider: &str, cols: u16) -> String {
-    let rule = "─".repeat(60);
-    let hint = format!("  ? for shortcuts · fake {provider}");
+    let codex = provider == "codex";
+    let (marker, footer) = if codex {
+        (
+            '›',
+            [String::new(), format!("  gpt-fake · fake {provider}")],
+        )
+    } else {
+        (
+            '❯',
+            [
+                "─".repeat(60),
+                format!("  ? for shortcuts · fake {provider}"),
+            ],
+        )
+    };
+    let placeholder = codex && shown.is_empty();
+    let lines = if placeholder {
+        CODEX_PLACEHOLDER
+    } else {
+        shown
+    };
     let rows = |text: &str| screen_rows(text, cols);
-    let draft_rows: usize = shown
+    let draft_rows: usize = lines
         .split('\n')
-        .map(|line| rows(&format!("❯ {line}")))
+        .map(|line| rows(&format!("{marker} {line}")))
         .sum();
+    let text = if placeholder {
+        format!("\x1b[2m{CODEX_PLACEHOLDER}\x1b[22m")
+    } else {
+        shown.replace('\n', "\r\n  ")
+    };
     format!(
-        "\r\x1b[J❯ {}\r\n{rule}\r\n{hint}\x1b[{}A\r\x1b[{}C",
-        shown.replace('\n', "\r\n  "),
-        draft_rows + rows(&rule) + rows(&hint) - 1,
+        "\r\x1b[J{marker} {text}\r\n{}\x1b[{}A\r\x1b[{}C",
+        footer.join("\r\n"),
+        draft_rows + footer.iter().map(|line| rows(line)).sum::<usize>() - 1,
         2 + shown.rsplit('\n').next().unwrap_or("").chars().count()
     )
 }
@@ -276,7 +367,9 @@ pub(super) fn screen_rows(text: &str, cols: u16) -> usize {
 }
 
 /// Replaces the box (the cursor is on its first row) with the submitted
-/// prompt, as Claude Code does.
+/// prompt, as Claude Code does. The fake Codex marks it the same way, not with
+/// Codex's `›`: it shows no composer while it answers, so a `›` here would be
+/// the last one on screen and Bus would read the sent prompt as a draft.
 pub(super) fn submitted(prompt: &str) -> String {
     format!("\r\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "))
 }
@@ -304,18 +397,17 @@ fn work_seconds(prompt: &str) -> Option<u64> {
     Some(seconds.min(600))
 }
 
-/// Claude's working line, redrawn in place: `✻ Working… (3s · esc to interrupt)`.
-fn spin(seconds: u64) {
-    let frames = ['✻', '✶', '✢', '·'];
+/// The working line, redrawn in place: Claude's `✻ Working… (3s · esc to
+/// interrupt)`, or Codex's `• Working (3s • esc to interrupt)`.
+fn spin(seconds: u64, codex: bool) {
     let started = std::time::Instant::now();
     let mut out = std::io::stdout();
     let mut index = 0;
     while started.elapsed().as_secs() < seconds {
         let _ = write!(
             out,
-            "\r\x1b[2K{} Working… ({}s · esc to interrupt)",
-            frames[index % frames.len()],
-            started.elapsed().as_secs()
+            "\r\x1b[2K{}",
+            working_line(codex, index, started.elapsed().as_secs())
         );
         let _ = out.flush();
         index += 1;
@@ -323,6 +415,16 @@ fn spin(seconds: u64) {
     }
     let _ = write!(out, "\r\x1b[2K");
     let _ = out.flush();
+}
+
+pub(super) fn working_line(codex: bool, frame: usize, seconds: u64) -> String {
+    if codex {
+        let bullet = ['•', '◦'][frame % 2];
+        format!("{bullet} Working ({seconds}s • esc to interrupt)")
+    } else {
+        let spinner = ['✻', '✶', '✢', '·'][frame % 4];
+        format!("{spinner} Working… ({seconds}s · esc to interrupt)")
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
