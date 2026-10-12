@@ -54,3 +54,9 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::Shutdown => "shutdown",
     }
 }
+
+/// A control method's name for perf logs: a known method's static name, else a
+/// fixed label, since the method field is whatever the caller sent.
+pub(crate) fn control_method_label(method: &str) -> &'static str {
+    super::coordinator::method_spec(method).map_or("unknown_method", |spec| spec.method)
+}

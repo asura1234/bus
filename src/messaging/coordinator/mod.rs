@@ -313,6 +313,7 @@ mod tests;
 use crate::agents::providers::launch;
 use crate::agents::providers::spool as callbacks;
 pub(crate) use agents::AddAgent;
+pub(crate) use control_dispatch::method_spec;
 #[cfg(feature = "dev-tools")]
 pub(crate) use control_dispatch::ui_hits;
 #[cfg(test)]

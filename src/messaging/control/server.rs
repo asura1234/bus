@@ -143,7 +143,8 @@ enum State {
     Reading(Frame),
     Waiting {
         id: String,
-        method: String,
+        /// A static label, never the caller's text.
+        method: &'static str,
         started: Instant,
         reply: mpsc::Receiver<Response>,
     },
@@ -290,7 +291,7 @@ impl Client {
             ));
         }
         let id = request.id.clone();
-        let method = request.method.clone();
+        let method = crate::messaging::perf::control_method_label(&request.method);
         let (reply, receiver) = mpsc::sync_channel(1);
         let command_id = *next_id;
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;

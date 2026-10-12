@@ -194,7 +194,10 @@ impl Worker {
                     busy.stage("control");
                     let started = std::time::Instant::now();
                     let response = self.control_response_with_events(&call.request, Some(&events));
-                    perf::CONTROL.record_op(started.elapsed(), &call.request.method);
+                    perf::CONTROL.record_op(
+                        started.elapsed(),
+                        perf::control_method_label(&call.request.method),
+                    );
                     // A disconnected client does not cancel or replay a committed action.
                     let _ = call.reply.try_send(response);
                 }
