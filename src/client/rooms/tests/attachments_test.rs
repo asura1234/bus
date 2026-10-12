@@ -6,8 +6,54 @@ fn composer_full_height_long_file_details_stay_readable() {
         .unwrap()
         .text
         .insert(&"long draft\n".repeat(80));
-    ui.detail_path = Some(format!("/tmp/{}/required-detail-tail.md", "a".repeat(70)));
+    let path = std::path::PathBuf::from(format!("/tmp/{}/required-detail-tail.md", "a".repeat(70)));
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.attach_file(room, path.clone()).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    let chip = chip_at(&mut ui, &path);
+    mouse(&mut ui, crossterm::event::MouseEventKind::Moved, chip.0, chip.1);
     assert!(room_screen(&mut ui, 100, 30).contains("required-detail-tail.md"));
+}
+
+fn chip_at(ui: &mut BusUi, path: &std::path::Path) -> (u16, u16) {
+    ui.compute_view(100, 30);
+    let rect = ui
+        .view
+        .hits
+        .iter()
+        .find(|h| matches!(&h.action, render::Action::RemoveFile(p) if p == path))
+        .expect("the draft chip is on screen")
+        .rect;
+    (rect.x, rect.y)
+}
+
+#[test]
+fn file_detail_hides_when_its_chip_leaves_a_still_pointer() {
+    use crossterm::event::MouseEventKind::Moved;
+    let (mut ui, room, _) = fixture();
+    let kept = std::path::PathBuf::from("/one/kept-attachment.md");
+    let gone = std::path::PathBuf::from("/two/gone-attachment.md");
+    let mut snapshot = (*ui.snapshot).clone();
+    for path in [&kept, &gone] {
+        snapshot.state.attach_file(room, path.clone()).unwrap();
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    let at = chip_at(&mut ui, &gone);
+    mouse(&mut ui, Moved, at.0, at.1);
+    assert!(room_screen(&mut ui, 100, 30).contains("/two/gone-attachment.md"));
+    // Removing the chip with its × or sending the draft drops it from the
+    // draft while the pointer stays where the chip was.
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.remove_file(room, &gone).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    assert!(!room_screen(&mut ui, 100, 30).contains("/two/gone-attachment.md"));
+    assert_eq!(ui.detail_path, None);
+    let at = chip_at(&mut ui, &kept);
+    mouse(&mut ui, Moved, at.0, at.1);
+    for _ in 0..2 {
+        assert!(room_screen(&mut ui, 100, 30).contains("/one/kept-attachment.md"));
+    }
 }
 
 #[test]

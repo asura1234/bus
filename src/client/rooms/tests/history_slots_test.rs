@@ -666,7 +666,17 @@ fn file_detail_popup_hides_history_thumbnails_it_covers() {
     assert_eq!(ui.view.thumbnails.len(), 1);
 
     // A path long enough to wrap over every history row above the composer.
-    ui.detail_path = Some(format!("/{}", "deep/".repeat(200)));
+    let path = std::path::PathBuf::from(format!("/{}detail.md", "deep/".repeat(200)));
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.attach_file(room, path.clone()).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    let chip = chip_at(&mut ui, &path);
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Moved,
+        chip.0,
+        chip.1,
+    );
     ui.compute_view(100, 30);
     std::fs::remove_dir_all(dir).unwrap();
     assert!(
