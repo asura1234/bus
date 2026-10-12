@@ -73,7 +73,7 @@ fn run_client_with_mode(
     let loop_config = client_loop_config(loaded_config.config, &loaded_config.diagnostics);
     let mouse_capture = loop_config.mouse_capture_active;
 
-    crate::utils::logging::startup("client", logging_options.dev);
+    crate::utils::logging::startup("client", &logging_options);
     info!(path = %socket_path.display(), "{log_message}");
 
     let InitialClientConnection {

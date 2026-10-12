@@ -70,6 +70,8 @@ clap = { version = "4.5", default-features = false, features = ["std", "help", "
 clap_complete = "4.5"
 crossterm = "0.29"
 ctrlc = { version = "3", features = ["termination"] }
+# Compresses rotated dev-build log archives (already in the tree through png).
+flate2 = "1"
 # Rasterizes the TUI driver's cell screenshots; dev variant only.
 fontdue = { version = "0.9", optional = true }
 # Decodes chat attachments into Bus room-history thumbnails.
