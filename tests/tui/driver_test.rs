@@ -1099,3 +1099,38 @@ fn the_client_records_ui_loop_and_coordinator_perf_windows() {
     assert_eq!(window["role"], "client");
     assert!(window["rss_mb"].as_f64().unwrap() > 0.0, "{window}");
 }
+
+/// Where the overlay label shows, if it does.
+fn overlay_matches(session: &Session) -> Vec<Value> {
+    let found = session.ok(&["find", "CPU [0-9n].* MEM .* FPS", "--regex"]);
+    found["matches"].as_array().cloned().unwrap_or_default()
+}
+
+#[test]
+fn the_dev_performance_overlay_turns_on_updates_and_turns_off() {
+    let session = Session::start("overlay");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["click", "--text", "Settings"]);
+    session.ok(&["wait", "--text", "[ ] Performance overlay"]);
+    assert!(overlay_matches(&session).is_empty(), "off by default");
+
+    session.ok(&["click", "--text", "Performance overlay"]);
+    session.ok(&["wait", "--text", "[x] Performance overlay"]);
+    session.ok(&["wait", "--text", "MB FPS", "--timeout", "5s"]);
+    let shown = overlay_matches(&session);
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!(shown[0]["row"].as_u64().unwrap() <= 1, "top row: {shown:?}");
+    // The label refreshes every second; FPS is measured after the first full second.
+    session.ok(&["wait", "--text", "FPS [0-9]+", "--regex", "--timeout", "5s"]);
+    let first = shown[0]["text"].clone();
+    session.ok(&["wait", "--changed", "--rows", "0-1", "--timeout", "5s"]);
+    assert_eq!(
+        overlay_matches(&session).len(),
+        1,
+        "still shown after {first}"
+    );
+
+    session.ok(&["click", "--text", "Performance overlay"]);
+    session.ok(&["wait", "--text", "[ ] Performance overlay"]);
+    session.ok(&["wait", "--text", "MB FPS", "--gone", "--timeout", "5s"]);
+}

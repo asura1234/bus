@@ -72,6 +72,11 @@ impl BusUi {
         lines.push(SoundSettingsLine::Compactions {
             field: self.sound_settings_targets().len() + 1,
         });
+        if let Some(field) = self.perf_overlay_field() {
+            lines.push(SoundSettingsLine::Empty(""));
+            lines.push(SoundSettingsLine::Heading("DEVELOPER"));
+            lines.push(SoundSettingsLine::PerfOverlay { field });
+        }
         lines
     }
 
@@ -370,6 +375,19 @@ impl BusUi {
             }
             SoundSettingsLine::Compactions { field } => {
                 self.compaction_settings_row(view, rect, *field);
+            }
+            SoundSettingsLine::PerfOverlay { field } => {
+                let on = crate::client::perf::OVERLAY.is_on();
+                view.row(
+                    rect,
+                    format!(
+                        "[{}] Performance overlay (CPU, memory, FPS)",
+                        if on { "x" } else { " " }
+                    ),
+                    Some(Action::TogglePerfOverlay),
+                    self.settings_field == *field,
+                    false,
+                );
             }
             SoundSettingsLine::Sound { target, field } => {
                 let Some((label, enabled, sound)) = self.sound_row(*target) else {

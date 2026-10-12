@@ -133,6 +133,8 @@ pub(in crate::client) struct BusUi {
     /// Settings focus: color blind mode, sound rows, then the compaction limit.
     pub(super) settings_field: usize,
     pub(super) settings_scroll: usize,
+    /// Dev builds show a Developer group in Settings (the performance overlay).
+    pub(super) dev_settings: bool,
     /// Set only by the coordinator-owning client; `None` never plays a sound.
     pub(super) sound_config: Option<crate::utils::config::SoundConfig>,
     /// System sound names, read from the OS when Settings first opens.
@@ -225,6 +227,7 @@ impl BusUi {
             settings_path: None,
             settings_field: 0,
             settings_scroll: 0,
+            dev_settings: false,
             sound_config: None,
             system_sounds: None,
             ringer: super::ring::Ringer::new(std::time::Instant::now()),
@@ -244,6 +247,21 @@ impl BusUi {
             }
         }
     }
+    /// Client-local and not saved: each run starts with the overlay off.
+    pub(super) fn toggle_perf_overlay(&mut self) {
+        let overlay = &crate::client::perf::OVERLAY;
+        overlay.set_on(!overlay.is_on(), std::time::Instant::now());
+        if let Some(field) = self.perf_overlay_field() {
+            self.settings_field = field;
+        }
+    }
+
+    /// The overlay row's Settings focus index, after the compaction limit.
+    pub(super) fn perf_overlay_field(&self) -> Option<usize> {
+        self.dev_settings
+            .then(|| self.sound_settings_targets().len() + 2)
+    }
+
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
         self.pending.retain(|p|p.enqueued || !matches!((&p.effect,&effect),
             (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Notes(a,_),Effect::Notes(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));

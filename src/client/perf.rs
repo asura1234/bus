@@ -1,6 +1,10 @@
 //! The client's perf metrics; the recorder writes them to `perf/client.jsonl`.
 use super::events::ClientLoopEvent;
-use crate::utils::perf::{Gauge, LoopWatch, Timer};
+use crate::protocol::wire::FrameData;
+use crate::utils::perf::{ContextSample, Field, Gauge, LoopWatch, Timer};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// One UI loop iteration: handling an input, server message, resize or timer event.
 pub(super) static UI_LOOP: LoopWatch = LoopWatch::new("client.ui_loop");
@@ -28,3 +32,134 @@ pub(super) fn event_stage(event: &ClientLoopEvent) -> &'static str {
         ClientLoopEvent::Timer => "timer",
     }
 }
+
+/// The dev-only live performance overlay (Settings, dev builds only).
+pub(super) static OVERLAY: OverlayMeter = OverlayMeter::new();
+
+/// Dev builds and `--dev` sessions offer the overlay in Settings.
+pub(super) fn overlay_available() -> bool {
+    cfg!(debug_assertions) || std::env::var_os("BUS_DEV").is_some_and(|value| value == "1")
+}
+
+const OVERLAY_REFRESH: Duration = Duration::from_secs(1);
+
+/// While off, every call is one relaxed atomic load: no counting, no repaint, no drawing.
+pub(super) struct OverlayMeter {
+    on: AtomicBool,
+    frames: AtomicU64,
+    shown: Mutex<OverlayShown>,
+}
+
+struct OverlayShown {
+    since: Option<Instant>,
+    label: String,
+}
+
+impl OverlayMeter {
+    pub(super) const fn new() -> Self {
+        Self {
+            on: AtomicBool::new(false),
+            frames: AtomicU64::new(0),
+            shown: Mutex::new(OverlayShown {
+                since: None,
+                label: String::new(),
+            }),
+        }
+    }
+
+    pub(super) fn is_on(&self) -> bool {
+        self.on.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn set_on(&self, on: bool, now: Instant) {
+        self.frames.store(0, Ordering::Relaxed);
+        if let Ok(mut shown) = self.shown.lock() {
+            shown.since = Some(now);
+            shown.label = overlay_label(crate::utils::perf::context(), None);
+        }
+        self.on.store(on, Ordering::Relaxed);
+    }
+
+    /// Counts a presented frame for FPS, only while the overlay is on.
+    pub(super) fn note_frame(&self) {
+        if self.is_on() {
+            self.frames.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    fn frames_since_sample(&self) -> u64 {
+        self.frames.load(Ordering::Relaxed)
+    }
+
+    /// Refreshes the label once a second; true when the overlay needs a repaint.
+    pub(super) fn tick(&self, now: Instant, context: Option<ContextSample>) -> bool {
+        if !self.is_on() {
+            return false;
+        }
+        let Ok(mut shown) = self.shown.lock() else {
+            return false;
+        };
+        let since = *shown.since.get_or_insert(now);
+        let elapsed = now.saturating_duration_since(since);
+        if elapsed < OVERLAY_REFRESH {
+            return false;
+        }
+        let frames = self.frames.swap(0, Ordering::Relaxed);
+        let fps = frames as f64 / elapsed.as_secs_f64();
+        shown.label = overlay_label(context, Some(fps));
+        shown.since = Some(now);
+        true
+    }
+
+    /// Draws the label over the frame's top-right corner.
+    pub(super) fn stamp(&self, frame: &mut FrameData) {
+        if !self.is_on() {
+            return;
+        }
+        let Ok(shown) = self.shown.lock() else {
+            return;
+        };
+        let label = if shown.label.is_empty() {
+            overlay_label(None, None)
+        } else {
+            shown.label.clone()
+        };
+        drop(shown);
+        let width = usize::from(frame.width);
+        let chars: Vec<char> = label.chars().collect();
+        let visible = &chars[chars.len().saturating_sub(width)..];
+        let start = width - visible.len();
+        let fg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Black);
+        let bg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Yellow);
+        for (offset, ch) in visible.iter().enumerate() {
+            if let Some(cell) = frame.cells.get_mut(start + offset) {
+                cell.symbol = ch.to_string();
+                cell.fg = fg;
+                cell.bg = bg;
+                cell.modifier = 0;
+                cell.skip = false;
+                cell.hyperlink = None;
+            }
+        }
+    }
+}
+
+pub(super) fn overlay_label(context: Option<ContextSample>, fps: Option<f64>) -> String {
+    let cpu = context
+        .map(|context| context.cpu_pct)
+        .filter(|cpu| cpu.is_finite());
+    let mem = context
+        .map(|context| context.rss_mb)
+        .filter(|mem| mem.is_finite());
+    format!(
+        " CPU {} MEM {} FPS {} ",
+        cpu.map_or("n/a".into(), |cpu| format!("{}%", Field(Some(cpu)))),
+        mem.map_or("n/a".into(), |mem| format!("{mem:.0}MB")),
+        fps.map_or("n/a".into(), |fps| format!("{fps:.0}")),
+    )
+}
+
+#[cfg(test)]
+#[path = "tests/perf_test.rs"]
+mod tests;
