@@ -47,8 +47,22 @@ impl HeadlessServer {
             let Ok(msg) = self.app.api_rx.try_recv() else {
                 break;
             };
-            changed |= self.handle_api_request_with_shutdown_check(msg);
+            changed |= self.handle_timed_api_request(msg);
         }
+        changed
+    }
+
+    /// Handles one queued API request, timing it with its method and noting how
+    /// many still wait behind it, whether it was drained or awaited.
+    pub(in crate::server) fn handle_timed_api_request(
+        &mut self,
+        msg: crate::server::api::ApiRequestMessage,
+    ) -> bool {
+        crate::server::perf::API_QUEUE.observe(self.app.api_rx.len() as u64);
+        let method = crate::protocol::api::api_method_name(&msg.request.method);
+        let started = std::time::Instant::now();
+        let changed = self.handle_api_request_with_shutdown_check(msg);
+        crate::server::perf::API.record_op(started.elapsed(), method);
         changed
     }
 

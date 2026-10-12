@@ -554,12 +554,7 @@ impl HeadlessServer {
                 }
             }
             LoopEvent::Api(msg) => {
-                super::perf::API_QUEUE.observe(self.app.api_rx.len() as u64);
-                let method = crate::protocol::api::api_method_name(&msg.request.method);
-                let started = Instant::now();
-                let changed = self.handle_api_request_with_shutdown_check(*msg);
-                super::perf::API.record_op(started.elapsed(), method);
-                if changed {
+                if self.handle_timed_api_request(*msg) {
                     *needs_render = true;
                     *needs_full_render = true;
                 }
