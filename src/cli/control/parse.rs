@@ -9,6 +9,7 @@ pub(super) struct ParsedCommand {
     pub(super) params: Value,
     pub(super) request_id: String,
     pub(super) wait_timeout: Option<Duration>,
+    pub(super) wait_for_message: bool,
     /// `send --async`: after sending, follow the message until every
     /// recipient's turn ended.
     pub(super) follow: bool,
@@ -75,12 +76,15 @@ fn cli() -> Command {
             ),
         )
         .subcommand(
-            subcommand("wait").arg(option("message")).arg(
-                Arg::new("timeout")
-                    .long("timeout")
-                    .default_value("60")
-                    .value_parser(clap::value_parser!(u64).range(1..=600)),
-            ),
+            subcommand("wait")
+                .arg(option("message"))
+                .arg(flag("async"))
+                .arg(
+                    Arg::new("timeout")
+                        .long("timeout")
+                        .default_value("60")
+                        .allow_hyphen_values(true),
+                ),
         )
         .subcommand(subcommand("history").arg(option("room")))
 }
@@ -180,11 +184,21 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
             _ => return Err("unknown request command".into()),
         },
         "wait" => {
-            let timeout = args
-                .get_one::<u64>("timeout")
-                .copied()
-                .ok_or_else(|| "missing wait timeout".to_owned())?;
-            wait_timeout = Some(Duration::from_secs(timeout));
+            if args.get_flag("async")
+                && args.value_source("timeout") == Some(clap::parser::ValueSource::CommandLine)
+            {
+                return Err("wait --async cannot be combined with --timeout; omit --timeout for a deadline-free wait".into());
+            }
+            if !args.get_flag("async") {
+                let timeout = args
+                    .get_one::<String>("timeout")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|timeout| (1..=600).contains(timeout))
+                    .ok_or_else(|| {
+                        "wait --timeout must be an integer in the range 1-600 seconds".to_owned()
+                    })?;
+                wait_timeout = Some(Duration::from_secs(timeout));
+            }
             (
                 "message.status",
                 json!({"message": required(args, "message")?}),
@@ -198,6 +212,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         params,
         request_id,
         wait_timeout,
+        wait_for_message: name == "wait",
         follow,
     })
 }

@@ -1,4 +1,4 @@
-//! Async following and deadline-bound message waits.
+//! Async following and bounded or unbounded message waits.
 use super::{next_request_id, ParsedCommand, Request, Response};
 use serde_json::{json, Value};
 use std::{
@@ -30,7 +30,7 @@ fn next_busy_delay(delay: Duration) -> Duration {
 /// on it and gone idle again (`turn_ended`), with no deadline. Orchestrators
 /// run it as a background tool call and are woken when it exits, so a long
 /// task must never time out. A blocked recipient is not idle, so it keeps
-/// waiting. It fails only when a request is abandoned or the message is gone.
+/// waiting. It fails when a request is abandoned, an unfinished turn stalls, or the message is gone.
 pub(super) fn follow_message(
     id: &str,
     message: &Value,
@@ -144,6 +144,7 @@ pub(super) fn execute(
     command: ParsedCommand,
     mut send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
 ) -> Response {
+    let waiting = command.wait_for_message;
     let id = command.request_id;
     let deadline = command.wait_timeout.map(|timeout| Instant::now() + timeout);
     let mut request = Request {
@@ -162,6 +163,11 @@ pub(super) fn execute(
         let mut response = match send(&request, remaining) {
             Ok(response) => response,
             Err(message) => {
+                if waiting && deadline.is_none() {
+                    thread::sleep(Duration::from_secs(1));
+                    request.id = next_request_id();
+                    continue;
+                }
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return timeout_response(&id, last_status);
                 }
@@ -172,10 +178,10 @@ pub(super) fn execute(
         };
         response.id.clone_from(&id);
         if is_server_busy(&response) {
-            // A wait retries until its deadline; other commands a few times.
+            // A wait retries until its deadline (or indefinitely); other commands a few times.
             let remaining =
                 deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-            if remaining.is_none() {
+            if remaining.is_none() && !waiting {
                 if busy_retries == BUSY_RETRIES {
                     return response;
                 }
@@ -185,7 +191,19 @@ pub(super) fn execute(
             busy_delay = next_busy_delay(busy_delay);
             continue;
         }
-        if !response.ok || deadline.is_none() || response.result["complete"] == true {
+        if !response.ok || !waiting {
+            return response;
+        }
+        match async_outcome(&response.result) {
+            Some(Ok(())) if deadline.is_none() => return response,
+            Some(Err((code, message))) if deadline.is_none() || code == "message_abandoned" => {
+                let mut failure = Response::failure(&id, code, message);
+                failure.result = response.result;
+                return failure;
+            }
+            _ => {}
+        }
+        if deadline.is_some() && response.result["complete"] == true {
             return response;
         }
         if response.result["waiting_on_dialog"]
@@ -194,17 +212,17 @@ pub(super) fn execute(
         {
             return dialog_response(&id, response.result);
         }
-        // A stalled message will not complete by waiting longer.
-        if let Some((code, message)) = stalled(&response.result, |_| true) {
+        // Bounded waits need the captured reply; async waits use async_outcome above.
+        if let Some((code, message)) = deadline.and_then(|_| stalled(&response.result, |_| true)) {
             let mut failure = Response::failure(&id, code, message);
             failure.result = response.result;
             return failure;
         }
         last_status = response.result;
-        if let Some(deadline) = deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            thread::sleep(Duration::from_millis(200).min(remaining));
-        }
+        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        thread::sleep(remaining.map_or(Duration::from_millis(200), |remaining| {
+            Duration::from_millis(200).min(remaining)
+        }));
         // Every status read is fresh even if the server caches request outcomes.
         request.id = next_request_id();
     }

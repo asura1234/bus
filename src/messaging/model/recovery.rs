@@ -95,7 +95,11 @@ impl BusState {
         if agent.current_request != Some(request) {
             return Err(ModelError::InvalidTransition);
         }
-        if agent.status != RuntimeStatus::Idle {
+        // Explicitly close ownership when the invalidated session cannot resume.
+        // Mere unavailability can be transient and must not abandon typed work.
+        let invalidated =
+            agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
+        if agent.status != RuntimeStatus::Idle && !invalidated {
             return Err(ModelError::AgentNotIdle);
         }
         self.abandon_current_request(request, recovered_at_ms)

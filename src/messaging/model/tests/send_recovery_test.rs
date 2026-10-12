@@ -195,3 +195,112 @@ fn a_rejected_steering_write_preserves_the_original_turn_end_evidence() {
     assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Abandoned);
     assert_eq!(state.next_queued_request(agent), Some(correction));
 }
+
+#[test]
+fn invalidated_stalled_typed_request_can_be_recovered_explicitly() {
+    let (mut state, agent, request) = idle_with_queued(1_000, "go");
+    start_request(&mut state, request, "launch-codex", 5);
+    state.invalidate_agent_session(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
+        .unwrap();
+    let stalled_at = 3_000 + DELIVERED_STALL_MS;
+    assert_eq!(
+        stall_at(&state, request, stalled_at).as_deref(),
+        Some("session_invalidated")
+    );
+    state
+        .recover_idle_request(request, stalled_at)
+        .expect("a session_invalidated stall is preserved for explicit recovery");
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+}
+
+#[test]
+fn invalidated_unavailable_recovery_closes_joined_group_and_preserves_queue() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "lead");
+    start_request(&mut state, lead, "launch-codex", 5);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 2_000)
+        .unwrap();
+    let member = submit_text(&mut state, room, agent, "joined");
+    state.begin_steering(member, lead).unwrap();
+    state
+        .record_steering(
+            member,
+            SubmissionOutcome::Uncertain {
+                message: "restart".into(),
+            },
+        )
+        .unwrap();
+    let queued = submit_text(&mut state, room, agent, "queued");
+    state.invalidate_agent_session(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
+        .unwrap();
+    let recovered_at = 3_000 + DELIVERED_STALL_MS;
+    assert_eq!(
+        state.recover_idle_request(member, recovered_at),
+        Err(ModelError::InvalidTransition)
+    );
+    state.recover_idle_request(lead, recovered_at).unwrap();
+    state.recover_idle_request(lead, recovered_at + 1).unwrap();
+    for request in [lead, member] {
+        assert_eq!(
+            state.request(request).unwrap().phase,
+            RequestPhase::Abandoned
+        );
+        assert_eq!(
+            state.request(request).unwrap().completed_at_ms,
+            Some(recovered_at)
+        );
+    }
+    assert_eq!(state.request(member).unwrap().group, Some(lead));
+    assert!(state.request(member).unwrap().uncertain_outcome);
+    assert_eq!(state.queued_requests(agent), &[queued]);
+    assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(state.agent(agent).unwrap().current_request, None);
+    assert_eq!(
+        state.agent(agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    assert!(state.agent(agent).unwrap().session_binding_invalidated);
+    assert!(state.room(room).unwrap().latest_replies.is_empty());
+}
+
+#[test]
+fn typed_recovery_requires_idle_or_both_invalidated_and_unavailable() {
+    for phase in [RequestPhase::Submitting, RequestPhase::Active] {
+        for invalidated in [false, true] {
+            for status in [
+                RuntimeStatus::Working,
+                RuntimeStatus::Blocked,
+                RuntimeStatus::Launching,
+                RuntimeStatus::Unavailable,
+            ] {
+                let (mut state, agent, request) = idle_with_queued(1_000, "go");
+                state.begin_submission(request, "launch-codex", 5).unwrap();
+                state.requests.get_mut(&request).unwrap().phase = phase;
+                if invalidated {
+                    state.invalidate_agent_session(agent).unwrap();
+                }
+                state.observe_status(agent, status, 3_000).unwrap();
+                let outcome = state.recover_idle_request(request, 4_000);
+                if invalidated && status == RuntimeStatus::Unavailable {
+                    assert!(outcome.is_ok(), "{phase:?} {outcome:?}");
+                    assert_eq!(
+                        state.request(request).unwrap().phase,
+                        RequestPhase::Abandoned
+                    );
+                } else {
+                    assert_eq!(outcome, Err(ModelError::AgentNotIdle));
+                    assert_eq!(state.request(request).unwrap().phase, phase);
+                    assert_eq!(state.agent(agent).unwrap().current_request, Some(request));
+                }
+            }
+        }
+    }
+}

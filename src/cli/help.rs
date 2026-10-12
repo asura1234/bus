@@ -35,7 +35,7 @@ pub const AGENT_HELP: &str = "Commands (connect to the running Bus in BUS_DATA_D
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]
   message status MESSAGE_ID
   request recover REQUEST_ID --confirm
-  wait --message MESSAGE_ID [--timeout SECONDS]
+  wait --message MESSAGE_ID [--timeout SECONDS | --async]
   history --room ROOM
   settings
 
@@ -68,9 +68,10 @@ it, or null) and per-provider usage (5-hour and weekly used %).
 Claude usage comes from its status line; Codex usage is read after each turn.
 Usage status \"unknown\" means data is missing or stale, never that the allowance is unused.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
-send --async prints the send receipt, then blocks with no time limit until every recipient
-has worked on the message and gone idle again (a blocked recipient keeps it waiting), and
-prints the final message status. It exits 1 if the send fails or Bus abandons a
+wait --async has no deadline and stops when the message settles or a recipient needs a dialog.
+send --async blocks with no time limit until every recipient has worked on the message
+and gone idle again (a blocked recipient keeps it waiting), then prints one JSON object
+with the final message status, message_id and send_receipt. It exits 1 if the send fails or Bus abandons a
 recipient's request, and 3 if a message stalls (stage stalled, reason in message status).
 wait also exits 3 on a stall. A Blocked agent never stalls; after 5 minutes its reason
 reads blocked_unanswered. Orchestrators run it as a background tool call and read the reply
@@ -78,6 +79,7 @@ with history when it exits.
 message status, wait and history keep raw Markdown and list attached files as absolute paths.
 agent read also works while an agent is launching (e.g. to see a provider trust prompt);
 runtime.session_verified is false until its provider session starts.
+Every control command emits exactly one JSON object, including failures.
 Every session answers these commands.";
 
 /// Dev-tier commands and notes, printed after the agent tier by

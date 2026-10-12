@@ -503,6 +503,44 @@ fn room_orchestrator_core_cli_wait_is_a_bounded_message_status_query() {
 }
 
 #[test]
+fn wait_timeout_errors_explain_the_supported_range() {
+    for timeout in ["0", "601", "999999", "nope"] {
+        let error = command(&["wait", "--message", "19", "--timeout", timeout]).unwrap_err();
+        assert!(error.contains("1-600"), "{error}");
+    }
+}
+
+#[test]
+fn wait_async_polls_until_reply_or_dialog_without_a_deadline() {
+    for last in [
+        json!({"message_id":19,"complete":true,"requests":[recipient(1, "replied", true)]}),
+        json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[recipient(1, "delivered", false)]}),
+    ] {
+        let mut reads = 0;
+        let (outcome, response) = run_captured(
+            &["wait", "--message", "19", "--async"],
+            |request, timeout| {
+                assert_eq!(request.method, "message.status");
+                assert!(timeout.is_none());
+                reads += 1;
+                Ok(Response::success(
+                    &request.id,
+                    if reads == 1 {
+                        json!({"message_id":19,"complete":false,"requests":[recipient(1, "delivered", false)]})
+                    } else {
+                        last.clone()
+                    },
+                ))
+            },
+        );
+        assert_eq!(reads, 2);
+        assert_eq!(response["result"], last);
+        assert_eq!(outcome.is_ok(), last["complete"] == true);
+    }
+    assert!(command(&["wait", "--message", "19", "--async", "--timeout", "60"]).is_err());
+}
+
+#[test]
 fn reserved_all_recipient_is_explicit_and_never_implicit() {
     let parsed = command(&["send", "--room", "7", "--to", "all", "--text", "hello"]).unwrap();
     assert_eq!(parsed.params["to"], json!(["all"]));
@@ -815,7 +853,34 @@ fn run_async(
 }
 
 #[test]
-fn send_async_prints_the_message_id_then_returns_once_the_turn_ended() {
+fn send_async_emits_one_json_document() {
+    let mut output = Vec::new();
+    run_with_pause(
+        &[
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ]
+        .map(String::from),
+        &mut output,
+        &mut |request, _| {
+            Ok(Response::success(
+                &request.id,
+                if request.method == "message.send" {
+                    json!({"message_id":19,"request_ids":[41],"stage":"queued"})
+                } else {
+                    status(vec![recipient(1, "replied", true)])
+                },
+            ))
+        },
+        |_| {},
+    )
+    .unwrap();
+    let response: Value = serde_json::from_slice(&output).expect("one JSON document");
+    assert_eq!(response["result"]["message_id"], 19);
+    assert_eq!(response["result"]["requests"][0]["turn_ended"], true);
+}
+
+#[test]
+fn send_async_returns_the_message_id_and_receipt_once_the_turn_ended() {
     let (outcome, lines, timeouts, pauses) = run_async(
         &[],
         [
@@ -825,11 +890,15 @@ fn send_async_prints_the_message_id_then_returns_once_the_turn_ended() {
         ],
     );
     assert!(outcome.is_ok());
-    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["result"]["message_id"], 19);
-    assert_eq!(lines[1]["ok"], true);
-    assert_eq!(lines[1]["result"]["requests"][0]["turn_ended"], true);
-    assert_eq!(lines[0]["id"], lines[1]["id"]);
+    assert_eq!(
+        lines[0]["result"]["send_receipt"]["request_ids"],
+        json!([41])
+    );
+    assert_eq!(lines[0]["ok"], true);
+    assert_eq!(lines[0]["result"]["requests"][0]["turn_ended"], true);
+    assert!(lines[0]["id"].is_string());
     assert!(timeouts.iter().all(Option::is_none), "no per-read deadline");
     assert_eq!(pauses, [Duration::from_millis(200); 2]);
 }
@@ -843,7 +912,7 @@ fn send_async_has_no_time_limit_and_keeps_waiting_while_blocked() {
         .chain([status(vec![recipient(1, "delivered", true)])]);
     let (outcome, lines, _, pauses) = run_async(&[], statuses);
     assert!(outcome.is_ok());
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 1);
     assert_eq!(pauses.len(), polls);
     assert!(pauses.iter().sum::<Duration>() > Duration::from_secs(600));
 }
@@ -869,7 +938,7 @@ fn send_async_waits_for_every_recipient() {
     );
     assert!(outcome.is_ok());
     assert_eq!(pauses.len(), 2);
-    assert_eq!(lines[1]["result"]["requests"][1]["turn_ended"], true);
+    assert_eq!(lines[0]["result"]["requests"][1]["turn_ended"], true);
 }
 
 #[test]
@@ -892,9 +961,9 @@ fn send_async_fails_when_a_request_is_abandoned() {
         error.contains("abandoned message 19 for agent a2"),
         "{error}"
     );
-    assert_eq!(lines[1]["ok"], false);
-    assert_eq!(lines[1]["error"]["code"], "message_abandoned");
-    assert_eq!(lines[1]["result"]["requests"][1]["stage"], "abandoned");
+    assert_eq!(lines[0]["ok"], false);
+    assert_eq!(lines[0]["error"]["code"], "message_abandoned");
+    assert_eq!(lines[0]["result"]["requests"][1]["stage"], "abandoned");
 }
 
 fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {
@@ -931,7 +1000,7 @@ fn send_async_exits_early_with_the_stalled_code_and_reason() {
         error.contains("message 19 stalled for agent a1 while queued: input_box_not_empty"),
         "{error}"
     );
-    assert_eq!(lines[1]["error"]["code"], "message_stalled");
+    assert_eq!(lines[0]["error"]["code"], "message_stalled");
 }
 
 #[test]
@@ -946,7 +1015,7 @@ fn send_async_counts_a_finished_turn_without_a_captured_reply_as_done() {
         )])],
     );
     assert!(outcome.is_ok());
-    assert_eq!(lines[1]["ok"], true);
+    assert_eq!(lines[0]["ok"], true);
 }
 
 #[test]
@@ -1235,10 +1304,10 @@ fn send_async_recovers_from_transient_server_busy_after_queued_receipt() {
         "transient overload must not end a queued send: {lines:?}"
     );
     assert_eq!(polls, 3);
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0]["result"]["stage"], "queued");
-    assert_eq!(lines[1]["result"]["requests"][0]["turn_ended"], true);
-    assert_eq!(lines[0]["id"], lines[1]["id"]);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["result"]["send_receipt"]["stage"], "queued");
+    assert_eq!(lines[0]["result"]["requests"][0]["turn_ended"], true);
+    assert!(lines[0]["id"].is_string());
     assert!(pauses.iter().all(|pause| !pause.is_zero()));
 }
 
@@ -1436,6 +1505,315 @@ fn parse_errors_do_not_advertise_dev_tools() {
             assert!(
                 !error.contains(dev),
                 "{args:?} names dev tool {dev}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn send_async_failure_keeps_the_send_receipt_and_message_id() {
+    let (outcome, lines, _, _) = run_async(&[], [status(vec![recipient(1, "abandoned", false)])]);
+    assert!(outcome.is_err());
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["error"]["code"], "message_abandoned");
+    assert_eq!(lines[0]["result"]["message_id"], 19);
+    assert_eq!(
+        lines[0]["result"]["send_receipt"]["request_ids"],
+        json!([41])
+    );
+}
+
+#[test]
+fn wait_async_keeps_polling_through_more_server_busy_replies_than_a_plain_command_retries() {
+    let mut reads = 0;
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--async"],
+        |request, _| {
+            reads += 1;
+            Ok(if reads <= 6 {
+                Response::failure(&request.id, "server_busy", "busy")
+            } else {
+                Response::success(
+                    &request.id,
+                    json!({"message_id":19,"complete":true,"requests":[recipient(1, "replied", true)]}),
+                )
+            })
+        },
+    );
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 7);
+}
+
+#[test]
+fn wait_async_with_an_explicit_timeout_names_the_conflicting_options() {
+    let error = command(&["wait", "--message", "19", "--async", "--timeout", "60"]).unwrap_err();
+    assert!(
+        error.contains("--async") && error.contains("--timeout"),
+        "{error}"
+    );
+}
+
+#[test]
+fn wait_async_keeps_waiting_through_a_transient_transport_error() {
+    let mut reads = 0;
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--async"],
+        |request, _| {
+            reads += 1;
+            if reads == 2 {
+                return Err("No developer endpoint is available".into());
+            }
+            Ok(Response::success(
+                &request.id,
+                json!({"message_id":19,"complete":reads >= 3,"requests":[recipient(1, "delivered", reads >= 3)]}),
+            ))
+        },
+    );
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 3);
+}
+
+#[test]
+fn wait_timeout_negative_or_blank_values_explain_the_supported_range() {
+    for timeout in ["-1", ""] {
+        let error = command(&["wait", "--message", "19", "--timeout", timeout]).unwrap_err();
+        assert!(error.contains("1-600"), "{timeout:?}: {error}");
+    }
+}
+
+#[test]
+fn wait_async_recovers_before_first_status_and_still_stops_at_a_dialog() {
+    let mut reads = 0;
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--async"],
+        |request, timeout| {
+            assert!(timeout.is_none());
+            reads += 1;
+            if reads <= 2 {
+                return Err("temporary connection loss".into());
+            }
+            Ok(Response::success(
+                &request.id,
+                json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[recipient(1, "delivered", false)]}),
+            ))
+        },
+    );
+    assert_eq!(reads, 3);
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "agent_waiting_on_dialog");
+    assert_eq!(response["result"]["waiting_on_dialog"], json!([1]));
+}
+
+#[test]
+fn bounded_wait_still_reports_transport_error_without_retrying_it() {
+    let mut reads = 0;
+    let pending =
+        json!({"message_id":19,"complete":false,"requests":[recipient(1, "delivered", false)]});
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--timeout", "60"],
+        |request, timeout| {
+            assert!(timeout.is_some());
+            reads += 1;
+            if reads == 2 {
+                return Err("connection lost".into());
+            }
+            Ok(Response::success(&request.id, pending.clone()))
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(reads, 2);
+    assert_eq!(response["error"]["code"], "transport_error");
+    assert_eq!(response["result"], pending);
+}
+
+#[test]
+fn wait_timeout_attached_and_blank_values_use_the_wait_diagnostics() {
+    for args in [
+        vec!["wait", "--message", "19", "--timeout", ""],
+        vec!["wait", "--message", "19", "--timeout=-1"],
+    ] {
+        let error = command(&args).unwrap_err();
+        assert!(error.contains("1-600"), "{error}");
+    }
+    let error = command(&["wait", "--message", "19", "--timeout=60", "--async"]).unwrap_err();
+    assert!(
+        error.contains("--async") && error.contains("--timeout"),
+        "{error}"
+    );
+}
+
+fn restart_statuses() -> Value {
+    serde_json::from_str(include_str!("tests/fixtures/restart-statuses.json")).unwrap()
+}
+
+#[test]
+fn wait_async_finishes_recorded_ended_turns_without_captured_replies() {
+    for snapshot in restart_statuses()["ended"].as_array().unwrap() {
+        let message = snapshot["message_id"].to_string();
+        let mut reads = 0;
+        let (outcome, response) = run_captured(
+            &["wait", "--message", &message, "--async"],
+            |request, timeout| {
+                assert_eq!(request.method, "message.status");
+                assert!(timeout.is_none());
+                reads += 1;
+                assert_eq!(
+                    reads, 1,
+                    "wait --async polled again after every turn ended: {snapshot}"
+                );
+                Ok(Response::success(&request.id, snapshot.clone()))
+            },
+        );
+        assert!(outcome.is_ok(), "{response}");
+        assert_eq!(
+            response["result"], *snapshot,
+            "preserve the server's status snapshot"
+        );
+        assert_eq!(response["result"]["complete"], false);
+        let sent = follow_message(
+            "send-follow",
+            &snapshot["message_id"],
+            &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+            &mut |_| panic!("send --async must also finish immediately"),
+        );
+        assert!(sent.ok);
+        assert_eq!(response["result"], sent.result);
+    }
+}
+
+#[test]
+fn wait_async_reports_recorded_abandonment_with_the_send_async_exit_code() {
+    let snapshot = restart_statuses()["abandoned"].clone();
+    let message = snapshot["message_id"].to_string();
+    let (outcome, response) =
+        run_captured(&["wait", "--message", &message, "--async"], |request, _| {
+            Ok(Response::success(&request.id, snapshot.clone()))
+        });
+    assert_eq!(exit_code(&outcome), Some(1), "{response}");
+    assert_eq!(response["error"]["code"], "message_abandoned");
+    assert_eq!(response["result"], snapshot);
+    let sent = follow_message(
+        "send-follow",
+        &snapshot["message_id"],
+        &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+        &mut |_| panic!("abandonment is terminal"),
+    );
+    assert!(!sent.ok);
+    assert_eq!(response["error"]["code"], sent.error.unwrap().code);
+    assert_eq!(response["result"], sent.result);
+}
+
+#[test]
+fn bounded_wait_reports_recorded_abandonment_as_failure() {
+    let snapshot = restart_statuses()["abandoned"].clone();
+    let message = snapshot["message_id"].to_string();
+    let (outcome, response) = run_captured(
+        &["wait", "--message", &message, "--timeout", "60"],
+        |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+    );
+    assert_eq!(exit_code(&outcome), Some(1), "{response}");
+    assert_eq!(response["error"]["code"], "message_abandoned");
+    assert_eq!(response["result"], snapshot);
+}
+
+#[test]
+fn wait_async_and_send_async_agree_on_invalidated_joined_stalls() {
+    let mut snapshot = restart_statuses()["joined"].clone();
+    snapshot["requests"][0]["stage"] = json!("stalled");
+    snapshot["requests"][0]["stalled_from"] = json!("joined");
+    snapshot["requests"][0]["reason"] = json!("session_invalidated");
+    let message = snapshot["message_id"].to_string();
+    let (outcome, response) =
+        run_captured(&["wait", "--message", &message, "--async"], |request, _| {
+            Ok(Response::success(&request.id, snapshot.clone()))
+        });
+    assert_eq!(exit_code(&outcome), Some(3));
+    let sent = follow_message(
+        "send-follow",
+        &snapshot["message_id"],
+        &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+        &mut |_| panic!("invalidated stall is terminal"),
+    );
+    assert!(!sent.ok);
+    assert_eq!(response["error"]["code"], sent.error.unwrap().code);
+    assert_eq!(response["result"], sent.result);
+}
+
+#[test]
+fn wait_async_ignores_finished_stalls_while_other_recipients_work() {
+    let mut finished = recipient(1, "stalled", true);
+    finished["stalled_from"] = json!("delivered");
+    finished["reason"] = json!("transcript_unmatched");
+    let mut reads = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            reads += 1;
+            assert!(reads <= 2);
+            Ok(Response::success(
+                &request.id,
+                status(vec![
+                    finished.clone(),
+                    recipient(2, "delivered", reads == 2),
+                ]),
+            ))
+        });
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 2);
+}
+
+#[test]
+fn async_wait_and_send_share_settlement_across_recipient_stages() {
+    for stage in [
+        "queued",
+        "submitting",
+        "awaiting_start",
+        "delivered",
+        "joined",
+        "replied",
+        "abandoned",
+        "stalled",
+    ] {
+        for ended in [false, true] {
+            let snapshot = status(vec![recipient(1, stage, ended)]);
+            let final_status = status(vec![recipient(1, "replied", true)]);
+            let mut wait_reads = 0;
+            let (outcome, waited) =
+                run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+                    wait_reads += 1;
+                    assert!(wait_reads <= 2);
+                    Ok(Response::success(
+                        &request.id,
+                        if wait_reads == 1 {
+                            snapshot.clone()
+                        } else {
+                            final_status.clone()
+                        },
+                    ))
+                });
+            let mut send_reads = 0;
+            let sent = follow_message(
+                "follow",
+                &json!(19),
+                &mut |request, _| {
+                    send_reads += 1;
+                    assert!(send_reads <= 2);
+                    Ok(Response::success(
+                        &request.id,
+                        if send_reads == 1 {
+                            snapshot.clone()
+                        } else {
+                            final_status.clone()
+                        },
+                    ))
+                },
+                &mut |_| {},
+            );
+            assert_eq!(wait_reads, send_reads, "{stage} ended={ended}");
+            assert_eq!(outcome.is_ok(), sent.ok, "{stage} ended={ended}");
+            assert_eq!(waited["result"], sent.result);
+            assert_eq!(
+                waited["error"]["code"].as_str(),
+                sent.error.as_ref().map(|error| error.code.as_str())
             );
         }
     }

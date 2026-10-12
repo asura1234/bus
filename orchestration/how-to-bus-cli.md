@@ -239,6 +239,19 @@ message_id=$(bus send \
 bus wait --message "$message_id" --timeout 600
 ```
 
+`wait` defaults to 60 seconds and accepts `--timeout` from 1 through 600.
+Use `bus wait --message "$message_id" --async` to wait without an overall
+deadline until every recipient’s turn ends, a request is abandoned or stalls,
+or a recipient needs a dialog. Like `send --async`, ended turns succeed even
+when the final reply was not captured (`complete` can remain `false`). It returns
+`agent_waiting_on_dialog` with the last status; answer the dialog, then wait
+again. `--async` and an explicit `--timeout` cannot be combined. Unlike
+`send --async`, `wait --async` stops at a dialog rather than waiting for it to
+be answered. Each transport request still has its normal finite timeout;
+`wait --async` retries transport failures after a one-second pause, like
+`send --async`. Bounded waits still report transport failures immediately.
+To obtain a message ID before waiting, use plain `send`, then `wait --async`.
+
 To record the message as written by a room agent instead of the human, add
 `--as AGENT`. The author must be an agent in the same room, or the room's MASTER
 orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is
@@ -254,10 +267,10 @@ defaults to 60 seconds.
 
 ### Send and follow a task with `--async`
 
-`send --async` sends as usual, prints the send receipt (with `message_id`)
-first, then blocks with no time limit until every recipient has worked on the
-message and gone idle again, and prints the final `message status` as a second
-JSON line:
+`send --async` sends as usual, then blocks with no time limit until every
+recipient has worked on the message and gone idle again. It emits one JSON
+object containing the final `message status`, `message_id`, and the original
+send receipt in `result.send_receipt`:
 
 ```sh
 bus send --room "$room_id" --as "$me" --to "$agent_id" --async \
@@ -273,8 +286,8 @@ polls. A captured reply also counts.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
 command keeps waiting until someone answers it. It exits early only if the send
 fails or Bus abandons a recipient's request (exit 1), or a recipient's message
-stalls before its turn ended (exit 3, see Stalled messages); the reason is on
-stderr.
+stalls before its turn ended (exit 3, see Stalled messages); the reason is in
+the JSON error object.
 `--async` cannot be combined with `--to human`.
 
 Orchestrators run it as a background tool call (Claude Code: Bash with
@@ -315,6 +328,7 @@ new message when ready. Typed requests remain `stalled` for explicit recovery.
 | `submitting` | 3 minutes idle after Bus typed it | `submission_unconfirmed`: the native server never confirmed the typing |
 | `awaiting_start` | 3 minutes idle | `no_start_hook`: the provider never reported the turn start |
 | `delivered`, `joined` | 3 minutes idle with no hook event | `transcript_unmatched`: the turn ended but no final reply matched the transcript |
+| Any typed stage | 3 minutes without progress after the agent becomes unavailable with its session binding invalidated | `session_invalidated`: the turn cannot continue in that session; recover the current lead request with `request recover REQUEST_ID --confirm` to close its group |
 
 A Working agent never stalls, however long its turn. A Blocked agent does not
 stall either: it already asked for help. After 5 minutes blocked, `reason`
@@ -322,11 +336,13 @@ reads `blocked_unanswered` so the block shows in `message status`, but the stage
 stays as it was and `send --async` keeps waiting. For a typed stalled request,
 fix the cause (clear the input box, answer the agent, restart it), or recover
 the request explicitly with `request recover`. `wait` and `send --async` stop
-at a typed stall with exit code 3 and the reason on stderr; an abandoned
+at a typed stall with exit code 3 and the reason in the JSON error; an abandoned
 queued request exits with code 1. For `--async`,
 a finished turn whose reply was not captured counts as done, not stalled.
 
-Treat `complete: true` from `message status` or `wait` as the settlement signal.
+Treat `complete: true` from `message status` or bounded `wait` as the durable
+settlement signal. An async wait can succeed earlier when every `turn_ended`
+is true, without claiming that a reply was captured.
 A successful terminal write or a visually idle agent is
 not proof that the request completed.
 
@@ -562,8 +578,13 @@ The generic form is `request recover REQUEST_ID --confirm`. For an untyped
 queued request, it removes only that request, even if the agent is working,
 blocked, launching, or unavailable. It preserves any current turn and other
 queued work. Recovering an already abandoned request succeeds without replaying
-it. A typed current request still requires confirmed idle state and recovery
-closes its joined group.
+it. A typed current request requires confirmed idle state, or an unavailable
+agent whose session binding is invalidated (`session_invalidated`). Recovery
+closes the current request and its joined group; for a joined request, recover
+the lead request identified by its `group` field. It preserves other queued
+work and does not reactivate the invalidated agent or replay typed work.
+After session invalidation, replace the agent before resending. Recovery does
+not undo effects of an interrupted task; inspect them before resending.
 
 Bus also releases a request on its own when the agent never started it as a
 turn. This happens when Bus typed the message while the agent ran a turn of its

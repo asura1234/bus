@@ -398,3 +398,94 @@ fn recovery_abandons_only_an_idle_current_request_and_releases_its_agent() {
     assert_eq!(state.next_queued_request(agent), Some(queued));
     assert!(state.room(room).unwrap().latest_replies.is_empty());
 }
+
+#[test]
+fn invalidated_unavailable_turn_and_joined_member_stall_after_grace() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    let lead = submit_text(&mut state, room, agent, "lead");
+    start_request(&mut state, lead, "launch-codex", 5);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 2_000)
+        .unwrap();
+    let member = submit_text(&mut state, room, agent, "joined");
+    state.begin_steering(member, lead).unwrap();
+    state
+        .record_steering(
+            member,
+            SubmissionOutcome::Uncertain {
+                message: "restart".into(),
+            },
+        )
+        .unwrap();
+    state.invalidate_agent_session(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
+        .unwrap();
+    for request in [lead, member] {
+        assert_eq!(
+            stall_at(&state, request, 3_000 + DELIVERED_STALL_MS - 1),
+            None
+        );
+        assert_eq!(
+            stall_at(&state, request, 3_000 + DELIVERED_STALL_MS).as_deref(),
+            Some("session_invalidated")
+        );
+        assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+    }
+    assert_eq!(state.request(member).unwrap().group, Some(lead));
+    assert!(state.request(member).unwrap().uncertain_outcome);
+}
+
+#[test]
+fn transient_unavailable_turn_does_not_stall_without_session_invalidation() {
+    let (mut state, agent, request) = idle_with_queued(1_000, "go");
+    start_request(&mut state, request, "launch-codex", 5);
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
+        .unwrap();
+    assert_eq!(
+        stall_at(&state, request, 3_000 + DELIVERED_STALL_MS * 10),
+        None
+    );
+}
+
+#[test]
+fn invalidated_typed_requests_preserve_live_status_and_progress_grace() {
+    for phase in [RequestPhase::Submitting, RequestPhase::Active] {
+        let (mut state, agent, request) = idle_with_queued(1_000, "go");
+        state.begin_submission(request, "launch-codex", 5).unwrap();
+        state.requests.get_mut(&request).unwrap().phase = phase;
+        state.invalidate_agent_session(agent).unwrap();
+        for status in [
+            RuntimeStatus::Working,
+            RuntimeStatus::Blocked,
+            RuntimeStatus::Launching,
+        ] {
+            state.observe_status(agent, status, 3_000).unwrap();
+            assert_eq!(
+                stall_at(&state, request, 3_000 + DELIVERED_STALL_MS * 10),
+                None
+            );
+        }
+        state
+            .observe_status(agent, RuntimeStatus::Unavailable, 4_000)
+            .unwrap();
+        state.requests.get_mut(&request).unwrap().progress_at_ms = Some(10_000);
+        assert_eq!(
+            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS - 1),
+            None
+        );
+        assert_eq!(
+            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS).as_deref(),
+            Some("session_invalidated")
+        );
+        state.agents.get_mut(&agent).unwrap().dialog = true;
+        assert_eq!(
+            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS * 10),
+            None
+        );
+    }
+}
