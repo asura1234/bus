@@ -443,3 +443,36 @@ fn claude_draft_with_a_numbered_list_is_still_our_pending_draft() {
         "{screen}"
     );
 }
+
+#[test]
+fn captured_dialogs_are_never_editable_composers() {
+    let rule = "─".repeat(64);
+    let claude_bash = format!(
+        "{rule}\n Bash command\n\n   curl -sS -o /tmp/probe.html https://example.com\n   Download example.com to /tmp/probe.html\n\n This command requires approval\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again for: curl *\n   3. No\n\n Esc to cancel · Tab to amend · ctrl+e to explain\n"
+    );
+    let claude_trust = format!(
+        "{rule}\n Accessing workspace:\n\n /Users/dev/work/bus\n\n Quick safety check: Is this a project you created or one you trust?\n\n Claude Code'll be able to read, edit, and execute files here.\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel\n"
+    );
+    let claude_question = "☐ Approach\n\nWhich storage should the cache use?\n\n❯ 1. Redis\n     Shared across workers\n  2. In memory\n     Fastest, lost on restart\n  3. Type something.\n────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n";
+    for screen in [claude_bash.as_str(), claude_trust.as_str(), claude_question] {
+        assert_eq!(
+            observe(AgentKind::Claude, screen, "from bus"),
+            InputObservation::Unavailable,
+            "{screen}"
+        );
+    }
+    for screen in [
+        "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
+        "Which option should I use?\n\n› 1. Alpha\n  2. Beta\n\nEnter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
+        include_str!("../../../../../tests/fixtures/codex-question/expanded.txt"),
+        include_str!("../../../../../tests/fixtures/codex-question/other-selected.txt"),
+        include_str!("../../../../../tests/fixtures/codex-question/other-typed.txt"),
+        include_str!("../../../../../tests/fixtures/codex-update/chooser-0.162.txt"),
+    ] {
+        assert_eq!(
+            observe(AgentKind::Codex, screen, "from bus"),
+            InputObservation::Unavailable,
+            "{screen}"
+        );
+    }
+}
