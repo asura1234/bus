@@ -270,7 +270,7 @@ pub(super) fn driver_root() -> PathBuf {
 
 /// `driver_root` for a given `$BUS_TUI_ROOT` value, so tests can check the
 /// default without depending on the caller's environment.
-pub(super) fn driver_root_for(value: Option<OsString>) -> PathBuf {
+fn driver_root_for(value: Option<OsString>) -> PathBuf {
     // `bus --dev tui` refuses a malformed override before any verb runs.
     if let Ok(Some(root)) = parse_root_override(value) {
         return root;
