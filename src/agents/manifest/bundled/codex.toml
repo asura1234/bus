@@ -92,8 +92,9 @@ all = [
 ]
 
 # Bus answers this chooser itself for agents it launched: it picks "Update
-# now", and once Codex exits with the success line, types the same launch
-# command again (src/server/terminals/self_update.rs). Codex 0.162 draws
+# now", and once Codex exits types the same launch command again; without the
+# success line it leaves the next chooser for a person
+# (src/server/terminals/self_update.rs). Codex 0.162 draws
 # "Update available ·" with an "enter continue · esc skip" footer; older
 # releases drew "Update available!" with "Press enter to continue".
 [[rules]]

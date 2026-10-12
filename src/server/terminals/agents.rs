@@ -396,7 +396,9 @@ impl App {
                 .map(|dialog| dialog.id()),
             update_error: match &terminal.self_update {
                 Some(crate::terminal::SelfUpdate {
-                    phase: crate::terminal::SelfUpdatePhase::Failed(error),
+                    phase:
+                        crate::terminal::SelfUpdatePhase::Failed(error)
+                        | crate::terminal::SelfUpdatePhase::Stuck(error),
                     ..
                 }) => Some(error.clone()),
                 _ => None,

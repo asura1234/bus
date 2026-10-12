@@ -139,6 +139,9 @@ pub enum SelfUpdatePhase {
         next_try: Instant,
         deadline: Instant,
     },
+    /// The install ignored Bus's interrupt; a person stops it, and its exit
+    /// still relaunches the agent with its chooser left for that person.
+    Stuck(String),
     /// Relaunched after an installed update. The chooser showing again means
     /// the update did not take, so Bus does not answer it twice.
     Relaunched,

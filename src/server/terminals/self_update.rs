@@ -3,8 +3,9 @@
 //! Left alone, the chooser blocked a fresh agent, and a queued message's Enter
 //! could pick "Update now" itself, after which the agent exited under the
 //! message. Bus instead picks the option the manifest's `auto_update` names,
-//! waits for the agent to exit, and types the same `agent.start` command again
-//! in the same pane under the same name. When the install fails, the agent
+//! waits for the agent to exit, and types its launch command again in the same
+//! pane under the same name: the `agent.start` command, or for a restored agent
+//! the resume command its restore typed. When the install fails, the agent
 //! starts again anyway and Bus leaves its chooser for a person, so the agent
 //! shows blocked with `AgentInfo::update_error` and queued messages wait.
 use std::time::{Duration, Instant};
@@ -20,10 +21,10 @@ use crate::terminal::{SelfUpdate, SelfUpdatePhase};
 use crate::utils::ids::{PaneId, TerminalId};
 
 /// How long an install may run before Bus interrupts it.
-pub(crate) const SELF_UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const SELF_UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// How long the agent may take to exit after an interrupt, and the shell to
 /// take the relaunch command after the agent exited.
-pub(crate) const SELF_UPDATE_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
+const SELF_UPDATE_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 const RELAUNCH_RETRY: Duration = Duration::from_millis(500);
 
 impl AppState {
@@ -33,7 +34,9 @@ impl AppState {
             .filter_map(|terminal| match terminal.self_update.as_ref()?.phase {
                 SelfUpdatePhase::Installing { deadline, .. } => Some(deadline),
                 SelfUpdatePhase::Relaunching { next_try, .. } => Some(next_try),
-                SelfUpdatePhase::Relaunched | SelfUpdatePhase::Failed(_) => None,
+                SelfUpdatePhase::Stuck(_)
+                | SelfUpdatePhase::Relaunched
+                | SelfUpdatePhase::Failed(_) => None,
             })
             .min()
     }
@@ -103,11 +106,25 @@ impl App {
                 if now < next_try {
                     return false;
                 }
-                match self.relaunch(ws_idx, pane_id, &update, failure, deadline, now) {
-                    Some(phase) => phase,
-                    None => return false,
+                let Some(phase) = self.relaunch(ws_idx, pane_id, &update, failure, deadline, now)
+                else {
+                    if let Some(terminal) = self.state.terminals.get_mut(terminal_id) {
+                        terminal.self_update = None;
+                    }
+                    return true;
+                };
+                phase
+            }
+            // The interrupted install finally exited: start the agent again
+            // once, with its chooser left for a person.
+            SelfUpdatePhase::Stuck(_) if terminal.managed_agent_kind().is_none() => {
+                SelfUpdatePhase::Relaunching {
+                    failure: Some(INTERRUPT_IGNORED.to_owned()),
+                    next_try: now,
+                    deadline: now + SELF_UPDATE_EXIT_TIMEOUT,
                 }
             }
+            SelfUpdatePhase::Stuck(_) => return false,
             SelfUpdatePhase::Relaunched | SelfUpdatePhase::Failed(_)
                 if terminal.managed_agent_interactive_ready()
                     && terminal.state == AgentState::Idle =>
@@ -119,10 +136,10 @@ impl App {
                 return true;
             }
             SelfUpdatePhase::Relaunched if self.update_chooser_visible(terminal_id) => {
-                SelfUpdatePhase::Failed(failed_install(
-                    &update,
-                    "the agent offered the same update again after installing it",
-                ))
+                let reason = "the agent offered the same update again after installing it";
+                tracing::warn!(event = "bus.self_update.failed", agent = %update.name, reason,
+                    "Leaving the agent's update chooser for a person");
+                SelfUpdatePhase::Failed(failed_install(&update, reason))
             }
             SelfUpdatePhase::Relaunched | SelfUpdatePhase::Failed(_) => return false,
         };
@@ -175,9 +192,15 @@ impl App {
             return None;
         }
         if interrupted {
-            return Some(SelfUpdatePhase::Failed(failed_install(
-                update,
-                "the install did not exit after Bus interrupted it",
+            // Bus does not kill it; a person stops it, and its exit still
+            // relaunches the agent.
+            tracing::warn!(event = "bus.self_update.failed", agent = %update.name,
+                reason = INTERRUPT_IGNORED, "The agent's update ignored Bus's interrupt");
+            return Some(SelfUpdatePhase::Stuck(format!(
+                "Bus could not install the {} update ({INTERRUPT_IGNORED}). Stop it in {}'s terminal; Bus then starts {} again and queued messages wait.",
+                crate::agents::agent_label(update.kind),
+                update.name,
+                update.name
             )));
         }
         // A hung install: interrupting it makes the agent exit with a
@@ -192,7 +215,9 @@ impl App {
         })
     }
 
-    /// Types the agent's launch command again; `None` when the pane is gone.
+    /// Types the agent's launch command again. `None` drops the update: the
+    /// pane is gone, or its shell never took the command and is a plain shell
+    /// with no agent to list an error on.
     fn relaunch(
         &mut self,
         ws_idx: usize,
@@ -240,10 +265,7 @@ impl App {
                 let message = self.agent_start_error_body(error).message;
                 tracing::warn!(event = "bus.self_update.relaunch_failed", agent = %update.name,
                     %message, "Could not start the agent again after its update");
-                SelfUpdatePhase::Failed(format!(
-                    "Bus could not start {} again after its update: {message}. Start it again in its terminal.",
-                    update.name
-                ))
+                return None;
             }
         })
     }
@@ -290,6 +312,9 @@ impl App {
             return false;
         };
         let session = terminal.persisted_agent_session.clone();
+        // Otherwise a started agent reads launch-pending for the whole install,
+        // and the coordinator closes its queued messages as stalled.
+        terminal.finish_managed_launch_for_update();
         terminal.self_update = Some(SelfUpdate {
             name,
             kind,
@@ -321,13 +346,15 @@ impl App {
 /// The arguments to type again after `kind`'s update: the command a restore
 /// typed into the pane's shell, without its executable. A restored agent's
 /// command resumes its own session, so its relaunch does too.
-pub(crate) fn managed_relaunch_args(
+pub(super) fn managed_relaunch_args(
     kind: Option<crate::agents::AgentKind>,
     argv: &[String],
 ) -> Option<Vec<String>> {
     let (executable, args) = argv.split_first()?;
     (executable == crate::agents::interactive_agent_executable(kind?)).then(|| args.to_vec())
 }
+
+const INTERRUPT_IGNORED: &str = "the install did not exit after Bus interrupted it";
 
 fn failed_install(update: &SelfUpdate, reason: &str) -> String {
     format!(

@@ -346,3 +346,193 @@ async fn claude_update_notices_never_block_or_open_a_dialog() {
     assert!(crate::agents::dialog::parse(&ansi).is_none());
     runtime.shutdown();
 }
+
+#[tokio::test]
+async fn a_bus_started_codex_installing_its_update_is_listed_working_and_ready() {
+    let mut harness = codex_at_update_chooser();
+    let now = Instant::now();
+    // As live: the chooser moves the pending launch to its Blocked phase.
+    harness.terminal().reconcile_managed_agent_at(now, false);
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+
+    harness.show(b"\x1b[2J\x1b[HUpdating Codex via `npm install -g @openai/codex`...\r\n");
+    harness
+        .terminal()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    harness.terminal().reconcile_managed_agent_at(now, false);
+    let info = harness.app.agent_info(0, harness.pane).unwrap();
+    assert_eq!(info.agent_status, schema::AgentStatus::Working);
+    assert_eq!(info.dialog_id, None);
+    // The coordinator reads launch_pending before agent_status: a pending
+    // launch would read Launching, and its queued messages would stall.
+    assert!(!info.launch_pending);
+    assert!(info.interactive_ready);
+}
+
+#[tokio::test]
+async fn a_codex_relaunched_after_its_update_is_listed_ready_under_the_same_identity() {
+    let mut harness = codex_at_update_chooser();
+    let before = harness.app.agent_info(0, harness.pane).unwrap();
+    let now = Instant::now();
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+    harness.exit_with("🎉 Update ran successfully! Please restart Codex.");
+    // Between the exit and the relaunch the pane is not an agent.
+    assert!(harness.app.agent_info(0, harness.pane).is_none());
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+
+    harness.show(b"\x1b[2J\x1b[H\xe2\x80\xba Ask Codex to do anything\r\n");
+    harness
+        .terminal()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
+    harness
+        .terminal()
+        .reconcile_managed_agent_at(now + std::time::Duration::from_secs(5), false);
+    let info = harness.app.agent_info(0, harness.pane).unwrap();
+    // What agent.prompt_if_unbound checks before typing a queued message.
+    assert_eq!(info.terminal_id, before.terminal_id);
+    assert_eq!(info.pane_id, before.pane_id);
+    assert_eq!(info.name.as_deref(), Some(NAME));
+    assert_eq!(info.agent.as_deref(), Some("codex"));
+    assert_eq!(info.agent_session, None);
+    assert_eq!(info.agent_status, schema::AgentStatus::Idle);
+    assert_eq!(info.dialog_id, None);
+    assert!(!info.launch_pending && info.interactive_ready);
+}
+
+#[tokio::test]
+async fn a_restored_codex_relaunched_after_its_update_is_listed_with_its_saved_session_once_ready()
+{
+    let mut harness = codex_at_update_chooser();
+    let terminal = harness.terminal();
+    terminal.clear_agent_name();
+    terminal.restore_managed_agent(NAME.into(), AgentKind::Codex);
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("saved-session").unwrap(),
+    });
+    terminal.managed_agent_args = Some(
+        ["resume", "saved-session", "-c", "hooks=bus"]
+            .map(String::from)
+            .into(),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Blocked);
+    let now = Instant::now();
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+    harness.exit_with("🎉 Update ran successfully! Please restart Codex.");
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+
+    harness.show(b"\x1b[2J\x1b[H\xe2\x80\xba Ask Codex to do anything\r\n");
+    harness
+        .terminal()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
+    harness
+        .terminal()
+        .reconcile_managed_agent_at(now + std::time::Duration::from_secs(5), false);
+    let info = harness.app.agent_info(0, harness.pane).unwrap();
+    // What agent.prompt_if_idle checks against the coordinator's session.
+    assert_eq!(
+        info.agent_session
+            .as_ref()
+            .map(|session| session.value.as_str()),
+        Some("saved-session")
+    );
+    assert_eq!(info.agent_status, schema::AgentStatus::Idle);
+    assert!(!info.launch_pending && info.interactive_ready);
+}
+
+#[tokio::test]
+async fn a_relaunch_that_fails_past_its_deadline_drops_the_update() {
+    let mut harness = codex_at_update_chooser();
+    let now = Instant::now();
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+    harness.exit_with("🎉 Update ran successfully! Please restart Codex.");
+    // The pane no longer takes input, so every relaunch attempt fails.
+    let (_, closed) = tokio::sync::mpsc::channel::<Bytes>(1);
+    harness.writes = closed;
+    harness.app.supervise_self_updates(now);
+    let late = now + SELF_UPDATE_EXIT_TIMEOUT + std::time::Duration::from_secs(1);
+    harness.app.supervise_self_updates(late);
+    // The pane is a plain shell: nothing can list an error for it, and a
+    // stale one must not show if a person starts the agent there by hand.
+    assert_eq!(harness.phase(), None);
+    assert!(harness.app.agent_info(0, harness.pane).is_none());
+}
+
+#[tokio::test]
+async fn an_older_codex_update_chooser_is_answered_too() {
+    let mut harness = codex_at_update_chooser();
+    let chooser = "\x1b[2J\x1b[H\u{2728} Update available! 0.153.0 -> 9.8.7\r\n\r\n\
+        Release notes: https://example\r\n\r\n\
+        \u{203a} 1. Update now (runs `npm install -g @openai/codex`)\r\n\
+        \x20 2. Skip\r\n\
+        \x20 3. Skip until next version\r\n\r\n\
+        Press enter to continue";
+    harness.show(chooser.as_bytes());
+    harness
+        .terminal()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Blocked);
+    assert!(crate::agents::manifest::auto_update(
+        AgentKind::Codex,
+        &harness
+            .app
+            .terminal_runtimes
+            .get(&harness.terminal_id)
+            .unwrap()
+            .visible_text()
+    )
+    .is_some());
+    assert!(harness.app.supervise_self_updates(Instant::now()));
+    assert!(harness.writes.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn updater_exiting_after_interrupt_grace_is_relaunched_for_manual_recovery() {
+    let mut harness = codex_at_update_chooser();
+    let now = Instant::now();
+    harness.terminal().reconcile_managed_agent_at(now, false);
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+    harness.show(b"\x1b[2J\x1b[HUpdating Codex via `npm install -g @openai/codex`...\r\n");
+    harness
+        .terminal()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    let late = now + SELF_UPDATE_INSTALL_TIMEOUT;
+    assert!(harness.app.supervise_self_updates(late));
+    assert_eq!(
+        harness.writes.try_recv().unwrap(),
+        Bytes::from_static(b"\x03")
+    );
+    assert!(harness
+        .app
+        .supervise_self_updates(late + SELF_UPDATE_EXIT_TIMEOUT));
+    // The updater is still on screen, so the error asks to stop it, not to
+    // answer a chooser that is not there.
+    let info = harness.app.agent_info(0, harness.pane).unwrap();
+    assert_eq!(info.dialog_id, None);
+    assert!(
+        info.update_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Stop it in")),
+        "{:?}",
+        info.update_error
+    );
+    // The updater eventually handles Ctrl-C, after Bus's exit grace elapsed.
+    harness.exit_with("^C");
+    harness.app.supervise_self_updates(
+        late + SELF_UPDATE_EXIT_TIMEOUT + std::time::Duration::from_secs(1),
+    );
+    let relaunch = harness.writes.try_recv().ok();
+    assert!(
+        relaunch.is_some(),
+        "late updater exit never relaunched Codex; phase={:?}",
+        harness.phase()
+    );
+    assert!(String::from_utf8_lossy(&relaunch.unwrap()).contains("codex"));
+}
