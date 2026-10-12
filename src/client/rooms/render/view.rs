@@ -61,15 +61,18 @@ impl View {
         self.hits.push(Hit { rect, action });
     }
 
-    /// The full path of the draft chip or history attachment on top at a cell.
-    pub(in crate::client::rooms) fn file_path_at(&self, column: u16, row: u16) -> Option<String> {
-        match self
-            .hits
+    /// The action of the topmost hit at a cell; later hits cover earlier ones.
+    pub(in crate::client::rooms) fn hit_at(&self, column: u16, row: u16) -> Option<&Action> {
+        self.hits
             .iter()
             .rev()
             .find(|h| h.rect.contains((column, row).into()))
             .map(|h| &h.action)
-        {
+    }
+
+    /// The full path of the draft chip or history attachment on top at a cell.
+    pub(in crate::client::rooms) fn file_path_at(&self, column: u16, row: u16) -> Option<String> {
+        match self.hit_at(column, row) {
             Some(Action::RemoveFile(path) | Action::OpenFile(path)) => {
                 Some(path.display().to_string())
             }

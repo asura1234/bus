@@ -128,13 +128,7 @@ impl BusUi {
         ready: bool,
         outcome: &mut ClientShellInput,
     ) -> Option<bool> {
-        let hit = self
-            .view
-            .hits
-            .iter()
-            .rev()
-            .find(|h| h.rect.contains((mouse.column, mouse.row).into()))
-            .map(|h| h.action.clone());
+        let hit = self.view.hit_at(mouse.column, mouse.row).cloned();
         if mouse.kind == MouseEventKind::Moved {
             let detail = self.view.file_path_at(mouse.column, mouse.row);
             self.detail_at = (mouse.column, mouse.row);
