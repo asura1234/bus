@@ -66,13 +66,17 @@ impl ClientShellState {
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
         bus.render(&mut buffer);
         Clear.render(self.layout(cols, rows).pane_surface, &mut buffer);
-        // The Bus cursor is the rename field's, if one is open.
-        let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, bus.cursor(), &[]);
+        let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
         blit_pane_surface(
             &mut frame,
             &surface.frame,
             self.layout(cols, rows).pane_surface,
         );
+        // The blit takes the pane's cursor; a Bus editor taking the keys (the
+        // inline rename field) keeps its own caret instead.
+        if let Some(cursor) = bus.cursor() {
+            frame.cursor = Some(cursor);
+        }
         // Preview geometry is stale: no pane mouse hits, graphics, selection or input leases.
         self.hits = ShellHitMap::default();
         self.presented_bus_terminal = Some(target.to_owned());

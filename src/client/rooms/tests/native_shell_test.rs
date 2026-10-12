@@ -735,7 +735,18 @@ fn renaming_the_open_agent_keeps_its_terminal_on_screen() {
         "an inline rename edits the sidebar; the terminal stays: {text}"
     );
     assert!(!text.contains("Opening agent"));
-    assert!(frame.cursor.is_some(), "the rename field keeps its cursor");
+    // The caret is the sidebar field's, not the pane's: keys go to the field.
+    let field = shell
+        .bus
+        .as_ref()
+        .unwrap()
+        .cursor()
+        .expect("rename field cursor");
+    assert!(field.x < shell.bus.as_ref().unwrap().view.sidebar.right());
+    assert_eq!(
+        frame.cursor.as_ref().map(|cursor| (cursor.x, cursor.y)),
+        Some((field.x, field.y))
+    );
     // The rename field, not the agent, takes the keys.
     assert!(shell.handle_input_bytes(b"x").requests.is_empty());
     assert!(shell
@@ -824,4 +835,105 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
         .pending
         .iter()
         .any(|p| matches!(&p.command,BusCommand::AddAgent(input) if input.consent_project_hooks)));
+}
+
+#[test]
+fn rename_preview_swallows_paste_text_and_pane_clicks() {
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    shell.bus.as_mut().unwrap().open_terminal(agent);
+    shell.compose(100, 30).unwrap();
+    shell.handle_raw_events(vec![RawInputEvent::Key(TerminalKey::new(
+        KeyCode::F(2),
+        KeyModifiers::NONE,
+    ))]);
+    shell.compose(100, 30).unwrap();
+    let outcome = shell.handle_raw_events(vec![
+        RawInputEvent::Paste("pasted".into()),
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 60,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }),
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollUp,
+            column: 60,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }),
+    ]);
+    assert!(
+        !outcome.requests.iter().any(|r| matches!(
+            r,
+            crate::protocol::wire::ClientMessage::ClientShellPaneInput { .. }
+        )),
+        "nothing reaches the agent pane while renaming: {:?}",
+        outcome.requests
+    );
+    assert!(shell
+        .bus
+        .as_ref()
+        .unwrap()
+        .rename
+        .as_ref()
+        .is_some_and(|rename| rename.editor.text.contains("pasted")));
+}
+
+#[test]
+fn rename_preview_survives_resize_and_enter_hands_keys_back_to_the_pane() {
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    shell.bus.as_mut().unwrap().open_terminal(agent);
+    shell.compose(100, 30).unwrap();
+    shell.handle_raw_events(vec![RawInputEvent::Key(TerminalKey::new(
+        KeyCode::F(2),
+        KeyModifiers::NONE,
+    ))]);
+    let frame = shell.compose(120, 40).unwrap();
+    let text: String = frame.cells.iter().map(|c| c.symbol.as_str()).collect();
+    assert!(
+        text.contains("LIVE"),
+        "resize during rename keeps the terminal: {text}"
+    );
+    assert!(!text.contains("Opening agent"));
+    shell.handle_raw_events(vec![RawInputEvent::Key(TerminalKey::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    ))]);
+    assert!(shell.bus.as_ref().unwrap().rename.is_none());
+    let frame = shell.compose(120, 40).unwrap();
+    let text: String = frame.cells.iter().map(|c| c.symbol.as_str()).collect();
+    assert!(text.contains("LIVE"));
+    let outcome = shell.handle_input_bytes(b"y");
+    assert!(outcome.requests.iter().any(|r| matches!(r,
+        crate::protocol::wire::ClientMessage::ClientShellPaneInput { pane_id, .. } if pane_id == "pane_1")));
+}
+
+#[test]
+fn rename_preview_keeps_the_field_cursor_when_the_pane_has_none() {
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    shell.pane_surface.as_mut().unwrap().frame.cursor = None;
+    shell.bus.as_mut().unwrap().open_terminal(agent);
+    shell.compose(100, 30).unwrap();
+    shell.handle_raw_events(vec![RawInputEvent::Key(TerminalKey::new(
+        KeyCode::F(2),
+        KeyModifiers::NONE,
+    ))]);
+    let frame = shell.compose(100, 30).unwrap();
+    let field = shell
+        .bus
+        .as_ref()
+        .unwrap()
+        .cursor()
+        .expect("rename field cursor");
+    assert_eq!(
+        frame.cursor.map(|cursor| (cursor.x, cursor.y)),
+        Some((field.x, field.y)),
+        "a pane without a caret must not erase the rename field's"
+    );
 }
