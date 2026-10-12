@@ -778,3 +778,147 @@ fn collapsed_question_inspection_retries_redraw_without_repeating_notice() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn redraw_error() -> TransportError {
+    TransportError {
+        code: Some("dialog_observation_unavailable".into()),
+        message: "Agent screen changed while it was being observed".into(),
+        definitely_rejected: true,
+    }
+}
+
+#[test]
+fn collapsed_question_inspection_retries_a_redraw_on_the_opening_read() {
+    struct RedrawOnOpen {
+        inner: CollapsedCodexQuestion,
+        observes: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for RedrawOnOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                self.observes
+                    .lock()
+                    .unwrap()
+                    .push(params.open_pending_question);
+                if params.open_pending_question {
+                    // The server queued Shift+Left, then Codex's redraw broke the snapshot.
+                    *self.inner.0.lock().unwrap() = true;
+                    return Err(redraw_error());
+                }
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let observes = Arc::default();
+    worker.transport = Box::new(RedrawOnOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        observes: Arc::clone(&observes),
+    });
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let observed = worker.observe_dialog(agent);
+    polls(&mut worker, 3);
+    assert!(observed.is_ok(), "{observed:?}");
+    assert!(observed.unwrap()["fingerprint"].is_string());
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    assert_eq!(*observes.lock().unwrap(), [true, false]);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dialog_inspection_gives_up_after_the_bounded_wait_when_redraws_never_settle() {
+    struct AlwaysRedrawing {
+        inner: CollapsedCodexQuestion,
+        observes: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for AlwaysRedrawing {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                self.observes
+                    .lock()
+                    .unwrap()
+                    .push(params.open_pending_question);
+                return Err(redraw_error());
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let observes = Arc::default();
+    worker.transport = Box::new(AlwaysRedrawing {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        observes: Arc::clone(&observes),
+    });
+    polls(&mut worker, 3);
+    let notice = worker.state.agent(agent).unwrap().dialog_notice.clone();
+    let started = std::time::Instant::now();
+    let observed = worker.observe_dialog(agent);
+    assert!(observed.is_err());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let observes = observes.lock().unwrap();
+    assert_eq!(observes.len(), 21, "one opening read plus 20 settle reads");
+    assert_eq!(observes.iter().filter(|open| **open).count(), 1);
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, notice);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn collapsed_question_inspection_waits_past_a_torn_frame_without_repeating_notice() {
+    // Codex replaces the collapsed queue with the opened question; a snapshot
+    // between the two shows neither, while the screen is still being drawn.
+    struct TornFrameDuringOpen {
+        inner: CollapsedCodexQuestion,
+        stage: u8,
+    }
+    impl Transport for TornFrameDuringOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                match self.stage {
+                    0 if params.open_pending_question => {
+                        self.stage = 1;
+                        let mut collapsed = params.clone();
+                        collapsed.open_pending_question = false;
+                        return self.inner.request(Method::AgentDialogObserve(collapsed));
+                    }
+                    1 => {
+                        self.stage = 2;
+                        *self.inner.0.lock().unwrap() = true;
+                        return Ok(ResponseResult::AgentDialog {
+                            observation: schema::AgentDialogObservation {
+                                pending_question: false,
+                                terminal_id: "terminal".into(),
+                                pane_id: "pane".into(),
+                                session_id: None,
+                                content_revision: 5,
+                                dialog: None,
+                            },
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    worker.transport = Box::new(TornFrameDuringOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        stage: 0,
+    });
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let observed = worker.observe_dialog(agent).unwrap();
+    polls(&mut worker, 3);
+    let notices = sent_by(&worker, room, agent).len();
+    assert_eq!(
+        notices, 1,
+        "a torn frame ended inspection with dialog={}; the opened question notified again",
+        observed["dialog"]
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
