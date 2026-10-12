@@ -3,6 +3,7 @@ use super::{
     mpsc, optional_bool, optional_text, required, schema, AgentId, BusEvent, Duration, Method,
     ResponseResult, RoomId, Worker,
 };
+use crate::messaging::native::TransportError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -97,23 +98,38 @@ impl Worker {
         session_id: Option<&str>,
         open_pending_question: bool,
     ) -> Result<schema::AgentDialogObservation, String> {
-        let response = self
-            .transport
-            .request(Method::AgentDialogObserve(
-                schema::AgentDialogObserveParams {
-                    target: pane_id.into(),
-                    open_pending_question,
-                },
-            ))
-            .map_err(|error| error.message)?;
+        self.native_dialog_checked(pane_id, terminal_id, session_id, open_pending_question)
+            .map_err(|error| error.message)
+    }
+
+    fn native_dialog_checked(
+        &mut self,
+        pane_id: &str,
+        terminal_id: &str,
+        session_id: Option<&str>,
+        open_pending_question: bool,
+    ) -> Result<schema::AgentDialogObservation, TransportError> {
+        let invalid = |message: &str| TransportError {
+            code: None,
+            message: message.into(),
+            definitely_rejected: true,
+        };
+        let response = self.transport.request(Method::AgentDialogObserve(
+            schema::AgentDialogObserveParams {
+                target: pane_id.into(),
+                open_pending_question,
+            },
+        ))?;
         let ResponseResult::AgentDialog { observation } = response else {
-            return Err("Unexpected native dialog response".into());
+            return Err(invalid("Unexpected native dialog response"));
         };
         if observation.terminal_id != terminal_id
             || observation.pane_id != pane_id
             || session_id.is_some_and(|session| observation.session_id.as_deref() != Some(session))
         {
-            return Err("Agent terminal or session changed; observe the dialog again".into());
+            return Err(invalid(
+                "Agent terminal or session changed; observe the dialog again",
+            ));
         }
         Ok(observation)
     }
@@ -123,18 +139,34 @@ impl Worker {
         id: AgentId,
     ) -> Result<Value, String> {
         let (room_id, launch_id, terminal_id, pane_id, session_id) = self.dialog_identity(id)?;
-        let mut observation =
-            self.native_dialog(&pane_id, &terminal_id, session_id.as_deref(), true)?;
-        // Shift+Left is queued once. Wait for Codex's redraw without blocking
-        // the native app thread or sending navigation again on every poll.
-        for _ in 0..DIALOG_SETTLE_POLLS {
-            if !observation.pending_question {
-                break;
+        let mut observation = None;
+        // Shift+Left is queued once. A redraw can temporarily prevent a coherent
+        // snapshot, including on that first read. Retry only that read error,
+        // within the same bounded wait, without sending navigation again.
+        for poll in 0..=DIALOG_SETTLE_POLLS {
+            if poll > 0 {
+                std::thread::sleep(DIALOG_SETTLE_INTERVAL);
             }
-            std::thread::sleep(DIALOG_SETTLE_INTERVAL);
-            observation =
-                self.native_dialog(&pane_id, &terminal_id, session_id.as_deref(), false)?;
+            match self.native_dialog_checked(
+                &pane_id,
+                &terminal_id,
+                session_id.as_deref(),
+                poll == 0,
+            ) {
+                Ok(current) => {
+                    let pending = current.pending_question;
+                    observation = Some(current);
+                    if !pending {
+                        break;
+                    }
+                }
+                Err(error)
+                    if error.code.as_deref() == Some("dialog_observation_unavailable")
+                        && poll < DIALOG_SETTLE_POLLS => {}
+                Err(error) => return Err(error.message),
+            }
         }
+        let observation = observation.ok_or("Agent dialog observation unavailable")?;
         // Inspection resolves an already-notified collapsed episode into its
         // concrete shape; opening the panel does not ask for help a second time.
         if self.state.agent(id).is_some_and(|agent| {

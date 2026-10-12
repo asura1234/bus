@@ -711,3 +711,70 @@ fn only_the_rooms_own_orchestrator_takes_messages_from_outside_its_room() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn collapsed_question_inspection_retries_redraw_without_repeating_notice() {
+    struct RedrawDuringOpen {
+        inner: CollapsedCodexQuestion,
+        stage: u8,
+        opens: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for RedrawDuringOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                if params.open_pending_question || self.stage > 0 {
+                    self.opens
+                        .lock()
+                        .unwrap()
+                        .push(params.open_pending_question);
+                    match self.stage {
+                        0 => {
+                            self.stage = 1;
+                            let mut pending = params.clone();
+                            pending.open_pending_question = false;
+                            return self.inner.request(Method::AgentDialogObserve(pending));
+                        }
+                        1 => {
+                            assert!(!params.open_pending_question);
+                            self.stage = 2;
+                            *self.inner.0.lock().unwrap() = true;
+                            return Err(TransportError {
+                                code: Some("dialog_observation_unavailable".into()),
+                                message: "Agent screen changed while it was being observed".into(),
+                                definitely_rejected: true,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let opens = Arc::default();
+    worker.transport = Box::new(RedrawDuringOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        stage: 0,
+        opens: Arc::clone(&opens),
+    });
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let observed = worker.observe_dialog(agent);
+    polls(&mut worker, 3);
+    let notices = sent_by(&worker, room, agent).len();
+    assert!(
+        observed.is_ok(),
+        "redraw aborted inspection: {observed:?}; notices={notices}"
+    );
+    assert!(observed.unwrap()["fingerprint"].is_string());
+    assert_eq!(
+        notices, 1,
+        "opening the same question must not notify twice"
+    );
+    let opens = opens.lock().unwrap();
+    assert_eq!(opens.iter().filter(|open| **open).count(), 1);
+    assert!(opens.len() >= 3, "must read again after the redraw error");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
