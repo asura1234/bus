@@ -389,8 +389,8 @@ impl BusState {
         if request.uncertain_outcome && !request.trusted_start_bound {
             return false;
         }
-        // Submitting can count only with a matching start binding; screen
-        // activity alone cannot confirm an uncertain submission.
+        // Screen activity alone cannot confirm an uncertain submission;
+        // a confirmed write may finish without a captured start hook.
         if !matches!(
             request.phase,
             RequestPhase::Submitting | RequestPhase::Active

@@ -12,7 +12,7 @@ use super::{AgentId, Author, BusState, Draft, Worker};
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
-/// Common prefix; each notice also names the worker and its inspection command.
+/// Common notice sentence; each notice also names the worker and its inspection command.
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
