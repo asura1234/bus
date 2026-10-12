@@ -6,7 +6,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pr_format_check import check_body, check_title, parse_template, run  # noqa: E402
+from pr_format_check import (  # noqa: E402
+    check_body,
+    check_title,
+    parse_body_template,
+    parse_title_types,
+    run,
+)
 from pr_goal_context import (  # noqa: E402
     build_context,
     extract_plan_section,
@@ -16,6 +22,11 @@ from pr_goal_context import (  # noqa: E402
 
 
 TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "references" / "pr-template.md"
+BODY_TEMPLATE_PATH = (
+    Path(__file__).resolve().parents[4] / ".github" / "pull_request_template.md"
+)
+GATE_EVIDENCE = "- [x] gate-and-fix — PASS, head `0123abc`, report `temp/gate-and-fix/b/round-1.md`"
+E2E_EVIDENCE = "- [x] e2e-test-tui — GREEN, head `0123abc`, report `temp/e2e-test-tui/run/report.md`"
 
 
 def valid_body() -> str:
@@ -40,8 +51,9 @@ def valid_body() -> str:
             "",
             "## 自测 / Agent 测",
             "",
+            E2E_EVIDENCE,
+            GATE_EVIDENCE,
             "- [x] `./run test cli`：通过",
-            "- [x] `./run lint check`：通过",
             "",
             "## 截图 / GIF",
             "",
@@ -58,8 +70,8 @@ def valid_draft_body() -> str:
     return (
         valid_body()
         .replace(
-            "- [x] `./run test cli`：通过\n- [x] `./run lint check`：通过",
-            "- [ ] Readiness verification：未提供",
+            f"{E2E_EVIDENCE}\n{GATE_EVIDENCE}\n- [x] `./run test cli`：通过",
+            "- [ ] e2e-test-tui — pending\n- [ ] gate-and-fix — pending",
         )
         .replace(
             "## 其他说明\n\n无",
@@ -71,9 +83,13 @@ def valid_draft_body() -> str:
 class PrFormatCheckTest(unittest.TestCase):
     def setUp(self) -> None:
         self.template_text = TEMPLATE_PATH.read_text(encoding="utf-8")
-        self.title_types, self.sections, self.placeholders = parse_template(
-            self.template_text
+        self.title_types = parse_title_types(self.template_text)
+        self.sections, self.placeholders, self.boxes = parse_body_template(
+            BODY_TEMPLATE_PATH.read_text(encoding="utf-8")
         )
+
+    def check(self, body: str, phase: str = "final") -> list[str]:
+        return check_body(body, self.sections, self.placeholders, self.boxes, phase=phase)
 
     def test_template_declares_types_and_sections(self) -> None:
         self.assertIn("feat", self.title_types)
@@ -93,42 +109,33 @@ class PrFormatCheckTest(unittest.TestCase):
 
     def test_valid_title_and_body_pass(self) -> None:
         self.assertEqual(check_title("[infra] 统一工作流校验", self.title_types), [])
-        self.assertEqual(check_body(valid_body(), self.sections, self.placeholders), [])
+        self.assertEqual(self.check(valid_body()), [])
 
     def test_draft_phase_allows_only_scoped_pending_items(self) -> None:
         body = valid_draft_body()
-        self.assertEqual(
-            check_body(body, self.sections, self.placeholders, phase="draft"), []
-        )
+        self.assertEqual(self.check(body, phase="draft"), [])
 
-        final_problems = check_body(body, self.sections, self.placeholders)
+        final_problems = self.check(body)
         self.assertTrue(any("unchecked boxes" in problem for problem in final_problems))
 
-        no_pending_test = body.replace(
-            "- [ ] Readiness verification：未提供",
-            "- [x] `./run test cli`：通过",
-        )
-        draft_problems = check_body(
-            no_pending_test, self.sections, self.placeholders, phase="draft"
-        )
+        draft_problems = self.check(valid_body(), phase="draft")
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
 
         malformed_pending_test = body.replace(
-            "- [ ] Readiness verification：未提供",
-            "- [ ]Readiness verification：未提供",
+            "- [ ] e2e-test-tui — pending\n- [ ] gate-and-fix — pending",
+            "- [ ]e2e-test-tui — pending\n- [ ]gate-and-fix — pending",
         )
-        draft_problems = check_body(
-            malformed_pending_test, self.sections, self.placeholders, phase="draft"
-        )
+        draft_problems = self.check(malformed_pending_test, phase="draft")
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
+
+        half_proven = body.replace("- [ ] gate-and-fix — pending", GATE_EVIDENCE)
+        self.assertEqual(self.check(half_proven, phase="draft"), [])
 
         unchecked_summary = body.replace(
             "- **主要变更**：校验 PR 工作流和验证证据",
             "- [ ] 摘要待补",
         )
-        draft_problems = check_body(
-            unchecked_summary, self.sections, self.placeholders, phase="draft"
-        )
+        draft_problems = self.check(unchecked_summary, phase="draft")
         self.assertTrue(
             any("section `摘要` contains unchecked" in problem for problem in draft_problems)
         )
@@ -141,62 +148,80 @@ class PrFormatCheckTest(unittest.TestCase):
 
     def test_body_rejects_missing_or_reordered_sections(self) -> None:
         body = valid_body().replace("## 其他说明", "## 备注")
-        problems = check_body(body, self.sections, self.placeholders)
+        problems = self.check(body)
         self.assertTrue(any("H2 sections" in problem for problem in problems))
 
     def test_body_rejects_missing_required_sections(self) -> None:
         body = valid_body().replace("## 截图 / GIF\n\n无 UI 变更\n\n", "")
-        problems = check_body(body, self.sections, self.placeholders)
+        problems = self.check(body)
         self.assertTrue(any("H2 sections" in problem for problem in problems))
 
     def test_body_rejects_unchecked_boxes_and_empty_self_test(self) -> None:
         body = valid_body().replace(
             "- [x] `./run test cli`：通过", "- [ ] `./run test cli`：未跑"
         )
-        problems = check_body(body, self.sections, self.placeholders)
+        problems = self.check(body)
         self.assertTrue(any("unchecked" in problem for problem in problems))
 
-        body = valid_body().replace("- [x] `./run test cli`：通过\n", "").replace(
-            "- [x] `./run lint check`：通过", "手工确认过"
+        body = valid_body().replace(
+            f"{E2E_EVIDENCE}\n{GATE_EVIDENCE}\n- [x] `./run test cli`：通过", "手工确认过"
         )
-        problems = check_body(body, self.sections, self.placeholders)
+        problems = self.check(body)
         self.assertTrue(any("at least one checked item" in problem for problem in problems))
 
-    def test_body_rejects_comments_and_invalid_size(self) -> None:
-        problems = check_body(
-            valid_body().replace("无 UI 变更", "<!-- 待补 -->"),
-            self.sections,
-            self.placeholders,
+    def test_template_self_test_boxes_are_required(self) -> None:
+        self.assertEqual(self.boxes, ["e2e-test-tui", "gate-and-fix"])
+
+        problems = self.check(valid_body().replace(f"{GATE_EVIDENCE}\n", ""))
+        self.assertTrue(any("exactly one `gate-and-fix` box" in problem for problem in problems))
+
+        problems = self.check(
+            valid_body().replace(GATE_EVIDENCE, f"{GATE_EVIDENCE}\n{GATE_EVIDENCE}")
         )
+        self.assertTrue(any("exactly one `gate-and-fix` box" in problem for problem in problems))
+
+    def test_checked_template_box_needs_head_and_report(self) -> None:
+        for unproven in (
+            "- [x] gate-and-fix",
+            "- [x] gate-and-fix — PASS, report `temp/gate-and-fix/b/round-1.md`",
+            "- [x] gate-and-fix — PASS, head `0123abc`",
+        ):
+            problems = self.check(valid_body().replace(GATE_EVIDENCE, unproven))
+            self.assertTrue(
+                any("checked `gate-and-fix` box must cite" in problem for problem in problems),
+                unproven,
+            )
+
+    def test_writing_guidance_names_only_template_sections(self) -> None:
+        """The guidance keys its rules by section name; a renamed template section must not leave it stale."""
+        guidance = [
+            line.removeprefix("### ")
+            for line in self.template_text.split("# PR 描述", 1)[1].splitlines()
+            if line.startswith("### ")
+        ]
+        self.assertEqual(guidance, self.sections)
+        self.assertNotIn("\n## ", self.template_text.split("# PR 描述", 1)[1])
+
+    def test_body_rejects_comments_and_invalid_size(self) -> None:
+        problems = self.check(valid_body().replace("无 UI 变更", "<!-- 待补 -->"))
         self.assertTrue(any("HTML comments" in problem for problem in problems))
 
-        problems = check_body(
-            valid_body().replace("- **大小**：`M`", "- **大小**：`巨大`"),
-            self.sections,
-            self.placeholders,
-        )
+        problems = self.check(valid_body().replace("- **大小**：`M`", "- **大小**：`巨大`"))
         self.assertTrue(any("大小" in problem for problem in problems))
 
     def test_placeholders_are_derived_from_the_template(self) -> None:
         """Placeholders must come from the template itself, not from a list hard-coded in the script.
 
         A hard-coded list covers only the few thought of at the time: the template's goal slots and
-        `[变更项 2]` could both slip through, and a PR body that keeps them would still pass, while the
+        the change-list slot could both slip through, and a PR body that keeps them would still pass, while the
         whole point of the gate is to block exactly this residue.
         """
-        self.assertIn("[变更项 2]", self.placeholders)
-        self.assertIn("[目标原文或 agent 撰写的目标]", self.placeholders)
-        self.assertIn("[非目标原文或无]", self.placeholders)
-        # Title-section examples are not body slots: the body may legitimately discuss which type to use.
-        for title_example in ("[feat]", "[fix]", "[infra]", "[类型]"):
-            self.assertNotIn(title_example, self.placeholders)
+        self.assertIn("[按主题列出变更，不罗列文件名]", self.placeholders)
+        self.assertIn("[这个 PR 要达成什么]", self.placeholders)
+        self.assertIn("[刻意不做的事；没有写「无」]", self.placeholders)
 
         for placeholder in self.placeholders:
-            problems = check_body(
-                valid_body().replace("无 UI 变更", placeholder),
-                self.sections,
-                self.placeholders,
-            )
+            problems = self.check(valid_body().replace("无 UI 变更", placeholder))
             self.assertTrue(
                 any("placeholder left in place" in problem for problem in problems),
                 f"未挡住模板占位符：{placeholder}",
@@ -212,14 +237,14 @@ class PrFormatCheckTest(unittest.TestCase):
             "无 UI 变更",
             "\n".join(["```markdown", "- [变更项 1]", "```", "见上"]),
         )
-        self.assertEqual(check_body(body, self.sections, self.placeholders), [])
+        self.assertEqual(self.check(body), [])
 
     def test_fenced_code_does_not_trigger_checks(self) -> None:
         body = valid_body().replace(
             "无 UI 变更",
             "\n".join(["```markdown", "- [ ] 这是代码示例", "<!-- 注释 -->", "```", "见上"]),
         )
-        self.assertEqual(check_body(body, self.sections, self.placeholders), [])
+        self.assertEqual(self.check(body), [])
 
     def test_run_validates_against_real_template(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
