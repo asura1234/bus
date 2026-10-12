@@ -187,6 +187,15 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
     std::mem::take(&mut sent).into_values().collect()
 }
 
+fn expected_blocked(worker: &Worker, id: AgentId) -> String {
+    format!(
+        "{} (agent {}). Blocked, needs help to continue.\nInspect: bus agent dialog {}",
+        worker.state.agent(id).unwrap().name,
+        id.0,
+        id.0
+    )
+}
+
 /// Worker blocks stay in their work room, and Bus authors no messages.
 fn assert_bus_sent_nothing(worker: &Worker) {
     assert!(worker
@@ -222,7 +231,7 @@ fn a_blocked_screen_without_an_open_dialog_does_not_queue_an_orchestrator_reques
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
-        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        [(Vec::new(), expected_blocked(&worker, agent))]
     );
     assert!(worker
         .state
@@ -244,7 +253,7 @@ fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
         "a single poll may be a redraw"
     );
     polls(&mut worker, 3);
-    let blocked = (vec![orchestrator], BLOCKED_MESSAGE.to_owned());
+    let blocked = (vec![orchestrator], expected_blocked(&worker, agent));
     assert_eq!(
         sent_by(&worker, room, agent),
         std::slice::from_ref(&blocked)
@@ -281,7 +290,7 @@ fn answering_adds_no_echo_and_a_new_dialog_is_a_new_episode() {
         .to_owned();
     let chosen = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
     assert_eq!(chosen["outcome"], "closed");
-    let blocked = (vec![orchestrator], BLOCKED_MESSAGE.to_owned());
+    let blocked = (vec![orchestrator], expected_blocked(&worker, agent));
     assert_eq!(
         sent_by(&worker, room, agent),
         std::slice::from_ref(&blocked),
@@ -319,7 +328,7 @@ fn without_an_orchestrator_the_blocked_worker_tells_the_developer() {
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
-        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        [(Vec::new(), expected_blocked(&worker, agent))]
     );
     // An agent's message to the developer is news: it counts as unread.
     assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
@@ -342,7 +351,7 @@ fn a_blocked_orchestrator_tells_the_developer_once_in_master() {
         notify_steady(&mut worker, orchestrator, Some(wait));
         assert_eq!(
             sent_by(&worker, master, orchestrator),
-            [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+            [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
         let master_room = worker.state.room(master).unwrap();
         let notice = &master_room.notices[0];
@@ -377,7 +386,7 @@ fn repeating_an_orchestrators_dialog_in_the_same_episode_adds_no_message() {
     }
     assert_eq!(
         sent_by(&worker, master, orchestrator),
-        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        [(Vec::new(), expected_blocked(&worker, orchestrator))]
     );
     assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
     drop(worker);
@@ -444,7 +453,7 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
             );
             assert_eq!(sent_by(&worker, room, sender).len(), 2);
 
-            let blocked = (recipients, BLOCKED_MESSAGE.to_owned());
+            let blocked = (recipients, expected_blocked(&worker, sender));
             assert_eq!(sent_by(&worker, room, sender), [blocked.clone(), blocked]);
             polls(&mut worker, 3);
             assert_eq!(sent_by(&worker, room, sender).len(), 2);
@@ -484,7 +493,7 @@ fn an_unblocked_orchestrator_reports_a_new_dialog_as_a_new_episode() {
     notify_steady(&mut worker, orchestrator, None);
     assert_eq!(sent_by(&worker, master, orchestrator).len(), 1);
     notify_steady(&mut worker, orchestrator, Some("question-id"));
-    let blocked = (Vec::new(), BLOCKED_MESSAGE.to_owned());
+    let blocked = (Vec::new(), expected_blocked(&worker, orchestrator));
     assert_eq!(
         sent_by(&worker, master, orchestrator),
         [blocked.clone(), blocked]
@@ -510,7 +519,7 @@ fn a_flicker_does_not_repeat_an_orchestrators_blocked_message() {
         }
         assert_eq!(
             sent_by(&worker, master, orchestrator),
-            [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+            [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
         assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
         drop(worker);
@@ -541,6 +550,142 @@ fn message_status_names_recipients_waiting_on_a_dialog() {
 }
 
 #[test]
+fn blocked_notice_identifies_worker_and_exact_inspection_command() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let messages = sent_by(&worker, room, agent);
+    assert_eq!(messages[0].0, vec![orchestrator.unwrap()]);
+    assert!(messages[0].1.contains("builder"), "{}", messages[0].1);
+    assert!(messages[0]
+        .1
+        .contains(&format!("bus agent dialog {}", agent.0)));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn message_status_rechecks_a_dialog_that_closed_between_polls() {
+    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    let receipt = worker
+        .control_send(
+            &json!({"room": room.0.to_string(), "to": [agent.0.to_string()], "text": "build it"}),
+        )
+        .unwrap();
+    let message = PromptId(receipt["message_id"].as_u64().unwrap());
+    screen.lock().unwrap().dialog = true;
+    worker.poll().unwrap();
+    screen.lock().unwrap().dialog = false;
+    // No status poll: the native observation is already clear.
+    let status = worker.control_message(message).unwrap();
+    assert_eq!(status["requests"][0]["dialog"], false);
+    assert_eq!(status["waiting_on_dialog"], json!([]));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A worker whose queued Codex question starts collapsed. The native list
+/// reports its pending-question id until `agent dialog` opens the panel, then
+/// the id of the expanded question parsed from the real capture.
+struct CollapsedCodexQuestion(Arc<Mutex<bool>>);
+
+impl Transport for CollapsedCodexQuestion {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let expanded = crate::agents::dialog::parse(include_str!(
+            "../../../../tests/fixtures/codex-question/expanded.txt"
+        ))
+        .expect("expanded Codex question parses");
+        let mut open = self.0.lock().unwrap();
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList {
+                agents: vec![serde_json::from_value(json!({
+                    "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
+                    "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
+                    "interactive_ready": true, "revision": 1, "agent_status": "blocked",
+                    "dialog_id": if *open { expanded.id() } else { "codex:pending_question".into() },
+                }))
+                .unwrap()],
+            }),
+            Method::AgentDialogObserve(params) => {
+                *open |= params.open_pending_question;
+                let mut observed = dialog();
+                observed.id = expanded.id();
+                Ok(ResponseResult::AgentDialog {
+                    observation: schema::AgentDialogObservation {
+                        pending_question: !*open,
+                        terminal_id: "terminal".into(),
+                        pane_id: "pane".into(),
+                        session_id: None,
+                        content_revision: 4,
+                        dialog: open.then_some(observed),
+                    },
+                })
+            }
+            _ => Ok(ResponseResult::Ok {}),
+        }
+    }
+}
+
+#[test]
+fn opening_a_collapsed_codex_question_does_not_repeat_the_blocked_notice() {
+    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
+    worker.transport = Box::new(CollapsedCodexQuestion(Arc::default()));
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1, "collapsed question");
+    // The orchestrator follows the notice's own inspection command.
+    worker.observe_dialog(agent).unwrap();
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(
+            vec![orchestrator.unwrap()],
+            expected_blocked(&worker, agent)
+        )],
+        "the same question, now expanded, is not a new blocked episode"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Lists agents like `FakeServer` but cannot read the screen, as while the
+/// native server restarts or the pane closes between polls.
+struct UnreadableScreen(FakeServer);
+
+impl Transport for UnreadableScreen {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentDialogObserve(_) => Err(TransportError {
+                code: None,
+                message: "native server unavailable".into(),
+                definitely_rejected: false,
+            }),
+            other => self.0.request(other),
+        }
+    }
+}
+
+#[test]
+fn message_status_still_answers_when_a_flagged_recipients_screen_is_unreadable() {
+    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    let receipt = worker
+        .control_send(
+            &json!({"room": room.0.to_string(), "to": [agent.0.to_string()], "text": "build it"}),
+        )
+        .unwrap();
+    let message = PromptId(receipt["message_id"].as_u64().unwrap());
+    screen.lock().unwrap().dialog = true;
+    worker.poll().unwrap();
+    worker.transport = Box::new(UnreadableScreen(FakeServer(screen.clone())));
+    let status = worker.control_message(message);
+    assert!(
+        status.is_ok(),
+        "a status read must not fail on a screen refresh: {status:?}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn only_the_rooms_own_orchestrator_takes_messages_from_outside_its_room() {
     let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
     let master = worker.state.master_room().unwrap().id;
@@ -563,6 +708,270 @@ fn only_the_rooms_own_orchestrator_takes_messages_from_outside_its_room() {
             .submit_message_from(room, draft(bystander), Author::Agent(agent), 1),
         Err(ModelError::AgentOutsideRoom(id)) if id == bystander
     ));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn collapsed_question_inspection_retries_redraw_without_repeating_notice() {
+    struct RedrawDuringOpen {
+        inner: CollapsedCodexQuestion,
+        stage: u8,
+        opens: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for RedrawDuringOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                if params.open_pending_question || self.stage > 0 {
+                    self.opens
+                        .lock()
+                        .unwrap()
+                        .push(params.open_pending_question);
+                    match self.stage {
+                        0 => {
+                            self.stage = 1;
+                            let mut pending = params.clone();
+                            pending.open_pending_question = false;
+                            return self.inner.request(Method::AgentDialogObserve(pending));
+                        }
+                        1 => {
+                            assert!(!params.open_pending_question);
+                            self.stage = 2;
+                            *self.inner.0.lock().unwrap() = true;
+                            return Err(TransportError {
+                                code: Some("dialog_observation_unavailable".into()),
+                                message: "Agent screen changed while it was being observed".into(),
+                                definitely_rejected: true,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let opens = Arc::default();
+    worker.transport = Box::new(RedrawDuringOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        stage: 0,
+        opens: Arc::clone(&opens),
+    });
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let observed = worker.observe_dialog(agent);
+    polls(&mut worker, 3);
+    let notices = sent_by(&worker, room, agent).len();
+    assert!(
+        observed.is_ok(),
+        "redraw aborted inspection: {observed:?}; notices={notices}"
+    );
+    assert!(observed.unwrap()["fingerprint"].is_string());
+    assert_eq!(
+        notices, 1,
+        "opening the same question must not notify twice"
+    );
+    let opens = opens.lock().unwrap();
+    assert_eq!(opens.iter().filter(|open| **open).count(), 1);
+    assert!(opens.len() >= 3, "must read again after the redraw error");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn redraw_error() -> TransportError {
+    TransportError {
+        code: Some("dialog_observation_unavailable".into()),
+        message: "Agent screen changed while it was being observed".into(),
+        definitely_rejected: true,
+    }
+}
+
+#[test]
+fn collapsed_question_inspection_retries_a_redraw_on_the_opening_read() {
+    struct RedrawOnOpen {
+        inner: CollapsedCodexQuestion,
+        observes: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for RedrawOnOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                self.observes
+                    .lock()
+                    .unwrap()
+                    .push(params.open_pending_question);
+                if params.open_pending_question {
+                    // The server queued Shift+Left, then Codex's redraw broke the snapshot.
+                    *self.inner.0.lock().unwrap() = true;
+                    return Err(redraw_error());
+                }
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let observes = Arc::default();
+    worker.transport = Box::new(RedrawOnOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        observes: Arc::clone(&observes),
+    });
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let observed = worker.observe_dialog(agent);
+    polls(&mut worker, 3);
+    assert!(observed.is_ok(), "{observed:?}");
+    assert!(observed.unwrap()["fingerprint"].is_string());
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    assert_eq!(*observes.lock().unwrap(), [true, false]);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dialog_inspection_gives_up_after_the_bounded_wait_when_redraws_never_settle() {
+    struct AlwaysRedrawing {
+        inner: CollapsedCodexQuestion,
+        observes: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for AlwaysRedrawing {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                self.observes
+                    .lock()
+                    .unwrap()
+                    .push(params.open_pending_question);
+                return Err(redraw_error());
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let observes = Arc::default();
+    worker.transport = Box::new(AlwaysRedrawing {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        observes: Arc::clone(&observes),
+    });
+    polls(&mut worker, 3);
+    let notice = worker.state.agent(agent).unwrap().dialog_notice.clone();
+    let started = std::time::Instant::now();
+    let observed = worker.observe_dialog(agent);
+    assert!(observed.is_err());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let observes = observes.lock().unwrap();
+    assert_eq!(observes.len(), 21, "one opening read plus 20 settle reads");
+    assert_eq!(observes.iter().filter(|open| **open).count(), 1);
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, notice);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn collapsed_question_inspection_waits_past_a_torn_frame_without_repeating_notice() {
+    // Codex replaces the collapsed queue with the opened question; a snapshot
+    // between the two shows neither, while the screen is still being drawn.
+    struct TornFrameDuringOpen {
+        inner: CollapsedCodexQuestion,
+        stage: u8,
+    }
+    impl Transport for TornFrameDuringOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                match self.stage {
+                    0 if params.open_pending_question => {
+                        self.stage = 1;
+                        let mut collapsed = params.clone();
+                        collapsed.open_pending_question = false;
+                        return self.inner.request(Method::AgentDialogObserve(collapsed));
+                    }
+                    1 => {
+                        self.stage = 2;
+                        *self.inner.0.lock().unwrap() = true;
+                        return Ok(ResponseResult::AgentDialog {
+                            observation: schema::AgentDialogObservation {
+                                pending_question: false,
+                                terminal_id: "terminal".into(),
+                                pane_id: "pane".into(),
+                                session_id: None,
+                                content_revision: 5,
+                                dialog: None,
+                            },
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    worker.transport = Box::new(TornFrameDuringOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        stage: 0,
+    });
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let observed = worker.observe_dialog(agent).unwrap();
+    polls(&mut worker, 3);
+    let notices = sent_by(&worker, room, agent).len();
+    assert_eq!(
+        notices, 1,
+        "a torn frame ended inspection with dialog={}; the opened question notified again",
+        observed["dialog"]
+    );
+    assert!(observed["fingerprint"].is_string());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn collapsed_question_inspection_bounds_the_wait_for_an_empty_replacement_frame() {
+    struct EmptyAfterOpen {
+        inner: CollapsedCodexQuestion,
+        observes: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for EmptyAfterOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                self.observes
+                    .lock()
+                    .unwrap()
+                    .push(params.open_pending_question);
+                let response = self.inner.request(method)?;
+                let ResponseResult::AgentDialog { mut observation } = response else {
+                    panic!("dialog response");
+                };
+                observation.pending_question = false;
+                observation.dialog = None;
+                return Ok(ResponseResult::AgentDialog { observation });
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let observes = Arc::default();
+    worker.transport = Box::new(EmptyAfterOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        observes: Arc::clone(&observes),
+    });
+    polls(&mut worker, 3);
+    let notice = worker.state.agent(agent).unwrap().dialog_notice.clone();
+    assert_eq!(
+        notice.as_deref(),
+        Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID)
+    );
+    let observed = worker.observe_dialog(agent).unwrap();
+    assert!(observed["dialog"].is_null());
+    assert!(observed["fingerprint"].is_null());
+    let observes = observes.lock().unwrap();
+    assert_eq!(
+        observes.len(),
+        21,
+        "pending episode waits through the full bound even if the opening read is empty"
+    );
+    assert_eq!(observes.iter().filter(|open| **open).count(), 1);
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, notice);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

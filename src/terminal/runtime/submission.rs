@@ -17,6 +17,10 @@ pub(crate) enum InputObservation {
     Accepted,
 }
 
+#[cfg(test)]
+#[path = "tests/submission_test.rs"]
+mod tests;
+
 /// The paste never rendered as Bus's draft, so no Enter was ever sent and the
 /// provider cannot have taken it; the unrecognised draft was cleared. Unlike a
 /// plain timeout this is a definite non-delivery, safe to try again.
@@ -101,8 +105,23 @@ impl ObservedSubmission {
 
     fn write(&self, bytes: Bytes, delay: Duration) -> io::Result<()> {
         self.check_deadline()?;
-        self.io
-            .queue_user_input_submission(bytes, Bytes::new(), delay, Some(self.deadline.get()))?
+        let guard = self
+            .content_lock
+            .lock()
+            .map_err(|_| io::Error::other(PromptNotShown))?;
+        // Rendering and paste enqueue share this lock, just like clear keys
+        // and Enter. A chooser can have replaced the empty composer since clear.
+        if self.observe() != InputObservation::Empty {
+            return Err(io::Error::other(PromptNotShown));
+        }
+        let completion = self.io.queue_user_input_submission(
+            bytes,
+            Bytes::new(),
+            delay,
+            Some(self.deadline.get()),
+        )?;
+        drop(guard);
+        completion
             .recv_timeout(
                 self.deadline
                     .get()
@@ -170,7 +189,16 @@ impl ObservedSubmission {
     }
 
     fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
-        self.clear_draft()?;
+        // No paste or Enter has been queued yet. A dialog that appeared after
+        // API validation is a definite non-delivery, safe to retain in FIFO.
+        if matches!(
+            self.observe(),
+            InputObservation::Unavailable | InputObservation::Accepted
+        ) {
+            return Err(io::Error::other(PromptNotShown));
+        }
+        self.clear_draft()
+            .map_err(|_| io::Error::other(PromptNotShown))?;
         self.write(text, delay)?;
         // Paste may be buffered by the provider after the PTY flush. Wait for
         // the owned draft to render before attempting the first Enter.

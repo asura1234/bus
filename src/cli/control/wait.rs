@@ -88,11 +88,16 @@ fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
             ),
         )));
     }
-    if requests.iter().all(|r| r["turn_ended"] == true) {
+    let ended = |r: &Value| {
+        r["turn_ended"] == true
+            && (r["stage"] == "replied"
+                || !(r["uncertain_outcome"] == true && r["start_bound"] != true))
+    };
+    if requests.iter().all(ended) {
         return Some(Ok(()));
     }
     // A finished turn whose reply was not captured is done for --async.
-    stalled(status, |r| r["turn_ended"] != true).map(Err)
+    stalled(status, |r| !ended(r)).map(Err)
 }
 
 /// The first stalled request (among those `relevant`) as a `message_stalled`

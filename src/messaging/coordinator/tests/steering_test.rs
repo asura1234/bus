@@ -22,8 +22,27 @@ struct Native(Arc<Mutex<Vec<Method>>>);
 
 impl Transport for Native {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let result = match &method {
+            Method::AgentPromptIfIdle(params) => ResponseResult::AgentPrompted {
+                agent: serde_json::from_value(json!({
+                    "terminal_id": params.expected_terminal_id,
+                    "pane_id": params.expected_pane_id,
+                    "agent": params.expected_agent,
+                    "agent_status": "idle",
+                    "interactive_ready": true,
+                    "workspace_id": "workspace", "tab_id": "tab",
+                    "focused": false, "revision": 1,
+                    "agent_session": {
+                        "source": "bus", "agent": params.expected_agent,
+                        "kind": "id", "value": params.expected_session_id,
+                    },
+                }))
+                .unwrap(),
+            },
+            _ => ResponseResult::Ok {},
+        };
         self.0.lock().unwrap().push(method);
-        Ok(ResponseResult::Ok {})
+        Ok(result)
     }
 }
 
@@ -323,6 +342,44 @@ fn typed_input_without_a_submit_hook_settles_after_a_short_wait() {
         fixture.reply(correction).as_deref(),
         Some("parser and tests written")
     );
+}
+
+#[test]
+fn uncertain_steering_without_its_own_start_can_complete_with_a_group_reply() {
+    struct UncertainNative;
+    impl Transport for UncertainNative {
+        fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
+            Ok(ResponseResult::Ok {})
+        }
+    }
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    fixture.worker.transport = Box::new(UncertainNative);
+    let correction = fixture.send("also add tests", false);
+    fixture.deliver();
+    assert!(fixture.request(correction).uncertain_outcome);
+    assert!(!fixture.request(correction).trusted_start_bound);
+    fixture.stopped("turn-1", "parser and tests written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(correction).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(correction).as_deref(),
+        Some("parser and tests written")
+    );
+    let status = fixture
+        .worker
+        .control_message(fixture.request(correction).prompt.id)
+        .unwrap();
+    assert_eq!(status["complete"], true);
+    assert_eq!(status["requests"][0]["turn_ended"], true);
+    assert_eq!(status["requests"][0]["uncertain_outcome"], true);
+    assert_eq!(status["requests"][0]["start_bound"], false);
+    assert_eq!(status["requests"][0]["group"], lead.0);
 }
 
 #[test]

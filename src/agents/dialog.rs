@@ -10,6 +10,8 @@
 
 use sha2::{Digest, Sha256};
 
+pub(crate) const CODEX_PENDING_QUESTION_ID: &str = "codex:pending_question";
+
 /// Characters that lead the selected option.
 const MARKERS: &[char] = &['❯', '›', '>', '→', '▶', '▸', '➤'];
 /// Words that only appear in a dialog's key hint line.

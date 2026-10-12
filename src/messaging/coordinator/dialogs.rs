@@ -12,8 +12,7 @@ use super::{AgentId, Author, BusState, Draft, Worker};
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
-/// The one text for every blocker. Bus is not an agent and adds no details:
-/// the orchestrator (or the developer) looks at the agent's terminal instead.
+/// Common notice sentence; each notice also names the worker and its inspection command.
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
@@ -88,6 +87,10 @@ impl Worker {
 fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
     let room = agent.room_id;
+    let text = format!(
+        "{} (agent {}). {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
+        agent.name, id.0, id.0
+    );
     if state.room(room).is_none() {
         return Ok(());
     }
@@ -103,7 +106,7 @@ fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<
             .submit_message_from(
                 room,
                 Draft {
-                    text: BLOCKED_MESSAGE.to_owned(),
+                    text,
                     files: Vec::new(),
                     recipient_ids: [orchestrator].into(),
                 },
@@ -112,7 +115,7 @@ fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<
             )
             .map(|_| ()),
         None => state
-            .post_to_developer(room, id, BLOCKED_MESSAGE.to_owned(), Vec::new(), now)
+            .post_to_developer(room, id, text, Vec::new(), now)
             .map(|_| ()),
     }
     .map_err(|error| error.to_string())

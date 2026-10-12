@@ -384,8 +384,13 @@ impl BusState {
         if request.phase == RequestPhase::Completed {
             return true;
         }
-        // Submitting counts too: an uncertain submit stays Submitting until a
-        // hook binds it, while the agent may already be working on it.
+        // An uncertain write without a matching provider start may be a
+        // startup dialog or unrelated activity, not work on this message.
+        if request.uncertain_outcome && !request.trusted_start_bound {
+            return false;
+        }
+        // Screen activity alone cannot confirm an uncertain submission;
+        // a confirmed write may finish without a captured start hook.
         if !matches!(
             request.phase,
             RequestPhase::Submitting | RequestPhase::Active

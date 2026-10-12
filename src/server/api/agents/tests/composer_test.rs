@@ -1,6 +1,65 @@
 use super::*;
 
 #[test]
+fn codex_approval_with_model_footer_is_not_an_editable_composer() {
+    let screen = "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace";
+    assert_eq!(
+        observe(AgentKind::Codex, screen, "first message"),
+        InputObservation::Unavailable
+    );
+}
+
+#[test]
+fn codex_trust_controls_are_never_owned_composer_input() {
+    for screen in [
+        "Hooks need review\n3 hooks are new or changed.\n› 1. Review hooks\n2. Trust all and continue\n3. Continue without trusting (hooks won't run)\nPress enter to confirm or esc to go back\n",
+        "> You are in /tmp/project\nDo you trust the contents of this directory?\n› 1. Yes, continue\n2. No, quit\nPress enter to continue\n",
+        include_str!("../../../../../tests/fixtures/codex-question/collapsed.txt"),
+    ] {
+        assert_eq!(observe(AgentKind::Codex, screen, "from bus"), InputObservation::Unavailable, "{screen}");
+    }
+}
+
+#[tokio::test]
+async fn startup_controls_visible_after_validation_receive_no_input() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    runtime.test_process_pty_bytes(
+        concat!(
+            "Hooks need review\r\n3 hooks are new or changed.\r\n",
+            "› 1. Review hooks\r\n2. Trust all and continue\r\n",
+            "3. Continue without trusting (hooks won't run)\r\n",
+            "Press enter to confirm or esc to go back\r\n",
+        )
+        .as_bytes(),
+    );
+    // The dialog appeared after native identity/readiness validation but
+    // before the asynchronous writer looked at the current screen.
+    let completion = runtime
+        .queue_observed_input_submission(
+            bytes::Bytes::from_static(b"first room message"),
+            bytes::Bytes::from_static(b"\r"),
+            vec![bytes::Bytes::from_static(b"\x01")],
+            std::time::Duration::ZERO,
+            None,
+            observer(AgentKind::Codex, "first room message".into()),
+        )
+        .unwrap();
+    let error = completion
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        writes.try_recv().is_err(),
+        "trust chooser must receive no editing keys, paste or Enter"
+    );
+    assert!(
+        crate::terminal::runtime::PromptNotShown::is(&error),
+        "{error}"
+    );
+}
+
+#[test]
 fn cursor_current_idle_and_steering_placeholders_are_empty_composers() {
     for placeholder in [
         "Plan, search, build anything",
@@ -278,4 +337,142 @@ fn current_cursor_composer_uses_an_arrow_prompt_inside_half_block_borders() {
         ),
         InputObservation::Empty
     );
+}
+
+#[test]
+fn codex_draft_quoting_approval_footer_text_is_still_our_pending_draft() {
+    for text in [
+        "Reply when you see Allow command? in your pane",
+        "If it says enter to submit answer, stop",
+    ] {
+        let screen = format!("history\n› {text}\n\n  gpt-5.6-sol · /repo");
+        assert_eq!(
+            observe(AgentKind::Codex, &screen, text),
+            InputObservation::Pending,
+            "{screen}"
+        );
+    }
+}
+
+#[test]
+fn codex_draft_with_a_numbered_list_is_still_our_pending_draft() {
+    let text = "1. run the tests\n2. open the PR";
+    let screen = "history\n› 1. run the tests\n  2. open the PR\n\n  gpt-5.6-sol · /repo";
+    assert_eq!(
+        observe(AgentKind::Codex, screen, text),
+        InputObservation::Pending,
+        "{screen}"
+    );
+}
+
+#[test]
+fn claude_draft_quoting_dynamic_workflow_prompt_is_still_our_pending_draft() {
+    let rule = "─".repeat(20);
+    let text = "If you see Run a dynamic workflow? press esc to cancel";
+    let screen = format!("● done\n\n{rule}\n❯\u{a0}{text}\n{rule}\n  ⏵⏵ auto mode on");
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, text),
+        InputObservation::Pending,
+        "{screen}"
+    );
+}
+
+#[tokio::test]
+async fn codex_numbered_list_message_is_submitted_after_its_draft_renders() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    runtime.test_process_pty_bytes("history\r\n›\r\n\r\n  gpt-5.6-sol · /repo".as_bytes());
+    let text = "1. run the tests\n2. open the PR";
+    let completion = runtime
+        .queue_observed_input_submission(
+            bytes::Bytes::from_static(b"1. run the tests\n2. open the PR"),
+            bytes::Bytes::from_static(b"\r"),
+            vec![bytes::Bytes::from_static(b"\x01")],
+            std::time::Duration::ZERO,
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
+            observer(AgentKind::Codex, text.into()),
+        )
+        .unwrap();
+    let paste = tokio::time::timeout(std::time::Duration::from_secs(2), writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(paste.starts_with(b"1. run"), "{paste:?}");
+    runtime.test_process_pty_bytes(
+        "\x1b[2J\x1b[Hhistory\r\n› 1. run the tests\r\n  2. open the PR\r\n\r\n  gpt-5.6-sol · /repo"
+            .as_bytes(),
+    );
+    let enter = tokio::time::timeout(std::time::Duration::from_secs(3), writes.recv()).await;
+    assert!(
+        matches!(&enter, Ok(Some(bytes)) if bytes.as_ref() == b"\r"),
+        "the rendered numbered-list draft must receive Enter: {enter:?}; result {:?}",
+        completion.recv_timeout(std::time::Duration::from_secs(1))
+    );
+    runtime.test_process_pty_bytes(
+        "\x1b[2J\x1b[Hhistory\r\n›\r\n\r\n  gpt-5.6-sol · /repo".as_bytes(),
+    );
+    assert!(completion
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap()
+        .is_ok());
+}
+
+#[test]
+fn claude_transcript_quoting_dynamic_workflow_prompt_leaves_an_empty_composer() {
+    let rule = "─".repeat(20);
+    let screen = format!(
+        "● Claude showed: Run a dynamic workflow? (esc to cancel)\n\n{rule}\n❯\u{a0}\n{rule}\n  ⏵⏵ auto mode on"
+    );
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, ""),
+        InputObservation::Empty,
+        "{screen}"
+    );
+}
+
+#[test]
+fn claude_draft_with_a_numbered_list_is_still_our_pending_draft() {
+    let rule = "─".repeat(20);
+    let text = "1. run the tests\n2. open the PR";
+    let screen = format!(
+        "● done\n\n{rule}\n❯\u{a0}1. run the tests\n  2. open the PR\n{rule}\n  ⏵⏵ auto mode on"
+    );
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, text),
+        InputObservation::Pending,
+        "{screen}"
+    );
+}
+
+#[test]
+fn captured_dialogs_are_never_editable_composers() {
+    let rule = "─".repeat(64);
+    let claude_bash = format!(
+        "{rule}\n Bash command\n\n   curl -sS -o /tmp/probe.html https://example.com\n   Download example.com to /tmp/probe.html\n\n This command requires approval\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again for: curl *\n   3. No\n\n Esc to cancel · Tab to amend · ctrl+e to explain\n"
+    );
+    let claude_trust = format!(
+        "{rule}\n Accessing workspace:\n\n /Users/dev/work/bus\n\n Quick safety check: Is this a project you created or one you trust?\n\n Claude Code'll be able to read, edit, and execute files here.\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel\n"
+    );
+    let claude_question = "☐ Approach\n\nWhich storage should the cache use?\n\n❯ 1. Redis\n     Shared across workers\n  2. In memory\n     Fastest, lost on restart\n  3. Type something.\n────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n";
+    for screen in [claude_bash.as_str(), claude_trust.as_str(), claude_question] {
+        assert_eq!(
+            observe(AgentKind::Claude, screen, "from bus"),
+            InputObservation::Unavailable,
+            "{screen}"
+        );
+    }
+    for screen in [
+        "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
+        "Which option should I use?\n\n› 1. Alpha\n  2. Beta\n\nEnter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
+        include_str!("../../../../../tests/fixtures/codex-question/expanded.txt"),
+        include_str!("../../../../../tests/fixtures/codex-question/other-selected.txt"),
+        include_str!("../../../../../tests/fixtures/codex-question/other-typed.txt"),
+        include_str!("../../../../../tests/fixtures/codex-update/chooser-0.162.txt"),
+    ] {
+        assert_eq!(
+            observe(AgentKind::Codex, screen, "from bus"),
+            InputObservation::Unavailable,
+            "{screen}"
+        );
+    }
 }

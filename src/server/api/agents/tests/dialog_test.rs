@@ -1,6 +1,46 @@
 use super::*;
 
 #[tokio::test]
+async fn missed_blocker_screen_payload_is_excluded_by_dev_logging_policy() {
+    let (mut app, _) = app_with_dialog(b"private-token=dialog-secret-value\r\n", None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+        .attached_terminal_id
+        .clone();
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Claude), AgentState::Blocked);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run_filtered(crate::utils::logging::DEV_FILTER, || {
+        let observed = observe_dialog(&mut app);
+        assert!(observed.dialog.is_none());
+    });
+    let log = capture.text();
+    assert!(
+        log.contains("bus.dialog.observed"),
+        "metadata must remain observable: {log}"
+    );
+    assert!(
+        !log.contains("dialog-secret-value"),
+        "dev logging must exclude screen payloads: {log}"
+    );
+    assert!(
+        log.contains("screen_hash"),
+        "snapshot identity remains available: {log}"
+    );
+    let trace = crate::utils::logging::test_capture::Capture::default();
+    trace.run_filtered("trace", || {
+        observe_dialog(&mut app);
+    });
+    assert!(
+        !trace.text().contains("dialog-secret-value"),
+        "even unrestricted trace must contain no screen payload"
+    );
+}
+
+#[tokio::test]
 async fn agent_dialog_answer_pastes_literal_text_then_enters_and_encodes_skip() {
     let (mut app, mut writes) = app_with_dialog(CODEX_TEXT_DIALOG, Some("session"));
     let pane = app.state.workspaces[0].tabs[0].root_pane;
@@ -295,6 +335,10 @@ async fn codex_queued_question_native_controls_are_guarded_and_answer_focused_ot
     };
     assert!(passive.pending_question);
     assert!(passive.dialog.is_none());
+    assert!(
+        app.agent_info(0, pane).unwrap().dialog_id.is_some(),
+        "collapsed question must reach coordinator dialog polling"
+    );
     assert!(writes.try_recv().is_err());
     let other = include_str!("../../../../../tests/fixtures/codex-question/other-selected.txt");
     app.lookup_runtime_sender(0, pane)
@@ -329,4 +373,33 @@ async fn codex_queued_question_native_controls_are_guarded_and_answer_focused_ot
     ));
     assert!(!stale.written);
     assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn dialog_observation_rejects_frames_inside_synchronized_output() {
+    let (mut app, _) = app_with_dialog(CLAUDE_BASH_DIALOG, None);
+    assert!(observe_dialog(&mut app).dialog.is_some());
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    // A provider starts an atomic redraw, clears its panel, then pauses
+    // before drawing the replacement and ending the synchronized update.
+    runtime.test_process_pty_bytes(b"\x1b[?2026h\x1b[2J\x1b[H");
+    assert!(runtime.synchronized_output_active());
+    let response = app.handle_agent_dialog_observe(
+        "mid-update".into(),
+        crate::protocol::api::schema::AgentDialogObserveParams {
+            target: "reviewer".into(),
+            open_pending_question: false,
+        },
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        response["error"]["code"], "dialog_observation_unavailable",
+        "{response}"
+    );
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.test_process_pty_bytes(CLAUDE_BASH_DIALOG);
+    runtime.test_process_pty_bytes(b"\x1b[?2026l");
+    assert!(!runtime.synchronized_output_active());
+    assert!(observe_dialog(&mut app).dialog.is_some());
 }
