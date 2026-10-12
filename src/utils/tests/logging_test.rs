@@ -34,6 +34,7 @@ fn rotate_files_shifts_existing_generations() {
         current_size: 0,
         disabled: false,
         archive_signal: None,
+        shared_lock: None,
     };
     state.rotate_files().unwrap();
 
@@ -191,7 +192,7 @@ fn archives(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name != "bus.log")
+        .filter(|name| name != "bus.log" && name != "bus.log.lock")
         .collect();
     names.sort();
     names
@@ -377,6 +378,7 @@ fn archive_rotation_enforces_cap_before_background_maintenance() {
         current_size: 0,
         disabled: false,
         archive_signal: Some(signal),
+        shared_lock: None,
     };
     for _ in 0..4 {
         state.rotate_if_needed(8).unwrap();
@@ -521,4 +523,125 @@ fn archive_maintenance_counts_a_half_finished_compression_once() {
         [text],
         "the only archive, well under the cap, was evicted"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn archive_prewrite_check_preserves_lines_if_rotation_happens_before_append() {
+    let path = temp_log_path("rotation-after-prewrite-check");
+    let dir = path.parent().unwrap().to_path_buf();
+    let options = |max_bytes| LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes,
+        retention: Retention::Archive(ArchivePolicy {
+            max_age: 24 * HOUR,
+            max_total_bytes: 1024 * 1024,
+        }),
+        dev: true,
+    };
+    let rotating = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options(8)).unwrap();
+    let other = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options(1024)).unwrap();
+    rotating.make_writer().write_all(b"AAAAAAAA").unwrap();
+    // Exercise the phases of RotatingFileGuard::write (shared lock, preflight,
+    // append) with another writer scheduled between preflight and append.
+    // Holding this writer's mutex does not lock the other writer's state.
+    let mut state = other.state.lock().unwrap();
+    let shared = state.lock_shared();
+    state.rotate_if_needed(b"OTHER_LINE".len() as u64).unwrap();
+    let rotating_write = std::thread::spawn(move || {
+        rotating.make_writer().write_all(b"BBBBBBBB").unwrap();
+        rotating
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    state
+        .file
+        .as_mut()
+        .unwrap()
+        .write_all(b"OTHER_LINE")
+        .unwrap();
+    state.current_size += b"OTHER_LINE".len() as u64;
+    drop(shared);
+    drop(state);
+    let rotating = rotating_write.join().unwrap();
+    wait_for_compressed_archives(&dir);
+    let mut kept = fs::read_to_string(&path).unwrap();
+    for name in archives(&dir) {
+        kept.push_str(&gunzip(&dir.join(name)));
+    }
+    drop(other);
+    drop(rotating);
+    let _ = fs::remove_dir_all(dir);
+    assert_eq!(
+        kept.matches("OTHER_LINE").count(),
+        1,
+        "each successfully appended line must survive exactly once: {kept:?}"
+    );
+}
+
+#[test]
+fn archive_shared_active_file_stays_within_its_size_budget() {
+    let path = temp_log_path("shared-active-size-budget");
+    let dir = path.parent().unwrap().to_path_buf();
+    let options = LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes: 8,
+        retention: Retention::Archive(ArchivePolicy {
+            max_age: 24 * HOUR,
+            max_total_bytes: 1024 * 1024,
+        }),
+        dev: true,
+    };
+    let first = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    let second = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    first.make_writer().write_all(b"AAAA").unwrap();
+    second.make_writer().write_all(b"BBBB").unwrap();
+    first.make_writer().write_all(b"CCCC").unwrap();
+    let active_bytes = fs::metadata(&path).unwrap().len();
+    drop(first);
+    drop(second);
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        active_bytes <= options.max_bytes,
+        "shared active log uses {active_bytes} bytes, budget {}",
+        options.max_bytes
+    );
+}
+
+/// Two clients that both write and both rotate the shared log keep every line
+/// exactly once across the live file and the archives.
+#[test]
+fn archive_rotation_by_two_writers_keeps_each_line_exactly_once() {
+    let path = temp_log_path("archive-two-rotating-writers");
+    let dir = path.parent().unwrap().to_path_buf();
+    let options = LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes: 64,
+        retention: Retention::Archive(ArchivePolicy {
+            max_age: 24 * HOUR,
+            max_total_bytes: u64::MAX,
+        }),
+        dev: true,
+    };
+    let first = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    let second = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    let mut expected = Vec::new();
+    for index in 0..300 {
+        let line = format!("line-{index:04}\n");
+        let writer = if index % 3 == 0 { &first } else { &second };
+        writer.make_writer().write_all(line.as_bytes()).unwrap();
+        expected.push(line);
+        std::thread::sleep(Duration::from_micros(50));
+    }
+    wait_for_compressed_archives(&dir);
+
+    let mut kept = fs::read_to_string(&path).unwrap();
+    for name in archives(&dir) {
+        kept.push_str(&gunzip(&dir.join(name)));
+    }
+    let _ = fs::remove_dir_all(&dir);
+    let wrong: Vec<_> = expected
+        .iter()
+        .filter(|line| kept.matches(line.as_str()).count() != 1)
+        .collect();
+    assert!(wrong.is_empty(), "lines lost or duplicated: {wrong:?}");
 }

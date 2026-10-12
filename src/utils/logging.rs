@@ -155,8 +155,10 @@ impl RotatingFileMakeWriter {
             current_size: 0,
             disabled: false,
             archive_signal: None,
+            shared_lock: None,
         };
         if let Retention::Archive(policy) = options.retention {
+            state.shared_lock = Some(open_shared_lock(&state.path)?);
             state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
         }
         state.open_current_file()?;
@@ -188,6 +190,9 @@ impl Write for RotatingFileGuard {
         if state.disabled {
             return Ok(buf.len());
         }
+        // Held across check, rotation and append so no other process sharing
+        // this log renames it or appends to it in between.
+        let _shared = state.lock_shared();
         if state.rotate_if_needed(buf.len() as u64).is_err() {
             state.disabled = true;
             return Ok(buf.len());
@@ -237,12 +242,50 @@ struct RotatingFileState {
     disabled: bool,
     /// Wakes the archive worker; it also runs once at startup for leftovers.
     archive_signal: Option<mpsc::Sender<()>>,
+    /// `<log>.lock`, shared by every process writing this log (archive mode).
+    shared_lock: Option<File>,
+}
+
+/// Releases the cross-process log lock on drop.
+struct SharedLogLock(Option<File>);
+
+impl Drop for SharedLogLock {
+    fn drop(&mut self) {
+        if let Some(lock) = &self.0 {
+            let _ = lock.unlock();
+        }
+    }
+}
+
+fn open_shared_lock(path: &Path) -> io::Result<File> {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".lock");
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(PathBuf::from(name))
 }
 
 impl RotatingFileState {
+    /// Blocks until this process holds the log's cross-process lock. Without
+    /// a shared lock, or if locking fails, writing goes on unserialized.
+    fn lock_shared(&self) -> SharedLogLock {
+        let lock = self
+            .shared_lock
+            .as_ref()
+            .and_then(|lock| lock.try_clone().ok());
+        SharedLogLock(lock.filter(|lock| lock.lock().is_ok()))
+    }
+
     fn rotate_if_needed(&mut self, incoming_len: u64) -> io::Result<()> {
         if self.file.is_none() || self.rotated_by_another_writer() {
             self.open_current_file()?;
+        } else if self.shared_lock.is_some() {
+            // Other writers append to the same file; count their bytes too.
+            if let Some(len) = self.file.as_ref().and_then(|file| file.metadata().ok()) {
+                self.current_size = len.len();
+            }
         }
         if self.current_size.saturating_add(incoming_len) <= self.max_bytes {
             return Ok(());
