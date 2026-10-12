@@ -159,29 +159,7 @@ impl App {
                 "Pane identity is unavailable",
             );
         };
-        let terminal = &self.state.terminals[&terminal_id];
-        let owned = if params.close_exited_shell {
-            // The provider exited in this exact terminal and released its
-            // managed name; only an idle shell remains. A running command, a
-            // detected agent or any managed name means the pane is in use.
-            terminal.agent_name.is_none()
-                && terminal.managed_agent_kind().is_none()
-                && pane.agent.is_none()
-                && self
-                    .terminal_runtimes
-                    .get(&terminal_id)
-                    .is_some_and(|runtime| {
-                        crate::server::terminals::agents::available_shell_name(runtime).is_some()
-                    })
-        } else {
-            pane.agent.as_deref() == Some(params.expected_agent.as_str())
-                && terminal.agent_name.as_deref() == Some(params.expected_managed_name.as_str())
-                && pane
-                    .agent_session
-                    .as_ref()
-                    .map(|session| session.value.as_str())
-                    == params.expected_session_id.as_deref()
-        };
+        let owned = self.close_guard_owns(&params, &pane, &terminal_id);
         if pane.terminal_id != params.expected_terminal_id
             || pane.pane_id != params.pane_id
             || !owned
@@ -224,6 +202,38 @@ impl App {
                 pane_id: params.pane_id,
             },
         )
+    }
+
+    /// Whether the guarded close may stop this terminal: it still runs the
+    /// expected provider session under the Bus managed name, or, for
+    /// `close_exited_shell`, the provider exited, released that name, and only
+    /// an idle shell remains. A running command, a detected agent or any
+    /// managed name means the pane is in use.
+    fn close_guard_owns(
+        &self,
+        params: &crate::protocol::api::schema::PaneCloseIfIdentityParams,
+        pane: &crate::protocol::api::schema::PaneInfo,
+        terminal_id: &crate::utils::ids::TerminalId,
+    ) -> bool {
+        let terminal = &self.state.terminals[terminal_id];
+        if params.close_exited_shell {
+            return terminal.agent_name.is_none()
+                && terminal.managed_agent_kind().is_none()
+                && pane.agent.is_none()
+                && self
+                    .terminal_runtimes
+                    .get(terminal_id)
+                    .is_some_and(|runtime| {
+                        crate::server::terminals::agents::available_shell_name(runtime).is_some()
+                    });
+        }
+        pane.agent.as_deref() == Some(params.expected_agent.as_str())
+            && terminal.agent_name.as_deref() == Some(params.expected_managed_name.as_str())
+            && pane
+                .agent_session
+                .as_ref()
+                .map(|session| session.value.as_str())
+                == params.expected_session_id.as_deref()
     }
 
     /// Close a pane; `Err` carries the encoded error response.

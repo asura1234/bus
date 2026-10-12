@@ -145,30 +145,12 @@ impl Worker {
                         // shell. That idle shell in Bus's own terminal is closed;
                         // anything running in it now is not ours, so the server
                         // refuses and the terminal is left open.
-                        let (pane, terminal) =
-                            (left_open.pane_id.clone(), left_open.terminal_id.clone());
-                        if self.close_exited_shell(
-                            &pane,
-                            &terminal,
+                        return Ok(self.close_exited_shell(
+                            left_open,
                             kind,
                             &managed_name,
-                            expected_session.clone(),
-                        ) {
-                            tracing::info!(event = "bus.deletion.exited_shell_closed", agent_id = id.0,
-                                pane_id = %left_open.pane_id, terminal_id = %left_open.terminal_id,
-                                "Closed the idle shell the exited provider left");
-                            return Ok(None);
-                        }
-                        tracing::info!(event = "bus.deletion.terminal_released", agent_id = id.0,
-                            pane_id = %left_open.pane_id, terminal_id = %left_open.terminal_id,
-                            "Native terminal no longer carries the Bus managed name; left open");
-                        return Ok(Some(LeftOpenTerminal::new(
-                            id,
-                            left_open.agent_name,
-                            left_open.pane_id,
-                            left_open.terminal_id,
-                            LeftOpenReason::ProviderExited,
-                        )));
+                            expected_session,
+                        ));
                     }
                     if expected_session.as_deref().is_some_and(|expected| {
                         self.owned_terminal_session_moved(&left_open, kind, &managed_name, expected)
@@ -280,20 +262,20 @@ impl Worker {
         ))
     }
 
-    /// Close the agent's own terminal when only an idle shell remains in it.
+    /// Close the agent's own terminal when only an idle shell remains in it,
+    /// else return it as left open: what runs there now is not Bus's.
     fn close_exited_shell(
         &mut self,
-        pane: &str,
-        terminal: &str,
+        terminal: LeftOpenTerminal,
         kind: &str,
         managed_name: &str,
         session: Option<String>,
-    ) -> bool {
-        matches!(
+    ) -> Option<LeftOpenTerminal> {
+        let closed = matches!(
             self.transport.request(Method::PaneCloseIfIdentity(
                 schema::PaneCloseIfIdentityParams {
-                    pane_id: pane.into(),
-                    expected_terminal_id: terminal.into(),
+                    pane_id: terminal.pane_id.clone(),
+                    expected_terminal_id: terminal.terminal_id.clone(),
                     expected_agent: kind.into(),
                     expected_managed_name: managed_name.into(),
                     expected_session_id: session,
@@ -301,7 +283,23 @@ impl Worker {
                 },
             )),
             Ok(ResponseResult::Ok {})
-        )
+        );
+        if closed {
+            tracing::info!(event = "bus.deletion.exited_shell_closed", agent_id = terminal.agent_id.0,
+                pane_id = %terminal.pane_id, terminal_id = %terminal.terminal_id,
+                "Closed the idle shell the exited provider left");
+            return None;
+        }
+        tracing::info!(event = "bus.deletion.terminal_released", agent_id = terminal.agent_id.0,
+            pane_id = %terminal.pane_id, terminal_id = %terminal.terminal_id,
+            "Native terminal no longer carries the Bus managed name; left open");
+        Some(LeftOpenTerminal::new(
+            terminal.agent_id,
+            terminal.agent_name,
+            terminal.pane_id,
+            terminal.terminal_id,
+            LeftOpenReason::ProviderExited,
+        ))
     }
 
     /// `agent.list` includes every terminal carrying a managed name, even with
