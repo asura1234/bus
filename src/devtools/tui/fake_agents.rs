@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Instant;
 
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
@@ -81,10 +83,11 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
     if !agent.codex() {
         agent.session_start();
     }
-    agent.draw_prompt("");
+    agent.draw_prompt();
     if crossterm::terminal::enable_raw_mode().is_err() {
         return 1;
     }
+    agent.input = Some(read_input());
     let code = agent.read_loop();
     let _ = crossterm::terminal::disable_raw_mode();
     code
@@ -93,7 +96,7 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
 /// Where the provider being played reads Bus's hooks: Claude from the
 /// `--settings` file Bus passes it, Codex from the nearest `.codex/hooks.json`
 /// at or above its directory, which Bus writes there before launching it.
-pub(super) fn hooks_path(provider: &str, args: &[String], cwd: &Path) -> Option<PathBuf> {
+fn hooks_path(provider: &str, args: &[String], cwd: &Path) -> Option<PathBuf> {
     if provider == "codex" {
         cwd.ancestors()
             .map(|dir| dir.join(".codex/hooks.json"))
@@ -117,6 +120,19 @@ struct FakeAgent {
     turns: u64,
     /// Images attached so far; Claude numbers `[Image #N]` across a session.
     images: usize,
+    /// Terminal input, read on its own thread so a Codex turn can take typing.
+    input: Option<mpsc::Receiver<Vec<u8>>>,
+    /// Bytes of an unfinished input sequence.
+    pending: Vec<u8>,
+    draft: String,
+    /// While a Codex turn runs: when it started and its spinner frame.
+    working: Option<(Instant, usize)>,
+}
+
+/// What a keystroke ended in, besides editing the draft.
+enum Typed {
+    Submit(String),
+    Exit,
 }
 
 impl FakeAgent {
@@ -127,6 +143,10 @@ impl FakeAgent {
             session: pseudo_uuid(),
             turns: 0,
             images: 0,
+            input: None,
+            pending: Vec::new(),
+            draft: String::new(),
+            working: None,
         }
     }
 
@@ -152,43 +172,34 @@ impl FakeAgent {
         payload
     }
 
-    /// Runs Bus's hook command for `event` with its payload on stdin.
+    /// Runs every command hook for `event`, in file order, with its payload on
+    /// stdin. A project's `.codex/hooks.json` keeps its own hooks before the
+    /// one Bus appends, and Codex runs them all; Claude's `--settings` holds
+    /// only Bus's.
     fn hook(&self, event: &str, turn: Option<&str>, payload: Value) {
-        let Some(command) = self.hooks[event][0]["hooks"][0]["command"].as_str() else {
-            return;
-        };
-        let payload = self.payload(event, turn, payload);
-        let shell = if cfg!(windows) {
-            ("cmd", "/C")
-        } else {
-            ("sh", "-c")
-        };
-        let Ok(mut child) = Command::new(shell.0)
-            .args([shell.1, command])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
-            return;
-        };
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.to_string().as_bytes());
+        let payload = self.payload(event, turn, payload).to_string();
+        let commands = self.hooks[event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten())
+            .filter_map(|hook| hook["command"].as_str());
+        for command in commands {
+            run_hook(command, &payload);
         }
-        let _ = child.wait();
     }
 
     fn session_start(&self) {
         self.hook("SessionStart", None, json!({"source": "startup"}));
     }
 
-    /// Draws an empty prompt under the transcript: Claude's box opens with a
-    /// rule, Codex's composer with a blank row.
-    fn draw_prompt(&self, draft: &str) {
+    /// Draws the prompt under the transcript: Claude's box opens with a rule,
+    /// Codex's composer with a blank row.
+    fn draw_prompt(&self) {
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", prompt_top(&self.provider));
         let _ = out.flush();
-        self.redraw(draft);
+        self.redraw();
     }
 
     /// The draft as the played provider shows and submits it, with the images
@@ -201,15 +212,47 @@ impl FakeAgent {
         }
     }
 
-    fn redraw(&self, draft: &str) {
-        let (shown, _) = self.lift(draft);
+    /// Redraws the prompt in place, under the working line while a turn runs.
+    fn redraw(&self) {
+        let (shown, _) = self.lift(&self.draft);
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
+        let frame = match self.working {
+            Some((started, frame)) => {
+                let line = working_line(true, frame, started.elapsed().as_secs());
+                working_block(&line, &shown, true, cols)
+            }
+            None => prompt_box(&shown, &self.provider, cols),
+        };
         let mut out = std::io::stdout();
-        let _ = write!(out, "{}", prompt_box(&shown, &self.provider, cols));
+        let _ = write!(out, "{frame}");
         let _ = out.flush();
     }
 
-    fn submit(&mut self, prompt: &str) {
+    /// Applies one input to the draft, redrawing it.
+    fn apply(&mut self, input: Input) -> Option<Typed> {
+        match input {
+            Input::Text(text) => self.draft.push_str(&text),
+            Input::Backspace => {
+                if self.draft.pop().is_none() {
+                    return None;
+                }
+            }
+            Input::KillLine => kill_line(&mut self.draft),
+            Input::Enter if !self.draft.trim().is_empty() => {
+                let draft = std::mem::take(&mut self.draft);
+                let (prompt, images) = self.lift(&draft);
+                self.images += images;
+                return Some(Typed::Submit(prompt));
+            }
+            Input::Enter => return None,
+            Input::Interrupt => return Some(Typed::Exit),
+        }
+        self.redraw();
+        None
+    }
+
+    /// Answers `prompt` in one turn; the exit code when interrupted meanwhile.
+    fn submit(&mut self, prompt: &str) -> Option<i32> {
         self.turns += 1;
         if self.codex() && self.turns == 1 {
             self.session_start();
@@ -219,10 +262,16 @@ impl FakeAgent {
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
         self.hook("UserPromptSubmit", Some(&turn), json!({"prompt": prompt}));
-        if let Some(seconds) = work_seconds(prompt) {
-            spin(seconds, self.codex());
+        let mut prompts = vec![prompt.trim().to_owned()];
+        match work_seconds(prompt) {
+            Some(seconds) if self.codex() => match self.work(seconds) {
+                Ok(steered) => prompts.extend(steered.iter().map(|p| p.trim().to_owned())),
+                Err(code) => return Some(code),
+            },
+            Some(seconds) => spin(seconds),
+            None => {}
         }
-        let reply = format!("fake reply: {}", prompt.trim());
+        let reply = format!("fake reply: {}", prompts.join("\n"));
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();
@@ -231,47 +280,117 @@ impl FakeAgent {
             Some(&turn),
             json!({"last_assistant_message": reply, "stop_hook_active": false}),
         );
-        self.draw_prompt("");
+        self.draw_prompt();
+        None
+    }
+
+    /// A Codex turn of `seconds`: its working line over a live composer, as
+    /// real Codex shows it, so Bus can type a steering message into the
+    /// running turn. Each prompt entered meanwhile joins the turn, whose one
+    /// reply answers it too. Returns those prompts, or the exit code when
+    /// interrupted.
+    fn work(&mut self, seconds: u64) -> Result<Vec<String>, i32> {
+        let started = Instant::now();
+        let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
+        let mut out = std::io::stdout();
+        let (shown, _) = self.lift(&self.draft);
+        let _ = write!(
+            out,
+            "{}",
+            working_block(&working_line(true, 0, 0), &shown, false, cols)
+        );
+        let _ = out.flush();
+        self.working = Some((started, 0));
+        let mut steered = Vec::new();
+        while started.elapsed().as_secs() < seconds {
+            let tick = std::time::Duration::from_millis(120);
+            let bytes = match self.input.as_ref().map(|input| input.recv_timeout(tick)) {
+                Some(Ok(bytes)) => bytes,
+                Some(Err(mpsc::RecvTimeoutError::Timeout)) => Vec::new(),
+                _ => {
+                    std::thread::sleep(tick);
+                    Vec::new()
+                }
+            };
+            self.pending.extend_from_slice(&bytes);
+            for input in drain_input(&mut self.pending) {
+                match self.apply(input) {
+                    Some(Typed::Submit(prompt)) => steered.push(prompt),
+                    Some(Typed::Exit) => return Err(0),
+                    None => {}
+                }
+            }
+            if let Some((_, frame)) = &mut self.working {
+                *frame += 1;
+            }
+            self.redraw();
+        }
+        let line = working_line(true, 0, started.elapsed().as_secs());
+        self.working = None;
+        let _ = write!(out, "{}", work_done(&line, cols));
+        for prompt in &steered {
+            let _ = write!(out, "{}", submitted(prompt));
+        }
+        let _ = out.flush();
+        Ok(steered)
     }
 
     fn read_loop(&mut self) -> i32 {
-        let mut stdin = std::io::stdin();
-        let mut buffer = [0u8; 4096];
-        let mut pending = Vec::new();
-        let mut draft = String::new();
         loop {
-            let count = match stdin.read(&mut buffer) {
-                Ok(0) | Err(_) => return 0,
-                Ok(count) => count,
+            let Some(Ok(bytes)) = self.input.as_ref().map(|input| input.recv()) else {
+                return 0;
             };
-            pending.extend_from_slice(&buffer[..count]);
-
-            for event in drain_input(&mut pending) {
-                match event {
-                    Input::Text(text) => {
-                        draft.push_str(&text);
-                        self.redraw(&draft);
-                    }
-                    Input::Backspace => {
-                        if draft.pop().is_some() {
-                            self.redraw(&draft);
+            self.pending.extend_from_slice(&bytes);
+            for input in drain_input(&mut self.pending) {
+                match self.apply(input) {
+                    Some(Typed::Submit(prompt)) => {
+                        if let Some(code) = self.submit(&prompt) {
+                            return code;
                         }
                     }
-                    Input::KillLine => {
-                        kill_line(&mut draft);
-                        self.redraw(&draft);
-                    }
-                    Input::Enter if !draft.trim().is_empty() => {
-                        let (prompt, images) = self.lift(&std::mem::take(&mut draft));
-                        self.images += images;
-                        self.submit(&prompt);
-                    }
-                    Input::Enter => {}
-                    Input::Interrupt => return 0,
+                    Some(Typed::Exit) => return 0,
+                    None => {}
                 }
             }
         }
     }
+}
+
+/// Runs one hook command with `payload` on its stdin and waits for it.
+fn run_hook(command: &str, payload: &str) {
+    let shell = if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    };
+    let Ok(mut child) = Command::new(shell.0)
+        .args([shell.1, command])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(payload.as_bytes());
+    }
+    let _ = child.wait();
+}
+
+/// Terminal input, read on its own thread until stdin closes.
+fn read_input() -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let mut buffer = [0u8; 4096];
+        while let Ok(count) = stdin.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
 }
 
 /// Empties the draft's last line, or when it is empty already, joins it to
@@ -288,7 +407,7 @@ pub(super) fn kill_line(draft: &mut String) {
 
 /// What opens a new prompt below the transcript, from the start of a line:
 /// a blank row and a rule for Claude Code, one blank row for Codex.
-pub(super) fn prompt_top(provider: &str) -> String {
+fn prompt_top(provider: &str) -> String {
     if provider == "codex" {
         "\r\n".into()
     } else {
@@ -368,8 +487,9 @@ pub(super) fn screen_rows(text: &str, cols: u16) -> usize {
 
 /// Replaces the box (the cursor is on its first row) with the submitted
 /// prompt, as Claude Code does. The fake Codex marks it the same way, not with
-/// Codex's `›`: it shows no composer while it answers, so a `›` here would be
-/// the last one on screen and Bus would read the sent prompt as a draft.
+/// Codex's `›`: it shows no composer until its turn works or ends, so a `›`
+/// here would be the last one on screen and Bus would read the sent prompt as
+/// a draft.
 pub(super) fn submitted(prompt: &str) -> String {
     format!("\r\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "))
 }
@@ -397,17 +517,17 @@ fn work_seconds(prompt: &str) -> Option<u64> {
     Some(seconds.min(600))
 }
 
-/// The working line, redrawn in place: Claude's `✻ Working… (3s · esc to
-/// interrupt)`, or Codex's `• Working (3s • esc to interrupt)`.
-fn spin(seconds: u64, codex: bool) {
-    let started = std::time::Instant::now();
+/// Claude's working line, redrawn in place: `✻ Working… (3s · esc to
+/// interrupt)`. Claude hides its prompt box meanwhile; input waits.
+fn spin(seconds: u64) {
+    let started = Instant::now();
     let mut out = std::io::stdout();
     let mut index = 0;
     while started.elapsed().as_secs() < seconds {
         let _ = write!(
             out,
             "\r\x1b[2K{}",
-            working_line(codex, index, started.elapsed().as_secs())
+            working_line(false, index, started.elapsed().as_secs())
         );
         let _ = out.flush();
         index += 1;
@@ -417,7 +537,9 @@ fn spin(seconds: u64, codex: bool) {
     let _ = out.flush();
 }
 
-pub(super) fn working_line(codex: bool, frame: usize, seconds: u64) -> String {
+/// Codex's `• Working (3s • esc to interrupt)`, or Claude's `✻ Working… (3s ·
+/// esc to interrupt)`, at spinner `frame`.
+fn working_line(codex: bool, frame: usize, seconds: u64) -> String {
     if codex {
         let bullet = ['•', '◦'][frame % 2];
         format!("{bullet} Working ({seconds}s • esc to interrupt)")
@@ -425,6 +547,25 @@ pub(super) fn working_line(codex: bool, frame: usize, seconds: u64) -> String {
         let spinner = ['✻', '✶', '✢', '·'][frame % 4];
         format!("{spinner} Working… ({seconds}s · esc to interrupt)")
     }
+}
+
+/// A running Codex turn: the working `line`, a blank row and the live
+/// composer showing `shown`. Drawn first from the start of the line under
+/// the transcript, then `again` in place from the composer's first row,
+/// where it leaves the cursor.
+fn working_block(line: &str, shown: &str, again: bool, cols: u16) -> String {
+    let back = if again {
+        format!("\x1b[{}A\r\x1b[J", screen_rows(line, cols) + 1)
+    } else {
+        String::new()
+    };
+    format!("{back}{line}\r\n\r\n{}", prompt_box(shown, "codex", cols))
+}
+
+/// Clears a running turn's working block, from the composer's first row, so
+/// the transcript continues where its working `line` was.
+fn work_done(line: &str, cols: u16) -> String {
+    format!("\x1b[{}A\r\x1b[J", screen_rows(line, cols) + 1)
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -515,3 +515,100 @@ fn the_fake_codex_keeps_image_paths_as_text_and_works_like_codex() {
         "✻ Working… (3s · esc to interrupt)"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn the_fake_codex_fires_bus_hook_after_a_project_hook_for_the_same_event() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    use crate::agents::providers::ProviderKind;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir =
+        std::env::temp_dir().join(format!("bus-tui-fake-codex-merged-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let delivered = dir.join("delivered.json");
+    // Stands in for the Bus executable named in the hook command.
+    let bus = dir.join("bus");
+    std::fs::write(
+        &bus,
+        format!("#!/bin/sh\ncat > '{}'\n", delivered.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bus, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A project that already has its own Codex Stop hook, merged the way Bus writes it.
+    let project = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}});
+    let merged = merge_hooks(
+        project,
+        HookContract::for_provider(ProviderKind::Codex),
+        &bus,
+    )
+    .unwrap();
+
+    let agent = FakeAgent::new("codex", merged["hooks"].clone());
+    agent.hook(
+        "Stop",
+        Some("t1"),
+        json!({"last_assistant_message": "fake reply: hey", "stop_hook_active": false}),
+    );
+    let fired = delivered.is_file();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(fired, "Bus's Stop hook never ran: {merged:#}");
+}
+
+#[test]
+fn a_working_fake_codex_still_shows_a_composer_bus_can_type_into() {
+    use crate::devtools::tui::screen::Screen;
+
+    // Real Codex keeps its `›` composer under `• Working (…)` while a turn
+    // runs, so Bus can type a steering message into it.
+    let mut screen = Screen::new(80, 12).unwrap();
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("hey fake:work 3", "codex", 80).as_bytes());
+    // What the fake draws from Enter while its turn works, typing included.
+    screen.feed(submitted("hey fake:work 3").as_bytes());
+    screen.feed(working_block(&working_line(true, 0, 0), "", false, 80).as_bytes());
+    for (frame, shown) in ["s", "st", "steer"].into_iter().enumerate() {
+        let line = working_line(true, frame + 1, 1);
+        screen.feed(working_block(&line, shown, true, 80).as_bytes());
+    }
+    let rows = screen_rows_of(&screen);
+    // Codex's spinner alternates `•` and `◦`; Bus's working rule takes both.
+    assert!(
+        rows.iter()
+            .any(|row| row.starts_with("• Working") || row.starts_with("◦ Working")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with('›')),
+        "no composer while working: {rows:#?}"
+    );
+    // Redrawn in place: one working line over one composer holding the draft.
+    let working: Vec<_> = rows
+        .iter()
+        .filter(|row| row.contains("Working ("))
+        .collect();
+    let composers: Vec<_> = rows.iter().filter(|row| row.starts_with('›')).collect();
+    assert_eq!((working.len(), composers.len()), (1, 1), "{rows:#?}");
+    assert_eq!(composers[0], "› steer");
+
+    // The turn ends: its block goes, the steered prompt joins the transcript.
+    let line = working_line(true, 4, 3);
+    screen.feed(work_done(&line, 80).as_bytes());
+    screen.feed(submitted("steer").as_bytes());
+    screen.feed("• fake reply: hey fake:work 3\r\n  steer\r\n".as_bytes());
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("", "codex", 80).as_bytes());
+    let rows = screen_rows_of(&screen);
+    assert!(
+        !rows.iter().any(|row| row.contains("Working (")),
+        "{rows:#?}"
+    );
+    let sent = rows
+        .iter()
+        .position(|row| row == "> hey fake:work 3")
+        .unwrap();
+    assert_eq!(rows[sent + 1], "> steer", "{rows:#?}");
+    assert_eq!(rows[sent + 2], "• fake reply: hey fake:work 3", "{rows:#?}");
+    let composers: Vec<_> = rows.iter().filter(|row| row.starts_with('›')).collect();
+    assert_eq!(composers, vec!["› Ask Codex to do anything"], "{rows:#?}");
+}

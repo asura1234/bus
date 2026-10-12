@@ -267,8 +267,7 @@ fn a_fake_codex_agent_gets_room_prompts_and_replies() {
         "20s",
     ]);
 
-    // Bus types each prompt into the fake's Codex composer; its hooks reply.
-    for text in ["hello codex", "hello again"] {
+    let send = |text: &str| -> String {
         let sent = scratch_bus(
             &session,
             &["send", "--room", "bus", "--to", "c1", "--text", text],
@@ -276,11 +275,37 @@ fn a_fake_codex_agent_gets_room_prompts_and_replies() {
         let receipt = String::from_utf8_lossy(&sent.stdout).to_string();
         assert!(sent.status.success(), "{receipt}");
         let receipt: Value = serde_json::from_str(receipt.trim()).unwrap();
-        let id = receipt["result"]["message_id"].to_string();
+        receipt["result"]["message_id"].to_string()
+    };
+
+    // Bus types each prompt into the fake's Codex composer; its hooks reply.
+    for text in ["hello codex", "hello again"] {
+        let id = send(text);
         let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
         assert!(
             settled.to_string().contains(&format!("fake reply: {text}")),
             "the fake Codex should answer {text:?}: {settled}"
+        );
+    }
+
+    // A message sent while the fake Codex works is typed into its running
+    // turn, whose one reply answers both.
+    let lead = send("fake:work 6 long task");
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == working",
+        "--timeout",
+        "20s",
+    ]);
+    let steer = send("steer in");
+    for id in [&lead, &steer] {
+        let settled = session.ok(&["wait", "--message", id, "--timeout", "40s"]);
+        assert!(
+            settled
+                .to_string()
+                .contains("fake reply: fake:work 6 long task\\nsteer in"),
+            "the steer should join the running turn's reply: {settled}"
         );
     }
 }
