@@ -150,7 +150,8 @@ or a root part when base_ref is not origin/master (`pr` only targets master):
     Write goal and non-goal files from this part's purpose, then:
       python3 skills/pr/scripts/pr_goal_context.py --branch <branch> \
         --output <ctx> --goal-file <goal> --non-goal-file <non-goals>
-    Read skills/pr/references/pr-template.md. Write a Draft body from
+    Read skills/pr/references/pr-template.md and .github/pull_request_template.md.
+    Write a Draft body (its self-test boxes `- [ ] <name> — pending`) from
     git diff <onto>...<branch> only, with `H stack PLAN --part <id>` output as
     a bullet in 摘要, then:
       python3 skills/pr/scripts/pr_format_check.py --phase draft \

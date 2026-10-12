@@ -10,6 +10,8 @@ INPUT $ARGUMENTS = [--plan <plan-file>]... [--verification <file>]
 plans = every plan path the developer supplied this time, in order of appearance; never guess from diff, commits, or historical state.
 verification = optional Markdown file of `- [x] ` lines, each naming verification actually executed and the commit it proves
   (for example a gate-and-fix PASS artifact with its Head); supplied by the caller, never produced here.
+  A line that starts with a self-test box name of the GitHub template (`- [x] gate-and-fix — ...`,
+  `- [x] e2e-test-tui — ...`) is that box's evidence and must cite head `<sha>` and report `<path>`.
 
 -- Rules
 - Code narrative takes only the current repository, current feature branch, and actual changes as its source of truth; plans lock only goal and non-goals.
@@ -18,8 +20,10 @@ verification = optional Markdown file of `- [x] ` lines, each naming verificatio
   sequences them; their results reach the body only through `--verification`.
 - Do not read or guess another skill's private control state, callbacks, or temporary artifacts; the only cross-skill
   handoff is `temp/review-pr/<branch>/.locked-goal` and `temp/review-pr/<branch>/.locked-non-goals`, written and returned by `pr_goal_context.py`.
-- PR title and narrative are English; fixed headings and machine tokens stay byte-compatible with the format SOT
-  `references/pr-template.md`. Every published body must pass `pr_format_check.py`; never skip it.
+- PR title and narrative are English; fixed headings and machine tokens stay byte-compatible with the format SOT:
+  body sections, placeholders and self-test boxes live only in `.github/pull_request_template.md` (the body GitHub
+  offers a person opening a PR); title rules and per-section writing guidance live in `references/pr-template.md`.
+  Every published body must pass `pr_format_check.py`; never skip it.
 - Every commit and push must be delegated to `commit-and-push`; every rebase must be delegated to `rebase-origin-main`; never duplicate their Git protocols.
 
 ========== PREFLIGHT ==========
@@ -101,16 +105,18 @@ The two sections of that context, `.locked-goal`, and `.locked-non-goals` are lo
 
 ========== WRITE BODY ==========
 
-Read(references/pr-template.md)
+Read(references/pr-template.md) and Read(`.github/pull_request_template.md`)
 Write the English title and narrative under one hard constraint: **the narrative may come only from the
 immutable `copy_diff` / `copy_commits`; goal and non-goals come only from GOAL_CONTEXT_FILE.** Never re-derive
 from the live worktree, live `HEAD`, or the mutable `origin/master`.
 
-Fill every template section:
+Fill every section of the GitHub template, in its order:
 - Insert the full `## 目标` and `## 非目标` sections of GOAL_CONTEXT_FILE verbatim; never add source labels,
   summaries, translations, or separators. Same-named sections from multiple plans were already appended by the renderer in input order.
-- `## 自测 / Agent 测`: IF verification given, insert its `- [x] ` lines verbatim and set phase = final.
-  ELSE write one `- [ ] ` item stating that readiness verification was not provided to `pr`, and set phase = draft.
+- `## 自测 / Agent 测`: keep every checkbox of the GitHub template (`e2e-test-tui`, `gate-and-fix`), each once.
+  A box whose evidence line verification supplies becomes that line verbatim; every other box stays
+  `- [ ] <name> — pending`. Append the remaining verification lines verbatim after the boxes.
+  phase = final when no box is pending, else draft.
   Never claim gates, E2E, review, or manual verification that the caller did not supply.
 - When the diff touches delivery, callbacks or launch, note in `## 其他说明` that `just e2e` (live model usage)
   is pending unless the supplied verification already records it.
@@ -118,7 +124,8 @@ Fill every template section:
 Write `body_file` under ignored `temp/`, then run:
 
   python3 skills/pr/scripts/pr_format_check.py --phase <phase> \
-    --template skills/pr/references/pr-template.md --title "<title>" \
+    --template skills/pr/references/pr-template.md \
+    --body-template .github/pull_request_template.md --title "<title>" \
     --body-file "<body-file>" --goal-context-file "<GOAL_CONTEXT_FILE>" \
     --locked-goal-file "<LOCKED_GOAL_FILE>"
 
