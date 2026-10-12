@@ -300,7 +300,7 @@ fn start_is_a_no_op_when_disabled() {
     let dir = crate::utils::test_temp::unique_temp_path("perf-off");
     let mut disabled = options();
     disabled.enabled = false;
-    assert!(!start(
+    assert!(start(
         &dir,
         "server",
         &disabled,
@@ -308,7 +308,8 @@ fn start_is_a_no_op_when_disabled() {
             sample: no_sample,
             capture_stacks: no_capture
         }
-    ));
+    )
+    .is_none());
     assert!(!perf_dir(&dir).exists());
 }
 
@@ -521,50 +522,82 @@ fn archive_file(dir: &Path) -> crate::utils::logging::RotatingFileState {
     .unwrap()
 }
 
+/// Spawns a writer whose thread logs into `capture`.
+fn captured_writer(
+    capture: &crate::utils::logging::test_capture::Capture,
+    dir: &Path,
+    capacity: usize,
+) -> crate::utils::perf::writer::WriterHandle {
+    let mut handle = None;
+    capture.run(|| {
+        handle = Some(
+            crate::utils::perf::writer::WriterHandle::spawn("client", archive_file(dir), capacity)
+                .unwrap(),
+        );
+    });
+    handle.unwrap()
+}
+
 #[cfg(unix)]
 #[test]
-fn append_failures_warn_once_and_recovery_reports_the_lost_records() {
-    use crate::utils::perf::writer::PerfWriter;
+fn append_failures_warn_once_and_the_episode_reports_the_lost_records_once_quiet() {
+    use crate::utils::perf::writer::{Counters, PerfWriter, QUIET_AFTER_LOSS};
     let dir = crate::utils::test_temp::unique_temp_path("perf-append-failure");
-    let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let mut writer = PerfWriter::new("client", archive_file(&dir), dropped.clone());
+    let counters = std::sync::Arc::new(Counters::default());
+    let mut writer = PerfWriter::new("client", archive_file(&dir), counters.clone());
     let live = perf_dir(&dir).join("client.jsonl");
     // A directory where the file was makes every reopen fail.
     std::fs::remove_file(&live).unwrap();
     std::fs::create_dir(&live).unwrap();
-    let failing = crate::utils::logging::test_capture::Capture::default();
-    failing.run(|| {
+    let t0 = Instant::now();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let mut texts = Vec::new();
+    capture.run(|| {
         for n in 0..3 {
-            writer.write(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").as_bytes());
+            writer.write(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").as_bytes(), t0);
         }
     });
+    texts.push(capture.text());
     std::fs::remove_dir(&live).unwrap();
     // Two more were refused by a full queue meanwhile.
-    dropped.store(2, Ordering::SeqCst);
-    let recovered = crate::utils::logging::test_capture::Capture::default();
-    recovered.run(|| writer.write(b"{\"kind\":\"probe\",\"n\":3}\n"));
+    counters.dropped.store(2, Ordering::SeqCst);
+    capture.run(|| {
+        writer.write(b"{\"kind\":\"probe\",\"n\":3}\n", t0);
+        writer.account(t0);
+    });
+    texts.push(capture.text());
+    capture.run(|| writer.account(t0 + QUIET_AFTER_LOSS));
+    texts.push(capture.text());
 
     let records = lines(&live);
     let _ = std::fs::remove_dir_all(dir);
-    let failed = failing.text();
-    assert_eq!(failed.matches("perf.write_failed").count(), 1, "{failed}");
+    let [failing, still_losing, quiet] = [&texts[0], &texts[1], &texts[2]];
+    assert_eq!(failing.matches("perf.write_failed").count(), 1, "{failing}");
     assert!(
-        failed.contains("role=\"client\"") || failed.contains("role=client"),
-        "{failed}"
+        failing.contains("role=\"client\"") || failing.contains("role=client"),
+        "{failing}"
     );
-    let recovered = recovered.text();
-    assert!(recovered.contains("perf.write_recovered"), "{recovered}");
-    assert!(recovered.contains("lost_records=5"), "{recovered}");
-    assert_eq!(dropped.load(Ordering::SeqCst), 0, "the drops were reported");
+    assert_eq!(
+        still_losing.matches("perf.").count(),
+        1,
+        "the episode continues silently until quiet: {still_losing}"
+    );
+    assert!(quiet.contains("perf.write_recovered"), "{quiet}");
+    assert!(quiet.contains("lost_records=5"), "{quiet}");
+    assert_eq!(
+        counters.dropped.load(Ordering::SeqCst),
+        0,
+        "the drops were taken"
+    );
     assert_eq!(records.len(), 1, "{records:?}");
 }
 
 #[cfg(unix)]
 #[test]
-fn a_full_writer_queue_drops_records_without_waiting_and_warns_once() {
-    use crate::utils::perf::writer::WriterHandle;
+fn a_full_writer_queue_drops_records_without_waiting_and_the_writer_warns_once() {
     let dir = crate::utils::test_temp::unique_temp_path("perf-full-queue");
-    let handle = WriterHandle::spawn("client", archive_file(&dir), 1).unwrap();
+    let writer_log = crate::utils::logging::test_capture::Capture::default();
+    let handle = captured_writer(&writer_log, &dir, 1);
     let live = perf_dir(&dir).join("client.jsonl");
     let holder = std::fs::OpenOptions::new()
         .append(true)
@@ -572,9 +605,9 @@ fn a_full_writer_queue_drops_records_without_waiting_and_warns_once() {
         .unwrap();
     holder.lock().unwrap();
 
-    let capture = crate::utils::logging::test_capture::Capture::default();
+    let watchdog_log = crate::utils::logging::test_capture::Capture::default();
     let started = Instant::now();
-    capture.run(|| {
+    watchdog_log.run(|| {
         for n in 0..6 {
             handle.send(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").into_bytes());
         }
@@ -589,7 +622,12 @@ fn a_full_writer_queue_drops_records_without_waiting_and_warns_once() {
         elapsed < Duration::from_millis(100),
         "queuing waited {elapsed:?}"
     );
-    let text = capture.text();
+    assert_eq!(
+        watchdog_log.text(),
+        "",
+        "the watchdog never logs a loss itself"
+    );
+    let text = writer_log.text();
     assert_eq!(text.matches("perf.write_failed").count(), 1, "{text}");
     assert!(
         (1..6).contains(&records.len()),
@@ -631,5 +669,211 @@ fn perf_window_does_not_block_the_watchdog_behind_another_writer() {
     assert!(
         elapsed < Duration::from_millis(100),
         "watchdog window append waited for another writer for {elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn normal_process_exit_preserves_records_queued_behind_a_busy_writer() {
+    const CHILD_DIR: &str = "BUS_PERF_EXIT_PROBE_DIR";
+    if let Some(dir) = std::env::var_os(CHILD_DIR) {
+        let mut recorder = Recorder::open(
+            Path::new(&dir),
+            "client",
+            &options(),
+            PerfHooks {
+                sample: no_sample,
+                capture_stacks: no_capture,
+            },
+        )
+        .unwrap();
+        for n in 0..16 {
+            recorder.append(&serde_json::json!({"kind":"probe", "n":n}));
+        }
+        // Return normally. Production also exits without the test-only flush.
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("perf-exit-backlog");
+    std::fs::create_dir_all(perf_dir(&dir)).unwrap();
+    let live = perf_dir(&dir).join("client.jsonl");
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&live)
+        .unwrap();
+    holder.lock().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("utils::perf::recorder::recorder_test::normal_process_exit_preserves_records_queued_behind_a_busy_writer")
+        .env(CHILD_DIR, &dir)
+        .spawn().unwrap();
+    // The contention is bounded: release it even if shutdown chooses to wait.
+    std::thread::sleep(Duration::from_millis(300));
+    holder.unlock().unwrap();
+    let status = child.wait().unwrap();
+    let records = lines(&live);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(status.success(), "child must exit normally: {status}");
+    assert_eq!(
+        records.len(),
+        16,
+        "normal exit must drain accepted perf records"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn full_perf_queue_warning_does_not_block_watchdog_on_the_log_file() {
+    use crate::utils::perf::writer::WriterHandle;
+    let dir = crate::utils::test_temp::unique_temp_path("perf-overflow-log-lock");
+    let handle = WriterHandle::spawn("client", archive_file(&dir), 1).unwrap();
+    let perf_lock = std::fs::OpenOptions::new()
+        .append(true)
+        .open(perf_dir(&dir).join("client.jsonl"))
+        .unwrap();
+    perf_lock.lock().unwrap();
+    let log_path = dir.join("client.log");
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .unwrap();
+        file.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        file.unlock().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    let logging = crate::utils::logging::LoggingOptions {
+        filter: tracing_subscriber::EnvFilter::new("warn"),
+        max_bytes: 1024 * 1024,
+        retention: crate::utils::logging::Retention::Archive(options().archive),
+        dev: true,
+    };
+    let mut elapsed = Duration::ZERO;
+    crate::utils::logging::test_capture::run_to_file(dir.clone(), "client.log", &logging, || {
+        let started = Instant::now();
+        for n in 0..6 {
+            handle.send(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").into_bytes());
+        }
+        elapsed = started.elapsed();
+    });
+    holder.join().unwrap();
+    perf_lock.unlock().unwrap();
+    handle.flush();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "queue overflow logging blocked the watchdog for {elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_writer_that_stays_slower_than_the_watchdog_warns_once_per_overload_not_per_write() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-sustained-overload");
+    // The writer reports losses; its thread logs into this capture.
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let handle = captured_writer(&capture, &dir, 1);
+    let live = perf_dir(&dir).join("client.jsonl");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let holder = {
+        let stop = std::sync::Arc::clone(&stop);
+        let live = live.clone();
+        std::thread::spawn(move || {
+            let file = std::fs::OpenOptions::new().append(true).open(live).unwrap();
+            // Every append waits ~100 ms on the shared lock: a slow disk or a
+            // busy peer keeps the writer slower than the records arriving.
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                file.lock().unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+                file.unlock().unwrap();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    {
+        let until = Instant::now() + Duration::from_secs(2);
+        let mut n = 0;
+        while Instant::now() < until {
+            handle.send(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").into_bytes());
+            n += 1;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    holder.join().unwrap();
+    handle.flush();
+    let _ = std::fs::remove_dir_all(dir);
+    let text = capture.text();
+    let warns =
+        text.matches("perf.write_failed").count() + text.matches("perf.write_recovered").count();
+    assert!(
+        text.contains("perf.write_failed"),
+        "the overload is reported by the writer: {text}"
+    );
+    assert!(
+        warns <= 4,
+        "{warns} loss WARNs in 2 s of one continuous overload: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn exit_drain_gives_up_at_the_deadline_and_reports_the_undrained_records() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-drain-deadline");
+    let writer_log = crate::utils::logging::test_capture::Capture::default();
+    let mut handle = captured_writer(&writer_log, &dir, 16);
+    let live = perf_dir(&dir).join("client.jsonl");
+    let holder = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&live)
+        .unwrap();
+    holder.lock().unwrap();
+    for n in 0..5 {
+        handle.send(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").into_bytes());
+    }
+    let exit_log = crate::utils::logging::test_capture::Capture::default();
+    let started = Instant::now();
+    exit_log.run(|| handle.shutdown(Duration::from_millis(200)));
+    let elapsed = started.elapsed();
+    holder.unlock().unwrap();
+    drop(handle);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "exit waited {elapsed:?} on a writer that cannot write"
+    );
+    let text = exit_log.text();
+    assert!(text.contains("perf.write_failed"), "{text}");
+    // One record is in flight on the blocked writer; four wait behind it.
+    assert!(
+        text.contains("undrained_records=5") || text.contains("undrained_records=4"),
+        "{text}"
+    );
+}
+
+#[test]
+fn dropping_the_running_recorder_stops_it_promptly() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-stop");
+    let running = start(
+        &dir,
+        "client",
+        &options(),
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    )
+    .expect("recorder starts");
+    let started = Instant::now();
+    drop(running);
+    let elapsed = started.elapsed();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "stopping took {elapsed:?}"
     );
 }

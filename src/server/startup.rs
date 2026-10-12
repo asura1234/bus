@@ -16,7 +16,8 @@ pub fn run_server(
     config_override: Option<fn(&mut config::Config)>,
 ) -> io::Result<()> {
     init_logging(&logging_options);
-    crate::utils::perf::start(
+    // Dropped on return, which drains the queued perf records.
+    let _perf = crate::utils::perf::start(
         &crate::utils::paths::data_dir(),
         "server",
         &perf_options,

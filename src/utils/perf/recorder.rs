@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
@@ -106,28 +106,52 @@ pub(crate) fn perf_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("perf")
 }
 
-/// Starts this process's recorder once; returns whether it is running.
+/// The running recorder. Dropping it, on a normal exit, stops the watchdog and
+/// drains the records already queued, waiting at most about
+/// [`super::writer::DRAIN_DEADLINE`].
+pub(crate) struct PerfRecorder {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for PerfRecorder {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Starts this process's recorder once; `None` when disabled, already
+/// started or unavailable.
 pub(crate) fn start(
     data_dir: &Path,
     role: &'static str,
     options: &PerfOptions,
     hooks: PerfHooks,
-) -> bool {
+) -> Option<PerfRecorder> {
     static STARTED: AtomicBool = AtomicBool::new(false);
     if !options.enabled || STARTED.swap(true, Ordering::AcqRel) {
-        return false;
+        return None;
     }
     let recorder = match Recorder::open(data_dir, role, options, hooks) {
         Ok(recorder) => recorder,
         Err(error) => {
             tracing::warn!(event = "perf.disabled", %error, "perf metrics unavailable");
-            return false;
+            return None;
         }
     };
-    std::thread::Builder::new()
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = Arc::clone(&stop);
+    let thread = std::thread::Builder::new()
         .name("bus-perf".into())
-        .spawn(move || recorder.run(global()))
-        .is_ok()
+        .spawn(move || recorder.run(global(), &stopped))
+        .ok()?;
+    Some(PerfRecorder {
+        stop,
+        thread: Some(thread),
+    })
 }
 
 pub(super) struct Recorder {
@@ -190,9 +214,10 @@ impl Recorder {
         })
     }
 
-    fn run(mut self, registry: &Registry) {
+    /// Watches and samples until `stop`; dropping `self` then drains the writer.
+    fn run(mut self, registry: &Registry, stop: &AtomicBool) {
         let mut next_window = Instant::now() + self.options.window;
-        loop {
+        while !stop.load(Ordering::Acquire) {
             let slept_from = Instant::now();
             std::thread::sleep(WATCH_TICK);
             let now = Instant::now();

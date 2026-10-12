@@ -66,7 +66,8 @@ fn run_client_with_mode(
     stop_server: fn() -> Result<(), String>,
 ) -> io::Result<()> {
     init_logging(&logging_options);
-    crate::utils::perf::start(
+    // Dropped on return, which drains the queued perf records.
+    let _perf = crate::utils::perf::start(
         &crate::utils::paths::data_dir(),
         "client",
         &perf_options,
