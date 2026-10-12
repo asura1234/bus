@@ -79,7 +79,10 @@ impl Worker {
             if own_turn && !steer_unbound {
                 continue;
             }
+            // A visible dialog takes typed text as its answer: Codex reports
+            // Idle under its startup update chooser, whose Enter updates.
             if (agent.status != RuntimeStatus::Idle && !steer_unbound)
+                || agent.dialog
                 || !agent.hook_setup_confirmed
                 || agent.session_binding_invalidated
                 || agent.deletion_pending

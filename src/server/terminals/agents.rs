@@ -196,8 +196,9 @@ impl App {
         let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
+        let args = params.args;
         let mut argv = vec![crate::agents::interactive_agent_executable(kind).to_string()];
-        argv.extend(params.args);
+        argv.extend(args.iter().cloned());
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::server::api::input_encoding::encode_api_submission(runtime, &command);
@@ -217,6 +218,7 @@ impl App {
             .get_mut(&terminal_id)
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
+        terminal.managed_agent_args = Some(args);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
@@ -385,13 +387,30 @@ impl App {
             terminal_title: pane.terminal_title,
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
-            agent_status: pane.agent_status,
+            // An install that ignored Bus's interrupt waits on a person to stop
+            // it; its screen still reads as working.
+            agent_status: match &terminal.self_update {
+                Some(crate::terminal::SelfUpdate {
+                    phase: crate::terminal::SelfUpdatePhase::Stuck(_),
+                    ..
+                }) => crate::protocol::api::schema::AgentStatus::Blocked,
+                _ => pane.agent_status,
+            },
             screen_detection_skipped: false,
             dialog_id: self
                 .lookup_runtime_sender(ws_idx, pane_id)
                 .and_then(|runtime| runtime.visible_ansi_snapshot_with_seq())
                 .and_then(|(screen, _)| crate::agents::dialog::parse(&screen))
                 .map(|dialog| dialog.id()),
+            update_error: match &terminal.self_update {
+                Some(crate::terminal::SelfUpdate {
+                    phase:
+                        crate::terminal::SelfUpdatePhase::Failed(error)
+                        | crate::terminal::SelfUpdatePhase::Stuck(error),
+                    ..
+                }) => Some(error.clone()),
+                _ => None,
+            },
             state_labels: pane.state_labels,
             tokens: pane.tokens,
             agent_session: pane.agent_session,

@@ -177,6 +177,57 @@ fn codex_startup_update_requires_complete_live_chooser() {
 }
 
 #[test]
+fn codex_0_162_update_chooser_blocks_and_asks_bus_to_update() {
+    // Codex 0.162 dropped the "!" and the "Press enter to continue" footer.
+    // Missing it left the agent Idle, so a queued message's Enter picked
+    // "Update now" and Codex exited under the message.
+    let chooser = include_str!("../../../../tests/fixtures/codex-update/chooser-0.162.txt");
+    let result = detect_screen_with_osc(AgentKind::Codex, chooser, "project", "");
+    assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("startup_update")
+    );
+    assert!(result.visible_blocker);
+    let update = auto_update(AgentKind::Codex, chooser).unwrap();
+    assert_eq!(update.choose, "Update now");
+    assert_eq!(update.success, "Update ran successfully");
+
+    for screen in [
+        format!("{chooser}\n› Ask Codex to do anything\n"),
+        chooser.replace("Update now", "Install"),
+    ] {
+        let result = detect_screen_with_osc(AgentKind::Codex, &screen, "project", "");
+        assert_ne!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("startup_update")
+        );
+        assert!(auto_update(AgentKind::Codex, &screen).is_none());
+    }
+    assert!(auto_update(AgentKind::Codex, "› Ask Codex to do anything\n").is_none());
+    assert!(auto_update(AgentKind::Claude, chooser).is_none());
+}
+
+#[test]
+fn auto_update_needs_both_the_option_and_the_success_text() {
+    for table in [
+        r#"auto_update = { choose = "Update now" }"#,
+        r#"auto_update = { choose = "", success = "done" }"#,
+        r#"auto_update = { choose = "Update now", success = "  " }"#,
+    ] {
+        let manifest = rules_manifest(&format!(
+            "[[rules]]\nid = \"update\"\nstate = \"blocked\"\ncontains = [\"update\"]\n{table}\n"
+        ));
+        assert!(parse_manifest(&manifest).is_err(), "{table}");
+    }
+    let valid = rules_manifest(
+        "[[rules]]\nid = \"update\"\nstate = \"blocked\"\ncontains = [\"update\"]\n\
+         auto_update = { choose = \"Update now\", success = \"done\" }\n",
+    );
+    assert!(parse_manifest(&valid).is_ok());
+}
+
+#[test]
 fn codex_background_terminal_screen_does_not_override_osc_idle() {
     // Background terminal tasks can be long-lived helpers such as dev servers.
     // They should not make Codex look busy once the foreground turn is idle.

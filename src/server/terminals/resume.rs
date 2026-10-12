@@ -341,6 +341,12 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
+            // What Bus types again if the agent updates itself and exits.
+            terminal.managed_agent_args =
+                crate::server::terminals::self_update::managed_relaunch_args(
+                    terminal.managed_agent_kind(),
+                    &argv,
+                );
         }
         true
     }

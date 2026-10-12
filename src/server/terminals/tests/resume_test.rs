@@ -600,3 +600,56 @@ async fn pending_agent_resume_shell_spawn_failure_keeps_saved_conversation() {
     );
     assert_eq!(terminal.agent_name.as_deref(), Some("saved-worker"));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_restored_codex_resume_keeps_its_command_for_a_relaunch_after_an_update() {
+    use std::os::unix::fs::PermissionsExt;
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("restored-update");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 30));
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    // A shell that only swallows its input, so the resume command runs nothing.
+    let dir = crate::utils::test_temp::unique_temp_path("bus-resume-swallowing-shell");
+    std::fs::create_dir_all(&dir).unwrap();
+    let shell = dir.join("sh");
+    std::fs::write(&shell, "#!/bin/sh\nexec cat >/dev/null\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    app.state.default_shell = shell.to_string_lossy().into_owned();
+    app.state.shell_mode = crate::utils::config::ShellModeConfig::NonLogin;
+    let session = crate::agents::resume::catalog::PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("saved-session").unwrap(),
+    };
+    let plan =
+        crate::agents::resume::catalog::plan(&session.source, &session.agent, &session.session_ref)
+            .unwrap();
+    // As restore builds a pending managed agent: name and kind first, then
+    // the saved session and the resume plan the next layout pass starts.
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("saved-worker".into(), crate::agents::AgentKind::Codex);
+    terminal.set_persisted_agent_session(session);
+    terminal.pending_agent_resume_plan = Some(plan);
+    terminal.set_detected_state(
+        Some(crate::agents::AgentKind::Codex),
+        crate::agents::AgentState::Idle,
+    );
+
+    assert!(app.start_pending_agent_resumes(true));
+    assert!(app.terminal_runtimes.get(&terminal_id).is_some());
+    assert_eq!(
+        app.state.terminals[&terminal_id].managed_agent_args,
+        Some(vec!["resume".to_string(), "saved-session".to_string()])
+    );
+    for (_, runtime) in app.terminal_runtimes.drain() {
+        runtime.shutdown();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

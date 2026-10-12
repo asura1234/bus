@@ -232,6 +232,10 @@ pub struct AgentInfo {
     /// The `id` of the numbered choice dialog waiting for an answer, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialog_id: Option<String>,
+    /// Why Bus could not install the agent's own update; its update chooser
+    /// then waits for a person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_error: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

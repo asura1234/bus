@@ -55,6 +55,7 @@ impl BusState {
                 dialog_answered: false,
                 dialog_answer: None,
                 actionable_error: None,
+                update_error: None,
                 current_request: None,
                 hook_setup_confirmed: false,
                 session_binding_invalidated: false,
@@ -247,6 +248,33 @@ impl BusState {
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
             .actionable_error = error;
+        Ok(())
+    }
+
+    /// Shows the update failure the agent's terminal reports as its error,
+    /// and clears that error, and only that one, once none is reported.
+    pub(crate) fn observe_update_error(
+        &mut self,
+        id: AgentId,
+        error: Option<String>,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        match error {
+            Some(error) => {
+                agent.actionable_error = Some(error.clone());
+                agent.update_error = Some(error);
+            }
+            None => {
+                if let Some(shown) = agent.update_error.take() {
+                    if agent.actionable_error.as_ref() == Some(&shown) {
+                        agent.actionable_error = None;
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

@@ -237,6 +237,37 @@ mod status_tests {
     }
 
     #[test]
+    fn a_failed_self_update_shows_its_error_until_the_chooser_is_answered() {
+        let error = "Bus could not install the codex update (npm failed). Answer the update prompt in bus-r1-a2's terminal; queued messages wait until then.";
+        let mut failed = pane_listing(Some("codex"), "blocked");
+        if let Ok(ResponseResult::AgentList { agents }) = &mut failed {
+            agents[0].dialog_id = Some("chooser".into());
+            agents[0].update_error = Some(error.into());
+        }
+        let failed_again = failed.clone();
+        let (mut worker, agent, room, dir, _) = fixture(
+            Provider::Codex,
+            vec![failed, failed_again, pane_listing(Some("codex"), "idle")],
+        );
+        let shown = |worker: &Worker| worker.state.agent(agent).unwrap().actionable_error.clone();
+        worker.poll().unwrap();
+        assert_eq!(shown(&worker).as_deref(), Some(error));
+        let request = queue(&mut worker, room, agent, "waits for the chooser");
+        worker.poll().unwrap();
+        assert_eq!(shown(&worker).as_deref(), Some(error));
+        assert_eq!(
+            worker
+                .state
+                .stall_reason(worker.state.request(request).unwrap(), u64::MAX),
+            None
+        );
+        worker.poll().unwrap();
+        assert_eq!(shown(&worker), None);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn an_agent_whose_provider_is_not_running_is_unavailable_until_it_returns() {
         let no_agents = Ok(ResponseResult::AgentList { agents: Vec::new() });
         let (mut worker, agent, room, dir, calls) = fixture(
@@ -288,4 +319,145 @@ mod status_tests {
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+mod update_lifecycle_tests {
+    use super::*;
+
+    /// What `agent.list` reports for a Codex Bus started while it installs the
+    /// update Bus chose in its startup chooser (pinned server-side by
+    /// `a_bus_started_codex_installing_its_update_is_listed_working_and_ready`).
+    fn codex_installing_its_update() -> Result<ResponseResult, TransportError> {
+        let info = serde_json::from_value(json!({
+            "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
+            "agent": "codex", "agent_status": "working",
+            "launch_pending": false, "interactive_ready": true,
+            "workspace_id": "w1", "tab_id": "t1", "focused": false, "revision": 1
+        }))
+        .unwrap();
+        Ok(ResponseResult::AgentList { agents: vec![info] })
+    }
+
+    #[test]
+    fn slow_startup_update_preserves_queued_messages_until_it_finishes() {
+        let (mut worker, agent, room, dir, _) =
+            fixture(Provider::Codex, vec![codex_installing_its_update()]);
+        let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity)
+            .unwrap();
+        worker.save(worker.state.clone()).unwrap();
+        worker.poll().unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().status,
+            RuntimeStatus::Working
+        );
+        let request = queue(&mut worker, room, agent, "brief waits for the update");
+        // A three-minute install, past the queued stall grace.
+        let expired = worker
+            .state
+            .expire_stalled_queued_requests(io::now_ms() + 180_000)
+            .unwrap();
+        let phase = worker.state.request(request).unwrap().phase;
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(
+            expired.is_empty(),
+            "slow install expired queued requests: {expired:?}"
+        );
+        assert_eq!(phase, RequestPhase::Queued);
+    }
+
+    #[test]
+    fn recovered_update_error_clears_after_coordinator_restart() {
+        let error = "Bus could not install the codex update (npm failed). Answer the update prompt in bus-r1-a2's terminal; queued messages wait until then.";
+        let listing = |failed: bool| {
+            let info: crate::protocol::api::schema::AgentInfo = serde_json::from_value(json!({
+                "terminal_id": "terminal", "pane_id": "pane", "agent": "codex",
+                "agent_status": if failed { "blocked" } else { "idle" },
+                "agent_session": {"source":"herdr:codex","agent":"codex","kind":"id","value":"session"},
+                "workspace_id":"w1","tab_id":"t1","focused":false,"interactive_ready":true,"revision":1,
+                "dialog_id": if failed {Some("chooser")} else {None},
+                "update_error": if failed {Some(error)} else {None},
+            })).unwrap();
+            Ok(ResponseResult::AgentList { agents: vec![info] })
+        };
+        let (mut worker, agent, _, dir, calls) = fixture(Provider::Codex, vec![listing(true)]);
+        worker.poll().unwrap();
+        assert_eq!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .as_deref(),
+            Some(error)
+        );
+        worker.save(worker.state.clone()).unwrap();
+        drop(worker);
+        let fake = FakeTransport {
+            replies: vec![listing(false)].into(),
+            calls,
+            state_path: dir.join("state.json"),
+        };
+        let mut reopened = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+        reopened.poll().unwrap();
+        assert_eq!(
+            reopened.state.agent(agent).unwrap().status,
+            RuntimeStatus::Idle
+        );
+        let actual = reopened
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .clone();
+        drop(reopened);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            actual, None,
+            "recovered agent must not retain a stale update failure"
+        );
+    }
+}
+
+#[test]
+fn recovered_update_preserves_an_unrelated_error_after_coordinator_restart() {
+    let (mut worker, agent, _, dir, calls) = fixture(Provider::Codex, vec![]);
+    worker
+        .state
+        .observe_update_error(agent, Some("update failed".into()))
+        .unwrap();
+    worker
+        .state
+        .set_agent_error(agent, Some("unrelated delivery error".into()))
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    drop(worker);
+    let info: crate::protocol::api::schema::AgentInfo = serde_json::from_value(json!({
+        "terminal_id":"terminal","pane_id":"pane","agent":"codex","agent_status":"idle",
+        "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session"},
+        "workspace_id":"w1","tab_id":"t1","focused":false,"interactive_ready":true,"revision":1
+    }))
+    .unwrap();
+    let fake = FakeTransport {
+        replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+        calls,
+        state_path: dir.join("state.json"),
+    };
+    let mut reopened = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+    reopened.poll().unwrap();
+    let actual = reopened
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .clone();
+    let update_error = reopened.state.agent(agent).unwrap().update_error.clone();
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(actual.as_deref(), Some("unrelated delivery error"));
+    assert_eq!(update_error, None);
 }

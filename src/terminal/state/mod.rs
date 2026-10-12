@@ -105,6 +105,48 @@ pub struct TerminalState {
     session_reporter: Vec<crate::platform::ProcessInstance>,
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agents::resume::catalog::AgentResumePlan>,
+    /// The arguments `agent.start` typed for the managed agent, so Bus can
+    /// type the same command again after the agent updates itself and exits.
+    pub managed_agent_args: Option<Vec<String>>,
+    pub self_update: Option<SelfUpdate>,
+}
+
+/// An update Bus chose in a managed agent's self-update chooser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfUpdate {
+    pub name: String,
+    pub kind: AgentKind,
+    pub args: Vec<String>,
+    /// The session the agent was running, bound again after the relaunch.
+    pub session: Option<crate::agents::resume::catalog::PersistedAgentSession>,
+    /// Text the agent prints when the install succeeded, before it exits.
+    pub success: String,
+    pub phase: SelfUpdatePhase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelfUpdatePhase {
+    /// The agent installs the update; it exits when done. Past `deadline` Bus
+    /// interrupts the install once.
+    Installing {
+        deadline: Instant,
+        interrupted: bool,
+    },
+    /// The agent exited. Bus types its launch command until the shell takes
+    /// it or `deadline` passes; `failure` says why the update did not install.
+    Relaunching {
+        failure: Option<String>,
+        next_try: Instant,
+        deadline: Instant,
+    },
+    /// The install ignored Bus's interrupt; a person stops it, and its exit
+    /// still relaunches the agent with its chooser left for that person.
+    Stuck(String),
+    /// Relaunched after an installed update. The chooser showing again means
+    /// the update did not take, so Bus does not answer it twice.
+    Relaunched,
+    /// Bus will not answer the chooser again; it waits for a person.
+    Failed(String),
 }
 
 impl TerminalState {
@@ -132,6 +174,8 @@ impl TerminalState {
             session_reporter: Vec::new(),
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
+            managed_agent_args: None,
+            self_update: None,
         }
     }
 
