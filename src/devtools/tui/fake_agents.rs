@@ -253,15 +253,20 @@ impl FakeAgent {
     /// Answers `prompt` in one turn; the exit code when interrupted meanwhile.
     fn submit(&mut self, prompt: &str) -> Option<i32> {
         self.turns += 1;
-        if self.codex() && self.turns == 1 {
-            self.session_start();
-        }
         let turn = format!("{}-{}", self.session, self.turns);
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
-        self.hook("UserPromptSubmit", Some(&turn), json!({"prompt": prompt}));
         let mut prompts = vec![prompt.trim().to_owned()];
+        if self.codex() {
+            // Codex clears its composer and shows its working line at once,
+            // before any hook runs: Bus confirms the submit from that screen.
+            self.begin_turn();
+            if self.turns == 1 {
+                self.session_start();
+            }
+        }
+        self.hook("UserPromptSubmit", Some(&turn), json!({"prompt": prompt}));
         match work_seconds(prompt) {
             Some(seconds) if self.codex() => match self.work(seconds) {
                 Ok(steered) => prompts.extend(steered.iter().map(|p| p.trim().to_owned())),
@@ -269,6 +274,9 @@ impl FakeAgent {
             },
             Some(seconds) => spin(seconds),
             None => {}
+        }
+        if self.codex() {
+            self.end_turn(&prompts[1..]);
         }
         let reply = format!("fake reply: {}", prompts.join("\n"));
         let bullet = if self.codex() { '•' } else { '⏺' };
@@ -283,25 +291,28 @@ impl FakeAgent {
         None
     }
 
-    /// A Codex turn of `seconds`: its working line over a live composer, as
-    /// real Codex shows it, so Bus can type a steering message into the
-    /// running turn. Each prompt entered meanwhile joins the turn, whose one
-    /// reply answers it too. Returns those prompts, or the exit code when
-    /// interrupted.
-    fn work(&mut self, seconds: u64) -> Result<Vec<String>, i32> {
-        let started = Instant::now();
+    /// Starts a Codex turn below the sent prompt: its working line over a
+    /// live composer, as real Codex shows every turn.
+    fn begin_turn(&mut self) {
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
-        let mut out = std::io::stdout();
         let (shown, _) = self.lift(&self.draft);
-        let _ = write!(
-            out,
-            "{}",
-            working_block(&working_line(true, 0, 0), &shown, false, cols)
-        );
+        let mut out = std::io::stdout();
+        let line = working_line(true, 0, 0);
+        let _ = write!(out, "{}", working_block(&line, &shown, false, cols));
         let _ = out.flush();
-        self.working = Some((started, 0));
+        self.working = Some((Instant::now(), 0));
+    }
+
+    /// Keeps a Codex turn working until `seconds` after it began, reading
+    /// input, so Bus can type a steering message into the running turn. Each
+    /// prompt entered meanwhile joins the turn, whose one reply answers it
+    /// too. Returns those prompts, or the exit code when interrupted.
+    fn work(&mut self, seconds: u64) -> Result<Vec<String>, i32> {
         let mut steered = Vec::new();
-        while started.elapsed().as_secs() < seconds {
+        while let Some((started, frame)) = self.working {
+            if started.elapsed().as_secs() >= seconds {
+                break;
+            }
             let tick = std::time::Duration::from_millis(120);
             let bytes = match self.input.as_ref().map(|input| input.recv_timeout(tick)) {
                 Some(Ok(bytes)) => bytes,
@@ -319,19 +330,26 @@ impl FakeAgent {
                     None => {}
                 }
             }
-            if let Some((_, frame)) = &mut self.working {
-                *frame += 1;
-            }
+            self.working = Some((started, frame + 1));
             self.redraw();
         }
-        let line = working_line(true, 0, started.elapsed().as_secs());
+        Ok(steered)
+    }
+
+    /// Ends a Codex turn: its working block goes, and the prompts `steered`
+    /// into it join the transcript before the reply.
+    fn end_turn(&mut self, steered: &[String]) {
+        let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
+        let seconds = self
+            .working
+            .map_or(0, |(started, _)| started.elapsed().as_secs());
         self.working = None;
-        let _ = write!(out, "{}", work_done(&line, cols));
-        for prompt in &steered {
+        let mut out = std::io::stdout();
+        let _ = write!(out, "{}", work_done(&working_line(true, 0, seconds), cols));
+        for prompt in steered {
             let _ = write!(out, "{}", submitted(prompt));
         }
         let _ = out.flush();
-        Ok(steered)
     }
 
     fn read_loop(&mut self) -> i32 {
@@ -486,9 +504,8 @@ pub(super) fn screen_rows(text: &str, cols: u16) -> usize {
 
 /// Replaces the box (the cursor is on its first row) with the submitted
 /// prompt, as Claude Code does. The fake Codex marks it the same way, not with
-/// Codex's `›`: it shows no composer until its turn works or ends, so a `›`
-/// here would be the last one on screen and Bus would read the sent prompt as
-/// a draft.
+/// Codex's `›`: Bus reads the last `›` line on screen as the composer, and the
+/// sent prompt must never be taken for a draft.
 pub(super) fn submitted(prompt: &str) -> String {
     format!("\r\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "))
 }
