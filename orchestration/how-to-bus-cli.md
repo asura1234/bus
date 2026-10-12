@@ -288,10 +288,12 @@ the command waits for that settlement too. If the provider ended the turn on an
 error (a model at capacity, say), Bus then abandons the request with reason
 `provider_error: <message>` and the command exits 1 with code
 `message_provider_error`, which is worth a retry. Without a provider error,
-settlement closes it as `reply_not_captured` and the command succeeds.
+settlement abandons it with reason `reply_not_captured`, which `--async` counts
+as an ended turn and succeeds on.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
 command keeps waiting until someone answers it. It exits early only if the send
-fails or Bus abandons a recipient's request (exit 1), or a recipient's message
+fails or Bus abandons a recipient's request other than as `reply_not_captured`
+(exit 1), or a recipient's message
 stalls before its turn ended (exit 3, see Stalled messages); the reason is in
 the JSON error object.
 `--async` cannot be combined with `--to human`.
@@ -344,7 +346,10 @@ fix the cause (clear the input box, answer the agent, restart it), or recover
 the request explicitly with `request recover`. `wait` and `send --async` stop
 at a typed stall with exit code 3 and the reason in the JSON error; an abandoned
 queued request exits with code 1. For `--async`,
-a finished turn whose reply was not captured counts as done, not stalled.
+a finished turn whose reply was not captured counts as done, not stalled, even
+once settlement abandons it as `reply_not_captured`. A bounded `wait` needs the
+reply: it fails on any abandoned request, with `message_provider_error` for a
+provider error and `message_abandoned` otherwise (exit 1).
 
 Treat `complete: true` from `message status` or bounded `wait` as the durable
 settlement signal. An async wait can succeed earlier when every `turn_ended`
