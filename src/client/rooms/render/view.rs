@@ -61,6 +61,22 @@ impl View {
         self.hits.push(Hit { rect, action });
     }
 
+    /// The full path of the draft chip or history attachment on top at a cell.
+    pub(in crate::client::rooms) fn file_path_at(&self, column: u16, row: u16) -> Option<String> {
+        match self
+            .hits
+            .iter()
+            .rev()
+            .find(|h| h.rect.contains((column, row).into()))
+            .map(|h| &h.action)
+        {
+            Some(Action::RemoveFile(path) | Action::OpenFile(path)) => {
+                Some(path.display().to_string())
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn color_last_row(&mut self, rect: Rect, color: Color) {
         if rect.width > 0 && rect.height > 0 {
             if let Some(row) = self.rows.last_mut() {

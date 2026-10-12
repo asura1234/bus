@@ -116,6 +116,8 @@ pub(in crate::client) struct BusUi {
     pub(super) file_scroll: usize,
     pub(super) last_click: Option<(super::render::Action, std::time::Instant)>,
     pub(super) detail_path: Option<String>,
+    /// The cell the pointer last moved to, where `detail_path` was read.
+    pub(super) detail_at: (u16, u16),
     pub(super) seed_first_room: bool,
     pub(super) quitting: Option<std::time::Instant>,
     pub(super) force_exit_available: bool,
@@ -210,6 +212,7 @@ impl BusUi {
             file_scroll: 0,
             last_click: None,
             detail_path: None,
+            detail_at: (0, 0),
             seed_first_room,
             quitting: None,
             force_exit_available: false,

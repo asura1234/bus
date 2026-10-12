@@ -133,6 +133,13 @@ impl BusUi {
         let files = self.draft_files(room);
         self.file_scroll = self.file_scroll.min(files.len().saturating_sub(1));
         file_rows(view, &files, self.file_scroll, layout);
+        // The pointer only reports moves, so a chip removed or sent from under
+        // a still pointer would otherwise keep its path up until the next move.
+        if self.detail_path.is_some()
+            && view.file_path_at(self.detail_at.0, self.detail_at.1) != self.detail_path
+        {
+            self.detail_path = None;
+        }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local, layout);
     }
