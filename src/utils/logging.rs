@@ -547,11 +547,25 @@ fn maintain_archives(path: &Path, policy: &ArchivePolicy, now: SystemTime) {
 }
 
 /// The archives Archive retention left for `path`, oldest first; a name ending
-/// in `.gz` is compressed.
+/// in `.gz` is compressed. Read-only: when an interrupted compression left both
+/// copies it lists the `.gz` and leaves the plain one to the writer's cleanup.
 pub(crate) fn archived_files(path: &Path) -> Vec<PathBuf> {
-    let mut archives = list_archives(path);
-    archives.sort_by_key(|archive| archive.rotated_at);
-    archives.into_iter().map(|archive| archive.path).collect()
+    let mut archives: Vec<(SystemTime, bool, PathBuf)> = archive_dir_entries(path)
+        .into_iter()
+        .filter_map(|(entry, rest)| {
+            let compressed = rest.ends_with(ARCHIVE_GZ);
+            let stem = rest.strip_suffix(ARCHIVE_GZ).unwrap_or(&rest);
+            Some((archive_time(stem)?, compressed, entry))
+        })
+        .collect();
+    let finished: std::collections::HashSet<SystemTime> = archives
+        .iter()
+        .filter(|(_, compressed, _)| *compressed)
+        .map(|(rotated_at, _, _)| *rotated_at)
+        .collect();
+    archives.retain(|(rotated_at, compressed, _)| *compressed || !finished.contains(rotated_at));
+    archives.sort_by_key(|(rotated_at, _, _)| *rotated_at);
+    archives.into_iter().map(|(_, _, path)| path).collect()
 }
 
 /// Archive names under `path`'s directory, one entry per archive. A plain

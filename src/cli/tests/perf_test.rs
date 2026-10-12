@@ -227,3 +227,29 @@ fn perf_reader_does_not_wait_for_the_session_registry_writer() {
         "bus perf must read evidence without waiting for session-registry.lock; status={status:?}"
     );
 }
+
+#[test]
+fn perf_reader_preserves_plain_archives_beside_finished_gzip_copies() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-reader-read-only");
+    let perf = dir.join("perf");
+    std::fs::create_dir_all(&perf).unwrap();
+    let plain = perf.join("client.jsonl.20260101T000000.000000000Z");
+    let compressed = perf.join("client.jsonl.20260101T000000.000000000Z.gz");
+    let contents = format!("{}\n", window("client", 100, json!({})));
+    std::fs::write(&plain, &contents).unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(
+        std::fs::File::create(compressed).unwrap(),
+        flate2::Compression::default(),
+    );
+    std::io::Write::write_all(&mut encoder, contents.as_bytes()).unwrap();
+    encoder.finish().unwrap();
+    let records = read_records(&dir, None);
+    let retained_plain = std::fs::read_to_string(&plain).ok();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(records.len(), 1, "finished compression is read once");
+    assert_eq!(
+        retained_plain.as_deref(),
+        Some(contents.as_str()),
+        "a files-only perf reader must leave archive maintenance to the writer"
+    );
+}
