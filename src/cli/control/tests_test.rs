@@ -853,7 +853,34 @@ fn run_async(
 }
 
 #[test]
-fn send_async_prints_the_message_id_then_returns_once_the_turn_ended() {
+fn send_async_emits_one_json_document() {
+    let mut output = Vec::new();
+    run_with_pause(
+        &[
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ]
+        .map(String::from),
+        &mut output,
+        &mut |request, _| {
+            Ok(Response::success(
+                &request.id,
+                if request.method == "message.send" {
+                    json!({"message_id":19,"request_ids":[41],"stage":"queued"})
+                } else {
+                    status(vec![recipient(1, "replied", true)])
+                },
+            ))
+        },
+        |_| {},
+    )
+    .unwrap();
+    let response: Value = serde_json::from_slice(&output).expect("one JSON document");
+    assert_eq!(response["result"]["message_id"], 19);
+    assert_eq!(response["result"]["requests"][0]["turn_ended"], true);
+}
+
+#[test]
+fn send_async_returns_the_message_id_and_receipt_once_the_turn_ended() {
     let (outcome, lines, timeouts, pauses) = run_async(
         &[],
         [
@@ -863,11 +890,15 @@ fn send_async_prints_the_message_id_then_returns_once_the_turn_ended() {
         ],
     );
     assert!(outcome.is_ok());
-    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["result"]["message_id"], 19);
-    assert_eq!(lines[1]["ok"], true);
-    assert_eq!(lines[1]["result"]["requests"][0]["turn_ended"], true);
-    assert_eq!(lines[0]["id"], lines[1]["id"]);
+    assert_eq!(
+        lines[0]["result"]["send_receipt"]["request_ids"],
+        json!([41])
+    );
+    assert_eq!(lines[0]["ok"], true);
+    assert_eq!(lines[0]["result"]["requests"][0]["turn_ended"], true);
+    assert!(lines[0]["id"].is_string());
     assert!(timeouts.iter().all(Option::is_none), "no per-read deadline");
     assert_eq!(pauses, [Duration::from_millis(200); 2]);
 }
@@ -881,7 +912,7 @@ fn send_async_has_no_time_limit_and_keeps_waiting_while_blocked() {
         .chain([status(vec![recipient(1, "delivered", true)])]);
     let (outcome, lines, _, pauses) = run_async(&[], statuses);
     assert!(outcome.is_ok());
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 1);
     assert_eq!(pauses.len(), polls);
     assert!(pauses.iter().sum::<Duration>() > Duration::from_secs(600));
 }
@@ -907,7 +938,7 @@ fn send_async_waits_for_every_recipient() {
     );
     assert!(outcome.is_ok());
     assert_eq!(pauses.len(), 2);
-    assert_eq!(lines[1]["result"]["requests"][1]["turn_ended"], true);
+    assert_eq!(lines[0]["result"]["requests"][1]["turn_ended"], true);
 }
 
 #[test]
@@ -930,9 +961,9 @@ fn send_async_fails_when_a_request_is_abandoned() {
         error.contains("abandoned message 19 for agent a2"),
         "{error}"
     );
-    assert_eq!(lines[1]["ok"], false);
-    assert_eq!(lines[1]["error"]["code"], "message_abandoned");
-    assert_eq!(lines[1]["result"]["requests"][1]["stage"], "abandoned");
+    assert_eq!(lines[0]["ok"], false);
+    assert_eq!(lines[0]["error"]["code"], "message_abandoned");
+    assert_eq!(lines[0]["result"]["requests"][1]["stage"], "abandoned");
 }
 
 fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {
@@ -969,7 +1000,7 @@ fn send_async_exits_early_with_the_stalled_code_and_reason() {
         error.contains("message 19 stalled for agent a1 while queued: input_box_not_empty"),
         "{error}"
     );
-    assert_eq!(lines[1]["error"]["code"], "message_stalled");
+    assert_eq!(lines[0]["error"]["code"], "message_stalled");
 }
 
 #[test]
@@ -984,7 +1015,7 @@ fn send_async_counts_a_finished_turn_without_a_captured_reply_as_done() {
         )])],
     );
     assert!(outcome.is_ok());
-    assert_eq!(lines[1]["ok"], true);
+    assert_eq!(lines[0]["ok"], true);
 }
 
 #[test]
@@ -1273,10 +1304,10 @@ fn send_async_recovers_from_transient_server_busy_after_queued_receipt() {
         "transient overload must not end a queued send: {lines:?}"
     );
     assert_eq!(polls, 3);
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0]["result"]["stage"], "queued");
-    assert_eq!(lines[1]["result"]["requests"][0]["turn_ended"], true);
-    assert_eq!(lines[0]["id"], lines[1]["id"]);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["result"]["send_receipt"]["stage"], "queued");
+    assert_eq!(lines[0]["result"]["requests"][0]["turn_ended"], true);
+    assert!(lines[0]["id"].is_string());
     assert!(pauses.iter().all(|pause| !pause.is_zero()));
 }
 

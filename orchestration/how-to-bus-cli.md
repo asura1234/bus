@@ -263,10 +263,10 @@ defaults to 60 seconds.
 
 ### Send and follow a task with `--async`
 
-`send --async` sends as usual, prints the send receipt (with `message_id`)
-first, then blocks with no time limit until every recipient has worked on the
-message and gone idle again, and prints the final `message status` as a second
-JSON line:
+`send --async` sends as usual, then blocks with no time limit until every
+recipient has worked on the message and gone idle again. It emits one JSON
+object containing the final `message status`, `message_id`, and the original
+send receipt in `result.send_receipt`:
 
 ```sh
 bus send --room "$room_id" --as "$me" --to "$agent_id" --async \
@@ -282,8 +282,8 @@ polls. A captured reply also counts.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
 command keeps waiting until someone answers it. It exits early only if the send
 fails or Bus abandons a recipient's request (exit 1), or a recipient's message
-stalls before its turn ended (exit 3, see Stalled messages); the reason is on
-stderr.
+stalls before its turn ended (exit 3, see Stalled messages); the reason is in
+the JSON error object.
 `--async` cannot be combined with `--to human`.
 
 Orchestrators run it as a background tool call (Claude Code: Bash with
@@ -331,7 +331,7 @@ reads `blocked_unanswered` so the block shows in `message status`, but the stage
 stays as it was and `send --async` keeps waiting. For a typed stalled request,
 fix the cause (clear the input box, answer the agent, restart it), or recover
 the request explicitly with `request recover`. `wait` and `send --async` stop
-at a typed stall with exit code 3 and the reason on stderr; an abandoned
+at a typed stall with exit code 3 and the reason in the JSON error; an abandoned
 queued request exits with code 1. For `--async`,
 a finished turn whose reply was not captured counts as done, not stalled.
 

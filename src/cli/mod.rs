@@ -67,6 +67,19 @@ fn apply_dev_environment(dev: bool) {
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
     let invocation = parse_invocation(args).map_err(io::Error::other)?;
+    let control_args = match &invocation.action {
+        Action::Control(args) => Some(args.clone()),
+        _ => None,
+    };
+    match run_invocation(invocation) {
+        Err(error) if control_args.is_some() => {
+            control::report_setup_failure(control_args.as_deref().unwrap_or_default(), error)
+        }
+        result => result,
+    }
+}
+
+fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     let dev = invocation.dev;
     apply_dev_environment(dev);
     if invocation.action == Action::Help {

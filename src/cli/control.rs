@@ -51,12 +51,26 @@ pub fn run(data_dir: &Path, args: &[String]) -> io::Result<()> {
         },
     );
     if let Err(error) = &result {
-        if let Some(exit) = error.get_ref().and_then(|e| e.downcast_ref::<CliExit>()) {
-            eprintln!("bus: {exit}");
-            std::process::exit(exit.code);
-        }
+        // The JSON envelope already explains the failure. Returning it to
+        // main would append Rust's plain-text error to combined tool output.
+        let code = error
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<CliExit>())
+            .map_or(1, |exit| exit.code);
+        std::process::exit(code);
     }
     result
+}
+
+/// Setup failures happen before the control request, but have the same JSON contract.
+pub(super) fn report_setup_failure(args: &[String], error: io::Error) -> io::Result<()> {
+    let generated_id = next_request_id();
+    let id = parse(args, &generated_id).map_or(generated_id, |command| command.request_id);
+    write_response(
+        &mut io::stdout().lock(),
+        &Response::failure(&id, "control_unavailable", error.to_string()),
+    )?;
+    std::process::exit(1)
 }
 
 fn next_request_id() -> String {
@@ -97,13 +111,15 @@ fn run_with_pause(
             let follow = command.follow;
             let sent = execute(command, &mut *send);
             if follow && sent.ok {
-                // The send receipt comes first, so a caller that stops
-                // reading early still knows the message id to look up.
-                write_response(output, &sent)?;
                 let mut followed =
                     follow_message(&sent.id, &sent.result["message_id"], send, &mut pause);
-                // Both lines answer the caller's one request id.
                 followed.id.clone_from(&sent.id);
+                if !followed.result.is_object() {
+                    followed.result = serde_json::json!({});
+                }
+                followed.result["send_receipt"] = sent.result;
+                followed.result["message_id"] =
+                    followed.result["send_receipt"]["message_id"].clone();
                 followed
             } else {
                 sent

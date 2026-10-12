@@ -1,6 +1,29 @@
 //! No-model executable checks. These never start provider processes.
 use std::process::Command;
 
+#[test]
+fn failed_agent_reads_emit_only_one_json_object_even_when_streams_are_combined() {
+    let home = isolated_home("read-json");
+    for args in [
+        vec!["agent", "read", "worker"],
+        vec!["agent", "read", "worker", "--source", "visible"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+            .args(args)
+            .env("BUS_DATA_DIR", &home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let mut combined = output.stdout;
+        combined.extend(output.stderr);
+        let response: serde_json::Value =
+            serde_json::from_slice(&combined).expect("single JSON object on failure");
+        assert_eq!(response["ok"], false);
+        assert!(response["error"]["code"].is_string());
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 fn isolated_home(label: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "bus-shell-{label}-{}-{}",
@@ -249,4 +272,26 @@ fn the_dev_variant_routes_tui_only_under_dev() {
         .expect("run bus");
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("bus --dev tui"));
+}
+
+#[test]
+fn control_without_a_recorded_session_still_emits_one_json_error() {
+    let home = isolated_home("control-no-session");
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["state"])
+        .env_remove("BUS_DATA_DIR")
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let mut combined = output.stdout;
+    combined.extend(output.stderr);
+    let response: serde_json::Value =
+        serde_json::from_slice(&combined).expect("one JSON error for session selection");
+    assert_eq!(response["ok"], false);
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("No local Bus session"));
+    std::fs::remove_dir_all(home).unwrap();
 }
