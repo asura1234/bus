@@ -324,101 +324,38 @@ mod status_tests {
 mod update_lifecycle_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn slow_startup_update_preserves_queued_messages_until_it_finishes() {
-        use crate::agents::{AgentKind, AgentState};
-        use crate::server::app::{App, AppPolicy};
-        use crate::server::workspaces::Workspace;
-        use crate::terminal::events::TerminalEvent;
-        let (_, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::utils::config::Config::default(),
-            AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::server::api::EventHub::default(),
-        );
-        app.state.workspaces = vec![Workspace::test_new("update")];
-        app.state.ensure_test_terminals();
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        let pane = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
-            .attached_terminal_id
-            .clone();
-        let (runtime, mut writes) =
-            crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 16);
-        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
-        let public_pane = app.public_pane_id(0, pane).unwrap();
-        let start = app.handle_api_request(crate::protocol::api::schema::Request {
-            id: "start".into(),
-            method: Method::AgentStart(crate::protocol::api::schema::AgentStartParams {
-                name: "bus-r1-a2".into(),
-                kind: "codex".into(),
-                pane_id: public_pane,
-                args: vec![],
-                timeout_ms: Some(4000),
-            }),
-        });
-        assert!(start.contains("agent_started"), "{start}");
-        writes.try_recv().unwrap();
-        app.terminal_runtimes
-            .get(&terminal_id)
-            .unwrap()
-            .test_process_pty_bytes(include_bytes!(
-                "../../../../tests/fixtures/codex-update/chooser-0.162.ansi"
-            ));
-        let now = std::time::Instant::now();
-        let event = |state, blocker| TerminalEvent::StateChanged {
-            pane_id: pane,
-            agent: Some(AgentKind::Codex),
-            state,
-            visible_blocker: blocker,
-            process_exited: false,
-            exited_process: None,
-            observed_at: now,
-        };
-        app.state.handle_app_event(event(AgentState::Blocked, true));
-        assert!(app.supervise_self_updates(now));
-        assert_eq!(writes.try_recv().unwrap(), bytes::Bytes::from_static(b"\r"));
-        app.terminal_runtimes
-            .get(&terminal_id)
-            .unwrap()
-            .test_process_pty_bytes(
-                b"\x1b[2J\x1b[HUpdating Codex via `npm install -g @openai/codex`...\r\n",
-            );
-        app.state
-            .handle_app_event(event(AgentState::Working, false));
-        app.supervise_self_updates(now);
-        let listing = app.handle_api_request(crate::protocol::api::schema::Request {
-            id: "list".into(),
-            method: Method::AgentList(crate::protocol::api::schema::EmptyParams {}),
-        });
-        let response: crate::protocol::api::schema::SuccessResponse =
-            serde_json::from_str(&listing).unwrap();
-        let ResponseResult::AgentList { agents } = &response.result else {
-            panic!("{listing}")
-        };
-        let info = &agents[0];
-        assert_eq!(
-            info.agent_status,
-            crate::protocol::api::schema::AgentStatus::Working
-        );
-        assert!(info.dialog_id.is_none());
-        let identity = AgentRuntimeIdentity {
-            launch_id: Some("launch".into()),
-            terminal_id: Some(info.terminal_id.clone()),
-            pane_id: Some(info.pane_id.clone()),
-            session_id: None,
-        };
-        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![Ok(response.result)]);
+    /// What `agent.list` reports for a Codex Bus started while it installs the
+    /// update Bus chose in its startup chooser (pinned server-side by
+    /// `a_bus_started_codex_installing_its_update_is_listed_working_and_ready`).
+    fn codex_installing_its_update() -> Result<ResponseResult, TransportError> {
+        let info = serde_json::from_value(json!({
+            "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
+            "agent": "codex", "agent_status": "working",
+            "launch_pending": false, "interactive_ready": true,
+            "workspace_id": "w1", "tab_id": "t1", "focused": false, "revision": 1
+        }))
+        .unwrap();
+        Ok(ResponseResult::AgentList { agents: vec![info] })
+    }
+
+    #[test]
+    fn slow_startup_update_preserves_queued_messages_until_it_finishes() {
+        let (mut worker, agent, room, dir, _) =
+            fixture(Provider::Codex, vec![codex_installing_its_update()]);
+        let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
         worker
             .state
             .set_agent_runtime_identity(agent, identity)
             .unwrap();
         worker.save(worker.state.clone()).unwrap();
         worker.poll().unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().status,
+            RuntimeStatus::Working
+        );
         let request = queue(&mut worker, room, agent, "brief waits for the update");
+        // A three-minute install, past the queued stall grace.
         let expired = worker
             .state
             .expire_stalled_queued_requests(io::now_ms() + 180_000)
@@ -428,7 +365,7 @@ mod update_lifecycle_tests {
         std::fs::remove_dir_all(dir).unwrap();
         assert!(
             expired.is_empty(),
-            "slow install expired queued requests: {expired:?}; phase={phase:?}"
+            "slow install expired queued requests: {expired:?}"
         );
         assert_eq!(phase, RequestPhase::Queued);
     }
