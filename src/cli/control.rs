@@ -25,8 +25,8 @@ mod focus_tests;
 /// caller can tell "stuck, look at it" from a failed command (1).
 pub(crate) const STALLED_EXIT_CODE: i32 = 3;
 
-/// A failure that ends the process with its own code and a one-line reason on
-/// stderr, instead of the generic error report.
+/// Preserve a specific exit code after the failure reason is emitted in JSON,
+/// so process termination does not add a second plain-text error report.
 #[derive(Debug)]
 struct CliExit {
     code: i32,

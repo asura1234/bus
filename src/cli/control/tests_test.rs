@@ -1509,3 +1509,130 @@ fn parse_errors_do_not_advertise_dev_tools() {
         }
     }
 }
+
+#[test]
+fn send_async_failure_keeps_the_send_receipt_and_message_id() {
+    let (outcome, lines, _, _) = run_async(&[], [status(vec![recipient(1, "abandoned", false)])]);
+    assert!(outcome.is_err());
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["error"]["code"], "message_abandoned");
+    assert_eq!(lines[0]["result"]["message_id"], 19);
+    assert_eq!(
+        lines[0]["result"]["send_receipt"]["request_ids"],
+        json!([41])
+    );
+}
+
+#[test]
+fn wait_async_keeps_polling_through_more_server_busy_replies_than_a_plain_command_retries() {
+    let mut reads = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            reads += 1;
+            Ok(if reads <= 6 {
+                Response::failure(&request.id, "server_busy", "busy")
+            } else {
+                Response::success(
+                    &request.id,
+                    json!({"message_id":19,"complete":true,"requests":[]}),
+                )
+            })
+        });
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 7);
+}
+
+#[test]
+fn wait_async_with_an_explicit_timeout_names_the_conflicting_options() {
+    let error = command(&["wait", "--message", "19", "--async", "--timeout", "60"]).unwrap_err();
+    assert!(
+        error.contains("--async") && error.contains("--timeout"),
+        "{error}"
+    );
+}
+
+#[test]
+fn wait_async_keeps_waiting_through_a_transient_transport_error() {
+    let mut reads = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            reads += 1;
+            if reads == 2 {
+                return Err("No developer endpoint is available".into());
+            }
+            Ok(Response::success(
+                &request.id,
+                json!({"message_id":19,"complete":reads >= 3,"requests":[]}),
+            ))
+        });
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 3);
+}
+
+#[test]
+fn wait_timeout_negative_or_blank_values_explain_the_supported_range() {
+    for timeout in ["-1", ""] {
+        let error = command(&["wait", "--message", "19", "--timeout", timeout]).unwrap_err();
+        assert!(error.contains("1-600"), "{timeout:?}: {error}");
+    }
+}
+
+#[test]
+fn wait_async_recovers_before_first_status_and_still_stops_at_a_dialog() {
+    let mut reads = 0;
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--async"],
+        |request, timeout| {
+            assert!(timeout.is_none());
+            reads += 1;
+            if reads <= 2 {
+                return Err("temporary connection loss".into());
+            }
+            Ok(Response::success(
+                &request.id,
+                json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[]}),
+            ))
+        },
+    );
+    assert_eq!(reads, 3);
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "agent_waiting_on_dialog");
+    assert_eq!(response["result"]["waiting_on_dialog"], json!([1]));
+}
+
+#[test]
+fn bounded_wait_still_reports_transport_error_without_retrying_it() {
+    let mut reads = 0;
+    let pending = json!({"message_id":19,"complete":false,"requests":[]});
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--timeout", "60"],
+        |request, timeout| {
+            assert!(timeout.is_some());
+            reads += 1;
+            if reads == 2 {
+                return Err("connection lost".into());
+            }
+            Ok(Response::success(&request.id, pending.clone()))
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(reads, 2);
+    assert_eq!(response["error"]["code"], "transport_error");
+    assert_eq!(response["result"], pending);
+}
+
+#[test]
+fn wait_timeout_attached_and_blank_values_use_the_wait_diagnostics() {
+    for args in [
+        vec!["wait", "--message", "19", "--timeout", ""],
+        vec!["wait", "--message", "19", "--timeout=-1"],
+    ] {
+        let error = command(&args).unwrap_err();
+        assert!(error.contains("1-600"), "{error}");
+    }
+    let error = command(&["wait", "--message", "19", "--timeout=60", "--async"]).unwrap_err();
+    assert!(
+        error.contains("--async") && error.contains("--timeout"),
+        "{error}"
+    );
+}

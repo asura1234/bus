@@ -83,8 +83,7 @@ fn cli() -> Command {
                     Arg::new("timeout")
                         .long("timeout")
                         .default_value("60")
-                        .conflicts_with("async")
-                        .value_parser(NonEmptyStringValueParser::new()),
+                        .allow_hyphen_values(true),
                 ),
         )
         .subcommand(subcommand("history").arg(option("room")))
@@ -185,10 +184,15 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
             _ => return Err("unknown request command".into()),
         },
         "wait" => {
+            if args.get_flag("async")
+                && args.value_source("timeout") == Some(clap::parser::ValueSource::CommandLine)
+            {
+                return Err("wait --async cannot be combined with --timeout; omit --timeout for a deadline-free wait".into());
+            }
             if !args.get_flag("async") {
-                let timeout = required(args, "timeout")?
-                    .parse::<u64>()
-                    .ok()
+                let timeout = args
+                    .get_one::<String>("timeout")
+                    .and_then(|value| value.parse::<u64>().ok())
                     .filter(|timeout| (1..=600).contains(timeout))
                     .ok_or_else(|| {
                         "wait --timeout must be an integer in the range 1-600 seconds".to_owned()

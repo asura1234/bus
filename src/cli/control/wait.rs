@@ -163,6 +163,11 @@ pub(super) fn execute(
         let mut response = match send(&request, remaining) {
             Ok(response) => response,
             Err(message) => {
+                if waiting && deadline.is_none() {
+                    thread::sleep(Duration::from_secs(1));
+                    request.id = next_request_id();
+                    continue;
+                }
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return timeout_response(&id, last_status);
                 }

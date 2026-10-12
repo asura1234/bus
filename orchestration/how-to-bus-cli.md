@@ -245,7 +245,9 @@ deadline until the message settles or a recipient needs a dialog. It returns
 `agent_waiting_on_dialog` with the last status; answer the dialog, then wait
 again. `--async` and an explicit `--timeout` cannot be combined. Unlike
 `send --async`, `wait --async` stops at a dialog rather than waiting for it to
-be answered. Each transport request still has its normal finite timeout.
+be answered. Each transport request still has its normal finite timeout;
+`wait --async` retries transport failures after a one-second pause, like
+`send --async`. Bounded waits still report transport failures immediately.
 To obtain a message ID before waiting, use plain `send`, then `wait --async`.
 
 To record the message as written by a room agent instead of the human, add
