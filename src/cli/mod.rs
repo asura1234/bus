@@ -97,6 +97,22 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     }
 }
 
+/// The session control commands target. The perf reader only reads files, so it
+/// looks the session up without recording it, which would wait for the registry lock.
+fn last_session(
+    registry: &LocalSessionRegistry,
+    action: &Action,
+) -> io::Result<sessions::LocalSession> {
+    let reads_perf =
+        matches!(action, Action::Control(args) if args.first().is_some_and(|arg| arg == "perf"));
+    if reads_perf {
+        registry.last()
+    } else {
+        registry.resume(ResumeTarget::Last)
+    }
+    .map_err(io::Error::other)
+}
+
 fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     let dev = invocation.dev;
     apply_dev_environment(dev);
@@ -147,23 +163,11 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
             return Ok(());
         }
-        // The perf reader only reads files: it must not wait to record the session.
-        Action::Control(args) if args.first().is_some_and(|arg| arg == "perf") => {
-            match explicit_root {
-                Some(root) => (root, None),
-                None => {
-                    let session = registry.last().map_err(io::Error::other)?;
-                    (session.root, Some(session.id))
-                }
-            }
-        }
         // Stop targets the same session as control commands.
         Action::Control(_) | Action::Stop => match explicit_root {
             Some(root) => (root, None),
             None => {
-                let session = registry
-                    .resume(ResumeTarget::Last)
-                    .map_err(io::Error::other)?;
+                let session = last_session(&registry, &invocation.action)?;
                 (session.root, Some(session.id))
             }
         },
