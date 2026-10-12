@@ -230,7 +230,8 @@ impl Write for RotatingFileGuard {
     }
 }
 
-struct RotatingFileState {
+/// An append-only file that rotates at a size limit.
+pub(crate) struct RotatingFileState {
     path: PathBuf,
     max_bytes: u64,
     retention: Retention,
@@ -275,6 +276,32 @@ impl Drop for SharedLogLock {
 }
 
 impl RotatingFileState {
+    pub(crate) fn open(path: PathBuf, max_bytes: u64, retained_files: usize) -> io::Result<Self> {
+        let mut state = Self {
+            path,
+            max_bytes,
+            retention: Retention::Generations(retained_files),
+            file: None,
+            current_size: 0,
+            disabled: false,
+            archive_signal: None,
+        };
+        state.open_current_file()?;
+        Ok(state)
+    }
+
+    /// Appends one record whole, rotating first when it would cross the limit.
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let _shared = self.lock_for_append(bytes.len() as u64, SharedLogLock(None))?;
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("log file closed"))?;
+        file.write_all(bytes)?;
+        self.current_size = self.current_size.saturating_add(bytes.len() as u64);
+        Ok(())
+    }
+
     /// Blocks until this process holds the lock of the file that is live at
     /// the log path, following renames by other writers, and counts the bytes
     /// they appended. Errors only on I/O failure, never with the file unlocked.
