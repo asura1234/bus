@@ -451,3 +451,41 @@ fn transient_unavailable_turn_does_not_stall_without_session_invalidation() {
         None
     );
 }
+
+#[test]
+fn invalidated_typed_requests_preserve_live_status_and_progress_grace() {
+    for phase in [RequestPhase::Submitting, RequestPhase::Active] {
+        let (mut state, agent, request) = idle_with_queued(1_000, "go");
+        state.begin_submission(request, "launch-codex", 5).unwrap();
+        state.requests.get_mut(&request).unwrap().phase = phase;
+        state.invalidate_agent_session(agent).unwrap();
+        for status in [
+            RuntimeStatus::Working,
+            RuntimeStatus::Blocked,
+            RuntimeStatus::Launching,
+        ] {
+            state.observe_status(agent, status, 3_000).unwrap();
+            assert_eq!(
+                stall_at(&state, request, 3_000 + DELIVERED_STALL_MS * 10),
+                None
+            );
+        }
+        state
+            .observe_status(agent, RuntimeStatus::Unavailable, 4_000)
+            .unwrap();
+        state.requests.get_mut(&request).unwrap().progress_at_ms = Some(10_000);
+        assert_eq!(
+            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS - 1),
+            None
+        );
+        assert_eq!(
+            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS).as_deref(),
+            Some("session_invalidated")
+        );
+        state.agents.get_mut(&agent).unwrap().dialog = true;
+        assert_eq!(
+            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS * 10),
+            None
+        );
+    }
+}

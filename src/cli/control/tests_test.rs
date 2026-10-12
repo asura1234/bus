@@ -1760,3 +1760,61 @@ fn wait_async_ignores_finished_stalls_while_other_recipients_work() {
     assert!(outcome.is_ok(), "{response}");
     assert_eq!(reads, 2);
 }
+
+#[test]
+fn async_wait_and_send_share_settlement_across_recipient_stages() {
+    for stage in [
+        "queued",
+        "submitting",
+        "awaiting_start",
+        "delivered",
+        "joined",
+        "replied",
+        "abandoned",
+        "stalled",
+    ] {
+        for ended in [false, true] {
+            let snapshot = status(vec![recipient(1, stage, ended)]);
+            let final_status = status(vec![recipient(1, "replied", true)]);
+            let mut wait_reads = 0;
+            let (outcome, waited) =
+                run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+                    wait_reads += 1;
+                    assert!(wait_reads <= 2);
+                    Ok(Response::success(
+                        &request.id,
+                        if wait_reads == 1 {
+                            snapshot.clone()
+                        } else {
+                            final_status.clone()
+                        },
+                    ))
+                });
+            let mut send_reads = 0;
+            let sent = follow_message(
+                "follow",
+                &json!(19),
+                &mut |request, _| {
+                    send_reads += 1;
+                    assert!(send_reads <= 2);
+                    Ok(Response::success(
+                        &request.id,
+                        if send_reads == 1 {
+                            snapshot.clone()
+                        } else {
+                            final_status.clone()
+                        },
+                    ))
+                },
+                &mut |_| {},
+            );
+            assert_eq!(wait_reads, send_reads, "{stage} ended={ended}");
+            assert_eq!(outcome.is_ok(), sent.ok, "{stage} ended={ended}");
+            assert_eq!(waited["result"], sent.result);
+            assert_eq!(
+                waited["error"]["code"].as_str(),
+                sent.error.as_ref().map(|error| error.code.as_str())
+            );
+        }
+    }
+}
