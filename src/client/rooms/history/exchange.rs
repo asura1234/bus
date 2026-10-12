@@ -199,6 +199,7 @@ impl History {
         if prompt.compaction_limit_notice {
             return;
         }
+        let mut replied = false;
         for agent_id in &prompt.recipient_ids {
             let Some(agent) = state.agent(*agent_id) else {
                 continue;
@@ -231,6 +232,25 @@ impl History {
             } else {
                 ("…", None)
             };
+            // One blank row between replies, as at every other block
+            // boundary; the exchange's own Gap row follows the last one.
+            if replied {
+                lines.push(Line {
+                    text: String::new(),
+                    action: None,
+                    tone: Tone::Text,
+                    spans: Vec::new(),
+                    styles: Vec::new(),
+                    links: None,
+                    thumbnail: None,
+                    raw_markdown: None,
+                    continued: false,
+                    rejoin_space: false,
+                    copy_from: 0,
+                    anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Gap),
+                });
+            }
+            replied = true;
             let reply_header = vec![
                 (agent.name.clone(), Tone::Agent(agent.id)),
                 (format!("  {}", provider(agent.provider)), Tone::Muted),
