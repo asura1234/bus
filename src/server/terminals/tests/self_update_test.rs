@@ -536,3 +536,67 @@ async fn updater_exiting_after_interrupt_grace_is_relaunched_for_manual_recovery
     );
     assert!(String::from_utf8_lossy(&relaunch.unwrap()).contains("codex"));
 }
+
+#[tokio::test]
+async fn relaunch_failure_never_attributes_its_error_to_a_later_unmanaged_codex() {
+    let mut harness = codex_at_update_chooser();
+    let now = Instant::now();
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+    harness.exit_with("Error: the install failed");
+    let (_, closed) = tokio::sync::mpsc::channel::<Bytes>(1);
+    harness.writes = closed;
+    harness.app.supervise_self_updates(now);
+    harness
+        .app
+        .supervise_self_updates(now + SELF_UPDATE_EXIT_TIMEOUT + std::time::Duration::from_secs(1));
+    assert_eq!(harness.phase(), None);
+    assert!(harness.app.agent_info(0, harness.pane).is_none());
+    // A person starts their own Codex later, under the same captured chooser.
+    harness.show(CHOOSER);
+    harness
+        .terminal()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Blocked);
+    let info = harness.app.agent_info(0, harness.pane).unwrap();
+    assert!(info.dialog_id.is_some());
+    assert_eq!(info.name, None);
+    assert_eq!(info.update_error, None);
+    assert!(!harness
+        .app
+        .supervise_self_updates(now + std::time::Duration::from_secs(60)));
+}
+
+#[tokio::test]
+async fn stuck_update_reports_blocked_while_waiting_for_a_person_to_stop_it() {
+    let mut harness = codex_at_update_chooser();
+    let now = Instant::now();
+    harness.terminal().reconcile_managed_agent_at(now, false);
+    assert!(harness.app.supervise_self_updates(now));
+    harness.writes.try_recv().unwrap();
+    harness.show(b"\x1b[2J\x1b[HUpdating Codex via `npm install -g @openai/codex`...\r\n");
+    harness
+        .terminal()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    assert!(harness
+        .app
+        .supervise_self_updates(now + SELF_UPDATE_INSTALL_TIMEOUT));
+    assert_eq!(
+        harness.writes.try_recv().unwrap(),
+        Bytes::from_static(b"\x03")
+    );
+    assert!(harness
+        .app
+        .supervise_self_updates(now + SELF_UPDATE_INSTALL_TIMEOUT + SELF_UPDATE_EXIT_TIMEOUT));
+    assert!(matches!(harness.phase(), Some(SelfUpdatePhase::Stuck(_))));
+    let info = harness.app.agent_info(0, harness.pane).unwrap();
+    assert!(info
+        .update_error
+        .as_deref()
+        .is_some_and(|error| error.contains("Stop it in")));
+    assert!(info.dialog_id.is_none());
+    assert_eq!(
+        info.agent_status,
+        schema::AgentStatus::Blocked,
+        "an update waiting on a person's recovery action must be shown as blocked"
+    );
+}

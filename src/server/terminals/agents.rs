@@ -387,7 +387,15 @@ impl App {
             terminal_title: pane.terminal_title,
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
-            agent_status: pane.agent_status,
+            // An install that ignored Bus's interrupt waits on a person to stop
+            // it; its screen still reads as working.
+            agent_status: match &terminal.self_update {
+                Some(crate::terminal::SelfUpdate {
+                    phase: crate::terminal::SelfUpdatePhase::Stuck(_),
+                    ..
+                }) => crate::protocol::api::schema::AgentStatus::Blocked,
+                _ => pane.agent_status,
+            },
             screen_detection_skipped: false,
             dialog_id: self
                 .lookup_runtime_sender(ws_idx, pane_id)
