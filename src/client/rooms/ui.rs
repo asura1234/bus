@@ -327,7 +327,9 @@ impl BusUi {
                 // A newly launched agent's worker request can finish after a later
                 // client-side selection. Restore that selection instead of allowing
                 // the old native focus to strand its terminal behind the preview.
-                self.native_focus_pending = self.terminal_pane().is_some();
+                // An open rename keeps that terminal shown, and nothing restores
+                // focus when the rename closes, so restore it now.
+                self.native_focus_pending = self.shown_terminal_pane().is_some();
             }
             BusEvent::Suggestions { query_id, result } if query_id == self.suggestions.query_id => {
                 match result {
