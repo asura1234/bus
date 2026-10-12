@@ -266,7 +266,11 @@ fn late_worker_focus_during_rename_still_reasserts_the_open_agent() {
         ui.open_terminal(selected);
         let mut shell = shell_with(ui);
         shell.tick_bus(&mut ClientShellInput::default());
-        key(shell.bus.as_mut().unwrap(), KeyCode::F(2), KeyModifiers::NONE);
+        key(
+            shell.bus.as_mut().unwrap(),
+            KeyCode::F(2),
+            KeyModifiers::NONE,
+        );
         assert!(shell.bus.as_ref().unwrap().rename.is_some());
         // The launching agent's worker steals native focus while the field is open.
         shell
