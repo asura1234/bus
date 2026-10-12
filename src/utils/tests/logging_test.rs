@@ -197,6 +197,21 @@ fn archives(dir: &Path) -> Vec<String> {
     names
 }
 
+/// Waits until the worker finished every archive: a `.gz` exists and no plain
+/// or staging archive is left.
+fn wait_for_compressed_archives(dir: &Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        let names = archives(dir);
+        if names.iter().any(|name| name.ends_with(".gz"))
+            && names.iter().all(|name| name.ends_with(".gz"))
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn gunzip(path: &Path) -> String {
     let mut text = String::new();
     std::io::Read::read_to_string(
@@ -229,12 +244,7 @@ fn archive_rotation_keeps_the_full_log_as_a_gzip_archive() {
         guard.flush().unwrap();
     }
     // The writer's worker compresses off the logging path.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !archives(&dir).iter().any(|name| name.ends_with(".gz"))
-        && std::time::Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_compressed_archives(&dir);
 
     assert_eq!(fs::read_to_string(&path).unwrap(), "22222222");
     let names = archives(&dir);
@@ -332,4 +342,183 @@ fn startup_records_the_effective_log_filter_and_retention() {
     assert!(logs.contains("bus::protocol::keys::host=off"), "{logs}");
     assert!(logs.contains("bus=trace"), "{logs}");
     assert!(logs.contains("log_retention=Archive"), "{logs}");
+}
+
+#[test]
+fn archive_cleanup_preserves_non_archive_temporary_files() {
+    let path = temp_log_path("unrelated-temporary");
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    let unrelated = dir.join("bus.log.user-backup.gz.tmp");
+    fs::write(&unrelated, "user data").unwrap();
+    maintain_archives(&path, &DEV_LOG_ARCHIVE, SystemTime::now());
+    let preserved = fs::read_to_string(&unrelated).ok();
+    let _ = fs::remove_dir_all(dir);
+    assert_eq!(preserved.as_deref(), Some("user data"));
+}
+
+#[test]
+fn archive_rotation_enforces_cap_before_background_maintenance() {
+    let path = temp_log_path("pending-archive-cap");
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    // Hold worker notifications pending, as when compression is busy. The
+    // writer's real rotation path must enforce the cap without worker progress.
+    let (signal, _pending) = mpsc::channel();
+    let policy = ArchivePolicy {
+        max_age: 72 * HOUR,
+        max_total_bytes: 16,
+    };
+    let mut state = RotatingFileState {
+        path: path.clone(),
+        max_bytes: 8,
+        retention: Retention::Archive(policy),
+        file: None,
+        current_size: 0,
+        disabled: false,
+        archive_signal: Some(signal),
+    };
+    for _ in 0..4 {
+        state.rotate_if_needed(8).unwrap();
+        state.file.as_mut().unwrap().write_all(b"12345678").unwrap();
+        state.current_size += 8;
+    }
+    let archive_bytes: u64 = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.path() != path)
+        .map(|entry| entry.metadata().unwrap().len())
+        .sum();
+    drop(state);
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        archive_bytes <= policy.max_total_bytes,
+        "pending archives use {archive_bytes} bytes, cap {} (active file excluded)",
+        policy.max_total_bytes
+    );
+}
+
+/// Two `bus client` processes attached to one session share `herdr-client.log`.
+/// When one rotates it, the other keeps appending to the renamed file until its
+/// own size check fires; those lines must survive archiving.
+#[test]
+fn archive_rotation_keeps_lines_a_second_writer_appends_after_the_rename() {
+    let path = temp_log_path("archive-two-writers");
+    let dir = path.parent().unwrap().to_path_buf();
+    let options = |max_bytes| LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes,
+        retention: Retention::Archive(ArchivePolicy {
+            max_age: 24 * HOUR,
+            max_total_bytes: 1024 * 1024,
+        }),
+        dev: true,
+    };
+    let rotating = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options(8)).unwrap();
+    let other = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options(1024)).unwrap();
+    {
+        let mut guard = rotating.make_writer();
+        guard.write_all(b"AAAAAAAA").unwrap();
+        guard.write_all(b"BBBBBBBB").unwrap();
+    }
+    wait_for_compressed_archives(&dir);
+    other.make_writer().write_all(b"OTHER_LINE").unwrap();
+
+    let mut kept = fs::read_to_string(&path).unwrap();
+    for name in archives(&dir) {
+        kept.push_str(&gunzip(&dir.join(name)));
+    }
+    assert!(kept.contains("OTHER_LINE"), "kept: {kept:?}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Every `bus client` attached to a session runs its own archive worker over
+/// the shared `herdr-client.log` archives; concurrent maintenance passes must
+/// not lose or truncate an archive.
+#[test]
+fn concurrent_archive_maintenance_keeps_every_archive_intact() {
+    let path = temp_log_path("archive-concurrent-workers");
+    let dir = path.parent().unwrap().to_path_buf();
+    fs::create_dir_all(&dir).unwrap();
+    let policy = ArchivePolicy {
+        max_age: 24 * HOUR,
+        max_total_bytes: u64::MAX,
+    };
+    let now = SystemTime::now();
+    let mut lost = Vec::new();
+    for round in 0..40u32 {
+        let mut originals = Vec::new();
+        for index in 0..4u32 {
+            let archive = archive_path(
+                &path,
+                now - Duration::from_secs(u64::from(round * 10 + index + 1)),
+            );
+            let text = format!("round {round} archive {index} ").repeat(20_000);
+            fs::write(&archive, &text).unwrap();
+            originals.push((archive, text));
+        }
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let workers: Vec<_> = (0..3)
+            .map(|_| {
+                let (barrier, path) = (Arc::clone(&barrier), path.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    maintain_archives(&path, &policy, now);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        maintain_archives(&path, &policy, now);
+        for (archive, text) in originals {
+            let gz = PathBuf::from(format!("{}.gz", archive.display()));
+            let kept = if archive.exists() {
+                fs::read_to_string(&archive).ok()
+            } else {
+                File::open(&gz).ok().and_then(|file| {
+                    let mut out = String::new();
+                    std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(file), &mut out)
+                        .ok()
+                        .map(|_| out)
+                })
+            };
+            if kept.as_deref() != Some(text.as_str()) {
+                lost.push(format!("{}", gz.display()));
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+    assert!(lost.is_empty(), "archives lost or corrupted: {lost:?}");
+}
+
+/// A process that stopped between the archive rename and removing the plain
+/// file leaves both; the next pass must count that archive once, not evict it.
+#[test]
+fn archive_maintenance_counts_a_half_finished_compression_once() {
+    let path = temp_log_path("archive-half-compressed");
+    let dir = path.parent().unwrap().to_path_buf();
+    fs::create_dir_all(&dir).unwrap();
+    let now = SystemTime::now();
+    let archive = archive_path(&path, now - HOUR);
+    let text = "only archive ".repeat(1000);
+    fs::write(&archive, &text).unwrap();
+    let gz = compress_archive(&archive).unwrap();
+    fs::write(&archive, &text).unwrap();
+    let size = fs::metadata(&gz).unwrap().len();
+    let policy = ArchivePolicy {
+        max_age: 24 * HOUR,
+        max_total_bytes: size + size / 2,
+    };
+    maintain_archives(&path, &policy, now);
+    let kept: Vec<String> = archives(&dir)
+        .iter()
+        .map(|name| gunzip(&dir.join(name)))
+        .collect();
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(
+        kept,
+        [text],
+        "the only archive, well under the cap, was evicted"
+    );
 }

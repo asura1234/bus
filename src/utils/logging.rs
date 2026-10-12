@@ -241,7 +241,7 @@ struct RotatingFileState {
 
 impl RotatingFileState {
     fn rotate_if_needed(&mut self, incoming_len: u64) -> io::Result<()> {
-        if self.file.is_none() {
+        if self.file.is_none() || self.rotated_by_another_writer() {
             self.open_current_file()?;
         }
         if self.current_size.saturating_add(incoming_len) <= self.max_bytes {
@@ -249,6 +249,25 @@ impl RotatingFileState {
         }
         self.rotate_files()?;
         self.open_current_file()
+    }
+
+    /// Another process sharing this log (a second `bus client`) renamed it into
+    /// an archive; keep writing to the live path, not into that archive.
+    #[cfg(unix)]
+    fn rotated_by_another_writer(&self) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        let (Retention::Archive(_), Some(file)) = (self.retention, self.file.as_ref()) else {
+            return false;
+        };
+        let (Ok(open), path) = (file.metadata(), fs::metadata(&self.path)) else {
+            return false;
+        };
+        !path.is_ok_and(|path| (path.dev(), path.ino()) == (open.dev(), open.ino()))
+    }
+
+    #[cfg(not(unix))]
+    fn rotated_by_another_writer(&self) -> bool {
+        false
     }
 
     fn open_current_file(&mut self) -> io::Result<()> {
@@ -265,13 +284,16 @@ impl RotatingFileState {
         self.file.take();
         let retained_files = match self.retention {
             Retention::Generations(count) => count,
-            Retention::Archive(_) => {
-                // Only a rename under the lock; compression runs on the worker.
-                match fs::rename(&self.path, archive_path(&self.path, SystemTime::now())) {
+            Retention::Archive(policy) => {
+                // Rename and enforce the cap under the lock, so the cap holds
+                // however far behind compression on the worker is.
+                let now = SystemTime::now();
+                match fs::rename(&self.path, archive_path(&self.path, now)) {
                     Ok(()) => {}
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                     Err(err) => return Err(err),
                 }
+                prune_archives(list_archives(&self.path), &policy, now);
                 if let Some(signal) = &self.archive_signal {
                     let _ = signal.send(());
                 }
@@ -400,41 +422,83 @@ struct Archive {
 /// Compresses archives left plain and drops those outside `policy`:
 /// older than `max_age`, then the oldest past `max_total_bytes`.
 fn maintain_archives(path: &Path, policy: &ArchivePolicy, now: SystemTime) {
-    let (Some(dir), Some(base)) = (path.parent(), path.file_name()) else {
-        return;
-    };
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let prefix = format!("{}.", base.to_string_lossy());
-    let mut archives = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(rest) = name.strip_prefix(&prefix) else {
-            continue;
-        };
-        if rest.ends_with(ARCHIVE_TMP) {
-            // Interrupted compression; its plain archive is still there.
-            let _ = fs::remove_file(entry.path());
-            continue;
-        }
-        let compressed = rest.ends_with(ARCHIVE_GZ);
-        let stem = rest.strip_suffix(ARCHIVE_GZ).unwrap_or(rest);
-        if let Some(rotated_at) = archive_time(stem) {
-            archives.push(Archive {
-                path: entry.path(),
-                rotated_at,
-                compressed,
-            });
-        }
-    }
+    remove_interrupted_compressions(path);
+    let mut archives = list_archives(path);
     for archive in archives.iter_mut().filter(|archive| !archive.compressed) {
         if let Ok(compressed) = compress_archive(&archive.path) {
             archive.path = compressed;
             archive.compressed = true;
         }
     }
+    prune_archives(archives, policy, now);
+}
 
+/// Archive names under `path`'s directory, one entry per archive. A plain
+/// copy left beside its finished `.gz` (a process stopped between the
+/// rename and the removal) is removed rather than counted twice.
+fn list_archives(path: &Path) -> Vec<Archive> {
+    let mut archives: Vec<Archive> = Vec::new();
+    let mut plain = Vec::new();
+    for (entry, rest) in archive_dir_entries(path) {
+        let compressed = rest.ends_with(ARCHIVE_GZ);
+        let stem = rest.strip_suffix(ARCHIVE_GZ).unwrap_or(&rest);
+        if let Some(rotated_at) = archive_time(stem) {
+            let archive = Archive {
+                path: entry,
+                rotated_at,
+                compressed,
+            };
+            if compressed {
+                archives.push(archive);
+            } else {
+                plain.push(archive);
+            }
+        }
+    }
+    for archive in plain {
+        let mut finished = archive.path.clone().into_os_string();
+        finished.push(ARCHIVE_GZ);
+        if archives.iter().any(|gz| gz.path.as_os_str() == finished) {
+            let _ = fs::remove_file(&archive.path);
+        } else {
+            archives.push(archive);
+        }
+    }
+    archives
+}
+
+/// Deletes `.gz.tmp` staging files of Bus archives only; other names stay.
+fn remove_interrupted_compressions(path: &Path) {
+    for (entry, rest) in archive_dir_entries(path) {
+        if rest
+            .strip_suffix(ARCHIVE_TMP)
+            .is_some_and(|stem| archive_time(stem).is_some())
+        {
+            let _ = fs::remove_file(entry);
+        }
+    }
+}
+
+/// Entries named `<log name>.<rest>` beside `path`, with `rest`.
+fn archive_dir_entries(path: &Path) -> Vec<(PathBuf, String)> {
+    let (Some(dir), Some(base)) = (path.parent(), path.file_name()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let prefix = format!("{}.", base.to_string_lossy());
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rest = name.strip_prefix(&prefix)?.to_owned();
+            Some((entry.path(), rest))
+        })
+        .collect()
+}
+
+fn prune_archives(mut archives: Vec<Archive>, policy: &ArchivePolicy, now: SystemTime) {
     archives.sort_by_key(|archive| std::cmp::Reverse(archive.rotated_at));
     let mut total: u64 = 0;
     for archive in archives {
