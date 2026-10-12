@@ -232,10 +232,9 @@ impl FakeAgent {
     fn apply(&mut self, input: Input) -> Option<Typed> {
         match input {
             Input::Text(text) => self.draft.push_str(&text),
+            // Nothing to erase: nothing to redraw.
             Input::Backspace => {
-                if self.draft.pop().is_none() {
-                    return None;
-                }
+                self.draft.pop()?;
             }
             Input::KillLine => kill_line(&mut self.draft),
             Input::Enter if !self.draft.trim().is_empty() => {
