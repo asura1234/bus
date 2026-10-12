@@ -34,7 +34,6 @@ from review_artifact_types import (
     SUMMARY_RE,
     SYNC_HEADING,
     TITLE_RE,
-    UNPROVEN_EVIDENCE_RE,
     VERDICT_RE,
     Heading,
     ReviewArtifact,
@@ -236,14 +235,6 @@ def _finding_ids(body: str, path: Path) -> tuple[str, ...]:
     return tuple(ids)
 
 
-def _reject_unproven_findings(body: str, path: Path) -> None:
-    for _, line in outside_fence_lines(body, path):
-        if UNPROVEN_EVIDENCE_RE.match(line):
-            raise ReviewArtifactError(
-                f"PR finding 证据不得为『未证明』；未证明的怀疑不是 finding，只能写进本轮探索区域: {path}"
-            )
-
-
 def parse_review_artifact(path: Path) -> ReviewArtifact:
     resolved = path.expanduser().resolve()
     try:
@@ -278,8 +269,6 @@ def parse_review_artifact(path: Path) -> ReviewArtifact:
     )
     substantive = _body(text, sections[SUBSTANTIVE_HEADING.removeprefix("## ")], resolved)
     sync = _body(text, sections[SYNC_HEADING.removeprefix("## ")], resolved)
-    if mode == "pr":
-        _reject_unproven_findings(substantive, resolved)
     try:
         verdict_body = _body(text, headings[-1], resolved)
     except ReviewArtifactError as error:

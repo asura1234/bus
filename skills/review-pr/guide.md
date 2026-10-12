@@ -61,12 +61,12 @@ shrinking scope, not from a hard cap on rounds.
 
 **Scope**: proof targets only **claims about runtime behavior** — dimensions 2 correctness, 3 security, 7 bug.
 Other dimensions are judged by reading source; evidence lists only `path:line` and the source observation, writes no probe, and does not mark
-`已证明`. All proof, investigation, and output first pass code-review-guide "goal-relevance admission",
+`已证明` / `未证明`. All proof, investigation, and output first pass code-review-guide "goal-relevance admission",
 then this round's coverage boundary; dimension 6 is the only exception, doing only purpose / cumulative-size classification on out-of-goal diff.
 
-**The burden of proof is the reviewer's**: a dimension 2 / 3 / 7 finding exists only once the reviewer has proven it on this
-round's HEAD, by one of two routes — a red probe test, or a failing real TUI run with its report (next section).
-Write every behavioral suspicion as a proof first, then decide whether to write it as a finding. A red proof simultaneously
+**Proving is strongly encouraged**: before writing a dimension 2 / 3 / 7 finding, prove it on this round's HEAD by one of
+two routes — a red probe test, or a failing real TUI run with its report (next section); for user-visible TUI behavior the
+TUI run is the preferred proof. Try to prove every behavioral suspicion first, then decide whether to write it as a finding. A red proof simultaneously
 gives the root cause, reproduction, and repair acceptance criterion, none of which a paper suspicion has; a behavioral suspicion that cannot be proven usually
 has not been thought through. Run probes narrowly (Rust with `just test-one <filter>`, a skill's Python tests with
 `python3 -m pytest <test file>::<test name>`), with scope locked to the area of this suspicion;
@@ -96,7 +96,7 @@ or a just-configured mock is not proof.
 ### Prove user-visible behavior by driving the real TUI
 
 When the claim is about what a user sees or does in the TUI (layout, keys, clicks, focus, styling, opens, sounds),
-prove it by driving the PR's HEAD through the real terminal rather than reasoning about it, or writing a unit test that mirrors the code.
+prefer proving it by driving the PR's HEAD through the real terminal over reasoning about it, or writing a unit test that mirrors the code.
 It complements probes, never replaces one where a probe can show the failure. Two ways, both on a scratch Bus the driver starts:
 
 - drive it directly with `./run tui <verb> --name <session> …` per `docs/tui-driver.md`, saving the session's run folder
@@ -105,7 +105,7 @@ It complements probes, never replaces one where a probe can show the failure. Tw
 - or write a small ad-hoc QA doc in the format of `tests/e2e-tui/app.md` at `<round dir>/tui/qa.md` and run
   `/e2e-test-tui <round dir>/tui/qa.md`, initialising its report with `--runs-root <round dir>/tui`; its `report.md` is the report.
 
-`<round dir>` is this round's `STATE_DIR/round-NN/`. Rules for every run:
+`<round dir>` is this round's `STATE_DIR/round-NN/`. Whether to run the TUI is your judgment; these rules are mandatory for every run:
 
 - export your own `CARGO_TARGET_DIR` (an absolute path no other worker uses, e.g. `<repo>/target/review-pr-<lane>`)
   and an absolute `BUS_TUI_ROOT` of your own (e.g. `/tmp/bus-tui-<lane>`); `./run tui` builds into `$CARGO_TARGET_DIR/tui-driver`;
@@ -119,12 +119,12 @@ A failing step proves the finding; its first evidence item is
 and effects paths follow as further evidence. A passing run withdraws the suspicion like a green probe, with one line in
 "本轮探索区域 / 运行的测试". A run that cannot reach the step (build broken, setup impossible) proves nothing.
 
-### Unproven suspicion is a note, not a finding
+### Mark what stays unproven
 
-Anything the reviewer suspects but has not proven by one of the two routes is **not a finding**: it never enters `新问题与建议`,
-the sync list, the verdict, or a later round's reconciliation, and the author has nothing to act on. At most it is one terse
-line under `本轮探索区域 / 未证明的怀疑`, phrased as "cannot rule out X", which the renderer keeps out of the chat response.
-`未证明` is not a legal evidence mark; `review_artifact.py render-response` refuses a finding that carries it.
+A suspicion neither route proved may still be reported, clearly marked so the author can weigh it: the first evidence item is
+`未证明`, with no explanation and no list of what was tried; phrase it as "cannot rule out X", and write the impact conditionally.
+`未证明` does not block Ready, does not trigger a new round, and cannot alone justify changing verified existing behavior.
+It is not an escape hatch: what a probe or a TUI run can prove should be proven.
 (Full criteria in code-review-guide "verification boundary" and guardrail 5.)
 
 A review round's quality is measured not by finding count but by how many behavioral suspicions received goal-related evidence or were ruled out;

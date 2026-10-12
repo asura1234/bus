@@ -124,8 +124,8 @@ ledger, proof evidence, verdicts, and response gate are unchanged.
 - **位置**：<path:line>
 - **维度**：<one code-review-guide dimension>
 - **观察**：<fact>
-- **证据**：<code / mechanism / cross-reference, each with path:line>; a finding in dimension 2 / 3 / 7 exists only when proven, and its first item is `已证明：<test name @ test file relative path> — <failed assertion>` or, for a real TUI run, `已证明：<case/step or session step @ run report relative path> — <expected vs seen>` followed by its screenshot / trace / effects paths; `未证明` is refused by the renderer; other dimensions carry no mark
-- **影响**：<what happens at execution or runtime if left unresolved>
+- **证据**：<code / mechanism / cross-reference, each with path:line>; a finding in dimension 2 / 3 / 7 marks its proof status as the first item — `已证明：<test name @ test file relative path> — <failed assertion>`, for a real TUI run `已证明：<case/step or session step @ run report relative path> — <expected vs seen>` followed by its screenshot / trace / effects paths, or `未证明`; other dimensions carry no mark
+- **影响**：<what happens at execution or runtime if left unresolved; write it conditionally when marked `未证明`>
 - **可能的修复**（可选）：<direct patch or design; a bug finding includes reproduction, fix, and regression test>
 
 <!-- With no SUBSTANTIVE finding, write only `无。`. -->
@@ -142,7 +142,6 @@ ledger, proof evidence, verdicts, and response gate are unchanged.
 - 运行的测试：<commands and results | 无>
 - 覆盖的审查维度：<guide dimension numbers covered this round>
 - 考虑过但判定非 finding 的候选：<one terse line | 无>
-- 未证明的怀疑（非 finding，作者无需处理）：<one terse "cannot rule out X" line each | 无>
 
 ## 代码就绪状态
 

@@ -235,41 +235,26 @@ FENCED_HEADING_MUST_SURVIVE
         self.assertEqual(result.stdout, expected)
         self.assertEqual(output.read_text(), expected)
 
-    def test_pr_finding_with_unproven_evidence_is_refused(self) -> None:
-        for evidence in ("- **证据**：未证明", "- **证据**：src/demo.py:3；`未证明`"):
-            with self.subTest(evidence=evidence):
+    def test_pr_finding_proof_marks_render_verbatim(self) -> None:
+        for name, evidence in (
+            (
+                "tui-run",
+                "- **证据**：已证明：APP-07 step 3 @ temp/review-pr/feature-demo/default/round-02/tui/run/report.md"
+                " — expected the draft kept, saw an empty composer",
+            ),
+            ("unproven", "- **证据**：未证明"),
+        ):
+            with self.subTest(evidence=name):
                 review = _write(
-                    self.tmp_path(f"unproven-{len(evidence)}") / "round-02" / "review.md",
+                    self.tmp_path(name) / "round-02" / "review.md",
                     _pr_review().replace("- **证据**：PR_EVIDENCE", evidence),
                 )
                 output = review.with_name("chat-response.md")
-                output.write_text("KEEP\n")
 
                 result = _run_cli(review, output)
 
-                self.assertEqual(result.returncode, 2)
-                self.assertIn("未证明", result.stderr)
-                self.assertEqual(output.read_text(), "KEEP\n")
-
-    def test_tui_run_proof_renders_and_unproven_note_stays_file_only(self) -> None:
-        proof = (
-            "- **证据**：已证明：APP-07 step 3 @ temp/review-pr/feature-demo/default/round-02/tui/run/report.md"
-            " — expected the draft kept, saw an empty composer"
-        )
-        note = "- 未证明的怀疑（非 finding，作者无需处理）：cannot rule out a lost draft on resize"
-        review = _write(
-            self.root / "round-02" / "review.md",
-            _pr_review()
-            .replace("- **证据**：PR_EVIDENCE", proof)
-            .replace("- PR_EXPLORATION_NOISE", f"- PR_EXPLORATION_NOISE\n{note}"),
-        )
-        output = review.with_name("chat-response.md")
-
-        result = _run_cli(review, output)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(proof, result.stdout)
-        self.assertNotIn("cannot rule out", result.stdout)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(evidence, result.stdout)
 
     def test_pr_split_abandon_verdict_survives_rendering(self) -> None:
         verdict = "- **判定**：Abandon (dimension 6: multi-purpose, split with split-pr)"
