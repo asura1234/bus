@@ -160,15 +160,31 @@ impl App {
             );
         };
         let terminal = &self.state.terminals[&terminal_id];
+        let owned = if params.close_exited_shell {
+            // The provider exited in this exact terminal and released its
+            // managed name; only an idle shell remains. A running command, a
+            // detected agent or any managed name means the pane is in use.
+            terminal.agent_name.is_none()
+                && terminal.managed_agent_kind().is_none()
+                && pane.agent.is_none()
+                && self
+                    .terminal_runtimes
+                    .get(&terminal_id)
+                    .is_some_and(|runtime| {
+                        crate::server::terminals::agents::available_shell_name(runtime).is_some()
+                    })
+        } else {
+            pane.agent.as_deref() == Some(params.expected_agent.as_str())
+                && terminal.agent_name.as_deref() == Some(params.expected_managed_name.as_str())
+                && pane
+                    .agent_session
+                    .as_ref()
+                    .map(|session| session.value.as_str())
+                    == params.expected_session_id.as_deref()
+        };
         if pane.terminal_id != params.expected_terminal_id
             || pane.pane_id != params.pane_id
-            || pane.agent.as_deref() != Some(params.expected_agent.as_str())
-            || terminal.agent_name.as_deref() != Some(params.expected_managed_name.as_str())
-            || pane
-                .agent_session
-                .as_ref()
-                .map(|session| session.value.as_str())
-                != params.expected_session_id.as_deref()
+            || !owned
         {
             return encode_error(
                 id,

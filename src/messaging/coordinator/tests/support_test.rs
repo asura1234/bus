@@ -10,10 +10,12 @@ pub(super) struct FakeTransport {
 
 impl Transport for FakeTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(crate::protocol::api::api_method_name(&method));
+        self.calls.lock().unwrap().push(match &method {
+            Method::PaneCloseIfIdentity(params) if params.close_exited_shell => {
+                "pane.close_if_identity(exited_shell)"
+            }
+            _ => crate::protocol::api::api_method_name(&method),
+        });
         if let Method::PaneCloseIfIdentity(params) = &method {
             let state = JsonStore::new(self.state_path.clone())
                 .load()

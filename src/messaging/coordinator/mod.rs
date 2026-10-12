@@ -131,6 +131,47 @@ pub(crate) struct LeftOpenTerminal {
     pub(crate) agent_name: String,
     pub(crate) pane_id: String,
     pub(crate) terminal_id: String,
+    pub(crate) reason: LeftOpenReason,
+    /// Why Bus did not close it and what the caller may do, for CLI callers
+    /// that never see the TUI's error line.
+    pub(crate) message: String,
+}
+
+/// Why a deletion left an agent's terminal open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeftOpenReason {
+    /// The provider exited and its shell now runs something else.
+    ProviderExited,
+    /// The terminal runs a provider session that may not be Bus's to end.
+    SessionMoved,
+}
+
+impl LeftOpenTerminal {
+    pub(crate) fn new(
+        agent_id: AgentId,
+        agent_name: String,
+        pane_id: String,
+        terminal_id: String,
+        reason: LeftOpenReason,
+    ) -> Self {
+        let message = match reason {
+            LeftOpenReason::ProviderExited => format!(
+                "The agent's provider exited and its shell is running something else, so Bus left the terminal open; close pane {pane_id} yourself if it is no longer needed."
+            ),
+            LeftOpenReason::SessionMoved => format!(
+                "The agent's terminal now runs another provider session that may not be Bus's to end, so Bus left it open; close pane {pane_id} yourself if it is no longer needed."
+            ),
+        };
+        Self {
+            agent_id,
+            agent_name,
+            pane_id,
+            terminal_id,
+            reason,
+            message,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

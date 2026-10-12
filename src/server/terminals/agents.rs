@@ -449,7 +449,9 @@ impl App {
     }
 }
 
-fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<String> {
+pub(in crate::server) fn available_shell_name(
+    runtime: &crate::terminal::TerminalRuntime,
+) -> Option<String> {
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());

@@ -54,6 +54,52 @@ async fn guarded_close_removes_only_exact_terminal_and_retries_absence_safely() 
     assert!(app.state.workspaces[0].pane_state(other).is_some());
 }
 
+/// Regression: Codex exited during bootstrap and its pane fell back to the
+/// shell, which cleared the managed name; deleting the agent left that idle
+/// Bus-created shell open forever.
+#[tokio::test]
+async fn guarded_close_of_an_exited_provider_closes_only_its_idle_released_shell() {
+    let (mut app, params, pane_id, _) = guarded_close_fixture();
+    let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+    let (runtime, _rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 2);
+    app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+    let exited = crate::protocol::api::schema::PaneCloseIfIdentityParams {
+        close_exited_shell: true,
+        ..params.clone()
+    };
+    // While the provider still runs, the exited-shell form proves nothing.
+    let response = app.handle_pane_close_if_identity("running".into(), exited.clone());
+    let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(error.error.code, "terminal_identity_changed");
+    assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.clear_agent_name();
+    terminal.set_detected_state(None, AgentState::Idle);
+    // The ordinary guard still refuses the released terminal.
+    let response = app.handle_pane_close_if_identity("plain".into(), params);
+    let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(error.error.code, "terminal_identity_changed");
+    // Another managed name on the same terminal is not a released shell.
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_agent_name("bus-r1-a9".into());
+    let response = app.handle_pane_close_if_identity("renamed".into(), exited.clone());
+    let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(error.error.code, "terminal_identity_changed");
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .clear_agent_name();
+    let response = app.handle_pane_close_if_identity("exited".into(), exited);
+    let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+    assert!(matches!(success.result, ResponseResult::Ok {}));
+    assert!(app.state.workspaces[0].pane_state(pane_id).is_none());
+}
+
 #[test]
 fn guarded_close_refuses_a_terminal_still_attached_to_multiple_panes() {
     let (mut app, params, pane_id, other) = guarded_close_fixture();
