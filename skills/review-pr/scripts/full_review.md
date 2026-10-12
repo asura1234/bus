@@ -28,8 +28,8 @@ IF MODE == full:
       - Read(docs/guides/code-review-guide.md) and docs/guides/architecture-principles.md
       - review only its assigned dimensions
       - Read(DIFF_SNAPSHOT); read the full current state of in-goal touched files; for dimension 6's out-of-goal slices only judge purpose / size
-      - obey §1 VERIFICATION BOUNDARY: only the correctness group writes a suspicion as a test and runs it narrowly
-        before deciding whether to report, writing only test files and running no quality gates; structure / hygiene groups are read-only
+      - obey §1 VERIFICATION BOUNDARY: only the correctness group proves a suspicion — a narrowly run probe, or a scratch
+        TUI run with its own CARGO_TARGET_DIR / BUS_TUI_ROOT — before deciding whether to report, writing only test files and running no quality gates; structure / hygiene groups are read-only
       - the main agent first assigns non-overlapping test files; name them semantically, never putting lane, dimension group, or round into test names
         In scope mode every assignment is a subset of SCOPE_TEST_FILES; all groups receive the same
         SCOPE_FILE / SCOPE_SNAPSHOT, whole-file target, and permissions, including fresh-eyes.

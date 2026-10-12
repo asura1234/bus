@@ -59,14 +59,16 @@ shrinking scope, not from a hard cap on rounds.
 
 ## Write behavioral suspicion as a test first, then as a finding
 
-**Scope**: test proof targets only **claims about runtime behavior** — dimensions 2 correctness, 3 security, 7 bug.
+**Scope**: proof targets only **claims about runtime behavior** — dimensions 2 correctness, 3 security, 7 bug.
 Other dimensions are judged by reading source; evidence lists only `path:line` and the source observation, writes no probe, and does not mark
-`已证明` / `未证明`. All proof, investigation, and output first pass code-review-guide "goal-relevance admission",
+`已证明`. All proof, investigation, and output first pass code-review-guide "goal-relevance admission",
 then this round's coverage boundary; dimension 6 is the only exception, doing only purpose / cumulative-size classification on out-of-goal diff.
 
-**A default action, not an option**: write every behavioral suspicion as a test first, then decide whether to write it as a finding. A red test simultaneously
-gives the root cause, reproduction, and repair acceptance criterion, none of which a paper suspicion has; a behavioral suspicion that cannot be written as a test usually
-has not been thought through. Run it narrowly (Rust with `just test-one <filter>`, a skill's Python tests with
+**The burden of proof is the reviewer's**: a dimension 2 / 3 / 7 finding exists only once the reviewer has proven it on this
+round's HEAD, by one of two routes — a red probe test, or a failing real TUI run with its report (next section).
+Write every behavioral suspicion as a proof first, then decide whether to write it as a finding. A red proof simultaneously
+gives the root cause, reproduction, and repair acceptance criterion, none of which a paper suspicion has; a behavioral suspicion that cannot be proven usually
+has not been thought through. Run probes narrowly (Rust with `just test-one <filter>`, a skill's Python tests with
 `python3 -m pytest <test file>::<test name>`), with scope locked to the area of this suspicion;
 not limited to tests you added — related existing tests may run too. Quality gates — lint, format check, coverage,
 build — and the unfiltered full test suite all belong to CI and `gate-and-fix`; the reviewer does not run them.
@@ -91,10 +93,38 @@ or a just-configured mock is not proof.
   "本轮探索区域 / 运行的测试";
 - never leave only a red test without writing a finding.
 
-**What may stop at "unproven"**: whatever Unit / Integration tests can prove must be proven before reporting,
-never reported as a suspicion. Only behavior that "can be confirmed only by manual verification in a real terminal session"
-may stop at suspicion: the first evidence item is `未证明`, with no explanation and no list of what was tried; phrase it as "cannot rule out X", and
-write the impact conditionally. `未证明` does not block Ready, does not trigger a new round, and cannot alone justify changing verified existing behavior.
+### Prove user-visible behavior by driving the real TUI
+
+When the claim is about what a user sees or does in the TUI (layout, keys, clicks, focus, styling, opens, sounds),
+prove it by driving the PR's HEAD through the real terminal rather than reasoning about it, or writing a unit test that mirrors the code.
+It complements probes, never replaces one where a probe can show the failure. Two ways, both on a scratch Bus the driver starts:
+
+- drive it directly with `./run tui <verb> --name <session> …` per `docs/tui-driver.md`, saving the session's run folder
+  (`start --run-dir <round dir>/tui/sessions`); the report is that folder's `trace.ndjson`, `shots/` and `effects.ndjson`,
+  plus a `<round dir>/tui/<session>.md` you write listing the steps, expected vs seen, and the screenshot you opened;
+- or write a small ad-hoc QA doc in the format of `tests/e2e-tui/app.md` at `<round dir>/tui/qa.md` and run
+  `/e2e-test-tui <round dir>/tui/qa.md`, initialising its report with `--runs-root <round dir>/tui`; its `report.md` is the report.
+
+`<round dir>` is this round's `STATE_DIR/round-NN/`. Rules for every run:
+
+- export your own `CARGO_TARGET_DIR` (an absolute path no other worker uses, e.g. `<repo>/target/review-pr-<lane>`)
+  and an absolute `BUS_TUI_ROOT` of your own (e.g. `/tmp/bus-tui-<lane>`); `./run tui` builds into `$CARGO_TARGET_DIR/tui-driver`;
+- export a scratch `BUS_DATA_DIR`, and unset every other inherited `BUS_*` and `HERDR_*` variable before any command;
+- never point anything at the running Bus, its data dir, or `target/debug`; a driver refusal is final, never worked around;
+- ad-hoc QA docs live only under `<round dir>/tui/`; never edit `tests/e2e-tui/app.md` or any other committed doc;
+- when done, `stop` every session you started (also after failures) and delete your `CARGO_TARGET_DIR`.
+
+A failing step proves the finding; its first evidence item is
+`已证明：<case/step or session step @ relative run report path> — <expected vs seen>`, and the screenshot, trace,
+and effects paths follow as further evidence. A passing run withdraws the suspicion like a green probe, with one line in
+"本轮探索区域 / 运行的测试". A run that cannot reach the step (build broken, setup impossible) proves nothing.
+
+### Unproven suspicion is a note, not a finding
+
+Anything the reviewer suspects but has not proven by one of the two routes is **not a finding**: it never enters `新问题与建议`,
+the sync list, the verdict, or a later round's reconciliation, and the author has nothing to act on. At most it is one terse
+line under `本轮探索区域 / 未证明的怀疑`, phrased as "cannot rule out X", which the renderer keeps out of the chat response.
+`未证明` is not a legal evidence mark; `review_artifact.py render-response` refuses a finding that carries it.
 (Full criteria in code-review-guide "verification boundary" and guardrail 5.)
 
 A review round's quality is measured not by finding count but by how many behavioral suspicions received goal-related evidence or were ruled out;

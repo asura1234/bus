@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Iterative code review in which the reviewer proves suspicions in the correctness / security / bug dimensions by writing tests that run red (write access is limited to test files; all other dimensions are read-only). Round 1 fully reviews the current branch's committed diff against base, excluding plans/, or a fixed chunk's whole committed files with --scope; Round 2+ only reconciles the prior round and reviews this round's delta and its direct consequences. Supports stable reviewer lanes, an optional associated plan, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review a PR, production chunk, review code, or re-review the current branch.
+description: Iterative code review in which the reviewer proves suspicions in the correctness / security / bug dimensions by writing tests that run red or by a failing real TUI run on a scratch Bus, and an unproven suspicion is never a finding (write access is limited to test files; all other dimensions are read-only). Round 1 fully reviews the current branch's committed diff against base, excluding plans/, or a fixed chunk's whole committed files with --scope; Round 2+ only reconciles the prior round and reviews this round's delta and its direct consequences. Supports stable reviewer lanes, an optional associated plan, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review a PR, production chunk, review code, or re-review the current branch.
 ---
 
 Review principles are in [guide.md](./guide.md); the SOT for the 9 review dimensions, severity, and guardrails is
@@ -32,7 +32,7 @@ For production review the developer's locked Goal must authorize reviewing the e
 
 ========== 1. VERIFICATION BOUNDARY ==========
 
-The proof obligation, probe lifecycle, and the criterion for "unproven" all live in guide.md
+The proof obligation (a red probe or a failing real TUI run), probe lifecycle, and "unproven is never a finding" all live in guide.md
 "Write behavioral suspicion as a test first, then as a finding"; this section defines only **permissions** —
 they must be visible before acting, and when they fail they must fail on the safe side.
 
@@ -46,6 +46,8 @@ MAY:
   - run read-only queries: git, grep, reading files
   - run tests narrowly: Rust with `just test-one <filter>`, a skill's Python tests with
     `python3 -m pytest <test file>::<test name>`
+  - drive the PR's HEAD on a scratch Bus (`./run tui`, or /e2e-test-tui on an ad-hoc QA doc under <round dir>/tui/)
+    per guide.md "Prove user-visible behavior by driving the real TUI", including its env, cleanup, and no-touch rules
 
 MUST NOT:
   - modify, create, or delete any **non-test** file (production code, config, build scripts, docs, plan files)
@@ -56,7 +58,7 @@ MUST NOT:
   - run quality gates: `just lint`, `cargo fmt --check`, `just check`, `just ci`, `just build`,
     **including** filtered forms. Those belong to CI and gate-and-fix
   - run the unfiltered full test suite: `just test`, or `cargo nextest run` without a filter;
-    E2E does not enter the review side
+    `just e2e` does not enter the review side; `./run tui`'s own dev build is not a gate
 
 ========== 2. DETERMINISTIC PROLOGUE ==========
 
@@ -204,7 +206,8 @@ IF MODE == incremental:
 
 REPORT:
   Recheck every candidate's goal relevance and consequence; out-of-goal committed diff is classified only under dimension 6, and other out-of-scope observations are not output.
-  Every finding must be an evidence-backed fact:
+  Every finding must be an evidence-backed fact; a dimension 2 / 3 / 7 finding exists only when proven (guide.md),
+  and an unproven suspicion goes at most to `本轮探索区域`:
     location / dimension / observation / evidence / impact / optional possible remediation
   Do not attach severity, blocking, adoption recommendations, or source-agent labels to findings.
   Substantive problems go into `新问题与建议`; wording consistency drift and dimension 6 `XS` / `S` out-of-goal slices go into

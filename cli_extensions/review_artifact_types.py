@@ -25,6 +25,9 @@ FENCE_RE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
 FINDING_ID_RE = re.compile(r"^###\s+(?P<id>[^\s.：]+)(?:[.：]|\s)")
 VERDICT_RE = re.compile(r"^-\s+\*\*判定\*\*：\s*(?P<verdict>.+?)\s*$")
 SUMMARY_RE = re.compile(r"^>\s*总结：\S.*$")
+# A PR finding stands only on proof (a red probe or a failing real TUI run); an unproven suspicion
+# belongs in the file-only exploration section, so the old `未证明` evidence mark is refused.
+UNPROVEN_EVIDENCE_RE = re.compile(r"^\s*-\s+\*\*证据\*\*：.*未证明")
 EMPTY_PREVIOUS_SUMMARY = "> 总结：前轮无待核销 finding。"
 PREVIOUS_TABLE_HEADER = ("#", "来源", "问题", "核销状态", "证据 / 去向")
 PREVIOUS_TABLE_SEPARATOR = ("---", "------", "------", "----------", "-------------")
