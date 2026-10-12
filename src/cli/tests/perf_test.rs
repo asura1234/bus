@@ -1,0 +1,129 @@
+use super::*;
+use serde_json::json;
+
+fn clock(ts_ms: u64) -> String {
+    format!("t{}", ts_ms / 1_000)
+}
+
+fn window(role: &str, ts_s: u64, extra: serde_json::Value) -> Value {
+    let mut record = json!({
+        "kind": "window", "role": role, "pid": 7, "ts_ms": ts_s * 1_000,
+        "cpu_pct": 10.0, "rss_mb": 90.0, "fds": 19, "threads": 9,
+        "load1": 3.5, "cpus": 12, "sys_cpu_pct": 20.0, "swap_used_mb": 100.0,
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        record[key] = value.clone();
+    }
+    record
+}
+
+#[test]
+fn quiet_records_report_no_stalls_or_slow_windows_but_still_show_peaks() {
+    let records = vec![
+        window("client", 100, json!({})),
+        window("server", 100, json!({})),
+    ];
+    let text = summarize(&records, clock);
+    assert!(text.contains("stalls: none"), "{text}");
+    assert!(text.contains("slow windows: none"), "{text}");
+    assert!(text.contains("client peaks:"), "{text}");
+    assert!(
+        text.contains("fds 19 at t100"),
+        "counts print as integers: {text}"
+    );
+    assert!(text.contains("cpu 10.0% at t100"), "{text}");
+    assert!(text.contains("server peaks:"), "{text}");
+}
+
+#[test]
+fn stalls_list_loop_stage_duration_and_stack_capture() {
+    let records = vec![
+        json!({"kind": "stall", "state": "began", "role": "client", "ts_ms": 200_000,
+               "loop": "client.ui_loop", "stage": "present", "busy_ms": 260}),
+        json!({"kind": "stall", "state": "capture", "role": "client", "ts_ms": 202_000,
+               "loop": "client.ui_loop", "busy_ms": 2_000, "file": "stall-x-client.txt", "ok": true}),
+        json!({"kind": "stall", "state": "ended", "role": "client", "ts_ms": 205_000,
+               "loop": "client.ui_loop", "stage": "present", "busy_ms": 5_100}),
+    ];
+    let text = summarize(&records, clock);
+    assert!(
+        text.contains("t200 client client.ui_loop blocked in present"),
+        "{text}"
+    );
+    assert!(
+        text.contains("t205 client client.ui_loop resumed after 5100 ms (present)"),
+        "{text}"
+    );
+    assert!(text.contains("perf/stall-x-client.txt"), "{text}");
+}
+
+#[test]
+fn slow_windows_name_the_slowest_metrics_with_the_system_load_at_that_time() {
+    let records = vec![
+        window("client", 300, json!({})),
+        window(
+            "client",
+            301,
+            json!({
+                "cpu_pct": 99.5, "load1": 43.0, "sys_cpu_pct": 99.7, "watchdog_lag_max_ms": 340.0,
+                "timers": {
+                    "client.ui_loop": {"n": 3, "avg_ms": 800.0, "max_ms": 2400.0, "ge16ms": 1, "ge100ms": 1, "ge1s": 1},
+                    "coordinator.tick": {"n": 1, "avg_ms": 120.0, "max_ms": 120.0, "ge16ms": 1, "ge100ms": 1, "ge1s": 0},
+                    "client.compose": {"n": 60, "avg_ms": 1.0, "max_ms": 3.0, "ge16ms": 0, "ge100ms": 0, "ge1s": 0}
+                },
+                "gauges": {"client.event_queue": {"max": 40, "last": 2}}
+            }),
+        ),
+    ];
+    let text = summarize(&records, clock);
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("  t301 client"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(line.contains("cpu 99.5%"), "{line}");
+    assert!(line.contains("sys 99.7%"), "{line}");
+    assert!(line.contains("load 43.0/12"), "{line}");
+    assert!(line.contains("lag 340ms"), "{line}");
+    assert!(line.contains("client.ui_loop max 2400ms"), "{line}");
+    assert!(line.contains("coordinator.tick max 120ms"), "{line}");
+    assert!(
+        !line.contains("client.compose"),
+        "fast timers are not culprits: {line}"
+    );
+    assert!(line.contains("client.event_queue 40"), "{line}");
+    assert!(!text.contains("  t300 client"), "{text}");
+}
+
+#[test]
+fn since_filter_and_rotated_files_are_read_in_time_order() {
+    let dir = crate::utils::test_temp::unique_temp_path("bus-perf-cli");
+    let perf = dir.join("perf");
+    std::fs::create_dir_all(&perf).unwrap();
+    let line = |ts: u64| format!("{}\n", window("server", ts, json!({})));
+    std::fs::write(perf.join("server.jsonl.1"), line(10)).unwrap();
+    std::fs::write(perf.join("server.jsonl"), line(20) + "not json\n").unwrap();
+    std::fs::write(perf.join("client.jsonl"), line(5)).unwrap();
+
+    let all = read_records(&dir, None);
+    let times: Vec<_> = all.iter().map(|r| r["ts_ms"].as_u64().unwrap()).collect();
+    assert_eq!(times, vec![5_000, 10_000, 20_000]);
+    let recent = read_records(&dir, Some(8_000));
+    assert_eq!(recent.len(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn since_argument_accepts_minutes_hours_and_rejects_garbage() {
+    assert_eq!(parse_since(&[]), Ok(Some(30 * 60_000)));
+    assert_eq!(
+        parse_since(&["--since".into(), "90m".into()]),
+        Ok(Some(90 * 60_000))
+    );
+    assert_eq!(
+        parse_since(&["--since".into(), "2h".into()]),
+        Ok(Some(2 * 3_600_000))
+    );
+    assert_eq!(parse_since(&["--all".into()]), Ok(None));
+    assert!(parse_since(&["--since".into(), "soon".into()]).is_err());
+    assert!(parse_since(&["--bogus".into()]).is_err());
+}

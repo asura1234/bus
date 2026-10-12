@@ -4,6 +4,7 @@ use std::io;
 pub(crate) mod control;
 pub(crate) mod help;
 pub(crate) mod launch;
+mod perf;
 mod session_pick;
 pub(crate) mod stop;
 use help::print_help;
@@ -189,6 +190,11 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     ];
     crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)?;
     match invocation.action {
+        // Reads files only, so it also works while the session is hung.
+        Action::Control(control_args) if control_args.first().is_some_and(|arg| arg == "perf") => {
+            // Perf files sit beside the session's logs (`--paths` "logs").
+            perf::run(&crate::utils::paths::data_dir(), &control_args[1..])
+        }
         Action::Control(control_args) => control::run(&root, &control_args),
         Action::Stop => {
             // Stopping the server closes every agent pane; an attached UI exits
