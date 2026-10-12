@@ -29,10 +29,11 @@ fn rotate_files_shifts_existing_generations() {
     let mut state = RotatingFileState {
         path: path.clone(),
         max_bytes: 128,
-        retained_files: 2,
+        retention: Retention::Generations(2),
         file: None,
         current_size: 0,
         disabled: false,
+        archive_signal: None,
     };
     state.rotate_files().unwrap();
 
@@ -58,7 +59,7 @@ fn write_replaces_log_without_retained_files_when_size_limit_is_reached() {
     let options = LoggingOptions {
         filter: EnvFilter::new("bus=info"),
         max_bytes: 8,
-        retained_files: 0,
+        retention: Retention::Generations(0),
         dev: false,
     };
     let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
@@ -82,7 +83,7 @@ fn supplied_rotation_options_keep_only_requested_generations() {
     let options = LoggingOptions {
         filter: EnvFilter::new("bus=info"),
         max_bytes: 8,
-        retained_files: 2,
+        retention: Retention::Generations(2),
         dev: false,
     };
     let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
@@ -115,7 +116,7 @@ fn supplied_filter_keeps_normal_events_and_selected_trace() {
     let options = LoggingOptions {
         filter: EnvFilter::new("bus=info,bus::logging_selected=trace"),
         max_bytes: DEFAULT_MAX_LOG_BYTES,
-        retained_files: DEFAULT_RETAINED_LOG_FILES,
+        retention: Retention::Generations(DEFAULT_RETAINED_LOG_FILES),
         dev: false,
     };
     let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
@@ -146,11 +147,11 @@ fn startup_records_explicit_dev_and_existing_metadata() {
         let options = LoggingOptions {
             filter: EnvFilter::new("bus=info"),
             max_bytes: DEFAULT_MAX_LOG_BYTES,
-            retained_files: DEFAULT_RETAINED_LOG_FILES,
+            retention: Retention::Generations(DEFAULT_RETAINED_LOG_FILES),
             dev,
         };
         let capture = test_capture::Capture::default();
-        capture.run(|| startup("client", options.dev));
+        capture.run(|| startup("client", &options));
         let logs = capture.text();
         for field in [
             "bus::utils::logging",
@@ -182,4 +183,232 @@ fn api_request_completion_respects_shared_logging_target() {
         logs.contains("api.request.complete"),
         "the shared logging target must retain request completion: {logs}"
     );
+}
+
+/// Live report: BUS_LOG (and `--dev`) set `bus=trace`, yet the logs had no TRACE
+/// lines. The process policy does reach the file writer at TRACE; only the
+/// payload modules the dev filter silences stay out.
+#[test]
+fn bus_log_trace_policy_reaches_the_log_file() {
+    let _lock = crate::utils::config::test_config_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let saved = ["BUS_DEV", "BUS_LOG"].map(|key| (key, std::env::var_os(key)));
+    for dev in [true, false] {
+        if dev {
+            std::env::set_var("BUS_DEV", "1");
+        } else {
+            std::env::remove_var("BUS_DEV");
+        }
+        std::env::set_var("BUS_LOG", DEV_FILTER);
+        let options = crate::cli::logging_options();
+        let path = temp_log_path("trace-policy");
+        let dir = path.parent().unwrap().to_path_buf();
+        let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(options.filter.clone())
+            .with_writer(writer)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::trace!(target: "bus::server::main_loop", "SERVER_TRACE");
+            tracing::trace!(target: "bus::client::run", "CLIENT_TRACE");
+            tracing::trace!(target: "bus::protocol::keys::host", "SECRET_KEYS");
+            tracing::debug!(target: "bus::client::host_terminal::input", "SECRET_INPUT");
+        });
+        let logs = fs::read_to_string(&path).unwrap();
+        assert!(
+            logs.contains("TRACE bus::server::main_loop: SERVER_TRACE")
+                && logs.contains("TRACE bus::client::run: CLIENT_TRACE"),
+            "dev={dev}: {logs}"
+        );
+        assert!(!logs.contains("SECRET"), "dev={dev}: {logs}");
+        let _ = fs::remove_dir_all(dir);
+    }
+    for (key, value) in saved {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+}
+
+const HOUR: Duration = Duration::from_secs(60 * 60);
+
+fn archives(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "bus.log")
+        .collect();
+    names.sort();
+    names
+}
+
+fn gunzip(path: &Path) -> String {
+    let mut text = String::new();
+    std::io::Read::read_to_string(
+        &mut flate2::read::GzDecoder::new(File::open(path).unwrap()),
+        &mut text,
+    )
+    .unwrap();
+    text
+}
+
+/// Live report: dev logs held about an hour because 3 numbered 5 MB files
+/// filled in ~20 minutes at the measured ~1 MB/min client rate.
+#[test]
+fn dev_logging_options_keep_a_day_of_logs_under_a_hard_cap() {
+    let _lock = crate::utils::config::test_config_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let saved = std::env::var_os("BUS_DEV");
+    std::env::set_var("BUS_DEV", "1");
+    let dev = crate::cli::logging_options();
+    std::env::remove_var("BUS_DEV");
+    let release = crate::cli::logging_options();
+    if let Some(saved) = saved {
+        std::env::set_var("BUS_DEV", saved);
+    }
+
+    let Retention::Archive(policy) = dev.retention else {
+        panic!("dev builds must archive by age: {:?}", dev.retention);
+    };
+    assert!(policy.max_age >= 24 * HOUR, "{policy:?}");
+    assert!(policy.max_total_bytes <= 1024 * 1024 * 1024, "{policy:?}");
+    assert_eq!(
+        (release.max_bytes, release.retention),
+        (
+            DEFAULT_MAX_LOG_BYTES,
+            Retention::Generations(DEFAULT_RETAINED_LOG_FILES)
+        ),
+        "release retention is unchanged"
+    );
+}
+
+#[test]
+fn archive_rotation_keeps_the_full_log_as_a_gzip_archive() {
+    let path = temp_log_path("archive-rotation");
+    let dir = path.parent().unwrap().to_path_buf();
+    let policy = ArchivePolicy {
+        max_age: 24 * HOUR,
+        max_total_bytes: 1024 * 1024,
+    };
+    let options = LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes: 8,
+        retention: Retention::Archive(policy),
+        dev: true,
+    };
+    let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    {
+        let mut guard = writer.make_writer();
+        guard.write_all(b"11111111").unwrap();
+        guard.write_all(b"22222222").unwrap();
+        guard.flush().unwrap();
+    }
+    // The writer's worker compresses off the logging path.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !archives(&dir).iter().any(|name| name.ends_with(".gz"))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "22222222");
+    let names = archives(&dir);
+    assert_eq!(names.len(), 1, "{names:?}");
+    assert!(
+        names[0].starts_with("bus.log.") && names[0].ends_with(".gz"),
+        "{names:?}"
+    );
+    assert_eq!(gunzip(&dir.join(&names[0])), "11111111");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn archive_maintenance_keeps_the_retention_window_and_drops_older_archives() {
+    let path = temp_log_path("archive-age");
+    let dir = path.parent().unwrap().to_path_buf();
+    fs::create_dir_all(&dir).unwrap();
+    let now = SystemTime::now();
+    let policy = ArchivePolicy {
+        max_age: 24 * HOUR,
+        max_total_bytes: 1024 * 1024,
+    };
+    for (hours, text) in [(1, "recent"), (23, "a day old"), (25, "too old")] {
+        fs::write(archive_path(&path, now - hours * HOUR), text).unwrap();
+    }
+    // An interrupted compression from an earlier process.
+    fs::write(
+        format!("{}.gz.tmp", archive_path(&path, now - 2 * HOUR).display()),
+        "partial",
+    )
+    .unwrap();
+    maintain_archives(&path, &policy, now);
+
+    let names = archives(&dir);
+    assert_eq!(names.len(), 2, "{names:?}");
+    let texts: Vec<String> = names.iter().map(|name| gunzip(&dir.join(name))).collect();
+    assert_eq!(texts, ["a day old", "recent"], "{names:?}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn archive_maintenance_drops_the_oldest_archives_past_the_hard_cap() {
+    let path = temp_log_path("archive-cap");
+    let dir = path.parent().unwrap().to_path_buf();
+    fs::create_dir_all(&dir).unwrap();
+    let now = SystemTime::now();
+    let mut sizes = Vec::new();
+    for hours in [3, 2, 1] {
+        let archive = archive_path(&path, now - hours * HOUR);
+        fs::write(&archive, format!("archive from {hours}h ago")).unwrap();
+        maintain_archives(
+            &path,
+            &ArchivePolicy {
+                max_age: 24 * HOUR,
+                max_total_bytes: u64::MAX,
+            },
+            now,
+        );
+        sizes.push(
+            fs::metadata(format!("{}.gz", archive.display()))
+                .unwrap()
+                .len(),
+        );
+    }
+    // Room for the two newest only.
+    let policy = ArchivePolicy {
+        max_age: 24 * HOUR,
+        max_total_bytes: sizes[1] + sizes[2],
+    };
+    maintain_archives(&path, &policy, now);
+
+    let names = archives(&dir);
+    let texts: Vec<String> = names.iter().map(|name| gunzip(&dir.join(name))).collect();
+    assert_eq!(
+        texts,
+        ["archive from 2h ago", "archive from 1h ago"],
+        "{names:?}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// The live logs had no startup line left to show which filter and retention
+/// the process ran with; the line now records both.
+#[test]
+fn startup_records_the_effective_log_filter_and_retention() {
+    let options = LoggingOptions {
+        filter: EnvFilter::new(DEV_FILTER),
+        max_bytes: DEV_MAX_LOG_BYTES,
+        retention: Retention::Archive(DEV_LOG_ARCHIVE),
+        dev: true,
+    };
+    let capture = test_capture::Capture::default();
+    capture.run(|| startup("server", &options));
+    let logs = capture.text();
+    assert!(logs.contains("bus::protocol::keys::host=off"), "{logs}");
+    assert!(logs.contains("bus=trace"), "{logs}");
+    assert!(logs.contains("log_retention=Archive"), "{logs}");
 }

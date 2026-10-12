@@ -83,7 +83,7 @@ pub fn run_server(
         );
         print_ready_message(&crate::protocol::api::socket_path(), &client_socket_path());
 
-        crate::utils::logging::startup("server", logging_options.dev);
+        crate::utils::logging::startup("server", &logging_options);
         server.run().await
     });
 

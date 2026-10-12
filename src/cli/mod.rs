@@ -23,7 +23,8 @@ use crate::utils::env::bus_data_dir;
 
 pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
     use crate::utils::logging::{
-        LoggingOptions, DEFAULT_MAX_LOG_BYTES, DEFAULT_RETAINED_LOG_FILES, DEV_FILTER,
+        LoggingOptions, Retention, DEFAULT_MAX_LOG_BYTES, DEFAULT_RETAINED_LOG_FILES, DEV_FILTER,
+        DEV_LOG_ARCHIVE, DEV_MAX_LOG_BYTES,
     };
     use tracing_subscriber::EnvFilter;
 
@@ -34,8 +35,16 @@ pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
         } else {
             EnvFilter::try_from_env("BUS_LOG").unwrap_or_else(|_| EnvFilter::new("bus=info"))
         },
-        max_bytes: DEFAULT_MAX_LOG_BYTES,
-        retained_files: if dev { 3 } else { DEFAULT_RETAINED_LOG_FILES },
+        max_bytes: if dev {
+            DEV_MAX_LOG_BYTES
+        } else {
+            DEFAULT_MAX_LOG_BYTES
+        },
+        retention: if dev {
+            Retention::Archive(DEV_LOG_ARCHIVE)
+        } else {
+            Retention::Generations(DEFAULT_RETAINED_LOG_FILES)
+        },
         dev,
     }
 }

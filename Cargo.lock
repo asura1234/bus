@@ -147,6 +147,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "ctrlc",
+ "flate2",
  "fontdue",
  "image",
  "interprocess",
