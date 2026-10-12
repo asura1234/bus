@@ -35,7 +35,7 @@ impl Worker {
                     .recover_idle_request(request, crate::messaging::storage::io::now_ms())
                     .map_err(|error| match error {
                         ModelError::AgentNotIdle => {
-                            "Request recovery is allowed only while its agent is idle".into()
+                            "Typed request recovery requires an idle agent or an unavailable agent with an invalidated session".into()
                         }
                         _ => error.to_string(),
                     })?;
