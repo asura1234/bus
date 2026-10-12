@@ -11,6 +11,45 @@ fn codex_trust_controls_are_never_owned_composer_input() {
     }
 }
 
+#[tokio::test]
+async fn startup_controls_visible_after_validation_receive_no_input() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    runtime.test_process_pty_bytes(
+        concat!(
+            "Hooks need review\r\n3 hooks are new or changed.\r\n",
+            "› 1. Review hooks\r\n2. Trust all and continue\r\n",
+            "3. Continue without trusting (hooks won't run)\r\n",
+            "Press enter to confirm or esc to go back\r\n",
+        )
+        .as_bytes(),
+    );
+    // The dialog appeared after native identity/readiness validation but
+    // before the asynchronous writer looked at the current screen.
+    let completion = runtime
+        .queue_observed_input_submission(
+            bytes::Bytes::from_static(b"first room message"),
+            bytes::Bytes::from_static(b"\r"),
+            vec![bytes::Bytes::from_static(b"\x01")],
+            std::time::Duration::ZERO,
+            None,
+            observer(AgentKind::Codex, "first room message".into()),
+        )
+        .unwrap();
+    let error = completion
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        writes.try_recv().is_err(),
+        "trust chooser must receive no editing keys, paste or Enter"
+    );
+    assert!(
+        crate::terminal::runtime::PromptNotShown::is(&error),
+        "{error}"
+    );
+}
+
 #[test]
 fn cursor_current_idle_and_steering_placeholders_are_empty_composers() {
     for placeholder in [
