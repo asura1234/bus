@@ -136,3 +136,67 @@ fn cached_work_history_updates_a_renamed_master_recipient() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn consecutive_replies_to_one_message_are_separated_by_one_blank_row() {
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let agents: Vec<_> = ["alpha", "beta", "gamma"]
+        .into_iter()
+        .map(|name| {
+            state
+                .create_agent(room, name, Provider::ClaudeCode, "/project".into(), None)
+                .unwrap()
+        })
+        .collect();
+    let requests = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "first".into(),
+                files: Vec::new(),
+                recipient_ids: agents.iter().copied().collect(),
+            },
+            Author::Developer,
+            1_000,
+        )
+        .unwrap();
+    // alpha has replied; beta and gamma are still pending.
+    let mut saved = serde_json::to_value(&state).unwrap();
+    let request = &mut saved["requests"][requests[0].0.to_string()];
+    request["phase"] = "completed".into();
+    request["pending_final"] = serde_json::json!({
+        "callback_id": "final", "text": "fake reply: first", "received_at_ms": 2_000,
+        "provider_session_id": "session", "provider_turn_id": "turn"
+    });
+    let state: BusState = serde_json::from_value(saved).unwrap();
+    let mut history = History::default();
+    let lines = history.lines(
+        &state,
+        state.room(room).unwrap(),
+        100,
+        1,
+        3_000,
+        &mut Thumbnails::default(),
+    );
+    let rows: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(
+        rows[1..],
+        [
+            "first",
+            "",
+            "    alpha  Claude Code",
+            "    fake reply: first",
+            "    ",
+            "    Quote",
+            "",
+            "    beta  Claude Code",
+            "    …",
+            "",
+            "    gamma  Claude Code",
+            "    …",
+            "",
+        ],
+        "{rows:?}"
+    );
+}
