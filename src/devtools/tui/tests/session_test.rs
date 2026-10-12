@@ -188,7 +188,30 @@ fn processes_and_run_roots() {
     );
     assert!(default_runs_root(Path::new("/")).ends_with("bus/tui-runs"));
     assert!(pids_holding(Path::new("/nonexistent-bus-tui-dir")).is_empty());
-    assert!(driver_root().ends_with("bus-tui"));
+    assert!(driver_root_for(None).ends_with("bus-tui"));
+    assert_eq!(
+        driver_root_for(Some("/tmp/x".into())),
+        PathBuf::from("/tmp/x")
+    );
+    // A malformed override is refused by `bus --dev tui`, never used as the root.
+    assert!(driver_root_for(Some("relative".into())).ends_with("bus-tui"));
+}
+
+#[test]
+fn root_tests_pass_whatever_bus_tui_root_the_caller_exported() {
+    // A worker that exported BUS_TUI_ROOT for e2e runs must not fail the suite.
+    let module = module_path!().split_once("::").unwrap().1;
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &format!("{module}::processes_and_run_roots")])
+        .env(ROOT_ENV, "/tmp/x")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // A filter that matched nothing would also exit 0.
+    assert!(
+        out.status.success() && stdout.contains("1 passed"),
+        "{stdout}"
+    );
 }
 
 /// True once `check` holds, within two seconds. Another test thread that
