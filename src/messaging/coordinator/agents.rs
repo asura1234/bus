@@ -1,7 +1,8 @@
 //! Owned agent launch, deletion and terminal identity checks.
 use super::{
-    mpsc, schema, AgentId, AgentRuntimeIdentity, Author, BusEvent, Draft, LeftOpenTerminal, Method,
-    Provider, ResponseResult, RoomId, RoomKind, Worker, MASTER_AGENT_NEEDS_ROOM,
+    mpsc, schema, AgentId, AgentRuntimeIdentity, Author, BusEvent, Draft, LeftOpenReason,
+    LeftOpenTerminal, Method, Provider, ResponseResult, RoomId, RoomKind, Worker,
+    MASTER_AGENT_NEEDS_ROOM,
 };
 use crate::agents::providers::{cursor, hook_json::HookContext, launch, spool};
 use crate::messaging::identity;
@@ -32,6 +33,7 @@ impl Worker {
         state.delete_agent(id).map_err(|e| e.to_string())?;
         self.save(state)?;
         self.branch_checks.remove(&id);
+        self.codex_rollouts.remove(&id);
         self.finish_deletion(left_open, events);
         Ok(())
     }
@@ -56,6 +58,7 @@ impl Worker {
         self.save(state)?;
         for agent in agents {
             self.branch_checks.remove(&agent);
+            self.codex_rollouts.remove(&agent);
         }
         self.finish_deletion(left_open, events);
         Ok(())
@@ -73,8 +76,8 @@ impl Worker {
                 .iter()
                 .map(|terminal| {
                     format!(
-                        "Deleted agent \"{}\". Bus no longer owns its terminal (pane {}, {}), so it was left open; close it yourself if it is no longer needed.",
-                        terminal.agent_name, terminal.pane_id, terminal.terminal_id
+                        "Deleted agent \"{}\" ({}). {}",
+                        terminal.agent_name, terminal.terminal_id, terminal.message
                     )
                 })
                 .collect::<Vec<_>>()
@@ -99,12 +102,13 @@ impl Worker {
         let managed_name = identity::managed_name(agent.room_id, id);
         let kind = identity::provider_kind(agent.provider).label();
         let expected_session = identity.session_id.clone();
-        let left_open = LeftOpenTerminal {
-            agent_id: id,
-            agent_name: agent.name.clone(),
-            pane_id: pane.clone(),
-            terminal_id: terminal.clone(),
-        };
+        let left_open = LeftOpenTerminal::new(
+            id,
+            agent.name.clone(),
+            pane.clone(),
+            terminal.clone(),
+            LeftOpenReason::SessionMoved,
+        );
         let result = self.transport.request(Method::PaneCloseIfIdentity(
             schema::PaneCloseIfIdentityParams {
                 pane_id: pane.clone(),
@@ -112,6 +116,7 @@ impl Worker {
                 expected_agent: kind.into(),
                 expected_managed_name: managed_name.clone(),
                 expected_session_id: expected_session.clone(),
+                close_exited_shell: false,
             },
         ));
         match result {
@@ -136,13 +141,16 @@ impl Worker {
                     }
                     if self.native_ownership_released(&managed_name) {
                         // The native server cleared this launch's managed name, e.g.
-                        // after the provider exited and the pane respawned a shell.
-                        // Nothing Bus-owned remains to close and no retry can ever
-                        // pass the guard; what runs in that pane now is not ours.
-                        tracing::info!(event = "bus.deletion.terminal_released", agent_id = id.0,
-                            pane_id = %left_open.pane_id, terminal_id = %left_open.terminal_id,
-                            "Native terminal no longer carries the Bus managed name; left open");
-                        return Ok(Some(left_open));
+                        // after the provider exited and the pane fell back to its
+                        // shell. That idle shell in Bus's own terminal is closed;
+                        // anything running in it now is not ours, so the server
+                        // refuses and the terminal is left open.
+                        return Ok(self.close_exited_shell(
+                            left_open,
+                            kind,
+                            &managed_name,
+                            expected_session,
+                        ));
                     }
                     if expected_session.as_deref().is_some_and(|expected| {
                         self.owned_terminal_session_moved(&left_open, kind, &managed_name, expected)
@@ -245,11 +253,53 @@ impl Worker {
         {
             return None;
         }
-        Some(LeftOpenTerminal {
-            pane_id: info.pane_id,
-            terminal_id: info.terminal_id,
-            ..recorded.clone()
-        })
+        Some(LeftOpenTerminal::new(
+            recorded.agent_id,
+            recorded.agent_name.clone(),
+            info.pane_id,
+            info.terminal_id,
+            LeftOpenReason::SessionMoved,
+        ))
+    }
+
+    /// Close the agent's own terminal when only an idle shell remains in it,
+    /// else return it as left open: what runs there now is not Bus's.
+    fn close_exited_shell(
+        &mut self,
+        terminal: LeftOpenTerminal,
+        kind: &str,
+        managed_name: &str,
+        session: Option<String>,
+    ) -> Option<LeftOpenTerminal> {
+        let closed = matches!(
+            self.transport.request(Method::PaneCloseIfIdentity(
+                schema::PaneCloseIfIdentityParams {
+                    pane_id: terminal.pane_id.clone(),
+                    expected_terminal_id: terminal.terminal_id.clone(),
+                    expected_agent: kind.into(),
+                    expected_managed_name: managed_name.into(),
+                    expected_session_id: session,
+                    close_exited_shell: true,
+                },
+            )),
+            Ok(ResponseResult::Ok {})
+        );
+        if closed {
+            tracing::info!(event = "bus.deletion.exited_shell_closed", agent_id = terminal.agent_id.0,
+                pane_id = %terminal.pane_id, terminal_id = %terminal.terminal_id,
+                "Closed the idle shell the exited provider left");
+            return None;
+        }
+        tracing::info!(event = "bus.deletion.terminal_released", agent_id = terminal.agent_id.0,
+            pane_id = %terminal.pane_id, terminal_id = %terminal.terminal_id,
+            "Native terminal no longer carries the Bus managed name; left open");
+        Some(LeftOpenTerminal::new(
+            terminal.agent_id,
+            terminal.agent_name,
+            terminal.pane_id,
+            terminal.terminal_id,
+            LeftOpenReason::ProviderExited,
+        ))
     }
 
     /// `agent.list` includes every terminal carrying a managed name, even with

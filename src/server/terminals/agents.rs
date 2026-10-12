@@ -449,12 +449,28 @@ impl App {
     }
 }
 
-fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<String> {
+pub(in crate::server) fn available_shell_name(
+    runtime: &crate::terminal::TerminalRuntime,
+) -> Option<String> {
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());
     }
     crate::platform::available_pane_shell(runtime.child_pid()?)
+}
+
+/// Whether the terminal session holds nothing but its idle shell: the shell
+/// is in the foreground and no other process, foreground or background job,
+/// shares its session. An unreadable session counts as busy.
+pub(in crate::server) fn runtime_is_idle_shell(runtime: &crate::terminal::TerminalRuntime) -> bool {
+    #[cfg(test)]
+    if runtime.child_pid().is_none() {
+        return true;
+    }
+    let Some(shell) = runtime.child_pid() else {
+        return false;
+    };
+    available_shell_name(runtime).is_some() && crate::platform::session_processes(shell) == [shell]
 }
 
 pub(in crate::server) fn runtime_hosts_agent(

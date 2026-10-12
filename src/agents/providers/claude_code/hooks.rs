@@ -201,6 +201,22 @@ fn claude_turn_awaits_background(value: &Value) -> bool {
         })
 }
 
+/// The ids of the background shells a Claude `Stop` lists as running. Each one
+/// that finishes wakes a turn of its own, whose `Stop` no longer lists it.
+pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet<String> {
+    value
+        .get("background_tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|task| {
+            task.get("type").and_then(Value::as_str) == Some("shell")
+                && task.get("status").and_then(Value::as_str) == Some("running")
+        })
+        .filter_map(|task| task.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "tests/hooks_test.rs"]
 mod tests;

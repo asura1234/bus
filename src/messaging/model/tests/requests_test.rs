@@ -177,7 +177,9 @@ fn uncertain_submission_cannot_end_from_unrelated_status_activity() {
         .observe_status(agent, RuntimeStatus::Idle, 11)
         .unwrap();
     assert!(!state.turn_ended(state.request(request).unwrap()));
-    assert!(state.settle_ended_request(agent, 100_000).is_none());
+    assert!(state
+        .settle_ended_request(agent, 100_000, |_| None)
+        .is_none());
     assert_eq!(
         state.request(request).unwrap().phase,
         RequestPhase::Submitting

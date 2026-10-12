@@ -8,6 +8,10 @@ pub struct PaneCloseIfIdentityParams {
     pub expected_agent: String,
     pub expected_managed_name: String,
     pub expected_session_id: Option<String>,
+    /// Close instead the idle shell left in this exact terminal after its
+    /// provider exited and the managed name was released. Old servers ignore it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub close_exited_shell: bool,
 }
 
 use super::agents::AgentSessionInfo;

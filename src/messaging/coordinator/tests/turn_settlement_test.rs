@@ -244,3 +244,350 @@ fn a_turn_with_status_evidence_but_no_start_or_reply_hook_also_closes() {
         .latest_replies
         .is_empty());
 }
+
+#[test]
+fn a_codex_turn_that_ended_on_a_provider_error_reports_that_error() {
+    // Live: Codex fires no Stop hook when "Selected model is at capacity"
+    // ends a turn; only its rollout's task_complete event carries the error.
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-2026-10-12T00-00-00-abc.jsonl");
+    std::fs::write(
+        &rollout,
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":null,
+            "error":{"message":"Selected model is at capacity. Please try a different model.","codex_error_info":"server_overloaded"}}})
+        .to_string() + "\n",
+    )
+    .unwrap();
+    let lead = fixture.send("implement the change", false);
+    fixture.deliver();
+    fixture.record(json!({"hook_event_name":"UserPromptSubmit","session_id":"session","turn_id":"turn-1","prompt":"implement the change","transcript_path":rollout}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let request = fixture.request(lead);
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    let expected = "provider_error: Selected model is at capacity. Please try a different model. (server_overloaded)";
+    assert_eq!(request.failure_reason.as_deref(), Some(expected));
+    assert!(fixture
+        .error()
+        .unwrap()
+        .contains("Selected model is at capacity"));
+}
+
+#[test]
+fn a_turn_closed_without_a_reply_or_provider_error_says_so_in_its_reason() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let request = fixture.request(lead);
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request.failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+}
+
+fn claude_stop(turn: &str, text: &str, shells: &[&str]) -> Value {
+    // Shape measured from Claude Code 2.1.296: each running background shell
+    // is listed, and each one that finishes wakes a turn whose Stop drops it.
+    let tasks: Vec<_> = shells
+        .iter()
+        .map(|id| json!({"id":id,"type":"shell","status":"running","description":"Run","command":"sleep 45"}))
+        .collect();
+    json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":tasks,"session_crons":[]})
+}
+
+fn claude_startup() -> Value {
+    json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"})
+}
+
+/// Regression: a Claude worker that ended its turn while shells it started
+/// still ran ("4 shells still running") had its interim text recorded as the
+/// final reply, so the orchestrator's `send --async` returned early.
+#[test]
+fn a_claude_turn_waiting_on_shells_it_started_keeps_its_request_open() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(&mut fixture, "run the tests", "turn-1");
+    fixture.record(claude_stop(
+        "turn-1",
+        "Waiting on the background shells.",
+        &["b1", "b2"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert!(fixture.reply(lead).is_none());
+    // The first shell finishing wakes a turn; the other still runs.
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.record(claude_stop("turn-2", "One shell finished.", &["b2"]));
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.started(
+        "turn-3",
+        "<task-notification>b2 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.record(claude_stop("turn-3", "Both test runs passed.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Both test runs passed.")
+    );
+}
+
+/// A shell left running before the request (say a hung `find /`) is listed by
+/// every later Stop and must not hold this or any later reply.
+#[test]
+fn a_claude_shell_left_running_before_the_request_does_not_hold_its_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let first = running(&mut fixture, "look around", "turn-1");
+    fixture.record(claude_stop("turn-1", "Looked around.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(first).phase, RequestPhase::Completed);
+    // A turn of the agent's own leaves a shell running.
+    fixture.record(claude_stop("own-turn", "Started a search.", &["stale"]));
+    fixture.consume();
+    let lead = running(&mut fixture, "review this change", "turn-2");
+    fixture.record(claude_stop("turn-2", "Reviewed.", &["stale"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Reviewed."));
+}
+
+/// After a Bus restart the shells running before the request are unknown, so
+/// none of them holds a reply.
+#[test]
+fn a_claude_reply_is_not_held_by_shells_of_unknown_age() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "review this change", "turn-1");
+    fixture.record(claude_stop("turn-1", "Reviewed.", &["unknown"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+}
+
+#[test]
+fn a_joined_codex_request_reports_the_provider_error_that_ended_its_turn() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    let joined = fixture.send("check the tests too", false);
+    fixture.deliver();
+    let rollout = fixture.dir.join("rollout-joined.jsonl");
+    std::fs::write(&rollout, json!({"type":"event_msg","payload":{
+        "type":"task_complete","turn_id":"turn-1","error":{"message":"Selected model is at capacity."}
+    }}).to_string()).unwrap();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"check the tests too","transcript_path":rollout}),
+    );
+    fixture.consume();
+    assert_eq!(fixture.request(joined).group, Some(lead));
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(joined).phase, RequestPhase::Abandoned);
+    let message = fixture.request(joined).prompt.id;
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(
+        status["requests"][0]["reason"],
+        "provider_error: Selected model is at capacity."
+    );
+}
+
+/// A follower polling message status between a reply-less turn end and its
+/// settlement must not take the turn as done: Bus attaches the provider error
+/// (or `reply_not_captured`) only after the settle window. Live e2e: `send
+/// --async` exited 0 at Idle, 5 s before the provider error was attached.
+#[test]
+fn a_reply_less_ended_turn_reports_settling_until_its_reason_is_attached() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    let joined = fixture.send("check the tests too", false);
+    fixture.deliver();
+    let rollout = fixture.dir.join("rollout-settling.jsonl");
+    std::fs::write(&rollout, json!({"type":"event_msg","payload":{
+        "type":"task_complete","turn_id":"turn-1","error":{"message":"Selected model is at capacity."}
+    }}).to_string()).unwrap();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"check the tests too","transcript_path":rollout}),
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for request in [lead, joined] {
+        let message = fixture.request(request).prompt.id;
+        let status = fixture
+            .worker
+            .control_message_at(message, fixture.now)
+            .unwrap();
+        assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
+        assert_eq!(status["requests"][0]["settling"], true, "{status}");
+    }
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for request in [lead, joined] {
+        let message = fixture.request(request).prompt.id;
+        let status = fixture
+            .worker
+            .control_message_at(message, fixture.now)
+            .unwrap();
+        assert_eq!(status["requests"][0]["stage"], "abandoned", "{status}");
+        assert_eq!(status["requests"][0]["settling"], false, "{status}");
+    }
+}
+
+/// A turn Bus will not settle (its agent went unavailable, as after a
+/// restart) is not settling, so followers still finish on it.
+#[test]
+fn an_ended_turn_whose_agent_is_unavailable_is_not_settling() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Unavailable);
+    let message = fixture.request(lead).prompt.id;
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
+    assert_eq!(status["requests"][0]["settling"], false, "{status}");
+}
+
+const SHELL_HOLD_MS: u64 = 15 * 60 * 1000;
+
+/// Holds `fixture`'s request on one shell its turn started, as Claude reports
+/// it ("Waiting on the build."), and returns the request.
+fn held_on_a_started_shell(fixture: &mut Fixture) -> RequestId {
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(fixture, "build it", "turn-1");
+    fixture.record(claude_stop("turn-1", "Waiting on the build.", &["b1"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    lead
+}
+
+/// A shell the turn started that never exits (a dev server, say) must not hold
+/// the request and the agent's queue forever: at the cap (15 minutes by
+/// default) the latest interim text is the reply.
+#[test]
+fn a_claude_reply_held_past_the_shell_cap_is_delivered_as_its_interim_text() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let next = fixture.send("review the next change", true);
+    let message = fixture.request(lead).prompt.id;
+    fixture.now += SHELL_HOLD_MS - 10;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["turn_ended"], false, "{status}");
+
+    fixture.now += 10;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
+    assert_eq!(
+        status["requests"][0]["reason"], "background_shells_timeout",
+        "{status}"
+    );
+    // The agent's queue moves on.
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed().last().unwrap(),
+        &("review the next change".into(), false)
+    );
+    assert_eq!(fixture.request(next).phase, RequestPhase::Active);
+}
+
+/// The cap counts from the first hold; a shell finishing wakes a turn that may
+/// hold again with newer text, and that newer text is what the cap delivers.
+#[test]
+fn the_shell_cap_counts_from_the_first_hold_and_delivers_the_newest_interim_text() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.now += 5 * 60 * 1000;
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop(
+        "turn-2",
+        "Build done; waiting on the server.",
+        &["b2"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.now += SHELL_HOLD_MS - 5 * 60 * 1000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Build done; waiting on the server.")
+    );
+}
+
+/// The cap is the `background_shell_hold_minutes` Bus setting.
+#[test]
+fn the_shell_cap_is_the_background_shell_hold_minutes_setting() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let settings = fixture.dir.join("settings.json");
+    std::fs::write(&settings, br#"{"background_shell_hold_minutes":1}"#).unwrap();
+    fixture.worker.settings_path = Some(settings);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.now += 60 * 1000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+}

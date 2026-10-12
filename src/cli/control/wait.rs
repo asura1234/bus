@@ -74,30 +74,65 @@ pub(super) fn follow_message(
 }
 
 /// `Some(Ok)` once every recipient's turn ended, `Some(Err)` with an error
-/// code when Bus abandoned a recipient's request or one stalled, `None` while
-/// any recipient still works, is blocked, or has not started.
+/// code when Bus abandoned a recipient's request (other than one settled as
+/// `reply_not_captured`) or one stalled, `None` while any recipient still
+/// works, is blocked, or has not started.
 fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
     let requests = status["requests"].as_array()?;
-    if let Some(abandoned) = requests.iter().find(|r| r["stage"] == "abandoned") {
-        return Some(Err((
-            "message_abandoned",
-            format!(
-                "Bus abandoned message {} for agent {}; inspect message status and the agent's terminal",
-                status["message_id"],
-                abandoned["agent_name"].as_str().unwrap_or("unknown"),
-            ),
-        )));
+    if let Some(error) = abandonment(status, true) {
+        return Some(Err(error));
     }
     let ended = |r: &Value| {
-        r["turn_ended"] == true
-            && (r["stage"] == "replied"
-                || !(r["uncertain_outcome"] == true && r["start_bound"] != true))
+        // A settling turn ended without a reply; Bus has yet to attach why.
+        let settling = r["settling"] == true;
+        settled_without_reply(r)
+            || r["turn_ended"] == true
+                && !settling
+                && (r["stage"] == "replied"
+                    || !(r["uncertain_outcome"] == true && r["start_bound"] != true))
     };
     if requests.iter().all(ended) {
         return Some(Ok(()));
     }
     // A finished turn whose reply was not captured is done for --async.
     stalled(status, |r| !ended(r)).map(Err)
+}
+
+/// A request settlement closed because its turn ended without a captured
+/// reply and without a provider error.
+fn settled_without_reply(r: &Value) -> bool {
+    r["stage"] == "abandoned" && r["reason"] == "reply_not_captured"
+}
+
+/// The first abandoned request as an error: `message_provider_error` when a
+/// provider error ended its turn (worth a retry), else `message_abandoned`.
+/// An async follower takes a turn settled without a reply as done, as it does
+/// any ended turn; a bounded wait needs the reply, so it fails on that too.
+fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)> {
+    let abandoned = status["requests"]
+        .as_array()?
+        .iter()
+        .find(|r| r["stage"] == "abandoned" && !(follower && settled_without_reply(r)))?;
+    let agent = abandoned["agent_name"].as_str().unwrap_or("unknown");
+    if let Some(error) = abandoned["reason"]
+        .as_str()
+        .and_then(|reason| reason.strip_prefix("provider_error: "))
+    {
+        return Some((
+            "message_provider_error",
+            format!(
+                "The provider ended agent {agent}'s turn on message {} with an error: {error}",
+                status["message_id"],
+            ),
+        ));
+    }
+    Some((
+        "message_abandoned",
+        format!(
+            "Bus abandoned message {} for agent {agent}; inspect message status and the agent's terminal",
+            status["message_id"],
+        ),
+    ))
 }
 
 /// The first stalled request (among those `relevant`) as a `message_stalled`
@@ -194,14 +229,19 @@ pub(super) fn execute(
         if !response.ok || !waiting {
             return response;
         }
-        match async_outcome(&response.result) {
-            Some(Ok(())) if deadline.is_none() => return response,
-            Some(Err((code, message))) if deadline.is_none() || code == "message_abandoned" => {
+        let outcome = if deadline.is_some() {
+            abandonment(&response.result, false).map(Err)
+        } else {
+            async_outcome(&response.result)
+        };
+        match outcome {
+            Some(Ok(())) => return response,
+            Some(Err((code, message))) => {
                 let mut failure = Response::failure(&id, code, message);
                 failure.result = response.result;
                 return failure;
             }
-            _ => {}
+            None => {}
         }
         if deadline.is_some() && response.result["complete"] == true {
             return response;

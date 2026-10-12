@@ -141,7 +141,7 @@ fn run_with_pause(
             message,
         }
         .into(),
-        "message_abandoned" => CliExit { code: 1, message }.into(),
+        "message_abandoned" | "message_provider_error" => CliExit { code: 1, message }.into(),
         _ => Box::<dyn std::error::Error + Send + Sync>::from(message),
     }))
 }

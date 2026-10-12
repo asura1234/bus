@@ -1,8 +1,8 @@
 //! Coordinator worker ownership.
 use super::{
-    control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BusCommand, BusEvent,
-    BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf, RequestId,
-    RuntimeStatus, StoragePause, Transport,
+    control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
+    BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
+    RequestId, RuntimeStatus, StoragePause, Transport,
 };
 use crate::messaging::storage::state_store::JournalOp;
 
@@ -37,6 +37,14 @@ pub(super) struct Worker {
     pub(super) control_receipt_retention: Duration,
     /// Provider allowance for dev `state`; in memory only, never persisted.
     pub(super) usage: usage::Usage,
+    /// Each Codex agent's rollout, from its hooks. A turn that a provider
+    /// error ended fires no Stop hook; only the rollout records why.
+    pub(super) codex_rollouts: BTreeMap<AgentId, PathBuf>,
+    /// The background shells each Claude agent had running when its last
+    /// reply settled. Shells beyond these were started by the current
+    /// request's turns, and its reply waits for them. In memory only: after a
+    /// restart every running shell counts as older.
+    pub(super) claude_settled_shells: BTreeMap<AgentId, BTreeSet<String>>,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
@@ -89,6 +97,8 @@ impl Worker {
             control_receipt_bytes: 0,
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
+            codex_rollouts: BTreeMap::new(),
+            claude_settled_shells: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
         })
@@ -289,8 +299,27 @@ impl Worker {
         let mut state = self.state.clone();
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
+        let hold_cap_ms = u64::from(
+            self.settings_path
+                .as_deref()
+                .and_then(|path| crate::messaging::prefs::settings::load(path).ok())
+                .unwrap_or_default()
+                .background_shell_hold_minutes,
+        ) * 60_000;
         for (agent, observed_at_ms) in agents {
-            changed |= state.settle_ended_request(agent, observed_at_ms).is_some();
+            changed |= state
+                .release_shell_hold(agent, observed_at_ms, hold_cap_ms)
+                .is_some();
+            let rollout = self.codex_rollouts.get(&agent);
+            let provider_error = |request: &crate::messaging::model::Request| {
+                let turn = request.provider_turn_id.as_deref()?;
+                crate::agents::providers::codex::usage::read_codex_turn_error(rollout?, turn)
+                    .ok()
+                    .flatten()
+            };
+            changed |= state
+                .settle_ended_request(agent, observed_at_ms, provider_error)
+                .is_some();
         }
         if changed {
             self.save(state)?;

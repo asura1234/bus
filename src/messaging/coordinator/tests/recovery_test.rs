@@ -14,6 +14,48 @@ fn delete_failure_suspends_delivery_across_restart_and_allows_retry() {
     }
 }
 
+/// Regression: a Codex agent whose provider exited (say a bootstrap failure
+/// after its update dialog) left Bus's own pane at an idle shell with no
+/// managed name. Every guarded close answered `terminal_identity_changed`, so
+/// deletion reported `terminals_left_open` and the shell stayed open forever.
+#[test]
+fn delete_closes_the_idle_shell_left_when_the_provider_exited() {
+    for delete_room in [false, true] {
+        let (mut worker, agent, room, dir, calls) = fixture(
+            Provider::Codex,
+            vec![
+                identity_changed(),
+                native_agents(None),
+                Ok(ResponseResult::Ok {}),
+            ],
+        );
+        let request = queue(&mut worker, room, agent, "stranded at awaiting_start");
+        let (events, received) = mpsc::channel();
+        let command = if delete_room {
+            BusCommand::DeleteRoom(room)
+        } else {
+            BusCommand::DeleteAgent(agent)
+        };
+        worker.command(command, &events).unwrap();
+        assert!(worker.state.agent(agent).is_none());
+        assert!(worker.state.request(request).is_none());
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "pane.close_if_identity",
+                "agent.list",
+                "pane.close_if_identity(exited_shell)"
+            ]
+        );
+        assert!(!received
+            .try_iter()
+            .any(|event| matches!(&event, BusEvent::TerminalsLeftOpen(_))));
+        assert_eq!(worker.snapshot().error, None);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// Regression: a Codex agent whose pane respawned after a Bus restart lost its
 /// native managed name, so every guarded close answered
 /// `terminal_identity_changed` and deletion stayed suspended forever.
@@ -22,7 +64,8 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
     for delete_room in [false, true] {
         let (mut worker, agent, room, dir, calls) = fixture(
             Provider::Codex,
-            vec![identity_changed(), native_agents(None)],
+            // The shell runs a command now, so the server refuses to close it.
+            vec![identity_changed(), native_agents(None), identity_changed()],
         );
         let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
         identity.session_id = None;
@@ -42,23 +85,44 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
         assert!(worker.state.agent(agent).is_none());
         assert!(worker.state.request(request).is_none());
         assert_eq!(worker.state.room(room).is_none(), delete_room);
-        // Never a second, unguarded close: the pane now holds foreign work.
+        // Never an unguarded close: the pane now holds foreign work.
         assert_eq!(
             *calls.lock().unwrap(),
-            vec!["pane.close_if_identity", "agent.list"]
+            vec![
+                "pane.close_if_identity",
+                "agent.list",
+                "pane.close_if_identity(exited_shell)"
+            ]
         );
-        let left_open = vec![LeftOpenTerminal {
-            agent_id: agent,
-            agent_name: "author".into(),
-            pane_id: "pane".into(),
-            terminal_id: "terminal".into(),
-        }];
-        assert!(received
+        let terminals = received
             .try_iter()
-            .any(|event| matches!(&event, BusEvent::TerminalsLeftOpen(t) if *t == left_open)));
+            .find_map(|event| match event {
+                BusEvent::TerminalsLeftOpen(terminals) => Some(terminals),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(terminals.len(), 1);
+        let terminal = &terminals[0];
+        assert_eq!(
+            (
+                terminal.agent_id,
+                terminal.agent_name.as_str(),
+                terminal.pane_id.as_str(),
+                terminal.terminal_id.as_str()
+            ),
+            (agent, "author", "pane", "terminal")
+        );
+        // The result explains itself to a CLI caller, not only to the TUI.
+        let json = serde_json::to_value(terminal).unwrap();
+        assert_eq!(json["reason"], "provider_exited");
+        let message = json["message"].as_str().unwrap();
+        assert!(
+            message.contains("exited") && message.contains("close pane pane yourself"),
+            "{message}"
+        );
         let report = worker.snapshot().error.unwrap();
         assert!(
-            report.contains("\"author\"") && report.contains("pane pane, terminal"),
+            report.contains("\"author\"") && report.contains(message),
             "{report}"
         );
         drop(worker);
@@ -344,7 +408,8 @@ fn delete_leaves_open_an_owned_terminal_whose_provider_session_moved() {
     );
     assert!(received.try_iter().any(|event| matches!(
         event,
-        BusEvent::TerminalsLeftOpen(terminals) if terminals[0].pane_id == "pane"
+        BusEvent::TerminalsLeftOpen(terminals)
+            if terminals[0].pane_id == "pane" && terminals[0].reason == LeftOpenReason::SessionMoved
     )));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
