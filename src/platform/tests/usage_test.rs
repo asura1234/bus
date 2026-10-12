@@ -86,3 +86,42 @@ fn open_fds_counts_only_the_descriptors_that_are_open() {
         "reported {reported} open fds, /dev/fd lists {actual}"
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+#[allow(deprecated)]
+fn process_sampling_releases_host_port_send_rights() {
+    unsafe extern "C" {
+        fn mach_port_get_refs(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+            right: u32,
+            refs: *mut u32,
+        ) -> libc::kern_return_t;
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
+    let host = unsafe { libc::mach_host_self() };
+    let refs = || {
+        let mut count = 0;
+        assert_eq!(
+            unsafe { mach_port_get_refs(libc::mach_task_self(), host, 0, &mut count) },
+            0
+        );
+        count
+    };
+    let before = refs();
+    for _ in 0..32 {
+        assert!(self_usage().is_some());
+    }
+    let after = refs();
+    unsafe {
+        mach_port_deallocate(libc::mach_task_self(), host);
+    }
+    assert_eq!(
+        after, before,
+        "sampling must balance each mach_host_self send right"
+    );
+}

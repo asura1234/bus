@@ -439,45 +439,6 @@ fn stack_captures_prune_old_files_to_a_bounded_retention() {
     );
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-#[allow(deprecated)]
-fn process_sampling_releases_host_port_send_rights() {
-    unsafe extern "C" {
-        fn mach_port_get_refs(
-            task: libc::mach_port_t,
-            name: libc::mach_port_t,
-            right: u32,
-            refs: *mut u32,
-        ) -> libc::kern_return_t;
-        fn mach_port_deallocate(
-            task: libc::mach_port_t,
-            name: libc::mach_port_t,
-        ) -> libc::kern_return_t;
-    }
-    let host = unsafe { libc::mach_host_self() };
-    let refs = || {
-        let mut count = 0;
-        assert_eq!(
-            unsafe { mach_port_get_refs(libc::mach_task_self(), host, 0, &mut count) },
-            0
-        );
-        count
-    };
-    let before = refs();
-    for _ in 0..32 {
-        assert!(crate::platform::usage::self_usage().is_some());
-    }
-    let after = refs();
-    unsafe {
-        mach_port_deallocate(libc::mach_task_self(), host);
-    }
-    assert_eq!(
-        after, before,
-        "sampling must balance each mach_host_self send right"
-    );
-}
-
 #[test]
 fn two_client_processes_sharing_the_role_file_keep_each_others_latest_records() {
     let dir = crate::utils::test_temp::unique_temp_path("perf-shared-role");
