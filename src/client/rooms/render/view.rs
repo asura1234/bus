@@ -56,6 +56,11 @@ impl View {
         }
     }
 
+    /// A click target with nothing painted.
+    pub(super) fn hit(&mut self, rect: Rect, action: Action) {
+        self.hits.push(Hit { rect, action });
+    }
+
     pub(super) fn color_last_row(&mut self, rect: Rect, color: Color) {
         if rect.width > 0 && rect.height > 0 {
             if let Some(row) = self.rows.last_mut() {

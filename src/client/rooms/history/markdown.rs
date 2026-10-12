@@ -221,6 +221,7 @@ fn line_from_buffer(
         tone: Tone::Text,
         spans: Vec::new(),
         styles,
+        links: None,
         thumbnail: None,
         raw_markdown: Some((request, Arc::clone(source))),
         // Set by `mark_soft_wraps` once every row of the message exists.
@@ -247,6 +248,7 @@ fn literal_reply_lines(
             tone: Tone::Text,
             spans: Vec::new(),
             styles: Vec::new(),
+            links: None,
             thumbnail: None,
             raw_markdown: Some((request, Arc::clone(source))),
             continued: index > 0 && rows[index - 1].end == row.start,

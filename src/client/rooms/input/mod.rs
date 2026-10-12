@@ -137,7 +137,7 @@ impl BusUi {
             .map(|h| h.action.clone());
         if mouse.kind == MouseEventKind::Moved {
             let detail = match &hit {
-                Some(Action::RemoveFile(path) | Action::FileDetail(path)) => {
+                Some(Action::RemoveFile(path) | Action::OpenFile(path)) => {
                     Some(path.display().to_string())
                 }
                 _ => None,
@@ -548,7 +548,8 @@ impl BusUi {
             Action::Recipient(id) => self.toggle_recipient(id),
             Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),
             Action::RemoveFile(path) => self.remove_room_file(path),
-            Action::FileDetail(path) => self.detail_path = Some(path.display().to_string()),
+            // Opening needs the client shell; `room_mouse` handles the click.
+            Action::OpenFile(_) => {}
             Action::Details(agent) => {
                 if let Some(a) = self.snapshot.state.agent(agent) {
                     self.queue(

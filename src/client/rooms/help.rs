@@ -26,6 +26,7 @@ Ctrl+G         Open the prompt in $EDITOR
 Ctrl+V         Attach a clipboard image
 Ctrl+C         Clear the draft (never quits Bus)
 Mouse drag     Select notes, history or draft text and copy it
+Click a link   Open an underlined URL, file path or attachment
 Ctrl+P         Choose agents
 Ctrl+O         Add files
 Ctrl+Shift+E   Toggle full-height / compact composer

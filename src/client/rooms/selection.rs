@@ -2,6 +2,7 @@
 //! anchored to text positions rather than screen cells, so they survive
 //! scrolling; releasing the button copies the selected text to the host
 //! clipboard. History selections cover exactly the dragged characters.
+use super::links::Target;
 use super::render::{cell_offset, wrap_ranges, Action};
 use super::BusUi;
 use crate::client::compositor::{ClientShellAction, ClientShellInput};
@@ -99,13 +100,18 @@ impl BusUi {
                     Some(Action::Composer) if self.view.composer.contains(point) => {
                         Region::Composer
                     }
-                    None if self.view.history_text.contains(point) => Region::History,
+                    None | Some(Action::OpenFile(_)) if self.view.history_text.contains(point) => {
+                        Region::History
+                    }
                     _ => return false,
                 };
                 self.clear_selection();
                 if region == Region::History {
                     let point = self.history_point(column, row, false);
                     self.history_selection = Some((point, point));
+                    self.pressed_link = self
+                        .link_at(column, row)
+                        .map(|(_, target)| ((column, row), target.clone()));
                 } else {
                     let offset = self.editor_offset(region, column, row, false);
                     self.action(if region == Region::Notes {
@@ -135,6 +141,7 @@ impl BusUi {
                     return false;
                 };
                 if region == Region::History {
+                    self.cancel_moved_click(column, row);
                     if let Some((anchor, _)) = self.history_selection {
                         let before = self.history_point(column, row, false);
                         let head = if before >= anchor {
@@ -161,8 +168,11 @@ impl BusUi {
                 true
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if self.drag.take().is_none() {
+                let Some(region) = self.drag.take() else {
                     return false;
+                };
+                if region == Region::History {
+                    self.open_clicked_link(column, row, outcome);
                 }
                 match self.selected_text() {
                     Some(text) => outcome
@@ -174,6 +184,45 @@ impl BusUi {
             }
             _ => false,
         }
+    }
+
+    /// Any motion makes the gesture a drag, even where it selects no text,
+    /// as across a picture.
+    fn cancel_moved_click(&mut self, column: u16, row: u16) {
+        if self
+            .pressed_link
+            .as_ref()
+            .is_some_and(|(cell, _)| *cell != (column, row))
+        {
+            self.pressed_link = None;
+        }
+    }
+
+    /// A click that selected nothing opens the link under it: the button
+    /// went down and came up on the same cell of a link without moving. The press
+    /// still starts a selection, so dragging across a link selects and
+    /// copies it as plain text.
+    fn open_clicked_link(&mut self, column: u16, row: u16, outcome: &mut ClientShellInput) {
+        let pressed = self.pressed_link.take();
+        if self
+            .history_selection
+            .is_none_or(|(anchor, head)| anchor != head)
+        {
+            return;
+        }
+        if let Some((_, target)) = pressed.filter(|(cell, _)| *cell == (column, row)) {
+            outcome.actions.push(match target {
+                Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url),
+                Target::Path(path) => ClientShellAction::OpenPath(path),
+            });
+        }
+    }
+
+    fn link_at(&self, column: u16, row: u16) -> Option<&(Rect, Target)> {
+        self.view
+            .history_links
+            .iter()
+            .find(|(rect, _)| rect.contains((column, row).into()))
     }
 
     /// Editor byte offset under the pointer, using the last frame's viewport.
@@ -254,6 +303,7 @@ impl BusUi {
     pub(super) fn clear_selection(&mut self) {
         self.drag = None;
         self.history_selection = None;
+        self.pressed_link = None;
         for local in self.locals.values_mut() {
             local.notes.anchor = None;
             local.text.anchor = None;

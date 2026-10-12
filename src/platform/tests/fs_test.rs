@@ -89,3 +89,95 @@ fn private_files_and_directories_are_owner_only() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn launchers_and_executables_are_revealed_not_opened() {
+    let dir = temp_dir("launches");
+    let document = dir.join("notes.md");
+    std::fs::write(&document, "x").unwrap();
+    let bundle = dir.join("Tool.app");
+    std::fs::create_dir_all(&bundle).unwrap();
+    let folder = dir.join("docs");
+    std::fs::create_dir_all(&folder).unwrap();
+    assert!(!launches_code(&document), "a document opens");
+    assert!(!launches_code(&folder), "a folder opens");
+    assert!(launches_code(&bundle), "an app bundle runs");
+    for name in [
+        "setup.EXE",
+        "run.command",
+        "x.ps1",
+        "a.desktop",
+        "b.AppImage",
+        "c.lnk",
+    ] {
+        std::fs::write(dir.join(name), "x").unwrap();
+        assert!(launches_code(&dir.join(name)), "{name}");
+    }
+    assert!(launches_code(&dir.join("gone.md")), "unresolvable: reveal");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("build");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(launches_code(&script), "an executable file runs");
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!launches_code(&folder), "a searchable folder still opens");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn script_host_and_shortcut_files_are_revealed_not_opened() {
+    // Each of these runs code, or follows a link to code, when its default
+    // app opens it: shortcuts, Terminal settings, Finder and Internet
+    // location files, and on Windows script hosts, mshta and Control Panel.
+    let dir = temp_dir("script-hosts");
+    let mut names = vec![
+        "a.url",
+        "a.terminal",
+        "a.fileloc",
+        "a.inetloc",
+        "a.webloc",
+        "a.workflow",
+    ];
+    if cfg!(windows) {
+        names.extend([
+            "a.vbs", "a.vbe", "a.js", "a.jse", "a.wsf", "a.wsh", "a.hta", "a.cpl", "a.pif",
+        ]);
+    }
+    for name in names {
+        let path = dir.join(name);
+        std::fs::write(&path, "x").unwrap();
+        assert!(launches_code(&path), "{name}");
+    }
+    // Elsewhere a script source is a document an editor opens.
+    #[cfg(unix)]
+    {
+        let source = dir.join("app.js");
+        std::fs::write(&source, "x").unwrap();
+        assert!(!launches_code(&source), "app.js opens");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn links_are_judged_by_what_they_point_at() {
+    use std::os::unix::fs::symlink;
+    let dir = temp_dir("app-symlink");
+    let bundle = dir.join("Tool.app");
+    std::fs::create_dir(&bundle).unwrap();
+    let shortcut = dir.join("Tool");
+    symlink(&bundle, &shortcut).unwrap();
+    let document = dir.join("notes.md");
+    std::fs::write(&document, "x").unwrap();
+    let alias = dir.join("Notes");
+    symlink(&document, &alias).unwrap();
+    assert!(
+        launches_code(&shortcut),
+        "an app through a symlink is revealed"
+    );
+    assert!(!launches_code(&alias), "a document through a symlink opens");
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -95,6 +95,7 @@ pub(in crate::client) struct BusUi {
     pub(super) history_follow_tail: bool,
     pub(super) history: super::history::History,
     pub(super) thumbnails: super::thumbnails::Thumbnails,
+    pub(super) link_paths: super::links::PathProbe,
     /// The screen the last view showed: room, agent terminal, form, dialog.
     pub(super) view_key: Option<ViewKey>,
     /// The view switched screens since the client last repainted every cell.
@@ -108,6 +109,8 @@ pub(in crate::client) struct BusUi {
     pub(super) drag: Option<super::selection::Region>,
     /// History selection as (anchor, head); editor selections live in `Editor`.
     pub(super) history_selection: Option<(super::selection::Point, super::selection::Point)>,
+    /// The cell and history link the left button went down on, until it moves.
+    pub(super) pressed_link: Option<((u16, u16), super::links::Target)>,
     pub(super) recipient_scroll: u16,
     pub(super) sidebar_scroll: usize,
     pub(super) file_scroll: usize,
@@ -194,12 +197,14 @@ impl BusUi {
             history_follow_tail: true,
             history: super::history::History::default(),
             thumbnails: super::thumbnails::Thumbnails::default(),
+            link_paths: super::links::PathProbe::default(),
             view_key: None,
             full_repaint: false,
             graphics: None,
             graphics_unconfirmed: false,
             drag: None,
             history_selection: None,
+            pressed_link: None,
             recipient_scroll: 0,
             sidebar_scroll: 0,
             file_scroll: 0,
@@ -600,6 +605,7 @@ impl BusUi {
         changed |= self.tick_status_animation(std::time::Instant::now());
         changed |= self.tick_toast(std::time::Instant::now());
         changed |= self.thumbnails.stale();
+        changed |= self.link_paths.poll();
         changed
     }
 

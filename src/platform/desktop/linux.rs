@@ -84,6 +84,12 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
         .map(Some)
 }
 
+/// Opens the directory holding `path`; file managers share no flag for
+/// selecting one file.
+pub fn reveal_path(path: &std::path::Path) -> std::io::Result<Option<std::process::Child>> {
+    open_url(&path.parent().unwrap_or(path).to_string_lossy())
+}
+
 pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     if running_inside_wsl() {
         if let Some(image) =

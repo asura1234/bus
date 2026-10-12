@@ -65,6 +65,18 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
         .map(Some)
 }
 
+/// Shows `path` selected in Finder without opening it.
+pub fn reveal_path(path: &Path) -> std::io::Result<Option<std::process::Child>> {
+    Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(Some)
+}
+
 pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     let path = std::env::temp_dir().join(format!(
         "bus-clipboard-image-{}-{}.png",

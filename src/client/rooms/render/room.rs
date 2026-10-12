@@ -2,6 +2,7 @@
 use super::super::{
     chat_search::ChatSearch,
     history::{Line, Tone},
+    links::{visible_links, Candidate},
     recipients::Layout as RecipientLayout,
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
@@ -112,7 +113,12 @@ impl BusUi {
             self.main_scroll.min(view.history_max_scroll)
         };
         view.history_text = Rect::new(layout.x, history_y, width, view.history.height);
-        self.history_rows(view, content);
+        let visible = content
+            .iter()
+            .skip(self.main_scroll)
+            .take(usize::from(view.history.height));
+        let links = visible_links(&mut self.link_paths, visible);
+        self.history_rows(view, content, &links);
         if !title.is_empty() && view.composer_box.height > 0 {
             view.row(
                 Rect::new(layout.x, view.composer_box.y, width, 1),
@@ -318,7 +324,7 @@ impl BusUi {
         }
     }
 
-    fn history_rows(&self, view: &mut View, content: &[Line]) {
+    fn history_rows(&self, view: &mut View, content: &[Line], links: &[Vec<Candidate>]) {
         let Rect {
             x,
             y: history_y,
@@ -339,13 +345,21 @@ impl BusUi {
             .enumerate()
         {
             let rect = Rect::new(x, history_y + index as u16, width, 1);
+            // An attachment's hit is its link, not the whole row.
+            let attachment = match &line.action {
+                Some(Action::OpenFile(path)) => Some(path),
+                _ => None,
+            };
             view.row(
                 rect,
                 &line.text,
-                line.action.clone(),
+                line.action.clone().filter(|_| attachment.is_none()),
                 false,
                 matches!(line.tone, Tone::Muted),
             );
+            if let Some(path) = attachment {
+                view.attachment_link(rect, line, path);
+            }
             if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
                 // Partly scrolled thumbnails keep their blank rows and name.
                 thumbnail.row == 0
@@ -379,6 +393,7 @@ impl BusUi {
                 view.select(rect, &line.text, 0, &(from..to), newline);
             }
             self.history_row_styles(view, line, rect);
+            view.text_links(rect, line, links.get(index).map_or(&[], Vec::as_slice));
             highlight_history_row(view, line, line_index, rect, current_match.as_ref());
         }
     }

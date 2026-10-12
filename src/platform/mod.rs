@@ -223,10 +223,14 @@ pub(crate) use desktop::{
     should_query_host_terminal_palette,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use desktop::{open_url, read_clipboard_image, show_desktop_notification, write_clipboard};
+pub use desktop::{
+    open_url, read_clipboard_image, reveal_path, show_desktop_notification, write_clipboard,
+};
 
 pub(crate) mod fs;
-pub(crate) use fs::{atomic_write, create_private_state_file, sync_parent_directory};
+pub(crate) use fs::{
+    atomic_write, create_private_state_file, launches_code, sync_parent_directory,
+};
 
 pub(crate) mod ipc;
 pub(crate) mod sound;

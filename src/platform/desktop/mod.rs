@@ -7,7 +7,9 @@ pub(crate) use linux::{
     should_query_host_terminal_palette,
 };
 #[cfg(target_os = "linux")]
-pub use linux::{open_url, read_clipboard_image, show_desktop_notification, write_clipboard};
+pub use linux::{
+    open_url, read_clipboard_image, reveal_path, show_desktop_notification, write_clipboard,
+};
 
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
@@ -17,4 +19,6 @@ pub(crate) use macos::{
     should_query_host_terminal_palette,
 };
 #[cfg(target_os = "macos")]
-pub use macos::{open_url, read_clipboard_image, show_desktop_notification, write_clipboard};
+pub use macos::{
+    open_url, read_clipboard_image, reveal_path, show_desktop_notification, write_clipboard,
+};
