@@ -48,7 +48,8 @@ impl ClientShellState {
         rows: u16,
     ) -> Option<FrameData> {
         let bus = self.bus.as_ref()?;
-        let target = bus.terminal_pane()?;
+        // Also during an inline rename, which keeps the terminal's keys out of the pane.
+        let target = bus.shown_terminal_pane()?;
         let snapshot = self.snapshot.as_deref()?;
         // A removed pane or a different server boot must never borrow an old terminal image.
         snapshot.panes.iter().find(|pane| pane.pane_id == target)?;
@@ -65,7 +66,8 @@ impl ClientShellState {
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
         bus.render(&mut buffer);
         Clear.render(self.layout(cols, rows).pane_surface, &mut buffer);
-        let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+        // The Bus cursor is the rename field's, if one is open.
+        let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, bus.cursor(), &[]);
         blit_pane_surface(
             &mut frame,
             &surface.frame,

@@ -221,12 +221,17 @@ impl crate::client::compositor::ClientShellState {
 
 impl BusUi {
     pub(super) fn terminal_pane(&self) -> Option<&str> {
-        (self.terminal.is_some()
-            && self.deletion.is_none()
-            && self.form.is_none()
-            && self.rename.is_none())
-        .then_some(self.target_pane.as_deref())
-        .flatten()
+        self.rename
+            .is_none()
+            .then(|| self.shown_terminal_pane())
+            .flatten()
+    }
+    /// The open agent pane the main area shows. An inline rename edits only
+    /// the sidebar, so its terminal stays on screen while the field takes keys.
+    pub(super) fn shown_terminal_pane(&self) -> Option<&str> {
+        (self.terminal.is_some() && self.deletion.is_none() && self.form.is_none())
+            .then_some(self.target_pane.as_deref())
+            .flatten()
     }
 }
 

@@ -707,6 +707,47 @@ fn keyboard_rename_is_available_for_terminal_and_escape_cancels() {
 }
 
 #[test]
+fn renaming_the_open_agent_keeps_its_terminal_on_screen() {
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    shell.bus.as_mut().unwrap().open_terminal(agent);
+    let frame = shell.compose(100, 30).unwrap();
+    let text: String = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(text.contains("LIVE"));
+    shell.handle_raw_events(vec![RawInputEvent::Key(TerminalKey::new(
+        KeyCode::F(2),
+        KeyModifiers::NONE,
+    ))]);
+    assert!(shell.bus.as_ref().unwrap().rename.is_some());
+    let frame = shell.compose(100, 30).unwrap();
+    let text: String = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(
+        text.contains("LIVE"),
+        "an inline rename edits the sidebar; the terminal stays: {text}"
+    );
+    assert!(!text.contains("Opening agent"));
+    assert!(frame.cursor.is_some(), "the rename field keeps its cursor");
+    // The rename field, not the agent, takes the keys.
+    assert!(shell.handle_input_bytes(b"x").requests.is_empty());
+    assert!(shell
+        .bus
+        .as_ref()
+        .unwrap()
+        .rename
+        .as_ref()
+        .is_some_and(|rename| rename.editor.text.ends_with('x')));
+}
+
+#[test]
 fn completed_shutdown_exits_only_after_its_exact_success_and_snapshot() {
     let (mut ui, _, _) = fixture();
     ui.request_quit();
