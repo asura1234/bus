@@ -31,6 +31,12 @@ impl ClientShellState {
     }
 
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
+        let mut frame = self.compose_frame(cols, rows)?;
+        crate::client::perf::OVERLAY.stamp(&mut frame);
+        Some(frame)
+    }
+
+    fn compose_frame(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
         self.last_composed_size = Some((cols, rows));
         let bus_ready = self.bus_terminal_ready();
         self.compute_bus_view(cols, rows);

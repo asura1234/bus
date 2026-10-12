@@ -74,6 +74,7 @@ pub(super) fn clear_path(path: &Path) -> std::io::Result<()> {
 }
 
 pub fn save(snapshot: &SessionSnapshot, history: Option<&SessionHistorySnapshot>) {
+    let _timer = crate::server::perf::SESSION_SAVE.start();
     let path = session_path();
     let history_path = session_history_path();
     if let Err(err) = save_to_paths(&path, &history_path, snapshot, history) {

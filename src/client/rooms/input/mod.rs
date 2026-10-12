@@ -583,6 +583,7 @@ impl BusUi {
                 self.cycle_sound(target, forward);
             }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
+            Action::TogglePerfOverlay => self.toggle_perf_overlay(),
             Action::AdjustCompactionLimit(forward) => self.adjust_compaction_limit(forward),
             Action::Cancel => {
                 if let Some(room) = self.room {

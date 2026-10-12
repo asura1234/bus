@@ -4,6 +4,7 @@ use std::io;
 pub(crate) mod control;
 pub(crate) mod help;
 pub(crate) mod launch;
+mod perf;
 mod session_pick;
 pub(crate) mod stop;
 use help::print_help;
@@ -53,6 +54,10 @@ pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
 #[path = "tests/logging_options_test.rs"]
 mod logging_options_tests;
 
+pub(crate) fn perf_options() -> crate::utils::perf::PerfOptions {
+    crate::utils::perf::PerfOptions::from_lookup(|key| std::env::var(key).ok())
+}
+
 pub(crate) fn config_override() -> Option<fn(&mut crate::utils::config::Config)> {
     bus_data_dir()
         .is_some()
@@ -90,6 +95,22 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         }
         result => result,
     }
+}
+
+/// The session control commands target. The perf reader only reads files, so it
+/// looks the session up without recording it, which would wait for the registry lock.
+fn last_session(
+    registry: &LocalSessionRegistry,
+    action: &Action,
+) -> io::Result<sessions::LocalSession> {
+    let reads_perf =
+        matches!(action, Action::Control(args) if args.first().is_some_and(|arg| arg == "perf"));
+    if reads_perf {
+        registry.last()
+    } else {
+        registry.resume(ResumeTarget::Last)
+    }
+    .map_err(io::Error::other)
 }
 
 fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
@@ -146,9 +167,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         Action::Control(_) | Action::Stop => match explicit_root {
             Some(root) => (root, None),
             None => {
-                let session = registry
-                    .resume(ResumeTarget::Last)
-                    .map_err(io::Error::other)?;
+                let session = last_session(&registry, &invocation.action)?;
                 (session.root, Some(session.id))
             }
         },
@@ -185,6 +204,11 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     ];
     crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)?;
     match invocation.action {
+        // Reads files only, so it also works while the session is hung.
+        Action::Control(control_args) if control_args.first().is_some_and(|arg| arg == "perf") => {
+            // Perf files sit beside the session's logs (`--paths` "logs").
+            perf::run(&crate::utils::paths::data_dir(), &control_args[1..])
+        }
         Action::Control(control_args) => control::run(&root, &control_args),
         Action::Stop => {
             // Stopping the server closes every agent pane; an attached UI exits

@@ -5,6 +5,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod model;
 pub(crate) mod native;
 pub(crate) mod orchestration;
+pub(crate) mod perf;
 pub(crate) mod prefs;
 
 pub(crate) mod storage;

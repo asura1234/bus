@@ -180,10 +180,14 @@ impl BusUi {
         let targets = self.sound_settings_targets();
         match code {
             KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
-            KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len() + 1),
+            KeyCode::Down => {
+                let last = self.perf_overlay_field().unwrap_or(targets.len() + 1);
+                self.settings_field = (self.settings_field + 1).min(last);
+            }
             // Enter alone toggles (Space is deliberately inert in Settings).
             KeyCode::Enter => match self.settings_field {
                 0 => self.toggle_color_blind_mode(),
+                field if Some(field) == self.perf_overlay_field() => self.toggle_perf_overlay(),
                 field => {
                     if let Some(target) = targets.get(field - 1) {
                         self.toggle_sound(*target);

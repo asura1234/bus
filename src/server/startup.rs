@@ -12,9 +12,17 @@ use crate::{server::app, utils::config};
 /// Run the headless server. This is the entry point called from main.rs.
 pub fn run_server(
     logging_options: crate::utils::logging::LoggingOptions,
+    perf_options: crate::utils::perf::PerfOptions,
     config_override: Option<fn(&mut config::Config)>,
 ) -> io::Result<()> {
     init_logging(&logging_options);
+    // Dropped on return, which drains the queued perf records.
+    let _perf = crate::utils::perf::start(
+        &crate::utils::paths::data_dir(),
+        "server",
+        &perf_options,
+        crate::platform::usage::perf_hooks(),
+    );
     crate::platform::raise_server_nofile_limit();
 
     let mut loaded_config = config::Config::load();
@@ -38,7 +46,7 @@ pub fn run_server(
                 "api socket: {}",
                 crate::protocol::api::socket_path().display()
             );
-            std::process::exit(1);
+            crate::utils::perf::exit(1);
         }
         Err(err) => return Err(err),
     };
@@ -71,7 +79,7 @@ pub fn run_server(
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
                 eprintln!("error: bus server is already running");
                 eprintln!("client socket: {}", client_socket_path().display());
-                std::process::exit(1);
+                crate::utils::perf::exit(1);
             }
             Err(err) => return Err(err),
         };

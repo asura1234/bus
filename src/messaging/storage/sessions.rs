@@ -93,6 +93,13 @@ impl LocalSessionRegistry {
         Ok(session)
     }
 
+    /// The last resumed session, without recording it again: readers that must
+    /// not wait for the registry lock use this instead of `resume`.
+    pub(crate) fn last(&self) -> Result<LocalSession, String> {
+        let id = self.read_last()?;
+        self.load(&id)
+    }
+
     pub(crate) fn list(&self) -> Result<Vec<LocalSessionSummary>, String> {
         let sessions_dir = self.base.join("sessions");
         let entries = match std::fs::read_dir(&sessions_dir) {

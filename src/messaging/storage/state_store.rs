@@ -282,6 +282,7 @@ impl JsonStore {
     }
 
     pub(crate) fn save(&self, state: &BusState) -> Result<(), StoreError> {
+        let _timer = crate::messaging::perf::STORE_SAVE.start();
         // Re-reading a large state on every save is most of its cost. A file
         // still exactly as this store last read or wrote it is known readable.
         let verified = self.journal_state().verified;
@@ -345,6 +346,7 @@ impl JsonStore {
     /// Durably records `op`, already applied by the caller to its in-memory
     /// state, without rewriting `state.json`.
     pub(crate) fn journal(&self, op: JournalOp) -> Result<(), StoreError> {
+        let _timer = crate::messaging::perf::STORE_JOURNAL.start();
         let mut journal = self.journal_state();
         let mut entries = journal.entries.clone();
         push_coalesced(

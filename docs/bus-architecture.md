@@ -84,6 +84,11 @@ Files are split by ownership, not by helper.
 - `utils/`: shared basics; a leaf that imports no other component
   - `ids.rs` (`PaneId`, `TerminalId`), `version.rs`, `paths.rs` (owns the path table for every on-disk
     file and socket under `BUS_DATA_DIR`, including `bus.sock`)
+  - `perf/`: always-on perf metrics (`mod.rs`: atomic `Timer`/`Gauge`/`Counter` and the `LoopWatch` stall detector;
+    `recorder.rs`: the `bus-perf` thread writing `<session>/perf/<role>.jsonl` windows and stall records (began, moved,
+    capture, ended) and a bounded set of `stall-*.txt` stack captures; `writer.rs`: the `bus-perf-writer` thread that appends
+    them through the shared, archiving log writer from a bounded queue (the watchdog only queues and counts; the writer reports
+    losses once per overload; on exit, the `start` guard or `perf::exit` stops the watchdog and drains within one 2 s deadline), so the watchdog never waits on a lock or log; `tests/`)
   - `logging.rs` (takes explicit filter/rotation/dev options from startup composition), `log_events.rs`, `env.rs` (shared inherited path/key facts), `time.rs`, `home_path.rs`, `url.rs` (safe web URL check)
   - `config/`: `mod.rs`, `load.rs` (TOML, live reload; an unknown key fails with a diagnostic), `session.rs`, `server.rs`,
     `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `interface.rs` (UI settings), `sound.rs` (ding paths),
@@ -98,7 +103,8 @@ Files are split by ownership, not by helper.
   - `process/{linux,macos}.rs`, `desktop/{linux,macos}.rs`: process introspection; clipboard, open URL, notifications
   - `unix.rs`, `daemon.rs`, `signals.rs`, `ipc.rs`: unix helpers, setsid and nofile, signals, local sockets
   - `fs.rs`: private dirs, locks and atomic replace primitives; each caller keeps its own write policy
-  - `tests/{process_linux_test,desktop_linux_test,process_macos_test,desktop_macos_test}.rs`
+  - `usage.rs`: this process's CPU time, RSS, threads and fds, machine load/CPU ticks/swap, and macOS stack capture for perf
+  - `tests/{process_linux_test,desktop_linux_test,process_macos_test,desktop_macos_test,usage_test}.rs`
   - `sound/`: `mod.rs` (`play`, `play_named`), `player.rs` (OS players), `catalog.rs` (system sounds)
   - `windows/`: Windows backend
     - `mod.rs` (small helpers, re-exports), `fs.rs` (atomic replace, ACL'd dirs, long paths), `shell.rs` (cmd and PowerShell)
@@ -174,7 +180,8 @@ Files are split by ownership, not by helper.
     - `sessions.rs` (session refs, replacement), `managed_agent.rs` (phases of agents started through `agent.start`)
     - `tests/{detection_test,process_exit_test,sessions_test,session_replacement_test,managed_agent_test}.rs`
 - `messaging/`: rooms and the message round trip
-  - `mod.rs`, `identity.rs` (managed agent names, `bus:<agent>` source ids), `attachments.rs`, `diagnostics.rs`
+  - `mod.rs`, `identity.rs` (managed agent names, `bus:<agent>` source ids), `attachments.rs`, `diagnostics.rs`, `perf.rs`
+    (coordinator, control socket, server API and store metrics)
   - `model/`: the round-trip rules, no I/O
     - `mod.rs`, `types.rs` (ids, `Author`, `Room` and its MASTER kind, `RoomAgent`, `Prompt`, `Reply`), `state.rs` (`BusState`)
     - `rooms.rs`, `agents.rs` (participants, `orchestrates` link), `requests.rs` (queue, coalesce, steer, settle)
@@ -203,7 +210,7 @@ Files are split by ownership, not by helper.
     prompt placeholders; compiled-in copies are the only defaults in every build
 - `server/`: the `bus server` daemon
   - `mod.rs` (wiring and stable server tests), `main_loop.rs` (`Server`), `app_loop.rs`, `app.rs` (`App`), `app_state.rs`,
-    `app_settings.rs`, `app_queries.rs`, `startup.rs`, `shutdown.rs`, `config_reload.rs`
+    `app_settings.rs`, `app_queries.rs`, `startup.rs`, `shutdown.rs`, `config_reload.rs`, `perf.rs` (main loop, API, render and save metrics)
   - `workspaces/`: workspaces, tabs and the split layout
     - `mod.rs` (`Workspace`), `tab.rs`, `pane.rs` (`PaneState`), `layout/{tree,geometry,nav,layout_test}.rs`,
     `agent_view.rs` (ordered agent-panel entries; no filter DSL)
@@ -242,7 +249,7 @@ Files are split by ownership, not by helper.
     `client_shell_test.rs`, `client_shell_input_test.rs`, `incremental_test.rs`, `views_test.rs`, `input_test.rs`, `notifications_test.rs`,
     `surface_lease_test.rs`, `render_scale_test.rs` (ignored benchmark; the one test-only import of `client`)
 - `client/`: the TUI client process
-  - `mod.rs`, `run.rs`, `event_loop.rs`, `server_messages.rs`, `state.rs`, `events.rs`, `timer.rs`, `errors.rs`
+  - `mod.rs`, `run.rs`, `event_loop.rs`, `server_messages.rs`, `state.rs`, `events.rs`, `timer.rs`, `errors.rs`, `perf.rs` (UI loop metrics and the dev-only performance overlay)
   - `config_reload.rs`, `effects.rs` (clipboard, URLs, editor), `clipboard.rs` (native or OSC 52), `notifications.rs`
   - `host_terminal/`: the user's real terminal
     - `setup.rs`, `geometry.rs`, `frame_output.rs`, `effects.rs` (bells, title), `modes.rs`, `notify.rs`, `color_probe.rs`
@@ -268,8 +275,8 @@ Files are split by ownership, not by helper.
       `history_markdown_test.rs`, `history_slots_test.rs`, `history_scroll_test.rs`, `keys_test.rs`, `master_test.rs`, `sound_test.rs`,
       `focus_test.rs`, `chat_search_test.rs`
 - `cli/`: the `bus` command
-  - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
-  - `control.rs` (control commands used by orchestrators and the developer), `help.rs`, `tests/{parse_test,execute_test}.rs`
+  - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`, `perf`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
+  - `control.rs` (control commands used by orchestrators and the developer), `perf.rs` (`bus perf`: reads perf files only), `help.rs`, `tests/{parse_test,execute_test,perf_test}.rs`
 - `devtools/`: test tooling that drives Bus itself; compiled only into the dev variant (cargo feature `dev-tools`) and run only
   behind `--dev`
   - `tui/`: `bus --dev tui`, the TUI driver (reference: `docs/tui-driver.md`): `mod.rs` (verbs, start/stop, waits), `args.rs`,

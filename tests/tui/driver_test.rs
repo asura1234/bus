@@ -1041,3 +1041,96 @@ fn a_fixture_file_name_leaves_the_selected_session_alone() {
         "notes.txt"
     );
 }
+
+/// The first `perf/client.jsonl` window under `dir` that has every named metric.
+fn client_perf_window(dir: &Path, metrics: &[&str]) -> Option<Value> {
+    fn find(dir: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path) {
+                    return Some(found);
+                }
+            } else if path.ends_with("perf/client.jsonl") {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let text = std::fs::read_to_string(find(dir)?).ok()?;
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|record| {
+            record["kind"] == "window"
+                && metrics
+                    .iter()
+                    .all(|metric| record["timers"].get(*metric).is_some())
+        })
+}
+
+#[test]
+fn the_client_records_ui_loop_and_coordinator_perf_windows() {
+    let session = Session::start("perf");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["press", "ctrl+shift+r"]);
+    session.ok(&["wait", "--text", "Room name"]);
+    session.ok(&["press", "escape"]);
+    let metrics = [
+        "client.ui_loop",
+        "client.timer_lag",
+        "client.compose",
+        "client.present",
+        "coordinator.loop",
+        "coordinator.snapshot",
+        "coordinator.tick",
+    ];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut window = None;
+    while window.is_none() && std::time::Instant::now() < deadline {
+        window = client_perf_window(&root(&session.0), &metrics);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let window = window.unwrap_or_else(|| {
+        panic!(
+            "no client perf window with {metrics:?} under {}",
+            root(&session.0).display()
+        )
+    });
+    assert_eq!(window["role"], "client");
+    assert!(window["rss_mb"].as_f64().unwrap() > 0.0, "{window}");
+}
+
+/// Where the overlay label shows, if it does.
+fn overlay_matches(session: &Session) -> Vec<Value> {
+    let found = session.ok(&["find", "CPU [0-9n].* MEM .* FPS", "--regex"]);
+    found["matches"].as_array().cloned().unwrap_or_default()
+}
+
+#[test]
+fn the_dev_performance_overlay_turns_on_updates_and_turns_off() {
+    let session = Session::start("overlay");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["click", "--text", "Settings"]);
+    session.ok(&["wait", "--text", "[ ] Performance overlay"]);
+    assert!(overlay_matches(&session).is_empty(), "off by default");
+
+    session.ok(&["click", "--text", "Performance overlay"]);
+    session.ok(&["wait", "--text", "[x] Performance overlay"]);
+    session.ok(&["wait", "--text", "MB FPS", "--timeout", "5s"]);
+    let shown = overlay_matches(&session);
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!(shown[0]["row"].as_u64().unwrap() <= 1, "top row: {shown:?}");
+    // The label refreshes every second; FPS is measured after the first full second.
+    session.ok(&["wait", "--text", "FPS [0-9]+", "--regex", "--timeout", "5s"]);
+    let first = shown[0]["text"].clone();
+    session.ok(&["wait", "--changed", "--rows", "0-1", "--timeout", "5s"]);
+    assert_eq!(
+        overlay_matches(&session).len(),
+        1,
+        "still shown after {first}"
+    );
+
+    session.ok(&["click", "--text", "Performance overlay"]);
+    session.ok(&["wait", "--text", "[ ] Performance overlay"]);
+    session.ok(&["wait", "--text", "MB FPS", "--gone", "--timeout", "5s"]);
+}

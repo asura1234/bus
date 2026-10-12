@@ -4,6 +4,7 @@ use super::{
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
     RequestId, RuntimeStatus, StoragePause, Transport,
 };
+use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 
 pub(super) struct Worker {
@@ -167,11 +168,12 @@ impl Worker {
         let mut pending_commands = std::collections::VecDeque::new();
         loop {
             let timeout = next_poll.saturating_duration_since(std::time::Instant::now());
-            match pending_commands
+            let received = pending_commands
                 .pop_front()
                 .map(Ok)
-                .unwrap_or_else(|| commands.recv_timeout(timeout))
-            {
+                .unwrap_or_else(|| commands.recv_timeout(timeout));
+            let busy = perf::COORDINATOR_LOOP.enter("command");
+            match received {
                 Ok((id, BusCommand::Shutdown)) => {
                     self.fold_journal();
                     self.last_command_id = id;
@@ -189,7 +191,13 @@ impl Worker {
                     break;
                 }
                 Ok((_id, BusCommand::Control(call))) => {
+                    busy.stage("control");
+                    let started = std::time::Instant::now();
                     let response = self.control_response_with_events(&call.request, Some(&events));
+                    perf::CONTROL.record_op(
+                        started.elapsed(),
+                        perf::control_method_label(&call.request.method),
+                    );
                     // A disconnected client does not cancel or replay a committed action.
                     let _ = call.reply.try_send(response);
                 }
@@ -197,11 +205,14 @@ impl Worker {
                     let submitting =
                         matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
+                    let name = perf::command_name(&command);
+                    let started = std::time::Instant::now();
                     let result = if self.storage_pause.is_some() {
                         Err(self.storage_notice().into())
                     } else {
                         self.command(command, &events)
                     };
+                    perf::COMMAND.record_op(started.elapsed(), name);
                     self.last_command_id = id;
                     if submitting {
                         tracing::info!(
@@ -220,8 +231,10 @@ impl Worker {
                     });
                     // The client settles a command only once a snapshot shows
                     // it; do not make that wait for this loop's poll tick.
+                    busy.stage("snapshot");
+                    let snapshot = self.timed_snapshot();
                     if let Ok(mut shared) = snapshots.lock() {
-                        *shared = Arc::new(self.snapshot());
+                        *shared = snapshot;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -233,6 +246,8 @@ impl Worker {
             let can_poll = collect_delivery_commands(&commands, &mut pending_commands);
             if can_poll && std::time::Instant::now() >= next_poll {
                 if self.storage_pause.is_none() {
+                    busy.stage("tick");
+                    let _tick = perf::TICK.start();
                     if let Err(error) = self.tick_with_delivery_check(|| {
                         collect_delivery_commands(&commands, &mut pending_commands)
                     }) {
@@ -243,11 +258,17 @@ impl Worker {
                 }
                 next_poll = std::time::Instant::now() + interval;
             }
-            let snapshot = Arc::new(self.snapshot());
+            busy.stage("snapshot");
+            let snapshot = self.timed_snapshot();
             if let Ok(mut shared) = snapshots.lock() {
                 *shared = snapshot;
             }
         }
+    }
+
+    fn timed_snapshot(&self) -> Arc<BusSnapshot> {
+        let _timer = perf::SNAPSHOT.start();
+        Arc::new(self.snapshot())
     }
 
     #[cfg(test)]

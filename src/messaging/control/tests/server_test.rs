@@ -421,3 +421,71 @@ fn startup_preserves_a_non_socket_endpoint_file() {
     assert!(start(&dir.0, tx).is_err());
     assert_eq!(std::fs::read(dir.socket()).unwrap(), b"user data");
 }
+
+#[test]
+fn control_requests_are_timed_from_dispatch_to_reply() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(2);
+    let server = start(&dir.0, tx).unwrap();
+    let worker = thread::spawn(move || {
+        let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("wrong coordinator command");
+        };
+        thread::sleep(Duration::from_millis(120));
+        call.reply
+            .try_send(Response::success("slow", json!({})))
+            .unwrap();
+    });
+    assert!(request(&dir.0, &call("slow")).unwrap().ok);
+    worker.join().unwrap();
+    drop(server);
+    let window = crate::messaging::perf::CONTROL_REQUEST
+        .take()
+        .expect("request timed");
+    assert!(window.count >= 1);
+    assert!(window.max_us >= 120_000, "{window:?}");
+}
+
+#[test]
+fn slow_unknown_control_methods_do_not_log_user_supplied_text() {
+    use interprocess::local_socket::traits::Listener as _;
+    let dir = TestDir::new();
+    storage_io::private_dir(&dir.0).unwrap();
+    let listener = ipc::bind_private_local_listener(&dir.socket()).unwrap();
+    let _peer = ipc::connect_local_stream(&dir.socket()).unwrap();
+    let mut client = Client::new(listener.accept().unwrap());
+    let (tx, rx) = mpsc::sync_channel(1);
+    let secret = "private draft text accidentally passed as method";
+    let request = Request {
+        id: "unknown".into(),
+        method: secret.into(),
+        params: Value::Null,
+    };
+    let mut next_id = CONTROL_COMMAND_BIT;
+    assert!(client.dispatch_request(&serde_json::to_vec(&request).unwrap(), &tx, &mut next_id));
+    let (_, BusCommand::Control(call)) = rx.recv().unwrap() else {
+        panic!("control call")
+    };
+    thread::sleep(Duration::from_millis(120));
+    call.reply
+        .try_send(Response::failure(
+            "unknown",
+            "unknown_method",
+            "Unknown method",
+        ))
+        .unwrap();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        assert!(client.poll(&tx, &mut next_id));
+    });
+    let text = capture.text();
+    assert!(
+        text.contains("perf.slow_op"),
+        "slow request must remain diagnosable: {text}"
+    );
+    assert!(
+        !text.contains(secret),
+        "user supplied method leaked into WARN: {text}"
+    );
+}

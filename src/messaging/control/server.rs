@@ -143,6 +143,9 @@ enum State {
     Reading(Frame),
     Waiting {
         id: String,
+        /// A static label, never the caller's text.
+        method: &'static str,
+        started: Instant,
         reply: mpsc::Receiver<Response>,
     },
     Writing {
@@ -186,11 +189,19 @@ impl Client {
                     "request_timeout",
                     "Request deadline elapsed",
                 )),
-                State::Waiting { id, .. } => self.respond(Response::failure(
+                State::Waiting {
                     id,
-                    "coordinator_timeout",
-                    "Coordinator deadline elapsed; the operation may still complete",
-                )),
+                    method,
+                    started,
+                    ..
+                } => {
+                    crate::messaging::perf::CONTROL_REQUEST.record_op(started.elapsed(), method);
+                    self.respond(Response::failure(
+                        id,
+                        "coordinator_timeout",
+                        "Coordinator deadline elapsed; the operation may still complete",
+                    ))
+                }
                 State::Writing { .. } | State::Closing => false,
             };
         }
@@ -218,8 +229,16 @@ impl Client {
                 self.dispatch_request(&bytes, commands, next_id)
             }
 
-            State::Waiting { id, reply } => match reply.try_recv() {
-                Ok(response) => self.respond(response),
+            State::Waiting {
+                id,
+                method,
+                started,
+                reply,
+            } => match reply.try_recv() {
+                Ok(response) => {
+                    crate::messaging::perf::CONTROL_REQUEST.record_op(started.elapsed(), method);
+                    self.respond(response)
+                }
                 Err(mpsc::TryRecvError::Empty) => true,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     let response = Response::failure(
@@ -272,6 +291,7 @@ impl Client {
             ));
         }
         let id = request.id.clone();
+        let method = crate::messaging::perf::control_method_label(&request.method);
         let (reply, receiver) = mpsc::sync_channel(1);
         let command_id = *next_id;
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;
@@ -282,6 +302,8 @@ impl Client {
             Ok(()) => {
                 self.state = State::Waiting {
                     id,
+                    method,
+                    started: Instant::now(),
                     reply: receiver,
                 };
                 self.deadline = Instant::now() + WORKER_TIMEOUT;

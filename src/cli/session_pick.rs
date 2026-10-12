@@ -1,7 +1,7 @@
 //! Process invocation grammar and local session selection.
 use crate::messaging::storage::sessions::ResumeTarget;
 
-pub(super) const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last\n       bus stop";
+pub(super) const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last\n       bus stop\n       bus perf [--since <minutes>m|<hours>h | --all]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Action {

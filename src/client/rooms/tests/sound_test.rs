@@ -746,3 +746,47 @@ fn live_sound_reload_updates_bus_room_playback() {
         "room notification should use the reloaded custom sound"
     );
 }
+
+#[test]
+fn settings_hides_the_performance_overlay_outside_dev_builds() {
+    let (mut ui, _, _) = sound_fixture(1);
+    ui.action(render::Action::Settings);
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        !rows.iter().any(|row| row.contains("Performance overlay")),
+        "{rows:#?}"
+    );
+}
+
+#[test]
+fn dev_settings_toggle_the_performance_overlay_with_enter() {
+    let (mut ui, _, _) = sound_fixture(1);
+    ui.dev_settings = true;
+    ui.action(render::Action::Settings);
+    let rows = settings_rows(&mut ui, 40);
+    let row = rows
+        .iter()
+        .position(|row| row.contains("[ ] Performance overlay"))
+        .unwrap_or_else(|| panic!("{rows:#?}"));
+    assert!(
+        rows[..row].iter().any(|row| row.ends_with("DEVELOPER")),
+        "{rows:#?}"
+    );
+    // Color blind, MASTER, All rooms, one room, compactions, then the overlay.
+    for _ in 0..5 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    assert_eq!(ui.settings_field, 5);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, 5, "the overlay row is the last field");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(crate::client::perf::OVERLAY.is_on());
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[x] Performance overlay")),
+        "{rows:#?}"
+    );
+    ui.action(render::Action::TogglePerfOverlay);
+    assert!(!crate::client::perf::OVERLAY.is_on());
+}

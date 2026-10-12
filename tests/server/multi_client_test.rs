@@ -388,3 +388,81 @@ fn rapid_client_shell_connect_disconnect_remains_healthy() {
     assert!(response.to_string().contains("pong"));
     cleanup(server, base);
 }
+
+/// The first `perf/<role>.jsonl` window line under `base` that has every named metric.
+fn perf_window(base: &Path, role: &str, metrics: &[&str], timeout: Duration) -> Option<Value> {
+    fn find(dir: &Path, name: &str) -> Option<PathBuf> {
+        for entry in fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path, name) {
+                    return Some(found);
+                }
+            } else if path.ends_with(Path::new("perf").join(name)) {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let window = find(base, &format!("{role}.jsonl"))
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|text| {
+                text.lines()
+                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                    .filter(|record| record["kind"] == "window" && record.get("cpu_pct").is_some())
+                    .find(|record| {
+                        metrics.iter().all(|metric| {
+                            ["timers", "gauges", "counters"]
+                                .iter()
+                                .any(|section| record[section].get(*metric).is_some())
+                        })
+                    })
+            });
+        if window.is_some() {
+            return window;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    None
+}
+
+#[test]
+fn server_records_perf_windows_in_the_session_dir() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let api = runtime.join("herdr.sock");
+    let clients = runtime.join("herdr-client.sock");
+    let server = spawn_server(&config, &runtime, &api);
+    wait_for_socket(&api, Duration::from_secs(10));
+    wait_for_file(&clients, Duration::from_secs(10));
+    let pane = create_pane(&api, "perf");
+    let metrics = [
+        "server.loop",
+        "server.api",
+        "server.api_queue",
+        "terminal.pty_bytes",
+        "terminal.pty_read",
+    ];
+    // Keep the API, the PTY and the server loop busy while windows are written.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut window = None;
+    while window.is_none() && Instant::now() < deadline {
+        pane_input(&api, &pane, "printf 'perf\\n'");
+        window = perf_window(&base, "server", &metrics, Duration::from_millis(200));
+    }
+    let window = window.unwrap_or_else(|| {
+        panic!(
+            "no server perf window with {metrics:?} under {}",
+            base.display()
+        )
+    });
+    assert_eq!(window["role"], "server");
+    assert!(window["rss_mb"].as_f64().unwrap() > 0.0, "{window}");
+    assert!(window["fds"].as_u64().unwrap() > 0, "{window}");
+    assert!(window["cpus"].as_u64().unwrap() > 0, "{window}");
+    cleanup(server, base);
+}

@@ -92,6 +92,7 @@ impl crate::client::compositor::ClientShellState {
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
         bus.handle = Some(handle);
+        bus.dev_settings = crate::client::perf::overlay_available();
         // Only the client that owns the coordinator plays room sounds, so each rings once.
         bus.sound_config = Some(sound.clone());
         bus.settings_path = crate::messaging::prefs::settings::path();

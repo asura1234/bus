@@ -219,6 +219,8 @@ impl PtyIoActor {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            crate::terminal::pty::actor::PTY_BYTES.add(n as u64);
+                            let _read = crate::terminal::pty::actor::PTY_READ.start();
                             let _order = response_order
                                 .lock()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner());

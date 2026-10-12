@@ -23,6 +23,7 @@ mod events;
 pub(crate) mod host_terminal;
 mod notifications;
 pub(crate) mod panes;
+mod perf;
 mod rooms;
 pub(crate) mod run;
 mod server_messages;

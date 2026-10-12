@@ -8,6 +8,7 @@ pub(crate) mod clients;
 mod config_reload;
 pub mod main_loop;
 pub(crate) mod notifications;
+pub(crate) mod perf;
 pub(crate) mod persistence;
 #[cfg(test)]
 #[path = "tests/render_scale_test.rs"]

@@ -111,3 +111,36 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
         .is_none());
     shutdown_test_runtimes(&mut server);
 }
+
+#[test]
+fn drained_api_requests_are_timed_like_waited_ones() {
+    let mut server = test_headless_server();
+    let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    server.app.api_rx = api_rx;
+    let _ = crate::server::perf::API.take();
+    let mut responses = Vec::new();
+    for id in ["queued-1", "queued-2"] {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        api_tx
+            .send(crate::server::api::ApiRequestMessage {
+                request: api::schema::Request {
+                    id: id.into(),
+                    method: api::schema::Method::PaneList(api::schema::PaneListParams::default()),
+                },
+                respond_to,
+            })
+            .unwrap();
+        responses.push(response_rx);
+    }
+
+    server.drain_api_requests_with_shutdown_check();
+
+    for response in responses {
+        response.try_recv().expect("drained request answered");
+    }
+    let window = crate::server::perf::API
+        .take()
+        .expect("drained requests are recorded in server.api");
+    assert_eq!(window.count, 2, "{window:?}");
+    shutdown_test_runtimes(&mut server);
+}

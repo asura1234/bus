@@ -94,6 +94,9 @@ impl ClientState {
     }
 
     pub(super) fn present_frame(&mut self, frame_data: FrameData) {
+        super::perf::UI_LOOP.relabel("present");
+        let _present = super::perf::PRESENT.start();
+        super::perf::OVERLAY.note_frame();
         if self
             .shell
             .as_mut()

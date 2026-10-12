@@ -105,6 +105,7 @@ impl BusUi {
             matches!(line,
                 super::super::render::SoundSettingsLine::Sound { field, .. }
                 | super::super::render::SoundSettingsLine::Compactions { field }
+                | super::super::render::SoundSettingsLine::PerfOverlay { field }
                 if *field == self.settings_field)
         }) else {
             self.settings_scroll = 0;

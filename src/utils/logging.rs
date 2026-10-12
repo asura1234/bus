@@ -146,20 +146,8 @@ struct RotatingFileMakeWriter {
 impl RotatingFileMakeWriter {
     fn new(dir: PathBuf, file_name: &str, options: &LoggingOptions) -> io::Result<Self> {
         fs::create_dir_all(&dir)?;
-        let path = dir.join(file_name);
-        let mut state = RotatingFileState {
-            path,
-            max_bytes: options.max_bytes,
-            retention: options.retention,
-            file: None,
-            current_size: 0,
-            disabled: false,
-            archive_signal: None,
-        };
-        if let Retention::Archive(policy) = options.retention {
-            state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
-        }
-        state.open_current_file()?;
+        let state =
+            RotatingFileState::open(dir.join(file_name), options.max_bytes, options.retention)?;
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
         })
@@ -230,7 +218,8 @@ impl Write for RotatingFileGuard {
     }
 }
 
-struct RotatingFileState {
+/// An append-only file that rotates at a size limit.
+pub(crate) struct RotatingFileState {
     path: PathBuf,
     max_bytes: u64,
     retention: Retention,
@@ -275,6 +264,38 @@ impl Drop for SharedLogLock {
 }
 
 impl RotatingFileState {
+    /// Opens `path` for appending. Archive retention also starts the worker that
+    /// compresses and prunes archives, and makes the file safe to share with
+    /// other processes that append to the same path.
+    pub(crate) fn open(path: PathBuf, max_bytes: u64, retention: Retention) -> io::Result<Self> {
+        let mut state = Self {
+            path,
+            max_bytes,
+            retention,
+            file: None,
+            current_size: 0,
+            disabled: false,
+            archive_signal: None,
+        };
+        if let Retention::Archive(policy) = retention {
+            state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
+        }
+        state.open_current_file()?;
+        Ok(state)
+    }
+
+    /// Appends one record whole, rotating first when it would cross the limit.
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let _shared = self.lock_for_append(bytes.len() as u64, SharedLogLock(None))?;
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("log file closed"))?;
+        file.write_all(bytes)?;
+        self.current_size = self.current_size.saturating_add(bytes.len() as u64);
+        Ok(())
+    }
+
     /// Blocks until this process holds the lock of the file that is live at
     /// the log path, following renames by other writers, and counts the bytes
     /// they appended. Errors only on I/O failure, never with the file unlocked.
@@ -523,6 +544,28 @@ fn maintain_archives(path: &Path, policy: &ArchivePolicy, now: SystemTime) {
         }
     }
     prune_archives(archives, policy, now);
+}
+
+/// The archives Archive retention left for `path`, oldest first; a name ending
+/// in `.gz` is compressed. Read-only: when an interrupted compression left both
+/// copies it lists the `.gz` and leaves the plain one to the writer's cleanup.
+pub(crate) fn archived_files(path: &Path) -> Vec<PathBuf> {
+    let mut archives: Vec<(SystemTime, bool, PathBuf)> = archive_dir_entries(path)
+        .into_iter()
+        .filter_map(|(entry, rest)| {
+            let compressed = rest.ends_with(ARCHIVE_GZ);
+            let stem = rest.strip_suffix(ARCHIVE_GZ).unwrap_or(&rest);
+            Some((archive_time(stem)?, compressed, entry))
+        })
+        .collect();
+    let finished: std::collections::HashSet<SystemTime> = archives
+        .iter()
+        .filter(|(_, compressed, _)| *compressed)
+        .map(|(rotated_at, _, _)| *rotated_at)
+        .collect();
+    archives.retain(|(rotated_at, compressed, _)| *compressed || !finished.contains(rotated_at));
+    archives.sort_by_key(|(rotated_at, _, _)| *rotated_at);
+    archives.into_iter().map(|(_, _, path)| path).collect()
 }
 
 /// Archive names under `path`'s directory, one entry per archive. A plain

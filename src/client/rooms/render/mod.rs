@@ -56,6 +56,8 @@ pub(super) enum Action {
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
+    /// Dev builds only: the live performance overlay.
+    TogglePerfOverlay,
     ToggleSound(SoundTarget),
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
@@ -151,6 +153,10 @@ pub(super) enum SoundSettingsLine {
         field: usize,
     },
     Compactions {
+        field: usize,
+    },
+    /// Dev builds only.
+    PerfOverlay {
         field: usize,
     },
 }
