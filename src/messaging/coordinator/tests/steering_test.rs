@@ -543,3 +543,30 @@ fn a_claude_reply_held_for_its_own_shells_does_not_report_the_turn_ended() {
         .unwrap();
     assert_eq!(status["requests"][0]["turn_ended"], false, "{status}");
 }
+
+/// A reply held for shells the request started (the live case ran about eight
+/// minutes) is waiting on known work, so `send --async` must not end it as a
+/// stalled message once the agent has been idle past the stall threshold.
+#[test]
+fn a_claude_reply_held_for_its_own_shells_is_not_reported_stalled() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(
+        json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
+    );
+    fixture.consume();
+    let lead = running(&mut fixture, "run the tests", "turn-1");
+    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1",
+        "last_assistant_message":"Waiting on the background shells.","session_crons":[],
+        "background_tasks":[{"id":"b1","type":"shell","status":"running","description":"Run","command":"cargo test"}]}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += crate::messaging::model::DELIVERED_STALL_MS + 1;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    let status = fixture
+        .worker
+        .control_message_at(fixture.request(lead).prompt.id, fixture.now)
+        .unwrap();
+    assert_ne!(status["requests"][0]["stage"], "stalled", "{status}");
+}

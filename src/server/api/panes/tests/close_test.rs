@@ -185,3 +185,47 @@ fn api_pane_close_of_last_pane_closes_its_workspace() {
     assert_eq!(success.id, "req");
     assert!(app.state.workspaces.is_empty());
 }
+
+/// The exited-shell close must still close a real shell that sits idle at its
+/// prompt, not only the pid-less runtime of the other close tests.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn guarded_close_of_an_exited_provider_closes_a_real_idle_shell() {
+    let (mut app, mut params, pane_id, _) = guarded_close_fixture();
+    let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+    let (events, _event_rx) = tokio::sync::mpsc::channel(64);
+    let runtime = crate::terminal::TerminalRuntime::spawn_argv_command(
+        pane_id,
+        24,
+        80,
+        std::env::temp_dir(),
+        &["/bin/sh".into(), "-i".into()],
+        &crate::terminal::runtime::PaneLaunchEnv::default(),
+        crate::terminal::runtime::AgentDetection::Disabled,
+        0,
+        crate::utils::theme::color::TerminalTheme::default(),
+        None,
+        events,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+        std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while crate::server::terminals::agents::available_shell_name(&runtime).is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "shell never reached its prompt"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.clear_agent_name();
+    terminal.set_detected_state(None, AgentState::Idle);
+    params.close_exited_shell = true;
+    let response = app.handle_pane_close_if_identity("idle".into(), params);
+    assert!(
+        app.state.workspaces[0].pane_state(pane_id).is_none(),
+        "an idle released shell must be closed; response: {response}"
+    );
+}
