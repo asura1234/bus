@@ -48,7 +48,8 @@ impl ClientShellState {
         rows: u16,
     ) -> Option<FrameData> {
         let bus = self.bus.as_ref()?;
-        let target = bus.terminal_pane()?;
+        // Also during an inline rename, which keeps the terminal's keys out of the pane.
+        let target = bus.shown_terminal_pane()?;
         let snapshot = self.snapshot.as_deref()?;
         // A removed pane or a different server boot must never borrow an old terminal image.
         snapshot.panes.iter().find(|pane| pane.pane_id == target)?;
@@ -71,6 +72,11 @@ impl ClientShellState {
             &surface.frame,
             self.layout(cols, rows).pane_surface,
         );
+        // The blit takes the pane's cursor; a Bus editor taking the keys (the
+        // inline rename field) keeps its own caret instead.
+        if let Some(cursor) = bus.cursor() {
+            frame.cursor = Some(cursor);
+        }
         // Preview geometry is stale: no pane mouse hits, graphics, selection or input leases.
         self.hits = ShellHitMap::default();
         self.presented_bus_terminal = Some(target.to_owned());
