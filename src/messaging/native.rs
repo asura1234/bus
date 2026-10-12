@@ -71,6 +71,7 @@ impl Transport for BusTransport {
                 error_code = ?result.as_ref().err().and_then(|e| e.code.as_deref()),
                 definitely_rejected = result.as_ref().err().is_some_and(|e| e.definitely_rejected),
                 elapsed_ms = started.elapsed().as_millis() as u64, "Bus native API result");
+            super::perf::SERVER_API.record_op(started.elapsed(), method_name);
             return result;
         }
     }

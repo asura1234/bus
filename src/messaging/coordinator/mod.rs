@@ -301,6 +301,9 @@ impl BusHandle {
 }
 
 #[cfg(test)]
+#[path = "tests/perf_test.rs"]
+mod perf_tests;
+#[cfg(test)]
 #[path = "tests/steering_test.rs"]
 mod steering_tests;
 #[cfg(test)]

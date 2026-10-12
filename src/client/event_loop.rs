@@ -22,7 +22,7 @@ use std::{
 };
 use tracing::{info, warn};
 use {
-    super::{server_messages, timer},
+    super::{perf, server_messages, timer},
     crate::client::{
         compositor as shell,
         connection::{
@@ -121,6 +121,11 @@ pub(super) async fn run_client_loop(
         };
 
         let now = std::time::Instant::now();
+        if matches!(event, ClientLoopEvent::Timer) {
+            perf::TIMER_LAG.record(now.saturating_duration_since(timer_deadline));
+        }
+        perf::EVENT_QUEUE.observe(event_rx.len() as u64);
+        let _busy = perf::UI_LOOP.enter(perf::event_stage(&event));
         if driver.handle_event(event, now, &mut client_timer)? {
             return Ok(());
         }
@@ -412,7 +417,11 @@ impl ClientLoopDriver {
         let outcome = input(shell);
         let frame = outcome
             .repaint
-            .then(|| shell.compose(self.state.reported_size.0, self.state.reported_size.1))
+            .then(|| {
+                perf::UI_LOOP.relabel("compose");
+                let _compose = perf::COMPOSE.start();
+                shell.compose(self.state.reported_size.0, self.state.reported_size.1)
+            })
             .flatten();
         finish_client_shell_input(
             &mut self.state,

@@ -388,3 +388,26 @@ fn a_state_file_changed_by_someone_else_is_checked_again_before_saving() {
     );
     fs::remove_dir_all(dir).expect("cleanup");
 }
+
+#[test]
+fn state_saves_and_journal_appends_are_timed() {
+    let dir = temp_dir("perf");
+    let store = JsonStore::new(dir.join("state.json"));
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    store.save(&state).expect("save");
+    store
+        .journal(JournalOp::DraftText {
+            room,
+            text: "timed".into(),
+        })
+        .expect("journal");
+    let saves = crate::messaging::perf::STORE_SAVE
+        .take()
+        .expect("save timed");
+    let journals = crate::messaging::perf::STORE_JOURNAL
+        .take()
+        .expect("journal timed");
+    assert!(saves.count >= 1 && journals.count >= 1);
+    let _ = fs::remove_dir_all(dir);
+}

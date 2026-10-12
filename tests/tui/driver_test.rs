@@ -1041,3 +1041,61 @@ fn a_fixture_file_name_leaves_the_selected_session_alone() {
         "notes.txt"
     );
 }
+
+/// The first `perf/client.jsonl` window under `dir` that has every named metric.
+fn client_perf_window(dir: &Path, metrics: &[&str]) -> Option<Value> {
+    fn find(dir: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path) {
+                    return Some(found);
+                }
+            } else if path.ends_with("perf/client.jsonl") {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let text = std::fs::read_to_string(find(dir)?).ok()?;
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|record| {
+            record["kind"] == "window"
+                && metrics
+                    .iter()
+                    .all(|metric| record["timers"].get(*metric).is_some())
+        })
+}
+
+#[test]
+fn the_client_records_ui_loop_and_coordinator_perf_windows() {
+    let session = Session::start("perf");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["press", "ctrl+shift+r"]);
+    session.ok(&["wait", "--text", "Room name"]);
+    session.ok(&["press", "escape"]);
+    let metrics = [
+        "client.ui_loop",
+        "client.timer_lag",
+        "client.compose",
+        "client.present",
+        "coordinator.loop",
+        "coordinator.snapshot",
+        "coordinator.tick",
+    ];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut window = None;
+    while window.is_none() && std::time::Instant::now() < deadline {
+        window = client_perf_window(&root(&session.0), &metrics);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let window = window.unwrap_or_else(|| {
+        panic!(
+            "no client perf window with {metrics:?} under {}",
+            root(&session.0).display()
+        )
+    });
+    assert_eq!(window["role"], "client");
+    assert!(window["rss_mb"].as_f64().unwrap() > 0.0, "{window}");
+}

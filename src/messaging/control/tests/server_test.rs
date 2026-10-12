@@ -421,3 +421,28 @@ fn startup_preserves_a_non_socket_endpoint_file() {
     assert!(start(&dir.0, tx).is_err());
     assert_eq!(std::fs::read(dir.socket()).unwrap(), b"user data");
 }
+
+#[test]
+fn control_requests_are_timed_from_dispatch_to_reply() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(2);
+    let server = start(&dir.0, tx).unwrap();
+    let worker = thread::spawn(move || {
+        let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("wrong coordinator command");
+        };
+        thread::sleep(Duration::from_millis(120));
+        call.reply
+            .try_send(Response::success("slow", json!({})))
+            .unwrap();
+    });
+    assert!(request(&dir.0, &call("slow")).unwrap().ok);
+    worker.join().unwrap();
+    drop(server);
+    let window = crate::messaging::perf::CONTROL_REQUEST
+        .take()
+        .expect("request timed");
+    assert!(window.count >= 1);
+    assert!(window.max_us >= 120_000, "{window:?}");
+}
