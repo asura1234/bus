@@ -15,6 +15,8 @@ pub(crate) use recorder::{start, PerfHooks, PerfOptions, ProcessUsage};
 
 /// An operation this slow blocks a 60 Hz UI for several frames.
 pub(crate) const SLOW_OP: Duration = Duration::from_millis(100);
+/// Slow-operation WARNs per timer are limited to one per interval.
+const WARN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Durations of one kind of operation; drained once per window.
 pub(crate) struct Timer {
@@ -26,6 +28,8 @@ pub(crate) struct Timer {
     over_16ms: AtomicU64,
     over_100ms: AtomicU64,
     over_1s: AtomicU64,
+    last_warn_us: AtomicU64,
+    suppressed: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,15 +53,21 @@ impl Timer {
             over_16ms: AtomicU64::new(0),
             over_100ms: AtomicU64::new(0),
             over_1s: AtomicU64::new(0),
+            last_warn_us: AtomicU64::new(0),
+            suppressed: AtomicU64::new(0),
         }
     }
 
+    /// Records one duration; one at [`SLOW_OP`] or longer also logs a WARN.
     pub(crate) fn record(&'static self, elapsed: Duration) {
+        self.record_op(elapsed, "");
+    }
+
+    fn register(&'static self) {
         if !self.registered.load(Ordering::Relaxed) && !self.registered.swap(true, Ordering::AcqRel)
         {
             global().add_timer(self);
         }
-        self.record_unregistered(elapsed);
     }
 
     fn record_unregistered(&self, elapsed: Duration) {
@@ -79,16 +89,40 @@ impl Timer {
     /// Records one operation and logs a WARN naming it when it took
     /// [`SLOW_OP`] or longer, so a window's slow count has a culprit.
     pub(crate) fn record_op(&'static self, elapsed: Duration, detail: &str) {
-        self.record(elapsed);
+        self.register();
+        self.record_unregistered(elapsed);
         if elapsed >= SLOW_OP {
-            tracing::warn!(
-                event = "perf.slow_op",
-                metric = self.name,
-                detail,
-                elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
-                "slow operation"
-            );
+            self.warn_slow(elapsed, detail);
         }
+    }
+
+    /// At most one WARN per timer per [`WARN_INTERVAL`]; the next one counts the rest.
+    fn warn_slow(&self, elapsed: Duration, detail: &str) {
+        let now = now_us();
+        let last = self.last_warn_us.load(Ordering::Relaxed);
+        let interval = u64::try_from(WARN_INTERVAL.as_micros()).unwrap_or(u64::MAX);
+        if last != 0 && now.saturating_sub(last) < interval
+            || self
+                .last_warn_us
+                .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
+                .is_err()
+        {
+            self.suppressed.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        let context = context();
+        tracing::warn!(
+            event = "perf.slow_op",
+            metric = self.name,
+            detail,
+            elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+            suppressed = self.suppressed.swap(0, Ordering::Relaxed),
+            cpu_pct = %Field(context.map(|c| c.cpu_pct)),
+            rss_mb = %Field(context.map(|c| c.rss_mb)),
+            load1 = %Field(context.map(|c| c.load1)),
+            sys_cpu_pct = %Field(context.map(|c| c.sys_cpu_pct)),
+            "slow operation"
+        );
     }
 
     /// Records the time until the guard drops.
@@ -432,6 +466,64 @@ fn snapshot<T: ?Sized>(list: &Mutex<Vec<&'static T>>) -> Vec<&'static T> {
 }
 
 static GLOBAL: Registry = Registry::new();
+
+/// The recorder's latest sample of this process and the machine, for WARNs and the overlay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ContextSample {
+    pub(crate) cpu_pct: f64,
+    pub(crate) rss_mb: f64,
+    pub(crate) load1: f64,
+    pub(crate) sys_cpu_pct: f64,
+}
+
+static CONTEXT_SET: AtomicBool = AtomicBool::new(false);
+static CONTEXT: [AtomicU64; 4] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+pub(crate) fn publish_context(sample: ContextSample) {
+    let values = [
+        sample.cpu_pct,
+        sample.rss_mb,
+        sample.load1,
+        sample.sys_cpu_pct,
+    ];
+    for (slot, value) in CONTEXT.iter().zip(values) {
+        slot.store(value.to_bits(), Ordering::Relaxed);
+    }
+    CONTEXT_SET.store(true, Ordering::Release);
+}
+
+/// None until the recorder's first sample (or when recording is off).
+pub(crate) fn context() -> Option<ContextSample> {
+    if !CONTEXT_SET.load(Ordering::Acquire) {
+        return None;
+    }
+    let value = |index: usize| f64::from_bits(CONTEXT[index].load(Ordering::Relaxed));
+    Some(ContextSample {
+        cpu_pct: value(0),
+        rss_mb: value(1),
+        load1: value(2),
+        sys_cpu_pct: value(3),
+    })
+}
+
+/// A log field that reads `n/a` when the value is unknown.
+pub(crate) struct Field(pub(crate) Option<f64>);
+
+impl std::fmt::Display for Field {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(value) if value.is_finite() => {
+                write!(formatter, "{}", (value * 10.0).round() / 10.0)
+            }
+            _ => formatter.write_str("n/a"),
+        }
+    }
+}
 
 pub(crate) fn global() -> &'static Registry {
     &GLOBAL

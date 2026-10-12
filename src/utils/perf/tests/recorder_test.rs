@@ -29,6 +29,13 @@ fn usage(cpu_ms: u64) -> ProcessUsage {
     }
 }
 
+fn calm_usage(cpu_ms: u64) -> ProcessUsage {
+    ProcessUsage {
+        load_1m: Some(6.0),
+        ..usage(cpu_ms)
+    }
+}
+
 fn no_sample() -> Option<ProcessUsage> {
     None
 }
@@ -279,4 +286,99 @@ fn start_is_a_no_op_when_disabled() {
         }
     ));
     assert!(!perf_dir(&dir).exists());
+}
+
+#[test]
+fn stall_warnings_carry_the_latest_process_and_system_sample() {
+    static WATCH: LoopWatch = LoopWatch::new("test.rec.warn");
+    let registry = Registry::new();
+    registry.add_watch(&WATCH);
+    let (mut recorder, dir) = recorder(
+        "perf-warn",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    let start = Instant::now();
+    recorder.window_record(start, Some(usage(1_000)), &registry);
+    recorder.window_record(
+        start + Duration::from_secs(1),
+        Some(usage(1_900)),
+        &registry,
+    );
+    let guard = WATCH.enter("journal");
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| recorder.watch(start, now_us() + 300_000, &registry));
+    drop(guard);
+    let text = capture.text();
+    let line = text
+        .lines()
+        .find(|line| line.contains("perf.stall"))
+        .expect(&text);
+    for field in [
+        "WARN",
+        "loop_name=\"test.rec.warn\"",
+        "stage=\"journal\"",
+        "busy_ms=",
+        "cpu_pct=90",
+        "rss_mb=50",
+        "load1=24.5",
+        "sys_cpu_pct=75",
+    ] {
+        assert!(line.contains(field), "{field} missing: {line}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn high_machine_load_warns_at_most_once_a_minute() {
+    let registry = Registry::new();
+    let (mut loaded, dir) = recorder(
+        "perf-load",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    let mut busy = usage(1_000);
+    busy.load_1m = Some(30.0);
+    let start = Instant::now();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        loaded.window_record(start, Some(busy), &registry);
+        loaded.window_record(start + Duration::from_secs(1), Some(busy), &registry);
+        loaded.window_record(start + Duration::from_secs(61), Some(busy), &registry);
+    });
+    let text = capture.text();
+    let warns: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("perf.high_load"))
+        .collect();
+    assert_eq!(warns.len(), 2, "{text}");
+    assert!(
+        warns[0].contains("WARN") && warns[0].contains("load1=30") && warns[0].contains("cpus=12"),
+        "{}",
+        warns[0]
+    );
+
+    let quiet = crate::utils::logging::test_capture::Capture::default();
+    let (mut calm, calm_dir) = recorder(
+        "perf-calm",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    quiet.run(|| {
+        calm.window_record(start, Some(calm_usage(1_000)), &registry);
+        calm.window_record(
+            start + Duration::from_secs(1),
+            Some(calm_usage(1_100)),
+            &registry,
+        );
+    });
+    assert!(!quiet.text().contains("perf.high_load"), "{}", quiet.text());
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(calm_dir);
 }

@@ -175,3 +175,42 @@ fn a_stall_ends_with_the_stage_that_blocked_not_the_last_one() {
     let ended = WATCH.check(now_us(), threshold).expect("end");
     assert_eq!(ended.stage, "tick");
 }
+
+#[test]
+fn slow_timers_warn_once_per_second_with_what_where_how_long_and_system_context() {
+    static TIMER: Timer = Timer::new("test.timer.slow_frame");
+    publish_context(ContextSample {
+        cpu_pct: 87.5,
+        rss_mb: 92.0,
+        load1: 24.8,
+        sys_cpu_pct: 99.0,
+    });
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        TIMER.record(Duration::from_millis(150));
+        TIMER.record(Duration::from_millis(400));
+        TIMER.record(Duration::from_millis(5));
+    });
+    let text = capture.text();
+    let warns: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("perf.slow_op"))
+        .collect();
+    assert_eq!(
+        warns.len(),
+        1,
+        "rate limited to one WARN per second: {text}"
+    );
+    for field in [
+        "WARN",
+        "metric=\"test.timer.slow_frame\"",
+        "elapsed_ms=150",
+        "cpu_pct=87.5",
+        "rss_mb=92",
+        "load1=24.8",
+        "sys_cpu_pct=99",
+    ] {
+        assert!(warns[0].contains(field), "{field} missing: {}", warns[0]);
+    }
+    assert_eq!(TIMER.take().map(|window| window.over_100ms), Some(2));
+}

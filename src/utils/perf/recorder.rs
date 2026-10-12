@@ -11,12 +11,20 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-use super::{global, now_us, Registry, StallEvent, StallKind, TimerWindow};
+use super::{
+    context, global, now_us, publish_context, ContextSample, Field, Registry, StallEvent,
+    StallKind, TimerWindow,
+};
 use crate::utils::logging::RotatingFileState;
 
 /// How often the watchdog looks for blocked loops.
 const WATCH_TICK: Duration = Duration::from_millis(100);
 const MIB: f64 = 1024.0 * 1024.0;
+/// Machine-wide or this process's CPU at or above this is saturated.
+const HIGH_CPU_PCT: f64 = 90.0;
+/// A run queue twice the core count means every thread waits for a core.
+const HIGH_LOAD_PER_CPU: f64 = 2.0;
+const LOAD_WARN_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PerfOptions {
@@ -117,6 +125,7 @@ pub(super) struct Recorder {
     hooks: PerfHooks,
     last_cpu: Option<(Instant, Duration)>,
     last_system_ticks: Option<(u64, u64)>,
+    last_load_warn: Option<Instant>,
     last_capture: Option<Instant>,
     wake_lag_max: Option<Duration>,
 }
@@ -144,6 +153,7 @@ impl Recorder {
             hooks,
             last_cpu: None,
             last_system_ticks: None,
+            last_load_warn: None,
             last_capture: None,
             wake_lag_max: None,
         })
@@ -320,6 +330,39 @@ impl Recorder {
         if let Some(swap) = usage.swap_used_bytes {
             record.insert("swap_used_mb".into(), json!((swap as f64 / MIB).round()));
         }
+        let number = |key: &str| record.get(key).and_then(Value::as_f64).unwrap_or(f64::NAN);
+        let sample = ContextSample {
+            cpu_pct: number("cpu_pct"),
+            rss_mb: number("rss_mb"),
+            load1: number("load1"),
+            sys_cpu_pct: number("sys_cpu_pct"),
+        };
+        publish_context(sample);
+        self.warn_if_high_load(now, sample, usage.cpus);
+    }
+
+    /// The machine or this process is saturated: a likely backdrop for any stall.
+    fn warn_if_high_load(&mut self, now: Instant, sample: ContextSample, cpus: u32) {
+        let high = sample.sys_cpu_pct >= HIGH_CPU_PCT
+            || sample.cpu_pct >= HIGH_CPU_PCT
+            || sample.load1 >= f64::from(cpus) * HIGH_LOAD_PER_CPU;
+        let cooled = self
+            .last_load_warn
+            .is_none_or(|last| now.duration_since(last) >= LOAD_WARN_INTERVAL);
+        if !high || !cooled {
+            return;
+        }
+        self.last_load_warn = Some(now);
+        tracing::warn!(
+            event = "perf.high_load",
+            role = self.role,
+            cpu_pct = %Field(Some(sample.cpu_pct)),
+            rss_mb = %Field(Some(sample.rss_mb)),
+            load1 = %Field(Some(sample.load1)),
+            cpus,
+            sys_cpu_pct = %Field(Some(sample.sys_cpu_pct)),
+            "high load"
+        );
     }
 
     fn base(&self, kind: &str) -> Map<String, Value> {
@@ -340,12 +383,21 @@ impl Recorder {
 }
 
 fn log_stall(event: &StallEvent) {
+    let context = context();
+    let cpu_pct = Field(context.map(|c| c.cpu_pct));
+    let rss_mb = Field(context.map(|c| c.rss_mb));
+    let load1 = Field(context.map(|c| c.load1));
+    let sys_cpu_pct = Field(context.map(|c| c.sys_cpu_pct));
     match event.kind {
         StallKind::Began => tracing::warn!(
             event = "perf.stall",
             loop_name = event.loop_name,
             stage = event.stage,
             busy_ms = event.busy_ms,
+            %cpu_pct,
+            %rss_mb,
+            %load1,
+            %sys_cpu_pct,
             "loop blocked"
         ),
         StallKind::Ended => tracing::warn!(
@@ -353,6 +405,10 @@ fn log_stall(event: &StallEvent) {
             loop_name = event.loop_name,
             stage = event.stage,
             busy_ms = event.busy_ms,
+            %cpu_pct,
+            %rss_mb,
+            %load1,
+            %sys_cpu_pct,
             "blocked loop resumed"
         ),
     }
