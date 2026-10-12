@@ -187,9 +187,34 @@ fn dialog_observation(
     runtime: &crate::terminal::TerminalRuntime,
 ) -> Option<AgentDialogObservation> {
     let (screen, content_revision) = runtime.visible_ansi_snapshot_with_seq()?;
+    let pending_question = agent.agent.as_deref() == Some("codex")
+        && crate::agents::dialog::codex_question_pending(&screen);
+    let dialog = crate::agents::dialog::parse(&screen);
+    tracing::debug!(
+        event = "bus.dialog.observed",
+        terminal_id = %agent.terminal_id,
+        pane_id = %agent.pane_id,
+        content_revision,
+        status = ?agent.agent_status,
+        listed_dialog_id = ?agent.dialog_id,
+        parsed_dialog_id = ?dialog.as_ref().map(|dialog| dialog.id()),
+        pending_question,
+        synchronized_output = runtime.synchronized_output_active(),
+        "Parsed the current native dialog snapshot"
+    );
+    if dialog.is_none()
+        && !pending_question
+        && (agent.dialog_id.is_some()
+            || agent.agent_status == crate::protocol::api::schema::AgentStatus::Blocked)
+    {
+        // Preserve the exact parser input for a missed blocker. Metadata
+        // alone cannot distinguish a parser miss from a closing/redrawing UI.
+        tracing::trace!(event = "bus.dialog.missed_blocker", terminal_id = %agent.terminal_id,
+            pane_id = %agent.pane_id, content_revision, screen = ?screen,
+            "Blocked metadata has no readable dialog in this snapshot");
+    }
     Some(AgentDialogObservation {
-        pending_question: agent.agent.as_deref() == Some("codex")
-            && crate::agents::dialog::codex_question_pending(&screen),
+        pending_question,
         terminal_id: agent.terminal_id.clone(),
         pane_id: agent.pane_id.clone(),
         session_id: agent
@@ -197,7 +222,7 @@ fn dialog_observation(
             .as_ref()
             .map(|session| session.value.clone()),
         content_revision,
-        dialog: crate::agents::dialog::parse(&screen).map(|dialog| AgentDialog {
+        dialog: dialog.map(|dialog| AgentDialog {
             kind: match dialog.kind {
                 crate::agents::dialog::DialogKind::Choice => AgentDialogKind::Choice,
                 crate::agents::dialog::DialogKind::Question => AgentDialogKind::Question,
