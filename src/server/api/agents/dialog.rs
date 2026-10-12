@@ -7,6 +7,7 @@ use crate::protocol::api::schema::{
 };
 use crate::server::api::errors::{encode_error, encode_error_body, encode_success};
 use crate::server::app::App;
+use sha2::{Digest, Sha256};
 
 impl App {
     pub(in crate::server::api) fn handle_agent_dialog_observe(
@@ -186,6 +187,7 @@ fn dialog_observation(
     agent: &crate::protocol::api::schema::AgentInfo,
     runtime: &crate::terminal::TerminalRuntime,
 ) -> Option<AgentDialogObservation> {
+    let started = std::time::Instant::now();
     let (screen, content_revision) = runtime.visible_ansi_snapshot_with_seq()?;
     let pending_question = agent.agent.as_deref() == Some("codex")
         && crate::agents::dialog::codex_question_pending(&screen);
@@ -198,6 +200,9 @@ fn dialog_observation(
         status = ?agent.agent_status,
         listed_dialog_id = ?agent.dialog_id,
         parsed_dialog_id = ?dialog.as_ref().map(|dialog| dialog.id()),
+        dialog_kind = ?dialog.as_ref().map(|dialog| dialog.kind),
+        option_count = dialog.as_ref().map_or(0, |dialog| dialog.options.len()),
+        elapsed_us = started.elapsed().as_micros() as u64,
         pending_question,
         synchronized_output = runtime.synchronized_output_active(),
         "Parsed the current native dialog snapshot"
@@ -207,10 +212,11 @@ fn dialog_observation(
         && (agent.dialog_id.is_some()
             || agent.agent_status == crate::protocol::api::schema::AgentStatus::Blocked)
     {
-        // Preserve the exact parser input for a missed blocker. Metadata
-        // alone cannot distinguish a parser miss from a closing/redrawing UI.
+        // Correlate snapshots without retaining prompts, commands or output.
         tracing::trace!(event = "bus.dialog.missed_blocker", terminal_id = %agent.terminal_id,
-            pane_id = %agent.pane_id, content_revision, screen = ?screen,
+            pane_id = %agent.pane_id, content_revision,
+            screen_hash = %format!("{:x}", Sha256::digest(screen.as_bytes())),
+            screen_bytes = screen.len(),
             "Blocked metadata has no readable dialog in this snapshot");
     }
     Some(AgentDialogObservation {
