@@ -30,7 +30,7 @@ fn next_busy_delay(delay: Duration) -> Duration {
 /// on it and gone idle again (`turn_ended`), with no deadline. Orchestrators
 /// run it as a background tool call and are woken when it exits, so a long
 /// task must never time out. A blocked recipient is not idle, so it keeps
-/// waiting. It fails only when a request is abandoned or the message is gone.
+/// waiting. It fails when a request is abandoned, an unfinished turn stalls, or the message is gone.
 pub(super) fn follow_message(
     id: &str,
     message: &Value,
@@ -191,7 +191,19 @@ pub(super) fn execute(
             busy_delay = next_busy_delay(busy_delay);
             continue;
         }
-        if !response.ok || !waiting || response.result["complete"] == true {
+        if !response.ok || !waiting {
+            return response;
+        }
+        match async_outcome(&response.result) {
+            Some(Ok(())) if deadline.is_none() => return response,
+            Some(Err((code, message))) if deadline.is_none() || code == "message_abandoned" => {
+                let mut failure = Response::failure(&id, code, message);
+                failure.result = response.result;
+                return failure;
+            }
+            _ => {}
+        }
+        if deadline.is_some() && response.result["complete"] == true {
             return response;
         }
         if response.result["waiting_on_dialog"]

@@ -1,0 +1,108 @@
+{
+  "ended": [
+    {
+      "complete": false,
+      "files": [],
+      "message_id": 7,
+      "requests": [
+        {
+          "agent_id": 2,
+          "agent_name": "a1",
+          "dialog": false,
+          "group": null,
+          "queue": false,
+          "reason": null,
+          "reply": null,
+          "request_id": 8,
+          "session_id": "f0e4ef8e-1426-4a90-a670-96a6bfa9d58c",
+          "stage": "delivered",
+          "stalled_from": null,
+          "start_bound": true,
+          "status": "unavailable",
+          "turn_ended": true,
+          "turn_id": "f0e4ef8e-1426-4a90-a670-96a6bfa9d58c-3",
+          "uncertain_outcome": false
+        }
+      ],
+      "waiting_on_dialog": []
+    },
+    {
+      "complete": false,
+      "files": [],
+      "message_id": 10,
+      "requests": [
+        {
+          "agent_id": 9,
+          "agent_name": "a2",
+          "dialog": false,
+          "group": null,
+          "queue": false,
+          "reason": null,
+          "reply": null,
+          "request_id": 11,
+          "session_id": "15f26d19-e5e4-4058-a5b9-b66934604d98",
+          "stage": "delivered",
+          "stalled_from": null,
+          "start_bound": true,
+          "status": "unavailable",
+          "turn_ended": true,
+          "turn_id": "15f26d19-e5e4-4058-a5b9-b66934604d98-1",
+          "uncertain_outcome": false
+        }
+      ],
+      "waiting_on_dialog": []
+    }
+  ],
+  "joined": {
+    "complete": false,
+    "files": [],
+    "message_id": 15,
+    "requests": [
+      {
+        "agent_id": 12,
+        "agent_name": "a3",
+        "dialog": false,
+        "group": 14,
+        "queue": false,
+        "reason": null,
+        "reply": null,
+        "request_id": 16,
+        "session_id": null,
+        "stage": "joined",
+        "stalled_from": null,
+        "start_bound": false,
+        "status": "unavailable",
+        "turn_ended": false,
+        "turn_id": null,
+        "uncertain_outcome": true
+      }
+    ],
+    "waiting_on_dialog": []
+  },
+  "abandoned": {
+    "complete": true,
+    "files": [],
+    "message_id": 17,
+    "requests": [
+      {
+        "agent_id": 12,
+        "agent_name": "a3",
+        "dialog": false,
+        "group": null,
+        "queue": true,
+        "reason": "session_invalidated",
+        "reply": null,
+        "request_id": 18,
+        "session_id": null,
+        "stage": "abandoned",
+        "stalled_from": null,
+        "start_bound": false,
+        "status": "unavailable",
+        "turn_ended": false,
+        "turn_id": null,
+        "uncertain_outcome": false
+      }
+    ],
+    "waiting_on_dialog": []
+  }
+}

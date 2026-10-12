@@ -513,8 +513,8 @@ fn wait_timeout_errors_explain_the_supported_range() {
 #[test]
 fn wait_async_polls_until_reply_or_dialog_without_a_deadline() {
     for last in [
-        json!({"message_id":19,"complete":true,"requests":[]}),
-        json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[]}),
+        json!({"message_id":19,"complete":true,"requests":[recipient(1, "replied", true)]}),
+        json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[recipient(1, "delivered", false)]}),
     ] {
         let mut reads = 0;
         let (outcome, response) = run_captured(
@@ -526,7 +526,7 @@ fn wait_async_polls_until_reply_or_dialog_without_a_deadline() {
                 Ok(Response::success(
                     &request.id,
                     if reads == 1 {
-                        json!({"message_id":19,"complete":false,"requests":[]})
+                        json!({"message_id":19,"complete":false,"requests":[recipient(1, "delivered", false)]})
                     } else {
                         last.clone()
                     },
@@ -1526,18 +1526,20 @@ fn send_async_failure_keeps_the_send_receipt_and_message_id() {
 #[test]
 fn wait_async_keeps_polling_through_more_server_busy_replies_than_a_plain_command_retries() {
     let mut reads = 0;
-    let (outcome, response) =
-        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--async"],
+        |request, _| {
             reads += 1;
             Ok(if reads <= 6 {
                 Response::failure(&request.id, "server_busy", "busy")
             } else {
                 Response::success(
                     &request.id,
-                    json!({"message_id":19,"complete":true,"requests":[]}),
+                    json!({"message_id":19,"complete":true,"requests":[recipient(1, "replied", true)]}),
                 )
             })
-        });
+        },
+    );
     assert!(outcome.is_ok(), "{response}");
     assert_eq!(reads, 7);
 }
@@ -1554,17 +1556,19 @@ fn wait_async_with_an_explicit_timeout_names_the_conflicting_options() {
 #[test]
 fn wait_async_keeps_waiting_through_a_transient_transport_error() {
     let mut reads = 0;
-    let (outcome, response) =
-        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--async"],
+        |request, _| {
             reads += 1;
             if reads == 2 {
                 return Err("No developer endpoint is available".into());
             }
             Ok(Response::success(
                 &request.id,
-                json!({"message_id":19,"complete":reads >= 3,"requests":[]}),
+                json!({"message_id":19,"complete":reads >= 3,"requests":[recipient(1, "delivered", reads >= 3)]}),
             ))
-        });
+        },
+    );
     assert!(outcome.is_ok(), "{response}");
     assert_eq!(reads, 3);
 }
@@ -1590,7 +1594,7 @@ fn wait_async_recovers_before_first_status_and_still_stops_at_a_dialog() {
             }
             Ok(Response::success(
                 &request.id,
-                json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[]}),
+                json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[recipient(1, "delivered", false)]}),
             ))
         },
     );
@@ -1603,7 +1607,8 @@ fn wait_async_recovers_before_first_status_and_still_stops_at_a_dialog() {
 #[test]
 fn bounded_wait_still_reports_transport_error_without_retrying_it() {
     let mut reads = 0;
-    let pending = json!({"message_id":19,"complete":false,"requests":[]});
+    let pending =
+        json!({"message_id":19,"complete":false,"requests":[recipient(1, "delivered", false)]});
     let (outcome, response) = run_captured(
         &["wait", "--message", "19", "--timeout", "60"],
         |request, timeout| {
@@ -1635,4 +1640,101 @@ fn wait_timeout_attached_and_blank_values_use_the_wait_diagnostics() {
         error.contains("--async") && error.contains("--timeout"),
         "{error}"
     );
+}
+
+fn restart_statuses() -> Value {
+    serde_json::from_str(include_str!("tests/fixtures/restart-statuses.json")).unwrap()
+}
+
+#[test]
+fn wait_async_finishes_recorded_ended_turns_without_captured_replies() {
+    for snapshot in restart_statuses()["ended"].as_array().unwrap() {
+        let message = snapshot["message_id"].to_string();
+        let mut reads = 0;
+        let (outcome, response) = run_captured(
+            &["wait", "--message", &message, "--async"],
+            |request, timeout| {
+                assert_eq!(request.method, "message.status");
+                assert!(timeout.is_none());
+                reads += 1;
+                assert_eq!(
+                    reads, 1,
+                    "wait --async polled again after every turn ended: {snapshot}"
+                );
+                Ok(Response::success(&request.id, snapshot.clone()))
+            },
+        );
+        assert!(outcome.is_ok(), "{response}");
+        assert_eq!(
+            response["result"], *snapshot,
+            "preserve the server's status snapshot"
+        );
+        assert_eq!(response["result"]["complete"], false);
+        let sent = follow_message(
+            "send-follow",
+            &snapshot["message_id"],
+            &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+            &mut |_| panic!("send --async must also finish immediately"),
+        );
+        assert!(sent.ok);
+        assert_eq!(response["result"], sent.result);
+    }
+}
+
+#[test]
+fn wait_async_reports_recorded_abandonment_with_the_send_async_exit_code() {
+    let snapshot = restart_statuses()["abandoned"].clone();
+    let message = snapshot["message_id"].to_string();
+    let (outcome, response) =
+        run_captured(&["wait", "--message", &message, "--async"], |request, _| {
+            Ok(Response::success(&request.id, snapshot.clone()))
+        });
+    assert_eq!(exit_code(&outcome), Some(1), "{response}");
+    assert_eq!(response["error"]["code"], "message_abandoned");
+    assert_eq!(response["result"], snapshot);
+    let sent = follow_message(
+        "send-follow",
+        &snapshot["message_id"],
+        &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+        &mut |_| panic!("abandonment is terminal"),
+    );
+    assert!(!sent.ok);
+    assert_eq!(response["error"]["code"], sent.error.unwrap().code);
+    assert_eq!(response["result"], sent.result);
+}
+
+#[test]
+fn bounded_wait_reports_recorded_abandonment_as_failure() {
+    let snapshot = restart_statuses()["abandoned"].clone();
+    let message = snapshot["message_id"].to_string();
+    let (outcome, response) = run_captured(
+        &["wait", "--message", &message, "--timeout", "60"],
+        |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+    );
+    assert_eq!(exit_code(&outcome), Some(1), "{response}");
+    assert_eq!(response["error"]["code"], "message_abandoned");
+    assert_eq!(response["result"], snapshot);
+}
+
+#[test]
+fn wait_async_and_send_async_agree_on_invalidated_joined_stalls() {
+    let mut snapshot = restart_statuses()["joined"].clone();
+    snapshot["requests"][0]["stage"] = json!("stalled");
+    snapshot["requests"][0]["stalled_from"] = json!("joined");
+    snapshot["requests"][0]["reason"] = json!("session_invalidated");
+    let message = snapshot["message_id"].to_string();
+    let (outcome, response) =
+        run_captured(&["wait", "--message", &message, "--async"], |request, _| {
+            Ok(Response::success(&request.id, snapshot.clone()))
+        });
+    assert_eq!(exit_code(&outcome), Some(3));
+    let sent = follow_message(
+        "send-follow",
+        &snapshot["message_id"],
+        &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
+        &mut |_| panic!("invalidated stall is terminal"),
+    );
+    assert!(!sent.ok);
+    assert_eq!(response["error"]["code"], sent.error.unwrap().code);
+    assert_eq!(response["result"], sent.result);
 }

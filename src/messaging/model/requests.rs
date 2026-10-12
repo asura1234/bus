@@ -333,13 +333,17 @@ impl BusState {
             }),
             RequestPhase::Submitting | RequestPhase::Active => {
                 let progress = lead.progress_at_ms.unwrap_or(agent.status_since_ms);
-                if agent.status != RuntimeStatus::Idle
+                let invalidated =
+                    agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
+                if (agent.status != RuntimeStatus::Idle && !invalidated)
                     || !since(DELIVERED_STALL_MS, progress.max(agent.status_since_ms))
                 {
                     return None;
                 }
                 Some(
-                    if lead.phase == RequestPhase::Submitting {
+                    if invalidated {
+                        "session_invalidated"
+                    } else if lead.phase == RequestPhase::Submitting {
                         "submission_unconfirmed"
                     } else if !lead.trusted_start_bound {
                         "no_start_hook"

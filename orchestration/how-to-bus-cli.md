@@ -241,7 +241,9 @@ bus wait --message "$message_id" --timeout 600
 
 `wait` defaults to 60 seconds and accepts `--timeout` from 1 through 600.
 Use `bus wait --message "$message_id" --async` to wait without an overall
-deadline until the message settles or a recipient needs a dialog. It returns
+deadline until every recipient’s turn ends, a request is abandoned or stalls,
+or a recipient needs a dialog. Like `send --async`, ended turns succeed even
+when the final reply was not captured (`complete` can remain `false`). It returns
 `agent_waiting_on_dialog` with the last status; answer the dialog, then wait
 again. `--async` and an explicit `--timeout` cannot be combined. Unlike
 `send --async`, `wait --async` stops at a dialog rather than waiting for it to
@@ -326,6 +328,7 @@ new message when ready. Typed requests remain `stalled` for explicit recovery.
 | `submitting` | 3 minutes idle after Bus typed it | `submission_unconfirmed`: the native server never confirmed the typing |
 | `awaiting_start` | 3 minutes idle | `no_start_hook`: the provider never reported the turn start |
 | `delivered`, `joined` | 3 minutes idle with no hook event | `transcript_unmatched`: the turn ended but no final reply matched the transcript |
+| Any typed stage | 3 minutes without progress after the agent becomes unavailable with its session binding invalidated | `session_invalidated`: the turn cannot continue in that session; its request and uncertain outcome are preserved for explicit recovery |
 
 A Working agent never stalls, however long its turn. A Blocked agent does not
 stall either: it already asked for help. After 5 minutes blocked, `reason`
@@ -337,7 +340,9 @@ at a typed stall with exit code 3 and the reason in the JSON error; an abandoned
 queued request exits with code 1. For `--async`,
 a finished turn whose reply was not captured counts as done, not stalled.
 
-Treat `complete: true` from `message status` or `wait` as the settlement signal.
+Treat `complete: true` from `message status` or bounded `wait` as the durable
+settlement signal. An async wait can succeed earlier when every `turn_ended`
+is true, without claiming that a reply was captured.
 A successful terminal write or a visually idle agent is
 not proof that the request completed.
 
