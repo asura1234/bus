@@ -89,7 +89,9 @@ fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
         )));
     }
     let ended = |r: &Value| {
-        r["turn_ended"] == true && !(r["uncertain_outcome"] == true && r["start_bound"] != true)
+        r["turn_ended"] == true
+            && (r["stage"] == "replied"
+                || !(r["uncertain_outcome"] == true && r["start_bound"] != true))
     };
     if requests.iter().all(ended) {
         return Some(Ok(()));
