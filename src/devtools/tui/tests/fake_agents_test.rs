@@ -847,3 +847,42 @@ fn a_fake_cursor_in_a_narrow_pane_reads_idle_once_its_turn_ends() {
     assert!(!detection.visible_working, "{rows:#?}");
     assert_eq!(working(&screen), 0, "{rows:#?}");
 }
+
+#[test]
+fn a_fake_cursor_turn_clears_its_working_line_at_every_pane_width() {
+    use crate::devtools::tui::screen::Screen;
+
+    // Around the 61-cell borders: narrower, exactly as wide, and wider.
+    for cols in 40..=80 {
+        let mut screen = Screen::new(cols, 30).unwrap();
+        screen.feed(prompt_top("cursor-agent").as_bytes());
+        screen.feed(prompt_box("hey fake:work 3", "cursor-agent", cols).as_bytes());
+        screen.feed(submitted("hey fake:work 3").as_bytes());
+        let start = working_line("cursor-agent", 0, 0);
+        screen.feed(working_block(&start, "", "cursor-agent", false, cols).as_bytes());
+        for frame in 1..4 {
+            let line = working_line("cursor-agent", frame, 1);
+            screen.feed(working_block(&line, "steer", "cursor-agent", true, cols).as_bytes());
+        }
+        let rows = screen_rows_of(&screen);
+        let working = rows
+            .iter()
+            .filter(|row| row.contains("Generating ("))
+            .count();
+        assert_eq!(working, 1, "{cols} cols: {rows:#?}");
+        screen
+            .feed(work_done(&working_line("cursor-agent", 4, 3), "cursor-agent", cols).as_bytes());
+        let rows = screen_rows_of(&screen);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains("Generating (") || row.starts_with('→')),
+            "{cols} cols: {rows:#?}"
+        );
+        assert_eq!(
+            rows.iter().rev().find(|row| !row.is_empty()).unwrap(),
+            "> hey fake:work 3",
+            "{cols} cols: {rows:#?}"
+        );
+    }
+}
