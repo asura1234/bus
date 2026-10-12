@@ -46,7 +46,7 @@ pub fn run_server(
                 "api socket: {}",
                 crate::protocol::api::socket_path().display()
             );
-            std::process::exit(1);
+            crate::utils::perf::exit(1);
         }
         Err(err) => return Err(err),
     };
@@ -79,7 +79,7 @@ pub fn run_server(
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
                 eprintln!("error: bus server is already running");
                 eprintln!("client socket: {}", client_socket_path().display());
-                std::process::exit(1);
+                crate::utils::perf::exit(1);
             }
             Err(err) => return Err(err),
         };

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 mod recorder;
 mod writer;
 
-pub(crate) use recorder::{start, PerfHooks, PerfOptions, ProcessUsage};
+pub(crate) use recorder::{exit, start, PerfHooks, PerfOptions, ProcessUsage};
 
 /// An operation this slow blocks a 60 Hz UI for several frames.
 pub(crate) const SLOW_OP: Duration = Duration::from_millis(100);

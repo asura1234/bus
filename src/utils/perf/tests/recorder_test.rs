@@ -839,6 +839,11 @@ fn exit_drain_gives_up_at_the_deadline_and_reports_the_undrained_records() {
     let started = Instant::now();
     exit_log.run(|| handle.shutdown(Duration::from_millis(200)));
     let elapsed = started.elapsed();
+    // The loss is reported off the exiting thread.
+    let reported = Instant::now() + Duration::from_secs(2);
+    while !exit_log.text().contains("undrained_records") && Instant::now() < reported {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     holder.unlock().unwrap();
     drop(handle);
     let _ = std::fs::remove_dir_all(dir);
@@ -875,5 +880,180 @@ fn dropping_the_running_recorder_stops_it_promptly() {
     assert!(
         elapsed < Duration::from_secs(1),
         "stopping took {elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shutdown_deadline_does_not_wait_for_a_locked_diagnostic_log() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-exit-log-deadline");
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let mut handle = captured_writer(&capture, &dir, 16);
+    let perf_lock = std::fs::OpenOptions::new()
+        .append(true)
+        .open(perf_dir(&dir).join("client.jsonl"))
+        .unwrap();
+    perf_lock.lock().unwrap();
+    handle.send(b"{\"kind\":\"probe\"}\n".to_vec());
+    let log_path = dir.join("client.log");
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .unwrap();
+        file.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        file.unlock().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    let logging = crate::utils::logging::LoggingOptions {
+        filter: tracing_subscriber::EnvFilter::new("warn"),
+        max_bytes: 1024 * 1024,
+        retention: crate::utils::logging::Retention::Archive(options().archive),
+        dev: true,
+    };
+    let mut elapsed = Duration::ZERO;
+    crate::utils::logging::test_capture::run_to_file(dir.clone(), "client.log", &logging, || {
+        let started = Instant::now();
+        handle.shutdown(Duration::from_millis(100));
+        elapsed = started.elapsed();
+    });
+    holder.join().unwrap();
+    perf_lock.unlock().unwrap();
+    drop(handle);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        elapsed < Duration::from_millis(300),
+        "100 ms shutdown deadline was extended by diagnostic logging to {elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_recorder_keeps_exit_deadline_when_watchdog_is_logging_a_stall() {
+    static WATCH: LoopWatch = LoopWatch::new("test.rec.exit.blocked_log");
+    let dir = crate::utils::test_temp::unique_temp_path("perf-stop-log-lock");
+    std::fs::create_dir_all(&dir).unwrap();
+    let logging = crate::utils::logging::LoggingOptions {
+        filter: tracing_subscriber::EnvFilter::new("warn"),
+        max_bytes: 1024 * 1024,
+        retention: crate::utils::logging::Retention::Archive(options().archive),
+        dev: true,
+    };
+    crate::utils::logging::init_file_logging_at(dir.clone(), "client.log", &logging);
+    let log_path = dir.join("client.log");
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(log_path)
+            .unwrap();
+        file.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_secs(3));
+        file.unlock().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    let busy = WATCH.enter("present");
+    let running = start(
+        &dir,
+        "client",
+        &options(),
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    )
+    .unwrap();
+    let wait_until = Instant::now() + Duration::from_secs(1);
+    while WATCH.reported.load(Ordering::Acquire) == 0 && Instant::now() < wait_until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let observed = WATCH.reported.load(Ordering::Acquire) != 0;
+    let started = Instant::now();
+    drop(running);
+    let elapsed = started.elapsed();
+    drop(busy);
+    holder.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(observed, "watchdog must have detected the blocked loop");
+    assert!(
+        elapsed < Duration::from_millis(2300),
+        "recorder exit exceeded the 2 s drain budget while joining watchdog: {elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn client_error_process_exit_preserves_queued_recorder_windows() {
+    const CHILD_DIR: &str = "BUS_PERF_ERROR_EXIT_PROBE_DIR";
+    static SAMPLES: AtomicUsize = AtomicUsize::new(0);
+    fn counted_sample() -> Option<ProcessUsage> {
+        SAMPLES.fetch_add(1, Ordering::SeqCst);
+        None
+    }
+    if let Some(dir) = std::env::var_os(CHILD_DIR) {
+        let mut tuned = options();
+        tuned.window = Duration::from_millis(1);
+        let _running = start(
+            Path::new(&dir),
+            "client",
+            &tuned,
+            PerfHooks {
+                sample: counted_sample,
+                capture_stacks: no_capture,
+            },
+        )
+        .unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        while SAMPLES.load(Ordering::SeqCst) < 2 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // The single watchdog queues its first window before invoking the
+        // sampler again. Two samples prove there was accepted writer work.
+        assert!(
+            SAMPLES.load(Ordering::SeqCst) >= 2,
+            "two windows must be sampled before error exit"
+        );
+        std::fs::write(Path::new(&dir).join("error-exit-ready"), b"queued").unwrap();
+        // finish_client_run and the server's startup failures exit this way
+        // while their caller still owns the running recorder guard.
+        crate::utils::perf::exit(1);
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("perf-error-exit-backlog");
+    std::fs::create_dir_all(perf_dir(&dir)).unwrap();
+    let live = perf_dir(&dir).join("client.jsonl");
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&live)
+        .unwrap();
+    holder.lock().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("utils::perf::recorder::recorder_test::client_error_process_exit_preserves_queued_recorder_windows")
+        .env(CHILD_DIR, &dir).spawn().unwrap();
+    let until = Instant::now() + Duration::from_secs(3);
+    let ready = dir.join("error-exit-ready");
+    while !ready.exists() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let sampled = ready.exists();
+    std::thread::sleep(Duration::from_millis(200));
+    holder.unlock().unwrap();
+    let status = child.wait().unwrap();
+    let records = lines(&live);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        sampled,
+        "child must queue a sampled window while the writer remains locked"
+    );
+    assert_eq!(status.code(), Some(1), "expected the client error exit");
+    assert!(
+        !records.is_empty(),
+        "ordinary client error exit must preserve queued windows"
     );
 }

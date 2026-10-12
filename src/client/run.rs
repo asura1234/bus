@@ -259,7 +259,8 @@ fn finish_client_run(
             return Ok(());
         }
 
-        std::process::exit(1);
+        // Drains the perf recorder first; a plain exit would skip its drop.
+        crate::utils::perf::exit(1);
     }
 
     rt.shutdown_timeout(Duration::from_millis(100));

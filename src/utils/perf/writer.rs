@@ -84,23 +84,37 @@ impl WriterHandle {
     }
 
     /// Stops queuing and lets the writer drain, waiting at most `deadline`.
-    /// Records still queued after it are reported as lost.
     pub(super) fn shutdown(&mut self, deadline: Duration) {
+        self.shutdown_until(Instant::now() + deadline);
+    }
+
+    /// Stops queuing and lets the writer drain until `deadline`. Records still
+    /// queued then are reported as lost from a detached thread, so an exit is
+    /// never held up by the log file either.
+    pub(super) fn shutdown_until(&mut self, deadline: Instant) {
         let Some(queue) = self.queue.take() else {
             return;
         };
         drop(queue);
-        if self.finished.recv_timeout(deadline).is_ok() {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if self.finished.recv_timeout(wait).is_ok() {
             return;
         }
         let undrained = self.counters.queued.load(Ordering::Acquire);
-        tracing::warn!(
-            event = "perf.write_failed",
-            role = self.role,
-            undrained_records = undrained,
-            deadline_ms = u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
-            "perf records still queued at exit are lost"
-        );
+        let role = self.role;
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        let _ = std::thread::Builder::new()
+            .name("bus-perf-report".into())
+            .spawn(move || {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    tracing::warn!(
+                        event = "perf.write_failed",
+                        role,
+                        undrained_records = undrained,
+                        "perf records still queued at exit are lost"
+                    );
+                });
+            });
     }
 
     /// Waits until every record queued so far is written.

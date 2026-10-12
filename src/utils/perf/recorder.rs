@@ -10,12 +10,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-use super::writer::{WriterHandle, QUEUE_RECORDS};
+use super::writer::{WriterHandle, DRAIN_DEADLINE, QUEUE_RECORDS};
 use super::{
     context, global, now_us, publish_context, ContextSample, Field, Registry, StallEvent,
     StallKind, TimerWindow,
@@ -106,21 +106,44 @@ pub(crate) fn perf_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("perf")
 }
 
-/// The running recorder. Dropping it, on a normal exit, stops the watchdog and
-/// drains the records already queued, waiting at most about
-/// [`super::writer::DRAIN_DEADLINE`].
-pub(crate) struct PerfRecorder {
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
+/// Owns this process's recorder: dropping it, or [`exit`], finishes it.
+pub(crate) struct PerfRecorder(());
 
 impl Drop for PerfRecorder {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        finish();
     }
+}
+
+/// The running watchdog: told when to stop, and how long the drain may take.
+struct Running {
+    stop: mpsc::Sender<Instant>,
+    done: mpsc::Receiver<()>,
+}
+
+static RUNNING: std::sync::Mutex<Option<Running>> = std::sync::Mutex::new(None);
+
+/// Stops the watchdog and drains the queued records, all within one deadline
+/// of [`DRAIN_DEADLINE`]. A watchdog or writer still blocked then (a stuck log
+/// or perf file) is left behind rather than joined, so exiting never waits more.
+pub(crate) fn finish() {
+    let running = RUNNING.lock().ok().and_then(|mut running| running.take());
+    let Some(running) = running else {
+        return;
+    };
+    let deadline = Instant::now() + DRAIN_DEADLINE;
+    if running.stop.send(deadline).is_ok() {
+        let _ = running
+            .done
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    }
+}
+
+/// Exits the process after finishing the recorder; for direct exits that
+/// would otherwise skip the owner's drop.
+pub(crate) fn exit(code: i32) -> ! {
+    finish();
+    std::process::exit(code)
 }
 
 /// Starts this process's recorder once; `None` when disabled, already
@@ -142,16 +165,19 @@ pub(crate) fn start(
             return None;
         }
     };
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopped = Arc::clone(&stop);
-    let thread = std::thread::Builder::new()
+    let (stop, stop_rx) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
         .name("bus-perf".into())
-        .spawn(move || recorder.run(global(), &stopped))
+        .spawn(move || {
+            recorder.run(global(), &stop_rx);
+            let _ = done_tx.send(());
+        })
         .ok()?;
-    Some(PerfRecorder {
-        stop,
-        thread: Some(thread),
-    })
+    if let Ok(mut running) = RUNNING.lock() {
+        *running = Some(Running { stop, done });
+    }
+    Some(PerfRecorder(()))
 }
 
 pub(super) struct Recorder {
@@ -214,10 +240,19 @@ impl Recorder {
         })
     }
 
-    /// Watches and samples until `stop`; dropping `self` then drains the writer.
-    fn run(mut self, registry: &Registry, stop: &AtomicBool) {
+    /// Watches and samples until `stop` brings the drain deadline, then drains
+    /// the writer until it.
+    fn run(mut self, registry: &Registry, stop: &mpsc::Receiver<Instant>) {
         let mut next_window = Instant::now() + self.options.window;
-        while !stop.load(Ordering::Acquire) {
+        loop {
+            match stop.try_recv() {
+                Ok(deadline) => {
+                    self.out.shutdown_until(deadline);
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
             let slept_from = Instant::now();
             std::thread::sleep(WATCH_TICK);
             let now = Instant::now();
