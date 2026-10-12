@@ -1,4 +1,4 @@
-//! Async following and deadline-bound message waits.
+//! Async following and bounded or unbounded message waits.
 use super::{next_request_id, ParsedCommand, Request, Response};
 use serde_json::{json, Value};
 use std::{
@@ -144,6 +144,7 @@ pub(super) fn execute(
     command: ParsedCommand,
     mut send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
 ) -> Response {
+    let waiting = command.wait_for_message;
     let id = command.request_id;
     let deadline = command.wait_timeout.map(|timeout| Instant::now() + timeout);
     let mut request = Request {
@@ -172,10 +173,10 @@ pub(super) fn execute(
         };
         response.id.clone_from(&id);
         if is_server_busy(&response) {
-            // A wait retries until its deadline; other commands a few times.
+            // A wait retries until its deadline (or indefinitely); other commands a few times.
             let remaining =
                 deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-            if remaining.is_none() {
+            if remaining.is_none() && !waiting {
                 if busy_retries == BUSY_RETRIES {
                     return response;
                 }
@@ -185,7 +186,7 @@ pub(super) fn execute(
             busy_delay = next_busy_delay(busy_delay);
             continue;
         }
-        if !response.ok || deadline.is_none() || response.result["complete"] == true {
+        if !response.ok || !waiting || response.result["complete"] == true {
             return response;
         }
         if response.result["waiting_on_dialog"]
@@ -201,10 +202,10 @@ pub(super) fn execute(
             return failure;
         }
         last_status = response.result;
-        if let Some(deadline) = deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            thread::sleep(Duration::from_millis(200).min(remaining));
-        }
+        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        thread::sleep(remaining.map_or(Duration::from_millis(200), |remaining| {
+            Duration::from_millis(200).min(remaining)
+        }));
         // Every status read is fresh even if the server caches request outcomes.
         request.id = next_request_id();
     }

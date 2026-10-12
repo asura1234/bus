@@ -35,7 +35,7 @@ pub const AGENT_HELP: &str = "Commands (connect to the running Bus in BUS_DATA_D
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]
   message status MESSAGE_ID
   request recover REQUEST_ID --confirm
-  wait --message MESSAGE_ID [--timeout SECONDS]
+  wait --message MESSAGE_ID [--timeout SECONDS | --async]
   history --room ROOM
   settings
 

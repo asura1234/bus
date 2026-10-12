@@ -239,6 +239,15 @@ message_id=$(bus send \
 bus wait --message "$message_id" --timeout 600
 ```
 
+`wait` defaults to 60 seconds and accepts `--timeout` from 1 through 600.
+Use `bus wait --message "$message_id" --async` to wait without an overall
+deadline until the message settles or a recipient needs a dialog. It returns
+`agent_waiting_on_dialog` with the last status; answer the dialog, then wait
+again. `--async` and an explicit `--timeout` cannot be combined. Unlike
+`send --async`, `wait --async` stops at a dialog rather than waiting for it to
+be answered. Each transport request still has its normal finite timeout.
+To obtain a message ID before waiting, use plain `send`, then `wait --async`.
+
 To record the message as written by a room agent instead of the human, add
 `--as AGENT`. The author must be an agent in the same room, or the room's MASTER
 orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is

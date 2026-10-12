@@ -503,6 +503,44 @@ fn room_orchestrator_core_cli_wait_is_a_bounded_message_status_query() {
 }
 
 #[test]
+fn wait_timeout_errors_explain_the_supported_range() {
+    for timeout in ["0", "601", "999999", "nope"] {
+        let error = command(&["wait", "--message", "19", "--timeout", timeout]).unwrap_err();
+        assert!(error.contains("1-600"), "{error}");
+    }
+}
+
+#[test]
+fn wait_async_polls_until_reply_or_dialog_without_a_deadline() {
+    for last in [
+        json!({"message_id":19,"complete":true,"requests":[]}),
+        json!({"message_id":19,"complete":false,"waiting_on_dialog":[1],"requests":[]}),
+    ] {
+        let mut reads = 0;
+        let (outcome, response) = run_captured(
+            &["wait", "--message", "19", "--async"],
+            |request, timeout| {
+                assert_eq!(request.method, "message.status");
+                assert!(timeout.is_none());
+                reads += 1;
+                Ok(Response::success(
+                    &request.id,
+                    if reads == 1 {
+                        json!({"message_id":19,"complete":false,"requests":[]})
+                    } else {
+                        last.clone()
+                    },
+                ))
+            },
+        );
+        assert_eq!(reads, 2);
+        assert_eq!(response["result"], last);
+        assert_eq!(outcome.is_ok(), last["complete"] == true);
+    }
+    assert!(command(&["wait", "--message", "19", "--async", "--timeout", "60"]).is_err());
+}
+
+#[test]
 fn reserved_all_recipient_is_explicit_and_never_implicit() {
     let parsed = command(&["send", "--room", "7", "--to", "all", "--text", "hello"]).unwrap();
     assert_eq!(parsed.params["to"], json!(["all"]));
