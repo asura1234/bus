@@ -135,6 +135,20 @@ impl Worker {
             observation =
                 self.native_dialog(&pane_id, &terminal_id, session_id.as_deref(), false)?;
         }
+        // Inspection resolves an already-notified collapsed episode into its
+        // concrete shape; opening the panel does not ask for help a second time.
+        if self.state.agent(id).is_some_and(|agent| {
+            agent.dialog_notice.as_deref() == Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID)
+        }) {
+            if let Some(dialog) = &observation.dialog {
+                let mut state = self.state.clone();
+                state
+                    .set_dialog_notice(id, Some(dialog.id.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.save(state)?;
+                self.dialog_seen.remove(&id);
+            }
+        }
         let fingerprint = match &observation.dialog {
             Some(dialog) => Some(encode_dialog_fingerprint(&DialogFingerprintClaims {
                 room_id,

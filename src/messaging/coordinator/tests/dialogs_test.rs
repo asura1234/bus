@@ -584,6 +584,107 @@ fn message_status_rechecks_a_dialog_that_closed_between_polls() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A worker whose queued Codex question starts collapsed. The native list
+/// reports its pending-question id until `agent dialog` opens the panel, then
+/// the id of the expanded question parsed from the real capture.
+struct CollapsedCodexQuestion(Arc<Mutex<bool>>);
+
+impl Transport for CollapsedCodexQuestion {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let expanded = crate::agents::dialog::parse(include_str!(
+            "../../../../tests/fixtures/codex-question/expanded.txt"
+        ))
+        .expect("expanded Codex question parses");
+        let mut open = self.0.lock().unwrap();
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList {
+                agents: vec![serde_json::from_value(json!({
+                    "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
+                    "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
+                    "interactive_ready": true, "revision": 1, "agent_status": "blocked",
+                    "dialog_id": if *open { expanded.id() } else { "codex:pending_question".into() },
+                }))
+                .unwrap()],
+            }),
+            Method::AgentDialogObserve(params) => {
+                *open |= params.open_pending_question;
+                let mut observed = dialog();
+                observed.id = expanded.id();
+                Ok(ResponseResult::AgentDialog {
+                    observation: schema::AgentDialogObservation {
+                        pending_question: !*open,
+                        terminal_id: "terminal".into(),
+                        pane_id: "pane".into(),
+                        session_id: None,
+                        content_revision: 4,
+                        dialog: open.then_some(observed),
+                    },
+                })
+            }
+            _ => Ok(ResponseResult::Ok {}),
+        }
+    }
+}
+
+#[test]
+fn opening_a_collapsed_codex_question_does_not_repeat_the_blocked_notice() {
+    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
+    worker.transport = Box::new(CollapsedCodexQuestion(Arc::default()));
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1, "collapsed question");
+    // The orchestrator follows the notice's own inspection command.
+    worker.observe_dialog(agent).unwrap();
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(
+            vec![orchestrator.unwrap()],
+            expected_blocked(&worker, agent)
+        )],
+        "the same question, now expanded, is not a new blocked episode"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Lists agents like `FakeServer` but cannot read the screen, as while the
+/// native server restarts or the pane closes between polls.
+struct UnreadableScreen(FakeServer);
+
+impl Transport for UnreadableScreen {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentDialogObserve(_) => Err(TransportError {
+                code: None,
+                message: "native server unavailable".into(),
+                definitely_rejected: false,
+            }),
+            other => self.0.request(other),
+        }
+    }
+}
+
+#[test]
+fn message_status_still_answers_when_a_flagged_recipients_screen_is_unreadable() {
+    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    let receipt = worker
+        .control_send(
+            &json!({"room": room.0.to_string(), "to": [agent.0.to_string()], "text": "build it"}),
+        )
+        .unwrap();
+    let message = PromptId(receipt["message_id"].as_u64().unwrap());
+    screen.lock().unwrap().dialog = true;
+    worker.poll().unwrap();
+    worker.transport = Box::new(UnreadableScreen(FakeServer(screen.clone())));
+    let status = worker.control_message(message);
+    assert!(
+        status.is_ok(),
+        "a status read must not fail on a screen refresh: {status:?}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn only_the_rooms_own_orchestrator_takes_messages_from_outside_its_room() {
     let (mut worker, agent, room, orchestrator, _, dir) = worker(true);

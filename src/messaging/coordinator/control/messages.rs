@@ -217,8 +217,14 @@ impl Worker {
             .map(|agent| agent.id)
             .collect();
         for agent in agents {
-            let (_, _, terminal, pane, session) = self.dialog_identity(agent)?;
-            let observation = self.native_dialog(&pane, &terminal, session.as_deref(), false)?;
+            let observation = (|| {
+                let (_, _, terminal, pane, session) = self.dialog_identity(agent)?;
+                self.native_dialog(&pane, &terminal, session.as_deref(), false)
+            })();
+            let Ok(observation) = observation else {
+                // An unreadable screen cannot prove the cached dialog closed.
+                continue;
+            };
             let mut state = self.state.clone();
             state
                 .observe_dialog(

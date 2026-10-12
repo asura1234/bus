@@ -407,7 +407,7 @@ impl App {
                             (terminal.effective_known_agent()
                                 == Some(crate::agents::AgentKind::Codex)
                                 && crate::agents::dialog::codex_question_pending(&screen))
-                            .then(|| "codex:pending_question".to_owned())
+                            .then(|| crate::agents::dialog::CODEX_PENDING_QUESTION_ID.to_owned())
                         })
                 }),
             update_error: match &terminal.self_update {
