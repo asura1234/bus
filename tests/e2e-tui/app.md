@@ -449,6 +449,20 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 **Pass criteria:** saved data, terminal restoration, clean UI exit and scratch session shutdown match all captured expectations. Never force quit to claim a clean save.
 
+### APP-23 — Dev performance overlay toggle
+
+**Preconditions/setup:** a dev variant (debug build or `--dev` session, as the driver starts); fresh scratch session at 120×40; default room `bus` open.
+
+1. Click Settings → a `DEVELOPER` group below `AGENTS` lists `[ ] Performance overlay (CPU, memory, FPS)`; the top row shows no `CPU … MEM … FPS …` label.
+2. Click the `Performance overlay` row (or move to it with ↓ and press Enter) → it reads `[x]`; within 2 s the top-right of row 0 shows ` CPU <n>% MEM <n>MB FPS <n> ` (CPU/MEM may read `n/a` only for the first second).
+3. Wait 3 s, capturing row 0 at least twice → the label stays on row 0 and refreshes (at least one of CPU/MEM/FPS changes, or the snapshot frame `seq` advances while the label is present); FPS shows a number once a full second has passed.
+4. Press Esc, then click a room and type a few characters → the label stays visible over every screen, including outside Settings.
+5. Reopen Settings and toggle the row again → `[ ]`; within 2 s no `CPU … MEM … FPS` text remains anywhere on screen, and nothing else on row 0 is left damaged.
+
+**Evidence:** steps 1–5: row 0 text and the Settings row text from snapshots/find, with frame `seq`; screenshot judged by the runner for step 2 and step 5. The overlay is client-local and not saved; scratch settings files must not change.
+
+**Pass criteria:** the overlay appears only while toggled on, shows CPU, memory and FPS on row 0, refreshes about once a second, and disappears completely when toggled off.
+
 ## Decisions
 
 - **Shortcuts / product finding:** test Ctrl+O files, Ctrl+P recipients, Ctrl+F find, literal @/+ typing and Ctrl+C draft-clear (terminal Ctrl+C interrupts); CLI help's conflicting shortcuts are a product documentation finding, not a reason to change these expectations (`rooms/help.rs`, `rooms/input/{composer,mod}.rs`, `cli/help.rs`).

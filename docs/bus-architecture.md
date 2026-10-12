@@ -246,7 +246,7 @@ Files are split by ownership, not by helper.
     `client_shell_test.rs`, `client_shell_input_test.rs`, `incremental_test.rs`, `views_test.rs`, `input_test.rs`, `notifications_test.rs`,
     `surface_lease_test.rs`, `render_scale_test.rs` (ignored benchmark; the one test-only import of `client`)
 - `client/`: the TUI client process
-  - `mod.rs`, `run.rs`, `event_loop.rs`, `server_messages.rs`, `state.rs`, `events.rs`, `timer.rs`, `errors.rs`, `perf.rs` (UI loop metrics)
+  - `mod.rs`, `run.rs`, `event_loop.rs`, `server_messages.rs`, `state.rs`, `events.rs`, `timer.rs`, `errors.rs`, `perf.rs` (UI loop metrics and the dev-only performance overlay)
   - `config_reload.rs`, `effects.rs` (clipboard, URLs, editor), `clipboard.rs` (native or OSC 52), `notifications.rs`
   - `host_terminal/`: the user's real terminal
     - `setup.rs`, `geometry.rs`, `frame_output.rs`, `effects.rs` (bells, title), `modes.rs`, `notify.rs`, `color_probe.rs`
