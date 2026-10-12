@@ -190,17 +190,10 @@ impl Write for RotatingFileGuard {
         }
         // Held across check, rotation and append so no other process sharing
         // this log renames it or appends to it in between.
-        let shared = state.lock_live_file();
-        if state.rotate_if_needed(buf.len() as u64).is_err() {
+        let held = state.lock_live_file();
+        let Ok(_shared) = state.lock_for_append(buf.len() as u64, held) else {
             state.disabled = true;
             return Ok(buf.len());
-        }
-        let _shared = if shared.covers(state.file.as_ref()) {
-            shared
-        } else {
-            // This write rotated: take the lock of the new live file.
-            drop(shared);
-            state.lock_live_file()
         };
         if let Some(file) = state.file.as_mut() {
             match file.write(buf) {
@@ -313,11 +306,34 @@ impl RotatingFileState {
         SharedLogLock(None)
     }
 
+    /// From `held` (the live file's lock, if any), rotates as needed and
+    /// returns the lock of the file the append goes to. After a rotation the
+    /// new file's lock is taken and its size, which other writers may have
+    /// grown meanwhile, is checked again before the append.
+    fn lock_for_append(
+        &mut self,
+        incoming_len: u64,
+        mut held: SharedLogLock,
+    ) -> io::Result<SharedLogLock> {
+        for _ in 0..4 {
+            self.rotate_if_needed(incoming_len)?;
+            if held.covers(self.file.as_ref()) {
+                return Ok(held);
+            }
+            drop(held);
+            held = self.lock_live_file();
+        }
+        Ok(held)
+    }
+
     fn rotate_if_needed(&mut self, incoming_len: u64) -> io::Result<()> {
         if self.file.is_none() || self.rotated_by_another_writer() {
             self.open_current_file()?;
         }
-        if self.current_size.saturating_add(incoming_len) <= self.max_bytes {
+        // An empty file is never rotated, even for an entry over the limit.
+        if self.current_size == 0
+            || self.current_size.saturating_add(incoming_len) <= self.max_bytes
+        {
             return Ok(());
         }
         self.rotate_files()?;
@@ -545,10 +561,13 @@ fn list_archives(path: &Path) -> Vec<Archive> {
 fn remove_interrupted_compressions(path: &Path) {
     for (entry, rest) in archive_dir_entries(path) {
         let stem = rest.strip_suffix(ARCHIVE_TMP).and_then(|staged| {
-            staged
-                .split_once(".gz.")
-                .map(|(stem, _)| stem)
-                .or_else(|| staged.strip_suffix(ARCHIVE_GZ))
+            staged.strip_suffix(ARCHIVE_GZ).or_else(|| {
+                let (stem, writer) = staged.split_once(".gz.")?;
+                let (pid, sequence) = writer.split_once('-')?;
+                let numeric =
+                    |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+                (numeric(pid) && numeric(sequence)).then_some(stem)
+            })
         });
         if stem.is_some_and(|stem| archive_time(stem).is_some()) {
             let _ = fs::remove_file(entry);

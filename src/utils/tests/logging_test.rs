@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "logging_lock_test.rs"]
+mod lock_tests;
+
 fn temp_log_path(name: &str) -> PathBuf {
     let unique = format!(
         "bus-logging-tests-{}-{}-{}",
@@ -642,4 +645,50 @@ fn archive_rotation_by_two_writers_keeps_each_line_exactly_once() {
         .filter(|line| kept.matches(line.as_str()).count() != 1)
         .collect();
     assert!(wrong.is_empty(), "lines lost or duplicated: {wrong:?}");
+}
+
+/// A writer waiting on the shared log lock while the holder renames the file
+/// into an archive and starts a new live file must write to the new file once
+/// the lock is released, not into the renamed archive.
+#[test]
+fn archive_writer_waiting_on_the_log_lock_follows_a_rename_by_the_holder() {
+    let path = temp_log_path("lock-wait-follows-rename");
+    let dir = path.parent().unwrap().to_path_buf();
+    let options = LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes: 1024,
+        retention: Retention::Archive(ArchivePolicy {
+            max_age: 24 * HOUR,
+            max_total_bytes: u64::MAX,
+        }),
+        dev: true,
+    };
+    let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    writer.make_writer().write_all(b"OLD;").unwrap();
+
+    let holder = OpenOptions::new().append(true).open(&path).unwrap();
+    holder.lock().unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiting = std::thread::spawn(move || {
+        writer.make_writer().write_all(b"WAITED;").unwrap();
+        done_tx.send(()).unwrap();
+        writer
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    let blocked = done_rx.try_recv().is_err();
+    let archive = archive_path(&path, SystemTime::now());
+    fs::rename(&path, &archive).unwrap();
+    fs::write(&path, "NEW;").unwrap();
+    holder.unlock().unwrap();
+    let finished = done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+    let writer = waiting.join().unwrap();
+
+    let live = fs::read_to_string(&path).unwrap();
+    let renamed = fs::read_to_string(&archive).unwrap_or_default();
+    drop(writer);
+    let _ = fs::remove_dir_all(&dir);
+    assert!(blocked, "the writer must wait for the holder's lock");
+    assert!(finished, "the writer must not stay blocked after release");
+    assert_eq!(live, "NEW;WAITED;", "archive: {renamed:?}");
+    assert_eq!(renamed, "OLD;");
 }
