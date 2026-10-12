@@ -38,9 +38,17 @@ first prompt, draws Codex's `›` composer with its model line below, and keeps
 image paths as text. Each turn shows Codex's
 `• Working (Ns • esc to interrupt)` line over a live composer as soon as the
 prompt is sent, for N seconds with `fake:work N`: a message Bus types in
-meanwhile joins the running turn, and the turn's one reply answers both. The
-fake Cursor is not a delivery target yet: it draws Claude's box and fires no
-hooks, so room prompts to it stay unsent.
+meanwhile joins the running turn, and the turn's one reply answers both.
+
+The fake Cursor answers the same way, the way Bus sees real Cursor: it fires
+every hook in the project's `.cursor/hooks.json` (Bus adds its own after the
+consent form on add), starts its session at launch, draws Cursor's `→`
+composer between half-block borders with the `Plan, search, build anything`
+placeholder, and keeps image paths as text. Each turn shows a
+`⬢ Generating (Ns)` line over a live `Add a follow-up` composer as soon as the
+prompt is sent; with `fake:work N` a message typed in meanwhile joins the
+running turn, as with the fake Codex. It reports the reply with
+`afterAgentResponse`, then a completed `stop`.
 
 The same PATH holds recording stand-ins for `open`, `osascript`,
 `terminal-notifier` and `afplay`, the commands Bus uses on macOS to open links

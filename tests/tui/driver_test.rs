@@ -238,7 +238,18 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
 
 #[test]
 fn a_fake_codex_agent_gets_room_prompts_and_replies() {
-    let session = Session::start("codex");
+    room_prompts_reach_a_fake("codex", ".codex/hooks.json");
+}
+
+#[test]
+fn a_fake_cursor_agent_gets_room_prompts_and_replies() {
+    room_prompts_reach_a_fake("cursor", ".cursor/hooks.json");
+}
+
+/// Adds a fake `provider` worker and sends it room messages: each must be
+/// typed into its composer and settle with its reply.
+fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
+    let session = Session::start(provider);
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
     let work = session_dir(&session.0).join("work");
     let added = scratch_bus(
@@ -251,14 +262,14 @@ fn a_fake_codex_agent_gets_room_prompts_and_replies() {
             "--name",
             "c1",
             "--provider",
-            "codex",
+            provider,
             "--pwd",
             work.to_str().unwrap(),
             "--consent-hooks",
         ],
     );
     assert!(added.status.success(), "{added:?}");
-    assert!(work.join(".codex/hooks.json").is_file());
+    assert!(work.join(hooks).is_file());
     session.ok(&[
         "wait",
         "--state",
@@ -278,17 +289,17 @@ fn a_fake_codex_agent_gets_room_prompts_and_replies() {
         receipt["result"]["message_id"].to_string()
     };
 
-    // Bus types each prompt into the fake's Codex composer; its hooks reply.
-    for text in ["hello codex", "hello again"] {
-        let id = send(text);
+    // Bus types each prompt into the fake's composer; its hooks reply.
+    for text in [format!("hello {provider}"), "hello again".into()] {
+        let id = send(&text);
         let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
         assert!(
             settled.to_string().contains(&format!("fake reply: {text}")),
-            "the fake Codex should answer {text:?}: {settled}"
+            "the fake {provider} should answer {text:?}: {settled}"
         );
     }
 
-    // A message sent while the fake Codex works is typed into its running
+    // A message sent while the fake works is typed into its running
     // turn, whose one reply answers both.
     let lead = send("fake:work 6 long task");
     session.ok(&[

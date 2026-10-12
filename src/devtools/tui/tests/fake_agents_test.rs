@@ -500,7 +500,7 @@ fn the_fake_codex_keeps_image_paths_as_text_and_works_like_codex() {
     let claude = FakeAgent::new("claude", Value::Null);
     assert_eq!(claude.lift(path_line).1, 1);
 
-    let screen = format!("> hey\n{}", working_line(true, 1, 3));
+    let screen = format!("> hey\n{}", working_line("codex", 1, 3));
     let detection = detect_with_osc(
         AgentKind::Codex,
         DetectionInput {
@@ -511,7 +511,7 @@ fn the_fake_codex_keeps_image_paths_as_text_and_works_like_codex() {
     );
     assert!(detection.visible_working, "{screen}");
     assert_eq!(
-        working_line(false, 0, 3),
+        working_line("claude", 0, 3),
         "✻ Working… (3s · esc to interrupt)"
     );
 }
@@ -566,10 +566,10 @@ fn a_working_fake_codex_still_shows_a_composer_bus_can_type_into() {
     screen.feed(prompt_box("hey fake:work 3", "codex", 80).as_bytes());
     // What the fake draws from Enter while its turn works, typing included.
     screen.feed(submitted("hey fake:work 3").as_bytes());
-    screen.feed(working_block(&working_line(true, 0, 0), "", false, 80).as_bytes());
+    screen.feed(working_block(&working_line("codex", 0, 0), "", "codex", false, 80).as_bytes());
     for (frame, shown) in ["s", "st", "steer"].into_iter().enumerate() {
-        let line = working_line(true, frame + 1, 1);
-        screen.feed(working_block(&line, shown, true, 80).as_bytes());
+        let line = working_line("codex", frame + 1, 1);
+        screen.feed(working_block(&line, shown, "codex", true, 80).as_bytes());
     }
     let rows = screen_rows_of(&screen);
     // Codex's spinner alternates `•` and `◦`; Bus's working rule takes both.
@@ -592,8 +592,8 @@ fn a_working_fake_codex_still_shows_a_composer_bus_can_type_into() {
     assert_eq!(composers[0], "› steer");
 
     // The turn ends: its block goes, the steered prompt joins the transcript.
-    let line = working_line(true, 4, 3);
-    screen.feed(work_done(&line, 80).as_bytes());
+    let line = working_line("codex", 4, 3);
+    screen.feed(work_done(&line, "codex", 80).as_bytes());
     screen.feed(submitted("steer").as_bytes());
     screen.feed("• fake reply: hey fake:work 3\r\n  steer\r\n".as_bytes());
     screen.feed(prompt_top("codex").as_bytes());
@@ -611,4 +611,278 @@ fn a_working_fake_codex_still_shows_a_composer_bus_can_type_into() {
     assert_eq!(rows[sent + 2], "• fake reply: hey fake:work 3", "{rows:#?}");
     let composers: Vec<_> = rows.iter().filter(|row| row.starts_with('›')).collect();
     assert_eq!(composers, vec!["› Ask Codex to do anything"], "{rows:#?}");
+}
+
+#[test]
+fn the_fake_cursor_draws_a_cursor_composer_that_bus_can_read() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 12).unwrap();
+    // Bus's Cursor composer reader takes the last `→` (or `>`) line, up to
+    // the `▀` border under it.
+    let composers = |screen: &Screen| -> Vec<String> {
+        screen_rows_of(screen)
+            .into_iter()
+            .filter(|row| row.starts_with('→'))
+            .collect()
+    };
+    for line in 0..30 {
+        screen.feed(format!("transcript {line}\r\n").as_bytes());
+    }
+    screen.feed(prompt_top("cursor-agent").as_bytes());
+    screen.feed(prompt_box("", "cursor-agent", 80).as_bytes());
+    let rows = screen_rows_of(&screen);
+    assert_eq!(
+        composers(&screen),
+        vec!["→ Plan, search, build anything"],
+        "{rows:#?}"
+    );
+    let composer = rows.iter().position(|row| row.starts_with('→')).unwrap();
+    assert!(rows[composer - 1].starts_with(" ▄"), "{rows:#?}");
+    assert!(rows[composer + 1].starts_with(" ▀"), "{rows:#?}");
+    assert!(!rows.iter().any(|row| row.starts_with('❯')), "{rows:#?}");
+
+    for draft in ["h", "he", "hey"] {
+        screen.feed(prompt_box(draft, "cursor-agent", 80).as_bytes());
+    }
+    assert_eq!(composers(&screen), vec!["→ hey"]);
+
+    // While its turn works, Cursor asks for a follow-up under a spinner line
+    // that Bus's Cursor manifest reads as working.
+    screen.feed(submitted("hey fake:work 3").as_bytes());
+    let start = working_line("cursor-agent", 0, 0);
+    screen.feed(working_block(&start, "", "cursor-agent", false, 80).as_bytes());
+    for (frame, shown) in ["", "s", "steer"].into_iter().enumerate() {
+        let line = working_line("cursor-agent", frame + 1, 1);
+        screen.feed(working_block(&line, shown, "cursor-agent", true, 80).as_bytes());
+    }
+    let rows = screen_rows_of(&screen);
+    let working: Vec<_> = rows
+        .iter()
+        .filter(|row| row.contains("Generating ("))
+        .collect();
+    assert_eq!(
+        (working.len(), composers(&screen)),
+        (1, vec!["→ steer".to_owned()]),
+        "{rows:#?}"
+    );
+    let detection = crate::agents::manifest::detect_with_osc(
+        crate::agents::AgentKind::Cursor,
+        crate::agents::manifest::DetectionInput {
+            screen: &rows.join("\n"),
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    assert!(detection.visible_working, "{rows:#?}");
+
+    // The turn ends: its block goes, and the idle composer comes back.
+    screen.feed(work_done(&working_line("cursor-agent", 4, 3), "cursor-agent", 80).as_bytes());
+    screen.feed(submitted("steer").as_bytes());
+    screen.feed("⏺ fake reply: hey fake:work 3\r\n  steer\r\n".as_bytes());
+    screen.feed(prompt_top("cursor-agent").as_bytes());
+    screen.feed(prompt_box("", "cursor-agent", 80).as_bytes());
+    let rows = screen_rows_of(&screen);
+    assert!(
+        !rows.iter().any(|row| row.contains("Generating (")),
+        "{rows:#?}"
+    );
+    let sent = rows
+        .iter()
+        .position(|row| row == "> hey fake:work 3")
+        .unwrap();
+    assert_eq!(rows[sent + 1], "> steer", "{rows:#?}");
+    assert_eq!(
+        composers(&screen),
+        vec!["→ Plan, search, build anything"],
+        "{rows:#?}"
+    );
+}
+
+#[test]
+fn the_fake_cursor_reads_the_hooks_bus_writes_for_its_project() {
+    let project = std::env::temp_dir().join(format!("bus-tui-fake-cursor-{}", std::process::id()));
+    let nested = project.join("crate/src");
+    std::fs::create_dir_all(&nested).unwrap();
+    assert_eq!(hooks_path("cursor-agent", &[], &nested), None);
+    std::fs::create_dir_all(project.join(".cursor")).unwrap();
+    std::fs::write(project.join(".cursor/hooks.json"), "{}").unwrap();
+    assert_eq!(
+        hooks_path("cursor-agent", &[], &nested),
+        Some(project.join(".cursor/hooks.json"))
+    );
+    std::fs::remove_dir_all(&project).unwrap();
+}
+
+#[test]
+fn the_fake_cursor_hooks_decode_as_a_cursor_turn() {
+    use crate::agents::providers::cursor::hooks::parse;
+    use crate::agents::providers::spool::Parsed;
+
+    let agent = FakeAgent::new("cursor-agent", Value::Null);
+    let session = agent.session.clone();
+    let start = agent.payload("sessionStart", None, json!({"source": "startup"}));
+    assert_eq!(
+        parse(&start).unwrap(),
+        Parsed::Session {
+            session: session.clone(),
+            source: Some("startup".into())
+        }
+    );
+    let started = agent.payload("beforeSubmitPrompt", Some("g1"), json!({"prompt": "hey"}));
+    assert_eq!(
+        parse(&started).unwrap(),
+        Parsed::Started {
+            session: session.clone(),
+            turn: "g1".into(),
+            prompt: "hey".into()
+        }
+    );
+    let response = agent.payload(
+        "afterAgentResponse",
+        Some("g1"),
+        json!({"text": "fake reply: hey"}),
+    );
+    assert_eq!(
+        parse(&response).unwrap(),
+        Parsed::Response {
+            session: session.clone(),
+            turn: "g1".into(),
+            text: "fake reply: hey".into()
+        }
+    );
+    // With no transcript to wait for, Bus settles on the hook's own text.
+    assert_eq!(
+        crate::agents::providers::cursor::final_reply::settle_text(&response, false),
+        Ok("fake reply: hey".into())
+    );
+    let stop = agent.payload("stop", Some("g1"), json!({"status": "completed"}));
+    assert_eq!(
+        parse(&stop).unwrap(),
+        Parsed::Completed {
+            session,
+            turn: "g1".into()
+        }
+    );
+    // Cursor keeps a pasted image path as text, as Codex does.
+    let path_line = "\"/tmp/shot.png\"";
+    assert_eq!(agent.lift(path_line), (path_line.to_owned(), 0));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_fake_cursor_fires_bus_hooks_from_a_cursor_hooks_file() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    use crate::agents::providers::ProviderKind;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("bus-tui-fake-cursor-hook-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let delivered = dir.join("delivered.json");
+    // Stands in for the Bus executable named in the hook command.
+    let bus = dir.join("bus");
+    std::fs::write(
+        &bus,
+        format!("#!/bin/sh\ncat > '{}'\n", delivered.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bus, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Cursor's hooks file as Bus writes it: each entry is the command itself.
+    let merged = merge_hooks(
+        json!({}),
+        HookContract::for_provider(ProviderKind::Cursor),
+        &bus,
+    )
+    .unwrap();
+
+    let agent = FakeAgent::new("cursor-agent", merged["hooks"].clone());
+    agent.session_start();
+    let fired = std::fs::read_to_string(&delivered).ok();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let fired: Value =
+        serde_json::from_str(&fired.expect("Bus's sessionStart hook never ran")).unwrap();
+    assert_eq!(fired["hook_event_name"], "sessionStart");
+    assert_eq!(fired["conversation_id"], json!(agent.session));
+}
+
+#[test]
+fn a_fake_cursor_in_a_narrow_pane_reads_idle_once_its_turn_ends() {
+    use crate::devtools::tui::screen::Screen;
+
+    // Narrower than the composer's 60-cell borders, so they wrap.
+    let cols = 50;
+    let mut screen = Screen::new(cols, 30).unwrap();
+    screen.feed(prompt_top("cursor-agent").as_bytes());
+    screen.feed(prompt_box("hey fake:work 3", "cursor-agent", cols).as_bytes());
+    screen.feed(submitted("hey fake:work 3").as_bytes());
+    let start = working_line("cursor-agent", 0, 0);
+    screen.feed(working_block(&start, "", "cursor-agent", false, cols).as_bytes());
+    for frame in 1..4 {
+        let line = working_line("cursor-agent", frame, 1);
+        screen.feed(working_block(&line, "", "cursor-agent", true, cols).as_bytes());
+    }
+    let working = |screen: &Screen| {
+        screen_rows_of(screen)
+            .iter()
+            .filter(|row| row.contains("Generating ("))
+            .count()
+    };
+    assert_eq!(working(&screen), 1, "{:#?}", screen_rows_of(&screen));
+
+    // The turn ends: no working line may outlive it, or Bus reads the idle
+    // fake as still working.
+    screen.feed(work_done(&working_line("cursor-agent", 4, 3), "cursor-agent", cols).as_bytes());
+    screen.feed("⏺ fake reply: hey fake:work 3\r\n".as_bytes());
+    screen.feed(prompt_top("cursor-agent").as_bytes());
+    screen.feed(prompt_box("", "cursor-agent", cols).as_bytes());
+    let rows = screen_rows_of(&screen);
+    let detection = crate::agents::manifest::detect_with_osc(
+        crate::agents::AgentKind::Cursor,
+        crate::agents::manifest::DetectionInput {
+            screen: &rows.join("\n"),
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    assert!(!detection.visible_working, "{rows:#?}");
+    assert_eq!(working(&screen), 0, "{rows:#?}");
+}
+
+#[test]
+fn a_fake_cursor_turn_clears_its_working_line_at_every_pane_width() {
+    use crate::devtools::tui::screen::Screen;
+
+    // Around the 61-cell borders: narrower, exactly as wide, and wider.
+    for cols in 40..=80 {
+        let mut screen = Screen::new(cols, 30).unwrap();
+        screen.feed(prompt_top("cursor-agent").as_bytes());
+        screen.feed(prompt_box("hey fake:work 3", "cursor-agent", cols).as_bytes());
+        screen.feed(submitted("hey fake:work 3").as_bytes());
+        let start = working_line("cursor-agent", 0, 0);
+        screen.feed(working_block(&start, "", "cursor-agent", false, cols).as_bytes());
+        for frame in 1..4 {
+            let line = working_line("cursor-agent", frame, 1);
+            screen.feed(working_block(&line, "steer", "cursor-agent", true, cols).as_bytes());
+        }
+        let rows = screen_rows_of(&screen);
+        let working = rows
+            .iter()
+            .filter(|row| row.contains("Generating ("))
+            .count();
+        assert_eq!(working, 1, "{cols} cols: {rows:#?}");
+        screen
+            .feed(work_done(&working_line("cursor-agent", 4, 3), "cursor-agent", cols).as_bytes());
+        let rows = screen_rows_of(&screen);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains("Generating (") || row.starts_with('→')),
+            "{cols} cols: {rows:#?}"
+        );
+        assert_eq!(
+            rows.iter().rev().find(|row| !row.is_empty()).unwrap(),
+            "> hey fake:work 3",
+            "{cols} cols: {rows:#?}"
+        );
+    }
 }
