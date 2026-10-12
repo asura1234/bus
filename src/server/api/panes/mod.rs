@@ -223,9 +223,7 @@ impl App {
                 && self
                     .terminal_runtimes
                     .get(terminal_id)
-                    .is_some_and(|runtime| {
-                        crate::server::terminals::agents::available_shell_name(runtime).is_some()
-                    });
+                    .is_some_and(crate::server::terminals::agents::runtime_is_idle_shell);
         }
         pane.agent.as_deref() == Some(params.expected_agent.as_str())
             && terminal.agent_name.as_deref() == Some(params.expected_managed_name.as_str())

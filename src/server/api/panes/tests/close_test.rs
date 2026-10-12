@@ -1,5 +1,57 @@
 use super::*;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn guarded_close_preserves_a_released_shell_with_a_running_background_job() {
+    let (mut app, mut params, pane_id, _) = guarded_close_fixture();
+    let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+    let (events, _event_rx) = tokio::sync::mpsc::channel(64);
+    let runtime = crate::terminal::TerminalRuntime::spawn_argv_command(
+        pane_id,
+        24,
+        80,
+        std::env::temp_dir(),
+        &["/bin/sh".into(), "-i".into()],
+        &crate::terminal::runtime::PaneLaunchEnv::default(),
+        crate::terminal::runtime::AgentDetection::Disabled,
+        0,
+        crate::utils::theme::color::TerminalTheme::default(),
+        None,
+        events,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+        std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
+    )
+    .unwrap();
+    let shell_pid = runtime.child_pid().unwrap();
+    runtime
+        .try_send_bytes(bytes::Bytes::from_static(b"sleep 30 &\n"))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let processes = crate::platform::session_processes(shell_pid);
+        if processes.iter().any(|pid| *pid != shell_pid)
+            && crate::server::terminals::agents::available_shell_name(&runtime).is_some()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background job did not start with shell in foreground"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.clear_agent_name();
+    terminal.set_detected_state(None, AgentState::Idle);
+    params.close_exited_shell = true;
+    let response = app.handle_pane_close_if_identity("background".into(), params);
+    assert!(
+        app.state.workspaces[0].pane_state(pane_id).is_some(),
+        "deletion must preserve a released shell running a background job; response: {response}"
+    );
+}
+
 #[test]
 fn guarded_close_rejects_changed_ownership_before_stopping_any_terminal() {
     let (mut app, params, pane_id, other) = guarded_close_fixture();
