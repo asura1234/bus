@@ -265,8 +265,14 @@ impl SessionPaths {
 /// `/tmp` because macOS `$TMPDIR` is long enough to push Bus's sockets past
 /// the `sockaddr_un` limit.
 pub(super) fn driver_root() -> PathBuf {
+    driver_root_for(std::env::var_os(ROOT_ENV))
+}
+
+/// `driver_root` for a given `$BUS_TUI_ROOT` value, so tests can check the
+/// default without depending on the caller's environment.
+pub(super) fn driver_root_for(value: Option<OsString>) -> PathBuf {
     // `bus --dev tui` refuses a malformed override before any verb runs.
-    if let Ok(Some(root)) = root_override() {
+    if let Ok(Some(root)) = parse_root_override(value) {
         return root;
     }
     #[cfg(unix)]
@@ -326,7 +332,11 @@ pub(super) fn process_alive(pid: u32) -> bool {
 /// `$BUS_TUI_ROOT`, when set: refused unless absolute and free of `.` and
 /// `..` components, so it names one directory however much of it exists.
 pub(super) fn root_override() -> Result<Option<PathBuf>, String> {
-    let Some(value) = std::env::var_os(ROOT_ENV) else {
+    parse_root_override(std::env::var_os(ROOT_ENV))
+}
+
+fn parse_root_override(value: Option<OsString>) -> Result<Option<PathBuf>, String> {
+    let Some(value) = value else {
         return Ok(None);
     };
     let root = PathBuf::from(&value);
