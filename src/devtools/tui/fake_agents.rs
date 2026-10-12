@@ -7,8 +7,9 @@
 //! fires Bus's own hooks from the `--settings` file Bus passes it and draws a
 //! Claude-like prompt box. The fake Codex fires the hooks Bus writes to the
 //! project's `.codex/hooks.json`, draws Codex's `›` composer and, like Codex,
-//! starts its session with the first prompt. Both answer every prompt with
-//! `fake reply: <prompt>`.
+//! starts its session with the first prompt. The fake Cursor fires the hooks
+//! Bus writes to the project's `.cursor/hooks.json` and draws Cursor's `→`
+//! composer. All answer every prompt with `fake reply: <prompt>`.
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
 use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
@@ -80,6 +81,7 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
         .unwrap_or(Value::Null);
     let mut agent = FakeAgent::new(provider, hooks);
     // Codex defers SessionStart to its first prompt; Bus delivers to it unbound.
+    // Claude and Cursor start theirs at launch: Bus delivers only to a bound session.
     if !agent.codex() {
         agent.session_start();
     }
@@ -94,16 +96,18 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
 }
 
 /// Where the provider being played reads Bus's hooks: Claude from the
-/// `--settings` file Bus passes it, Codex from the nearest `.codex/hooks.json`
-/// at or above its directory, which Bus writes there before launching it.
+/// `--settings` file Bus passes it, Codex and Cursor from the nearest
+/// `.codex/hooks.json` or `.cursor/hooks.json` at or above its directory,
+/// which Bus writes there before launching it.
 fn hooks_path(provider: &str, args: &[String], cwd: &Path) -> Option<PathBuf> {
-    if provider == "codex" {
-        cwd.ancestors()
-            .map(|dir| dir.join(".codex/hooks.json"))
-            .find(|path| path.is_file())
-    } else {
-        settings_path(args)
-    }
+    let file = match provider {
+        "codex" => ".codex/hooks.json",
+        "cursor-agent" => ".cursor/hooks.json",
+        _ => return settings_path(args),
+    };
+    cwd.ancestors()
+        .map(|dir| dir.join(file))
+        .find(|path| path.is_file())
 }
 
 fn settings_path(args: &[String]) -> Option<PathBuf> {
@@ -120,12 +124,12 @@ struct FakeAgent {
     turns: u64,
     /// Images attached so far; Claude numbers `[Image #N]` across a session.
     images: usize,
-    /// Terminal input, read on its own thread so a Codex turn can take typing.
+    /// Terminal input, read on its own thread so a live turn can take typing.
     input: Option<mpsc::Receiver<Vec<u8>>>,
     /// Bytes of an unfinished input sequence.
     pending: Vec<u8>,
     draft: String,
-    /// While a Codex turn runs: when it started and its spinner frame.
+    /// While a live turn runs: when it started and its spinner frame.
     working: Option<(Instant, usize)>,
 }
 
@@ -154,16 +158,33 @@ impl FakeAgent {
         self.provider == "codex"
     }
 
+    fn cursor(&self) -> bool {
+        self.provider == "cursor-agent"
+    }
+
+    /// Codex and Cursor keep a live composer under their working line, so a
+    /// message typed meanwhile joins the running turn; Claude hides its box.
+    fn live_turn(&self) -> bool {
+        self.codex() || self.cursor()
+    }
+
     /// `payload` for `event` as the played provider reports it. Codex names
     /// its turn `turn_id` (Claude: `prompt_id`) and always names its rollout:
     /// Bus ignores a Codex hook without one as a background session. The path
-    /// is no `rollout-*` file, so Bus reads no usage from it.
+    /// is no `rollout-*` file, so Bus reads no usage from it. Cursor names its
+    /// session `conversation_id` and its turn `generation_id`, and gets no
+    /// transcript: Bus would wait for one to settle the reply.
     fn payload(&self, event: &str, turn: Option<&str>, mut payload: Value) -> Value {
         payload["hook_event_name"] = json!(event);
-        payload["session_id"] = json!(self.session);
+        let (session, turn_key) = match self.provider.as_str() {
+            "codex" => ("session_id", "turn_id"),
+            "cursor-agent" => ("conversation_id", "generation_id"),
+            _ => ("session_id", "prompt_id"),
+        };
+        payload[session] = json!(self.session);
         payload["cwd"] = json!(std::env::current_dir().ok());
         if let Some(turn) = turn {
-            payload[if self.codex() { "turn_id" } else { "prompt_id" }] = json!(turn);
+            payload[turn_key] = json!(turn);
         }
         if self.codex() {
             let rollout = std::env::temp_dir().join(format!("fake-codex-{}.jsonl", self.session));
@@ -175,14 +196,18 @@ impl FakeAgent {
     /// Runs every command hook for `event`, in file order, with its payload on
     /// stdin. A project's `.codex/hooks.json` keeps its own hooks before the
     /// one Bus appends, and Codex runs them all; Claude's `--settings` holds
-    /// only Bus's.
+    /// only Bus's. Claude and Codex nest commands in an entry's `hooks`;
+    /// Cursor's entry is the command itself.
     fn hook(&self, event: &str, turn: Option<&str>, payload: Value) {
         let payload = self.payload(event, turn, payload).to_string();
         let commands = self.hooks[event]
             .as_array()
             .into_iter()
             .flatten()
-            .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten())
+            .flat_map(|entry| match entry["hooks"].as_array() {
+                Some(hooks) => hooks.iter().collect(),
+                None => vec![entry],
+            })
             .filter_map(|hook| hook["command"].as_str());
         for command in commands {
             run_hook(command, &payload);
@@ -190,11 +215,16 @@ impl FakeAgent {
     }
 
     fn session_start(&self) {
-        self.hook("SessionStart", None, json!({"source": "startup"}));
+        let event = if self.cursor() {
+            "sessionStart"
+        } else {
+            "SessionStart"
+        };
+        self.hook(event, None, json!({"source": "startup"}));
     }
 
     /// Draws the prompt under the transcript: Claude's box opens with a rule,
-    /// Codex's composer with a blank row.
+    /// Codex's composer with a blank row, Cursor's with a half-block border.
     fn draw_prompt(&self) {
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", prompt_top(&self.provider));
@@ -203,9 +233,10 @@ impl FakeAgent {
     }
 
     /// The draft as the played provider shows and submits it, with the images
-    /// it lifted: Claude lifts image lines into chips, Codex keeps them as text.
+    /// it lifted: Claude lifts image lines into chips, Codex and Cursor keep
+    /// them as text.
     fn lift(&self, draft: &str) -> (String, usize) {
-        if self.codex() {
+        if self.live_turn() {
             (draft.to_owned(), 0)
         } else {
             lift_images(draft, self.images)
@@ -218,8 +249,8 @@ impl FakeAgent {
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
         let frame = match self.working {
             Some((started, frame)) => {
-                let line = working_line(true, frame, started.elapsed().as_secs());
-                working_block(&line, &shown, true, cols)
+                let line = working_line(&self.provider, frame, started.elapsed().as_secs());
+                working_block(&line, &shown, &self.provider, true, cols)
             }
             None => prompt_box(&shown, &self.provider, cols),
         };
@@ -258,52 +289,66 @@ impl FakeAgent {
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
         let mut prompts = vec![prompt.trim().to_owned()];
-        if self.codex() {
-            // Codex clears its composer and shows its working line at once,
-            // before any hook runs: Bus confirms the submit from that screen.
+        if self.live_turn() {
+            // Codex and Cursor clear the composer and show their working line
+            // at once, before any hook runs: Bus confirms the submit from that
+            // screen.
             self.begin_turn();
-            if self.turns == 1 {
+            if self.codex() && self.turns == 1 {
                 self.session_start();
             }
         }
-        self.hook("UserPromptSubmit", Some(&turn), json!({"prompt": prompt}));
+        let submit = if self.cursor() {
+            "beforeSubmitPrompt"
+        } else {
+            "UserPromptSubmit"
+        };
+        self.hook(submit, Some(&turn), json!({"prompt": prompt}));
         match work_seconds(prompt) {
-            Some(seconds) if self.codex() => match self.work(seconds) {
+            Some(seconds) if self.live_turn() => match self.work(seconds) {
                 Ok(steered) => prompts.extend(steered.iter().map(|p| p.trim().to_owned())),
                 Err(code) => return Some(code),
             },
             Some(seconds) => spin(seconds),
             None => {}
         }
-        if self.codex() {
+        if self.live_turn() {
             self.end_turn(&prompts[1..]);
         }
         let reply = format!("fake reply: {}", prompts.join("\n"));
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();
-        self.hook(
-            "Stop",
-            Some(&turn),
-            json!({"last_assistant_message": reply, "stop_hook_active": false}),
-        );
+        if self.cursor() {
+            // Cursor reports the reply, then a completed stop that Bus settles
+            // it on.
+            self.hook("afterAgentResponse", Some(&turn), json!({"text": reply}));
+            self.hook("stop", Some(&turn), json!({"status": "completed"}));
+        } else {
+            self.hook(
+                "Stop",
+                Some(&turn),
+                json!({"last_assistant_message": reply, "stop_hook_active": false}),
+            );
+        }
         self.draw_prompt();
         None
     }
 
-    /// Starts a Codex turn below the sent prompt: its working line over a
-    /// live composer, as real Codex shows every turn.
+    /// Starts a live turn below the sent prompt: the working line over a
+    /// live composer, as real Codex and Cursor show every turn.
     fn begin_turn(&mut self) {
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
         let (shown, _) = self.lift(&self.draft);
         let mut out = std::io::stdout();
-        let line = working_line(true, 0, 0);
-        let _ = write!(out, "{}", working_block(&line, &shown, false, cols));
+        let line = working_line(&self.provider, 0, 0);
+        let block = working_block(&line, &shown, &self.provider, false, cols);
+        let _ = write!(out, "{block}");
         let _ = out.flush();
         self.working = Some((Instant::now(), 0));
     }
 
-    /// Keeps a Codex turn working until `seconds` after it began, reading
+    /// Keeps a live turn working until `seconds` after it began, reading
     /// input, so Bus can type a steering message into the running turn. Each
     /// prompt entered meanwhile joins the turn, whose one reply answers it
     /// too. Returns those prompts, or the exit code when interrupted.
@@ -336,7 +381,7 @@ impl FakeAgent {
         Ok(steered)
     }
 
-    /// Ends a Codex turn: its working block goes, and the prompts `steered`
+    /// Ends a live turn: its working block goes, and the prompts `steered`
     /// into it join the transcript before the reply.
     fn end_turn(&mut self, steered: &[String]) {
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
@@ -345,7 +390,8 @@ impl FakeAgent {
             .map_or(0, |(started, _)| started.elapsed().as_secs());
         self.working = None;
         let mut out = std::io::stdout();
-        let _ = write!(out, "{}", work_done(&working_line(true, 0, seconds), cols));
+        let line = working_line(&self.provider, 0, seconds);
+        let _ = write!(out, "{}", work_done(&line, &self.provider, cols));
         for prompt in steered {
             let _ = write!(out, "{}", submitted(prompt));
         }
@@ -423,56 +469,81 @@ pub(super) fn kill_line(draft: &mut String) {
 }
 
 /// What opens a new prompt below the transcript, from the start of a line:
-/// a blank row and a rule for Claude Code, one blank row for Codex.
+/// a blank row and a rule for Claude Code, one blank row for Codex, a blank
+/// row and the composer's top border for Cursor.
 fn prompt_top(provider: &str) -> String {
-    if provider == "codex" {
-        "\r\n".into()
-    } else {
-        format!("\r\n{}\r\n", "─".repeat(60))
+    match provider {
+        "codex" => "\r\n".into(),
+        _ => format!("\r\n{}", composer_top(provider)),
+    }
+}
+
+/// The line over the composer itself: Claude's rule, Cursor's half-block
+/// border; Codex draws none.
+fn composer_top(provider: &str) -> String {
+    match provider {
+        "codex" => String::new(),
+        "cursor-agent" => format!(" {}\r\n", "▄".repeat(60)),
+        _ => format!("{}\r\n", "─".repeat(60)),
     }
 }
 
 /// Codex's empty composer text, one Bus reads as an empty composer.
 const CODEX_PLACEHOLDER: &str = "Ask Codex to do anything";
+/// Cursor's empty composer text when idle, and while a turn runs; Bus reads
+/// both as an empty composer.
+const CURSOR_PLACEHOLDER: &str = "Plan, search, build anything";
+const CURSOR_FOLLOW_UP: &str = "Add a follow-up";
 
 /// The prompt box redrawn in place the way the played provider shows a
 /// draft, continuation lines indented under its marker. Claude Code: `❯` over
 /// a rule and its hint, image lines already lifted into leading `[Image #N]`
 /// chips. Codex: a `›` composer with a dim placeholder when empty, then a
 /// blank row and its model line, which is where Bus stops reading the draft.
+/// Cursor: a `→` composer with a dim placeholder when empty, then its
+/// half-block bottom border, where Bus stops reading, and its model line.
 /// It starts and ends with the cursor on the box's first row: moving relative
 /// to the cursor, never to a saved position, keeps the box in place when
 /// drawing it scrolls a full pane. The move counts the rows the box takes on
 /// a `cols`-wide pane, so lines that wrap count too.
 pub(super) fn prompt_box(shown: &str, provider: &str, cols: u16) -> String {
-    let codex = provider == "codex";
-    let (marker, footer) = if codex {
-        (
+    prompt_box_with(shown, provider, CURSOR_PLACEHOLDER, cols)
+}
+
+/// [`prompt_box`], with Cursor's empty composer showing `cursor_placeholder`.
+fn prompt_box_with(shown: &str, provider: &str, cursor_placeholder: &str, cols: u16) -> String {
+    let (marker, footer, empty) = match provider {
+        "codex" => (
             '›',
             [String::new(), format!("  gpt-fake · fake {provider}")],
-        )
-    } else {
-        (
+            Some(CODEX_PLACEHOLDER),
+        ),
+        "cursor-agent" => (
+            '→',
+            [
+                format!(" {}", "▀".repeat(60)),
+                format!("  fake-model · fake {provider}"),
+            ],
+            Some(cursor_placeholder),
+        ),
+        _ => (
             '❯',
             [
                 "─".repeat(60),
                 format!("  ? for shortcuts · fake {provider}"),
             ],
-        )
+            None,
+        ),
     };
-    let placeholder = codex && shown.is_empty();
-    let lines = if placeholder {
-        CODEX_PLACEHOLDER
-    } else {
-        shown
-    };
+    let placeholder = empty.filter(|_| shown.is_empty());
+    let lines = placeholder.unwrap_or(shown);
     let rows = |text: &str| screen_rows(text, cols);
     let draft_rows: usize = lines
         .split('\n')
         .map(|line| rows(&format!("{marker} {line}")))
         .sum();
-    let text = if placeholder {
-        format!("\x1b[2m{CODEX_PLACEHOLDER}\x1b[22m")
+    let text = if let Some(placeholder) = placeholder {
+        format!("\x1b[2m{placeholder}\x1b[22m")
     } else {
         shown.replace('\n', "\r\n  ")
     };
@@ -505,7 +576,8 @@ pub(super) fn screen_rows(text: &str, cols: u16) -> usize {
 /// Replaces the box (the cursor is on its first row) with the submitted
 /// prompt, as Claude Code does. The fake Codex marks it the same way, not with
 /// Codex's `›`: Bus reads the last `›` line on screen as the composer, and the
-/// sent prompt must never be taken for a draft.
+/// sent prompt must never be taken for a draft. The fake Cursor's `>` is one
+/// of Cursor's composer markers, but its live composer always follows below.
 pub(super) fn submitted(prompt: &str) -> String {
     format!("\r\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "))
 }
@@ -543,7 +615,7 @@ fn spin(seconds: u64) {
         let _ = write!(
             out,
             "\r\x1b[2K{}",
-            working_line(false, index, started.elapsed().as_secs())
+            working_line("claude", index, started.elapsed().as_secs())
         );
         let _ = out.flush();
         index += 1;
@@ -553,35 +625,47 @@ fn spin(seconds: u64) {
     let _ = out.flush();
 }
 
-/// Codex's `• Working (3s • esc to interrupt)`, or Claude's `✻ Working… (3s ·
-/// esc to interrupt)`, at spinner `frame`.
-fn working_line(codex: bool, frame: usize, seconds: u64) -> String {
-    if codex {
-        let bullet = ['•', '◦'][frame % 2];
-        format!("{bullet} Working ({seconds}s • esc to interrupt)")
-    } else {
-        let spinner = ['✻', '✶', '✢', '·'][frame % 4];
-        format!("{spinner} Working… ({seconds}s · esc to interrupt)")
+/// Codex's `• Working (3s • esc to interrupt)`, Cursor's `⬢ Generating (3s)`,
+/// or Claude's `✻ Working… (3s · esc to interrupt)`, at spinner `frame`.
+fn working_line(provider: &str, frame: usize, seconds: u64) -> String {
+    match provider {
+        "codex" => {
+            let bullet = ['•', '◦'][frame % 2];
+            format!("{bullet} Working ({seconds}s • esc to interrupt)")
+        }
+        "cursor-agent" => {
+            let hexagon = ['⬢', '⬡'][frame % 2];
+            format!("{hexagon} Generating ({seconds}s)")
+        }
+        _ => {
+            let spinner = ['✻', '✶', '✢', '·'][frame % 4];
+            format!("{spinner} Working… ({seconds}s · esc to interrupt)")
+        }
     }
 }
 
-/// A running Codex turn: the working `line`, a blank row and the live
-/// composer showing `shown`. Drawn first from the start of the line under
-/// the transcript, then `again` in place from the composer's first row,
-/// where it leaves the cursor.
-fn working_block(line: &str, shown: &str, again: bool, cols: u16) -> String {
+/// A running Codex or Cursor turn: the working `line`, a blank row and the
+/// live composer showing `shown` (Cursor's asks for a follow-up). Drawn first
+/// from the start of the line under the transcript, then `again` in place
+/// from the composer's first row, where it leaves the cursor.
+fn working_block(line: &str, shown: &str, provider: &str, again: bool, cols: u16) -> String {
     let back = if again {
-        format!("\x1b[{}A\r\x1b[J", screen_rows(line, cols) + 1)
+        work_done(line, provider, cols)
     } else {
         String::new()
     };
-    format!("{back}{line}\r\n\r\n{}", prompt_box(shown, "codex", cols))
+    format!(
+        "{back}{line}\r\n\r\n{}{}",
+        composer_top(provider),
+        prompt_box_with(shown, provider, CURSOR_FOLLOW_UP, cols)
+    )
 }
 
 /// Clears a running turn's working block, from the composer's first row, so
 /// the transcript continues where its working `line` was.
-fn work_done(line: &str, cols: u16) -> String {
-    format!("\x1b[{}A\r\x1b[J", screen_rows(line, cols) + 1)
+fn work_done(line: &str, provider: &str, cols: u16) -> String {
+    let above = screen_rows(line, cols) + 1 + usize::from(!composer_top(provider).is_empty());
+    format!("\x1b[{above}A\r\x1b[J")
 }
 
 #[derive(Debug, PartialEq, Eq)]
