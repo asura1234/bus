@@ -22,8 +22,27 @@ struct Native(Arc<Mutex<Vec<Method>>>);
 
 impl Transport for Native {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let result = match &method {
+            Method::AgentPromptIfIdle(params) => ResponseResult::AgentPrompted {
+                agent: serde_json::from_value(json!({
+                    "terminal_id": params.expected_terminal_id,
+                    "pane_id": params.expected_pane_id,
+                    "agent": params.expected_agent,
+                    "agent_status": "idle",
+                    "interactive_ready": true,
+                    "workspace_id": "workspace", "tab_id": "tab",
+                    "focused": false, "revision": 1,
+                    "agent_session": {
+                        "source": "bus", "agent": params.expected_agent,
+                        "kind": "id", "value": params.expected_session_id,
+                    },
+                }))
+                .unwrap(),
+            },
+            _ => ResponseResult::Ok {},
+        };
         self.0.lock().unwrap().push(method);
-        Ok(ResponseResult::Ok {})
+        Ok(result)
     }
 }
 

@@ -225,6 +225,8 @@ fn a_turn_with_status_evidence_but_no_start_or_reply_hook_also_closes() {
     let mut fixture = Fixture::new(Provider::Codex);
     let lead = fixture.send("implement the change", false);
     fixture.deliver();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert!(!fixture.request(lead).uncertain_outcome);
     assert!(!fixture.request(lead).trusted_start_bound);
     fixture.status(RuntimeStatus::Working);
     fixture.status(RuntimeStatus::Idle);
