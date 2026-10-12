@@ -250,6 +250,53 @@ fn late_coordinator_focus_cannot_override_a_newer_native_agent_selection() {
 }
 
 #[test]
+fn late_worker_focus_during_rename_still_reasserts_the_open_agent() {
+    use crate::client::compositor::{ClientShellAction, ClientShellInput};
+    for close in [KeyCode::Esc, KeyCode::Enter] {
+        let (mut ui, room, selected) = fixture();
+        let mut snapshot = (*ui.snapshot).clone();
+        let launching = snapshot
+            .state
+            .create_agent(room, "launching", Provider::Codex, "/project".into(), None)
+            .unwrap();
+        ui.receive_snapshot(Arc::new(snapshot));
+        ui.open_terminal(launching);
+        ui.pending.back_mut().unwrap().enqueued = true;
+        bind_pane(&mut ui, selected, "pane_1");
+        ui.open_terminal(selected);
+        let mut shell = shell_with(ui);
+        shell.tick_bus(&mut ClientShellInput::default());
+        key(shell.bus.as_mut().unwrap(), KeyCode::F(2), KeyModifiers::NONE);
+        assert!(shell.bus.as_ref().unwrap().rename.is_some());
+        // The launching agent's worker steals native focus while the field is open.
+        shell
+            .bus
+            .as_mut()
+            .unwrap()
+            .receive_event(BusEvent::TerminalFocused {
+                agent: launching,
+                pane_id: "pane_2".into(),
+            });
+        let mut outcome = ClientShellInput::default();
+        shell.tick_bus(&mut outcome);
+        key(shell.bus.as_mut().unwrap(), close, KeyModifiers::NONE);
+        assert!(shell.bus.as_ref().unwrap().rename.is_none());
+        shell.tick_bus(&mut outcome);
+        assert!(
+            outcome.actions.iter().any(|action| matches!(action,
+                ClientShellAction::Endpoint { request, .. }
+                    if matches!(&request.method, crate::protocol::api::schema::Method::PaneFocus(target)
+                        if target.pane_id == "pane_1")
+            )),
+            "{close:?} must leave native focus on the open agent"
+        );
+        let ui = shell.bus.as_ref().unwrap();
+        assert_eq!(ui.terminal, Some(selected));
+        assert_eq!(ui.target_pane.as_deref(), Some("pane_1"));
+    }
+}
+
+#[test]
 fn native_shell_composes_bus_before_any_server_frame_and_uses_same_resize_geometry() {
     let (ui, _, _) = fixture();
     let mut shell = crate::client::compositor::ClientShellState::new(
