@@ -973,7 +973,7 @@ fn send_async_reports_a_provider_error_with_its_own_code_so_callers_can_retry() 
     let (outcome, lines, _, _) = run_async(&[], [status(vec![failed])]);
     let error = outcome.unwrap_err().to_string();
     assert!(error.contains("Selected model is at capacity."), "{error}");
-    assert_eq!(lines[1]["error"]["code"], "message_provider_error");
+    assert_eq!(lines[0]["error"]["code"], "message_provider_error");
 }
 
 fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {

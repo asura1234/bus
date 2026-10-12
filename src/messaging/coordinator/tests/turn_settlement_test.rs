@@ -477,7 +477,7 @@ fn a_claude_reply_held_past_the_shell_cap_is_delivered_as_its_interim_text() {
         fixture.typed().last().unwrap(),
         &("review the next change".into(), false)
     );
-    assert_eq!(fixture.request(next).phase, RequestPhase::Submitting);
+    assert_eq!(fixture.request(next).phase, RequestPhase::Active);
 }
 
 /// The cap counts from the first hold; a shell finishing wakes a turn that may
