@@ -93,6 +93,34 @@ impl BusState {
         Some(id)
     }
 
+    /// The agent's current request when its turn ended without a reply and
+    /// `settle_ended_request` will close it once the settle window passes.
+    fn settle_candidate(&self, agent: AgentId) -> Option<&Request> {
+        let agent_state = self.agents.get(&agent)?;
+        if agent_state.deletion_pending
+            || agent_state.session_binding_invalidated
+            || agent_state.dialog
+            || agent_state.status != RuntimeStatus::Idle
+        {
+            return None;
+        }
+        let request = self.requests.get(&agent_state.current_request?)?;
+        (!request.awaiting_background
+            && request.pending_final.is_none()
+            && request.turn_ended_at_ms.is_some())
+        .then_some(request)
+    }
+
+    /// Whether `request` (or the turn it joined) ended without a reply and
+    /// awaits settlement, which attaches its reason (a provider error, say).
+    /// Followers wait for that instead of taking the turn as done.
+    pub(crate) fn settling(&self, request: &Request) -> bool {
+        !request.settled()
+            && self
+                .settle_candidate(request.agent_id)
+                .is_some_and(|lead| lead.id == request.group.unwrap_or(request.id))
+    }
+
     /// Run after callback consumption, so a final spooled at the deadline wins.
     /// No reply is invented when capture failed; the sender sees `abandoned`
     /// with a reason: `provider_error: ...` when `provider_error` finds the
@@ -103,20 +131,9 @@ impl BusState {
         now_ms: u64,
         provider_error: impl FnOnce(&Request) -> Option<String>,
     ) -> Option<RequestId> {
-        let agent_state = self.agents.get(&agent)?;
-        if agent_state.deletion_pending
-            || agent_state.session_binding_invalidated
-            || agent_state.dialog
-            || agent_state.status != RuntimeStatus::Idle
-        {
-            return None;
-        }
-        let id = agent_state.current_request?;
-        let request = self.requests.get(&id)?;
-        if request.awaiting_background
-            || request.pending_final.is_some()
-            || now_ms < request.turn_ended_at_ms?.saturating_add(TURN_SETTLE_MS)
-        {
+        let request = self.settle_candidate(agent)?;
+        let id = request.id;
+        if now_ms < request.turn_ended_at_ms?.saturating_add(TURN_SETTLE_MS) {
             return None;
         }
         let provider_error = provider_error(request);

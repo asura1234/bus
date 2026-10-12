@@ -419,6 +419,68 @@ fn a_joined_codex_request_reports_the_provider_error_that_ended_its_turn() {
     );
 }
 
+/// A follower polling message status between a reply-less turn end and its
+/// settlement must not take the turn as done: Bus attaches the provider error
+/// (or `reply_not_captured`) only after the settle window. Live e2e: `send
+/// --async` exited 0 at Idle, 5 s before the provider error was attached.
+#[test]
+fn a_reply_less_ended_turn_reports_settling_until_its_reason_is_attached() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    let joined = fixture.send("check the tests too", false);
+    fixture.deliver();
+    let rollout = fixture.dir.join("rollout-settling.jsonl");
+    std::fs::write(&rollout, json!({"type":"event_msg","payload":{
+        "type":"task_complete","turn_id":"turn-1","error":{"message":"Selected model is at capacity."}
+    }}).to_string()).unwrap();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"check the tests too","transcript_path":rollout}),
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for request in [lead, joined] {
+        let message = fixture.request(request).prompt.id;
+        let status = fixture
+            .worker
+            .control_message_at(message, fixture.now)
+            .unwrap();
+        assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
+        assert_eq!(status["requests"][0]["settling"], true, "{status}");
+    }
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for request in [lead, joined] {
+        let message = fixture.request(request).prompt.id;
+        let status = fixture
+            .worker
+            .control_message_at(message, fixture.now)
+            .unwrap();
+        assert_eq!(status["requests"][0]["stage"], "abandoned", "{status}");
+        assert_eq!(status["requests"][0]["settling"], false, "{status}");
+    }
+}
+
+/// A turn Bus will not settle (its agent went unavailable, as after a
+/// restart) is not settling, so followers still finish on it.
+#[test]
+fn an_ended_turn_whose_agent_is_unavailable_is_not_settling() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Unavailable);
+    let message = fixture.request(lead).prompt.id;
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
+    assert_eq!(status["requests"][0]["settling"], false, "{status}");
+}
+
 const SHELL_HOLD_MS: u64 = 15 * 60 * 1000;
 
 /// Holds `fixture`'s request on one shell its turn started, as Claude reports

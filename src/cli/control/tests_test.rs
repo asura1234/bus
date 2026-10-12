@@ -976,6 +976,53 @@ fn send_async_reports_a_provider_error_with_its_own_code_so_callers_can_retry() 
     assert_eq!(lines[0]["error"]["code"], "message_provider_error");
 }
 
+/// Live e2e: a follower saw the turn end with no reply and exited 0, 5 s
+/// before Bus attached the provider error. A settling turn is not done yet.
+#[test]
+fn async_followers_wait_for_a_settling_turn_and_report_its_provider_error() {
+    let mut settling = recipient(1, "delivered", true);
+    settling["settling"] = json!(true);
+    let mut failed = recipient(1, "abandoned", false);
+    failed["reason"] = json!("provider_error: Selected model is at capacity.");
+    let (outcome, lines, _, _) = run_async(
+        &[],
+        [status(vec![settling.clone()]), status(vec![failed.clone()])],
+    );
+    assert!(outcome.is_err(), "{lines:?}");
+    assert_eq!(lines[0]["error"]["code"], "message_provider_error");
+
+    let mut reads = vec![status(vec![settling]), status(vec![failed])].into_iter();
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            Ok(Response::success(&request.id, reads.next().unwrap()))
+        });
+    assert!(outcome.is_err(), "{response}");
+    assert_eq!(response["error"]["code"], "message_provider_error");
+}
+
+/// #43: an ended turn with no captured reply and no provider error is done
+/// for --async, also once settlement closes it as `reply_not_captured`.
+#[test]
+fn async_followers_finish_a_settled_turn_whose_reply_was_not_captured() {
+    let mut settling = recipient(1, "delivered", true);
+    settling["settling"] = json!(true);
+    let mut closed = recipient(1, "abandoned", false);
+    closed["reason"] = json!("reply_not_captured");
+    let (outcome, lines, _, _) = run_async(
+        &[],
+        [status(vec![settling.clone()]), status(vec![closed.clone()])],
+    );
+    assert!(outcome.is_ok(), "{lines:?}");
+    assert_eq!(lines[0]["result"]["requests"][0]["stage"], "abandoned");
+
+    let mut reads = vec![status(vec![settling]), status(vec![closed])].into_iter();
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            Ok(Response::success(&request.id, reads.next().unwrap()))
+        });
+    assert!(outcome.is_ok(), "{response}");
+}
+
 fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {
     json!({"request_id": 40 + agent, "agent_id": agent, "agent_name": format!("a{agent}"),
         "stage": "stalled", "stalled_from": from, "reason": reason, "turn_ended": turn_ended})

@@ -78,7 +78,13 @@ pub(super) fn follow_message(
 /// any recipient still works, is blocked, or has not started.
 fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
     let requests = status["requests"].as_array()?;
-    if let Some(abandoned) = requests.iter().find(|r| r["stage"] == "abandoned") {
+    // Settlement closes a turn that ended without a captured reply as
+    // `reply_not_captured`; like an ended turn, that is done for --async.
+    let not_captured = |r: &Value| r["stage"] == "abandoned" && r["reason"] == "reply_not_captured";
+    if let Some(abandoned) = requests
+        .iter()
+        .find(|r| r["stage"] == "abandoned" && !not_captured(r))
+    {
         let agent = abandoned["agent_name"].as_str().unwrap_or("unknown");
         // A provider error (say a model at capacity) is worth a retry, so it
         // gets a code of its own.
@@ -103,9 +109,13 @@ fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
         )));
     }
     let ended = |r: &Value| {
-        r["turn_ended"] == true
-            && (r["stage"] == "replied"
-                || !(r["uncertain_outcome"] == true && r["start_bound"] != true))
+        // A settling turn ended without a reply; Bus has yet to attach why.
+        let settling = r["settling"] == true;
+        not_captured(r)
+            || r["turn_ended"] == true
+                && !settling
+                && (r["stage"] == "replied"
+                    || !(r["uncertain_outcome"] == true && r["start_bound"] != true))
     };
     if requests.iter().all(ended) {
         return Some(Ok(()));
