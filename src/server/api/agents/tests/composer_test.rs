@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn codex_approval_with_model_footer_is_not_an_editable_composer() {
+    let screen = "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace";
+    assert_eq!(
+        observe(AgentKind::Codex, screen, "first message"),
+        InputObservation::Unavailable
+    );
+}
+
+#[test]
 fn codex_trust_controls_are_never_owned_composer_input() {
     for screen in [
         "Hooks need review\n3 hooks are new or changed.\n› 1. Review hooks\n2. Trust all and continue\n3. Continue without trusting (hooks won't run)\nPress enter to confirm or esc to go back\n",
@@ -327,5 +336,110 @@ fn current_cursor_composer_uses_an_arrow_prompt_inside_half_block_borders() {
             "from bus"
         ),
         InputObservation::Empty
+    );
+}
+
+#[test]
+fn codex_draft_quoting_approval_footer_text_is_still_our_pending_draft() {
+    for text in [
+        "Reply when you see Allow command? in your pane",
+        "If it says enter to submit answer, stop",
+    ] {
+        let screen = format!("history\n› {text}\n\n  gpt-5.6-sol · /repo");
+        assert_eq!(
+            observe(AgentKind::Codex, &screen, text),
+            InputObservation::Pending,
+            "{screen}"
+        );
+    }
+}
+
+#[test]
+fn codex_draft_with_a_numbered_list_is_still_our_pending_draft() {
+    let text = "1. run the tests\n2. open the PR";
+    let screen = "history\n› 1. run the tests\n  2. open the PR\n\n  gpt-5.6-sol · /repo";
+    assert_eq!(
+        observe(AgentKind::Codex, screen, text),
+        InputObservation::Pending,
+        "{screen}"
+    );
+}
+
+#[test]
+fn claude_draft_quoting_dynamic_workflow_prompt_is_still_our_pending_draft() {
+    let rule = "─".repeat(20);
+    let text = "If you see Run a dynamic workflow? press esc to cancel";
+    let screen = format!("● done\n\n{rule}\n❯\u{a0}{text}\n{rule}\n  ⏵⏵ auto mode on");
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, text),
+        InputObservation::Pending,
+        "{screen}"
+    );
+}
+
+#[tokio::test]
+async fn codex_numbered_list_message_is_submitted_after_its_draft_renders() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    runtime.test_process_pty_bytes("history\r\n›\r\n\r\n  gpt-5.6-sol · /repo".as_bytes());
+    let text = "1. run the tests\n2. open the PR";
+    let completion = runtime
+        .queue_observed_input_submission(
+            bytes::Bytes::from_static(b"1. run the tests\n2. open the PR"),
+            bytes::Bytes::from_static(b"\r"),
+            vec![bytes::Bytes::from_static(b"\x01")],
+            std::time::Duration::ZERO,
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
+            observer(AgentKind::Codex, text.into()),
+        )
+        .unwrap();
+    let paste = tokio::time::timeout(std::time::Duration::from_secs(2), writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(paste.starts_with(b"1. run"), "{paste:?}");
+    runtime.test_process_pty_bytes(
+        "\x1b[2J\x1b[Hhistory\r\n› 1. run the tests\r\n  2. open the PR\r\n\r\n  gpt-5.6-sol · /repo"
+            .as_bytes(),
+    );
+    let enter = tokio::time::timeout(std::time::Duration::from_secs(3), writes.recv()).await;
+    assert!(
+        matches!(&enter, Ok(Some(bytes)) if bytes.as_ref() == b"\r"),
+        "the rendered numbered-list draft must receive Enter: {enter:?}; result {:?}",
+        completion.recv_timeout(std::time::Duration::from_secs(1))
+    );
+    runtime.test_process_pty_bytes(
+        "\x1b[2J\x1b[Hhistory\r\n›\r\n\r\n  gpt-5.6-sol · /repo".as_bytes(),
+    );
+    assert!(completion
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap()
+        .is_ok());
+}
+
+#[test]
+fn claude_transcript_quoting_dynamic_workflow_prompt_leaves_an_empty_composer() {
+    let rule = "─".repeat(20);
+    let screen = format!(
+        "● Claude showed: Run a dynamic workflow? (esc to cancel)\n\n{rule}\n❯\u{a0}\n{rule}\n  ⏵⏵ auto mode on"
+    );
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, ""),
+        InputObservation::Empty,
+        "{screen}"
+    );
+}
+
+#[test]
+fn claude_draft_with_a_numbered_list_is_still_our_pending_draft() {
+    let rule = "─".repeat(20);
+    let text = "1. run the tests\n2. open the PR";
+    let screen = format!(
+        "● done\n\n{rule}\n❯\u{a0}1. run the tests\n  2. open the PR\n{rule}\n  ⏵⏵ auto mode on"
+    );
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, text),
+        InputObservation::Pending,
+        "{screen}"
     );
 }

@@ -52,8 +52,8 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
     );
     // Choosers use the same prompt marker as the composer. Inspect live
     // controls before reading input, including collapsed async questions.
-    if detection.visible_blocker
-        || crate::agents::dialog::parse(screen).is_some()
+    if !composer_frame(kind, &plain)
+        && (detection.visible_blocker || crate::agents::dialog::parse(screen).is_some())
         || kind == AgentKind::Codex && crate::agents::dialog::codex_question_pending(screen)
     {
         return InputObservation::Unavailable;
@@ -80,6 +80,34 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
         InputObservation::Pending
     } else {
         InputObservation::Other
+    }
+}
+
+/// Provider chrome distinguishes editable numbered instructions from chooser
+/// rows, and an empty live composer from quoted blocker text in the transcript.
+fn composer_frame(kind: AgentKind, screen: &str) -> bool {
+    let lines: Vec<_> = screen.lines().map(str::trim).collect();
+    let marker = match kind {
+        AgentKind::Claude => '❯',
+        AgentKind::Codex => '›',
+        _ => return false,
+    };
+    let Some(index) = lines.iter().rposition(|line| line.starts_with(marker)) else {
+        return false;
+    };
+    match kind {
+        AgentKind::Claude => {
+            index > 0
+                && lines[index - 1].starts_with('─')
+                && lines[index + 1..].iter().any(|line| line.starts_with('─'))
+        }
+        AgentKind::Codex => lines[index + 1..]
+            .iter()
+            .take_while(|line| !line.starts_with(['─', '╰', '└', '▀']))
+            .any(|line| {
+                line.starts_with("GPT-") || line.starts_with("gpt-") || *line == "? for shortcuts"
+            }),
+        _ => false,
     }
 }
 
