@@ -422,3 +422,42 @@ mod update_lifecycle_tests {
         );
     }
 }
+
+#[test]
+fn recovered_update_preserves_an_unrelated_error_after_coordinator_restart() {
+    let (mut worker, agent, _, dir, calls) = fixture(Provider::Codex, vec![]);
+    worker
+        .state
+        .observe_update_error(agent, Some("update failed".into()))
+        .unwrap();
+    worker
+        .state
+        .set_agent_error(agent, Some("unrelated delivery error".into()))
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    drop(worker);
+    let info: crate::protocol::api::schema::AgentInfo = serde_json::from_value(json!({
+        "terminal_id":"terminal","pane_id":"pane","agent":"codex","agent_status":"idle",
+        "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session"},
+        "workspace_id":"w1","tab_id":"t1","focused":false,"interactive_ready":true,"revision":1
+    }))
+    .unwrap();
+    let fake = FakeTransport {
+        replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+        calls,
+        state_path: dir.join("state.json"),
+    };
+    let mut reopened = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+    reopened.poll().unwrap();
+    let actual = reopened
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .clone();
+    let update_error = reopened.state.agent(agent).unwrap().update_error.clone();
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(actual.as_deref(), Some("unrelated delivery error"));
+    assert_eq!(update_error, None);
+}
