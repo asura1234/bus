@@ -393,6 +393,15 @@ impl BusState {
         if request.uncertain_outcome && !request.trusted_start_bound {
             return false;
         }
+        // Background work (agents, crons, shells the turn started) will wake
+        // the turn with the real reply, for its joined messages too.
+        let lead = request
+            .group
+            .and_then(|lead| self.requests.get(&lead))
+            .unwrap_or(request);
+        if lead.awaiting_background {
+            return false;
+        }
         // Screen activity alone cannot confirm an uncertain submission;
         // a confirmed write may finish without a captured start hook.
         if !matches!(

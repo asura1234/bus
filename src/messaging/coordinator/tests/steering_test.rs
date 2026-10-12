@@ -520,3 +520,26 @@ fn old_saved_requests_load_without_group_fields() {
         (None, None)
     );
 }
+
+/// `send --async` returns once every recipient's `turn_ended` is true, so a
+/// reply held for shells the request started must not read as an ended turn.
+#[test]
+fn a_claude_reply_held_for_its_own_shells_does_not_report_the_turn_ended() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(
+        json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
+    );
+    fixture.consume();
+    let lead = running(&mut fixture, "run the tests", "turn-1");
+    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1",
+        "last_assistant_message":"Waiting on the background shells.","session_crons":[],
+        "background_tasks":[{"id":"b1","type":"shell","status":"running","description":"Run","command":"sleep 45"}]}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    let status = fixture
+        .worker
+        .control_message(fixture.request(lead).prompt.id)
+        .unwrap();
+    assert_eq!(status["requests"][0]["turn_ended"], false, "{status}");
+}
