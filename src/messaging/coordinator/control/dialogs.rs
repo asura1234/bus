@@ -140,6 +140,9 @@ impl Worker {
     ) -> Result<Value, String> {
         let (room_id, launch_id, terminal_id, pane_id, session_id) = self.dialog_identity(id)?;
         let mut observation = None;
+        let mut awaiting_question = self.state.agent(id).is_some_and(|agent| {
+            agent.dialog_notice.as_deref() == Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID)
+        });
         // Shift+Left is queued once. A redraw can temporarily prevent a coherent
         // snapshot, including on that first read. Retry only that read error,
         // within the same bounded wait, without sending navigation again.
@@ -154,9 +157,12 @@ impl Worker {
                 poll == 0,
             ) {
                 Ok(current) => {
-                    let pending = current.pending_question;
+                    awaiting_question |= current.pending_question;
+                    let settled = current.dialog.is_some() || !awaiting_question;
                     observation = Some(current);
-                    if !pending {
+                    // Removing the collapsed queue can precede drawing its
+                    // question. An empty intermediate frame is not settlement.
+                    if settled {
                         break;
                     }
                 }

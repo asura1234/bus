@@ -374,3 +374,32 @@ async fn codex_queued_question_native_controls_are_guarded_and_answer_focused_ot
     assert!(!stale.written);
     assert!(writes.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn dialog_observation_rejects_frames_inside_synchronized_output() {
+    let (mut app, _) = app_with_dialog(CLAUDE_BASH_DIALOG, None);
+    assert!(observe_dialog(&mut app).dialog.is_some());
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    // A provider starts an atomic redraw, clears its panel, then pauses
+    // before drawing the replacement and ending the synchronized update.
+    runtime.test_process_pty_bytes(b"\x1b[?2026h\x1b[2J\x1b[H");
+    assert!(runtime.synchronized_output_active());
+    let response = app.handle_agent_dialog_observe(
+        "mid-update".into(),
+        crate::protocol::api::schema::AgentDialogObserveParams {
+            target: "reviewer".into(),
+            open_pending_question: false,
+        },
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        response["error"]["code"], "dialog_observation_unavailable",
+        "{response}"
+    );
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.test_process_pty_bytes(CLAUDE_BASH_DIALOG);
+    runtime.test_process_pty_bytes(b"\x1b[?2026l");
+    assert!(!runtime.synchronized_output_active());
+    assert!(observe_dialog(&mut app).dialog.is_some());
+}

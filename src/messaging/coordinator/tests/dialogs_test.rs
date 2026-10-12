@@ -919,6 +919,59 @@ fn collapsed_question_inspection_waits_past_a_torn_frame_without_repeating_notic
         "a torn frame ended inspection with dialog={}; the opened question notified again",
         observed["dialog"]
     );
+    assert!(observed["fingerprint"].is_string());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn collapsed_question_inspection_bounds_the_wait_for_an_empty_replacement_frame() {
+    struct EmptyAfterOpen {
+        inner: CollapsedCodexQuestion,
+        observes: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Transport for EmptyAfterOpen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::AgentDialogObserve(params) = &method {
+                self.observes
+                    .lock()
+                    .unwrap()
+                    .push(params.open_pending_question);
+                let response = self.inner.request(method)?;
+                let ResponseResult::AgentDialog { mut observation } = response else {
+                    panic!("dialog response");
+                };
+                observation.pending_question = false;
+                observation.dialog = None;
+                return Ok(ResponseResult::AgentDialog { observation });
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let observes = Arc::default();
+    worker.transport = Box::new(EmptyAfterOpen {
+        inner: CollapsedCodexQuestion(Arc::default()),
+        observes: Arc::clone(&observes),
+    });
+    polls(&mut worker, 3);
+    let notice = worker.state.agent(agent).unwrap().dialog_notice.clone();
+    assert_eq!(
+        notice.as_deref(),
+        Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID)
+    );
+    let observed = worker.observe_dialog(agent).unwrap();
+    assert!(observed["dialog"].is_null());
+    assert!(observed["fingerprint"].is_null());
+    let observes = observes.lock().unwrap();
+    assert_eq!(
+        observes.len(),
+        21,
+        "pending episode waits through the full bound even if the opening read is empty"
+    );
+    assert_eq!(observes.iter().filter(|open| **open).count(), 1);
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, notice);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
