@@ -24,15 +24,42 @@ pub(crate) fn codex_rollout_path(value: &Value) -> Option<&Path> {
 /// undocumented: windows are classified by duration because Codex may put
 /// the weekly window in either slot. `Ok(None)` means none were found.
 pub(crate) fn read_codex_rollout(path: &Path) -> std::io::Result<Option<UsageWindows>> {
+    Ok(read_rollout_tail(path)?
+        .lines()
+        .rev()
+        .find_map(codex_rate_limits))
+}
+
+/// A partial first line from the seek simply fails to parse.
+fn read_rollout_tail(path: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
     let start = length.saturating_sub(ROLLOUT_TAIL_BYTES);
     file.seek(SeekFrom::Start(start))?;
     let mut tail = Vec::new();
     file.take(ROLLOUT_TAIL_BYTES).read_to_end(&mut tail)?;
-    let tail = String::from_utf8_lossy(&tail);
-    // A partial first line from the seek simply fails to parse.
-    Ok(tail.lines().rev().find_map(codex_rate_limits))
+    Ok(String::from_utf8_lossy(&tail).into_owned())
+}
+
+/// The error that ended Codex turn `turn_id`, from its `task_complete`
+/// event. Codex fires no Stop hook for such turns.
+pub(crate) fn read_codex_turn_error(path: &Path, turn_id: &str) -> std::io::Result<Option<String>> {
+    let tail = read_rollout_tail(path)?;
+    Ok(tail.lines().rev().find_map(|line| {
+        let event: Value = serde_json::from_str(line).ok()?;
+        let payload = &event["payload"];
+        if event["type"] != "event_msg"
+            || payload["type"] != "task_complete"
+            || payload["turn_id"] != turn_id
+        {
+            return None;
+        }
+        let message = payload["error"]["message"].as_str()?;
+        Some(match payload["error"]["codex_error_info"].as_str() {
+            Some(code) => format!("{message} ({code})"),
+            None => message.to_owned(),
+        })
+    }))
 }
 
 fn codex_rate_limits(line: &str) -> Option<UsageWindows> {

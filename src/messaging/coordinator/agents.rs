@@ -32,6 +32,7 @@ impl Worker {
         state.delete_agent(id).map_err(|e| e.to_string())?;
         self.save(state)?;
         self.branch_checks.remove(&id);
+        self.codex_rollouts.remove(&id);
         self.finish_deletion(left_open, events);
         Ok(())
     }
@@ -56,6 +57,7 @@ impl Worker {
         self.save(state)?;
         for agent in agents {
             self.branch_checks.remove(&agent);
+            self.codex_rollouts.remove(&agent);
         }
         self.finish_deletion(left_open, events);
         Ok(())

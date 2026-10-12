@@ -37,6 +37,9 @@ pub(super) struct Worker {
     pub(super) control_receipt_retention: Duration,
     /// Provider allowance for dev `state`; in memory only, never persisted.
     pub(super) usage: usage::Usage,
+    /// Each Codex agent's rollout, from its hooks. A turn that a provider
+    /// error ended fires no Stop hook; only the rollout records why.
+    pub(super) codex_rollouts: BTreeMap<AgentId, PathBuf>,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
@@ -89,6 +92,7 @@ impl Worker {
             control_receipt_bytes: 0,
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
+            codex_rollouts: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
         })
@@ -290,7 +294,16 @@ impl Worker {
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
         for (agent, observed_at_ms) in agents {
-            changed |= state.settle_ended_request(agent, observed_at_ms).is_some();
+            let rollout = self.codex_rollouts.get(&agent);
+            let provider_error = |request: &crate::messaging::model::Request| {
+                let turn = request.provider_turn_id.as_deref()?;
+                crate::agents::providers::codex::usage::read_codex_turn_error(rollout?, turn)
+                    .ok()
+                    .flatten()
+            };
+            changed |= state
+                .settle_ended_request(agent, observed_at_ms, provider_error)
+                .is_some();
         }
         if changed {
             self.save(state)?;

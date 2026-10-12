@@ -244,3 +244,51 @@ fn a_turn_with_status_evidence_but_no_start_or_reply_hook_also_closes() {
         .latest_replies
         .is_empty());
 }
+
+#[test]
+fn a_codex_turn_that_ended_on_a_provider_error_reports_that_error() {
+    // Live: Codex fires no Stop hook when "Selected model is at capacity"
+    // ends a turn; only its rollout's task_complete event carries the error.
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-2026-10-12T00-00-00-abc.jsonl");
+    std::fs::write(
+        &rollout,
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":null,
+            "error":{"message":"Selected model is at capacity. Please try a different model.","codex_error_info":"server_overloaded"}}})
+        .to_string() + "\n",
+    )
+    .unwrap();
+    let lead = fixture.send("implement the change", false);
+    fixture.deliver();
+    fixture.record(json!({"hook_event_name":"UserPromptSubmit","session_id":"session","turn_id":"turn-1","prompt":"implement the change","transcript_path":rollout}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let request = fixture.request(lead);
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    let expected = "provider_error: Selected model is at capacity. Please try a different model. (server_overloaded)";
+    assert_eq!(request.failure_reason.as_deref(), Some(expected));
+    assert!(fixture
+        .error()
+        .unwrap()
+        .contains("Selected model is at capacity"));
+}
+
+#[test]
+fn a_turn_closed_without_a_reply_or_provider_error_says_so_in_its_reason() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let request = fixture.request(lead);
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request.failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+}

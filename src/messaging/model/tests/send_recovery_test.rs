@@ -189,7 +189,7 @@ fn a_rejected_steering_write_preserves_the_original_turn_end_evidence() {
         "rejecting a correction must preserve the original request's observed work"
     );
     assert_eq!(
-        state.settle_ended_request(agent, 13 + TURN_SETTLE_MS),
+        state.settle_ended_request(agent, 13 + TURN_SETTLE_MS, |_| None),
         Some(lead)
     );
     assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Abandoned);

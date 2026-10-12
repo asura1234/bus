@@ -75,3 +75,38 @@ fn only_absolute_codex_rollout_paths_are_read() {
         );
     }
 }
+
+fn task_complete(turn: &str, error: Value) -> String {
+    json!({"timestamp":"2026-10-12T13:02:52.716Z","type":"event_msg",
+        "payload":{"type":"task_complete","turn_id":turn,"last_agent_message":null,"error":error}})
+    .to_string()
+}
+
+#[test]
+fn rollout_reports_the_error_that_ended_a_given_codex_turn() {
+    let dir = std::env::temp_dir().join(format!(
+        "bus-turn-error-{}-{}",
+        std::process::id(),
+        bus_io::now_ns()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rollout-2026-10-12T00-00-00-abc.jsonl");
+    let capacity = json!({"message":"Selected model is at capacity. Please try a different model.",
+        "codex_error_info":"server_overloaded"});
+    let lines = [
+        // A partial first line, as after the tail seek, is skipped.
+        "\"payload\":{\"type\":\"task_complete\"".to_owned(),
+        task_complete("turn-1", capacity.clone()),
+        task_complete("turn-2", Value::Null),
+        task_complete("turn-3", capacity),
+    ];
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    assert_eq!(
+        read_codex_turn_error(&path, "turn-1").unwrap().as_deref(),
+        Some("Selected model is at capacity. Please try a different model. (server_overloaded)")
+    );
+    assert_eq!(read_codex_turn_error(&path, "turn-2").unwrap(), None);
+    assert_eq!(read_codex_turn_error(&path, "turn-9").unwrap(), None);
+    assert!(read_codex_turn_error(&dir.join("missing.jsonl"), "turn-1").is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}

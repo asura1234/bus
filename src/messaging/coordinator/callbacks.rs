@@ -653,10 +653,15 @@ impl Worker {
             ControlFlow::Continue(state) => state,
             ControlFlow::Break(flow) => return Ok(flow),
         };
-        if record.manifest.provider == Provider::Codex && matches!(parsed, Parsed::Final { .. }) {
-            *rollout = crate::agents::providers::codex::usage::codex_rollout_path(&record.value)
-                .map(Path::to_path_buf)
-                .or(rollout.take());
+        if record.manifest.provider == Provider::Codex {
+            if let Some(path) =
+                crate::agents::providers::codex::usage::codex_rollout_path(&record.value)
+            {
+                self.codex_rollouts.insert(id, path.to_path_buf());
+                if matches!(parsed, Parsed::Final { .. }) {
+                    *rollout = Some(path.to_path_buf());
+                }
+            }
         }
         let (mut state, callback, remove) =
             match self.callback_from_record(id, state, path, record, records, parsed)? {

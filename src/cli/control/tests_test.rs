@@ -966,6 +966,16 @@ fn send_async_fails_when_a_request_is_abandoned() {
     assert_eq!(lines[0]["result"]["requests"][1]["stage"], "abandoned");
 }
 
+#[test]
+fn send_async_reports_a_provider_error_with_its_own_code_so_callers_can_retry() {
+    let mut failed = recipient(2, "abandoned", false);
+    failed["reason"] = json!("provider_error: Selected model is at capacity.");
+    let (outcome, lines, _, _) = run_async(&[], [status(vec![failed])]);
+    let error = outcome.unwrap_err().to_string();
+    assert!(error.contains("Selected model is at capacity."), "{error}");
+    assert_eq!(lines[1]["error"]["code"], "message_provider_error");
+}
+
 fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {
     json!({"request_id": 40 + agent, "agent_id": agent, "agent_name": format!("a{agent}"),
         "stage": "stalled", "stalled_from": from, "reason": reason, "turn_ended": turn_ended})

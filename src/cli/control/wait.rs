@@ -79,12 +79,26 @@ pub(super) fn follow_message(
 fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
     let requests = status["requests"].as_array()?;
     if let Some(abandoned) = requests.iter().find(|r| r["stage"] == "abandoned") {
+        let agent = abandoned["agent_name"].as_str().unwrap_or("unknown");
+        // A provider error (say a model at capacity) is worth a retry, so it
+        // gets a code of its own.
+        if let Some(error) = abandoned["reason"]
+            .as_str()
+            .and_then(|reason| reason.strip_prefix("provider_error: "))
+        {
+            return Some(Err((
+                "message_provider_error",
+                format!(
+                    "The provider ended agent {agent}'s turn on message {} with an error: {error}",
+                    status["message_id"],
+                ),
+            )));
+        }
         return Some(Err((
             "message_abandoned",
             format!(
-                "Bus abandoned message {} for agent {}; inspect message status and the agent's terminal",
+                "Bus abandoned message {} for agent {agent}; inspect message status and the agent's terminal",
                 status["message_id"],
-                abandoned["agent_name"].as_str().unwrap_or("unknown"),
             ),
         )));
     }
