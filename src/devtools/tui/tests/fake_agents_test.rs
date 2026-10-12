@@ -804,3 +804,46 @@ fn the_fake_cursor_fires_bus_hooks_from_a_cursor_hooks_file() {
     assert_eq!(fired["hook_event_name"], "sessionStart");
     assert_eq!(fired["conversation_id"], json!(agent.session));
 }
+
+#[test]
+fn a_fake_cursor_in_a_narrow_pane_reads_idle_once_its_turn_ends() {
+    use crate::devtools::tui::screen::Screen;
+
+    // Narrower than the composer's 60-cell borders, so they wrap.
+    let cols = 50;
+    let mut screen = Screen::new(cols, 30).unwrap();
+    screen.feed(prompt_top("cursor-agent").as_bytes());
+    screen.feed(prompt_box("hey fake:work 3", "cursor-agent", cols).as_bytes());
+    screen.feed(submitted("hey fake:work 3").as_bytes());
+    let start = working_line("cursor-agent", 0, 0);
+    screen.feed(working_block(&start, "", "cursor-agent", false, cols).as_bytes());
+    for frame in 1..4 {
+        let line = working_line("cursor-agent", frame, 1);
+        screen.feed(working_block(&line, "", "cursor-agent", true, cols).as_bytes());
+    }
+    let working = |screen: &Screen| {
+        screen_rows_of(screen)
+            .iter()
+            .filter(|row| row.contains("Generating ("))
+            .count()
+    };
+    assert_eq!(working(&screen), 1, "{:#?}", screen_rows_of(&screen));
+
+    // The turn ends: no working line may outlive it, or Bus reads the idle
+    // fake as still working.
+    screen.feed(work_done(&working_line("cursor-agent", 4, 3), "cursor-agent", cols).as_bytes());
+    screen.feed("⏺ fake reply: hey fake:work 3\r\n".as_bytes());
+    screen.feed(prompt_top("cursor-agent").as_bytes());
+    screen.feed(prompt_box("", "cursor-agent", cols).as_bytes());
+    let rows = screen_rows_of(&screen);
+    let detection = crate::agents::manifest::detect_with_osc(
+        crate::agents::AgentKind::Cursor,
+        crate::agents::manifest::DetectionInput {
+            screen: &rows.join("\n"),
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    assert!(!detection.visible_working, "{rows:#?}");
+    assert_eq!(working(&screen), 0, "{rows:#?}");
+}

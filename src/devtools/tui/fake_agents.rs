@@ -577,7 +577,8 @@ pub(super) fn screen_rows(text: &str, cols: u16) -> usize {
 /// prompt, as Claude Code does. The fake Codex marks it the same way, not with
 /// Codex's `›`: Bus reads the last `›` line on screen as the composer, and the
 /// sent prompt must never be taken for a draft. The fake Cursor's `>` is one
-/// of Cursor's composer markers, but its live composer always follows below.
+/// of Cursor's composer markers; its live composer follows below, except
+/// while the hooks of a finished turn run, before the idle composer is drawn.
 pub(super) fn submitted(prompt: &str) -> String {
     format!("\r\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "))
 }
@@ -664,7 +665,12 @@ fn working_block(line: &str, shown: &str, provider: &str, again: bool, cols: u16
 /// Clears a running turn's working block, from the composer's first row, so
 /// the transcript continues where its working `line` was.
 fn work_done(line: &str, provider: &str, cols: u16) -> String {
-    let above = screen_rows(line, cols) + 1 + usize::from(!composer_top(provider).is_empty());
+    // Cursor's border wraps in a pane narrower than it, so count its rows.
+    let top = match composer_top(provider) {
+        top if top.is_empty() => 0,
+        top => screen_rows(top.trim_end_matches("\r\n"), cols),
+    };
+    let above = screen_rows(line, cols) + 1 + top;
     format!("\x1b[{above}A\r\x1b[J")
 }
 
