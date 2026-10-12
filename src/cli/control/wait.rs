@@ -212,8 +212,8 @@ pub(super) fn execute(
         {
             return dialog_response(&id, response.result);
         }
-        // A stalled message will not complete by waiting longer.
-        if let Some((code, message)) = stalled(&response.result, |_| true) {
+        // Bounded waits need the captured reply; async waits use async_outcome above.
+        if let Some((code, message)) = deadline.and_then(|_| stalled(&response.result, |_| true)) {
             let mut failure = Response::failure(&id, code, message);
             failure.result = response.result;
             return failure;

@@ -1738,3 +1738,25 @@ fn wait_async_and_send_async_agree_on_invalidated_joined_stalls() {
     assert_eq!(response["error"]["code"], sent.error.unwrap().code);
     assert_eq!(response["result"], sent.result);
 }
+
+#[test]
+fn wait_async_ignores_finished_stalls_while_other_recipients_work() {
+    let mut finished = recipient(1, "stalled", true);
+    finished["stalled_from"] = json!("delivered");
+    finished["reason"] = json!("transcript_unmatched");
+    let mut reads = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            reads += 1;
+            assert!(reads <= 2);
+            Ok(Response::success(
+                &request.id,
+                status(vec![
+                    finished.clone(),
+                    recipient(2, "delivered", reads == 2),
+                ]),
+            ))
+        });
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 2);
+}
