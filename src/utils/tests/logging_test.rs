@@ -547,7 +547,7 @@ fn archive_prewrite_check_preserves_lines_if_rotation_happens_before_append() {
     // append) with another writer scheduled between preflight and append.
     // Holding this writer's mutex does not lock the other writer's state.
     let mut state = other.state.lock().unwrap();
-    let shared = state.lock_live_file();
+    let shared = state.lock_live_file().unwrap();
     state.rotate_if_needed(b"OTHER_LINE".len() as u64).unwrap();
     let rotating_write = std::thread::spawn(move || {
         rotating.make_writer().write_all(b"BBBBBBBB").unwrap();
@@ -691,4 +691,35 @@ fn archive_writer_waiting_on_the_log_lock_follows_a_rename_by_the_holder() {
     assert!(finished, "the writer must not stay blocked after release");
     assert_eq!(live, "NEW;WAITED;", "archive: {renamed:?}");
     assert_eq!(renamed, "OLD;");
+}
+
+/// An entry larger than the size limit rotates a non-empty log once and is
+/// then written whole to the fresh file, never rotated again or dropped.
+#[test]
+fn archive_oversized_entry_rotates_once_and_is_kept_whole() {
+    let path = temp_log_path("archive-oversized-entry");
+    let dir = path.parent().unwrap().to_path_buf();
+    let options = LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes: 8,
+        retention: Retention::Archive(ArchivePolicy {
+            max_age: 24 * HOUR,
+            max_total_bytes: u64::MAX,
+        }),
+        dev: true,
+    };
+    let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    writer.make_writer().write_all(b"OVERSIZED-FIRST").unwrap();
+    writer.make_writer().write_all(b"OVERSIZED-SECOND").unwrap();
+    wait_for_compressed_archives(&dir);
+
+    let live = fs::read_to_string(&path).unwrap();
+    let kept: Vec<String> = archives(&dir)
+        .iter()
+        .map(|name| gunzip(&dir.join(name)))
+        .collect();
+    drop(writer);
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(live, "OVERSIZED-SECOND");
+    assert_eq!(kept, ["OVERSIZED-FIRST"]);
 }

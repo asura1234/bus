@@ -190,8 +190,7 @@ impl Write for RotatingFileGuard {
         }
         // Held across check, rotation and append so no other process sharing
         // this log renames it or appends to it in between.
-        let held = state.lock_live_file();
-        let Ok(_shared) = state.lock_for_append(buf.len() as u64, held) else {
+        let Ok(_shared) = state.lock_for_append(buf.len() as u64, SharedLogLock(None)) else {
             state.disabled = true;
             return Ok(buf.len());
         };
@@ -247,22 +246,23 @@ struct RotatingFileState {
 struct SharedLogLock(Option<File>);
 
 impl SharedLogLock {
-    /// Whether this lock is on `file`'s inode (always true when unlocked).
+    /// Whether this is a held lock on `file`'s inode; no lock covers nothing.
     #[cfg(unix)]
     fn covers(&self, file: Option<&File>) -> bool {
         use std::os::unix::fs::MetadataExt;
         let (Some(lock), Some(file)) = (&self.0, file) else {
-            return true;
+            return false;
         };
         match (lock.metadata(), file.metadata()) {
             (Ok(lock), Ok(file)) => (lock.dev(), lock.ino()) == (file.dev(), file.ino()),
-            _ => true,
+            _ => false,
         }
     }
 
+    /// Without inode identity, a held lock is on the file it was cloned from.
     #[cfg(not(unix))]
-    fn covers(&self, _file: Option<&File>) -> bool {
-        true
+    fn covers(&self, file: Option<&File>) -> bool {
+        self.0.is_some() && file.is_some()
     }
 }
 
@@ -275,55 +275,58 @@ impl Drop for SharedLogLock {
 }
 
 impl RotatingFileState {
-    /// Archive mode: blocks until this process holds the lock of the file
-    /// that is live at the log path, following renames by other writers, and
-    /// counts the bytes they appended. Other modes and failures return no lock.
-    fn lock_live_file(&mut self) -> SharedLogLock {
-        if !matches!(self.retention, Retention::Archive(_)) {
-            return SharedLogLock(None);
-        }
-        for _ in 0..4 {
-            if (self.file.is_none() || self.rotated_by_another_writer())
-                && self.open_current_file().is_err()
-            {
-                break;
+    /// Blocks until this process holds the lock of the file that is live at
+    /// the log path, following renames by other writers, and counts the bytes
+    /// they appended. Errors only on I/O failure, never with the file unlocked.
+    fn lock_live_file(&mut self) -> io::Result<SharedLogLock> {
+        loop {
+            if self.file.is_none() || self.rotated_by_another_writer() {
+                self.open_current_file()?;
             }
-            let Some(lock) = self.file.as_ref().and_then(|file| file.try_clone().ok()) else {
-                break;
-            };
-            if lock.lock().is_err() {
-                break;
-            }
+            let lock = self
+                .file
+                .as_ref()
+                .ok_or_else(|| io::Error::other("log file is not open"))?
+                .try_clone()?;
+            lock.lock()?;
             let lock = SharedLogLock(Some(lock));
             // Another writer may have renamed the file while this one waited.
             if !self.rotated_by_another_writer() {
-                if let Some(meta) = self.file.as_ref().and_then(|file| file.metadata().ok()) {
-                    self.current_size = meta.len();
+                if let Some(file) = self.file.as_ref() {
+                    self.current_size = file.metadata()?.len();
                 }
-                return lock;
+                return Ok(lock);
             }
         }
-        SharedLogLock(None)
     }
 
-    /// From `held` (the live file's lock, if any), rotates as needed and
-    /// returns the lock of the file the append goes to. After a rotation the
-    /// new file's lock is taken and its size, which other writers may have
-    /// grown meanwhile, is checked again before the append.
+    /// Returns the permission to append `incoming_len` bytes. In archive mode
+    /// that is the lock of the live file, granted only once its refreshed size
+    /// admits the entry (or it is empty), rotating under the lock as needed:
+    /// starting from `held`, it relocks until both hold. Other writers'
+    /// rotations are the only reason to loop, so it ends once one admits it.
     fn lock_for_append(
         &mut self,
         incoming_len: u64,
         mut held: SharedLogLock,
     ) -> io::Result<SharedLogLock> {
-        for _ in 0..4 {
+        if !matches!(self.retention, Retention::Archive(_)) {
             self.rotate_if_needed(incoming_len)?;
-            if held.covers(self.file.as_ref()) {
+            return Ok(held);
+        }
+        loop {
+            if !held.covers(self.file.as_ref()) || self.rotated_by_another_writer() {
+                drop(held);
+                held = self.lock_live_file()?;
+            }
+            if self.current_size == 0
+                || self.current_size.saturating_add(incoming_len) <= self.max_bytes
+            {
                 return Ok(held);
             }
-            drop(held);
-            held = self.lock_live_file();
+            self.rotate_files()?;
+            self.open_current_file()?;
         }
-        Ok(held)
     }
 
     fn rotate_if_needed(&mut self, incoming_len: u64) -> io::Result<()> {

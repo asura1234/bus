@@ -2,6 +2,54 @@ use super::super::*;
 use super::temp_log_path;
 
 #[test]
+fn contending_archive_writers_keep_the_active_file_within_budget() {
+    let path = temp_log_path("contending-active-budget");
+    let dir = path.parent().unwrap().to_path_buf();
+    let options = LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes: 16,
+        retention: Retention::Archive(ArchivePolicy {
+            max_age: Duration::from_secs(86400),
+            max_total_bytes: u64::MAX,
+        }),
+        dev: true,
+    };
+    let writers: Vec<_> = (0..8)
+        .map(|_| RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap())
+        .collect();
+    let barrier = Arc::new(std::sync::Barrier::new(writers.len()));
+    let workers: Vec<_> = writers
+        .into_iter()
+        .map(|writer| {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                let mut oversized = Vec::new();
+                for _ in 0..100 {
+                    writer.make_writer().write_all(b"12345678").unwrap();
+                    if let Ok(meta) = fs::metadata(&path) {
+                        if meta.len() > 16 {
+                            oversized.push(meta.len());
+                        }
+                    }
+                }
+                oversized
+            })
+        })
+        .collect();
+    let oversized: Vec<_> = workers
+        .into_iter()
+        .flat_map(|worker| worker.join().unwrap())
+        .collect();
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        oversized.is_empty(),
+        "active sizes above budget 16: {oversized:?}"
+    );
+}
+
+#[test]
 fn rotation_handoff_rechecks_replacement_size_before_append() {
     let path = temp_log_path("replacement-lock-size");
     let dir = path.parent().unwrap().to_path_buf();
@@ -19,7 +67,7 @@ fn rotation_handoff_rechecks_replacement_size_before_append() {
     let mut state = writer.state.lock().unwrap();
     // The production write phases release the old inode's lock and acquire
     // the replacement's. A new client can fill the replacement in that gap.
-    let shared = state.lock_live_file();
+    let shared = state.lock_live_file().unwrap();
     state.rotate_if_needed(8).unwrap();
     assert!(!shared.covers(state.file.as_ref()));
     let newcomer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
