@@ -147,6 +147,16 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
             return Ok(());
         }
+        // The perf reader only reads files: it must not wait to record the session.
+        Action::Control(args) if args.first().is_some_and(|arg| arg == "perf") => {
+            match explicit_root {
+                Some(root) => (root, None),
+                None => {
+                    let session = registry.last().map_err(io::Error::other)?;
+                    (session.root, Some(session.id))
+                }
+            }
+        }
         // Stop targets the same session as control commands.
         Action::Control(_) | Action::Stop => match explicit_root {
             Some(root) => (root, None),

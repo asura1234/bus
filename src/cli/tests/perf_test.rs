@@ -174,3 +174,56 @@ fn since_argument_accepts_minutes_hours_and_rejects_garbage() {
     assert!(parse_since(&["--since".into(), "soon".into()]).is_err());
     assert!(parse_since(&["--bogus".into()]).is_err());
 }
+
+#[test]
+fn perf_reader_subprocess() {
+    if std::env::var_os("BUS_PERF_READER_PROBE").is_none() {
+        return;
+    }
+    crate::cli::run(&["perf".into(), "--all".into()]).unwrap();
+}
+
+#[test]
+fn perf_reader_does_not_wait_for_the_session_registry_writer() {
+    use crate::messaging::storage::{io, sessions::LocalSessionRegistry};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let home = crate::utils::test_temp::unique_temp_path("perf-reader-lock");
+    let base = home.join(".local/share/bus");
+    let registry = LocalSessionRegistry::new(base.clone());
+    let session = registry.create().unwrap();
+    std::fs::create_dir_all(session.root.join("perf")).unwrap();
+    let lease = io::lock(&base.join("session-registry.lock")).unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "cli::perf::tests::perf_reader_subprocess",
+            "--nocapture",
+        ])
+        .env("HOME", &home)
+        .env("BUS_PERF_READER_PROBE", "1")
+        .env_remove("BUS_DATA_DIR")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(lease);
+    std::fs::remove_dir_all(home).unwrap();
+    assert!(
+        status.is_some_and(|status| status.success()),
+        "bus perf must read evidence without waiting for session-registry.lock; status={status:?}"
+    );
+}
