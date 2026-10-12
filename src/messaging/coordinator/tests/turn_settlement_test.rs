@@ -386,3 +386,35 @@ fn a_claude_reply_is_not_held_by_shells_of_unknown_age() {
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
 }
+
+#[test]
+fn a_joined_codex_request_reports_the_provider_error_that_ended_its_turn() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    let joined = fixture.send("check the tests too", false);
+    fixture.deliver();
+    let rollout = fixture.dir.join("rollout-joined.jsonl");
+    std::fs::write(&rollout, json!({"type":"event_msg","payload":{
+        "type":"task_complete","turn_id":"turn-1","error":{"message":"Selected model is at capacity."}
+    }}).to_string()).unwrap();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"check the tests too","transcript_path":rollout}),
+    );
+    fixture.consume();
+    assert_eq!(fixture.request(joined).group, Some(lead));
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(joined).phase, RequestPhase::Abandoned);
+    let message = fixture.request(joined).prompt.id;
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(
+        status["requests"][0]["reason"],
+        "provider_error: Selected model is at capacity."
+    );
+}

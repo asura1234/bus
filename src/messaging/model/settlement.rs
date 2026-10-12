@@ -48,6 +48,11 @@ impl BusState {
             return None;
         }
         let provider_error = provider_error(request);
+        // Messages typed or coalesced into this turn close with it and share
+        // its reason; members that already settled keep their own outcome.
+        let mut closed = self.group_members(id);
+        closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
+        closed.push(id);
         self.abandon_current_request(id, now_ms).ok()?;
         let (reason, error) = match &provider_error {
             Some(message) => (
@@ -59,8 +64,10 @@ impl BusState {
                 "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.".to_owned(),
             ),
         };
-        if let Some(request) = self.requests.get_mut(&id) {
-            request.failure_reason = Some(reason);
+        for request in closed {
+            if let Some(request) = self.requests.get_mut(&request) {
+                request.failure_reason = Some(reason.clone());
+            }
         }
         if let Some(agent) = self.agents.get_mut(&agent) {
             agent.actionable_error = Some(error);
