@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn codex_trust_controls_are_never_owned_composer_input() {
+    for screen in [
+        "Hooks need review\n3 hooks are new or changed.\n› 1. Review hooks\n2. Trust all and continue\n3. Continue without trusting (hooks won't run)\nPress enter to confirm or esc to go back\n",
+        "> You are in /tmp/project\nDo you trust the contents of this directory?\n› 1. Yes, continue\n2. No, quit\nPress enter to continue\n",
+        include_str!("../../../../../tests/fixtures/codex-question/collapsed.txt"),
+    ] {
+        assert_eq!(observe(AgentKind::Codex, screen, "from bus"), InputObservation::Unavailable, "{screen}");
+    }
+}
+
+#[test]
 fn cursor_current_idle_and_steering_placeholders_are_empty_composers() {
     for placeholder in [
         "Plan, search, build anything",

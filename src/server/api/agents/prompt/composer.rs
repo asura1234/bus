@@ -32,26 +32,34 @@ pub(super) fn observer(
 }
 
 pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObservation {
+    let plain = screen
+        .lines()
+        .map(|line| {
+            styled_chars(line)
+                .iter()
+                .map(|(c, _)| *c)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detection = crate::agents::manifest::detect_with_osc(
+        kind,
+        crate::agents::manifest::DetectionInput {
+            screen: &plain,
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    // Choosers use the same prompt marker as the composer. Inspect live
+    // controls before reading input, including collapsed async questions.
+    if detection.visible_blocker
+        || crate::agents::dialog::parse(screen).is_some()
+        || kind == AgentKind::Codex && crate::agents::dialog::codex_question_pending(screen)
+    {
+        return InputObservation::Unavailable;
+    }
     let Some(body) = input(kind, screen) else {
-        let plain = screen
-            .lines()
-            .map(|line| {
-                styled_chars(line)
-                    .iter()
-                    .map(|(c, _)| *c)
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let detection = crate::agents::manifest::detect_with_osc(
-            kind,
-            crate::agents::manifest::DetectionInput {
-                screen: &plain,
-                osc_title: "",
-                osc_progress: "",
-            },
-        );
-        return if detection.visible_working || detection.visible_blocker {
+        return if detection.visible_working {
             InputObservation::Accepted
         } else {
             InputObservation::Unavailable

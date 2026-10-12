@@ -295,6 +295,10 @@ async fn codex_queued_question_native_controls_are_guarded_and_answer_focused_ot
     };
     assert!(passive.pending_question);
     assert!(passive.dialog.is_none());
+    assert!(
+        app.agent_info(0, pane).unwrap().dialog_id.is_some(),
+        "collapsed question must reach coordinator dialog polling"
+    );
     assert!(writes.try_recv().is_err());
     let other = include_str!("../../../../../tests/fixtures/codex-question/other-selected.txt");
     app.lookup_runtime_sender(0, pane)

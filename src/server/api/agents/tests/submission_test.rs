@@ -74,6 +74,35 @@ fn screen(kind: AgentKind, draft: &str) -> String {
     format!("\x1b[2J\x1b[H{body}")
 }
 
+#[tokio::test]
+async fn guarded_submission_rejects_unavailable_composer_before_any_write() {
+    let (app, _, mut writes) = provider_fixture(AgentKind::Codex, false, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    let completion = runtime
+        .queue_observed_input_submission(
+            Bytes::from_static(b"from bus"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01")],
+            Duration::ZERO,
+            None,
+            |_| crate::terminal::runtime::InputObservation::Unavailable,
+        )
+        .unwrap();
+    let error = completion
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        crate::terminal::runtime::PromptNotShown::is(&error),
+        "{error}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "no editing keys, paste or Enter"
+    );
+}
+
 pub(super) fn redraw(app: &App, kind: AgentKind, draft: &str) {
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     app.lookup_runtime_sender(0, pane)

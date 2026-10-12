@@ -1,7 +1,7 @@
 //! Messages development commands on the single coordinator.
 use super::{
     mpsc, optional_text, required, AgentId, AgentRecipients, Author, BusEvent, Draft, ModelError,
-    PathBuf, PromptId, Request, RequestId, RequestPhase, RoomId, RoomKind, RuntimeStatus, Worker,
+    PathBuf, PromptId, Request, RequestId, RequestPhase, RoomId, RoomKind, Worker,
 };
 use serde_json::{json, Value};
 
@@ -200,6 +200,34 @@ impl Worker {
         message: PromptId,
     ) -> Result<Value, String> {
         let now_ms = crate::messaging::storage::io::now_ms();
+        // Poll metadata can lag a dialog closing. Confirm flagged recipients
+        // from their current screen without opening or answering any question.
+        let agents: std::collections::BTreeSet<_> = self
+            .state
+            .requests()
+            .filter(|request| {
+                request.prompt.id == message
+                    && !matches!(
+                        request.phase,
+                        RequestPhase::Completed | RequestPhase::Abandoned
+                    )
+            })
+            .filter_map(|request| self.state.agent(request.agent_id))
+            .filter(|agent| agent.dialog)
+            .map(|agent| agent.id)
+            .collect();
+        for agent in agents {
+            let (_, _, terminal, pane, session) = self.dialog_identity(agent)?;
+            let observation = self.native_dialog(&pane, &terminal, session.as_deref(), false)?;
+            let mut state = self.state.clone();
+            state
+                .observe_dialog(
+                    agent,
+                    observation.dialog.is_some() || observation.pending_question,
+                )
+                .map_err(|error| error.to_string())?;
+            self.save(state)?;
+        }
         self.expire_queued_requests(now_ms)?;
         self.control_message_at(message, now_ms)
     }
@@ -243,7 +271,7 @@ impl Worker {
         )
     }
 
-    /// An unsettled request whose agent shows a dialog or a blocked screen.
+    /// An unsettled request whose agent shows a readable or pending dialog.
     pub(in crate::messaging::coordinator) fn waiting_on_dialog(&self, request: &Request) -> bool {
         !matches!(
             request.phase,
@@ -251,7 +279,7 @@ impl Worker {
         ) && self
             .state
             .agent(request.agent_id)
-            .is_some_and(|agent| agent.dialog || agent.status == RuntimeStatus::Blocked)
+            .is_some_and(|agent| agent.dialog)
     }
 }
 

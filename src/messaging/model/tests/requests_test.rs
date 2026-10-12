@@ -158,6 +158,33 @@ fn turn_ended_needs_work_after_submission_then_idle_and_ignores_reply_capture() 
 }
 
 #[test]
+fn uncertain_submission_cannot_end_from_unrelated_status_activity() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "first");
+    state.begin_submission(request, "launch-codex", 5).unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Uncertain {
+                message: "timeout".into(),
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Blocked, 10)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 11)
+        .unwrap();
+    assert!(!state.turn_ended(state.request(request).unwrap()));
+    assert!(state.settle_ended_request(agent, 100_000).is_none());
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+}
+
+#[test]
 fn a_queued_message_refused_by_the_input_box_stalls_with_that_reason() {
     let (mut state, agent, request) = idle_with_queued(1_000, "go");
     state.begin_submission(request, "launch-codex", 5).unwrap();

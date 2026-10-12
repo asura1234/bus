@@ -187,6 +187,15 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
     std::mem::take(&mut sent).into_values().collect()
 }
 
+fn expected_blocked(worker: &Worker, id: AgentId) -> String {
+    format!(
+        "{} (agent {}). Blocked, needs help to continue.\nInspect: bus agent dialog {}",
+        worker.state.agent(id).unwrap().name,
+        id.0,
+        id.0
+    )
+}
+
 /// Worker blocks stay in their work room, and Bus authors no messages.
 fn assert_bus_sent_nothing(worker: &Worker) {
     assert!(worker
@@ -222,7 +231,7 @@ fn a_blocked_screen_without_an_open_dialog_does_not_queue_an_orchestrator_reques
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
-        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        [(Vec::new(), expected_blocked(&worker, agent))]
     );
     assert!(worker
         .state
@@ -244,7 +253,7 @@ fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
         "a single poll may be a redraw"
     );
     polls(&mut worker, 3);
-    let blocked = (vec![orchestrator], BLOCKED_MESSAGE.to_owned());
+    let blocked = (vec![orchestrator], expected_blocked(&worker, agent));
     assert_eq!(
         sent_by(&worker, room, agent),
         std::slice::from_ref(&blocked)
@@ -281,7 +290,7 @@ fn answering_adds_no_echo_and_a_new_dialog_is_a_new_episode() {
         .to_owned();
     let chosen = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
     assert_eq!(chosen["outcome"], "closed");
-    let blocked = (vec![orchestrator], BLOCKED_MESSAGE.to_owned());
+    let blocked = (vec![orchestrator], expected_blocked(&worker, agent));
     assert_eq!(
         sent_by(&worker, room, agent),
         std::slice::from_ref(&blocked),
@@ -319,7 +328,7 @@ fn without_an_orchestrator_the_blocked_worker_tells_the_developer() {
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
-        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        [(Vec::new(), expected_blocked(&worker, agent))]
     );
     // An agent's message to the developer is news: it counts as unread.
     assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
@@ -342,7 +351,7 @@ fn a_blocked_orchestrator_tells_the_developer_once_in_master() {
         notify_steady(&mut worker, orchestrator, Some(wait));
         assert_eq!(
             sent_by(&worker, master, orchestrator),
-            [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+            [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
         let master_room = worker.state.room(master).unwrap();
         let notice = &master_room.notices[0];
@@ -377,7 +386,7 @@ fn repeating_an_orchestrators_dialog_in_the_same_episode_adds_no_message() {
     }
     assert_eq!(
         sent_by(&worker, master, orchestrator),
-        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        [(Vec::new(), expected_blocked(&worker, orchestrator))]
     );
     assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
     drop(worker);
@@ -444,7 +453,7 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
             );
             assert_eq!(sent_by(&worker, room, sender).len(), 2);
 
-            let blocked = (recipients, BLOCKED_MESSAGE.to_owned());
+            let blocked = (recipients, expected_blocked(&worker, sender));
             assert_eq!(sent_by(&worker, room, sender), [blocked.clone(), blocked]);
             polls(&mut worker, 3);
             assert_eq!(sent_by(&worker, room, sender).len(), 2);
@@ -484,7 +493,7 @@ fn an_unblocked_orchestrator_reports_a_new_dialog_as_a_new_episode() {
     notify_steady(&mut worker, orchestrator, None);
     assert_eq!(sent_by(&worker, master, orchestrator).len(), 1);
     notify_steady(&mut worker, orchestrator, Some("question-id"));
-    let blocked = (Vec::new(), BLOCKED_MESSAGE.to_owned());
+    let blocked = (Vec::new(), expected_blocked(&worker, orchestrator));
     assert_eq!(
         sent_by(&worker, master, orchestrator),
         [blocked.clone(), blocked]
@@ -510,7 +519,7 @@ fn a_flicker_does_not_repeat_an_orchestrators_blocked_message() {
         }
         assert_eq!(
             sent_by(&worker, master, orchestrator),
-            [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+            [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
         assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
         drop(worker);
@@ -536,6 +545,41 @@ fn message_status_names_recipients_waiting_on_a_dialog() {
     let waiting = status(&mut worker);
     assert_eq!(waiting["waiting_on_dialog"], json!([agent.0]));
     assert_eq!(waiting["requests"][0]["dialog"], true);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn blocked_notice_identifies_worker_and_exact_inspection_command() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let messages = sent_by(&worker, room, agent);
+    assert_eq!(messages[0].0, vec![orchestrator.unwrap()]);
+    assert!(messages[0].1.contains("builder"), "{}", messages[0].1);
+    assert!(messages[0]
+        .1
+        .contains(&format!("bus agent dialog {}", agent.0)));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn message_status_rechecks_a_dialog_that_closed_between_polls() {
+    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    let receipt = worker
+        .control_send(
+            &json!({"room": room.0.to_string(), "to": [agent.0.to_string()], "text": "build it"}),
+        )
+        .unwrap();
+    let message = PromptId(receipt["message_id"].as_u64().unwrap());
+    screen.lock().unwrap().dialog = true;
+    worker.poll().unwrap();
+    screen.lock().unwrap().dialog = false;
+    // No status poll: the native observation is already clear.
+    let status = worker.control_message(message).unwrap();
+    assert_eq!(status["requests"][0]["dialog"], false);
+    assert_eq!(status["waiting_on_dialog"], json!([]));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

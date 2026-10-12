@@ -950,6 +950,22 @@ fn send_async_counts_a_finished_turn_without_a_captured_reply_as_done() {
 }
 
 #[test]
+fn send_async_does_not_complete_an_uncertain_unbound_submission_on_idle() {
+    let mut uncertain = recipient(1, "submitting", true);
+    uncertain["uncertain_outcome"] = json!(true);
+    uncertain["start_bound"] = json!(false);
+    let (outcome, _, _, pauses) = run_async(
+        &[],
+        [
+            status(vec![uncertain]),
+            status(vec![recipient(1, "delivered", true)]),
+        ],
+    );
+    assert!(outcome.is_ok());
+    assert_eq!(pauses, [Duration::from_millis(200)]);
+}
+
+#[test]
 fn an_abandoned_async_send_exits_one_with_a_clear_reason() {
     let (outcome, _, _, _) = run_async(&[], [status(vec![recipient(1, "abandoned", false)])]);
     assert_eq!(exit_code(&outcome), Some(1));

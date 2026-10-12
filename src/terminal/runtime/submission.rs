@@ -170,6 +170,14 @@ impl ObservedSubmission {
     }
 
     fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
+        // No paste or Enter has been queued yet. A dialog that appeared after
+        // API validation is a definite non-delivery, safe to retain in FIFO.
+        if matches!(
+            self.observe(),
+            InputObservation::Unavailable | InputObservation::Accepted
+        ) {
+            return Err(io::Error::other(PromptNotShown));
+        }
         self.clear_draft()?;
         self.write(text, delay)?;
         // Paste may be buffered by the provider after the PTY flush. Wait for
