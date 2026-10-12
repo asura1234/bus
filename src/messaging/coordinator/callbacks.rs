@@ -648,6 +648,7 @@ impl Worker {
             ControlFlow::Continue(parsed) => parsed,
             ControlFlow::Break(flow) => return Ok(flow),
         };
+        let parsed = self.hold_for_started_shells(id, record, parsed);
         let state = self.state.clone();
         let state = match self.check_callback_session(id, dir, path, record, &parsed, state)? {
             ControlFlow::Continue(state) => state,
@@ -687,6 +688,59 @@ impl Worker {
         }
         crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
         Ok(CallbackFlow::Next)
+    }
+
+    /// A Claude reply waits while shells started since the agent's last settled
+    /// reply still run: each wakes a turn when it ends, and the last such turn
+    /// carries the real reply. Shells already running then (say a hung
+    /// `find /`) are listed by every later `Stop` and never hold a reply.
+    fn hold_for_started_shells(
+        &mut self,
+        id: AgentId,
+        record: &callbacks::Record,
+        parsed: Parsed,
+    ) -> Parsed {
+        if record.manifest.provider != Provider::ClaudeCode {
+            return parsed;
+        }
+        // A freshly started Claude process has no shells running.
+        if matches!(&parsed, Parsed::Session { source: Some(source), .. } if source == "startup") {
+            self.claude_settled_shells.insert(id, BTreeSet::new());
+        }
+        let Parsed::Final {
+            session,
+            turn,
+            text,
+        } = parsed
+        else {
+            return parsed;
+        };
+        let running =
+            crate::agents::providers::claude_code::hooks::claude_running_shells(&record.value);
+        let has_request = self
+            .state
+            .agent(id)
+            .is_some_and(|agent| agent.current_request.is_some());
+        let started: Vec<_> = match self.claude_settled_shells.get(&id) {
+            Some(settled) => running.difference(settled).cloned().collect(),
+            // Unknown after a restart: treat every running shell as older.
+            None => Vec::new(),
+        };
+        if has_request && !started.is_empty() {
+            tracing::info!(
+                event = "bus.callback.background_shells",
+                agent_id = id.0,
+                shells = ?started,
+                "Reply waits for shells this request started"
+            );
+            return Parsed::BackgroundPending { session, turn };
+        }
+        self.claude_settled_shells.insert(id, running);
+        Parsed::Final {
+            session,
+            turn,
+            text,
+        }
     }
 
     /// Codex writes rate limits into its rollout after each turn. Usage is

@@ -1,8 +1,8 @@
 //! Coordinator worker ownership.
 use super::{
-    control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BusCommand, BusEvent,
-    BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf, RequestId,
-    RuntimeStatus, StoragePause, Transport,
+    control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
+    BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
+    RequestId, RuntimeStatus, StoragePause, Transport,
 };
 use crate::messaging::storage::state_store::JournalOp;
 
@@ -40,6 +40,11 @@ pub(super) struct Worker {
     /// Each Codex agent's rollout, from its hooks. A turn that a provider
     /// error ended fires no Stop hook; only the rollout records why.
     pub(super) codex_rollouts: BTreeMap<AgentId, PathBuf>,
+    /// The background shells each Claude agent had running when its last
+    /// reply settled. Shells beyond these were started by the current
+    /// request's turns, and its reply waits for them. In memory only: after a
+    /// restart every running shell counts as older.
+    pub(super) claude_settled_shells: BTreeMap<AgentId, BTreeSet<String>>,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
@@ -93,6 +98,7 @@ impl Worker {
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
             codex_rollouts: BTreeMap::new(),
+            claude_settled_shells: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
         })

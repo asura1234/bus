@@ -292,3 +292,97 @@ fn a_turn_closed_without_a_reply_or_provider_error_says_so_in_its_reason() {
         Some("reply_not_captured")
     );
 }
+
+fn claude_stop(turn: &str, text: &str, shells: &[&str]) -> Value {
+    // Shape measured from Claude Code 2.1.296: each running background shell
+    // is listed, and each one that finishes wakes a turn whose Stop drops it.
+    let tasks: Vec<_> = shells
+        .iter()
+        .map(|id| json!({"id":id,"type":"shell","status":"running","description":"Run","command":"sleep 45"}))
+        .collect();
+    json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":tasks,"session_crons":[]})
+}
+
+fn claude_startup() -> Value {
+    json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"})
+}
+
+/// Regression: a Claude worker that ended its turn while shells it started
+/// still ran ("4 shells still running") had its interim text recorded as the
+/// final reply, so the orchestrator's `send --async` returned early.
+#[test]
+fn a_claude_turn_waiting_on_shells_it_started_keeps_its_request_open() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(&mut fixture, "run the tests", "turn-1");
+    fixture.record(claude_stop(
+        "turn-1",
+        "Waiting on the background shells.",
+        &["b1", "b2"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert!(fixture.reply(lead).is_none());
+    // The first shell finishing wakes a turn; the other still runs.
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.record(claude_stop("turn-2", "One shell finished.", &["b2"]));
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.started(
+        "turn-3",
+        "<task-notification>b2 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.record(claude_stop("turn-3", "Both test runs passed.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Both test runs passed.")
+    );
+}
+
+/// A shell left running before the request (say a hung `find /`) is listed by
+/// every later Stop and must not hold this or any later reply.
+#[test]
+fn a_claude_shell_left_running_before_the_request_does_not_hold_its_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let first = running(&mut fixture, "look around", "turn-1");
+    fixture.record(claude_stop("turn-1", "Looked around.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(first).phase, RequestPhase::Completed);
+    // A turn of the agent's own leaves a shell running.
+    fixture.record(claude_stop("own-turn", "Started a search.", &["stale"]));
+    fixture.consume();
+    let lead = running(&mut fixture, "review this change", "turn-2");
+    fixture.record(claude_stop("turn-2", "Reviewed.", &["stale"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Reviewed."));
+}
+
+/// After a Bus restart the shells running before the request are unknown, so
+/// none of them holds a reply.
+#[test]
+fn a_claude_reply_is_not_held_by_shells_of_unknown_age() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "review this change", "turn-1");
+    fixture.record(claude_stop("turn-1", "Reviewed.", &["unknown"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+}
