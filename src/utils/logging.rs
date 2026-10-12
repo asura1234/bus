@@ -155,10 +155,8 @@ impl RotatingFileMakeWriter {
             current_size: 0,
             disabled: false,
             archive_signal: None,
-            shared_lock: None,
         };
         if let Retention::Archive(policy) = options.retention {
-            state.shared_lock = Some(open_shared_lock(&state.path)?);
             state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
         }
         state.open_current_file()?;
@@ -192,11 +190,18 @@ impl Write for RotatingFileGuard {
         }
         // Held across check, rotation and append so no other process sharing
         // this log renames it or appends to it in between.
-        let _shared = state.lock_shared();
+        let shared = state.lock_live_file();
         if state.rotate_if_needed(buf.len() as u64).is_err() {
             state.disabled = true;
             return Ok(buf.len());
         }
+        let _shared = if shared.covers(state.file.as_ref()) {
+            shared
+        } else {
+            // This write rotated: take the lock of the new live file.
+            drop(shared);
+            state.lock_live_file()
+        };
         if let Some(file) = state.file.as_mut() {
             match file.write(buf) {
                 Ok(written) => {
@@ -242,12 +247,31 @@ struct RotatingFileState {
     disabled: bool,
     /// Wakes the archive worker; it also runs once at startup for leftovers.
     archive_signal: Option<mpsc::Sender<()>>,
-    /// `<log>.lock`, shared by every process writing this log (archive mode).
-    shared_lock: Option<File>,
 }
 
-/// Releases the cross-process log lock on drop.
+/// An exclusive lock on the live log file itself, shared by every process
+/// that writes it; released on drop.
 struct SharedLogLock(Option<File>);
+
+impl SharedLogLock {
+    /// Whether this lock is on `file`'s inode (always true when unlocked).
+    #[cfg(unix)]
+    fn covers(&self, file: Option<&File>) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        let (Some(lock), Some(file)) = (&self.0, file) else {
+            return true;
+        };
+        match (lock.metadata(), file.metadata()) {
+            (Ok(lock), Ok(file)) => (lock.dev(), lock.ino()) == (file.dev(), file.ino()),
+            _ => true,
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn covers(&self, _file: Option<&File>) -> bool {
+        true
+    }
+}
 
 impl Drop for SharedLogLock {
     fn drop(&mut self) {
@@ -257,35 +281,41 @@ impl Drop for SharedLogLock {
     }
 }
 
-fn open_shared_lock(path: &Path) -> io::Result<File> {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".lock");
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(PathBuf::from(name))
-}
-
 impl RotatingFileState {
-    /// Blocks until this process holds the log's cross-process lock. Without
-    /// a shared lock, or if locking fails, writing goes on unserialized.
-    fn lock_shared(&self) -> SharedLogLock {
-        let lock = self
-            .shared_lock
-            .as_ref()
-            .and_then(|lock| lock.try_clone().ok());
-        SharedLogLock(lock.filter(|lock| lock.lock().is_ok()))
+    /// Archive mode: blocks until this process holds the lock of the file
+    /// that is live at the log path, following renames by other writers, and
+    /// counts the bytes they appended. Other modes and failures return no lock.
+    fn lock_live_file(&mut self) -> SharedLogLock {
+        if !matches!(self.retention, Retention::Archive(_)) {
+            return SharedLogLock(None);
+        }
+        for _ in 0..4 {
+            if (self.file.is_none() || self.rotated_by_another_writer())
+                && self.open_current_file().is_err()
+            {
+                break;
+            }
+            let Some(lock) = self.file.as_ref().and_then(|file| file.try_clone().ok()) else {
+                break;
+            };
+            if lock.lock().is_err() {
+                break;
+            }
+            let lock = SharedLogLock(Some(lock));
+            // Another writer may have renamed the file while this one waited.
+            if !self.rotated_by_another_writer() {
+                if let Some(meta) = self.file.as_ref().and_then(|file| file.metadata().ok()) {
+                    self.current_size = meta.len();
+                }
+                return lock;
+            }
+        }
+        SharedLogLock(None)
     }
 
     fn rotate_if_needed(&mut self, incoming_len: u64) -> io::Result<()> {
         if self.file.is_none() || self.rotated_by_another_writer() {
             self.open_current_file()?;
-        } else if self.shared_lock.is_some() {
-            // Other writers append to the same file; count their bytes too.
-            if let Some(len) = self.file.as_ref().and_then(|file| file.metadata().ok()) {
-                self.current_size = len.len();
-            }
         }
         if self.current_size.saturating_add(incoming_len) <= self.max_bytes {
             return Ok(());
@@ -408,7 +438,7 @@ fn spawn_archive_worker(path: PathBuf, policy: ArchivePolicy) -> mpsc::Sender<()
 }
 
 const ARCHIVE_GZ: &str = ".gz";
-const ARCHIVE_TMP: &str = ".gz.tmp";
+const ARCHIVE_TMP: &str = ".tmp";
 
 /// Archive file name for a log rotated at `at`, before compression. The UTC
 /// stamp sorts by rotation time, which is the archive's newest entry.
@@ -510,13 +540,17 @@ fn list_archives(path: &Path) -> Vec<Archive> {
     archives
 }
 
-/// Deletes `.gz.tmp` staging files of Bus archives only; other names stay.
+/// Deletes `.gz[.<writer>].tmp` staging files of Bus archives only; other
+/// names stay.
 fn remove_interrupted_compressions(path: &Path) {
     for (entry, rest) in archive_dir_entries(path) {
-        if rest
-            .strip_suffix(ARCHIVE_TMP)
-            .is_some_and(|stem| archive_time(stem).is_some())
-        {
+        let stem = rest.strip_suffix(ARCHIVE_TMP).and_then(|staged| {
+            staged
+                .split_once(".gz.")
+                .map(|(stem, _)| stem)
+                .or_else(|| staged.strip_suffix(ARCHIVE_GZ))
+        });
+        if stem.is_some_and(|stem| archive_time(stem).is_some()) {
             let _ = fs::remove_file(entry);
         }
     }
@@ -556,17 +590,38 @@ fn prune_archives(mut archives: Vec<Archive>, policy: &ArchivePolicy, now: Syste
     }
 }
 
+/// Gzips `plain` into `<plain>.gz` through a staging file of its own: workers
+/// of several processes may compress the same archive at once, and a shared
+/// staging name let one truncate the other's finished output.
 fn compress_archive(plain: &Path) -> io::Result<PathBuf> {
-    let mut name = plain.as_os_str().to_os_string();
-    name.push(ARCHIVE_TMP);
-    let temporary = PathBuf::from(name);
-    let compressed = temporary.with_extension("");
-    let mut encoder =
-        flate2::write::GzEncoder::new(File::create(&temporary)?, flate2::Compression::default());
-    io::copy(&mut File::open(plain)?, &mut encoder)?;
-    encoder.finish()?.sync_all()?;
-    fs::rename(&temporary, &compressed)?;
-    fs::remove_file(plain)?;
+    static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut compressed = plain.as_os_str().to_os_string();
+    compressed.push(ARCHIVE_GZ);
+    let compressed = PathBuf::from(compressed);
+    let mut staging = compressed.clone().into_os_string();
+    let sequence = STAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    staging.push(format!(".{}-{sequence}{ARCHIVE_TMP}", std::process::id()));
+    let staging = PathBuf::from(staging);
+    let source = File::open(plain)?;
+    let staged = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)?;
+    let result = (|| {
+        let mut encoder = flate2::write::GzEncoder::new(staged, flate2::Compression::default());
+        io::copy(&mut &source, &mut encoder)?;
+        encoder.finish()?.sync_all()?;
+        fs::rename(&staging, &compressed)
+    })();
+    if let Err(err) = result {
+        let _ = fs::remove_file(&staging);
+        return Err(err);
+    }
+    match fs::remove_file(plain) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
     Ok(compressed)
 }
 

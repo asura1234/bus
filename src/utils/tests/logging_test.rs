@@ -34,7 +34,6 @@ fn rotate_files_shifts_existing_generations() {
         current_size: 0,
         disabled: false,
         archive_signal: None,
-        shared_lock: None,
     };
     state.rotate_files().unwrap();
 
@@ -192,7 +191,7 @@ fn archives(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name != "bus.log" && name != "bus.log.lock")
+        .filter(|name| name != "bus.log")
         .collect();
     names.sort();
     names
@@ -378,7 +377,6 @@ fn archive_rotation_enforces_cap_before_background_maintenance() {
         current_size: 0,
         disabled: false,
         archive_signal: Some(signal),
-        shared_lock: None,
     };
     for _ in 0..4 {
         state.rotate_if_needed(8).unwrap();
@@ -546,7 +544,7 @@ fn archive_prewrite_check_preserves_lines_if_rotation_happens_before_append() {
     // append) with another writer scheduled between preflight and append.
     // Holding this writer's mutex does not lock the other writer's state.
     let mut state = other.state.lock().unwrap();
-    let shared = state.lock_shared();
+    let shared = state.lock_live_file();
     state.rotate_if_needed(b"OTHER_LINE".len() as u64).unwrap();
     let rotating_write = std::thread::spawn(move || {
         rotating.make_writer().write_all(b"BBBBBBBB").unwrap();
