@@ -340,3 +340,275 @@ fn an_emoji_grapheme_at_the_wrap_boundary_preserves_the_composer_rule() {
     );
     assert!(visible.iter().any(|row| row == "transcript sentinel"));
 }
+
+fn screen_rows_of(screen: &crate::devtools::tui::screen::Screen) -> Vec<String> {
+    screen
+        .grid()
+        .cells
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .map(|row| row.trim_end().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_fake_codex_draws_a_codex_composer_that_bus_can_read() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 12).unwrap();
+    // Bus's Codex composer reader takes the last `›` line, up to the model line.
+    let composers = |screen: &Screen| -> Vec<String> {
+        screen_rows_of(screen)
+            .into_iter()
+            .filter(|row| row.starts_with('›'))
+            .collect()
+    };
+    for line in 0..30 {
+        screen.feed(format!("transcript {line}\r\n").as_bytes());
+    }
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("", "codex", 80).as_bytes());
+    let rows = screen_rows_of(&screen);
+    assert_eq!(
+        composers(&screen),
+        vec!["› Ask Codex to do anything"],
+        "{rows:#?}"
+    );
+    let composer = rows.iter().position(|row| row.starts_with('›')).unwrap();
+    assert_eq!(rows[composer + 1], "");
+    assert_eq!(rows[composer + 2], "  gpt-fake · fake codex");
+    assert!(!rows.iter().any(|row| row.starts_with('❯')), "{rows:#?}");
+
+    for draft in ["h", "he", "hey"] {
+        screen.feed(prompt_box(draft, "codex", 80).as_bytes());
+    }
+    assert_eq!(
+        composers(&screen),
+        vec!["› hey"],
+        "{:#?}",
+        screen_rows_of(&screen)
+    );
+
+    screen.feed(submitted("hey").as_bytes());
+    assert!(
+        composers(&screen).is_empty(),
+        "{:#?}",
+        screen_rows_of(&screen)
+    );
+    screen.feed("• fake reply: hey\r\n".as_bytes());
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("", "codex", 80).as_bytes());
+    let rows = screen_rows_of(&screen);
+    assert_eq!(
+        composers(&screen),
+        vec!["› Ask Codex to do anything"],
+        "{rows:#?}"
+    );
+    // One blank row parts the reply from the composer, as in Codex.
+    let reply = rows
+        .iter()
+        .position(|row| row == "• fake reply: hey")
+        .unwrap();
+    assert_eq!(rows[reply + 1], "", "{rows:#?}");
+    assert_eq!(rows[reply + 2], "› Ask Codex to do anything", "{rows:#?}");
+    assert!(rows.contains(&"> hey".to_owned()));
+}
+
+#[test]
+fn the_fake_codex_reads_the_hooks_bus_writes_for_its_project() {
+    let project = std::env::temp_dir().join(format!("bus-tui-fake-codex-{}", std::process::id()));
+    let nested = project.join("crate/src");
+    std::fs::create_dir_all(&nested).unwrap();
+    let settings = vec!["--settings".to_owned(), "/x.json".to_owned()];
+    assert_eq!(hooks_path("codex", &settings, &nested), None);
+    std::fs::create_dir_all(project.join(".codex")).unwrap();
+    std::fs::write(project.join(".codex/hooks.json"), "{}").unwrap();
+    assert_eq!(
+        hooks_path("codex", &[], &nested),
+        Some(project.join(".codex/hooks.json"))
+    );
+    // Claude never looks there: it reads only the settings Bus passes it.
+    assert_eq!(hooks_path("claude", &[], &nested), None);
+    assert_eq!(
+        hooks_path("claude", &settings, &nested),
+        Some("/x.json".into())
+    );
+    std::fs::remove_dir_all(&project).unwrap();
+}
+
+#[test]
+fn the_fake_codex_hooks_decode_as_an_interactive_codex_turn() {
+    use crate::agents::providers::codex::hooks::parse;
+    use crate::agents::providers::spool::Parsed;
+
+    let agent = FakeAgent::new("codex", Value::Null);
+    let session = agent.session.clone();
+    let start = agent.payload("SessionStart", None, json!({"source": "startup"}));
+    assert_eq!(
+        parse(&start).unwrap(),
+        Parsed::Session {
+            session: session.clone(),
+            source: Some("startup".into())
+        }
+    );
+    let started = agent.payload("UserPromptSubmit", Some("t1"), json!({"prompt": "hey"}));
+    assert_eq!(
+        parse(&started).unwrap(),
+        Parsed::Started {
+            session: session.clone(),
+            turn: "t1".into(),
+            prompt: "hey".into()
+        }
+    );
+    let stop = agent.payload(
+        "Stop",
+        Some("t1"),
+        json!({"last_assistant_message": "fake reply: hey"}),
+    );
+    assert_eq!(
+        parse(&stop).unwrap(),
+        Parsed::Final {
+            session,
+            turn: "t1".into(),
+            text: "fake reply: hey".into()
+        }
+    );
+    // No usage is read from it: Bus takes only Codex `rollout-*` files.
+    assert_eq!(
+        crate::agents::providers::codex::usage::codex_rollout_path(&stop),
+        None
+    );
+    // The fake Claude keeps Claude's turn field.
+    let claude = FakeAgent::new("claude", Value::Null);
+    let claude_started = claude.payload("UserPromptSubmit", Some("t1"), json!({}));
+    assert_eq!(claude_started["prompt_id"], "t1");
+    assert!(claude_started.get("transcript_path").is_none());
+}
+
+#[test]
+fn the_fake_codex_keeps_image_paths_as_text_and_works_like_codex() {
+    use crate::agents::manifest::{detect_with_osc, DetectionInput};
+    use crate::agents::AgentKind;
+
+    let path_line = "\"/tmp/shot.png\"";
+    let codex = FakeAgent::new("codex", Value::Null);
+    assert_eq!(codex.lift(path_line), (path_line.to_owned(), 0));
+    let claude = FakeAgent::new("claude", Value::Null);
+    assert_eq!(claude.lift(path_line).1, 1);
+
+    let screen = format!("> hey\n{}", working_line(true, 1, 3));
+    let detection = detect_with_osc(
+        AgentKind::Codex,
+        DetectionInput {
+            screen: &screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    assert!(detection.visible_working, "{screen}");
+    assert_eq!(
+        working_line(false, 0, 3),
+        "✻ Working… (3s · esc to interrupt)"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_fake_codex_fires_bus_hook_after_a_project_hook_for_the_same_event() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    use crate::agents::providers::ProviderKind;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir =
+        std::env::temp_dir().join(format!("bus-tui-fake-codex-merged-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let delivered = dir.join("delivered.json");
+    // Stands in for the Bus executable named in the hook command.
+    let bus = dir.join("bus");
+    std::fs::write(
+        &bus,
+        format!("#!/bin/sh\ncat > '{}'\n", delivered.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bus, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A project that already has its own Codex Stop hook, merged the way Bus writes it.
+    let project = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}});
+    let merged = merge_hooks(
+        project,
+        HookContract::for_provider(ProviderKind::Codex),
+        &bus,
+    )
+    .unwrap();
+
+    let agent = FakeAgent::new("codex", merged["hooks"].clone());
+    agent.hook(
+        "Stop",
+        Some("t1"),
+        json!({"last_assistant_message": "fake reply: hey", "stop_hook_active": false}),
+    );
+    let fired = delivered.is_file();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(fired, "Bus's Stop hook never ran: {merged:#}");
+}
+
+#[test]
+fn a_working_fake_codex_still_shows_a_composer_bus_can_type_into() {
+    use crate::devtools::tui::screen::Screen;
+
+    // Real Codex keeps its `›` composer under `• Working (…)` while a turn
+    // runs, so Bus can type a steering message into it.
+    let mut screen = Screen::new(80, 12).unwrap();
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("hey fake:work 3", "codex", 80).as_bytes());
+    // What the fake draws from Enter while its turn works, typing included.
+    screen.feed(submitted("hey fake:work 3").as_bytes());
+    screen.feed(working_block(&working_line(true, 0, 0), "", false, 80).as_bytes());
+    for (frame, shown) in ["s", "st", "steer"].into_iter().enumerate() {
+        let line = working_line(true, frame + 1, 1);
+        screen.feed(working_block(&line, shown, true, 80).as_bytes());
+    }
+    let rows = screen_rows_of(&screen);
+    // Codex's spinner alternates `•` and `◦`; Bus's working rule takes both.
+    assert!(
+        rows.iter()
+            .any(|row| row.starts_with("• Working") || row.starts_with("◦ Working")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with('›')),
+        "no composer while working: {rows:#?}"
+    );
+    // Redrawn in place: one working line over one composer holding the draft.
+    let working: Vec<_> = rows
+        .iter()
+        .filter(|row| row.contains("Working ("))
+        .collect();
+    let composers: Vec<_> = rows.iter().filter(|row| row.starts_with('›')).collect();
+    assert_eq!((working.len(), composers.len()), (1, 1), "{rows:#?}");
+    assert_eq!(composers[0], "› steer");
+
+    // The turn ends: its block goes, the steered prompt joins the transcript.
+    let line = working_line(true, 4, 3);
+    screen.feed(work_done(&line, 80).as_bytes());
+    screen.feed(submitted("steer").as_bytes());
+    screen.feed("• fake reply: hey fake:work 3\r\n  steer\r\n".as_bytes());
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("", "codex", 80).as_bytes());
+    let rows = screen_rows_of(&screen);
+    assert!(
+        !rows.iter().any(|row| row.contains("Working (")),
+        "{rows:#?}"
+    );
+    let sent = rows
+        .iter()
+        .position(|row| row == "> hey fake:work 3")
+        .unwrap();
+    assert_eq!(rows[sent + 1], "> steer", "{rows:#?}");
+    assert_eq!(rows[sent + 2], "• fake reply: hey fake:work 3", "{rows:#?}");
+    let composers: Vec<_> = rows.iter().filter(|row| row.starts_with('›')).collect();
+    assert_eq!(composers, vec!["› Ask Codex to do anything"], "{rows:#?}");
+}
