@@ -2,7 +2,8 @@
 //!
 //! Files live in `<session data dir>/perf/<role>.jsonl`. Every process of a role
 //! appends to the same file through the dev log writer, which locks it and
-//! rotates it into gzipped, time-stamped archives. A line is either
+//! rotates it into gzipped, time-stamped archives; a `bus-perf-writer` thread
+//! does the appends so the watchdog never waits on that lock. A line is either
 //! `{"kind":"window",...}` (process sample plus every metric active in the
 //! window) or `{"kind":"stall",...}` (a loop blocked past the threshold, a move
 //! to another stage while still blocked, its end, or a finished stack capture).
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
+use super::writer::{WriterHandle, QUEUE_RECORDS};
 use super::{
     context, global, now_us, publish_context, ContextSample, Field, Registry, StallEvent,
     StallKind, TimerWindow,
@@ -132,7 +134,7 @@ pub(super) struct Recorder {
     role: &'static str,
     pid: u32,
     dir: PathBuf,
-    out: RotatingFileState,
+    out: WriterHandle,
     options: PerfOptions,
     hooks: PerfHooks,
     last_cpu: Option<(Instant, Duration)>,
@@ -145,8 +147,6 @@ pub(super) struct Recorder {
     ),
     pending_captures: usize,
     wake_lag_max: Option<Duration>,
-    /// Records that failed to append since the last one that succeeded.
-    lost_records: u64,
 }
 
 /// A stack capture that ran on its own thread, reported back to the recorder.
@@ -172,6 +172,7 @@ impl Recorder {
             options.max_bytes,
             Retention::Archive(options.archive),
         )?;
+        let out = WriterHandle::spawn(role, out, QUEUE_RECORDS)?;
         Ok(Self {
             role,
             pid: std::process::id(),
@@ -186,7 +187,6 @@ impl Recorder {
             captures: mpsc::channel(),
             pending_captures: 0,
             wake_lag_max: None,
-            lost_records: 0,
         })
     }
 
@@ -486,34 +486,17 @@ impl Recorder {
         record
     }
 
-    /// Appends one record. A failure is logged once, and the recovery with the
-    /// number of records lost, so missing evidence is never mistaken for quiet.
+    /// Queues one record for the writer thread; never waits on the file.
     pub(super) fn append(&mut self, record: &Value) {
         let mut line = record.to_string();
         line.push('\n');
-        match self.out.append(line.as_bytes()) {
-            Ok(()) if self.lost_records > 0 => {
-                tracing::warn!(
-                    event = "perf.write_recovered",
-                    role = self.role,
-                    lost_records = self.lost_records,
-                    "perf records are being written again"
-                );
-                self.lost_records = 0;
-            }
-            Ok(()) => {}
-            Err(error) => {
-                if self.lost_records == 0 {
-                    tracing::warn!(
-                        event = "perf.write_failed",
-                        role = self.role,
-                        %error,
-                        "perf records are not being written"
-                    );
-                }
-                self.lost_records += 1;
-            }
-        }
+        self.out.send(line.into_bytes());
+    }
+
+    /// Waits until every record appended so far is in the file.
+    #[cfg(test)]
+    pub(super) fn flush(&self) {
+        self.out.flush();
     }
 }
 

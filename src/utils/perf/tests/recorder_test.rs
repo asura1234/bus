@@ -201,6 +201,7 @@ fn records_are_appended_as_jsonl_under_the_session_perf_dir() {
     let start = Instant::now();
     recorder.write_window(start, None, &registry);
     recorder.write_window(start + Duration::from_secs(1), None, &registry);
+    recorder.flush();
     let path = perf_dir(&dir).join("client.jsonl");
     let records = lines(&path);
     assert_eq!(records.len(), 2);
@@ -253,6 +254,7 @@ fn watchdog_writes_stall_records_and_captures_stacks_once_per_cooldown() {
     );
     drop(second);
     recorder.watch(start + Duration::from_secs(60), now_us(), &registry);
+    recorder.flush();
 
     let records = lines(&perf_dir(&dir).join("client.jsonl"));
     let stalls: Vec<_> = records.iter().filter(|r| r["kind"] == "stall").collect();
@@ -457,6 +459,8 @@ fn two_client_processes_sharing_the_role_file_keep_each_others_latest_records() 
         first.append(&serde_json::json!({"kind": "probe", "who": "first", "n": n}));
     }
     second.append(&serde_json::json!({"kind": "probe", "who": "second", "n": 1}));
+    first.flush();
+    second.flush();
 
     let live = perf_dir(&dir).join("client.jsonl");
     let found = std::iter::once(live.clone())
@@ -494,6 +498,7 @@ fn a_stall_that_moves_on_and_stays_blocked_in_a_later_stage_names_that_stage() {
     recorder.watch(start, t0 + 60_000_000, &registry);
     drop(guard);
     recorder.watch(start, now_us(), &registry);
+    recorder.flush();
 
     let records = lines(&perf_dir(&dir).join("client.jsonl"));
     let _ = std::fs::remove_dir_all(dir);
@@ -506,16 +511,23 @@ fn a_stall_that_moves_on_and_stays_blocked_in_a_later_stage_names_that_stage() {
     );
 }
 
+fn archive_file(dir: &Path) -> crate::utils::logging::RotatingFileState {
+    std::fs::create_dir_all(perf_dir(dir)).unwrap();
+    crate::utils::logging::RotatingFileState::open(
+        perf_dir(dir).join("client.jsonl"),
+        1024 * 1024,
+        crate::utils::logging::Retention::Archive(options().archive),
+    )
+    .unwrap()
+}
+
 #[cfg(unix)]
 #[test]
 fn append_failures_warn_once_and_recovery_reports_the_lost_records() {
-    let (mut recorder, dir) = recorder(
-        "perf-append-failure",
-        PerfHooks {
-            sample: no_sample,
-            capture_stacks: no_capture,
-        },
-    );
+    use crate::utils::perf::writer::PerfWriter;
+    let dir = crate::utils::test_temp::unique_temp_path("perf-append-failure");
+    let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let mut writer = PerfWriter::new("client", archive_file(&dir), dropped.clone());
     let live = perf_dir(&dir).join("client.jsonl");
     // A directory where the file was makes every reopen fail.
     std::fs::remove_file(&live).unwrap();
@@ -523,12 +535,14 @@ fn append_failures_warn_once_and_recovery_reports_the_lost_records() {
     let failing = crate::utils::logging::test_capture::Capture::default();
     failing.run(|| {
         for n in 0..3 {
-            recorder.append(&serde_json::json!({"kind": "probe", "n": n}));
+            writer.write(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").as_bytes());
         }
     });
     std::fs::remove_dir(&live).unwrap();
+    // Two more were refused by a full queue meanwhile.
+    dropped.store(2, Ordering::SeqCst);
     let recovered = crate::utils::logging::test_capture::Capture::default();
-    recovered.run(|| recorder.append(&serde_json::json!({"kind": "probe", "n": 3})));
+    recovered.run(|| writer.write(b"{\"kind\":\"probe\",\"n\":3}\n"));
 
     let records = lines(&live);
     let _ = std::fs::remove_dir_all(dir);
@@ -540,6 +554,82 @@ fn append_failures_warn_once_and_recovery_reports_the_lost_records() {
     );
     let recovered = recovered.text();
     assert!(recovered.contains("perf.write_recovered"), "{recovered}");
-    assert!(recovered.contains("lost_records=3"), "{recovered}");
+    assert!(recovered.contains("lost_records=5"), "{recovered}");
+    assert_eq!(dropped.load(Ordering::SeqCst), 0, "the drops were reported");
     assert_eq!(records.len(), 1, "{records:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_writer_queue_drops_records_without_waiting_and_warns_once() {
+    use crate::utils::perf::writer::WriterHandle;
+    let dir = crate::utils::test_temp::unique_temp_path("perf-full-queue");
+    let handle = WriterHandle::spawn("client", archive_file(&dir), 1).unwrap();
+    let live = perf_dir(&dir).join("client.jsonl");
+    let holder = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&live)
+        .unwrap();
+    holder.lock().unwrap();
+
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let started = Instant::now();
+    capture.run(|| {
+        for n in 0..6 {
+            handle.send(format!("{{\"kind\":\"probe\",\"n\":{n}}}\n").into_bytes());
+        }
+    });
+    let elapsed = started.elapsed();
+    holder.unlock().unwrap();
+    handle.flush();
+
+    let records = lines(&live);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "queuing waited {elapsed:?}"
+    );
+    let text = capture.text();
+    assert_eq!(text.matches("perf.write_failed").count(), 1, "{text}");
+    assert!(
+        (1..6).contains(&records.len()),
+        "the writer held at most the queue plus one in flight: {records:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn perf_window_does_not_block_the_watchdog_behind_another_writer() {
+    let (mut recorder, dir) = recorder(
+        "perf-contended-writer",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    let live = perf_dir(&dir).join("client.jsonl");
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(live)
+            .unwrap();
+        file.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        // A descheduled client or a client waiting on filesystem I/O can hold
+        // this shared role-file lock while another client's watchdog wakes.
+        std::thread::sleep(Duration::from_millis(300));
+        file.unlock().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    let started = Instant::now();
+    recorder.write_window(started, None, &Registry::new());
+    let elapsed = started.elapsed();
+    holder.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "watchdog window append waited for another writer for {elapsed:?}"
+    );
 }

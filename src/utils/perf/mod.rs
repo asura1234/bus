@@ -10,6 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod recorder;
+mod writer;
 
 pub(crate) use recorder::{start, PerfHooks, PerfOptions, ProcessUsage};
 
