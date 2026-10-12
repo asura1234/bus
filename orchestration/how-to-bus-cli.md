@@ -282,7 +282,13 @@ recipient's turn has ended (`turn_ended: true` in `message status`) once,
 after the message was submitted, Bus saw it Working or Blocked or its provider
 reported the turn start for the message, and Bus has seen it Idle since. The
 provider's turn start covers a turn that starts and ends between two status
-polls. A captured reply also counts.
+polls. A captured reply also counts. A turn that ended without a captured
+reply is `settling: true` for a few seconds while Bus waits for a late reply;
+the command waits for that settlement too. If the provider ended the turn on an
+error (a model at capacity, say), Bus then abandons the request with reason
+`provider_error: <message>` and the command exits 1 with code
+`message_provider_error`, which is worth a retry. Without a provider error,
+settlement closes it as `reply_not_captured` and the command succeeds.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
 command keeps waiting until someone answers it. It exits early only if the send
 fails or Bus abandons a recipient's request (exit 1), or a recipient's message
@@ -342,7 +348,7 @@ a finished turn whose reply was not captured counts as done, not stalled.
 
 Treat `complete: true` from `message status` or bounded `wait` as the durable
 settlement signal. An async wait can succeed earlier when every `turn_ended`
-is true, without claiming that a reply was captured.
+is true and none is `settling`, without claiming that a reply was captured.
 A successful terminal write or a visually idle agent is
 not proof that the request completed.
 
