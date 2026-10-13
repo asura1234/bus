@@ -90,7 +90,48 @@ pub fn wait_for_socket(path: &Path, timeout: Duration) {
         }
         thread::sleep(Duration::from_millis(25));
     }
-    panic!("socket did not appear at {}", path.display());
+    panic!(
+        "socket did not appear at {} within {timeout:?}\n{}",
+        path.display(),
+        startup_evidence(path)
+    );
+}
+
+/// What a scratch server left behind when its socket never appeared: whether
+/// the socket file exists and why connecting fails, plus the tail of every log
+/// and perf file under the test's config dir, so a startup timeout shows where
+/// the time went.
+fn startup_evidence(socket_path: &Path) -> String {
+    let mut out = format!(
+        "socket exists: {}; connect: {:?}",
+        socket_path.exists(),
+        UnixStream::connect(socket_path).err()
+    );
+    let Some(base) = socket_path.parent().and_then(Path::parent) else {
+        return out;
+    };
+    let mut pending = vec![base.join("config")];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let name = path.to_string_lossy();
+            if !(name.ends_with(".log") || name.ends_with(".jsonl")) {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            let lines: Vec<&str> = text.lines().collect();
+            let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+            out.push_str(&format!("\n--- {} ---\n{tail}", path.display()));
+        }
+    }
+    out
 }
 
 pub fn cleanup_registered_bus_pids() {
