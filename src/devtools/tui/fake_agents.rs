@@ -297,6 +297,8 @@ impl FakeAgent {
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
+        let permission_working = permissions::service_prompt(&self.provider, prompt);
+        permissions::begin_work(&mut out, permission_working);
         let mut prompts = vec![prompt.trim().to_owned()];
         if self.live_turn() {
             // Codex and Cursor clear the composer and show their working line
@@ -345,6 +347,7 @@ impl FakeAgent {
         let reply = self
             .permission_reply(prompt)
             .unwrap_or_else(|| format!("fake reply: {}", prompts.join("\n")));
+        permissions::end_work(&mut out, permission_working);
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();

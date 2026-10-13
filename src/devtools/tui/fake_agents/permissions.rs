@@ -5,6 +5,29 @@ use std::io::Write;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+pub(super) fn service_prompt(provider: &str, prompt: &str) -> bool {
+    provider == "claude"
+        && prompt.starts_with("Permission assignment ")
+        && std::env::var_os("BUS_PERMISSION_HANDLER_ID").is_some()
+}
+
+/// A real Claude turn announces activity before hooks/tool protocol can block.
+pub(super) fn begin_work(out: &mut impl Write, active: bool) {
+    if active {
+        let _ = write!(out, "{}\r\n", super::working_line("claude", 0, 0));
+        let _ = out.flush();
+    }
+}
+
+pub(super) fn end_work(out: &mut impl Write, active: bool) {
+    if active {
+        let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
+        let rows = super::screen_rows(&super::working_line("claude", 0, 0), cols);
+        let _ = write!(out, "\x1b[{rows}A\r\x1b[J");
+        let _ = out.flush();
+    }
+}
+
 pub(super) fn fixture_kind(prompt: &str) -> Option<&str> {
     let kind = prompt.strip_prefix("fake:permission ")?.trim();
     ["safe", "destructive", "question"]
@@ -95,7 +118,7 @@ impl FakeAgent {
 
     /// Only the fake Claude service executes deterministic typed decisions.
     pub(super) fn permission_reply(&self, prompt: &str) -> Option<String> {
-        if self.provider != "claude" || !prompt.starts_with("Permission assignment ") {
+        if !service_prompt(&self.provider, prompt) {
             return None;
         }
         let handler = std::env::var("BUS_PERMISSION_HANDLER_ID").ok()?;
@@ -237,6 +260,25 @@ pub(super) fn pseudo_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_fixture_claude_busy_frame_confirms_native_acceptance() {
+        let mut screen = super::super::submitted("Permission assignment p8-123.").into_bytes();
+        begin_work(&mut screen, true);
+        let screen = String::from_utf8(screen).unwrap();
+        let detection = crate::agents::manifest::detect_with_osc(
+            crate::agents::AgentKind::Claude,
+            crate::agents::manifest::DetectionInput {
+                screen: &screen,
+                osc_title: "",
+                osc_progress: "",
+            },
+        );
+        assert!(
+            detection.visible_working,
+            "native submit cannot confirm this frame: {screen}"
+        );
+    }
 
     #[test]
     fn permission_fixture_cli_decodes_real_response_envelope() {
