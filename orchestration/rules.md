@@ -72,10 +72,9 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   *Why:* the author adjudicates technical approaches; only an unresolved
   blocking issue stops the review round.
 - **Own the PR's scope.** Lock the goal from the developer's own words (the
-  originating request or issue) before any fan-out: have the author pass them
-  verbatim as the origin to the `pr` skill's goal lock
-  ([LOCK PR INTENT](../skills/pr/SKILL.md)), which later `pr` and `review-pr`
-  runs reuse. A locked
+  originating request or issue) before any fan-out: have the author run
+  [`pr --lock-only --origin <file>`](../skills/pr/SKILL.md) with them
+  verbatim; later `pr` and `review-pr` runs reuse that lock. A locked
   goal widens only on an explicit developer yes to a question that names the
   widening; "add to this PR" for a broad ask is not consent to every item.
   - An audit or gap list yields a deferred list or proposed follow-up PRs;

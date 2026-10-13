@@ -80,7 +80,8 @@ ELSE IF exit != 0 AND FAIL names missing, blank, or mismatched locked Goal/Non-g
     rerun the prologue once; relay any remaining FAIL verbatim and STOP.
   ELSE:
     ask the developer for the PR's originating request (their words or the issue), its one-sentence single Goal,
-    and its explicit Non-goals (`无` when none); write each reply verbatim to ignored temp origin, goal and non-goal files.
+    and its explicit Non-goals (`无` when none); write the goal and non-goal replies verbatim to ignored temp goal and non-goal
+    files, and the request followed by both replies verbatim to an origin file.
     Trim only leading/trailing whitespace; do not summarize, rewrite, or infer from the diff/commits/PR description.
     run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --goal-file <goal-file> --non-goal-file <non-goal-file> --origin-file <origin-file>;
     rerun the prologue.
