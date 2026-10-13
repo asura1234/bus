@@ -673,3 +673,99 @@ fn codex_free_text_question_paragraphs_and_identity_survive_editing_the_placehol
     assert_ne!(untouched.digest(), edited.digest());
     assert_eq!(edited.input.unwrap().value, "MY_TOKEN");
 }
+
+const CLAUDE_MULTI_SELECT: &str =
+    include_str!("../../../tests/fixtures/claude-question/multi-select.txt");
+
+#[test]
+fn claude_multi_select_models_submit_and_chat_as_distinct_rows() {
+    let dialog = parse(CLAUDE_MULTI_SELECT).unwrap();
+    assert_eq!(dialog.options[4].label, "[ ] Type something");
+    assert_eq!(dialog.options[5].label, "Submit");
+    assert_eq!(dialog.options[6].label, "Chat about this");
+    assert_eq!(
+        dialog.keys_for(6).unwrap(),
+        ["down", "down", "down", "down", "down", "enter"]
+    );
+    assert_eq!(
+        dialog.keys_for(7).unwrap(),
+        ["down", "down", "down", "down", "down", "down", "enter"]
+    );
+    let focused = parse(
+        &CLAUDE_MULTI_SELECT
+            .replace("❯ 1.", "  1.")
+            .replace("     Submit", "   ❯ Submit"),
+    )
+    .unwrap();
+    assert_eq!(focused.selected(), Some(6));
+    assert_eq!(focused.keys_for(7).unwrap(), ["down", "enter"]);
+}
+
+#[test]
+fn claude_question_tabs_are_explicit_fingerprint_checked_actions() {
+    let dialog = parse(CLAUDE_MULTI_SELECT).unwrap();
+    assert_eq!(dialog.options[7].label, "Previous question");
+    assert_eq!(dialog.options[8].label, "Next question");
+    assert_eq!(dialog.keys_for(8).unwrap(), ["left"]);
+    assert_eq!(dialog.keys_for(9).unwrap(), ["right"]);
+    let checked = parse(&CLAUDE_MULTI_SELECT.replace("[ ] Build", "[✔] Build")).unwrap();
+    assert_ne!(dialog.digest(), checked.digest());
+    let active =
+        parse(&CLAUDE_MULTI_SELECT.replace("☐ Tier 2 OK?", "\x1b[7m☐ Tier 2 OK?\x1b[0m")).unwrap();
+    assert_ne!(dialog.digest(), active.digest());
+}
+
+#[test]
+fn claude_multi_question_next_and_review_use_their_native_controls() {
+    let screen = "←  ☐ Storage  ☐ Region  ✔ Submit  →\n\nWhich storage?\n\n❯ 1. Redis\n  2. In memory\n  3. Type something.\n     Next\n────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n";
+    let dialog = parse(screen).unwrap();
+    assert_eq!(dialog.options[3].label, "Next");
+    assert_eq!(
+        dialog.keys_for(4).unwrap(),
+        ["down", "down", "down", "enter"]
+    );
+    assert_eq!(dialog.keys_for(6).unwrap(), ["left"]);
+    assert_eq!(dialog.keys_for(7).unwrap(), ["right"]);
+    let review = parse("Review your answers\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel\n\nEnter to select · Esc to cancel\n").unwrap();
+    assert_eq!(review.options[0].label, "Submit answers");
+    assert_eq!(review.keys_for(1).unwrap(), ["enter"]);
+    assert_eq!(review.keys_for(2).unwrap(), ["down", "enter"]);
+}
+
+#[test]
+fn claude_highlighted_submit_ignores_trailing_screen_padding() {
+    let screen = CLAUDE_MULTI_SELECT
+        .replace("❯ 1.", "  1.")
+        .replace("     Submit", "     \x1b[7mSubmit\x1b[0m            ");
+    let dialog = parse(&screen).unwrap();
+    assert_eq!(dialog.selected(), Some(6));
+    assert_eq!(dialog.keys_for(6).unwrap(), ["enter"]);
+}
+
+#[test]
+fn claude_checkbox_toggle_preserves_dialog_identity_but_invalidates_digest() {
+    let unchecked = parse(CLAUDE_MULTI_SELECT).unwrap();
+    let checked = parse(&CLAUDE_MULTI_SELECT.replace("[ ] Build", "[✔] Build")).unwrap();
+    assert_eq!(unchecked.id(), checked.id());
+    assert_ne!(unchecked.digest(), checked.digest());
+}
+
+#[test]
+fn claude_focused_checkbox_custom_field_is_an_empty_text_question_with_stable_identity() {
+    let focused = CLAUDE_MULTI_SELECT
+        .replace("❯ 1.", "  1.")
+        .replace("  5. [ ] Type something", "❯ 5. [ ] Type something")
+        .replace(
+            "Enter to toggle · Tab/Arrow keys to navigate · Esc to cancel",
+            "Enter to toggle · Tab/Arrow keys to navigate\nctrl+g to edit in Vim · Esc to cancel",
+        );
+    let dialog = parse(&focused).unwrap();
+    assert_eq!(dialog.kind, DialogKind::Question);
+    assert!(dialog.options.is_empty());
+    assert_eq!(dialog.text, "Which caches may be removed?");
+    assert_eq!(dialog.input.as_ref().unwrap().value, "");
+    let typed = parse(&focused.replace("[ ] Type something", "[ ] MY_TOKEN")).unwrap();
+    assert_eq!(typed.input.as_ref().unwrap().value, "MY_TOKEN");
+    assert_eq!(dialog.id(), typed.id());
+    assert_ne!(dialog.digest(), typed.digest());
+}

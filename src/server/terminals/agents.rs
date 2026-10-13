@@ -379,6 +379,23 @@ impl App {
             return None;
         }
         let pane = self.pane_info(ws_idx, pane_id)?;
+        let dialog = self
+            .lookup_runtime_sender(ws_idx, pane_id)
+            .and_then(|runtime| runtime.visible_ansi_snapshot_with_seq())
+            .and_then(|(screen, _)| {
+                crate::agents::dialog::parse(&screen)
+                    .map(|dialog| (dialog.id(), true))
+                    .or_else(|| {
+                        (terminal.effective_known_agent() == Some(crate::agents::AgentKind::Codex)
+                            && crate::agents::dialog::codex_question_pending(&screen))
+                        .then(|| {
+                            (
+                                crate::agents::dialog::CODEX_PENDING_QUESTION_ID.to_owned(),
+                                false,
+                            )
+                        })
+                    })
+            });
         Some(crate::protocol::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
@@ -397,19 +414,7 @@ impl App {
                 _ => pane.agent_status,
             },
             screen_detection_skipped: false,
-            dialog_id: self
-                .lookup_runtime_sender(ws_idx, pane_id)
-                .and_then(|runtime| runtime.visible_ansi_snapshot_with_seq())
-                .and_then(|(screen, _)| {
-                    crate::agents::dialog::parse(&screen)
-                        .map(|dialog| dialog.id())
-                        .or_else(|| {
-                            (terminal.effective_known_agent()
-                                == Some(crate::agents::AgentKind::Codex)
-                                && crate::agents::dialog::codex_question_pending(&screen))
-                            .then(|| crate::agents::dialog::CODEX_PENDING_QUESTION_ID.to_owned())
-                        })
-                }),
+            dialog_id: dialog.map(|(id, _)| id),
             update_error: match &terminal.self_update {
                 Some(crate::terminal::SelfUpdate {
                     phase:

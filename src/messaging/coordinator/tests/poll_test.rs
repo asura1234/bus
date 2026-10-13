@@ -251,6 +251,24 @@ mod status_tests {
     }
 
     #[test]
+    fn visible_dialog_poll_keeps_idle_settlement_and_busy_revision() {
+        let mut listing = pane_listing(Some("claude"), "idle");
+        if let Ok(ResponseResult::AgentList { agents }) = &mut listing {
+            agents[0].dialog_id = Some("checkbox-panel".into());
+        }
+        let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![listing]);
+        let busy_revision = worker.state.agent(agent).unwrap().busy_revision;
+        worker.poll().unwrap();
+        let observed = worker.state.agent(agent).unwrap();
+        assert_eq!(observed.status, RuntimeStatus::Idle);
+        assert_eq!(observed.busy_revision, busy_revision);
+        assert_eq!(observed.shown_status(), RuntimeStatus::Blocked);
+        assert!(observed.dialog);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn a_failed_self_update_shows_its_error_until_the_chooser_is_answered() {
         let error = "Bus could not install the codex update (npm failed). Answer the update prompt in bus-r1-a2's terminal; queued messages wait until then.";
         let mut failed = pane_listing(Some("codex"), "blocked");

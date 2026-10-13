@@ -1,0 +1,14 @@
+←  ☐ Tier 2 OK?  ✔ Submit  →
+
+Which caches may be removed?
+
+❯ 1. [ ] Build cache
+  2. [ ] Package cache
+  3. [ ] Simulator cache
+  4. [ ] Download cache
+  5. [ ] Type something
+     Submit
+────────────────────────────────
+  6. Chat about this
+
+Enter to toggle · Tab/Arrow keys to navigate · Esc to cancel

@@ -9,6 +9,7 @@
 //! selection is found when no marker is drawn.
 
 use sha2::{Digest, Sha256};
+mod claude;
 
 pub(crate) const CODEX_PENDING_QUESTION_ID: &str = "codex:pending_question";
 
@@ -42,6 +43,8 @@ pub(crate) struct Dialog {
     pub(crate) options: Vec<DialogOption>,
     /// The key hint below the options, such as `Esc to cancel`.
     pub(crate) hint: Option<String>,
+    /// Tab styling carries Claude's active question even when text is unchanged.
+    fingerprint_context: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +52,8 @@ pub(crate) struct DialogOption {
     pub(crate) number: u32,
     pub(crate) label: String,
     pub(crate) selected: bool,
+    navigation_key: Option<&'static str>,
+    identity_label: Option<String>,
 }
 
 impl Dialog {
@@ -62,7 +67,14 @@ impl Dialog {
             hasher.update(input.skip_key.as_bytes());
         }
         for option in &self.options {
-            hasher.update(format!("\0{}\0{}", option.number, option.label));
+            hasher.update(format!(
+                "\0{}\0{}",
+                option.number,
+                option.identity_label.as_deref().unwrap_or(&option.label)
+            ));
+            if let Some(key) = option.navigation_key {
+                hasher.update(key.as_bytes());
+            }
         }
         format!("{:x}", hasher.finalize())
     }
@@ -71,6 +83,7 @@ impl Dialog {
     pub(crate) fn digest(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.id().as_bytes());
+        hasher.update(self.fingerprint_context.as_bytes());
         if let Some(input) = &self.input {
             hasher.update(input.value.as_bytes());
         }
@@ -95,8 +108,9 @@ impl Dialog {
     /// The keys that choose `number`: arrows from the selected option, then
     /// Enter. `None` when the option does not exist or no selection is visible.
     pub(crate) fn keys_for(&self, number: u32) -> Option<Vec<&'static str>> {
-        if !self.options.iter().any(|option| option.number == number) {
-            return None;
+        let option = self.options.iter().find(|option| option.number == number)?;
+        if let Some(key) = option.navigation_key {
+            return Some(vec![key]);
         }
         let selected = self.selected()?;
         let step = if number > selected { "down" } else { "up" };
@@ -199,7 +213,8 @@ fn is_hint(line: &str) -> bool {
 pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let (texts, styles) = styled_lines(screen);
     let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
-    numbered(&lines, &styles)
+    claude::parse(&lines, &styles)
+        .or_else(|| numbered(&lines, &styles))
         .or_else(|| unnumbered(&lines))
         .or_else(|| text_question(&lines))
 }
@@ -363,6 +378,7 @@ fn question_dialog(
         text,
         options: Vec::new(),
         hint: Some(hint.to_owned()),
+        fingerprint_context: String::new(),
     })
 }
 
@@ -421,9 +437,12 @@ fn unnumbered(lines: &[&str]) -> Option<Dialog> {
                     None => unboxed(lines[index]).trim().to_owned(),
                 },
                 selected: index == marked,
+                navigation_key: None,
+                identity_label: None,
             })
             .collect(),
         hint: Some(hint.to_owned()),
+        fingerprint_context: String::new(),
     })
 }
 
@@ -507,14 +526,7 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                     .last()
                     .is_some_and(|option| option.label == "Chat about this")
             {
-                let question = title(&lines[..start])
-                    .lines()
-                    .filter(|line| !line.starts_with('☐'))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .trim()
-                    .to_owned();
-                return question_dialog(question, hint, &selected.label, "Type something.", "esc");
+                return claude::text_question(&lines[..start], hint, &selected.label);
             }
         }
     }
@@ -528,9 +540,12 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                 number: option.number,
                 label: option.label,
                 selected: option.selected,
+                navigation_key: None,
+                identity_label: None,
             })
             .collect(),
         hint,
+        fingerprint_context: String::new(),
     })
 }
 
