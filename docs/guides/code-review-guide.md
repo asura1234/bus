@@ -261,8 +261,8 @@ An `M`-or-larger slice yields `Abandon (dimension 6: multi-purpose, split with s
 **Goal vs origin.** A goal written after the work grew matches the growth, so the locked goal is itself checked against its
 origin: the plan, or `.locked-origin` (the developer's originating request or the issue, verbatim). When the goal names areas,
 owners, items, or mechanisms the origin did not ask for, write a "goal wider than origin" finding into "新问题与建议", quoting
-both texts. It blocks Ready until the developer rules: confirm the widening (`pr --widen` re-locks with their yes appended to the
-origin) or narrow the goal. The reviewer still does not rewrite the goal. A changed file that serves neither the goal nor the origin is an
+both texts. It blocks Ready until the developer rules: confirm the widening or narrow the goal; either way `pr --relock` re-locks with
+the question and their answer appended to the origin. The reviewer still does not rewrite the goal. A changed file that serves neither the goal nor the origin is an
 out-of-goal slice, sized as above.
 
 ### 7. Bug (unanticipated edge cases)

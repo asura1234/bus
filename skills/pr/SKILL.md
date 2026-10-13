@@ -6,11 +6,12 @@ description: Feature-branch PR workflow. Land uncommitted work, rebase onto orig
 # PR
 
 ```text
-INPUT $ARGUMENTS = [--plan <plan-file>]... [--origin <file>] [--widen <file>] [--lock-only] [--verification <file>]
+INPUT $ARGUMENTS = [--plan <plan-file>]... [--origin <file>] [--relock <file>] [--lock-only] [--verification <file>]
 plans = every plan path the developer supplied this time, in order of appearance; never guess from diff, commits, or historical state.
 origin = optional file holding the PR's originating request verbatim: the developer's own words or the issue text,
   usually passed by the orchestrator. It is what the goal is locked from when there is no plan.
-widen = optional file holding, verbatim, the developer's explicit yes to a question that names a widening of the locked goal.
+relock = optional file holding, verbatim, the question that names a change to the locked goal (widening or narrowing) and
+  the developer's explicit answer to it.
 lock-only = lock the goal and return without publishing; the orchestrator's lock-before-fan-out entry, valid on a branch with no work yet.
 verification = optional Markdown file of `- [x] ` lines, each naming verification actually executed and the commit it proves
   (for example a gate-and-fix PASS artifact with its Head); supplied by the caller, never produced here.
@@ -62,13 +63,13 @@ PR purpose. Do not silently discard, stash, rewrite, or absorb unrelated develop
 ========== LOCK PR INTENT ==========
 
 IF `temp/review-pr/<branch_slug>/.locked-goal` and `.locked-non-goals` already exist (an earlier run or the orchestrator locked them):
-  IF widen is given:
-    Write the goal as the locked goal plus the widening the yes names, the non-goals as the locked ones minus what the
-    yes moves into scope, and the origin as the recorded `.locked-origin` (if any), a blank line, then widen verbatim;
-    pass all three. The script rejects an origin that does not start with the recorded one.
+  IF relock is given:
+    Rewrite the goal and non-goals to exactly the change the question names and the answer approves, and write the
+    origin as the recorded `.locked-origin` (if any), a blank line, then relock verbatim; pass all three. The script
+    refuses a changed lock whose origin does not append to the recorded one.
   ELSE:
     Reuse them unchanged: pass them as `--goal-file` / `--non-goal-file` with no `--origin-file`; the script keeps the
-    recorded origin, and accepts a lock from before origins existed only unchanged. Only widen re-locks.
+    recorded origin, and accepts a lock from before origins existed only unchanged. Only relock re-locks.
 ELSE IF plans nonempty:
   Run `python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" --output
   "<ignored-temp-goal-context>"`, appending `--plan "<path>"` once per plan in original order
@@ -94,12 +95,14 @@ IF lock-only: go to RETURN.
 
 It runs before anything is committed or pushed, so out-of-goal work never reaches the PR.
 mb = `git merge-base origin/master HEAD`.
-Sort every file in committed_changed and working_changed (excluding `plans/**`) into: serves the locked goal, is a
-direct consequence of it (its tests, docs, a required refactor), or serves neither.
-Measure `git diff --shortstat <mb>` (committed plus uncommitted tracked changes).
+pr_files = committed_changed plus the uncommitted files that belong to this PR (exactly what LAND will commit);
+unrelated dirty files LAND leaves untouched are listed as excluded and never sorted.
+Sort every file in pr_files (excluding `plans/**`) into: serves the locked goal, is a direct consequence of it (its
+tests, docs, a required refactor), or serves neither.
+Measure `git diff --shortstat <mb> -- <pr_files>`.
 IF any file serves neither:
   STOP and report each such file with the purpose it serves, the locked goal, and the size; the caller chooses
-  split-pr, moving it to the deferred list, or rerunning with `--widen` holding the developer's explicit yes.
+  split-pr, moving it to the deferred list, or rerunning with `--relock` holding the developer's ruling.
 
 ========== LAND UNCOMMITTED WORK (ONLY IF DIRTY) ==========
 
