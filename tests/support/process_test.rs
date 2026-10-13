@@ -352,7 +352,9 @@ fn terminate_pid(pid: u32) {
         }
     }
 
-    if wait_for_pid_exit(pid_t, Duration::from_millis(400)) {
+    // A SIGKILL during the graceful exit truncates the coverage profile bus
+    // writes last; see `stop_spawned_bus`.
+    if wait_for_pid_exit(pid_t, STOP_GRACE) {
         return;
     }
 

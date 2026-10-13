@@ -30,8 +30,9 @@ mod detach_reattach {
     use serde_json::Value;
     use support::{
         cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-        register_spawned_bus_pid, send_detach, unregister_spawned_bus_pid, wait_for_disconnect,
-        wait_for_socket, wait_until, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
+        register_spawned_bus_pid, send_detach, stop_spawned_bus, unregister_spawned_bus_pid,
+        wait_for_disconnect, wait_for_socket, wait_until,
+        CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
     };
 
     const CUSTOM_HEADLESS_SIZE_CONFIG: &str = r#"onboarding = false
@@ -57,29 +58,15 @@ pane_scrollbars = false
     }
 
     struct SpawnedBus {
-        _master: Box<dyn MasterPty + Send>,
+        _master: Option<Box<dyn MasterPty + Send>>,
         child: Box<dyn Child + Send + Sync>,
     }
 
     impl Drop for SpawnedBus {
         fn drop(&mut self) {
             let pid = self.child.process_id();
-            let _ = self.child.kill();
-
-            if let Some(pid) = pid {
-                let deadline = Instant::now() + Duration::from_secs(2);
-                while Instant::now() < deadline {
-                    let mut status = 0;
-                    let result =
-                        unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-                    if result == pid as libc::pid_t || result == -1 {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-
-                unregister_spawned_bus_pid(Some(pid));
-            }
+            stop_spawned_bus(self.child.as_mut(), self._master.take());
+            unregister_spawned_bus_pid(pid);
         }
     }
 
@@ -146,7 +133,7 @@ pane_scrollbars = false
         drop(pair.slave);
 
         SpawnedBus {
-            _master: pair.master,
+            _master: Some(pair.master),
             child,
         }
     }

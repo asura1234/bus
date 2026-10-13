@@ -2,30 +2,54 @@ use super::*;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 pub struct SpawnedBus {
-    _master: Box<dyn MasterPty + Send>,
+    _master: Option<Box<dyn MasterPty + Send>>,
     pub child: Box<dyn Child + Send + Sync>,
 }
 
 impl Drop for SpawnedBus {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        let _ = self.child.kill();
+        stop_spawned_bus(self.child.as_mut(), self._master.take());
+        unregister_spawned_bus_pid(pid);
+    }
+}
 
-        if let Some(pid) = pid {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < deadline {
-                let mut status = 0;
-                let result =
-                    unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-                if result == pid as libc::pid_t || result == -1 {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
+/// How long a stopped bus may take to finish its graceful exit before teardown
+/// treats it as hung.
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(30);
 
-            unregister_spawned_bus_pid(Some(pid));
+/// Stops a spawned bus like a closing terminal does: SIGHUP and close its PTY,
+/// then wait until it has exited. portable-pty's `Child::kill` sends SIGKILL
+/// about 200 ms after its SIGHUP, which lands inside the bus's graceful exit on
+/// a busy machine and truncates the coverage profile it writes last, failing the
+/// coverage merge. The PTY is closed before waiting because an exiting process
+/// cannot finish while its unread terminal output is still draining. SIGKILL is
+/// kept for a bus that is still running after `STOP_GRACE`.
+pub fn stop_spawned_bus(
+    child: &mut (dyn Child + Send + Sync),
+    master: Option<Box<dyn MasterPty + Send>>,
+) {
+    let Some(pid) = child.process_id() else {
+        return;
+    };
+    if matches!(child.try_wait(), Ok(None)) {
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGHUP);
         }
     }
+    drop(master);
+    let deadline = Instant::now() + STOP_GRACE;
+    while Instant::now() < deadline {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    eprintln!("bus {pid} still running {STOP_GRACE:?} after SIGHUP; sending SIGKILL");
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = child.wait();
 }
 
 pub fn cleanup_spawned_bus(spawned: SpawnedBus, base: PathBuf) {
@@ -102,7 +126,7 @@ pub fn spawn_bus_with_options(
     register_spawned_bus_pid(child.process_id());
 
     SpawnedBus {
-        _master: pair.master,
+        _master: Some(pair.master),
         child,
     }
 }
