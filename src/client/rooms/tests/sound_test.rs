@@ -351,6 +351,46 @@ mod ring_decisions {
     }
 
     #[test]
+    fn hidden_permission_assignment_does_not_ring_or_accrue_unread() {
+        let (mut state, master, work, _, worker) = rooms_with_agents();
+        let handler = state
+            .create_agent(work, "service", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        state.mark_permission_handler(handler).unwrap();
+        state.set_room_sound(work, true).unwrap();
+        state.select_room(master).unwrap();
+        let mut next = state.clone();
+        let ids = next
+            .submit_message_from(work, draft(handler), Author::Agent(worker), 5)
+            .unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(
+            !new_message_should_ring(&state, &next),
+            "hidden protocol rang"
+        );
+        assert_eq!(next.room(work).unwrap().unread_count, 0);
+        assert!(next.room(work).unwrap().latest_prompt.is_none());
+        assert!(
+            next.request(ids[0]).is_some(),
+            "delivery must remain authoritative"
+        );
+    }
+
+    #[test]
+    fn hidden_permission_reply_does_not_ring_but_visible_worker_reply_does() {
+        let (mut state, _, work, _, worker) = rooms_with_agents();
+        let handler = state
+            .create_agent(work, "service", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        state.mark_permission_handler(handler).unwrap();
+        state.set_room_sound(work, true).unwrap();
+        let hidden = with_reply(&state, work, handler, 40);
+        assert!(!new_message_should_ring(&state, &hidden));
+        let visible = with_reply(&hidden, work, worker, 41);
+        assert!(new_message_should_ring(&hidden, &visible));
+    }
+
+    #[test]
     fn an_agent_reply_rings_once_in_an_enabled_room() {
         let (state, master, _, orchestrator, _) = rooms_with_agents();
         let replied = with_reply(&state, master, orchestrator, 40);
