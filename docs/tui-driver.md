@@ -29,7 +29,10 @@ real hooks and answers each prompt with `fake reply: <prompt>`. Like Claude
 Code, it submits on Enter (CR), takes a typed LF as a newline, shows each line
 that is one quoted image path as a leading `[Image #N]`, and clears a line on
 Ctrl+K or Ctrl+U. A prompt containing `fake:work N` keeps it Working for N
-seconds first.
+seconds first. A prompt containing `fake:api-error` ends the turn without a
+reply, as a Claude API error does: it shows `API Error: Connection lost
+mid-response…` and fires `StopFailure` with that text and `error:
+server_error`.
 
 The fake Codex answers the same way, the way Bus sees real Codex: it fires
 every hook in the project's `.codex/hooks.json`, in order, Bus's among them

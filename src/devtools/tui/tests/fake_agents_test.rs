@@ -886,3 +886,15 @@ fn a_fake_cursor_turn_clears_its_working_line_at_every_pane_width() {
         );
     }
 }
+
+#[test]
+fn fake_api_error_ends_only_a_claude_turn_with_the_measured_stop_failure() {
+    let payload = api_error("claude", "run it fake:api-error").unwrap();
+    assert_eq!(payload["error"], "server_error");
+    assert_eq!(
+        payload["last_assistant_message"],
+        "API Error: Connection lost mid-response. The response above may be incomplete."
+    );
+    assert_eq!(api_error("codex", "fake:api-error"), None);
+    assert_eq!(api_error("claude", "just hello"), None);
+}
