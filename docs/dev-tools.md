@@ -10,6 +10,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   quit
   diagnostics
   ui hits      (dev variant only)
+  agent legacy-fixture AGENT (scratch fake-provider sessions only; dev variant)
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
 orchestrators and workers coordinate, and every session answers it. Dev tools
