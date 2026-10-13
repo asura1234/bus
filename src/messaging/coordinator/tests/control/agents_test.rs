@@ -671,3 +671,34 @@ fn agent_clear_keeps_reset_intent_only_while_the_reset_may_have_been_typed() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[test]
+fn permission_profile_orchestrator_keeps_native_control_protocol() {
+    let (mut worker, _, _, dir) = fixture();
+    worker.transport = Box::new(NoTabs);
+    let pwd = dir.join("orchestrator-root");
+    std::fs::create_dir(&pwd).unwrap();
+    call(
+        &mut worker,
+        "orch",
+        "agent.add",
+        json!({"room":"master","name":"orch","provider":"claude","cwd":pwd,"orchestrates":"test"}),
+    );
+    let agent = worker.state.agents().find(|a| a.name == "orch").unwrap().id;
+    let settings: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(launch_spool(&worker, agent).join("claude-settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        settings.get("sandbox").is_none(),
+        "worker sandbox must not restrict orchestrator Bus protocol"
+    );
+    assert!(
+        settings["permissions"]["allow"]
+            .as_array()
+            .is_none_or(|a| a.is_empty()),
+        "operational allows are service-only"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

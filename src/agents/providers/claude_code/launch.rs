@@ -73,6 +73,8 @@ pub(crate) fn prepare(
         args,
         adopted_session,
         env: spec.hooks.env(),
+        scratch_dir: None,
+        profile: String::new(),
     })
 }
 

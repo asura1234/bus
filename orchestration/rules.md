@@ -107,14 +107,16 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   only: the orchestrator never resets its own context and is never replaced
   for compactions. *Why:* you carry the context, carry-over and situational
   awareness for the whole effort.
-- **On "Blocked, needs help to continue.", look at the worker's terminal.** A
-  worker blocked on a dialog, question, trust prompt or any other screen sends
-  you exactly that message, once, with no details; `bus wait` also stops with
-  `agent_waiting_on_dialog`. Inspect it with `bus agent dialog AGENT` (or `bus
-  agent read AGENT --source visible`) and handle it with `bus agent choose` or
-  `bus agent answer`, asking the developer first for anything destructive or
-  outward-facing. *Why:* Bus is not an agent and sends no messages itself; the
-  worker's terminal is the source of truth.
+- **Handle escalations, routed choices and fallback notices.** Every blocked
+  episode reaches the room's hidden permission handler first. Routine safe
+  approvals belong to that service. It sends you one concise line for an unsafe
+  or uncertain request, a non-permission question/choice, or fallback. Read raw
+  dialogs only when needed with `bus agent dialog AGENT`; use fresh fingerprints
+  and typed choose/answer for settled assignments. Never race an active handler
+  lease. Ask the developer before destructive or outward-facing work unless
+  their existing authorization covers it. The 90-second deadline includes queue
+  time; unavailable handlers fall back immediately. *Why:* routine approvals
+  stay out of your context while decisions that require your judgment reach you.
 - **Use `worktree-new` only when it is a must.** By default all workers share
   one branch: give each worker its file boundaries and grant shared files one
   agent at a time. *Why:* one branch avoids merge work and keeps everyone on the

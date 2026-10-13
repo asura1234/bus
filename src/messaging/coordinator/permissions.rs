@@ -7,11 +7,23 @@ use std::path::Path;
 pub(super) const POLICY: &str = include_str!("../../../orchestration/permission-handler.md");
 pub(super) fn handler_prompt(room: RoomId, handler: AgentId, data: &Path) -> String {
     let executable = std::env::current_exe().ok();
-    let target = executable.as_ref().and_then(|p| {
+    handler_prompt_with_binary(room, handler, data, executable.as_deref())
+}
+pub(super) fn handler_prompt_with_binary(
+    room: RoomId,
+    handler: AgentId,
+    data: &Path,
+    executable: Option<&Path>,
+) -> String {
+    let target = executable.and_then(|p| {
         p.ancestors()
             .find(|a| a.file_name().is_some_and(|n| n == "target"))
     });
-    format!("{POLICY}\nYour room is {}. Your handler agent ID is {}. Live session data/control path to protect: {}. Protected running Bus executable: {:?}; protected live build target: {:?}. Assigned worker roots must be inspected from current Bus state. Service scratch: {}.\n", room.0, handler.0, data.display(), executable, target, data.join("permission-handlers").join(room.0.to_string()).display())
+    let prefix = executable
+        .map(crate::agents::providers::launch::profile::cli_prefix)
+        .unwrap_or_else(|| "UNAVAILABLE_BUS_EXECUTABLE".into());
+    let policy = POLICY.replace("bus ", &format!("{prefix} "));
+    format!("{policy}\nOperational CLI prefix: {prefix}. Invoke this exact quoted executable prefix for every Bus operation. Your room is {}. Your handler agent ID is {}. Live session data/control path to protect: {}. Protected running Bus executable: {:?}; protected live build target: {:?}. Assigned worker roots must be inspected from current Bus state. Service scratch: {}.\n", room.0, handler.0, data.display(), executable, target, data.join("permission-handlers").join(room.0.to_string()).display())
 }
 impl Worker {
     pub(super) fn maintain_permission_handlers(&mut self) -> Result<(), String> {

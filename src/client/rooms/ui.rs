@@ -325,7 +325,7 @@ impl BusUi {
                 self.open_room(room);
                 if self.seed_first_room {
                     self.seed_first_room = false;
-                    self.queue(BusCommand::SetNotes(room, "Goal: stay in the room to coordinate selected agents.\nNon-goals: automatic handoffs or permission approval.".into()), Effect::None);
+                    self.queue(BusCommand::SetNotes(room, "Goal: stay in the room to coordinate selected agents.\nNon-goals: automatic handoffs.\nRoutine safe approvals: managed permission handler.".into()), Effect::None);
                 }
             }
             BusEvent::AgentAdded(agent) => {
@@ -696,6 +696,26 @@ fn storage_paused(pending: &Pending) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn permission_profile_seed_notes_do_not_forbid_standing_safe_approvals() {
+        let (mut ui, room) = ui();
+        ui.seed_first_room = true;
+        ui.receive_event(BusEvent::RoomCreated(room));
+        let text = ui
+            .pending
+            .iter()
+            .find_map(|p| match &p.command {
+                BusCommand::SetNotes(_, text) => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            text.contains("Routine safe approvals: managed permission handler."),
+            "{text}"
+        );
+        assert!(!text.contains("or permission approval"));
+    }
+
     fn ui() -> (BusUi, RoomId) {
         let mut state = BusState::default();
         let room = state.create_room("bus").unwrap();

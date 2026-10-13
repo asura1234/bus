@@ -13,3 +13,19 @@ Escalate WITHOUT ANSWERING: destructive work outside the worker's own roots; tou
 For an authorized permission only: `bus agent choose WORKER --option N --fingerprint F --handler HANDLER --assignment TOKEN` (or typed `agent answer` where the actual permission requires text). An uncertain answer MUST NOT be retried. Approval completion requires confirmed native closure/replacement. Then `bus agent permission-decision WORKER --handler HANDLER --assignment TOKEN --fingerprint F --outcome approved --summary 'short command category and reason'`.
 
 For escalation/routing: `bus agent permission-decision WORKER --handler HANDLER --assignment TOKEN --fingerprint F_OR_unavailable --outcome escalated|routed --summary 'short redacted category and reason'`. Bus records exactly one short decision line in THIS work room, including worker, outcome, reason, episode and fingerprint. Escalated/routed lines wake only this room's orchestrator; approved lines are audit-only. NEVER log in MASTER or send a separate duplicate decision message. Finish your turn with a brief acknowledgement, never a raw terminal dump. Assignment tokens expire; stale completion or answers are rejected. Fallback belongs to Bus and must not be duplicated.
+
+Inspect `launch_cwd` as the frozen authorized root and `scratch_dir` as the
+assigned private launch resource. `cwd` is only an actual native observation and
+can drift. Missing legacy `launch_cwd` means escalate; never infer ownership from
+current cwd. Provider source approvals have no fabricated handler audit entries.
+Claude worker settings are additive and keep regular approval checks; do not
+assume their Bash sandbox confines all tools or inherited write permissions.
+Your narrowly allowed current-executable Bus protocol is an explicit service
+exception for assigned inspection/answer/completion, not permission to execute
+a worker command or access secrets.
+
+Before approving, verify the frozen root and assigned scratch still canonicalize
+to exactly their recorded paths; a missing or replaced root means escalate.
+Your service preserves inherited/managed sandbox restrictions and adds only the
+assigned session control socket. If those restrictions prevent operation, let
+Bus use its bounded fallback rather than widening them.

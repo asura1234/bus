@@ -198,7 +198,19 @@ impl BusState {
             return Ok(());
         }
         let agent = self.agent(worker).ok_or("Unknown worker")?;
-        let text = format!("Permission assignment {}. Worker {} (agent {}), handler {}. Inspect: bus agent dialog {}. Canonical worker cwd: {}. Read fresh room workflow authorization with bus state and the room's workflow files; the listed safe classes have standing user authorization; other unclear authority means escalate. Deadline {}. Complete with bus agent permission-decision {} --handler {} --assignment {} --fingerprint FINGERPRINT_OR_unavailable --outcome approved|escalated|routed --summary ONE_LINE. Managed choose/answer must include --handler {} --assignment {}. Never answer an unknown screen.", p.token, agent.name, worker.0, handler.0, worker.0, agent.cwd.display(), p.deadline_ms, worker.0, handler.0, p.token, handler.0, p.token);
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        let cli = crate::platform::remote_reattach_program(&executable.to_string_lossy());
+        let root = agent
+            .launch_cwd
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "unknown (legacy); escalate".into());
+        let scratch = agent
+            .scratch_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none assigned".into());
+        let text = format!("Permission assignment {}. Worker {} (agent {}), handler {}. Inspect: {cli} agent dialog {}. Frozen authorized worker root: {}. Actual observed cwd: {}. Assigned private scratch: {}. Read fresh room workflow authorization with {cli} state and the room's workflow files; the listed safe classes have standing user authorization; other unclear authority means escalate. Deadline {}. Complete with {cli} agent permission-decision {} --handler {} --assignment {} --fingerprint FINGERPRINT_OR_unavailable --outcome approved|escalated|routed --summary ONE_LINE. Managed choose/answer must include --handler {} --assignment {}. Never answer an unknown screen.", p.token, agent.name, worker.0, handler.0, worker.0, root, agent.cwd.display(), scratch, p.deadline_ms, worker.0, handler.0, p.token, handler.0, p.token);
         let requests = self
             .submit_message_with(
                 p.room,

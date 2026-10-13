@@ -302,6 +302,14 @@ pub(crate) struct RoomAgent {
     #[serde(default)]
     pub(crate) permission_reset_at_ms: Option<u64>,
     pub(crate) provider: Provider,
+    /// Frozen creation/launch authority; runtime cwd observations never change it.
+    #[serde(default)]
+    pub(crate) launch_cwd: Option<PathBuf>,
+    /// Private launch resource, retained while terminal ownership is uncertain.
+    #[serde(default)]
+    pub(crate) scratch_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) launch_profile: Option<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,

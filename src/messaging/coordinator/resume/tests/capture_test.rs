@@ -558,3 +558,86 @@ fn bus_resume_refuses_callback_spool_symlink_escape_before_touching_capture() {
     );
     assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), hooks_before);
 }
+
+#[test]
+fn permission_profile_resume_restores_service_identity_and_current_executable_rules() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.state.mark_permission_handler(fixture.agent).unwrap();
+    fixture.save();
+    let extras = fixture.load().unwrap();
+    assert!(extras.env.contains(&("BUS_PERMISSION_HANDLER_ID".into(), fixture.agent.0.to_string())));
+    assert!(extras.env.iter().any(|(k,v)| k == "PATH" && std::env::split_paths(std::ffi::OsStr::new(v)).next().as_deref() == fixture.binary.parent()));
+    let settings: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
+    assert!(settings["permissions"]["allow"].as_array().unwrap().iter().any(|v| v.as_str().unwrap().contains("agent permission-decision")));
+}
+
+#[test]
+fn permission_profile_resume_refuses_observed_cwd_drift_before_capture_rewrite() {
+    let fixture = Fixture::new(Provider::Codex);
+    let bytes = std::fs::read(fixture.hook_path()).unwrap();
+    let mut context = fixture.context();
+    context.project = fixture.root.clone();
+    std::fs::create_dir_all(fixture.root.join(".codex")).unwrap();
+    std::fs::write(fixture.root.join(".codex/hooks.json"), &bytes).unwrap();
+    assert!(load(&context, &fixture.facts, &fixture.plan).is_err(), "resume silently widened root");
+    assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), bytes);
+}
+
+#[test]
+fn permission_profile_resume_new_binary_overlap_downgrades_codex() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let scratch = fixture.root.join("scratch");
+    std::fs::create_dir(&scratch).unwrap();
+    let mut value = serde_json::to_value(&fixture.state).unwrap();
+    value["agents"][fixture.agent.0.to_string()]["scratch_dir"] = json!(scratch.canonicalize().unwrap());
+    value["agents"][fixture.agent.0.to_string()]["launch_profile"] = json!("codex-workspace-write-v1");
+    fixture.state = serde_json::from_value(value).unwrap();
+    fixture.save();
+    let mut context = fixture.context();
+    context.binary = fixture.project.join("target/debug/bus");
+    std::fs::create_dir_all(context.binary.parent().unwrap()).unwrap();
+    std::fs::write(&context.binary, b"fixture binary").unwrap();
+    let extras = load(&context, &fixture.facts, &fixture.plan).unwrap();
+    assert!(extras.args.windows(2).any(|args| args == ["--sandbox", "read-only"]), "new running binary must remain protected: {:?}", extras.args);
+}
+
+#[test]
+fn permission_profile_resume_rebinds_claude_worker_protected_paths() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let scratch = fixture.root.join("scratch");
+    std::fs::create_dir(&scratch).unwrap();
+    let mut value = serde_json::to_value(&fixture.state).unwrap();
+    value["agents"][fixture.agent.0.to_string()]["scratch_dir"] = json!(scratch.canonicalize().unwrap());
+    value["agents"][fixture.agent.0.to_string()]["launch_profile"] = json!("claude-additive-sandbox-regular-approval-v1");
+    fixture.state = serde_json::from_value(value).unwrap();
+    fixture.save();
+    let mut context = fixture.context();
+    context.binary = fixture.project.join("new-target/debug/bus");
+    load(&context, &fixture.facts, &fixture.plan).unwrap();
+    let settings: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
+    assert!(settings["sandbox"]["filesystem"]["denyWrite"].as_array().unwrap().contains(&json!(context.binary)));
+}
+
+#[test]
+fn permission_profile_service_socket_exception_is_exact_and_preserves_inherited_sandbox() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.state.mark_permission_handler(fixture.agent).unwrap();
+    fixture.save();
+    fixture.load().unwrap();
+    let settings: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
+    assert_eq!(settings["sandbox"]["network"]["allowUnixSockets"], json!([fixture.root.canonicalize().unwrap().join("control.sock")]));
+    assert!(settings["sandbox"].get("enabled").is_none());
+    assert!(settings["sandbox"].get("filesystem").is_none());
+    assert!(settings["sandbox"]["network"].get("allowAllUnixSockets").is_none());
+}
+
+#[test]
+fn permission_profile_service_state_without_args_has_exact_allow_rule() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.state.mark_permission_handler(fixture.agent).unwrap();
+    fixture.save();
+    fixture.load().unwrap();
+    let settings: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
+    let prefix = crate::agents::providers::launch::profile::cli_prefix(&fixture.binary);
+    assert!(settings["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({prefix} state)"))));
+}

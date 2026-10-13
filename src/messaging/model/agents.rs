@@ -47,6 +47,9 @@ impl BusState {
                 permission_clear_started: false,
                 permission_reset_at_ms: None,
                 provider,
+                launch_cwd: cwd.canonicalize().ok(),
+                scratch_dir: None,
+                launch_profile: None,
                 cwd,
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
@@ -75,6 +78,23 @@ impl BusState {
         );
         self.queues.insert(id, Vec::new());
         Ok(id)
+    }
+
+    pub(crate) fn set_agent_launch_scope(
+        &mut self,
+        id: AgentId,
+        cwd: PathBuf,
+        scratch: Option<PathBuf>,
+        profile: String,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        agent.launch_cwd = Some(cwd);
+        agent.scratch_dir = scratch;
+        agent.launch_profile = Some(profile);
+        Ok(())
     }
 
     pub(crate) fn record_compaction(&mut self, id: AgentId, at_ms: u64) -> Result<(), ModelError> {

@@ -72,7 +72,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** pristine scratch data/settings; no pre-created workers.
 
 1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and AGENTS list have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
-2. Inspect room notes → seeded text includes `Goal: stay in the room to coordinate selected agents.` and `Non-goals: automatic handoffs or permission approval.`
+2. Inspect room notes → seeded text includes `Goal: stay in the room to coordinate selected agents.` and `Non-goals: automatic handoffs.` and `Routine safe approvals: managed permission handler.`
 3. Press Enter on the empty composer → no message, error or agent is created.
 4. Type `/help`, press Enter, scroll with PageDown, then Esc → local `Keyboard shortcuts` guide opens and closes; `/help` is not sent or retained as a message.
 

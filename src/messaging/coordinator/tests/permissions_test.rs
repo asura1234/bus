@@ -639,3 +639,147 @@ fn permission_handler_public_state_bounds_recent_audit_and_hides_completed_assig
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn permission_profile_cwd_drift_keeps_frozen_root_in_assignment() {
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    ready_permission_handler(&mut worker, room, &dir);
+    let original = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .cwd
+        .canonicalize()
+        .unwrap();
+    let drift = dir.join("drift");
+    std::fs::create_dir(&drift).unwrap();
+    worker
+        .state
+        .update_agent_runtime_metadata(agent, drift.clone(), None)
+        .unwrap();
+    let value = serde_json::to_value(worker.state.agent(agent).unwrap()).unwrap();
+    assert_eq!(value["launch_cwd"], json!(original));
+    post_blocked(&mut worker.state, agent, true).unwrap();
+    let prompt = &sent_by(&worker, room, agent)[0].1;
+    assert!(
+        prompt.contains(&format!(
+            "Frozen authorized worker root: {}",
+            original.display()
+        )),
+        "{prompt}"
+    );
+    assert!(prompt.contains(&format!("Actual observed cwd: {}", drift.display())));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn permission_profile_legacy_unknown_root_requires_escalation() {
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    ready_permission_handler(&mut worker, room, &dir);
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    value["agents"][agent.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("launch_cwd");
+    worker.state = serde_json::from_value(value).unwrap();
+    post_blocked(&mut worker.state, agent, true).unwrap();
+    assert!(sent_by(&worker, room, agent)[0]
+        .1
+        .contains("unknown (legacy); escalate"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn permission_profile_service_pins_current_binary_and_narrow_operational_rules() {
+    struct InspectService;
+    impl Transport for InspectService {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let Method::TabCreate(p) = method else {
+                panic!("unexpected {method:?}")
+            };
+            let binary = std::env::current_exe().unwrap();
+            let first = std::env::split_paths(std::ffi::OsStr::new(
+                p.env.get("PATH").expect("service PATH"),
+            ))
+            .next()
+            .unwrap();
+            assert_eq!(first, binary.parent().unwrap());
+            let settings: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    PathBuf::from(&p.env["BUS_CALLBACK_DIR"]).join("claude-settings.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let allow = settings["permissions"]["allow"].as_array().unwrap();
+            for family in [
+                "state",
+                "agent dialog",
+                "agent choose",
+                "agent answer",
+                "agent permission-decision",
+            ] {
+                assert!(
+                    allow.iter().any(|v| v
+                        .as_str()
+                        .is_some_and(|s| s.contains(&format!("{family} *"))
+                            && s.contains(&*binary.to_string_lossy()))),
+                    "missing {family}: {allow:?}"
+                );
+            }
+            assert!(allow
+                .iter()
+                .all(|v| !["Bash", "Bash(bus *)", "Bash(cargo *)", "Bash(rm *)"]
+                    .contains(&v.as_str().unwrap())));
+            assert!(settings["sandbox"].get("enabled").is_none());
+            assert!(settings["sandbox"].get("filesystem").is_none());
+            let prompt = std::fs::read_to_string(
+                PathBuf::from(&p.env["BUS_CALLBACK_DIR"]).join("system-prompt.md"),
+            )
+            .unwrap();
+            assert!(prompt.contains("Operational CLI prefix:"));
+            let prefix = crate::agents::providers::launch::profile::cli_prefix(&binary);
+            assert!(
+                prompt.contains(&format!("{prefix} state")),
+                "policy CLI must match permission matcher literally: {prompt}"
+            );
+            Err(TransportError {
+                code: None,
+                message: "inspected service".into(),
+                definitely_rejected: true,
+            })
+        }
+    }
+    let (mut worker, _, _, _, _, dir) = worker(false);
+    worker.transport = Box::new(InspectService);
+    worker.maintain_permission_handlers().unwrap();
+    assert_eq!(
+        worker
+            .state
+            .agents()
+            .filter(|a| a.permission_handler)
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn permission_profile_assignment_uses_exact_current_executable_commands() {
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    ready_permission_handler(&mut worker, room, &dir);
+    post_blocked(&mut worker.state, agent, true).unwrap();
+    let prefix =
+        crate::agents::providers::launch::profile::cli_prefix(&std::env::current_exe().unwrap());
+    let prompt = &sent_by(&worker, room, agent)[0].1;
+    assert!(
+        prompt.contains(&format!("{prefix} agent dialog {}", agent.0)),
+        "{prompt}"
+    );
+    assert!(prompt.contains(&format!("{prefix} agent permission-decision {}", agent.0)));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

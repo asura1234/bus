@@ -359,7 +359,16 @@ impl Worker {
                 return Ok(());
             }
         }
-        let (mut prepared, hooks) = self.prepare_provider_launch(&input, id)?;
+        let (mut prepared, hooks) =
+            self.prepare_provider_launch(&input, id, permission_handler, orchestrator.is_some())?;
+        state
+            .set_agent_launch_scope(
+                id,
+                prepared.cwd.clone(),
+                prepared.scratch_dir.clone(),
+                prepared.profile.clone(),
+            )
+            .map_err(|e| e.to_string())?;
         if permission_handler {
             prepared
                 .env
@@ -451,6 +460,8 @@ impl Worker {
         &self,
         input: &AddAgent,
         id: AgentId,
+        permission_handler: bool,
+        orchestrator: bool,
     ) -> Result<(launch::PreparedLaunch, HookContext), String> {
         let binary = std::env::current_exe().map_err(|e| e.to_string())?;
         let launch_id = crate::utils::time::digest(
@@ -468,6 +479,8 @@ impl Worker {
             launch_id,
         };
         let spec = launch::LaunchSpec {
+            permission_handler,
+            orchestrator,
             provider: identity::provider_kind(input.provider),
             cwd: input.cwd.clone(),
             extra_args: input.extra_args.clone(),
