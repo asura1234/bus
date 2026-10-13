@@ -13,7 +13,7 @@
 mod directives;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
-use directives::{api_error, spin, work_seconds};
+use directives::{api_error, dialog_seconds, show_dialog, spin, work_seconds};
 use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -307,6 +307,9 @@ impl FakeAgent {
             "UserPromptSubmit"
         };
         self.hook(submit, Some(&turn), json!({"prompt": prompt}));
+        if let Some(seconds) = dialog_seconds(prompt) {
+            show_dialog(seconds);
+        }
         match work_seconds(prompt) {
             Some(seconds) if self.live_turn() => match self.work(seconds) {
                 Ok(steered) => prompts.extend(steered.iter().map(|p| p.trim().to_owned())),

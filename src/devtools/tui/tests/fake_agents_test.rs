@@ -903,3 +903,13 @@ fn fake_api_error_ends_only_a_claude_turn_with_the_measured_stop_failure() {
 fn fake_api_error_is_ignored_by_a_fake_cursor() {
     assert_eq!(api_error("cursor-agent", "fake:api-error"), None);
 }
+
+#[test]
+fn fake_dialog_is_read_as_a_dialog_and_holds_for_its_seconds() {
+    assert_eq!(dialog_seconds("go fake:dialog 30"), Some(30));
+    assert_eq!(dialog_seconds("go fake:work 5"), None);
+    let dialog =
+        crate::agents::dialog::parse(&directives::DIALOG.replace('\r', "")).expect("a dialog");
+    assert_eq!(dialog.text, "Do you want to proceed?");
+    assert_eq!(dialog.options.len(), 2);
+}

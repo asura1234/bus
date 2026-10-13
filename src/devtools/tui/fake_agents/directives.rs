@@ -1,5 +1,5 @@
-//! Prompt directives that make a fake provider act out a turn: `fake:work N`
-//! and `fake:api-error`.
+//! Prompt directives that make a fake provider act out a turn: `fake:work N`,
+//! `fake:dialog N` and `fake:api-error`.
 use super::working_line;
 use serde_json::{json, Value};
 use std::io::Write;
@@ -8,9 +8,36 @@ use std::time::Instant;
 /// A prompt containing `fake:work N` keeps the fake busy for N seconds (at
 /// most 600), so a driver can see a Working agent and a live spinner.
 pub(super) fn work_seconds(prompt: &str) -> Option<u64> {
-    let rest = prompt.split("fake:work").nth(1)?;
+    directive_seconds(prompt, "fake:work")
+}
+
+/// A prompt containing `fake:dialog N` holds its turn on [`DIALOG`] for N
+/// seconds (at most 600), so a driver can see an agent wait on a dialog.
+pub(super) fn dialog_seconds(prompt: &str) -> Option<u64> {
+    directive_seconds(prompt, "fake:dialog")
+}
+
+fn directive_seconds(prompt: &str, directive: &str) -> Option<u64> {
+    let rest = prompt.split(directive).nth(1)?;
     let seconds: u64 = rest.split_whitespace().next()?.parse().ok()?;
     Some(seconds.min(600))
+}
+
+/// A permission dialog as Claude Code draws one, which Bus reads off the
+/// screen as the agent waiting on a dialog.
+pub(super) const DIALOG: &str =
+    "Do you want to proceed?\r\n\u{276f} 1. Yes\r\n  2. No\r\n\r\nEsc to cancel\r\n";
+
+/// Shows [`DIALOG`] for `seconds`, then clears it. Nothing is chosen: the
+/// dialog only holds the turn, which then answers as usual.
+pub(super) fn show_dialog(seconds: u64) {
+    let mut out = std::io::stdout();
+    let _ = write!(out, "{DIALOG}");
+    let _ = out.flush();
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    let rows = DIALOG.matches("\r\n").count();
+    let _ = write!(out, "\x1b[{rows}A\r\x1b[J");
+    let _ = out.flush();
 }
 
 /// Claude's working line, redrawn in place: `✻ Working… (3s · esc to
