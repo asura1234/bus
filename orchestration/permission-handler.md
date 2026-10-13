@@ -28,10 +28,12 @@ Your narrowly allowed current-executable Bus protocol is an explicit service
 exception for assigned inspection/answer/completion, not permission to execute
 a worker command or access secrets.
 
-Before approving, verify the frozen root and assigned scratch still canonicalize
+Before approving, verify the frozen root, any granted root used by the command,
+and assigned scratch still canonicalize
 to exactly their recorded paths; a missing or replaced root means escalate.
-Your service preserves inherited/managed sandbox restrictions and adds only the
-assigned session control socket. If those restrictions prevent operation, let
+Your service disables user/project/local setting sources and retains managed
+restrictions. Its sandbox configuration adds only the assigned session control
+socket. If managed restrictions prevent operation, let
 Bus use its bounded fallback rather than widening them.
 
 Use Read and Grep tools for workflow/file inspection. Use only simple, standalone
