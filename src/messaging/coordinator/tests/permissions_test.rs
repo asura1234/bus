@@ -430,6 +430,59 @@ fn permission_handler_fallback_withdraws_queued_assignment_before_reset() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]
+fn permission_handler_timely_reset_delivers_waiting_assignment_after_rebind() {
+    struct ClearOnly(Arc<Mutex<Vec<String>>>);
+    impl Transport for ClearOnly {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let Method::AgentPromptIfIdle(p) = method else {
+                panic!("unexpected request {method:?}")
+            };
+            self.0.lock().unwrap().push(p.text);
+            Ok(ResponseResult::AgentPrompted {agent:serde_json::from_value(json!({"terminal_id":"handler-terminal","agent":"claude","agent_status":"idle","workspace_id":"w","tab_id":"t","pane_id":"handler-pane","focused":false,"interactive_ready":true,"revision":1})).unwrap()})
+        }
+    }
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    let handler = ready_permission_handler(&mut worker, room, &dir);
+    let other = worker
+        .state
+        .create_agent(room, "other", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    let now = crate::messaging::storage::io::now_ms();
+    worker
+        .state
+        .dispatch_permission("bus", agent, "unknown".into(), now)
+        .unwrap();
+    worker
+        .state
+        .complete_permission(
+            agent,
+            crate::messaging::model::PermissionOutcome::Routed,
+            "unknown screen",
+            now,
+        )
+        .unwrap();
+    worker
+        .state
+        .dispatch_permission("bus", other, "other-screen".into(), now)
+        .unwrap();
+    let clears = Arc::default();
+    worker.transport = Box::new(ClearOnly(Arc::clone(&clears)));
+    worker.maintain_permissions().unwrap();
+    assert_eq!(*clears.lock().unwrap(), ["/clear"]);
+    assert!(!worker.state.permission_assignment(other).unwrap().delivered);
+    worker
+        .state
+        .rebind_reset_session(handler, "fresh-session".into())
+        .unwrap();
+    worker.maintain_permissions().unwrap();
+    let assignment = worker.state.permission_assignment(other).unwrap();
+    assert!(assignment.outcome.is_none() && assignment.delivered);
+    assert_eq!(worker.state.permission_decisions().len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn permission_handler_clear_suspends_delivery_until_new_session_rebind_and_keeps_audit() {
     struct ClearOnly(Arc<Mutex<Vec<String>>>);
     impl Transport for ClearOnly {
