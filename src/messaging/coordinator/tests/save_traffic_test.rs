@@ -242,3 +242,35 @@ fn a_ui_command_never_overtakes_a_control_mutation() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn callback_spool_survives_every_atomic_save_failure_boundary() {
+    use crate::messaging::storage::state_store::SaveStage;
+
+    for stage in [
+        SaveStage::TempCreate,
+        SaveStage::TempWrite,
+        SaveStage::TempSync,
+        SaveStage::Replace,
+        SaveStage::ParentSync,
+    ] {
+        let (mut worker, _, _, dir, _) = idle_worker();
+        for turn in 0..3 {
+            record(
+                &dir,
+                Provider::ClaudeCode,
+                claude_start(&format!("own-turn-{turn}"), &format!("task {turn}")),
+            );
+        }
+        let before = worker.state.clone();
+        worker.store.fail_once_at(stage);
+        assert!(worker.tick().is_err(), "{stage:?}");
+        assert_eq!(spooled(&dir), 3, "{stage:?}: no unsynced acknowledgement");
+        assert!(
+            !worker.state.durable_poll_change_from(&before),
+            "{stage:?}: failed batch does not publish its model changes"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
