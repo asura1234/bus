@@ -880,6 +880,15 @@ fn caller_home_stays_out_of_file_suggestions_and_agent_settings() {
     ]);
     let state = bus_state(&session);
     let agents = state["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 2, "worker plus managed handler: {state}");
+    assert_eq!(
+        agents
+            .iter()
+            .filter(|a| a["permission_handler"] == true)
+            .count(),
+        1,
+        "{state}"
+    );
     assert_eq!(
         agents[0]["cwd"],
         scratch_home.canonicalize().unwrap().to_str().unwrap(),
@@ -892,13 +901,15 @@ fn caller_home_stays_out_of_file_suggestions_and_agent_settings() {
         .collect();
     assert_eq!(
         saved.len(),
-        1,
-        "statusline settings should have been captured"
+        2,
+        "worker and managed handler settings should have been captured"
     );
-    assert_eq!(
-        serde_json::from_slice::<Value>(&saved[0].1).unwrap(),
-        serde_json::json!({})
-    );
+    for (_, settings) in &saved {
+        assert_eq!(
+            serde_json::from_slice::<Value>(settings).unwrap(),
+            serde_json::json!({})
+        );
+    }
     let (code, stopped) = tui(&session.0, &["stop"]);
     assert_eq!(code, 0, "{stopped}");
     assert_eq!(files_under(&caller_home), before, "caller HOME was written");
