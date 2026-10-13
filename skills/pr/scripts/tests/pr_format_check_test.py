@@ -35,7 +35,6 @@ def valid_body() -> str:
             "## 摘要",
             "",
             "- **主要变更**：校验 PR 工作流和验证证据",
-            "- **大小**：`M`",
             "",
             "## 目标",
             "",
@@ -202,12 +201,9 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertEqual(guidance, self.sections)
         self.assertNotIn("\n## ", self.template_text.split("# PR 描述", 1)[1])
 
-    def test_body_rejects_comments_and_invalid_size(self) -> None:
+    def test_body_rejects_comments(self) -> None:
         problems = self.check(valid_body().replace("无 UI 变更", "<!-- 待补 -->"))
         self.assertTrue(any("HTML comments" in problem for problem in problems))
-
-        problems = self.check(valid_body().replace("- **大小**：`M`", "- **大小**：`巨大`"))
-        self.assertTrue(any("大小" in problem for problem in problems))
 
     def test_placeholders_are_derived_from_the_template(self) -> None:
         """Placeholders must come from the template itself, not from a list hard-coded in the script.
