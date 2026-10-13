@@ -826,3 +826,36 @@ fn an_unreported_message_typed_into_a_held_turn_settles_at_the_shell_cap() {
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert_eq!(fixture.request(question).phase, RequestPhase::Completed);
 }
+
+/// disk2 replied while its file search still ran. A held reply is known
+/// progress with its own cap, not failed transcript capture.
+#[test]
+fn a_shell_held_reply_does_not_stall_its_sender_or_block_later_messages() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.now += crate::messaging::model::DELIVERED_STALL_MS + 60_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let status = fixture
+        .worker
+        .control_message_at(fixture.request(lead).prompt.id, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["stage"], "delivered", "{status}");
+    assert_eq!(status["requests"][0]["reason"], Value::Null, "{status}");
+    assert_eq!(status["requests"][0]["turn_ended"], false);
+    let next = fixture.send("go, run the approved cleanup", false);
+    fixture.deliver();
+    assert_eq!(fixture.request(next).group, Some(lead));
+    assert_eq!(
+        fixture.typed().last().unwrap(),
+        &("go, run the approved cleanup".into(), true)
+    );
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.request(next).phase, RequestPhase::Completed);
+    let later = fixture.send("next task", true);
+    fixture.deliver();
+    assert_eq!(fixture.request(later).phase, RequestPhase::Active);
+}

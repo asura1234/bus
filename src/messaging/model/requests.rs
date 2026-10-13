@@ -369,6 +369,15 @@ impl BusState {
                 let progress = lead.progress_at_ms.unwrap_or(agent.status_since_ms);
                 let invalidated =
                     agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
+                // The captured interim reply waits on known work, bounded by
+                // its shell cap. It has not failed transcript capture. Keep
+                // unavailable/session-invalidated requests recoverable.
+                if agent.status == RuntimeStatus::Idle
+                    && lead.awaiting_background
+                    && lead.shell_hold.is_some()
+                {
+                    return None;
+                }
                 if (agent.status != RuntimeStatus::Idle && !invalidated)
                     || !since(DELIVERED_STALL_MS, progress.max(agent.status_since_ms))
                 {
