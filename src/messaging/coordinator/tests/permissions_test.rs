@@ -539,7 +539,7 @@ fn permission_handler_launch_role_is_durable_before_native_creation_and_never_du
                 panic!("unexpected native operation {method:?}")
             };
             assert_eq!(p.label.as_deref(), Some("permission handler"));
-            assert!(p.env.get("BUS_PERMISSION_HANDLER_ID").is_some());
+            assert!(p.env.contains_key("BUS_PERMISSION_HANDLER_ID"));
             let state = crate::messaging::storage::state_store::JsonStore::new(self.state.clone())
                 .load()
                 .unwrap()

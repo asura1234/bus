@@ -177,11 +177,12 @@ fn service_decision_with(
         .strip_prefix("Permission assignment ")
         .and_then(|s| s.split('.').next())
         .ok_or("Missing assignment token")?;
+    let handler_id = handler.parse::<u64>().map_err(|_| "Invalid handler ID")?;
     let assignment = state["permission_assignments"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|a| a["handler"].to_string() == handler && a["token"].as_str() == Some(token))
+        .find(|a| a["handler"].as_u64() == Some(handler_id) && a["token"].as_str() == Some(token))
         .ok_or("No matching active handler assignment")?;
     let worker = assignment["worker"].to_string();
     let observed = call(&["agent", "dialog", &worker])?;

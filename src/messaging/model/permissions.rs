@@ -96,7 +96,10 @@ impl BusState {
         {
             return Err(ModelError::InvalidTransition);
         }
-        let agent = self.agents.get_mut(&id).unwrap();
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
         agent.permission_handler = true;
         agent.name = "permission handler".into();
         Ok(())
@@ -224,7 +227,10 @@ impl BusState {
                 true,
             )
             .map_err(|e| e.to_string())?;
-        let assignment = self.permission_assignments.get_mut(&worker).unwrap();
+        let assignment = self
+            .permission_assignments
+            .get_mut(&worker)
+            .ok_or("Unknown permission assignment")?;
         assignment.delivered = true;
         assignment.request = requests.first().copied();
         Ok(())
