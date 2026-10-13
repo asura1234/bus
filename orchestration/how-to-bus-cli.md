@@ -285,9 +285,12 @@ provider's turn start covers a turn that starts and ends between two status
 polls. A captured reply also counts. A turn that ended without a captured
 reply is `settling: true` for a few seconds while Bus waits for a late reply;
 the command waits for that settlement too. If the provider ended the turn on an
-error (a model at capacity, say), Bus then abandons the request with reason
+error (a Codex model at capacity, say), Bus then abandons the request with reason
 `provider_error: <message>` and the command exits 1 with code
-`message_provider_error`, which is worth a retry. Without a provider error,
+`message_provider_error`, which is worth a retry. A Claude API error (such as
+`API Error: Connection lost mid-response` or `529 Overloaded`) closes the
+request at once with the same reason, carrying Claude's error text and
+category. Without a provider error,
 settlement abandons it with reason `reply_not_captured`, which `--async` counts
 as an ended turn and succeeds on.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the

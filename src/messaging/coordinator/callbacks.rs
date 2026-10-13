@@ -383,13 +383,17 @@ impl Worker {
                 session,
                 turn,
                 message,
+                error: provider_error,
             } => Some(callback(
                 record,
                 id,
                 session,
                 turn,
                 None,
-                CallbackEventKind::Error { message },
+                CallbackEventKind::Error {
+                    message,
+                    provider_error,
+                },
             )),
             Parsed::Completed { session, turn } => {
                 return self

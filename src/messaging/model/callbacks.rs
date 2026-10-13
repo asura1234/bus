@@ -346,20 +346,45 @@ impl BusState {
         callback: ProviderCallback,
         turn_key: Option<String>,
     ) -> CallbackDisposition {
-        let CallbackEventKind::Error { message } = callback.kind else {
+        let CallbackEventKind::Error {
+            message,
+            provider_error,
+        } = callback.kind
+        else {
             return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
         };
-        if self
+        let bound = self
             .requests
             .get(&request_id)
-            .is_some_and(|r| r.trusted_start_bound)
-        {
-            if self
-                .abandon_current_request(request_id, callback.occurred_at_ms)
-                .is_err()
-            {
-                return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+            .is_some_and(|r| r.trusted_start_bound);
+        let message = match (bound, provider_error) {
+            // A provider that names its error (Claude's StopFailure) closes the
+            // turn with the same retryable reason settlement gives Codex's.
+            (true, Some(error)) => {
+                let (reason, message) = super::settlement::provider_error_outcome(&error);
+                let at_ms = callback.occurred_at_ms;
+                if self
+                    .close_turn_with_reason(request_id, at_ms, reason)
+                    .is_err()
+                {
+                    return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+                }
+                message
             }
+            (true, None) => {
+                if self
+                    .abandon_current_request(request_id, callback.occurred_at_ms)
+                    .is_err()
+                {
+                    return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+                }
+                message
+            }
+            // The request stays open, so the error must not say it closed.
+            (false, Some(error)) => format!("Provider turn failed: {error}; inspect its terminal."),
+            (false, None) => message,
+        };
+        if bound {
             self.consumed_provider_turns.extend(turn_key);
         }
         if let Some(agent) = self.agents.get_mut(&callback.agent_id) {

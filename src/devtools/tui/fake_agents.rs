@@ -10,7 +10,10 @@
 //! starts its session with the first prompt. The fake Cursor fires the hooks
 //! Bus writes to the project's `.cursor/hooks.json` and draws Cursor's `→`
 //! composer. All answer every prompt with `fake reply: <prompt>`.
+mod directives;
+
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
+use directives::{api_error, spin, work_seconds};
 use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -315,6 +318,16 @@ impl FakeAgent {
         if self.live_turn() {
             self.end_turn(&prompts[1..]);
         }
+        if let Some(payload) = api_error(&self.provider, prompt) {
+            let text = payload["last_assistant_message"]
+                .as_str()
+                .unwrap_or_default();
+            let _ = write!(out, "  ⎿  {text}\r\n");
+            let _ = out.flush();
+            self.hook("StopFailure", Some(&turn), payload);
+            self.draw_prompt();
+            return None;
+        }
         let reply = format!("fake reply: {}", prompts.join("\n"));
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
@@ -596,34 +609,6 @@ pub(super) fn lift_images(draft: &str, earlier: usize) -> (String, usize) {
         .map(|n| format!("[Image #{}]", earlier + n))
         .collect();
     (format!("{chips}{rest}"), images)
-}
-
-/// A prompt containing `fake:work N` keeps the fake busy for N seconds (at
-/// most 600), so a driver can see a Working agent and a live spinner.
-fn work_seconds(prompt: &str) -> Option<u64> {
-    let rest = prompt.split("fake:work").nth(1)?;
-    let seconds: u64 = rest.split_whitespace().next()?.parse().ok()?;
-    Some(seconds.min(600))
-}
-
-/// Claude's working line, redrawn in place: `✻ Working… (3s · esc to
-/// interrupt)`. Claude hides its prompt box meanwhile; input waits.
-fn spin(seconds: u64) {
-    let started = Instant::now();
-    let mut out = std::io::stdout();
-    let mut index = 0;
-    while started.elapsed().as_secs() < seconds {
-        let _ = write!(
-            out,
-            "\r\x1b[2K{}",
-            working_line("claude", index, started.elapsed().as_secs())
-        );
-        let _ = out.flush();
-        index += 1;
-        std::thread::sleep(std::time::Duration::from_millis(120));
-    }
-    let _ = write!(out, "\r\x1b[2K");
-    let _ = out.flush();
 }
 
 /// Codex's `• Working (3s • esc to interrupt)`, Cursor's `⬢ Generating (3s)`,

@@ -277,6 +277,41 @@ fn a_codex_turn_that_ended_on_a_provider_error_reports_that_error() {
         .contains("Selected model is at capacity"));
 }
 
+/// Live (2026-10-13, Claude Code 2.1.296): "API Error: Connection lost
+/// mid-response" ended a worker's turn with a StopFailure hook, and Bus closed
+/// the request with no reason. The payload names the error, as measured.
+#[test]
+fn a_claude_turn_ended_by_an_api_error_reports_that_error() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "run the e2e", "turn-1");
+    let joined = fixture.send("check the tests too", false);
+    fixture.deliver();
+    fixture.started("turn-1", "check the tests too");
+    fixture.consume();
+    fixture.record(json!({"hook_event_name":"StopFailure","session_id":"session","prompt_id":"turn-1",
+        "error":"server_error",
+        "last_assistant_message":"API Error: Connection lost mid-response. The response above may be incomplete."}));
+    fixture.consume();
+    let expected = "provider_error: API Error: Connection lost mid-response. The response above may be incomplete. (server_error)";
+    for id in [lead, joined] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            fixture.request(id).failure_reason.as_deref(),
+            Some(expected)
+        );
+    }
+    assert!(fixture
+        .error()
+        .unwrap()
+        .contains("Connection lost mid-response"));
+    let message = fixture.request(joined).prompt.id;
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["reason"], expected);
+}
+
 #[test]
 fn a_turn_closed_without_a_reply_or_provider_error_says_so_in_its_reason() {
     let mut fixture = Fixture::new(Provider::Codex);

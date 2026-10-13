@@ -63,7 +63,8 @@ fn codex_interactive_hooks_keep_opaque_binding_and_verbatim_prompt() {
         Parsed::Failure {
             session: "s".into(),
             turn: "t".into(),
-            message: "Provider turn failed; inspect its terminal.".into()
+            message: "Provider turn failed; inspect its terminal.".into(),
+            error: None,
         }
     );
     let mut malformed = hook("Stop");

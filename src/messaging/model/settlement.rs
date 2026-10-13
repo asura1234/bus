@@ -1,7 +1,7 @@
 //! Close finished turns after giving their completion callbacks time to arrive.
 use super::{
-    types::ShellHold, AgentId, BusState, PendingFinal, Request, RequestId, RuntimeStatus,
-    TURN_SETTLE_MS,
+    types::ShellHold, AgentId, BusState, ModelError, PendingFinal, Request, RequestId,
+    RuntimeStatus, TURN_SETTLE_MS,
 };
 
 impl BusState {
@@ -137,27 +137,14 @@ impl BusState {
             return None;
         }
         let provider_error = provider_error(request);
-        // Messages typed or coalesced into this turn close with it and share
-        // its reason; members that already settled keep their own outcome.
-        let mut closed = self.group_members(id);
-        closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        closed.push(id);
-        self.abandon_current_request(id, now_ms).ok()?;
         let (reason, error) = match &provider_error {
-            Some(message) => (
-                format!("provider_error: {message}"),
-                format!("Provider turn failed: {message}; request closed. Resend it to retry."),
-            ),
+            Some(message) => provider_error_outcome(message),
             None => (
                 "reply_not_captured".to_owned(),
                 "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.".to_owned(),
             ),
         };
-        for request in closed {
-            if let Some(request) = self.requests.get_mut(&request) {
-                request.failure_reason = Some(reason.clone());
-            }
-        }
+        self.close_turn_with_reason(id, now_ms, reason).ok()?;
         if let Some(agent) = self.agents.get_mut(&agent) {
             agent.actionable_error = Some(error);
         }
@@ -174,4 +161,34 @@ impl BusState {
         );
         Some(id)
     }
+
+    /// Abandon `id`'s turn with `reason`. Messages typed or coalesced into
+    /// this turn close with it and share its reason; members that already
+    /// settled keep their own outcome.
+    pub(super) fn close_turn_with_reason(
+        &mut self,
+        id: RequestId,
+        now_ms: u64,
+        reason: String,
+    ) -> Result<(), ModelError> {
+        let mut closed = self.group_members(id);
+        closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
+        closed.push(id);
+        self.abandon_current_request(id, now_ms)?;
+        for request in closed {
+            if let Some(request) = self.requests.get_mut(&request) {
+                request.failure_reason = Some(reason.clone());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The request reason and agent error for a turn a provider error ended:
+/// `provider_error: ...` tells callers (and `message_provider_error`) to retry.
+pub(super) fn provider_error_outcome(message: &str) -> (String, String) {
+    (
+        format!("provider_error: {message}"),
+        format!("Provider turn failed: {message}; request closed. Resend it to retry."),
+    )
 }

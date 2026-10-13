@@ -42,6 +42,7 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
             session,
             turn,
             message: "Provider turn failed; inspect its terminal.".into(),
+            error: None,
         }),
         _ => Err(format!("Unsupported Bus hook event {event}")),
     }

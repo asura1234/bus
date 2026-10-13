@@ -79,8 +79,39 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
             session,
             turn,
             message: "Provider turn failed; inspect its terminal.".into(),
+            error: Some(claude_api_error(value)),
         }),
         _ => Err(format!("Unsupported Bus hook event {event}")),
+    }
+}
+
+/// Longest provider error text Bus keeps for a reason and the agent's error.
+const API_ERROR_MAX_CHARS: usize = 300;
+
+/// Claude Code fires StopFailure when an API error ends a turn. Measured on
+/// 2.1.296: `last_assistant_message` is the "API Error: ..." text it shows
+/// (and records as a synthetic transcript message), `error` its category,
+/// e.g. `server_error`. Kept to one bounded line for statuses and logs.
+fn claude_api_error(value: &Value) -> String {
+    let text = |key| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|text| !text.is_empty())
+    };
+    let (message, category) = (text("last_assistant_message"), text("error"));
+    let message = match message {
+        Some(message) if message.chars().count() > API_ERROR_MAX_CHARS => {
+            let cut: String = message.chars().take(API_ERROR_MAX_CHARS).collect();
+            format!("{}…", cut.trim_end())
+        }
+        Some(message) => message,
+        None => return category.unwrap_or_else(|| "unknown".into()),
+    };
+    match category {
+        Some(category) => format!("{message} ({category})"),
+        None => message,
     }
 }
 

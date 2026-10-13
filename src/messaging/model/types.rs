@@ -537,8 +537,15 @@ pub(crate) enum SubmissionOutcome {
 pub(crate) enum CallbackEventKind {
     PromptStarted,
     BackgroundPending,
-    Final { text: String },
-    Error { message: String },
+    Final {
+        text: String,
+    },
+    Error {
+        message: String,
+        /// The provider's own description of the error that ended the turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_error: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
