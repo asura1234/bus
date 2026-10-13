@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the PR goal/non-goal fragment and the review-pr branch goal and non-goal locks."""
+"""Render the PR goal/non-goal fragment and the review-pr branch goal, non-goal and origin locks."""
 
 from __future__ import annotations
 
@@ -103,6 +103,10 @@ def locked_context_paths(repo_root: Path, branch: str) -> tuple[Path, Path]:
     return lane_root / ".locked-goal", lane_root / ".locked-non-goals"
 
 
+def locked_origin_path(repo_root: Path, branch: str) -> Path:
+    return locked_context_paths(repo_root, branch)[0].with_name(".locked-origin")
+
+
 def prepare_context(
     *,
     branch: str,
@@ -111,6 +115,7 @@ def prepare_context(
     plan_paths: Sequence[Path] = (),
     goal_path: Path | None = None,
     non_goal_path: Path | None = None,
+    origin_path: Path | None = None,
 ) -> Path:
     if not branch or branch in {"main", "master"}:
         raise ValueError("必须提供非 main/master 的具名 feature branch")
@@ -129,6 +134,19 @@ def prepare_context(
         non_goal = _trim_boundary_blank_lines(non_goal_path.read_text(encoding="utf-8"))
         if not goal or not non_goal:
             raise ValueError("authored goal/non-goal 不得为空")
+        # A goal written without its origin is how a grown PR locks its growth; review-pr needs
+        # the developer's own words to catch a goal that is wider than what was asked.
+        if origin_path is None:
+            raise ValueError(
+                "无计划时必须提供 --origin-file（开发者原话或 issue 原文）；不得从 diff 或 commit 推断"
+            )
+
+    if origin_path is not None:
+        origin = _trim_boundary_blank_lines(origin_path.read_text(encoding="utf-8"))
+        if not origin:
+            raise ValueError("origin 不得为空")
+    else:
+        origin = _trim_boundary_blank_lines(render_context(goal, non_goal))
 
     locked_goal_path, locked_non_goals_path = locked_context_paths(repo_root, branch)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,6 +154,7 @@ def prepare_context(
     output_path.write_text(render_context(goal, non_goal), encoding="utf-8")
     locked_goal_path.write_text(f"{goal}\n", encoding="utf-8")
     locked_non_goals_path.write_text(f"{non_goal}\n", encoding="utf-8")
+    locked_origin_path(repo_root, branch).write_text(f"{origin}\n", encoding="utf-8")
     return locked_goal_path
 
 
@@ -148,13 +167,14 @@ def _relative(path: Path, root: Path) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare exact PR goal/non-goal context and review-pr goal/non-goal locks"
+        description="Prepare exact PR goal/non-goal context and review-pr goal/non-goal/origin locks"
     )
     parser.add_argument("--branch", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--plan", type=Path, action="append", default=[])
     parser.add_argument("--goal-file", type=Path)
     parser.add_argument("--non-goal-file", type=Path)
+    parser.add_argument("--origin-file", type=Path)
     args = parser.parse_args(argv)
     try:
         locked_goal_path = prepare_context(
@@ -164,6 +184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan_paths=args.plan,
             goal_path=args.goal_file,
             non_goal_path=args.non_goal_file,
+            origin_path=args.origin_file,
         )
     except (OSError, UnicodeError, ValueError) as error:
         print(f"pr goal context failed: {error}", file=sys.stderr)
@@ -172,6 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"GOAL_CONTEXT_FILE={_relative(args.output, REPO_ROOT)}")
     print(f"LOCKED_GOAL_FILE={_relative(locked_goal_path, REPO_ROOT)}")
     print(f"LOCKED_NON_GOALS_FILE={_relative(locked_non_goals_path, REPO_ROOT)}")
+    print(f"LOCKED_ORIGIN_FILE={_relative(locked_origin_path(REPO_ROOT, args.branch), REPO_ROOT)}")
     return 0
 
 

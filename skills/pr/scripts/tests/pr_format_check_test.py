@@ -17,6 +17,7 @@ from pr_goal_context import (  # noqa: E402
     build_context,
     extract_plan_section,
     locked_context_paths,
+    locked_origin_path,
     prepare_context,
 )
 
@@ -356,6 +357,10 @@ class PrFormatCheckTest(unittest.TestCase):
                 (root / "temp/review-pr/feat-a-b/.locked-non-goals").read_text(encoding="utf-8"),
                 "非目标 A\n\n非目标 B\n",
             )
+            self.assertEqual(
+                locked_origin_path(root, "feat/a/b").read_text(encoding="utf-8"),
+                output.read_text(encoding="utf-8"),
+            )
 
     def test_prepare_context_uses_authored_goal_when_no_plan_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -363,8 +368,10 @@ class PrFormatCheckTest(unittest.TestCase):
             goal = root / "goal.md"
             non_goal = root / "non-goal.md"
             output = root / "pr-goal-context.md"
+            origin = root / "origin.md"
             goal.write_text("代理生成的目标\n", encoding="utf-8")
             non_goal.write_text("无\n", encoding="utf-8")
+            origin.write_text("\n开发者原话：修这个 bug\n\n", encoding="utf-8")
 
             locked = prepare_context(
                 branch="infra/pr-skill",
@@ -372,6 +379,7 @@ class PrFormatCheckTest(unittest.TestCase):
                 repo_root=root,
                 goal_path=goal,
                 non_goal_path=non_goal,
+                origin_path=origin,
             )
 
             self.assertEqual(
@@ -383,6 +391,32 @@ class PrFormatCheckTest(unittest.TestCase):
                 locked_context_paths(root, "infra/pr-skill")[1].read_text(encoding="utf-8"),
                 "无\n",
             )
+            self.assertEqual(
+                locked_origin_path(root, "infra/pr-skill").read_text(encoding="utf-8"),
+                "开发者原话：修这个 bug\n",
+            )
+
+    def test_prepare_context_rejects_authored_goal_without_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            goal = root / "goal.md"
+            non_goal = root / "non-goal.md"
+            blank = root / "blank.md"
+            goal.write_text("目标\n", encoding="utf-8")
+            non_goal.write_text("无\n", encoding="utf-8")
+            blank.write_text(" \n", encoding="utf-8")
+            for origin, message in ((None, "--origin-file"), (blank, "origin 不得为空")):
+                with self.subTest(origin=origin), self.assertRaisesRegex(ValueError, message):
+                    prepare_context(
+                        branch="feat/room",
+                        output_path=root / "pr-goal-context.md",
+                        repo_root=root,
+                        goal_path=goal,
+                        non_goal_path=non_goal,
+                        origin_path=origin,
+                    )
+            self.assertFalse(locked_context_paths(root, "feat/room")[0].exists())
+            self.assertFalse(locked_origin_path(root, "feat/room").exists())
 
     def test_prepare_context_rejects_mixed_plan_and_authored_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
