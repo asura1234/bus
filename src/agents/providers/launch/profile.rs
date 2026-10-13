@@ -8,6 +8,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(crate) const CLAUDE_SERVICE: &str = "claude-service-cli-v1";
+pub(crate) const ORCHESTRATOR_NATIVE_APPROVAL: &str = "orchestrator-native-approval-v1";
+pub(crate) const CODEX_READ_ONLY: &str = "codex-read-only-protected-overlap-v1";
+pub(crate) const CODEX_WORKSPACE_WRITE: &str = "codex-workspace-write-v1";
+pub(crate) const CLAUDE_WORKER: &str = "claude-additive-sandbox-regular-approval-v1";
+pub(crate) const CURSOR_NATIVE_APPROVAL: &str = "cursor-native-approval-v1";
+
 pub(crate) fn validate_extra_dirs(cwd: &Path, args: &mut [String]) -> Result<(), String> {
     let mut index = 0;
     while index < args.len() {
@@ -222,11 +229,11 @@ pub(crate) fn install(spec: &LaunchSpec, launch: &mut PreparedLaunch) -> Result<
         }
         service_settings(&spec.hooks)?;
         service_env(&spec.hooks.binary, &mut launch.env)?;
-        launch.profile = "claude-service-cli-v1".into();
+        launch.profile = CLAUDE_SERVICE.into();
         return Ok(());
     }
     if spec.orchestrator {
-        launch.profile = "orchestrator-native-approval-v1".into();
+        launch.profile = ORCHESTRATOR_NATIVE_APPROVAL.into();
         return Ok(());
     }
     let scratch = private_scratch(&spec.hooks)?;
@@ -238,16 +245,16 @@ pub(crate) fn install(spec: &LaunchSpec, launch: &mut PreparedLaunch) -> Result<
             let overlap = codex_read_only(&spec.hooks, Some(&launch.cwd), false);
             launch.args.extend(codex_args(Some(&scratch), overlap));
             if overlap {
-                "codex-read-only-protected-overlap-v1"
+                CODEX_READ_ONLY
             } else {
-                "codex-workspace-write-v1"
+                CODEX_WORKSPACE_WRITE
             }
         }
         ProviderKind::ClaudeCode => {
             worker_claude_settings(&spec.hooks, &launch.cwd, &scratch)?;
-            "claude-additive-sandbox-regular-approval-v1"
+            CLAUDE_WORKER
         }
-        ProviderKind::Cursor => "cursor-native-approval-v1",
+        ProviderKind::Cursor => CURSOR_NATIVE_APPROVAL,
     }
     .into();
     launch.scratch_dir = Some(scratch);

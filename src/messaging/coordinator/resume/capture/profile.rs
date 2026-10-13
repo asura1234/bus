@@ -3,9 +3,9 @@ use super::NativeResumeContext;
 use crate::{agents::providers::hook_json::HookContext, messaging::model::RoomAgent};
 use std::{collections::HashMap, path::Path};
 
-pub(super) fn validate_scope(agent: &RoomAgent, project: &Path) -> Result<(), String> {
+pub(super) fn validate_scope(agent: &RoomAgent, cwd: &Path) -> Result<(), String> {
     if let Some(frozen) = &agent.launch_cwd {
-        if project
+        if cwd
             .canonicalize()
             .map_err(|_| "Bus resume cwd unavailable")?
             != *frozen
@@ -16,6 +16,31 @@ pub(super) fn validate_scope(agent: &RoomAgent, project: &Path) -> Result<(), St
         }
     }
     if let Some(scratch) = &agent.scratch_dir {
+        match std::fs::symlink_metadata(scratch) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let parent = scratch
+                    .parent()
+                    .ok_or("Bus resume scratch parent unavailable")?;
+                if parent
+                    .canonicalize()
+                    .map_err(|_| "Bus resume scratch parent unavailable")?
+                    != parent
+                {
+                    return Err("Bus resume scratch escaped its frozen path".into());
+                }
+                let mut builder = std::fs::DirBuilder::new();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::DirBuilderExt;
+                    builder.mode(0o700);
+                }
+                builder
+                    .create(scratch)
+                    .map_err(|_| "Bus resume private scratch restoration failed")?;
+            }
+            _ => return Err("Bus resume scratch escaped its frozen path".into()),
+        }
         if scratch
             .canonicalize()
             .map_err(|_| "Bus resume private scratch missing")?
@@ -52,7 +77,7 @@ pub(super) fn extras(
         }
         if agent.provider == crate::messaging::model::Provider::ClaudeCode
             && agent.launch_profile.as_deref()
-                == Some("claude-additive-sandbox-regular-approval-v1")
+                == Some(crate::agents::providers::launch::profile::CLAUDE_WORKER)
         {
             let cwd = agent
                 .launch_cwd
@@ -68,7 +93,8 @@ pub(super) fn extras(
             let read_only = crate::agents::providers::launch::profile::codex_read_only(
                 hooks,
                 agent.launch_cwd.as_deref(),
-                agent.launch_profile.as_deref() == Some("codex-read-only-protected-overlap-v1"),
+                agent.launch_profile.as_deref()
+                    == Some(crate::agents::providers::launch::profile::CODEX_READ_ONLY),
             );
             if agent.launch_profile.is_some() || agent.launch_cwd.is_none() {
                 args.extend(crate::agents::providers::launch::profile::codex_args(

@@ -36,6 +36,7 @@ pub(crate) struct NativeResumeContext {
     pub(crate) session_name: Option<String>,
     pub(crate) config_root: PathBuf,
     pub(crate) project: PathBuf,
+    pub(crate) cwd: PathBuf,
     pub(crate) binary: PathBuf,
 }
 
@@ -110,7 +111,7 @@ pub(crate) fn load(
     {
         return Err("Bus resume is suspended by deletion or invalidated identity".into());
     }
-    profile::validate_scope(agent, &context.project)?;
+    profile::validate_scope(agent, &context.cwd)?;
     let hooks = ownership::verified_capture(root, agent, &context.binary)?;
     if facts.session.is_none()
         && crate::agents::providers::launch::reserved_session(&hooks.spool).is_some()

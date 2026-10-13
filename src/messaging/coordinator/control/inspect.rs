@@ -236,9 +236,11 @@ fn agent_json(agent: &crate::messaging::model::RoomAgent, data: &std::path::Path
             if crate::agents::providers::launch::profile::codex_read_only(
                 &hooks,
                 agent.launch_cwd.as_deref(),
-                agent.launch_profile.as_deref() == Some("codex-read-only-protected-overlap-v1"),
+                agent.launch_profile.as_deref()
+                    == Some(crate::agents::providers::launch::profile::CODEX_READ_ONLY),
             ) {
-                value["launch_profile"] = json!("codex-read-only-protected-overlap-v1");
+                value["launch_profile"] =
+                    json!(crate::agents::providers::launch::profile::CODEX_READ_ONLY);
             }
         }
     }
