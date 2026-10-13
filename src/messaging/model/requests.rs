@@ -498,8 +498,9 @@ impl BusState {
     /// its turn visibly runs, or while the idle agent holds its reply for
     /// background work that turn started (shells, agents, session crons),
     /// bound by its submit hook, with no final reply yet. The idle agent takes
-    /// typed input, so the message reaches it rather than waiting on the hold. Returns the first queued request and that lead, unless the queued
-    /// one asked to wait (`--queue`).
+    /// typed input, so the message reaches it rather than waiting on the hold.
+    /// Returns the first queued request and that lead, unless the queued one
+    /// asked to wait (`--queue`).
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
         if !matches!(
