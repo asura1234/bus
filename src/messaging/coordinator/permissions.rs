@@ -4,6 +4,13 @@ use crate::messaging::model::PermissionOutcome;
 use crate::messaging::storage::io;
 use std::path::Path;
 
+pub(super) fn permission_cli() -> Result<String, String> {
+    let binary = std::env::current_exe().map_err(|error| error.to_string())?;
+    Ok(crate::agents::providers::launch::profile::cli_prefix(
+        &binary,
+    ))
+}
+
 pub(super) const POLICY: &str = include_str!("../../../orchestration/permission-handler.md");
 pub(super) fn handler_prompt(room: RoomId, handler: AgentId, data: &Path) -> String {
     let executable = std::env::current_exe().ok();
@@ -34,7 +41,7 @@ impl Worker {
                 r.kind == RoomKind::Work
                     && !r.deletion_pending
                     && (self.state.agents().any(|a| {
-                        a.room_id == r.id
+                        (a.room_id == r.id || a.orchestrates == Some(r.id))
                             && !a.permission_handler
                             && !a.deletion_pending
                             && a.runtime_identity.launch_id.is_some()
@@ -133,7 +140,7 @@ impl Worker {
             .collect();
         for worker in waiting {
             let mut state = self.state.clone();
-            state.deliver_permission(worker, now)?;
+            state.deliver_permission(&permission_cli()?, worker, now)?;
             if state != self.state {
                 self.save(state)?;
             }

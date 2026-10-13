@@ -84,10 +84,8 @@ impl Worker {
     }
 }
 
-/// The blocked agent's own message in its work room: to the room's
-/// orchestrator, which delivers it like any agent message and wakes the
-/// orchestrator, or else to the developer. A blocked MASTER orchestrator tells
-/// the developer directly, since MASTER cannot itself be orchestrated.
+/// Route every blocked episode to the room service; only unavailable-service
+/// fallback reaches the orchestrator or developer directly in that work room.
 fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
     let episode = state
         .agent(id)
@@ -99,7 +97,12 @@ fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<
                 BLOCKED.into()
             }
         });
-    state.dispatch_permission(id, episode, crate::messaging::storage::io::now_ms())
+    state.dispatch_permission(
+        &super::permissions::permission_cli()?,
+        id,
+        episode,
+        crate::messaging::storage::io::now_ms(),
+    )
 }
 
 #[cfg(test)]

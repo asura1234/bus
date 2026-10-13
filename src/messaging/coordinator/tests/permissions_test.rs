@@ -253,7 +253,7 @@ fn permission_handler_deadline_is_durable_and_expires_after_restart_once() {
     let handler = ready_permission_handler(&mut worker, room, &dir);
     worker
         .state
-        .dispatch_permission(agent, "unknown".into(), 1)
+        .dispatch_permission("bus", agent, "unknown".into(), 1)
         .unwrap();
     worker.state = serde_json::from_slice(&serde_json::to_vec(&worker.state).unwrap()).unwrap();
     assert!(worker
@@ -328,6 +328,7 @@ fn permission_handler_fallback_withdraws_queued_assignment_before_reset() {
     worker
         .state
         .dispatch_permission(
+            "bus",
             agent,
             "unknown".into(),
             crate::messaging::storage::io::now_ms(),
@@ -365,7 +366,7 @@ fn permission_handler_clear_suspends_delivery_until_new_session_rebind_and_keeps
     let now = crate::messaging::storage::io::now_ms();
     worker
         .state
-        .dispatch_permission(agent, "unknown".into(), now)
+        .dispatch_permission("bus", agent, "unknown".into(), now)
         .unwrap();
     worker
         .state
@@ -378,7 +379,7 @@ fn permission_handler_clear_suspends_delivery_until_new_session_rebind_and_keeps
         .unwrap();
     worker
         .state
-        .dispatch_permission(other, "other-screen".into(), now)
+        .dispatch_permission("bus", other, "other-screen".into(), now)
         .unwrap();
     assert!(!worker.state.permission_assignment(other).unwrap().delivered);
     let clears = Arc::default();
@@ -594,6 +595,7 @@ fn permission_handler_room_deletion_retires_pending_assignment_without_breaking_
     worker
         .state
         .dispatch_permission(
+            "bus",
             agent,
             "unknown".into(),
             crate::messaging::storage::io::now_ms(),
@@ -618,7 +620,7 @@ fn permission_handler_public_state_bounds_recent_audit_and_hides_completed_assig
     for offset in 0..105 {
         worker
             .state
-            .dispatch_permission(agent, "unknown".into(), now + offset)
+            .dispatch_permission("bus", agent, "unknown".into(), now + offset)
             .unwrap();
         worker
             .state
@@ -782,6 +784,72 @@ fn permission_profile_assignment_uses_exact_current_executable_commands() {
         "{prompt}"
     );
     assert!(prompt.contains(&format!("{prefix} agent permission-decision {}", agent.0)));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn permission_handler_is_created_for_live_master_orchestrator_without_live_workers() {
+    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Unavailable, 1)
+        .unwrap();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            orchestrator,
+            AgentRuntimeIdentity {
+                launch_id: Some("orchestrator-launch".into()),
+                terminal_id: Some("orchestrator-terminal".into()),
+                pane_id: Some("orchestrator-pane".into()),
+                session_id: Some("orchestrator-session".into()),
+            },
+        )
+        .unwrap();
+    worker
+        .state
+        .observe_status(orchestrator, RuntimeStatus::Idle, 1)
+        .unwrap();
+    worker.maintain_permission_handlers().unwrap();
+    let has_handler = worker.state.permission_handler_of(room).is_some();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        has_handler,
+        "a live MASTER orchestrator requires its bound work-room handler before its first blocker"
+    );
+}
+
+#[test]
+fn permission_handler_failed_reset_keeps_later_dialog_on_bounded_fallback() {
+    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
+    let handler = ready_permission_handler(&mut worker, room, &dir);
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    let service = &mut value["agents"][handler.0.to_string()];
+    service["permission_reset_required"] = json!(true);
+    service["permission_reset_at_ms"] = json!(1);
+    worker.state = serde_json::from_value(value).unwrap();
+    worker.maintain_permissions().unwrap();
+    assert!(!worker.state.permission_handler_ready(handler));
+    assert!(worker
+        .state
+        .agent(handler)
+        .unwrap()
+        .actionable_error
+        .is_some());
+    post_blocked(&mut worker.state, agent, false).unwrap();
+    worker.maintain_permissions().unwrap();
+    assert_eq!(worker.state.permission_decisions().len(), 1);
+    assert_eq!(
+        worker.state.permission_decisions()[0].assignment.outcome,
+        Some(crate::messaging::model::PermissionOutcome::Fallback)
+    );
+    assert_eq!(
+        sent_by(&worker, room, handler)[0].0,
+        vec![orchestrator.unwrap()]
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

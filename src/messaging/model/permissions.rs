@@ -122,6 +122,7 @@ impl BusState {
     /// No interpretation of the dialog enters this operation.
     pub(crate) fn dispatch_permission(
         &mut self,
+        cli: &str,
         worker: AgentId,
         episode: String,
         now: u64,
@@ -176,9 +177,14 @@ impl BusState {
                 now,
             );
         }
-        self.deliver_permission(worker, now)
+        self.deliver_permission(cli, worker, now)
     }
-    pub(crate) fn deliver_permission(&mut self, worker: AgentId, now: u64) -> Result<(), String> {
+    pub(crate) fn deliver_permission(
+        &mut self,
+        cli: &str,
+        worker: AgentId,
+        now: u64,
+    ) -> Result<(), String> {
         let p = self
             .permission_assignment(worker)
             .ok_or("Unknown assignment")?
@@ -201,8 +207,6 @@ impl BusState {
             return Ok(());
         }
         let agent = self.agent(worker).ok_or("Unknown worker")?;
-        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        let cli = crate::platform::remote_reattach_program(&executable.to_string_lossy());
         let root = agent
             .launch_cwd
             .as_ref()
