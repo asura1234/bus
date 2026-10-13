@@ -1,8 +1,10 @@
-//! An orchestrator's report to the developer. When a MASTER orchestrator ends a
-//! turn that no message in MASTER started (a background command exited, a
-//! worker messaged it, a worker said it is blocked), that turn's final text is
-//! its report, so Bus shows it in MASTER as the orchestrator's own message to
-//! the developer. Bus authors nothing: the text is the agent's.
+//! An orchestrator's status report. When a MASTER orchestrator ends a turn that
+//! no message in MASTER started (a background command exited, a worker
+//! messaged it, a worker said it is blocked), that turn's final text is routine
+//! status, so Bus shows it in the work room the orchestrator runs as its own
+//! message to the developer. MASTER carries only what needs the developer: the
+//! replies to their MASTER messages, and what the orchestrator posts there
+//! itself with `send --to human`. Bus authors nothing: the text is the agent's.
 use super::{
     AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection,
     ProviderCallback, RoomId,
@@ -11,6 +13,8 @@ use super::{
 /// An orchestrator's final text, taken before `accept_callback` settles it.
 pub(super) struct PendingReport {
     master: RoomId,
+    /// Where the report shows: the work room the orchestrator runs.
+    room: RoomId,
     agent: AgentId,
     text: String,
     /// The provider session and turn the final ends.
@@ -43,6 +47,7 @@ pub(super) fn pending_report(
     });
     Some(PendingReport {
         master,
+        room: agent.orchestrates.unwrap_or(master),
         agent: agent.id,
         text: text.trim().to_owned(),
         session: callback.provider_session_id.clone(),
@@ -71,8 +76,9 @@ pub(super) fn post_report(
         ) => true,
         _ => return,
     };
-    // The orchestrator already posted this text itself with `send --to human`
-    // during this turn; an earlier turn's same words are a separate report.
+    // The orchestrator already posted this text to the developer itself with
+    // `send --to human` during this turn, so MASTER has it and the work room
+    // needs no copy; an earlier turn's same words are a separate report.
     let first = state.report_turn_start(
         report.master,
         report.agent,
@@ -87,11 +93,17 @@ pub(super) fn post_report(
             .is_some_and(|notice| notice.text.trim() == report.text)
     });
     if reports && !already_posted {
-        if let Err(error) =
-            state.post_to_developer(report.master, report.agent, report.text, Vec::new(), now_ms)
-        {
-            tracing::warn!(event = "bus.report.failed", agent_id = report.agent.0, %error,
-                "Orchestrator report not shown in MASTER");
+        match state.post_to_developer(report.room, report.agent, report.text, Vec::new(), now_ms) {
+            Ok(message) => tracing::info!(
+                event = "bus.report.posted",
+                agent_id = report.agent.0,
+                room_id = report.room.0,
+                message_id = message.0,
+                "Orchestrator report shown in its work room"
+            ),
+            Err(error) => tracing::warn!(event = "bus.report.failed",
+                agent_id = report.agent.0, room_id = report.room.0, %error,
+                "Orchestrator report not shown"),
         }
     }
     if let Some(turn) = report.turn {

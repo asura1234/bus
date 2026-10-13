@@ -78,9 +78,15 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("/data/docs/how-to-bus-cli.md"));
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
-    // Reports reach MASTER as the turn's final message; Bus posts it there.
-    assert!(text.contains("Bus shows it in MASTER"), "{text}");
-    assert!(!text.contains("--to human"), "{text}");
+    // A turn's final is routine status: Bus shows it in the work room unless
+    // the developer's MASTER message started the turn. Anything that needs the
+    // developer goes to MASTER with `send --to human`.
+    assert!(text.contains("Bus shows it in your work room"), "{text}");
+    assert!(!text.contains("automatically, whatever woke you"), "{text}");
+    assert!(
+        text.contains("bus send --room master --as orch --to human"),
+        "{text}"
+    );
     assert!(text.contains("Parallelism is king"), "{text}");
     assert!(text.contains("Compartmentalize, within reason"), "{text}");
     assert!(text.contains("Size the team to the current step"), "{text}");
@@ -158,8 +164,13 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     }
     let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
     assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
-    assert!(rules.contains("End each turn with your report; Bus shows it in MASTER."));
-    assert!(!rules.contains("--to human"), "{rules}");
+    assert!(rules.contains("**Post only what needs the developer to MASTER.**"));
+    assert!(rules.contains("Bus shows it in your work room"), "{rules}");
+    assert!(
+        !rules.contains("Bus posts that message to MASTER"),
+        "{rules}"
+    );
+    assert!(rules.contains("bus send --room master --as YOUR_NAME --to human"));
     assert!(rules.contains("**Parallelism is king.**"));
     assert!(rules.contains("**Compartmentalize, within reason.**"));
     assert!(rules.contains("**Size the team to the current step.**"));

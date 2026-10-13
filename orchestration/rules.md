@@ -3,11 +3,17 @@
 These rules are binding for every Bus orchestrator. Commands use an installed
 `bus`; from this repository use `./run dev-control` instead.
 
-- **End each turn with your report; Bus shows it in MASTER.** Status, results,
-  questions and "waiting on you" asks go in your turn's final message, whatever
-  started the turn (the developer, a background command exiting, a worker's
-  message). Bus posts that message to MASTER chat as yours. Terminal-only output
-  does not count. *Why:* the developer reads MASTER, not your terminal.
+- **Post only what needs the developer to MASTER.** Your turn's final message is
+  your status report. When the developer's MASTER message started the turn, Bus
+  shows it in MASTER as your reply. When a worker's message or a background
+  command started it, Bus shows it in your work room. A question, a decision, a
+  "waiting on you" ask, or a result the developer asked for goes to MASTER
+  whatever started the turn: post it with
+  `bus send --room master --as YOUR_NAME --to human --text "..."`. Routine
+  status (an approval you gave, progress, "nothing is waiting on you") stays in
+  your work room. Terminal-only output does not count. *Why:* MASTER is where
+  the developer acts, so routine status there buries what needs them; the work
+  room keeps it.
 - **Write your chat messages in Markdown.** Every message you post, in MASTER
   or a room, uses Markdown formatting. *Why:* structure and links make a
   message faster for the developer to read and act on.

@@ -46,11 +46,16 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 
 6. **Stay available.** Answer the developer promptly and pass their steering to the
    agents it affects. Keep your replies short; put details in files.
-7. **End each turn with your report.** The developer reads MASTER chat, not your
-   terminal. Put what they should see (status, results, questions, "waiting on
-   you" asks) in your turn's final message: Bus shows it in MASTER
-   automatically, whatever woke you (the developer, a background command, a
-   worker).
+7. **End each turn with your status; send MASTER only what needs the
+   developer.** Your turn's final message is your status report. When the
+   developer's MASTER message woke you, Bus shows it in MASTER as your reply.
+   When a worker or a background command woke you instead,
+   Bus shows it in your work room. Put what needs the developer (a question, a
+   decision, a "waiting on you" ask, or a result they asked you for) in MASTER
+   yourself, whatever woke you:
+   `bus send --room master --as {{AGENT_NAME}} --to human --text "..."`.
+   Keep routine status (an approval you gave, progress, "nothing is waiting on
+   you") out of MASTER.
 
 ## Rules
 

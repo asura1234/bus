@@ -208,9 +208,12 @@ room that already has one fails.
 ### Report to the human in MASTER
 
 An orchestrator's final reply to a human message lands in MASTER by itself.
-Anything it reports on its own initiative, such as a result after a background
-task or a worker's reply, a question, or a "waiting on you" ask, appears only
-in its terminal unless it posts it to MASTER chat:
+When a worker's message or a background command starts its turn instead, the
+turn's final message is routine status: Bus shows it in the work room the
+orchestrator runs, as written by that orchestrator and addressed to you, never
+in MASTER. Anything that needs you, such as a question, a decision, a "waiting
+on you" ask, or a result you asked for, reaches MASTER only if the
+orchestrator posts it there:
 
 ```sh
 bus send --room master --as claude-orch --to human \

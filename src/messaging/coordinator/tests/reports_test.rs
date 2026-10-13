@@ -133,9 +133,18 @@ impl Fixture {
 
     /// The orchestrator's messages to the developer in MASTER.
     fn reports(&self) -> Vec<String> {
+        self.notices(self.master)
+    }
+
+    /// The orchestrator's status messages in the room it orchestrates.
+    fn room_reports(&self) -> Vec<String> {
+        self.notices(self.room)
+    }
+
+    fn notices(&self, room: RoomId) -> Vec<String> {
         self.worker
             .state
-            .room(self.master)
+            .room(room)
             .unwrap()
             .notices
             .iter()
@@ -146,7 +155,7 @@ impl Fixture {
 }
 
 #[test]
-fn an_unprompted_orchestrator_turn_is_reported_in_master_once() {
+fn an_unprompted_orchestrator_turn_is_reported_in_its_work_room_once() {
     let mut bus = fixture(Provider::ClaudeCode);
     let orchestrator = bus.orchestrator;
     // A background command exited and woke the orchestrator.
@@ -156,25 +165,29 @@ fn an_unprompted_orchestrator_turn_is_reported_in_master_once() {
         "<task-notification>",
         "Gate passed on 1a2b3c.",
     );
-    assert_eq!(bus.reports(), ["Gate passed on 1a2b3c."]);
+    // Routine status: the work room shows it, MASTER stays for the developer.
+    assert_eq!(bus.room_reports(), ["Gate passed on 1a2b3c."]);
+    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
     let master = bus.worker.state.room(bus.master).unwrap();
-    // Like a reply: it rings and counts as unread while MASTER is not open.
+    assert!(master.latest_prompt.is_none());
+    assert_eq!(master.unread_count, 0);
+    let room = bus.worker.state.room(bus.room).unwrap();
+    // Like a reply: it counts as unread while the room is not open.
     assert_eq!(
-        master
-            .latest_prompt
+        room.latest_prompt
             .as_ref()
             .map(|prompt| prompt.text.as_str()),
         Some("Gate passed on 1a2b3c.")
     );
-    assert_eq!(master.unread_count, 1);
+    assert_eq!(room.unread_count, 1);
     assert!(
-        master.notices[0].recipient_ids.is_empty(),
+        room.notices[0].recipient_ids.is_empty(),
         "orchestrator -> You"
     );
     // The same hooks read again (a restart replaying the spool) post nothing.
     let spool = bus.dir.join("callbacks/orch");
     bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
-    assert_eq!(bus.reports().len(), 1);
+    assert_eq!(bus.room_reports().len(), 1);
 }
 
 #[test]
@@ -202,10 +215,11 @@ fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
         .map(|reply| reply.text.clone());
     assert_eq!(reply.as_deref(), Some("Review is done; merging next."));
     assert!(bus.reports().is_empty(), "{:?}", bus.reports());
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
 }
 
 #[test]
-fn a_turn_that_answers_a_worker_is_reported_in_master() {
+fn a_turn_that_answers_a_worker_is_reported_in_its_work_room() {
     let mut bus = fixture(Provider::ClaudeCode);
     let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
     let typed = bus.deliver(
@@ -220,7 +234,33 @@ fn a_turn_that_answers_a_worker_is_reported_in_master() {
         &typed,
         "builder finished; tests pass.",
     );
-    assert_eq!(bus.reports(), ["builder finished; tests pass."]);
+    assert_eq!(bus.room_reports(), ["builder finished; tests pass."]);
+    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
+}
+
+#[test]
+fn a_worker_blocked_on_a_dialog_wakes_a_turn_reported_in_its_work_room() {
+    // The 11:21 case: a worker's open dialog sends "Blocked, needs help to
+    // continue." to the orchestrator, which approves it and ends its turn.
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
+    let typed = bus.deliver(
+        room,
+        Author::Agent(builder),
+        orchestrator,
+        crate::messaging::coordinator::dialogs::BLOCKED_MESSAGE,
+    );
+    bus.claude_turn(
+        orchestrator,
+        "blocked",
+        &typed,
+        "I approved formatting one test file. Nothing is waiting on you.",
+    );
+    assert_eq!(
+        bus.room_reports(),
+        ["I approved formatting one test file. Nothing is waiting on you."]
+    );
+    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
 }
 
 #[test]
@@ -235,6 +275,7 @@ fn a_report_the_orchestrator_already_sent_to_the_developer_is_not_posted_twice()
     bus.worker.save(state).unwrap();
     bus.claude_turn(orchestrator, "own", "<task-notification>", "Merged PR 12.");
     assert_eq!(bus.reports(), ["Merged PR 12."]);
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
 }
 
 #[test]
@@ -244,6 +285,7 @@ fn an_empty_or_wordless_final_is_not_a_report() {
     bus.claude_turn(orchestrator, "one", "<task-notification>", "  ");
     bus.claude_turn(orchestrator, "two", "<task-notification>", "…");
     assert!(bus.reports().is_empty(), "{:?}", bus.reports());
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
 }
 
 #[test]
@@ -264,7 +306,7 @@ fn worker_turns_never_post_to_master() {
 }
 
 #[test]
-fn an_unprompted_cursor_orchestrator_turn_is_reported_in_master() {
+fn an_unprompted_cursor_orchestrator_turn_is_reported_in_its_work_room() {
     let mut bus = fixture(Provider::Cursor);
     let orchestrator = bus.orchestrator;
     let spool = bus.dir.join("callbacks/orch");
@@ -277,7 +319,7 @@ fn an_unprompted_cursor_orchestrator_turn_is_reported_in_master() {
         callbacks::append(&spool, "orch", Provider::Cursor, value, &[], false).unwrap();
     }
     bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
-    assert_eq!(bus.reports(), ["Gate passed."]);
+    assert_eq!(bus.room_reports(), ["Gate passed."]);
 }
 
 #[test]
@@ -290,9 +332,9 @@ fn separate_orchestrator_turns_with_identical_text_each_publish_a_report() {
         "First background build finished",
         "All tests passed.",
     );
-    assert_eq!(bus.reports(), ["All tests passed."]);
+    assert_eq!(bus.room_reports(), ["All tests passed."]);
     let mut state = bus.worker.state.clone();
-    state.mark_room_seen(bus.master).unwrap();
+    state.mark_room_seen(bus.room).unwrap();
     bus.worker.save(state).unwrap();
 
     bus.claude_turn(
@@ -301,13 +343,13 @@ fn separate_orchestrator_turns_with_identical_text_each_publish_a_report() {
         "Second background build finished",
         "All tests passed.",
     );
-    let reports = bus.reports();
+    let reports = bus.room_reports();
     assert_eq!(
         reports,
         ["All tests passed.", "All tests passed."],
         "distinct provider turns must each publish their report even when the text repeats"
     );
-    assert_eq!(bus.worker.state.room(bus.master).unwrap().unread_count, 1);
+    assert_eq!(bus.worker.state.room(bus.room).unwrap().unread_count, 1);
 }
 
 #[test]
@@ -332,7 +374,8 @@ fn a_later_turn_that_already_sent_its_report_is_not_posted_twice() {
         "<task-notification>",
         "Merged PR 13.",
     );
-    assert_eq!(bus.reports(), ["Merged PR 12.", "Merged PR 13."]);
+    assert_eq!(bus.room_reports(), ["Merged PR 12."]);
+    assert_eq!(bus.reports(), ["Merged PR 13."]);
 }
 
 #[test]
@@ -346,13 +389,15 @@ fn a_message_an_earlier_turn_sent_does_not_absorb_a_later_turns_report() {
     bus.worker.save(state).unwrap();
     bus.claude_turn(orchestrator, "first", "<task-notification>", "Gate passed.");
     assert_eq!(bus.reports(), ["Gate passed."]);
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
     bus.claude_turn(
         orchestrator,
         "second",
         "<task-notification>",
         "Gate passed.",
     );
-    assert_eq!(bus.reports(), ["Gate passed.", "Gate passed."]);
+    assert_eq!(bus.reports(), ["Gate passed."]);
+    assert_eq!(bus.room_reports(), ["Gate passed."]);
 }
 
 #[test]
@@ -400,8 +445,20 @@ fn state_saved_without_report_turns_loads_and_dedupes_as_before() {
         .report_turns
         .is_empty());
 
-    // Without a recorded turn the report is compared with the last message,
-    // as before; the turn is recorded from here on.
+    // Without a recorded turn the report is compared with the last message
+    // the orchestrator sent to the developer, as before; the turn is
+    // recorded from here on.
+    let mut state = bus.worker.state.clone();
+    state
+        .post_to_developer(
+            master,
+            orchestrator,
+            "All tests passed.".into(),
+            Vec::new(),
+            3,
+        )
+        .unwrap();
+    bus.worker.save(state).unwrap();
     bus.claude_turn(
         orchestrator,
         "second",
@@ -409,13 +466,18 @@ fn state_saved_without_report_turns_loads_and_dedupes_as_before() {
         "All tests passed.",
     );
     assert_eq!(bus.reports(), ["All tests passed."]);
+    assert_eq!(bus.room_reports(), ["All tests passed."]);
     bus.claude_turn(
         orchestrator,
         "third",
         "<task-notification>",
         "All tests passed.",
     );
-    assert_eq!(bus.reports(), ["All tests passed.", "All tests passed."]);
+    assert_eq!(bus.reports(), ["All tests passed."]);
+    assert_eq!(
+        bus.room_reports(),
+        ["All tests passed.", "All tests passed."]
+    );
 }
 
 #[test]
@@ -435,7 +497,7 @@ fn persisted_report_turn_boundary_separates_the_next_report_after_restart() {
         "First background build finished",
         "All tests passed.",
     );
-    assert_eq!(bus.reports(), ["All tests passed."]);
+    assert_eq!(bus.room_reports(), ["All tests passed."]);
 
     let elsewhere = bus.dir.with_extension("restart-placeholder");
     drop(std::mem::replace(
@@ -452,5 +514,8 @@ fn persisted_report_turn_boundary_separates_the_next_report_after_restart() {
         "Second background build finished",
         "All tests passed.",
     );
-    assert_eq!(bus.reports(), ["All tests passed.", "All tests passed."]);
+    assert_eq!(
+        bus.room_reports(),
+        ["All tests passed.", "All tests passed."]
+    );
 }
