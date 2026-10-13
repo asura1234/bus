@@ -33,6 +33,19 @@ fn is_server_busy(response: &Response) -> bool {
             .is_some_and(|error| error.code == "server_busy")
 }
 
+/// Status reads are idempotent even if a queued coordinator call later runs.
+/// These live-server responses are overload, not failed transport.
+fn is_status_overloaded(response: &Response) -> bool {
+    is_server_busy(response)
+        || !response.ok
+            && response.error.as_ref().is_some_and(|error| {
+                matches!(
+                    error.code.as_str(),
+                    "coordinator_timeout" | "coordinator_busy"
+                )
+            })
+}
+
 fn next_busy_delay(delay: Duration) -> Duration {
     (delay * 2).min(BUSY_MAX_DELAY)
 }
@@ -78,7 +91,7 @@ pub(super) fn follow_message(
         };
         match response {
             // Following has no deadline, so overload only slows it down.
-            response if is_server_busy(&response) => {
+            response if is_status_overloaded(&response) => {
                 pause(busy_delay);
                 busy_delay = next_busy_delay(busy_delay);
             }
@@ -245,7 +258,7 @@ pub(super) fn execute(
             }
         };
         response.id.clone_from(&id);
-        if is_server_busy(&response) {
+        if is_server_busy(&response) || waiting && is_status_overloaded(&response) {
             // A wait retries until its deadline (or indefinitely); other commands a few times.
             let remaining =
                 deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));

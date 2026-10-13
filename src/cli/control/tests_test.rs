@@ -1573,6 +1573,89 @@ fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy
         .all(|pause| *pause == Duration::from_secs(2)));
 }
 
+#[test]
+fn async_following_retries_coordinator_overload_without_reporting_bus_down() {
+    let mut calls = 0;
+    let mut pauses = Vec::new();
+    let completed = status(vec![recipient(1, "delivered", true)]);
+    let response = follow_message(
+        "coordinator-overload",
+        &json!(19),
+        &mut |request, timeout| {
+            assert_eq!(request.method, "message.status");
+            assert!(timeout.is_none());
+            calls += 1;
+            assert!(calls <= 33);
+            if calls == 33 {
+                return Ok(Response::success(&request.id, completed.clone()));
+            }
+            if calls % 4 == 0 {
+                let code = if calls % 8 == 0 {
+                    "coordinator_timeout"
+                } else {
+                    "coordinator_busy"
+                };
+                return Ok(Response::failure(
+                    &request.id,
+                    code,
+                    "live coordinator is overloaded",
+                ));
+            }
+            Err("transient connection loss".into())
+        },
+        &mut |pause| pauses.push(pause),
+    );
+    assert!(
+        response.ok,
+        "overload must not settle a live message: {:?}",
+        response.error
+    );
+    assert_eq!(response.result, completed);
+    assert_eq!(calls, 33);
+    assert_eq!(pauses.len(), 32);
+    assert!(pauses.contains(&Duration::from_secs(2)));
+    assert!(pauses.iter().all(|pause| *pause <= Duration::from_secs(2)));
+}
+
+#[test]
+fn wait_async_retries_coordinator_overload_status_reads() {
+    let mut calls = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            assert_eq!(request.method, "message.status");
+            calls += 1;
+            Ok(match calls {
+                1 => Response::failure(&request.id, "coordinator_timeout", "still active"),
+                2 => Response::failure(&request.id, "coordinator_busy", "still active"),
+                _ => Response::success(&request.id, status(vec![recipient(1, "delivered", true)])),
+            })
+        });
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(calls, 3);
+}
+
+#[test]
+fn coordinator_timeout_never_replays_a_message_send() {
+    let mut calls = 0;
+    let (outcome, response) = run_captured(
+        &[
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ],
+        |request, _| {
+            calls += 1;
+            assert_eq!(request.method, "message.send");
+            Ok(Response::failure(
+                &request.id,
+                "coordinator_timeout",
+                "operation may still complete",
+            ))
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "coordinator_timeout");
+    assert_eq!(calls, 1);
+}
+
 /// `bus --help` hides the dev tier, but clap's own errors for an incomplete
 /// or mistyped agent-tier command should not advertise dev tools either.
 #[test]
