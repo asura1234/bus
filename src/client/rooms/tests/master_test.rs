@@ -797,3 +797,43 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
         BusCommand::AddAgent(input) if input.provider == Provider::Codex
     )));
 }
+
+#[test]
+fn permission_handler_is_hidden_from_sidebar_and_normal_recipient_picker() {
+    let (mut ui, _, room, _, _) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let worker = snapshot
+        .state
+        .create_agent(
+            room,
+            "ordinary-worker",
+            Provider::Codex,
+            "/repo".into(),
+            None,
+        )
+        .unwrap();
+    let handler = snapshot
+        .state
+        .create_agent(
+            room,
+            "service",
+            Provider::ClaudeCode,
+            "/scratch".into(),
+            None,
+        )
+        .unwrap();
+    snapshot.state.mark_permission_handler(handler).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    let rows = sidebar_rows(&mut ui);
+    assert!(!hit_rows(&ui, render::Action::Agent(worker)).is_empty());
+    assert!(!rows.iter().any(|row| row.contains("permission handler")));
+    assert!(hit_rows(&ui, render::Action::Agent(handler)).is_empty());
+    ui.recipient_menu = true;
+    ui.recipient_index = 0;
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(
+        ui.locals.get(&room).unwrap().recipients,
+        AgentRecipients::from([worker])
+    );
+}

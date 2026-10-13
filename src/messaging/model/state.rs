@@ -10,6 +10,10 @@ use {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct BusState {
+    #[serde(default)]
+    pub(super) permission_assignments: BTreeMap<AgentId, super::permissions::PermissionAssignment>,
+    #[serde(default)]
+    pub(super) permission_decisions: Vec<super::permissions::PermissionDecision>,
     pub(super) next_id: u64,
     pub(super) next_status_revision: u64,
     pub(super) rooms: BTreeMap<RoomId, Room>,
@@ -96,7 +100,9 @@ impl BusState {
     /// without rewriting the durable state. Any status edge, settlement, or
     /// other model change still needs an atomic save before delivery resumes.
     pub(crate) fn durable_poll_change_from(&self, previous: &Self) -> bool {
-        if self.next_id != previous.next_id
+        if self.permission_assignments != previous.permission_assignments
+            || self.permission_decisions != previous.permission_decisions
+            || self.next_id != previous.next_id
             || self.rooms != previous.rooms
             || self.requests != previous.requests
             || self.queues != previous.queues
@@ -128,6 +134,8 @@ impl BusState {
 
     pub(crate) fn new() -> Self {
         Self {
+            permission_assignments: BTreeMap::new(),
+            permission_decisions: Vec::new(),
             next_id: 1,
             next_status_revision: 1,
             rooms: BTreeMap::new(),

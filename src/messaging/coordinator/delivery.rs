@@ -32,6 +32,11 @@ impl Worker {
             if !can_deliver() {
                 break;
             }
+            if agent.permission_handler
+                && (agent.permission_reset_required || agent.session_reset_pending)
+            {
+                continue;
+            }
             // Messages waited because the agent could not take them yet.
             let waited = self.delivery_waits.contains_key(&agent.id);
             if let Some(request) = self.state.queued_requests(agent.id).first().copied() {

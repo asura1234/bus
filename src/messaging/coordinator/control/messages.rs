@@ -107,7 +107,7 @@ impl Worker {
             let recipients: AgentRecipients = self
                 .state
                 .agents()
-                .filter(|a| a.room_id == room && Some(a.id) != author)
+                .filter(|a| !a.permission_handler && a.room_id == room && Some(a.id) != author)
                 .map(|a| a.id)
                 .collect();
             if recipients.is_empty() {

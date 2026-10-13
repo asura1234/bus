@@ -319,12 +319,28 @@ impl Worker {
         orchestrator: Option<OrchestratorSpec>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        self.add_agent_owned(input, orchestrator, false, events)
+    }
+
+    pub(super) fn add_agent_owned(
+        &mut self,
+        input: AddAgent,
+        orchestrator: Option<OrchestratorSpec>,
+        permission_handler: bool,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
         let orchestrates = orchestrator.as_ref().map(|spec| spec.room);
         let cwd = self.validate_agent_addition(&input, orchestrator.as_ref())?;
         let mut state = self.state.clone();
         let id = state
             .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
             .map_err(|e| e.to_string())?;
+        if permission_handler {
+            state
+                .mark_permission_handler(id)
+                .map_err(|e| e.to_string())?;
+            self.save(state.clone())?;
+        }
         // Validate the assignment before any consent prompt or launch side effect.
         if let Some(room) = orchestrates {
             state
@@ -344,6 +360,17 @@ impl Worker {
             }
         }
         let (mut prepared, hooks) = self.prepare_provider_launch(&input, id)?;
+        if permission_handler {
+            prepared
+                .env
+                .insert("BUS_PERMISSION_HANDLER_ID".into(), id.0.to_string());
+            let text = super::permissions::handler_prompt(input.room, id, &self.data_dir);
+            let path = orchestrator::write_prompt(&hooks.spool, &text)?;
+            prepared.args.extend(
+                orchestrator::prompt_args(input.provider, &path, false)?
+                    .ok_or("Claude handler prompt unavailable")?,
+            );
+        }
         if let Some(spec) = &orchestrator {
             self.prepare_orchestrator_prompt(&input, id, &mut state, spec, &mut prepared, &hooks)?;
         }
@@ -354,13 +381,24 @@ impl Worker {
             hooks.launch_id,
             prepared.adopted_session.clone(),
         )?;
+        self.start_owned_agent(&input, id, prepared, identity, events)
+    }
+
+    fn start_owned_agent(
+        &mut self,
+        input: &AddAgent,
+        id: AgentId,
+        prepared: launch::PreparedLaunch,
+        identity: AgentRuntimeIdentity,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
         let created = self
             .transport
             .request(Method::TabCreate(schema::TabCreateParams {
                 workspace_id: None,
                 cwd: Some(prepared.cwd.to_string_lossy().into_owned()),
                 focus: false,
-                label: Some(input.name.clone()),
+                label: self.state.agent(id).map(|agent| agent.name.clone()),
                 env: prepared.env,
             }));
         let (pane, terminal) = match created {

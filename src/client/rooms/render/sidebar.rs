@@ -137,6 +137,7 @@ fn sidebar_rooms_header(state: &BusState, selected: Option<RoomId>) -> usize {
     }
     let agents = state
         .agents()
+        .filter(|a| !a.permission_handler)
         .filter(|agent| agent.room_id == master)
         .count();
     // AGENTS header, gap, the agents, then the divider.
@@ -357,6 +358,7 @@ impl BusUi {
         // and hit targets. Expanded paths supply both height and display lines.
         state
             .agents()
+            .filter(|a| !a.permission_handler)
             .filter(|a| Some(a.room_id) == room)
             .map(|agent| {
                 // MASTER agents show name, provider and orchestrated room only.

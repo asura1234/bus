@@ -292,6 +292,15 @@ pub(crate) struct RoomAgent {
     /// Shown instead of `color` in color blind mode; allocated the same way.
     #[serde(default)]
     pub(crate) accessible_color: [u8; 3],
+    /// Bus-owned, hidden service; old saved agents remain ordinary workers.
+    #[serde(default)]
+    pub(crate) permission_handler: bool,
+    #[serde(default)]
+    pub(crate) permission_reset_required: bool,
+    #[serde(default)]
+    pub(crate) permission_clear_started: bool,
+    #[serde(default)]
+    pub(crate) permission_reset_at_ms: Option<u64>,
     pub(crate) provider: Provider,
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,

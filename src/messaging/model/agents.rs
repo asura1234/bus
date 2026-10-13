@@ -42,6 +42,10 @@ impl BusState {
                 name,
                 color,
                 accessible_color,
+                permission_handler: false,
+                permission_reset_required: false,
+                permission_clear_started: false,
+                permission_reset_at_ms: None,
                 provider,
                 cwd,
                 branch,
@@ -107,6 +111,9 @@ impl BusState {
 
     pub(crate) fn rename_agent(&mut self, id: AgentId, name: &str) -> Result<(), ModelError> {
         let name = agent_name(name)?;
+        if self.agent(id).is_some_and(|a| a.permission_handler) {
+            return Err(ModelError::ReservedAgentName);
+        }
         self.agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
@@ -369,7 +376,9 @@ impl BusState {
 
 fn agent_name(name: &str) -> Result<String, ModelError> {
     let name = normalized_name(name)?;
-    if name.eq_ignore_ascii_case(DEVELOPER_RECIPIENT) {
+    if name.eq_ignore_ascii_case(DEVELOPER_RECIPIENT)
+        || name.eq_ignore_ascii_case("permission handler")
+    {
         return Err(ModelError::ReservedAgentName);
     }
     Ok(name)
