@@ -133,6 +133,7 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(id))?;
         self.queues.remove(&id);
         self.requests.retain(|_, request| request.agent_id != id);
+        self.drop_history_of_agent(id);
         for room in self.rooms.values_mut() {
             room.draft.recipient_ids.remove(&id);
             room.latest_replies.remove(&id);

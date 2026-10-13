@@ -243,6 +243,11 @@ impl Worker {
         fingerprint: &str,
     ) -> Result<Value, String> {
         let claims = decode_dialog_fingerprint(fingerprint)?;
+        let age_ms =
+            crate::messaging::storage::io::now_ms().saturating_sub(observed_at_ms(&claims));
+        if age_ms > crate::messaging::model::DIALOG_ANSWER_TTL_MS {
+            return Err("Dialog fingerprint expired; observe the dialog again".into());
+        }
         if claims.agent_id != id {
             return Err("Dialog fingerprint belongs to another agent".into());
         }
@@ -261,11 +266,12 @@ impl Worker {
         if option.is_none() && claims.options != 0 {
             return Err("This is a choice dialog; use agent choose".into());
         }
-        if self.state.dialog_fingerprint_consumed(fingerprint) {
+        let digest = fingerprint_digest(fingerprint);
+        if self.state.dialog_answer_spent(digest) {
             return Err("Dialog fingerprint was already used; observe the dialog again".into());
         }
         let mut consumed = self.state.clone();
-        consumed.consume_dialog_fingerprint(fingerprint.to_owned());
+        consumed.spend_dialog_answer(digest.to_owned(), observed_at_ms(&claims));
         self.save(consumed)?;
         let method = match option {
             Some(option) => Method::AgentDialogChoose(schema::AgentDialogChooseParams {
@@ -410,6 +416,15 @@ fn encode_dialog_fingerprint(claims: &DialogFingerprintClaims) -> Result<String,
     Ok(format!("d1.{encoded}.{digest}"))
 }
 
+/// The digest a fingerprint ends with; it names the fingerprint once spent.
+pub(in crate::messaging::coordinator) fn fingerprint_digest(fingerprint: &str) -> &str {
+    fingerprint.rsplit('.').next().unwrap_or(fingerprint)
+}
+
+fn observed_at_ms(claims: &DialogFingerprintClaims) -> u64 {
+    u64::try_from(claims.observed_at_ns / 1_000_000).unwrap_or(u64::MAX)
+}
+
 fn decode_dialog_fingerprint(value: &str) -> Result<DialogFingerprintClaims, String> {
     use base64::Engine;
     let malformed = || "Dialog fingerprint is malformed; observe the dialog again".to_owned();
@@ -427,3 +442,7 @@ fn decode_dialog_fingerprint(value: &str) -> Result<DialogFingerprintClaims, Str
     }
     serde_json::from_slice(&payload).map_err(|_| malformed())
 }
+
+#[cfg(test)]
+#[path = "../tests/control/fingerprint_test.rs"]
+mod fingerprint_tests;

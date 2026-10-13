@@ -224,6 +224,7 @@ impl BusState {
         }
         self.rooms.remove(&id);
         self.requests.retain(|_, request| request.room_id != id);
+        self.drop_history_of_room(id);
         // Match the UI, which falls back to the first room (MASTER) at once,
         // so `state` never shows a gap between the delete and the next view.
         if self.visible_room == Some(id) {

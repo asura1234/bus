@@ -77,9 +77,10 @@ impl BusState {
     }
 
     fn accept_callback_unrecorded(&mut self, callback: ProviderCallback) -> CallbackDisposition {
-        if !self
-            .consumed_callback_ids
-            .insert(callback.callback_id.clone())
+        if self
+            .consumed_callbacks
+            .insert(callback.callback_id.clone(), callback.occurred_at_ms)
+            .is_some()
         {
             return CallbackDisposition::Rejected(CallbackRejection::DuplicateCallback);
         }

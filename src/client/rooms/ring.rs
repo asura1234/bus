@@ -48,7 +48,7 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
         .chain(
             previous
                 .rooms()
-                .flat_map(|room| room.notices.iter().map(|prompt| prompt.id)),
+                .flat_map(|room| previous.notices(room.id).map(|prompt| prompt.id)),
         )
         .collect();
     // Dialog notices to orchestrators are delivery-only and never ring.
@@ -61,7 +61,7 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
         )
         .chain(
             next.rooms()
-                .flat_map(|room| room.notices.iter().map(move |prompt| (room.id, prompt))),
+                .flat_map(|room| next.notices(room.id).map(move |prompt| (room.id, prompt))),
         )
         .find(|(room, prompt)| {
             prompt.author != Author::Developer && !known.contains(&prompt.id) && rings(*room)

@@ -65,7 +65,7 @@ impl History {
                 .insert(request.agent_id, request);
         }
         // Bus notices for the developer read like messages addressed to nobody.
-        for prompt in &room.notices {
+        for prompt in state.notices(room.id) {
             exchanges.insert(
                 (prompt.submitted_at_ms, prompt.id.0),
                 Exchange {
@@ -424,7 +424,11 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         }
     }
     room.latest_prompt.as_ref().map(|p| p.id.0).hash(&mut hash);
-    room.notices.last().map(|p| p.id.0).hash(&mut hash);
+    state
+        .notices(room.id)
+        .last()
+        .map(|p| p.id.0)
+        .hash(&mut hash);
     for reply in room.latest_replies.values() {
         (reply.request_id.0, reply.received_at_ms).hash(&mut hash);
     }
@@ -439,7 +443,7 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         .requests()
         .filter(|r| r.room_id == room.id && !r.delivery_only())
         .map(|r| &r.prompt)
-        .chain(&room.notices)
+        .chain(state.notices(room.id))
         .chain(room.latest_prompt.as_ref());
     for prompt in prompts {
         agents.extend(prompt.recipient_ids.iter().copied());

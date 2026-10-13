@@ -1,6 +1,7 @@
 //! Durable storage pause and recovery for the single coordinator.
 use super::{mpsc, BusEvent, BusState, Duration, Worker};
 use crate::messaging::storage::state_store::StoreError;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Unlock while the owning handle is still open. A duplicated handle may
@@ -94,7 +95,14 @@ impl Worker {
         if now < *next_retry {
             return;
         }
-        match self.store.load_base() {
+        // The archive beside state.json is append-only and only this
+        // coordinator writes it, so only state.json can have diverged.
+        let history = Arc::clone(self.durable_state.history());
+        match self
+            .store
+            .load_base()
+            .map(|durable| durable.map(|durable| durable.with_history(history)))
+        {
             // Compare with the exact last commit: status-only polls and journal
             // entries may have advanced the in-memory state since that write.
             Ok(Some(durable)) if durable == self.durable_state => {}
