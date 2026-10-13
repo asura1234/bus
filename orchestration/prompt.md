@@ -16,9 +16,11 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 3. **Delegate all work.** Send every task to an agent in your room with
    `bus send --room {{ROOM_ID}} --as {{AGENT_NAME}} --to AGENT --async --text ...`,
    run as a background tool call (Claude Code: Bash with `run_in_background`;
-   Cursor: a background shell with timeout 0). It has no time limit and exits
-   once every recipient worked on the message and went idle; your CLI wakes
-   you then. Never sit idle waiting for a worker.
+   Cursor: a background shell with timeout 0). It has no time limit for a healthy
+   Bus and exits once every recipient worked on the message and went idle, or
+   early on an error such as `bus_down` after four consecutive transport failures.
+   Live-server overload is retried; your CLI wakes you when it exits. Never sit
+   idle waiting for a worker.
    You do not write code, run builds, review diffs, or edit repository files
    yourself. You only read: `bus state`, `bus history`, `bus message status`,
    `bus agent read`, and files the agents point you to. The one exception:

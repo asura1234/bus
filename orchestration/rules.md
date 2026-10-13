@@ -33,8 +33,10 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   background tool call (Claude Code: Bash with `run_in_background`; Cursor: a
   background shell with timeout 0). When it exits, your CLI wakes you; read the
   reply in the room with `bus history --room ROOM`. Never sit idle waiting
-  for a worker. *Why:* `--async` has no time limit and returns only after every
-  recipient worked and went idle, so you stay free for the developer meanwhile.
+  for a worker. *Why:* `--async` has no time limit for a healthy Bus and returns
+  after every recipient worked and went idle, or exits early on an error such as
+  `bus_down` after four consecutive transport failures, so you stay free for the
+  developer meanwhile. Live-server overload is retried.
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the developer.
