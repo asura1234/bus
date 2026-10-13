@@ -1,5 +1,36 @@
 use super::*;
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_samples_named_threads_without_waiting_for_their_loop() {
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::Builder::new()
+        .name("perf-cpu-probe".into())
+        .spawn(move || {
+            ready_tx.send(()).unwrap();
+            let mut spin = 0_u64;
+            while stop_rx.try_recv().is_err() {
+                spin = std::hint::black_box(spin.wrapping_add(1));
+            }
+        })
+        .unwrap();
+    ready_rx.recv().unwrap();
+    let first = self_usage().unwrap().thread_cpu;
+    std::thread::sleep(Duration::from_millis(30));
+    let second = self_usage().unwrap().thread_cpu;
+    stop_tx.send(()).unwrap();
+    worker.join().unwrap();
+    let first = first.expect("per-thread sample on macOS");
+    let second = second.expect("per-thread sample on macOS");
+    let before = first.iter().find(|t| t.name == "perf-cpu-probe").unwrap();
+    let after = second.iter().find(|t| t.id == before.id).unwrap();
+    assert!(
+        after.cpu_time > before.cpu_time,
+        "CPU advances while the worker remains inside one call"
+    );
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn self_usage_reports_this_process() {

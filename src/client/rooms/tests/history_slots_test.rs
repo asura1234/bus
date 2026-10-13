@@ -2,6 +2,20 @@ use super::*;
 use crossterm::event::MouseEventKind::ScrollDown;
 
 #[test]
+fn room_layout_registers_separate_compose_and_history_timers() {
+    let (mut ui, _, _) = fixture();
+    ui.compute_view(100, 40);
+    let names = crate::utils::perf::global().names();
+    for metric in [
+        "client.compute_view",
+        "client.history.lines",
+        "client.history.rebuild",
+    ] {
+        assert!(names.contains(&metric), "missing {metric}: {names:?}");
+    }
+}
+
+#[test]
 fn compaction_notice_history_is_one_plain_line_without_a_reply_slot() {
     let (mut ui, room, author) = fixture();
     let mut state = ui.snapshot.state.clone();

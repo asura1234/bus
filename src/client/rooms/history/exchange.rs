@@ -28,6 +28,11 @@ impl History {
         now: u64,
         thumbnails: &mut Thumbnails,
     ) -> &[Line] {
+        static LINES: crate::utils::perf::Timer =
+            crate::utils::perf::Timer::new("client.history.lines");
+        static REBUILD: crate::utils::perf::Timer =
+            crate::utils::perf::Timer::new("client.history.rebuild");
+        let _lines_timer = LINES.start();
         if self.source != Some((revision, room.id)) {
             self.signature = signature(state, room);
             self.source = Some((revision, room.id));
@@ -42,6 +47,7 @@ impl History {
         if self.key == Some(key) {
             return &self.lines;
         }
+        let _rebuild_timer = REBUILD.start();
         let mut exchanges = BTreeMap::new();
         // Dialog notices to orchestrators are delivery-only, never history.
         for request in state

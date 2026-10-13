@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 mod recorder;
 mod writer;
 
-pub(crate) use recorder::{exit, start, PerfHooks, PerfOptions, ProcessUsage};
+pub(crate) use recorder::{exit, start, PerfHooks, PerfOptions, ProcessUsage, ThreadUsage};
 
 /// An operation this slow blocks a 60 Hz UI for several frames.
 pub(crate) const SLOW_OP: Duration = Duration::from_millis(100);
@@ -460,7 +460,7 @@ impl Registry {
     }
 
     #[cfg(test)]
-    fn names(&self) -> Vec<&'static str> {
+    pub(crate) fn names(&self) -> Vec<&'static str> {
         let timers = self.timers().into_iter().map(|timer| timer.name);
         let gauges = self.gauges().into_iter().map(|gauge| gauge.name);
         let counters = self.counters().into_iter().map(|counter| counter.name);

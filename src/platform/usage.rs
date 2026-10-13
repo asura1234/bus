@@ -4,6 +4,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+use crate::utils::perf::ThreadUsage;
 use crate::utils::perf::{PerfHooks, ProcessUsage};
 
 /// The recorder's view of this platform.
@@ -26,6 +28,7 @@ pub(crate) fn self_usage() -> Option<ProcessUsage> {
         cpus: std::thread::available_parallelism().map_or(1, |n| n.get() as u32),
         system_cpu_ticks: system_cpu_ticks(),
         swap_used_bytes: swap_used_bytes(),
+        thread_cpu: thread_cpu(threads),
     })
 }
 
@@ -67,6 +70,57 @@ fn memory_and_threads() -> Option<(u64, u32)> {
         )
     };
     (read == size).then(|| (info.pti_resident_size, info.pti_threadnum.max(0) as u32))
+}
+
+/// One bounded listing plus one query per thread, once per perf window. These
+/// public libproc IDs are opaque pthread addresses, not Mach port rights.
+#[cfg(target_os = "macos")]
+fn thread_cpu(threads: u32) -> Option<Vec<ThreadUsage>> {
+    const PROC_PIDLISTTHREADS: libc::c_int = 6;
+    let pid = std::process::id() as libc::c_int;
+    let mut ids = vec![0_u64; (threads as usize + 16).min(4096)];
+    let size = (ids.len() * std::mem::size_of::<u64>()) as libc::c_int;
+    let read =
+        unsafe { libc::proc_pidinfo(pid, PROC_PIDLISTTHREADS, 0, ids.as_mut_ptr().cast(), size) };
+    if read <= 0 || read >= size || read as usize % std::mem::size_of::<u64>() != 0 {
+        return None;
+    }
+    ids.truncate(read as usize / std::mem::size_of::<u64>());
+    let mut samples = Vec::with_capacity(ids.len());
+    for id in ids {
+        let mut info: libc::proc_threadinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_threadinfo>() as libc::c_int;
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTHREADINFO,
+                id,
+                (&mut info as *mut libc::proc_threadinfo).cast(),
+                size,
+            )
+        };
+        if read != size {
+            continue; // Thread exited between the listing and the query.
+        }
+        let name: Vec<u8> = info
+            .pth_name
+            .iter()
+            .take_while(|ch| **ch != 0)
+            .map(|ch| *ch as u8)
+            .collect();
+        samples.push(ThreadUsage {
+            id,
+            name: String::from_utf8_lossy(&name).into_owned(),
+            // XNU fill_taskthreadinfo exports seconds/microseconds as ns.
+            cpu_time: Duration::from_nanos(info.pth_user_time.saturating_add(info.pth_system_time)),
+        });
+    }
+    Some(samples)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn thread_cpu(_threads: u32) -> Option<Vec<crate::utils::perf::ThreadUsage>> {
+    None
 }
 
 #[cfg(target_os = "macos")]

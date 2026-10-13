@@ -8,6 +8,7 @@
 //! window) or `{"kind":"stall",...}` (a loop blocked past the threshold, a move
 //! to another stage while still blocked, its end, or a finished stack capture).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -81,7 +82,7 @@ impl PerfOptions {
 }
 
 /// Raw facts about this process, supplied by `platform` at startup composition.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProcessUsage {
     pub(crate) cpu_time: Duration,
     pub(crate) rss_bytes: u64,
@@ -92,6 +93,14 @@ pub(crate) struct ProcessUsage {
     /// Machine-wide cumulative CPU ticks as (busy, total).
     pub(crate) system_cpu_ticks: Option<(u64, u64)>,
     pub(crate) swap_used_bytes: Option<u64>,
+    pub(crate) thread_cpu: Option<Vec<ThreadUsage>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ThreadUsage {
+    pub(crate) id: u64,
+    pub(crate) name: String,
+    pub(crate) cpu_time: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -188,9 +197,11 @@ pub(super) struct Recorder {
     options: PerfOptions,
     hooks: PerfHooks,
     last_cpu: Option<(Instant, Duration)>,
+    last_thread_cpu: BTreeMap<u64, (Instant, Duration)>,
     last_system_ticks: Option<(u64, u64)>,
     last_load_warn: Option<Instant>,
-    last_capture: Option<Instant>,
+    last_capture: BTreeMap<&'static str, Instant>,
+    capture_sequence: u64,
     captures: (
         mpsc::Sender<FinishedCapture>,
         mpsc::Receiver<FinishedCapture>,
@@ -231,9 +242,11 @@ impl Recorder {
             options: options.clone(),
             hooks,
             last_cpu: None,
+            last_thread_cpu: BTreeMap::new(),
             last_system_ticks: None,
             last_load_warn: None,
-            last_capture: None,
+            last_capture: BTreeMap::new(),
+            capture_sequence: 0,
             captures: mpsc::channel(),
             pending_captures: 0,
             wake_lag_max: None,
@@ -291,9 +304,10 @@ impl Recorder {
                 .is_some_and(|after| u128::from(ongoing_ms) >= after.as_millis());
             let cooled = self
                 .last_capture
-                .is_none_or(|last| now.duration_since(last) >= self.options.capture_cooldown);
+                .get(watch.name)
+                .is_none_or(|last| now.duration_since(*last) >= self.options.capture_cooldown);
             if due && cooled {
-                self.last_capture = Some(now);
+                self.last_capture.insert(watch.name, now);
                 self.capture(watch.name, watch.stage(), ongoing_ms);
             }
         }
@@ -303,7 +317,14 @@ impl Recorder {
     /// and the watchdog must keep writing windows meanwhile.
     pub(super) fn capture(&mut self, loop_name: &'static str, stage: &'static str, busy_ms: u64) {
         self.prune_captures();
-        let file = format!("stall-{}-{}.txt", compact_timestamp(), self.role);
+        self.capture_sequence += 1;
+        let file = format!(
+            "stall-{}-{}-{:016}-{}.txt",
+            compact_timestamp(),
+            self.pid,
+            self.capture_sequence,
+            self.role
+        );
         let (pid, path, hook) = (self.pid, self.dir.join(&file), self.hooks.capture_stacks);
         let done = self.captures.0.clone();
         let mut finished = FinishedCapture {
@@ -428,6 +449,8 @@ impl Recorder {
         let mut record = self.base("window");
         if let Some(usage) = usage {
             self.insert_usage(&mut record, now, usage);
+        } else {
+            self.last_thread_cpu.clear();
         }
         if let Some(lag) = self.wake_lag_max.take() {
             record.insert(
@@ -475,6 +498,20 @@ impl Recorder {
     }
 
     fn insert_usage(&mut self, record: &mut Map<String, Value>, now: Instant, usage: ProcessUsage) {
+        let mut next_thread_cpu = BTreeMap::new();
+        if let Some(threads) = usage.thread_cpu {
+            let threads: Vec<Value> = threads.into_iter().map(|thread| {
+                let mut sample = json!({"id": thread.id, "name": thread.name, "cpu_ms": round_ms(thread.cpu_time.as_micros())});
+                if let Some(previous) = self.last_thread_cpu.get(&thread.id).copied().filter(|(_, cpu)| *cpu <= thread.cpu_time) {
+                    let pct = cpu_percent(previous, (now, thread.cpu_time));
+                    sample["cpu_pct"] = json!((pct * 10.0).round() / 10.0);
+                }
+                next_thread_cpu.insert(thread.id, (now, thread.cpu_time));
+                sample
+            }).collect();
+            record.insert("thread_cpu".into(), json!(threads));
+        }
+        self.last_thread_cpu = next_thread_cpu;
         if let Some(previous) = self.last_cpu {
             let pct = cpu_percent(previous, (now, usage.cpu_time));
             record.insert("cpu_pct".into(), json!((pct * 10.0).round() / 10.0));
