@@ -591,3 +591,50 @@ fn a_late_reply_to_a_developer_master_message_still_shows_in_master() {
     assert_eq!(bus.reports(), ["Review is done; merging next."]);
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
 }
+
+#[test]
+fn a_late_final_after_stop_failure_for_a_master_request_stays_in_master() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (master, orchestrator) = (bus.master, bus.orchestrator);
+    let typed = bus.deliver(master, Author::Developer, orchestrator, "How is the PR?");
+    let request = bus
+        .worker
+        .state
+        .agent(orchestrator)
+        .unwrap()
+        .current_request
+        .unwrap();
+    let spool = bus.dir.join("callbacks/orch");
+    for value in [
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"asked","prompt":typed}),
+        json!({"hook_event_name":"StopFailure","session_id":"session-orch","prompt_id":"asked","error":"server_error","last_assistant_message":"API Error: 529 Overloaded."}),
+    ] {
+        callbacks::append(&spool, "orch", Provider::ClaudeCode, value, &[], false).unwrap();
+        bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    }
+    let closed = bus.worker.state.request(request).unwrap();
+    assert!(closed.completed_at_ms.is_some());
+    assert!(closed
+        .failure_reason
+        .as_deref()
+        .unwrap()
+        .starts_with("provider_error: "));
+    assert_eq!(closed.provider_turn_id.as_deref(), Some("asked"));
+    assert!(bus
+        .worker
+        .state
+        .agent(orchestrator)
+        .unwrap()
+        .current_request
+        .is_none());
+    assert!(bus.reports().is_empty());
+    assert!(bus.room_reports().is_empty());
+    callbacks::append(
+        &spool, "orch", Provider::ClaudeCode,
+        json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"asked","last_assistant_message":"Review is done; merging next."}),
+        &[], false,
+    ).unwrap();
+    bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    assert_eq!(bus.reports(), ["Review is done; merging next."]);
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
+}
