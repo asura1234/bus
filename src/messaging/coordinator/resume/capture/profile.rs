@@ -63,6 +63,14 @@ pub(super) fn extras(
     if agent.permission_handler {
         crate::agents::providers::launch::profile::service_settings(hooks)?;
         crate::agents::providers::launch::profile::service_env(&context.binary, &mut env)?;
+        args.extend([
+            "--permission-mode".into(),
+            "dontAsk".into(),
+            "--tools".into(),
+            "Read,Glob,Grep,Bash".into(),
+            "--setting-sources".into(),
+            String::new(),
+        ]);
         env.insert("BUS_PERMISSION_HANDLER_ID".into(), agent.id.0.to_string());
         let text = super::super::super::permissions::handler_prompt_with_binary(
             agent.room_id,
@@ -90,13 +98,31 @@ pub(super) fn extras(
             crate::agents::providers::launch::profile::worker_claude_settings(hooks, cwd, scratch)?;
         }
         if agent.provider == crate::messaging::model::Provider::Codex {
+            for grant in &agent.allowed_roots {
+                let canonical = grant
+                    .path
+                    .canonicalize()
+                    .map_err(|_| "Granted root unavailable on resume")?;
+                if canonical != grant.path
+                    || !canonical.is_dir()
+                    || crate::agents::providers::launch::profile::protected_paths(hooks)
+                        .iter()
+                        .any(|p| p.starts_with(&canonical) || canonical.starts_with(p))
+                {
+                    return Err("Granted root changed or overlaps live Bus resources".into());
+                }
+                args.extend(["--add-dir".into(), canonical.to_string_lossy().into_owned()]);
+            }
             let read_only = crate::agents::providers::launch::profile::codex_read_only(
                 hooks,
                 agent.launch_cwd.as_deref(),
                 agent.launch_profile.as_deref()
                     == Some(crate::agents::providers::launch::profile::CODEX_READ_ONLY),
             );
-            if agent.launch_profile.is_some() || agent.launch_cwd.is_none() {
+            if agent.launch_profile.is_some()
+                || agent.launch_cwd_backfilled
+                || agent.launch_cwd.is_none()
+            {
                 args.extend(crate::agents::providers::launch::profile::codex_args(
                     agent.scratch_dir.as_deref(),
                     read_only,

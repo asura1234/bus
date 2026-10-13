@@ -281,7 +281,7 @@ impl FakeAgent {
             }
             Input::Enter => return None,
             Input::Interrupt => return Some(Typed::Exit),
-            Input::Navigate(_) => return None,
+            Input::Navigate(_) | Input::OpenQuestion => return None,
         }
         self.redraw();
         None
@@ -687,6 +687,7 @@ enum Input {
     Enter,
     Interrupt,
     Navigate(i32),
+    OpenQuestion,
 }
 
 /// Splits raw terminal input into text, Enter, Backspace and Ctrl+C/D,
@@ -755,6 +756,9 @@ fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
                 if sequence == b"\x1b[13u" {
                     flush(&mut text, &mut events);
                     events.push(Input::Enter);
+                } else if sequence == b"\x1b[1;2D" {
+                    flush(&mut text, &mut events);
+                    events.push(Input::OpenQuestion);
                 } else if sequence == b"\x1b[A" || sequence == b"\x1b[B" {
                     flush(&mut text, &mut events);
                     events.push(Input::Navigate(if sequence == b"\x1b[A" { -1 } else { 1 }));

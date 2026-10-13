@@ -15,6 +15,9 @@ impl Worker {
         _events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<Value, String> {
         match method {
+            #[cfg(feature = "dev-tools")]
+            "agent.legacy-fixture" => self.control_legacy_fixture(p),
+            "agent.allow-root" => self.control_allow_root(p),
             "agent.details" => self.control_command(BusCommand::SetDetails(
                 self.control_agent(required(p, "agent")?, None)?,
                 p.get("on")

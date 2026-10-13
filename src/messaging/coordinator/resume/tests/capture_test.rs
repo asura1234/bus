@@ -738,6 +738,23 @@ fn permission_profile_service_state_without_args_has_exact_allow_rule() {
 }
 
 #[test]
+fn permission_profile_codex_resume_includes_audited_shared_root() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let shared = fixture.root.with_extension("shared-work");
+    std::fs::create_dir(&shared).unwrap();
+    let canonical = shared.canonicalize().unwrap();
+    let mut value = serde_json::to_value(&fixture.state).unwrap();
+    let agent = &mut value["agents"][fixture.agent.0.to_string()];
+    agent["launch_profile"] = json!("codex-workspace-write-v1");
+    agent["allowed_roots"] = json!([{"path":canonical,"granted_by":99,"granted_at_ms":1}]);
+    fixture.state = serde_json::from_value(value).unwrap();
+    fixture.save();
+    let extras = fixture.load().unwrap();
+    assert!(extras.args.windows(2).any(|a| a[0] == "--add-dir" && a[1] == canonical.to_string_lossy()));
+    std::fs::remove_dir_all(shared).unwrap();
+}
+
+#[test]
 fn permission_profile_review_codex_orchestrator_resume_keeps_native_approval() {
     for legacy in [false, true] {
         let mut fixture = Fixture::new(Provider::Codex);

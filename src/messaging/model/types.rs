@@ -275,6 +275,12 @@ pub(crate) enum RoomKind {
 }
 
 pub(crate) const MASTER_ROOM_NAME: &str = "MASTER";
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct AllowedRoot {
+    pub(crate) path: PathBuf,
+    pub(crate) granted_by: AgentId,
+    pub(crate) granted_at_ms: u64,
+}
 /// The `send --to` selector for a message to the developer; no agent may take it.
 pub(crate) const DEVELOPER_RECIPIENT: &str = "human";
 /// Never produced by the ID allocator, which starts at 1, so adding MASTER to a
@@ -305,6 +311,11 @@ pub(crate) struct RoomAgent {
     /// Frozen creation/launch authority; runtime cwd observations never change it.
     #[serde(default)]
     pub(crate) launch_cwd: Option<PathBuf>,
+    /// Legacy authority frozen from the saved cwd before runtime polling.
+    #[serde(default)]
+    pub(crate) launch_cwd_backfilled: bool,
+    #[serde(default)]
+    pub(crate) allowed_roots: Vec<AllowedRoot>,
     /// Private launch resource, retained while terminal ownership is uncertain.
     #[serde(default)]
     pub(crate) scratch_dir: Option<PathBuf>,

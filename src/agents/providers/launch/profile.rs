@@ -8,6 +8,33 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+mod build_scope_tests {
+    use super::*;
+    #[test]
+    fn codex_build_cache_roots_are_explicit_and_keep_approval() {
+        let args = codex_args(Some(Path::new("/private/worker-scratch")), false);
+        let roots = args
+            .iter()
+            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
+            .unwrap();
+        let home = std::env::home_dir().unwrap();
+        for relative in [".cargo", ".rustup", "Library/Caches/zig", ".cache/zig"] {
+            let path = home.join(relative);
+            if path.is_dir() {
+                assert!(
+                    roots.contains(&*path.canonicalize().unwrap().to_string_lossy()),
+                    "missing {}: {roots}",
+                    path.display()
+                );
+            }
+        }
+        assert!(args
+            .windows(2)
+            .any(|a| a == ["--ask-for-approval", "on-request"]));
+    }
+}
+
 pub(crate) const CLAUDE_SERVICE: &str = "claude-service-cli-v1";
 pub(crate) const ORCHESTRATOR_NATIVE_APPROVAL: &str = "orchestrator-native-approval-v1";
 pub(crate) const CODEX_READ_ONLY: &str = "codex-read-only-protected-overlap-v1";
@@ -109,6 +136,18 @@ fn private_scratch(hooks: &hook_json::HookContext) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn codex_args(scratch: Option<&Path>, read_only: bool) -> Vec<String> {
+    let mut roots: Vec<PathBuf> = scratch.into_iter().map(Path::to_path_buf).collect();
+    if !read_only {
+        if let Some(home) = std::env::home_dir() {
+            for relative in [".cargo", ".rustup", "Library/Caches/zig", ".cache/zig"] {
+                if let Ok(root) = home.join(relative).canonicalize() {
+                    if root.is_dir() {
+                        roots.push(root);
+                    }
+                }
+            }
+        }
+    }
     let mut args = vec![
         "--sandbox".into(),
         if read_only {
@@ -121,10 +160,7 @@ pub(crate) fn codex_args(scratch: Option<&Path>, read_only: bool) -> Vec<String>
         "on-request".into(),
     ];
     for value in [
-        format!(
-            "sandbox_workspace_write.writable_roots={}",
-            json!(scratch.into_iter().collect::<Vec<_>>())
-        ),
+        format!("sandbox_workspace_write.writable_roots={}", json!(roots)),
         "sandbox_workspace_write.exclude_slash_tmp=true".into(),
         "sandbox_workspace_write.exclude_tmpdir_env_var=true".into(),
         "sandbox_workspace_write.network_access=false".into(),
@@ -162,9 +198,26 @@ pub(crate) fn service_settings(hooks: &hook_json::HookContext) -> Result<(), Str
     .map(|family| format!("Bash({prefix} {family} *)"))
     .collect();
     allow.push(format!("Bash({prefix} state)"));
+    allow.extend(
+        [
+            "Read",
+            "Glob",
+            "Grep",
+            "Bash(cat *)",
+            "Bash(ls *)",
+            "Bash(realpath *)",
+            "Bash(grep *)",
+            "Bash(head *)",
+            "Bash(test *)",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
     // This file is Bus-owned per launch; replace its service allowlist on rebind
     // so a stale executable never remains implicitly authorized.
-    settings["permissions"]["defaultMode"] = json!("default");
+    // Unlisted service work fails closed instead of making the service itself
+    // wait for a permission handler. This does not bypass approval checks.
+    settings["permissions"]["defaultMode"] = json!("dontAsk");
     settings["permissions"]["allow"] = json!(allow);
     #[cfg(unix)]
     {
@@ -229,6 +282,14 @@ pub(crate) fn install(spec: &LaunchSpec, launch: &mut PreparedLaunch) -> Result<
         }
         service_settings(&spec.hooks)?;
         service_env(&spec.hooks.binary, &mut launch.env)?;
+        launch.args.extend([
+            "--permission-mode".into(),
+            "dontAsk".into(),
+            "--tools".into(),
+            "Read,Glob,Grep,Bash".into(),
+            "--setting-sources".into(),
+            String::new(),
+        ]);
         launch.profile = CLAUDE_SERVICE.into();
         return Ok(());
     }

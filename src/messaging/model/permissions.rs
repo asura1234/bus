@@ -64,6 +64,11 @@ impl BusState {
         a.permission_reset_required = false;
         a.permission_clear_started = false;
         a.permission_reset_at_ms = None;
+        if a.actionable_error.as_deref().is_some_and(|e| {
+            e.starts_with("Permission handler reset") || e.starts_with("Permission handler clear")
+        }) {
+            a.actionable_error = None;
+        }
         Ok(())
     }
     pub(crate) fn permission_assignments(&self) -> impl Iterator<Item = &PermissionAssignment> {
@@ -218,6 +223,10 @@ impl BusState {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "none assigned".into());
         let text = format!("Permission assignment {}. Worker {} (agent {}), handler {}. Inspect: {cli} agent dialog {}. Frozen authorized worker root: {}. Actual observed cwd: {}. Assigned private scratch: {}. Read fresh room workflow authorization with {cli} state and the room's workflow files; the listed safe classes have standing user authorization; other unclear authority means escalate. Deadline {}. Complete with {cli} agent permission-decision {} --handler {} --assignment {} --fingerprint FINGERPRINT_OR_unavailable --outcome approved|escalated|routed --summary ONE_LINE. Managed choose/answer must include --handler {} --assignment {}. Never answer an unknown screen.", p.token, agent.name, worker.0, handler.0, worker.0, root, agent.cwd.display(), scratch, p.deadline_ms, worker.0, handler.0, p.token, handler.0, p.token);
+        let text = format!(
+            "{text}\nExplicit granted roots (state authority, grantor and timestamp): {}",
+            serde_json::to_string(&agent.allowed_roots).map_err(|e| e.to_string())?
+        );
         let requests = self
             .submit_message_with(
                 p.room,

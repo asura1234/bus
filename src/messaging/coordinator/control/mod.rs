@@ -5,6 +5,7 @@ mod inspect;
 mod messages;
 mod permissions;
 mod rooms;
+mod roots;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod ui_hits;
 
@@ -238,6 +239,8 @@ impl Worker {
             | "bus.quit"
             | "agent.read" => self.execute_inspect(method, p, events),
             "agent.details"
+            | "agent.legacy-fixture"
+            | "agent.allow-root"
             | "agent.rename"
             | "agent.delete"
             | "agent.setup-confirm"
@@ -376,6 +379,13 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     ),
     spec("room.history", "history", &["room"], false, Tier::Agent),
     spec(
+        "agent.allow-root",
+        "agent allow-root",
+        &["agent", "path", "by"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
         "agent.add",
         "agent add",
         &[
@@ -485,6 +495,14 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     ),
     // Dev tier: the developer's view and preferences, and Bus's own internals.
     spec("room.focus", "room focus", &["room"], true, Tier::Dev),
+    #[cfg(feature = "dev-tools")]
+    spec(
+        "agent.legacy-fixture",
+        "agent legacy-fixture",
+        &["agent"],
+        true,
+        Tier::Dev,
+    ),
     spec("room.seen", "room seen", &["room"], true, Tier::Dev),
     spec(
         "room.sound",

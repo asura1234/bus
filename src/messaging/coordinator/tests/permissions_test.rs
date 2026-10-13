@@ -1,6 +1,90 @@
 use super::*;
 
 #[test]
+fn permission_handler_confirmed_late_reset_restores_service() {
+    let (mut worker, _, room, _, _, dir) = worker(true);
+    let handler = ready_permission_handler(&mut worker, room, &dir);
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    let service = &mut value["agents"][handler.0.to_string()];
+    service["permission_reset_required"] = json!(true);
+    service["permission_clear_started"] = json!(true);
+    service["permission_reset_at_ms"] = json!(1);
+    service["actionable_error"] = json!("Permission handler reset failed or timed out");
+    worker.state = serde_json::from_value(value).unwrap();
+    worker.maintain_permissions().unwrap();
+    assert!(
+        !worker
+            .state
+            .agent(handler)
+            .unwrap()
+            .permission_reset_required
+    );
+    assert!(worker
+        .state
+        .agent(handler)
+        .unwrap()
+        .actionable_error
+        .is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn permission_handler_prompt_covers_visible_scripts_gh_and_explicit_cargo_target() {
+    let prompt = crate::messaging::coordinator::permissions::handler_prompt_with_binary(
+        RoomId(1),
+        AgentId(7),
+        std::path::Path::new("/session"),
+        Some(std::path::Path::new("/lane/target/debug/bus")),
+    );
+    for instruction in [
+        "gh pr view/list/diff/checks",
+        "gh api GET",
+        "-f/-F",
+        "full source",
+        "CARGO_TARGET_DIR",
+        "allowed_roots",
+        "Read and Grep",
+        "option 1",
+        "launch_cwd_backfilled",
+    ] {
+        assert!(
+            prompt.contains(instruction),
+            "missing policy instruction: {instruction}"
+        );
+    }
+}
+
+#[test]
+fn permission_shared_root_requires_room_orchestrator_and_is_audited() {
+    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
+    ready_permission_handler(&mut worker, room, &dir);
+    let shared = dir.with_extension("shared");
+    std::fs::create_dir(&shared).unwrap();
+    let params = json!({"agent":agent.0.to_string(), "path":shared.to_string_lossy(), "by":agent.0.to_string()});
+    assert!(permission_control(&mut worker, "agent.allow-root", &params).is_err());
+    let mut params = params;
+    params["by"] = json!(orchestrator.unwrap().0.to_string());
+    permission_control(&mut worker, "agent.allow-root", &params).unwrap();
+    let stored = serde_json::to_value(worker.state.agent(agent).unwrap()).unwrap();
+    assert_eq!(
+        stored["allowed_roots"][0]["path"],
+        json!(shared.canonicalize().unwrap())
+    );
+    assert_eq!(
+        stored["allowed_roots"][0]["granted_by"],
+        json!(orchestrator.unwrap())
+    );
+    post_blocked(&mut worker.state, agent, true).unwrap();
+    assert!(sent_by(&worker, room, agent)[0]
+        .1
+        .contains(&shared.display().to_string()));
+    drop(worker);
+    std::fs::remove_dir_all(shared).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn permission_handler_unreadable_fallback_reaches_work_room_orchestrator() {
     let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
     post_blocked(&mut worker.state, agent, false).unwrap();
@@ -384,6 +468,11 @@ fn permission_handler_clear_suspends_delivery_until_new_session_rebind_and_keeps
     assert!(!worker.state.permission_assignment(other).unwrap().delivered);
     let clears = Arc::default();
     worker.transport = Box::new(ClearOnly(Arc::clone(&clears)));
+    // The prior handler turn outlived fallback while blocked on its own prompt.
+    // It is now idle; the first clear must still be allowed, never retried.
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    value["agents"][handler.0.to_string()]["permission_reset_at_ms"] = json!(1);
+    worker.state = serde_json::from_value(value).unwrap();
     worker.maintain_permissions().unwrap();
     assert_eq!(*clears.lock().unwrap(), ["/clear"]);
     assert!(worker.state.agent(handler).unwrap().session_reset_pending);
@@ -402,8 +491,19 @@ fn permission_handler_clear_suspends_delivery_until_new_session_rebind_and_keeps
             .unwrap()
             .permission_reset_required
     );
+    // The expired prior reset routes already-waiting work once; after a fresh
+    // binding, a NEW episode must again reach the recovered handler.
+    worker
+        .state
+        .dispatch_permission(
+            "bus",
+            other,
+            "fresh-screen".into(),
+            crate::messaging::storage::io::now_ms(),
+        )
+        .unwrap();
     assert!(worker.state.permission_assignment(other).unwrap().delivered);
-    assert_eq!(worker.state.permission_decisions().len(), 1);
+    assert_eq!(worker.state.permission_decisions().len(), 2);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -678,7 +778,7 @@ fn permission_profile_cwd_drift_keeps_frozen_root_in_assignment() {
 }
 
 #[test]
-fn permission_profile_legacy_unknown_root_requires_escalation() {
+fn permission_profile_legacy_root_backfilled_once_on_load() {
     let (mut worker, agent, room, _, _, dir) = worker(true);
     ready_permission_handler(&mut worker, room, &dir);
     let mut value = serde_json::to_value(&worker.state).unwrap();
@@ -687,10 +787,26 @@ fn permission_profile_legacy_unknown_root_requires_escalation() {
         .unwrap()
         .remove("launch_cwd");
     worker.state = serde_json::from_value(value).unwrap();
+    let original = dir.canonicalize().unwrap();
+    let saved = serde_json::to_value(worker.state.agent(agent).unwrap()).unwrap();
+    assert_eq!(saved["launch_cwd"], json!(original));
+    assert_eq!(saved["launch_cwd_backfilled"], json!(true));
+    let drift = dir.join("legacy-drift");
+    std::fs::create_dir(&drift).unwrap();
+    worker
+        .state
+        .update_agent_runtime_metadata(agent, drift, None)
+        .unwrap();
+    worker.state = serde_json::from_value(serde_json::to_value(&worker.state).unwrap()).unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().launch_cwd,
+        Some(original.clone())
+    );
     post_blocked(&mut worker.state, agent, true).unwrap();
-    assert!(sent_by(&worker, room, agent)[0]
-        .1
-        .contains("unknown (legacy); escalate"));
+    assert!(sent_by(&worker, room, agent)[0].1.contains(&format!(
+        "Frozen authorized worker root: {}",
+        original.display()
+    )));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -829,6 +945,8 @@ fn permission_handler_failed_reset_keeps_later_dialog_on_bounded_fallback() {
     let mut value = serde_json::to_value(&worker.state).unwrap();
     let service = &mut value["agents"][handler.0.to_string()];
     service["permission_reset_required"] = json!(true);
+    service["permission_clear_started"] = json!(true);
+    service["session_reset_pending"] = json!(true);
     service["permission_reset_at_ms"] = json!(1);
     worker.state = serde_json::from_value(value).unwrap();
     worker.maintain_permissions().unwrap();
