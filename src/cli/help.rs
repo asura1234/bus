@@ -69,10 +69,13 @@ Claude usage comes from its status line; Codex usage is read after each turn.
 Usage status \"unknown\" means data is missing or stale, never that the allowance is unused.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 wait --async has no deadline and stops when the message settles or a recipient needs a dialog.
+Both async waits exit 1 with bus_down after four consecutive transport failures.
+Live-server overload replies and accepted-connection disconnects back off and retry.
 send --async blocks with no time limit until every recipient has worked on the message
 and gone idle again (a blocked recipient keeps it waiting), then prints one JSON object
-with the final message status, message_id and send_receipt. It exits 1 if the send fails or Bus abandons a
-recipient's request, and 3 if a message stalls (stage stalled, reason in message status).
+with the final message status, message_id and send_receipt. It exits 1 if Bus is unreachable,
+the send fails or Bus abandons a recipient's request, and 3 if a message stalls
+(stage stalled, reason in message status).
 wait also exits 3 on a stall. A Blocked agent never stalls; after 5 minutes its reason
 reads blocked_unanswered. Orchestrators run it as a background tool call and read the reply
 with history when it exits.

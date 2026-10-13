@@ -10,7 +10,7 @@
 //! - Accepts client connections on the client socket
 //! - Streams frames to connected clients after each render
 //! - Routes client input events through the existing input pipeline
-//! - Continues running after client disconnect
+//! - Stops client-launched sessions after their last interactive client leaves
 //! - Handles stale socket cleanup, explicit server stop, minimum terminal size,
 //!   and pane spawn failure during restore
 use crate::protocol::api::schema;
@@ -152,6 +152,9 @@ pub struct HeadlessServer {
     pub(super) effective_size: (u16, u16),
     /// Flag set when shutdown is initiated.
     pub(super) shutting_down: bool,
+    /// Only client-launched servers stop when their last interactive client leaves.
+    pub(super) stop_without_clients: bool,
+    pub(super) clientless_shutdown_deadline: Option<Instant>,
     /// Flag set by Ctrl+C or `server stop` signal.
     pub(super) should_quit: Arc<AtomicBool>,
     /// Channel for receiving server events from client connection threads.
@@ -268,6 +271,8 @@ impl HeadlessServer {
             headless_size,
             effective_size: headless_size,
             shutting_down: false,
+            stop_without_clients: false,
+            clientless_shutdown_deadline: None,
             should_quit,
             server_event_rx,
             server_event_tx,
@@ -317,6 +322,9 @@ impl HeadlessServer {
                 continue;
             }
             let now = Instant::now();
+            if self.check_client_lifetime(now) {
+                continue;
+            }
             busy.stage("schedule");
             self.schedule_loop_work(now, &mut needs_render, &mut needs_full_render);
             busy.stage("render");

@@ -6,6 +6,7 @@ pub(crate) const BUS_ENV_VALUE: &str = "1";
 
 pub const SOCKET_PATH_ENV_VAR: &str = "HERDR_SOCKET_PATH";
 pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
+pub(crate) const STOP_WITHOUT_CLIENTS_ENV_VAR: &str = "HERDR_STOP_WITHOUT_CLIENTS";
 
 /// Preserve an inherited root exactly, including empty and non-UTF8 values.
 pub(crate) fn bus_data_dir() -> Option<PathBuf> {

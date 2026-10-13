@@ -123,6 +123,95 @@ fn bus_state(session: &Session) -> Value {
     serde_json::from_str::<Value>(stdout.trim()).unwrap()["result"].clone()
 }
 
+fn assert_client_death_stops_scratch_tree(signal: i32, tag: &str) {
+    use std::time::{Duration, Instant};
+    let session = Session::start(tag);
+    let work = session_dir(&session.0).join("work");
+    let added = scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "cleanup",
+            "--provider",
+            "claude",
+            "--pwd",
+            work.to_str().unwrap(),
+        ],
+    );
+    assert!(added.status.success(), "{added:?}");
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    let client = session.ok(&["status"])["bus_pid"].as_u64().unwrap() as u32;
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let rows: Vec<(u32, u32)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            let mut fields = line.split_whitespace();
+            (
+                fields.next().unwrap().parse().unwrap(),
+                fields.next().unwrap().parse().unwrap(),
+            )
+        })
+        .collect();
+    let mut owned = vec![client];
+    loop {
+        let children: Vec<_> = rows
+            .iter()
+            .filter(|(pid, parent)| owned.contains(parent) && !owned.contains(pid))
+            .map(|(pid, _)| *pid)
+            .collect();
+        if children.is_empty() {
+            break;
+        }
+        owned.extend(children);
+    }
+    assert!(
+        owned.len() >= 4,
+        "expected client, server, pane shell and fake provider: {owned:?}"
+    );
+    assert_eq!(unsafe { libc::kill(client as i32, signal) }, 0);
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let survivors = loop {
+        let survivors: Vec<_> = owned
+            .iter()
+            .copied()
+            .filter(|pid| unsafe { libc::kill(*pid as i32, 0) == 0 })
+            .collect();
+        if survivors.is_empty() || Instant::now() >= deadline {
+            break survivors;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // Assert before Session::Drop invokes the driver's fallback teardown.
+    assert!(
+        survivors.is_empty(),
+        "Bus-owned processes survived client signal {signal}: {survivors:?}"
+    );
+}
+
+#[test]
+fn client_sigkill_stops_server_and_provider_panes() {
+    assert_client_death_stops_scratch_tree(libc::SIGKILL, "kill");
+}
+
+#[test]
+fn client_sigterm_stops_server_and_provider_panes() {
+    assert_client_death_stops_scratch_tree(libc::SIGTERM, "term");
+}
+
 #[test]
 fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     let session = Session::start("flow");

@@ -309,7 +309,10 @@ category. Without a provider error,
 settlement abandons it with reason `reply_not_captured`, which `--async` counts
 as an ended turn and succeeds on.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
-command keeps waiting until someone answers it. It exits early only if the send
+command keeps waiting until someone answers it. Both async waits retry live-server
+overload, including accepted connections closed without a response. Four consecutive
+transport failures exit 1 with `bus_down`; a live status reply or accepted-connection
+disconnect resets this budget. It exits early only if Bus is unreachable, the send
 fails or Bus abandons a recipient's request other than as `reply_not_captured`
 (exit 1), or a recipient's message
 stalls before its turn ended (exit 3, see Stalled messages); the reason is in

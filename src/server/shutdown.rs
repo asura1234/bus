@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 
@@ -9,6 +9,24 @@ use crate::protocol::wire::ServerMessage;
 use crate::server::main_loop::HeadlessServer;
 
 impl HeadlessServer {
+    /// Allow brief reconnects and the first attach without leaving a daemon
+    /// alive indefinitely after its interactive clients have gone away.
+    pub(in crate::server) fn check_client_lifetime(&mut self, now: Instant) -> bool {
+        if !self.stop_without_clients || self.clients.values().any(|c| c.is_shell_client()) {
+            self.clientless_shutdown_deadline = None;
+            return false;
+        }
+        let deadline = self
+            .clientless_shutdown_deadline
+            .get_or_insert(now + Duration::from_secs(3));
+        if now < *deadline {
+            return false;
+        }
+        info!("last interactive client left; saving and stopping Bus");
+        self.initiate_shutdown();
+        true
+    }
+
     /// Initiates graceful shutdown.
     pub(in crate::server) fn initiate_shutdown(&mut self) {
         if self.shutting_down {
