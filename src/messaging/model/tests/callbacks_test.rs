@@ -841,3 +841,41 @@ fn developer_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
         )
     );
 }
+
+#[test]
+fn provider_error_on_an_unbound_request_does_not_claim_the_request_closed() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "prompt");
+    submit_request(&mut state, request, "launch-codex", 1);
+
+    let result = state.accept_callback(ProviderCallback {
+        callback_id: "unbound-error".into(),
+        sequence: 3,
+        occurred_at_ms: 15,
+        agent_id: agent,
+        launch_id: "launch-codex".into(),
+        provider_session_id: Some("provider-session".into()),
+        provider_turn_id: Some("turn-1".into()),
+        provider_prompt_id: None,
+        prompt_payload: None,
+        kind: CallbackEventKind::Error {
+            message: "Provider turn failed; inspect its terminal.".into(),
+            provider_error: Some("API Error: 529 Overloaded. (server_error)".into()),
+        },
+    });
+
+    assert_eq!(result, CallbackDisposition::AcceptedError);
+    let phase = state.request(request).expect("request").phase;
+    let error = state
+        .agent(agent)
+        .expect("agent")
+        .actionable_error
+        .clone()
+        .unwrap_or_default();
+    assert!(
+        phase == RequestPhase::Abandoned || !error.contains("request closed"),
+        "request is {phase:?} but the agent error says: {error}"
+    );
+    assert_eq!(phase, RequestPhase::Active);
+    assert!(error.contains("API Error: 529 Overloaded."), "{error}");
+}
