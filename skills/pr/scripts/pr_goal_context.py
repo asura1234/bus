@@ -134,28 +134,48 @@ def prepare_context(
         non_goal = _trim_boundary_blank_lines(non_goal_path.read_text(encoding="utf-8"))
         if not goal or not non_goal:
             raise ValueError("authored goal/non-goal 不得为空")
-        # A goal written without its origin is how a grown PR locks its growth; review-pr needs
-        # the developer's own words to catch a goal that is wider than what was asked.
-        if origin_path is None:
-            raise ValueError(
-                "无计划时必须提供 --origin-file（开发者原话或 issue 原文）；不得从 diff 或 commit 推断"
-            )
 
+    locked_goal_path, locked_non_goals_path = locked_context_paths(repo_root, branch)
+    origin_file = locked_origin_path(repo_root, branch)
+    recorded = (
+        _trim_boundary_blank_lines(origin_file.read_text(encoding="utf-8"))
+        if origin_file.is_file()
+        else ""
+    )
     if origin_path is not None:
         origin = _trim_boundary_blank_lines(origin_path.read_text(encoding="utf-8"))
         if not origin:
             raise ValueError("origin 不得为空")
-    else:
+        # The recorded origin is the developer's own words; a re-lock may only append to it
+        # (e.g. their yes to a widening), never replace it with a later, wider text.
+        if recorded and not origin.startswith(recorded):
+            raise ValueError("origin 只能追加：新 --origin-file 必须以已记录的 .locked-origin 开头")
+    elif recorded:
+        origin = recorded
+    elif plan_paths:
         origin = _trim_boundary_blank_lines(render_context(goal, non_goal))
+    elif _same_as_locked(locked_goal_path, goal) and _same_as_locked(locked_non_goals_path, non_goal):
+        # A lock written before origins were recorded can still be reused unchanged.
+        origin = ""
+    else:
+        # A goal written without its origin is how a grown PR locks its growth; review-pr needs
+        # the developer's own words to catch a goal that is wider than what was asked.
+        raise ValueError(
+            "无计划时必须提供 --origin-file（开发者原话或 issue 原文）；不得从 diff 或 commit 推断"
+        )
 
-    locked_goal_path, locked_non_goals_path = locked_context_paths(repo_root, branch)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     locked_goal_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_context(goal, non_goal), encoding="utf-8")
     locked_goal_path.write_text(f"{goal}\n", encoding="utf-8")
     locked_non_goals_path.write_text(f"{non_goal}\n", encoding="utf-8")
-    locked_origin_path(repo_root, branch).write_text(f"{origin}\n", encoding="utf-8")
+    if origin:
+        origin_file.write_text(f"{origin}\n", encoding="utf-8")
     return locked_goal_path
+
+
+def _same_as_locked(path: Path, value: str) -> bool:
+    return path.is_file() and _trim_boundary_blank_lines(path.read_text(encoding="utf-8")) == value
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -193,7 +213,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"GOAL_CONTEXT_FILE={_relative(args.output, REPO_ROOT)}")
     print(f"LOCKED_GOAL_FILE={_relative(locked_goal_path, REPO_ROOT)}")
     print(f"LOCKED_NON_GOALS_FILE={_relative(locked_non_goals_path, REPO_ROOT)}")
-    print(f"LOCKED_ORIGIN_FILE={_relative(locked_origin_path(REPO_ROOT, args.branch), REPO_ROOT)}")
+    origin_file = locked_origin_path(REPO_ROOT, args.branch)
+    print(f"LOCKED_ORIGIN_FILE={_relative(origin_file, REPO_ROOT) if origin_file.is_file() else 'none'}")
     return 0
 
 

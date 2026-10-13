@@ -418,6 +418,65 @@ class PrFormatCheckTest(unittest.TestCase):
             self.assertFalse(locked_context_paths(root, "feat/room")[0].exists())
             self.assertFalse(locked_origin_path(root, "feat/room").exists())
 
+    def test_prepare_context_reuses_existing_locks_without_origin(self) -> None:
+        # pr's LOCK PR INTENT reuses a branch's existing locks and passes `.locked-origin` only
+        # "when it exists"; a branch locked before origins were recorded has none.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            locked_goal, locked_non_goals = locked_context_paths(root, "feat/legacy")
+            locked_goal.parent.mkdir(parents=True)
+            locked_goal.write_text("既有目标\n", encoding="utf-8")
+            locked_non_goals.write_text("无\n", encoding="utf-8")
+
+            prepare_context(
+                branch="feat/legacy",
+                output_path=root / "pr-goal-context.md",
+                repo_root=root,
+                goal_path=locked_goal,
+                non_goal_path=locked_non_goals,
+            )
+
+            self.assertEqual(locked_goal.read_text(encoding="utf-8"), "既有目标\n")
+            self.assertFalse(locked_origin_path(root, "feat/legacy").exists())
+
+            # Reuse without an origin covers only the unchanged lock, never a new goal.
+            new_goal = root / "new-goal.md"
+            new_goal.write_text("更宽的目标\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "--origin-file"):
+                prepare_context(
+                    branch="feat/legacy",
+                    output_path=root / "pr-goal-context.md",
+                    repo_root=root,
+                    goal_path=new_goal,
+                    non_goal_path=locked_non_goals,
+                )
+            self.assertEqual(locked_goal.read_text(encoding="utf-8"), "既有目标\n")
+
+    def test_relock_keeps_recorded_origin_and_only_appends_to_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            goal, non_goal, origin, plan, widened, replaced = (
+                root / n for n in ("g.md", "n.md", "o.md", "p.md", "w.md", "r.md")
+            )
+            goal.write_text("修三个埋点\n", encoding="utf-8")
+            non_goal.write_text("无\n", encoding="utf-8")
+            origin.write_text("开发者原话：只修三个埋点缺陷\n", encoding="utf-8")
+            plan.write_text("## 目标\n\n重写整个埋点系统\n\n## 非目标\n\n无\n", encoding="utf-8")
+            widened.write_text("开发者原话：只修三个埋点缺陷\n\n开发者：同意加上心跳\n", encoding="utf-8")
+            replaced.write_text("重写整个埋点系统\n", encoding="utf-8")
+            kw = dict(branch="feat/x", output_path=root / "ctx.md", repo_root=root)
+            recorded = locked_origin_path(root, "feat/x")
+            prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=origin, **kw)
+
+            # review-pr's mismatched-lock fallback reruns with --plan only
+            prepare_context(plan_paths=[plan], **kw)
+            self.assertEqual(recorded.read_text(encoding="utf-8"), "开发者原话：只修三个埋点缺陷\n")
+
+            with self.assertRaisesRegex(ValueError, "只能追加"):
+                prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=replaced, **kw)
+            prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=widened, **kw)
+            self.assertIn("同意加上心跳", recorded.read_text(encoding="utf-8"))
+
     def test_prepare_context_rejects_mixed_plan_and_authored_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

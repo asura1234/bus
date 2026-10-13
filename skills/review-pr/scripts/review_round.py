@@ -282,7 +282,7 @@ def main(argv: list[str]) -> int:
         print("FAIL")
         print(
             f"- {error}。两份 locks 只由 skills/pr/scripts/pr_goal_context.py 生成"
-            "（--plan，或开发者提供的 --goal-file 与 --non-goal-file）；"
+            "（--plan，或开发者提供的 --goal-file、--non-goal-file 与 --origin-file）；"
             "不得从 diff、commit 或 PR 描述自行推断。"
         )
         return 1
