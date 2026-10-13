@@ -190,6 +190,124 @@ fn api_request_completion_respects_shared_logging_target() {
 
 const HOUR: Duration = Duration::from_secs(60 * 60);
 
+/// Old numbered rotations must not sit outside the archive policy forever.
+#[test]
+fn archive_startup_recovers_numbered_leftovers_and_interrupted_compression() {
+    let path = temp_log_path("startup-leftovers");
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    let numbered = dir.join("bus.log.1");
+    fs::write(&numbered, "legacy log").unwrap();
+    let at = SystemTime::now() - HOUR;
+    let plain = archive_path(&path, at);
+    fs::write(&plain, "interrupted log").unwrap();
+    let staging = PathBuf::from(format!("{}.gz.999999-0.tmp", plain.display()));
+    fs::write(&staging, "partial gzip").unwrap();
+    let state =
+        RotatingFileState::open(path.clone(), 16, Retention::Archive(DEV_LOG_ARCHIVE)).unwrap();
+    wait_for_compressed_archives(dir);
+    assert!(!numbered.exists(), "numbered rotation was ignored");
+    assert!(!plain.exists());
+    assert!(!staging.exists());
+    assert_eq!(gunzip(&dir.join("bus.log.1.gz")), "legacy log");
+    assert_eq!(
+        gunzip(&PathBuf::from(format!("{}.gz", plain.display()))),
+        "interrupted log"
+    );
+    drop(state);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_numbered_leftovers_count_toward_age_and_uncompressed_cap() {
+    let path = temp_log_path("numbered-policy");
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    let now = SystemTime::now();
+    let old = dir.join("bus.log.2");
+    let recent = dir.join("bus.log.1");
+    fs::write(&old, "old log").unwrap();
+    File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(now - 73 * HOUR))
+        .unwrap();
+    fs::write(&recent, "12345678").unwrap();
+    let policy = ArchivePolicy {
+        max_age: 72 * HOUR,
+        max_total_bytes: 7,
+    };
+    // The same pre-compression pruning used by rotation must count all bytes.
+    prune_archives(list_archives(&path), &policy, now);
+    assert!(!old.exists(), "expired numbered rotation was ignored");
+    assert!(
+        !recent.exists(),
+        "plain numbered rotation escaped the byte cap"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_numbered_compression_preserves_age_for_later_maintenance() {
+    let path = temp_log_path("numbered-age");
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    let now = SystemTime::now();
+    let plain = dir.join("bus.log.1");
+    fs::write(&plain, "legacy log").unwrap();
+    File::options()
+        .write(true)
+        .open(&plain)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(now - 71 * HOUR))
+        .unwrap();
+    maintain_archives(&path, &DEV_LOG_ARCHIVE, now);
+    assert!(!plain.exists(), "numbered rotation was not compressed");
+    assert_eq!(gunzip(&dir.join("bus.log.1.gz")), "legacy log");
+    maintain_archives(&path, &DEV_LOG_ARCHIVE, now + 2 * HOUR);
+    assert!(
+        archives(dir).is_empty(),
+        "compression reset the retention age"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_numbered_reader_keeps_distinct_files_with_the_same_age() {
+    let path = temp_log_path("numbered-reader");
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    let at = SystemTime::now() - HOUR;
+    for name in ["bus.log.1", "bus.log.2"] {
+        let plain = dir.join(name);
+        fs::write(&plain, name).unwrap();
+        File::options()
+            .write(true)
+            .open(&plain)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(at))
+            .unwrap();
+    }
+    let gz = compress_archive(&dir.join("bus.log.1")).unwrap();
+    // A half-finished compression and unrelated prefix matches.
+    fs::write(dir.join("bus.log.1"), "bus.log.1").unwrap();
+    fs::write(dir.join("bus.log.0"), "not an archive").unwrap();
+    fs::write(dir.join("bus.log.notes"), "not an archive").unwrap();
+    let files = archived_files(&path);
+    assert_eq!(
+        files.len(),
+        2,
+        "distinct generations were ignored: {files:?}"
+    );
+    assert!(files.contains(&gz));
+    assert!(files.contains(&dir.join("bus.log.2")));
+    maintain_archives(&path, &DEV_LOG_ARCHIVE, SystemTime::now());
+    assert!(dir.join("bus.log.0").exists());
+    assert!(dir.join("bus.log.notes").exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn archives(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()
