@@ -20,7 +20,7 @@ pub fn run_server(
     let stop_without_clients =
         std::env::var_os(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR).is_some();
     std::env::remove_var(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR);
-    init_logging(&logging_options);
+    let logging_options = init_logging(&logging_options);
     // Dropped on return, which drains the queued perf records.
     let _perf = crate::utils::perf::start(
         &crate::utils::paths::data_dir(),
@@ -150,12 +150,14 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
 }
 
 /// Initialize logging for the server process.
-fn init_logging(options: &crate::utils::logging::LoggingOptions) {
+fn init_logging(
+    options: &crate::utils::logging::LoggingOptions,
+) -> crate::utils::logging::LoggingOptions {
     crate::utils::logging::init_file_logging_at(
         crate::utils::paths::data_dir(),
         "herdr-server.log",
         options,
-    );
+    )
 }
 
 #[cfg(test)]
