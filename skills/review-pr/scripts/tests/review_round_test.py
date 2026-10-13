@@ -59,6 +59,17 @@ class LockedReviewContextTests(unittest.TestCase):
         self.assertEqual(context.goal_file, self.lane_root / ".locked-goal")
         self.assertEqual(context.non_goals_file, self.lane_root / ".locked-non-goals")
 
+    def test_origin_lock_is_reported_only_when_recorded(self) -> None:
+        self.write_locks("单一目标\n", "无\n")
+        self.assertIsNone(load_locked_review_context(self.lane_root, None).origin_file)
+        (self.lane_root / ".locked-origin").write_text(" \n", encoding="utf-8")
+        self.assertIsNone(load_locked_review_context(self.lane_root, None).origin_file)
+        (self.lane_root / ".locked-origin").write_text("修三个埋点缺陷\n", encoding="utf-8")
+        self.assertEqual(
+            load_locked_review_context(self.lane_root, None).origin_file,
+            self.lane_root / ".locked-origin",
+        )
+
     def test_missing_goal_lock_fails_closed(self) -> None:
         self.write_locks(None, "无\n")
         with self.assertRaisesRegex(LockedContextError, r"\.locked-goal"):
@@ -168,6 +179,13 @@ class ScopeRoundTests(unittest.TestCase):
         self.assertNotIn("dirty source", patch)
         self.assertNotIn("other.py", patch)
         self.assertEqual(output["SCOPE_TEST_FILES"], "source_test.py")
+
+    def test_prologue_prints_origin_lock(self) -> None:
+        _, output = self.prologue("--reviewer", "test")
+        self.assertEqual(output["LOCKED_ORIGIN_FILE"], "none")
+        (self.root / "temp/review-pr/feat-chunk/.locked-origin").write_text("审查这个 chunk\n")
+        _, output = self.prologue("--reviewer", "other")
+        self.assertEqual(output["LOCKED_ORIGIN_FILE"], "temp/review-pr/feat-chunk/.locked-origin")
 
     def test_round_two_uses_only_chunk_delta_and_prior_lane(self) -> None:
         _, first = self.prologue("--reviewer", "test")

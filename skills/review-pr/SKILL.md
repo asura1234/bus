@@ -77,12 +77,13 @@ IF exit != 0 AND output says multiple / named lanes make a bare invocation ambig
 ELSE IF exit != 0 AND FAIL names missing, blank, or mismatched locked Goal/Non-goals:
   IF --plan was supplied:
     run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --plan <plan-file>;
-    rerun the prologue once; relay any remaining FAIL verbatim and STOP.
+    rerun the prologue once (without --plan if the script refused: a developer ruling re-locked it); relay any FAIL and STOP.
   ELSE:
-    ask the developer for the PR's one-sentence single Goal and its explicit Non-goals (`无` when none);
-    write each reply verbatim to ignored temp goal and non-goal files.
+    ask the developer for the PR's originating request (their words or the issue), its one-sentence single Goal,
+    and its explicit Non-goals (`无` when none); write the goal and non-goal replies verbatim to ignored temp goal and non-goal
+    files, and the request followed by both replies verbatim to an origin file.
     Trim only leading/trailing whitespace; do not summarize, rewrite, or infer from the diff/commits/PR description.
-    run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --goal-file <goal-file> --non-goal-file <non-goal-file>;
+    run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --goal-file <goal-file> --non-goal-file <non-goal-file> --origin-file <origin-file>;
     rerun the prologue.
 ELSE IF exit != 0:
   relay stdout/stderr verbatim, then STOP.
@@ -95,7 +96,7 @@ IF NOTE says the working tree has uncommitted changes:
 Capture:
   ROUND, MODE, POSTURE, REVIEWER, BRANCH, BASE, HEAD, STATE_DIR,
   DIFF_SNAPSHOT, DIFF_DELTA, PREV_REVIEWS, PLAN, LOCKED_GOAL_FILE,
-  LOCKED_NON_GOALS_FILE, TRIAGE_LEDGER
+  LOCKED_NON_GOALS_FILE, LOCKED_ORIGIN_FILE, TRIAGE_LEDGER
   For --scope also capture TARGET_KIND=scope, SCOPE_HASH, SCOPE_FILE, SCOPE_SNAPSHOT, SCOPE_TEST_FILES;
   without --scope, TARGET_KIND is branch and these extra fields are absent.
 
@@ -131,6 +132,9 @@ ELSE:
   locked_goal = Read(LOCKED_GOAL_FILE)
   non_goals = Read(LOCKED_NON_GOALS_FILE)
   archived_decisions = none
+origin = Read(LOCKED_ORIGIN_FILE) when it is not none, plus the plan when PLAN != none.
+Round 1 and every round whose delta adds files: compare locked_goal and the diff with origin per code-review-guide
+"Goal vs origin". With no origin at all, note `origin not recorded` in the exploration record and skip the comparison.
 
 The associated plan serves only as locked goal / non-goals / archived decisions input; it is not a
 code-review target. Do not review or comment on the plan's own changes in this PR.

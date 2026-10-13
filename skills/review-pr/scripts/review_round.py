@@ -62,6 +62,7 @@ stdout on success (KEY=VALUE, one per line; paths repo-relative):
   PLAN=<plan-file>                                             (or "none")
   LOCKED_GOAL_FILE=temp/review-pr/<branch>/.locked-goal
   LOCKED_NON_GOALS_FILE=temp/review-pr/<branch>/.locked-non-goals
+  LOCKED_ORIGIN_FILE=temp/review-pr/<branch>/.locked-origin    (or "none" for a lock without an origin)
   TRIAGE_LEDGER=.../<ts1>/triage.md,.../<ts2>/triage.md        (PR mode only, mtime old→new, comma-joined, or "none")
   NOTE=...                                                     (zero or more)
 
@@ -119,6 +120,7 @@ from pr_goal_context import build_context  # noqa: E402
 
 LOCKED_GOAL_NAME = ".locked-goal"
 LOCKED_NON_GOALS_NAME = ".locked-non-goals"
+LOCKED_ORIGIN_NAME = ".locked-origin"
 
 
 class LockedContextError(ValueError):
@@ -131,6 +133,9 @@ class LockedReviewContext:
     non_goals: str
     goal_file: Path
     non_goals_file: Path
+    # Optional: locks written before origins were recorded have none, and review-pr then skips
+    # the goal-vs-origin comparison instead of failing the round.
+    origin_file: Path | None = None
 
 
 def triage_ledgers(branch_slug: str) -> list[Path]:
@@ -157,7 +162,14 @@ def read_required_goal_and_non_goals(lane_root: Path) -> LockedReviewContext:
         non_goals=values[non_goals_file],
         goal_file=goal_file,
         non_goals_file=non_goals_file,
+        origin_file=_nonblank_file(lane_root / LOCKED_ORIGIN_NAME),
     )
+
+
+def _nonblank_file(path: Path) -> Path | None:
+    if path.is_file() and path.read_text(encoding="utf-8").strip():
+        return path
+    return None
 
 
 def require_exact_plan_match(context: LockedReviewContext, plan: Path) -> None:
@@ -270,7 +282,7 @@ def main(argv: list[str]) -> int:
         print("FAIL")
         print(
             f"- {error}。两份 locks 只由 skills/pr/scripts/pr_goal_context.py 生成"
-            "（--plan，或开发者提供的 --goal-file 与 --non-goal-file）；"
+            "（--plan，或开发者提供的 --goal-file、--non-goal-file 与 --origin-file）；"
             "不得从 diff、commit 或 PR 描述自行推断。"
         )
         return 1
@@ -412,6 +424,7 @@ def main(argv: list[str]) -> int:
     print(f"PLAN={rel(plan_path) if plan_path else 'none'}")
     print(f"LOCKED_GOAL_FILE={rel(locked.goal_file)}")
     print(f"LOCKED_NON_GOALS_FILE={rel(locked.non_goals_file)}")
+    print(f"LOCKED_ORIGIN_FILE={rel(locked.origin_file) if locked.origin_file else 'none'}")
     if scope is not None:
         print("TARGET_KIND=scope")
         print(f"SCOPE_HASH={scope.scope_hash}")

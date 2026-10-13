@@ -6,8 +6,13 @@ description: Feature-branch PR workflow. Land uncommitted work, rebase onto orig
 # PR
 
 ```text
-INPUT $ARGUMENTS = [--plan <plan-file>]... [--verification <file>]
+INPUT $ARGUMENTS = [--plan <plan-file>]... [--origin <file>] [--relock <file>] [--lock-only] [--verification <file>]
 plans = every plan path the developer supplied this time, in order of appearance; never guess from diff, commits, or historical state.
+origin = optional file holding the PR's originating request verbatim: the developer's own words or the issue text,
+  usually passed by the orchestrator. It is what the goal is locked from when there is no plan.
+relock = optional file holding, verbatim, the question that names a change to the locked goal (widening or narrowing) and
+  the developer's explicit answer to it.
+lock-only = lock the goal and return without publishing; the orchestrator's lock-before-fan-out entry, valid on a branch with no work yet.
 verification = optional Markdown file of `- [x] ` lines, each naming verification actually executed and the commit it proves
   (for example a gate-and-fix PASS artifact with its Head); supplied by the caller, never produced here.
   A line that starts with a self-test box name of the GitHub template (`- [x] gate-and-fix — ...`,
@@ -15,11 +20,13 @@ verification = optional Markdown file of `- [x] ` lines, each naming verificatio
 
 -- Rules
 - Code narrative takes only the current repository, current feature branch, and actual changes as its source of truth; plans lock only goal and non-goals.
+- Goal and non-goals come from the originating request (plan, origin, or the developer's answer), never from the diff or commits:
+  a goal written from what was built always matches its growth, and then review-pr cannot catch the growth.
 - Prior review-plan or review-pr invocation is not required.
 - This skill never runs or requires `gate-and-fix` or `delete-dead-code`, or their artifacts. The orchestrator
   sequences them; their results reach the body only through `--verification`.
 - Do not read or guess another skill's private control state, callbacks, or temporary artifacts; the only cross-skill
-  handoff is `temp/review-pr/<branch>/.locked-goal` and `temp/review-pr/<branch>/.locked-non-goals`, written and returned by `pr_goal_context.py`.
+  handoff is `temp/review-pr/<branch>/.locked-goal`, `.locked-non-goals` and `.locked-origin`, written and returned by `pr_goal_context.py`.
 - PR title and narrative are English; fixed headings and machine tokens stay byte-compatible with the format SOT:
   body sections, placeholders and self-test boxes live only in `.github/pull_request_template.md` (the body GitHub
   offers a person opening a PR); title rules and per-section writing guidance live in `references/pr-template.md`.
@@ -47,11 +54,55 @@ working_changed = tracked + untracked files in the current worktree
 committed_changed = `git diff --name-only origin/master...HEAD`
 ahead = `git rev-list --count origin/master..HEAD`
 
-IF working_changed empty AND committed_changed empty AND ahead == 0
+IF NOT lock-only AND working_changed empty AND committed_changed empty AND ahead == 0
   ERROR "The current branch has no work to commit or publish relative to origin/master."
 
 Inspect the complete current diff, untracked files, and commits. Confirm they describe one coherent
 PR purpose. Do not silently discard, stash, rewrite, or absorb unrelated developer changes.
+
+========== LOCK PR INTENT ==========
+
+IF `temp/review-pr/<branch_slug>/.locked-goal` and `.locked-non-goals` already exist (an earlier run or the orchestrator locked them):
+  IF relock is given:
+    Rewrite the goal and non-goals to exactly the change the question names and the answer approves, and write the
+    origin as the recorded `.locked-origin` (if any), a blank line, then relock verbatim; pass all three. The script
+    refuses a changed lock whose origin does not append to the recorded one.
+  ELSE:
+    Reuse them unchanged: pass them as `--goal-file` / `--non-goal-file` with no `--origin-file`; the script keeps the
+    recorded origin, and accepts a lock from before origins existed only unchanged. Only relock re-locks.
+ELSE IF plans nonempty:
+  Run `python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" --output
+  "<ignored-temp-goal-context>"`, appending `--plan "<path>"` once per plan in original order
+  (and `--origin-file "<origin>"` when origin is given).
+ELSE:
+  IF origin is not given:
+    ask the developer for the PR's originating request (their words or the issue), its one-sentence goal, and its
+    non-goals (`无` when none). Write the goal and non-goal replies verbatim as the goal and non-goals, and the request
+    followed by both replies verbatim as the origin. Never fill any of them from the diff or commits.
+  ELSE:
+    write the goal as the origin's ask in one sentence, keeping its areas and items, and the non-goals the origin
+    excludes (otherwise `无`).
+  Write them into ignored temp files, then Run:
+    python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" \
+      --output "<ignored-temp-goal-context>" --goal-file "<goal-file>" \
+      --non-goal-file "<non-goal-file>" --origin-file "<origin>"
+IF command fails: STOP; never hand-parse plans or create the lock yourself.
+Capture `GOAL_CONTEXT_FILE`, `LOCKED_GOAL_FILE`, `LOCKED_NON_GOALS_FILE`, and `LOCKED_ORIGIN_FILE`; Read(GOAL_CONTEXT_FILE) completely.
+The two sections of that context, `.locked-goal`, `.locked-non-goals`, and `.locked-origin` are locked by the script and must not be rewritten afterwards.
+IF lock-only: go to RETURN.
+
+========== SCOPE CHECK ==========
+
+It runs before anything is committed or pushed, so out-of-goal work never reaches the PR.
+mb = `git merge-base origin/master HEAD`.
+pr_files = committed_changed plus the uncommitted files that belong to this PR (exactly what LAND will commit);
+unrelated dirty files LAND leaves untouched are listed as excluded and never sorted.
+Sort every file in pr_files (excluding `plans/**`) into: serves the locked goal, is a direct consequence of it (its
+tests, docs, a required refactor), or serves neither.
+Measure `git diff --shortstat <mb> -- <pr_files>`.
+IF any file serves neither:
+  STOP and report each such file with the purpose it serves, the locked goal, and the size; the caller chooses
+  split-pr, moving it to the deferred list, or rerunning with `--relock` holding the developer's ruling.
 
 ========== LAND UNCOMMITTED WORK (ONLY IF DIRTY) ==========
 
@@ -87,21 +138,6 @@ copy_diff = `git diff <baseline>...<head>`; copy_commits = `git log <baseline>..
 
 IF verification given AND any line names a commit other than `head`:
   STOP and report the stale evidence; never publish verification that does not prove `head`.
-
-========== LOCK PR INTENT ==========
-
-IF plans nonempty:
-  Run `python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" --output
-  "<ignored-temp-goal-context>"`, appending `--plan "<path>"` once per plan in original order.
-ELSE:
-  Write a single goal from copy_diff / copy_commits; write only evidence-backed intentional exclusions as non-goals, otherwise write `无`.
-  Write the two into ignored temp goal/non-goal files respectively, then Run:
-    python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" \
-      --output "<ignored-temp-goal-context>" --goal-file "<goal-file>" \
-      --non-goal-file "<non-goal-file>"
-IF command fails: STOP; never hand-parse plans or create the lock yourself.
-Capture `GOAL_CONTEXT_FILE`, `LOCKED_GOAL_FILE`, and `LOCKED_NON_GOALS_FILE`; Read(GOAL_CONTEXT_FILE) completely.
-The two sections of that context, `.locked-goal`, and `.locked-non-goals` are locked by the script and must not be rewritten afterwards.
 
 ========== WRITE BODY ==========
 
@@ -165,7 +201,9 @@ Report:
   - whether the PR was created as a Draft or an existing PR was refreshed (its draft/ready status unchanged);
   - head (the commit the body describes) and commits created or updated;
   - the phase used, and whether optional `--verification` was supplied or absent;
-  - `GOAL_CONTEXT_FILE`, plus `LOCKED_GOAL_FILE` and `LOCKED_NON_GOALS_FILE` for `review-pr` to consume;
+  - for lock-only, only the lock lines below;
+  - `GOAL_CONTEXT_FILE`, plus `LOCKED_GOAL_FILE`, `LOCKED_NON_GOALS_FILE` and `LOCKED_ORIGIN_FILE` for `review-pr` to consume;
+  - the SCOPE CHECK result and the `--shortstat` size;
   - pr_format_check result on the published PR;
   - verification still pending (gates, E2E, manual) for the orchestrator to sequence;
   - unrelated dirty files explicitly excluded from the PR.
