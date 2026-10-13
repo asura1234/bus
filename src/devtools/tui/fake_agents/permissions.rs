@@ -125,7 +125,19 @@ fn bus(args: &[&str]) -> Result<Value, String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
-    serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
+    decode_response(&output.stdout)
+}
+
+fn decode_response(stdout: &[u8]) -> Result<Value, String> {
+    let response: crate::messaging::control::Response =
+        serde_json::from_slice(stdout).map_err(|e| e.to_string())?;
+    if !response.ok {
+        return Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "CLI command failed".into()));
+    }
+    Ok(response.result)
 }
 
 fn service_decision(handler: &str, prompt: &str) -> Result<&'static str, String> {
@@ -227,6 +239,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn permission_fixture_cli_decodes_real_response_envelope() {
+        let result = json!({"permission_assignments":[{"worker":6,"handler":7,"token":"p8-123"}]});
+        let response = crate::messaging::control::Response::success("test", result.clone());
+        let stdout = serde_json::to_vec(&response).unwrap();
+        assert_eq!(decode_response(&stdout).unwrap(), result);
+    }
+
+    #[test]
+    fn permission_fixture_cli_rejects_failed_response_envelope() {
+        let response = crate::messaging::control::Response::failure(
+            "test",
+            "stale_assignment",
+            "Lease expired",
+        );
+        let stdout = serde_json::to_vec(&response).unwrap();
+        assert_eq!(decode_response(&stdout).unwrap_err(), "Lease expired");
+    }
+
+    #[test]
     fn permission_fixture_screens_are_native_inspectable_and_classifiable() {
         for (kind, outcome) in [
             ("safe", "approved"),
@@ -253,13 +284,15 @@ mod tests {
             let mut calls = Vec::new();
             let result = service_decision_with("7", "Permission assignment p8-123. Worker worker", |args| {
                 calls.push(args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
-                Ok(match args {
+                    let result = match args {
                     ["state"] => json!({"permission_assignments":[{"worker":6,"handler":7,"token":"p8-123"}]}),
                     ["agent", "dialog", "6"] => json!({"dialog":{"text":text},"fingerprint":"d1.observed"}),
                     ["agent", "choose", ..] => json!({"outcome":"closed"}),
                     ["agent", "permission-decision", ..] => json!({"recorded":true}),
                     _ => panic!("unexpected control operation: {args:?}"),
-                })
+                    };
+                    let response = crate::messaging::control::Response::success("fixture", result);
+                    decode_response(&serde_json::to_vec(&response).unwrap())
             }).unwrap();
             assert_eq!(result, expected);
             let chooses: Vec<_> = calls
