@@ -60,6 +60,8 @@ impl TerminalRuntime {
             let code = match key {
                 "up" => crossterm::event::KeyCode::Up,
                 "down" => crossterm::event::KeyCode::Down,
+                "left" => crossterm::event::KeyCode::Left,
+                "right" => crossterm::event::KeyCode::Right,
                 "enter" => crossterm::event::KeyCode::Enter,
                 digit => crossterm::event::KeyCode::Char(digit.chars().next().unwrap_or('0')),
             };

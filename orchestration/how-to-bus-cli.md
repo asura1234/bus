@@ -637,7 +637,8 @@ and the selected option, marked by `›`, `>`, `❯` or similar, or drawn
 highlighted. An unnumbered list counts too when an `Enter to ...` key hint
 follows it, as in Claude Code's folder trust prompt (`❯ No, exit` above
 `Yes, I trust this folder`); its options are numbered from the top. `bus state`
-marks such an agent `dialog: true`.
+marks such an agent `dialog: true` and `status: blocked`, using the same status
+as the agent list even when its provider still reports idle.
 
 Bus is not an agent and never sends a message as "Bus". Instead, once an
 agent has been blocked for about a second, on a dialog, a question, a trust
@@ -668,20 +669,46 @@ bus agent choose "$agent_id" --option 2 --fingerprint "$fingerprint"
 `text` (the question above the
 options), `options` (`number`, `label`, `selected`), and `hint` (the key hint
 below them), plus a `fingerprint`. Both are `null` when no dialog is visible.
-Free-text questions have an empty `options` array.
+Free-text questions normally have an empty `options` array; a focused Claude
+question can retain its panel's options and tab controls.
 It works while the agent is still launching, before its session starts.
 
 `agent choose AGENT --option N --fingerprint FINGERPRINT` sends keys only while
 the agent's launch, terminal, pane, and session (once bound) are unchanged and
 its screen still shows exactly the observed dialog, including which option is
-selected. It presses Up or Down from the selected option to option N, then
-Enter; it never types digits or letter shortcuts. A fingerprint is spent before
+selected, checkbox state, and active question tab. For a native row it presses
+Up or Down from the selected option to option N, then Enter; explicit question
+navigation options send Left or Right alone. It never types digits or letter
+shortcuts. A fingerprint is spent before
 any key is sent, so it answers at most one dialog; observe again for a fresh
 one. The result lists the `keys` sent and an
 `outcome` from watching the screen for up to two seconds: `closed`, `replaced`
 (another dialog appeared), `selection_moved` (the selection changed but the
 dialog stayed), or `unchanged`. Nothing is sent when no dialog is visible, the
 option does not exist, or the selected option cannot be seen.
+
+Claude Code's `AskUserQuestion` checkbox panels use the same commands. API
+option numbers follow the actual selectable rows, including Claude's
+unnumbered `Submit` or `Next` button before `Chat about this`. Use the numbers
+returned by `agent dialog`, rather than the numbers printed in the terminal:
+with four checkboxes and a custom field, API option 6 is `Submit` and option 7
+is `Chat about this`, even though Claude prints `6. Chat about this`.
+
+1. Observe, choose a checkbox row to toggle it with Enter, then observe again.
+   Read its `[ ]` or checked label to verify the result. Every toggle requires
+   a fresh fingerprint; choosing a checkbox does not submit the form.
+2. For a header such as `← ☐ Storage ☐ Region ✔ Submit →`, the options also
+   include `Previous question` and `Next question`. Choosing either sends only
+   Left or Right, keeping answers in their own tabs. `text` retains the tab
+   header; `selected` marks the focused native row, not whether a checkbox is
+   checked. Tab highlighting is included in fingerprint checks.
+3. Choose `Next` to advance from a question or `Submit` to open Claude's
+   review screen. Observe that new screen and choose `Submit answers` to finish,
+   or `Cancel` to return and revise. The review requires its own fingerprint.
+
+For example, when the observed labels show `6: Submit`, submit with
+`bus agent choose "$agent_id" --option 6 --fingerprint "$fingerprint"`, then
+run `bus agent dialog "$agent_id"` again before confirming `Submit answers`.
 
 To submit a free-text answer or skip it, fetch a fresh fingerprint and use
 exactly one of `--text` and `--skip`:

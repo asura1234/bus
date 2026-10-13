@@ -423,3 +423,71 @@ async fn agent_list_reports_visible_dialog_as_blocked_even_with_idle_detection()
         crate::protocol::api::schema::AgentStatus::Blocked
     );
 }
+
+#[tokio::test]
+async fn claude_dialog_actions_send_native_rows_and_arrows_and_reject_checkbox_edits() {
+    let screen = include_str!("../../../../../tests/fixtures/claude-question/multi-select.txt")
+        .replace('\n', "\r\n");
+    let (mut app, mut writes) = app_with_dialog(screen.as_bytes(), Some("session"));
+    for (option, moves) in [
+        (6, b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B".as_slice()),
+        (7, b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B".as_slice()),
+    ] {
+        let observed = observe_dialog(&mut app);
+        let result = chosen(&choose(
+            &mut app,
+            &observed,
+            Some("session"),
+            &observed.dialog.as_ref().unwrap().digest,
+            option,
+        ));
+        assert!(result.written);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::copy_from_slice(moves)
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+    }
+    for (option, arrow) in [(8, b"\x1b[D".as_slice()), (9, b"\x1b[C".as_slice())] {
+        let observed = observe_dialog(&mut app);
+        let result = chosen(&choose(
+            &mut app,
+            &observed,
+            Some("session"),
+            &observed.dialog.as_ref().unwrap().digest,
+            option,
+        ));
+        assert!(result.written);
+        assert_eq!(writes.try_recv().unwrap(), Bytes::copy_from_slice(arrow));
+        assert!(writes.try_recv().is_err()); // Tab navigation must not confirm an answer.
+    }
+    for edit in [
+        screen.replace("[ ] Build", "[✔] Build"),
+        screen.replace("☐ Tier 2 OK?", "\x1b[7m☐ Tier 2 OK?\x1b[0m"),
+    ] {
+        let observed = observe_dialog(&mut app);
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(format!("\x1b[2J\x1b[H{edit}").as_bytes());
+        let result = chosen(&choose(
+            &mut app,
+            &observed,
+            Some("session"),
+            &observed.dialog.as_ref().unwrap().digest,
+            6,
+        ));
+        assert!(!result.written);
+        assert_eq!(result.reason.as_deref(), Some("stale_or_changed_dialog"));
+        assert!(writes.try_recv().is_err());
+    }
+}
