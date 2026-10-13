@@ -81,6 +81,8 @@ pub(super) fn test_headless_server_with_event_hub(
         headless_size,
         effective_size: headless_size,
         shutting_down: false,
+        stop_without_clients: false,
+        clientless_shutdown_deadline: None,
         should_quit,
         server_event_rx,
         server_event_tx,

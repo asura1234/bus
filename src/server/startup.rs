@@ -15,6 +15,11 @@ pub fn run_server(
     perf_options: crate::utils::perf::PerfOptions,
     config_override: Option<fn(&mut config::Config)>,
 ) -> io::Result<()> {
+    // Consume the private launch hint before spawning any pane processes. An
+    // explicit `bus server` launched inside a pane must remain headless.
+    let stop_without_clients =
+        std::env::var_os(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR).is_some();
+    std::env::remove_var(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR);
     init_logging(&logging_options);
     // Dropped on return, which drains the queued perf records.
     let _perf = crate::utils::perf::start(
@@ -89,6 +94,7 @@ pub fn run_server(
             client_socket = %client_socket_path().display(),
             "bus server started"
         );
+        server.stop_without_clients = stop_without_clients;
         print_ready_message(&crate::protocol::api::socket_path(), &client_socket_path());
 
         crate::utils::logging::startup("server", &logging_options);

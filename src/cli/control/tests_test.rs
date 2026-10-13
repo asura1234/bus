@@ -1667,6 +1667,94 @@ fn wait_async_keeps_waiting_through_a_transient_transport_error() {
 }
 
 #[test]
+fn wait_async_exits_when_bus_stays_down() {
+    let mut reads = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            reads += 1;
+            if reads > 6 {
+                return Ok(Response::failure(
+                    &request.id,
+                    "test_limit",
+                    "retry loop did not exit",
+                ));
+            }
+            Err("connection refused".into())
+        });
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "bus_down");
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Bus is down"));
+    assert_eq!(reads, 4);
+}
+
+#[test]
+fn send_async_exits_when_bus_stays_down() {
+    let mut reads = 0;
+    let response = follow_message(
+        "send-down",
+        &json!(19),
+        &mut |request, _| {
+            reads += 1;
+            if reads > 6 {
+                return Ok(Response::failure(
+                    &request.id,
+                    "test_limit",
+                    "retry loop did not exit",
+                ));
+            }
+            Err("connection refused".into())
+        },
+        &mut |_| {},
+    );
+    assert_eq!(response.error.unwrap().code, "bus_down");
+    assert_eq!(reads, 4);
+}
+
+#[test]
+fn async_transport_budget_resets_after_successful_status_reads() {
+    let mut reads = 0;
+    let mut pauses = 0;
+    let response = follow_message(
+        "reset",
+        &json!(19),
+        &mut |request, _| {
+            reads += 1;
+            if reads % 4 != 0 {
+                return Err("temporary loss".into());
+            }
+            Ok(Response::success(
+                &request.id,
+                json!({"requests":[recipient(1, "delivered", reads == 12)]}),
+            ))
+        },
+        &mut |_| {
+            pauses += 1;
+        },
+    );
+    assert!(response.ok);
+    assert_eq!(reads, 12);
+    assert_eq!(pauses, 11);
+
+    let mut reads = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            reads += 1;
+            if reads % 4 != 0 {
+                return Err("temporary loss".into());
+            }
+            Ok(Response::success(
+                &request.id,
+                json!({"requests":[recipient(1, "delivered", reads == 8)]}),
+            ))
+        });
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 8);
+}
+
+#[test]
 fn wait_timeout_negative_or_blank_values_explain_the_supported_range() {
     for timeout in ["-1", ""] {
         let error = command(&["wait", "--message", "19", "--timeout", timeout]).unwrap_err();

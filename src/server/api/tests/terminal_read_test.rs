@@ -179,6 +179,8 @@ async fn frozen_visible_read_keeps_range_metadata_during_partial_redraw() {
         headless_size,
         effective_size: headless_size,
         shutting_down: false,
+        stop_without_clients: false,
+        clientless_shutdown_deadline: None,
         should_quit: Arc::new(AtomicBool::new(false)),
         server_event_rx,
         server_event_tx,

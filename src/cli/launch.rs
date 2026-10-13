@@ -186,7 +186,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
 /// Spawns the bus server as a background daemon process.
 ///
 /// The server process is fully detached:
-/// - Runs in its own session (setsid) so it survives the client exiting
+/// - Runs in its own session (setsid); stops after the last client leaves
 /// - Stdin/stdout/stderr are redirected to /dev/null
 /// - Inherits relevant environment variables (`XDG_CONFIG_HOME`, `HERDR_SESSION`,
 ///   socket overrides, etc.), except inherited socket overrides are cleared when
@@ -218,6 +218,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
     let mut command = Command::new(&exe);
     command
         .arg("server")
+        .env(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR, "1")
         // Redirect stdio to /dev/null
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

@@ -13,6 +13,17 @@ const BUSY_FIRST_DELAY: Duration = Duration::from_millis(100);
 const BUSY_MAX_DELAY: Duration = Duration::from_secs(2);
 /// Retries of a command without a wait deadline before its overload is reported.
 const BUSY_RETRIES: u32 = 5;
+/// Four consecutive failed reads allow three seconds of reconnect grace.
+/// Successful reads reset the budget; a healthy long turn has no deadline.
+const TRANSPORT_FAILURE_LIMIT: u32 = 4;
+
+fn bus_down_response(id: &str, message: String) -> Response {
+    Response::failure(
+        id,
+        "bus_down",
+        format!("Bus is down or unreachable after {TRANSPORT_FAILURE_LIMIT} consecutive status failures: {message}"),
+    )
+}
 
 fn is_server_busy(response: &Response) -> bool {
     !response.ok
@@ -44,23 +55,35 @@ pub(super) fn follow_message(
         other => other.to_string(),
     };
     let mut busy_delay = BUSY_FIRST_DELAY;
+    let mut transport_failures = 0;
     loop {
         let request = Request {
             id: next_request_id(),
             method: "message.status".into(),
             params: json!({ "message": message }),
         };
-        match send(&request, None) {
-            // The server can be briefly unreachable, e.g. while it saves;
-            // keep following rather than report a failed delivery.
-            Err(_) => pause(Duration::from_secs(1)),
+        let response = match send(&request, None) {
+            Err(message) => {
+                transport_failures += 1;
+                if transport_failures >= TRANSPORT_FAILURE_LIMIT {
+                    return bus_down_response(id, message);
+                }
+                pause(Duration::from_secs(1));
+                continue;
+            }
+            Ok(response) => {
+                transport_failures = 0;
+                response
+            }
+        };
+        match response {
             // Following has no deadline, so overload only slows it down.
-            Ok(response) if is_server_busy(&response) => {
+            response if is_server_busy(&response) => {
                 pause(busy_delay);
                 busy_delay = next_busy_delay(busy_delay);
             }
-            Ok(response) if !response.ok => return response,
-            Ok(response) => match async_outcome(&response.result) {
+            response if !response.ok => return response,
+            response => match async_outcome(&response.result) {
                 Some(Ok(())) => return response,
                 Some(Err((code, message))) => {
                     let mut failure = Response::failure(id, code, message);
@@ -190,15 +213,25 @@ pub(super) fn execute(
     let mut last_status = Value::Null;
     let mut busy_delay = BUSY_FIRST_DELAY;
     let mut busy_retries = 0;
+    let mut transport_failures = 0;
     loop {
         let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         if remaining == Some(Duration::ZERO) {
             return timeout_response(&id, last_status);
         }
         let mut response = match send(&request, remaining) {
-            Ok(response) => response,
+            Ok(response) => {
+                transport_failures = 0;
+                response
+            }
             Err(message) => {
                 if waiting && deadline.is_none() {
+                    transport_failures += 1;
+                    if transport_failures >= TRANSPORT_FAILURE_LIMIT {
+                        let mut response = bus_down_response(&id, message);
+                        response.result = last_status;
+                        return response;
+                    }
                     thread::sleep(Duration::from_secs(1));
                     request.id = next_request_id();
                     continue;

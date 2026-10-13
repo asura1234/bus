@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn client_launched_server_saves_and_stops_after_last_client_grace() {
+    let mut server = test_headless_server();
+    server.stop_without_clients = true;
+    let (writer, _control_rx, _render_rx) = test_client_writer();
+    server.clients.insert(
+        1,
+        ClientConnection::new((80, 24), Default::default(), 1, writer),
+    );
+    let now = Instant::now();
+    assert!(!server.check_client_lifetime(now));
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 1 });
+    assert!(!server.check_client_lifetime(now));
+    assert!(!server.check_client_lifetime(now + Duration::from_millis(2999)));
+    assert!(server.check_client_lifetime(now + Duration::from_secs(3)));
+    assert!(server.shutting_down);
+    assert!(server.app.state.should_quit);
+}
+
+#[test]
+fn remaining_or_reattached_client_cancels_shutdown_grace() {
+    let mut server = test_headless_server();
+    server.stop_without_clients = true;
+    let now = Instant::now();
+    assert!(!server.check_client_lifetime(now));
+    for id in 1..=2 {
+        let (writer, _control_rx, _render_rx) = test_client_writer();
+        server.clients.insert(
+            id,
+            ClientConnection::new((80, 24), Default::default(), id, writer),
+        );
+    }
+    assert!(!server.check_client_lifetime(now + Duration::from_secs(4)));
+    server.remove_client(1);
+    assert!(!server.check_client_lifetime(now + Duration::from_secs(8)));
+    server.remove_client(2);
+    assert!(!server.check_client_lifetime(now + Duration::from_secs(9)));
+    assert!(server.check_client_lifetime(now + Duration::from_secs(12)));
+}
+
+#[test]
+fn explicit_headless_server_survives_clientless_periods() {
+    let mut server = test_headless_server();
+    let now = Instant::now();
+    assert!(!server.check_client_lifetime(now));
+    assert!(!server.check_client_lifetime(now + Duration::from_secs(60)));
+    assert!(!server.shutting_down);
+}
+
+#[test]
 fn default_headless_size_is_effective_without_clients() {
     let server = test_headless_server();
 
