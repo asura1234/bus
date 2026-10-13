@@ -412,7 +412,7 @@ Probe tests **stay in the working tree, uncommitted**, and the author decides wh
 
 Raising a suspicion is not wrong in itself. Rules:
 
-- **Proving is strongly encouraged**: a red probe test, or — the preferred proof for user-visible TUI behavior — a real TUI run on a scratch Bus (the `bus --dev tui` driver or `/e2e-test-tui`) with its report: steps, screenshot, trace and effects. Whenever a reviewer runs the TUI, the safety rules in review-pr's guide "Prove user-visible behavior by driving the real TUI" are mandatory.
+- **Proving is strongly encouraged**: a red probe test, or — the preferred proof for user-visible TUI behavior — a real TUI run on a scratch Bus (the `bus --dev tui` driver or `/e2e-test`) with its report: steps, screenshot, trace and effects. Whenever a reviewer runs the TUI, the safety rules in review-pr's guide "Prove user-visible behavior by driving the real TUI" are mandatory.
 - What a Unit / Integration test or a TUI run can prove should be proven rather than reported in suspicion form.
 - The evidence field states the proof status: proven ones write `已证明：<test name @ test file relative path> — <failing assertion>`, or for a TUI run `已证明：<case/step or session step @ run report relative path> — <expected vs seen>`; unproven ones write `未证明`, so the author can weigh them. **There is no need to explain why it cannot be proven, nor to list what was tried.**
 - Unproven wording is "cannot rule out X" rather than "this is wrong", and the impact is written conditionally.

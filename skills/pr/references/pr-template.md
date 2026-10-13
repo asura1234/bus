@@ -70,7 +70,7 @@
 
 ### 自测 / Agent 测
 
-> GitHub 模板里的每个 checkbox（`e2e-test-tui`、`gate-and-fix`）都必须保留，且以该名字开头：
+> GitHub 模板里的每个 checkbox（`e2e-test`、`gate-and-fix`）都必须保留，且以该名字开头：
 >
 > - 调用方提供了该项证据（证明当前 head 的 SHA 加报告路径）时勾选，写成
 >   ``- [x] gate-and-fix — PASS, head `<sha>`, report `<path>` ``；

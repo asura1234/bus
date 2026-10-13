@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run-report skeleton and checker for /e2e-test-tui.
+"""Run-report skeleton and checker for /e2e-test.
 
 `init` writes `report.md` with one PENDING step per numbered step of the chosen
 cases of a test doc. `check` validates a filled report against the same doc

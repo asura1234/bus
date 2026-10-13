@@ -103,14 +103,14 @@ It complements probes, never replaces one where a probe can show the failure. Tw
   (`start --run-dir <round dir>/tui/sessions`); the report is that folder's `trace.ndjson`, `shots/` and `effects.ndjson`,
   plus a `<round dir>/tui/<session>.md` you write listing the steps, expected vs seen, and the screenshot you opened;
 - or write a small ad-hoc QA doc in the format of `tests/e2e-tui/app.md` at `<round dir>/tui/qa.md` and run
-  `/e2e-test-tui <round dir>/tui/qa.md`. That skill takes only the doc and `--cases`, so add `--runs-root <round dir>/tui` yourself
+  `/e2e-test <round dir>/tui/qa.md`. That skill takes only the doc and `--cases`, so add `--runs-root <round dir>/tui` yourself
   to its `e2e_report.py init` call; the report then lands at `<round dir>/tui/<run>/report.md`, its sessions under `<run>/sessions/`.
 
 `<round dir>` is this round's `STATE_DIR/round-NN/`. Whether to run the TUI is your judgment; these rules are mandatory for every run:
 
 - export your own `CARGO_TARGET_DIR` (an absolute path no other worker uses, e.g. `<repo>/target/review-pr-<lane>`)
   and an absolute `BUS_TUI_ROOT` of your own (e.g. `/tmp/bus-tui-<lane>`); `./run tui` builds into `$CARGO_TARGET_DIR/tui-driver`;
-- unset `BUS_DATA_DIR` as /e2e-test-tui does, or point it at a scratch dir outside your `BUS_TUI_ROOT` (the driver refuses one
+- unset `BUS_DATA_DIR` as /e2e-test does, or point it at a scratch dir outside your `BUS_TUI_ROOT` (the driver refuses one
   inside its target); it never names the live data dir. Unset every other inherited `BUS_*` and `HERDR_*` variable before any command;
 - never point anything at the running Bus, its data dir, or `target/debug`; a driver refusal is final, never worked around;
 - ad-hoc QA docs live only under `<round dir>/tui/`; never edit `tests/e2e-tui/app.md` or any other committed doc;

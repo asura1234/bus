@@ -1,9 +1,9 @@
 ---
-name: e2e-test-tui
+name: e2e-test
 description: Use to test the Bus TUI end to end like a manual QA tester, against a QA test doc (default tests/e2e-tui/app.md, optionally only some case IDs). Builds the dev-tools variant, drives a fresh scratch Bus through `bus --dev tui` (never the running Bus), judges every step against the doc from screen text, styled cells, screenshots and recorded effects, and writes a run report with PASS/FAIL/SKIP per step and a GREEN/RED/INCOMPLETE verdict (GREEN only when every step ran and passed).
 ---
 
-# E2E Test TUI
+# E2E Test
 
 Read [guide.md](guide.md), [e2e-run-report-format.md](references/e2e-run-report-format.md) and
 `docs/tui-driver.md` completely before driving anything. Read the whole test doc, including its
@@ -26,7 +26,7 @@ Every driver call for a case names its session: `T <verb> --name <name> ...`.
 
 -- Start the report from the doc; never write case or step headings by hand.
 Run:
-  python3 skills/e2e-test-tui/scripts/e2e_report.py init --doc <doc> [--cases <IDs>] [--name <run folder>] \
+  python3 skills/e2e-test/scripts/e2e_report.py init --doc <doc> [--cases <IDs>] [--name <run folder>] \
     --commit "$(git rev-parse HEAD)" --platform "<OS>, Ghostty <version> for --real, <size>"
 report = its stdout line; run_dir = dirname(report)
 
@@ -58,7 +58,7 @@ FOR EACH case in the report, in order:
     IF a later step depends on a failed one: still attempt it; record what happened.
   Run: T stop --name <name>   (always, also after failures)
 
-Run: python3 skills/e2e-test-tui/scripts/e2e_report.py check --doc <doc> <report>
+Run: python3 skills/e2e-test/scripts/e2e_report.py check --doc <doc> <report>
 IF exit code 1: fix the report's form (never its results) and rerun check.
 Append check's output under `## Summary` at the end of the report.
 
