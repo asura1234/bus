@@ -11,9 +11,9 @@ recover.
 flowchart TD
     begin(["Get PR merge-ready"]):::start --> askverify
     askverify["Orchestrator: ask developer to merge without asking, or hold for manual test and approval"] --> measure
-    measure["Orchestrator: measure added + removed lines against the PR base branch, excluding plans/"] --> big{"Total changed lines >= 3000?"}
+    measure["Orchestrator: measure added + removed lines against the PR base branch, excluding plans/ (git diff --shortstat base...HEAD)"] --> big{"Total changed lines >= 3000?"}
     big -- yes --> split["Author: run split-pr --publish"]
-    big -- no --> lockgoal["Orchestrator: get the PR goal and non-goals locked (ask the developer once if none is locked)"]
+    big -- no --> lockgoal["Orchestrator: confirm the PR goal and non-goals are locked from the developer's words, with the origin recorded (ask the developer once if not)"]
     lockgoal --> review
     split --> approveplan["Orchestrator: approve the split plan (split-pr CONFIRM)"]
     approveplan --> splitok{"split-pr built every part and published every publishable one?"}
@@ -26,7 +26,7 @@ flowchart TD
         allready -- no --> anyabandon{Any Abandon?}
         anyabandon -- "no (Needs Refinement)" --> address[Author: run address-review-comments, push]
         address --> outscope{"Orchestrator: any finding outside the PR goal?"}
-        outscope -- yes --> recordscope[Orchestrator: record it in deferred.md]
+        outscope -- yes --> recordscope["Orchestrator: record it in deferred.md as a follow-up PR candidate; re-send goal and non-goals to author and reviewers"]
         outscope -- no --> flag
         recordscope --> flag{Any FLAG?}
         flag -- yes --> triage[Orchestrator: triage every flagged issue]
@@ -35,14 +35,17 @@ flowchart TD
         poll --> bestof[Author: run best-of-n on every flagged issue]
         bestof --> handback{best-of-n handed a question back?}
         handback -- no --> applyfirst[Author: apply the top-ranked option, push]
-        flag -- no --> review
-        applyfirst --> review
-        applydec[Author: apply developer's feedback, push] --> review
+        flag -- no --> remeasure
+        applyfirst --> remeasure
+        remeasure{"Orchestrator: re-measure; total changed lines >= 3000?"}
+        remeasure -- no --> review
+        applydec[Author: apply developer's feedback, push] --> remeasure
     end
 
     needsdev -- yes --> informdev
     handback -- yes --> informdev
 
+    remeasure -- yes --> split
     anyabandon -- yes --> abandonfix{"Orchestrator: would splitting with split-pr fix every Abandon?"}
     abandonfix -- yes --> split
     abandonfix -- no --> informdev
@@ -124,7 +127,7 @@ You handle these yourself:
 
 | Role | Model | Does |
 |---|---|---|
-| Orchestrator | any | Steers the run to "PR merged" and recovers from the cases above. Names and staffs the agents and changes the team as the run needs. Asks the merge-permission question once; that answer is the permission to merge. Gets the PR goal and non-goals locked, approves the split plan, decides whether splitting fixes an Abandon, records out-of-scope findings and flaky tests the author reports in `deferred.md`, triages flagged issues, and on the developer's behalf has the author apply best-of-n's top-ranked option. Informs the developer in MASTER at "PR merge blocked", and at "PR merged" when `deferred.md` has entries; after "PR merged", starts each recorded flaky test as its own PR. Writing `deferred.md` and running worktree-close are its only hands-on actions; it delegates everything else. |
+| Orchestrator | any | Steers the run to "PR merged" and recovers from the cases above. Names and staffs the agents and changes the team as the run needs. Asks the merge-permission question once; that answer is the permission to merge. Gets the PR goal and non-goals locked from the developer's words, re-measures after every pushed fix, approves the split plan, decides whether splitting fixes an Abandon, records out-of-scope findings and flaky tests the author reports in `deferred.md`, triages flagged issues, and on the developer's behalf has the author apply best-of-n's top-ranked option. Informs the developer in MASTER at "PR merge blocked", and at "PR merged" when `deferred.md` has entries; after "PR merged", starts each recorded flaky test as its own PR. Writing `deferred.md` and running worktree-close are its only hands-on actions; it delegates everything else. |
 | Developer | - | Answers the merge-permission question; supplies the PR goal and non-goals when none is locked; optionally runs the manual test and merge approval while merge-pr holds; recovers from "PR merge blocked". |
 | Author | any | split-pr, address-review-comments (which commits the reviewers' tests), best-of-n, fixes, merge-pr (which handles CI and new GitHub review comments, pushing its own fixes). Before split-pr or merge-pr, commits any reviewer tests still left in the worktree. A flaky test found while running gate-and-fix or merge-pr is not fixed in this PR: it reports the test, error and diagnosis to the orchestrator and continues once a rerun passes. |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |

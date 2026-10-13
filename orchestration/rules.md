@@ -67,8 +67,32 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   block, and ask the developer later in MASTER at the next developer checkpoint;
   the round continues unblocked. With no clear winner on a blocking issue, halt
   progress and ask the developer in MASTER; resume only after their decision.
+  Before polling, you may reject an issue outside the locked goal; record it
+  in the deferred list when it is real.
   *Why:* the author adjudicates technical approaches; only an unresolved
   blocking issue stops the review round.
+- **Own the PR's scope.** Lock the goal from the developer's own words (the
+  originating request or issue) before any fan-out: have the author pass them
+  verbatim as the origin to the `pr` skill's goal lock
+  ([LOCK PR INTENT](../skills/pr/SKILL.md)), which later `pr` and `review-pr`
+  runs reuse. A locked
+  goal widens only on an explicit developer yes to a question that names the
+  widening; "add to this PR" for a broad ask is not consent to every item.
+  - An audit or gap list yields a deferred list or proposed follow-up PRs;
+    only items inside the goal land.
+  - A worker's proposal outside the goal goes to the deferred list.
+  - After each lane lands, re-measure with `git diff --shortstat base...HEAD`.
+    At the split threshold, run `split-pr` or ask the developer; never skip
+    the check.
+  - A review fix that adds a new cross-process or cross-repo mechanism
+    defaults to a follow-up PR.
+  - On drift (out-of-goal files, a review issue pulling in new areas, the
+    diff growing toward the threshold), re-send the locked goal and non-goals
+    to the author and every reviewer before the next round.
+
+  *Why:* a PR grew from three bug fixes to 130 files because its goal was
+  written after the work grew; every review check passed against that wrong
+  goal, and nothing compared it with the request or the size.
 - **Brief workers directly.** Write tasks, constraints and decisions as your own
   instructions; never label them as coming from the developer or as
   developer-approved. *Why:* a worker cannot verify who is behind a message, so
