@@ -17,7 +17,6 @@ Rules (all fail-closed):
 - Every checkbox of the template's `自测 / Agent 测` appears exactly once in the body, by its name; a
   checked one must cite the head SHA and report it rests on.
 - The whole body (outside code fences) allows no HTML comments or leftover template placeholders.
-- `摘要` must contain a valid `- **大小**：` size tier.
 - `目标` / `非目标` must equal the mechanically generated context verbatim, and the review-pr lock must equal the goal.
 """
 
@@ -31,11 +30,9 @@ from pr_goal_context import parse_context, split_h2_sections
 
 
 SELF_TEST_SECTION = "自测 / Agent 测"
-SUMMARY_SECTION = "摘要"
 GOAL_SECTION = "目标"
 NON_GOAL_SECTION = "非目标"
 PHASES = ("draft", "final")
-SIZE_PATTERN = re.compile(r"^- \*\*大小\*\*：`(XS|S|M|L|XL)`", re.MULTILINE)
 # Placeholders are derived from the template body, not hard-coded: a hard-coded list covers only the
 # few thought of at the time, placeholders added to the template later slip through silently, and the
 # whole point of the gate is to block template residue.
@@ -226,14 +223,6 @@ def check_body(
             problems.append(
                 f"body: section `{title}` contains unchecked boxes; "
                 "remove items that were not performed"
-            )
-        if (
-            title == SUMMARY_SECTION
-            and SIZE_PATTERN.search("\n".join(content_lines)) is None
-        ):
-            problems.append(
-                "body: section `摘要` must contain `- **大小**：` with one of "
-                "`XS|S|M|L|XL`"
             )
     return problems
 
