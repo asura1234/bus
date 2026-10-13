@@ -465,8 +465,7 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
             state.set_agent_error(id, Some("The Bus server kept the previous provider session after agent clear, so Bus can no longer follow this agent. Delete it and add a new one; restart Bus first if its server predates this build.".into())).map_err(|e| e.to_string())?;
             self.save(state)?;
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
-            crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
+            self.acknowledge_spool(dir, vec![path.to_path_buf()])?;
             return Ok(CallbackFlow::Next);
         }
         tracing::info!(
@@ -547,8 +546,7 @@ impl Worker {
                     .map_err(|e| e.to_string())?;
                 state.set_agent_error(id, Some("Provider callback session differs from this Bus launch; request ownership is preserved. Inspect the terminal and create a new Bus agent for a new session.".into())).map_err(|e| e.to_string())?;
                 self.save(state)?;
-                std::fs::remove_file(path).map_err(|e| e.to_string())?;
-                crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
+                self.acknowledge_spool(dir, vec![path.to_path_buf()])?;
                 return Ok(ControlFlow::Break(CallbackFlow::Next));
             }
             if agent.runtime_identity.session_id.is_none()
@@ -694,16 +692,9 @@ impl Worker {
         self.save(state)?;
         tracing::debug!(
             event = "bus.callback.applied",
-            "Callback state persisted before spool acknowledgement"
+            "Callback state committed; its spool files go once it is durable"
         );
-        for path in remove {
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-        crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
+        self.acknowledge_spool(dir, remove)?;
         Ok(CallbackFlow::Next)
     }
 }

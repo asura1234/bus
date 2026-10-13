@@ -73,11 +73,12 @@ impl Transport for FakeServer {
                 }))
                 .unwrap()],
             }),
-            Method::AgentDialogObserve(_) => Ok(ResponseResult::AgentDialog {
+            Method::AgentDialogObserve(params) => Ok(ResponseResult::AgentDialog {
                 observation: schema::AgentDialogObservation {
                     pending_question: false,
                     terminal_id: "terminal".into(),
-                    pane_id: "pane".into(),
+                    // Every watched agent shows the same screen in its own pane.
+                    pane_id: params.target,
                     session_id: None,
                     content_revision: 4 + screen.revision,
                     dialog: screen.current_dialog(),
@@ -972,6 +973,78 @@ fn collapsed_question_inspection_bounds_the_wait_for_an_empty_replacement_frame(
     assert_eq!(observes.iter().filter(|open| **open).count(), 1);
     assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, notice);
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn message_status_writes_nothing_when_no_dialog_changed() {
+    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    let receipt = worker
+        .control_send(
+            &json!({"room": room.0.to_string(), "to": [agent.0.to_string()], "text": "build it"}),
+        )
+        .unwrap();
+    let message = PromptId(receipt["message_id"].as_u64().unwrap());
+    screen.lock().unwrap().dialog = true;
+    worker.poll().unwrap();
+    assert!(worker.state.agent(agent).unwrap().dialog);
+    let writes = worker.store.writes();
+    for _ in 0..3 {
+        let status = worker.control_message(message).unwrap();
+        assert_eq!(status["waiting_on_dialog"], json!([agent.0]));
+    }
+    assert_eq!(
+        worker.store.writes(),
+        writes,
+        "a status poll that re-observes the same dialog must not rewrite state.json"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn message_status_saves_once_when_several_recipients_dialogs_closed() {
+    let (mut worker, agent, room, _, _, dir) = worker(false);
+    let mut state = worker.state.clone();
+    let other = state
+        .create_agent(room, "tester", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            other,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch-2".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane-2".into()),
+                session_id: None,
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    let receipt = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string(), other.0.to_string()],
+            "text": "build it"
+        }))
+        .unwrap();
+    let message = PromptId(receipt["message_id"].as_u64().unwrap());
+    // Both were last seen blocked on a dialog; the screens have since cleared.
+    let mut state = worker.state.clone();
+    state.observe_dialog(agent, true).unwrap();
+    state.observe_dialog(other, true).unwrap();
+    worker.save(state).unwrap();
+    let writes = worker.store.writes();
+    let status = worker.control_message(message).unwrap();
+    assert_eq!(status["waiting_on_dialog"], json!([]));
+    assert!(!worker.state.agent(agent).unwrap().dialog);
+    assert!(!worker.state.agent(other).unwrap().dialog);
+    assert_eq!(
+        worker.store.writes(),
+        writes + 1,
+        "one status call persists all of its dialog observations in one write"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

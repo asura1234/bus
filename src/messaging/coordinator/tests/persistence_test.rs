@@ -404,7 +404,7 @@ fn recovered_storage_does_not_resubmit_uncertain_delivery() {
     assert!(worker.state.request(request).unwrap().uncertain_outcome);
     let calls_before = calls.lock().unwrap().len();
     worker.store.fail_once_at(SaveStage::TempSync);
-    assert!(worker.save(worker.state.clone()).is_err());
+    assert!(worker.save(changed(&worker)).is_err());
     let (events, _) = mpsc::channel();
     worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
     worker.submit_ready().unwrap();
@@ -418,7 +418,7 @@ fn recovered_storage_does_not_resubmit_uncertain_delivery() {
 fn paused_worker_rejects_send_without_touching_native_transport() {
     let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
     worker.store.fail_once_at(SaveStage::TempCreate);
-    assert!(worker.save(worker.state.clone()).is_err());
+    assert!(worker.save(changed(&worker)).is_err());
     let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
     let (commands, receiver) = mpsc::sync_channel(4);
     let (events, received) = mpsc::channel();
@@ -436,7 +436,7 @@ fn paused_worker_rejects_send_without_touching_native_transport() {
 fn storage_retry_delay_doubles_and_stops_at_thirty_seconds() {
     let (mut worker, _, _, dir, _) = fixture(Provider::Codex, vec![]);
     worker.store.fail_once_at(SaveStage::TempCreate);
-    assert!(worker.save(worker.state.clone()).is_err());
+    assert!(worker.save(changed(&worker)).is_err());
     let (events, _) = mpsc::channel();
     let mut now = Instant::now() + Duration::from_secs(1);
     for expected in [2, 4, 8, 16, 30, 30] {
@@ -505,4 +505,11 @@ fn journaled_drafts_and_sends_are_durable_and_survive_a_paused_full_save() {
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A durable change, so the save really writes and can fail.
+fn changed(worker: &Worker) -> BusState {
+    let mut state = worker.state.clone();
+    state.create_room("pending").unwrap();
+    state
 }
