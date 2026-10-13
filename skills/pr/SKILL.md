@@ -11,7 +11,7 @@ plans = every plan path the developer supplied this time, in order of appearance
 verification = optional Markdown file of `- [x] ` lines, each naming verification actually executed and the commit it proves
   (for example a gate-and-fix PASS artifact with its Head); supplied by the caller, never produced here.
   A line that starts with a self-test box name of the GitHub template (`- [x] gate-and-fix — ...`,
-  `- [x] e2e-test-tui — ...`) is that box's evidence and must cite head `<sha>` and report `<path>`.
+  `- [x] e2e-test — ...`) is that box's evidence and must cite head `<sha>` and report `<path>`.
 
 -- Rules
 - Code narrative takes only the current repository, current feature branch, and actual changes as its source of truth; plans lock only goal and non-goals.
@@ -113,7 +113,7 @@ from the live worktree, live `HEAD`, or the mutable `origin/master`.
 Fill every section of the GitHub template, in its order:
 - Insert the full `## 目标` and `## 非目标` sections of GOAL_CONTEXT_FILE verbatim; never add source labels,
   summaries, translations, or separators. Same-named sections from multiple plans were already appended by the renderer in input order.
-- `## 自测 / Agent 测`: keep every checkbox of the GitHub template (`e2e-test-tui`, `gate-and-fix`), each once.
+- `## 自测 / Agent 测`: keep every checkbox of the GitHub template (`e2e-test`, `gate-and-fix`), each once.
   A box whose evidence line verification supplies becomes that line verbatim; every other box stays
   `- [ ] <name> — pending`. Append the remaining verification lines verbatim after the boxes.
   phase = final when no box is pending, else draft.

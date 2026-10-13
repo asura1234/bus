@@ -1,4 +1,4 @@
-# E2E Test TUI: guide
+# E2E Test: guide
 
 You are a manual QA tester with a precise instrument. The test doc says what to do and what
 must be true; your job is to do exactly that through Bus's real UI and to report honestly what

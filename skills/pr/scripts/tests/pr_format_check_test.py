@@ -26,7 +26,7 @@ BODY_TEMPLATE_PATH = (
     Path(__file__).resolve().parents[4] / ".github" / "pull_request_template.md"
 )
 GATE_EVIDENCE = "- [x] gate-and-fix — PASS, head `0123abc`, report `temp/gate-and-fix/b/round-1.md`"
-E2E_EVIDENCE = "- [x] e2e-test-tui — GREEN, head `0123abc`, report `temp/e2e-test-tui/run/report.md`"
+E2E_EVIDENCE = "- [x] e2e-test — GREEN, head `0123abc`, report `temp/e2e-tui/runs/run/report.md`"
 
 
 def valid_body() -> str:
@@ -71,7 +71,7 @@ def valid_draft_body() -> str:
         valid_body()
         .replace(
             f"{E2E_EVIDENCE}\n{GATE_EVIDENCE}\n- [x] `./run test cli`：通过",
-            "- [ ] e2e-test-tui — pending\n- [ ] gate-and-fix — pending",
+            "- [ ] e2e-test — pending\n- [ ] gate-and-fix — pending",
         )
         .replace(
             "## 其他说明\n\n无",
@@ -122,8 +122,8 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
 
         malformed_pending_test = body.replace(
-            "- [ ] e2e-test-tui — pending\n- [ ] gate-and-fix — pending",
-            "- [ ]e2e-test-tui — pending\n- [ ]gate-and-fix — pending",
+            "- [ ] e2e-test — pending\n- [ ] gate-and-fix — pending",
+            "- [ ]e2e-test — pending\n- [ ]gate-and-fix — pending",
         )
         draft_problems = self.check(malformed_pending_test, phase="draft")
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
@@ -170,7 +170,7 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("at least one checked item" in problem for problem in problems))
 
     def test_template_self_test_boxes_are_required(self) -> None:
-        self.assertEqual(self.boxes, ["e2e-test-tui", "gate-and-fix"])
+        self.assertEqual(self.boxes, ["e2e-test", "gate-and-fix"])
 
         problems = self.check(valid_body().replace(f"{GATE_EVIDENCE}\n", ""))
         self.assertTrue(any("exactly one `gate-and-fix` box" in problem for problem in problems))

@@ -21,7 +21,7 @@
 
 <!-- 跑过才勾选，并写上 head SHA 和报告路径，例如：gate-and-fix — PASS, head `<sha>`, report `<path>` -->
 
-- [ ] e2e-test-tui
+- [ ] e2e-test
 - [ ] gate-and-fix
 
 ## 截图 / GIF

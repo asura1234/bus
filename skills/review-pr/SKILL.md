@@ -46,7 +46,7 @@ MAY:
   - run read-only queries: git, grep, reading files
   - run tests narrowly: Rust with `just test-one <filter>`, a skill's Python tests with
     `python3 -m pytest <test file>::<test name>`
-  - drive the PR's HEAD on a scratch Bus (`./run tui`, or /e2e-test-tui on an ad-hoc QA doc under <round dir>/tui/)
+  - drive the PR's HEAD on a scratch Bus (`./run tui`, or /e2e-test on an ad-hoc QA doc under <round dir>/tui/)
     per guide.md "Prove user-visible behavior by driving the real TUI", whose env, cleanup, and no-touch rules are mandatory
 
 MUST NOT:
