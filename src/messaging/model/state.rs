@@ -55,11 +55,14 @@ where
 {
     let mut agents = BTreeMap::<AgentId, RoomAgent>::deserialize(deserializer)?;
     for agent in agents.values_mut() {
-        if agent.launch_cwd.is_none() && !agent.launch_cwd_backfilled {
-            agent.launch_cwd_backfilled = true;
-            if let Ok(root) = agent.cwd.canonicalize() {
-                if root.is_dir() {
-                    agent.launch_cwd = Some(root);
+        if !agent.launch_scope_initialized {
+            agent.launch_scope_initialized = true;
+            if agent.launch_cwd.is_none() && !agent.launch_cwd_backfilled {
+                if let Ok(root) = agent.cwd.canonicalize() {
+                    if root.is_dir() {
+                        agent.launch_cwd = Some(root);
+                        agent.launch_cwd_backfilled = true;
+                    }
                 }
             }
         }

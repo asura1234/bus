@@ -311,6 +311,10 @@ pub(crate) struct RoomAgent {
     /// Frozen creation/launch authority; runtime cwd observations never change it.
     #[serde(default)]
     pub(crate) launch_cwd: Option<PathBuf>,
+    /// Current registration or a completed one-time legacy migration attempt.
+    /// A missing root must not be adopted from a later runtime cwd observation.
+    #[serde(default)]
+    pub(crate) launch_scope_initialized: bool,
     /// Legacy authority frozen from the saved cwd before runtime polling.
     #[serde(default)]
     pub(crate) launch_cwd_backfilled: bool,

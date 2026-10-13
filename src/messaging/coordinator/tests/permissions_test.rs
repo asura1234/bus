@@ -786,6 +786,10 @@ fn permission_profile_legacy_root_backfilled_once_on_load() {
         .as_object_mut()
         .unwrap()
         .remove("launch_cwd");
+    value["agents"][agent.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("launch_scope_initialized");
     worker.state = serde_json::from_value(value).unwrap();
     let original = dir.canonicalize().unwrap();
     let saved = serde_json::to_value(worker.state.agent(agent).unwrap()).unwrap();

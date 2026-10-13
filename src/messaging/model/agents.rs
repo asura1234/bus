@@ -75,6 +75,7 @@ impl BusState {
                 permission_reset_at_ms: None,
                 provider,
                 launch_cwd: cwd.canonicalize().ok(),
+                launch_scope_initialized: true,
                 launch_cwd_backfilled: false,
                 allowed_roots: Vec::new(),
                 scratch_dir: None,

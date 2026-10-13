@@ -58,6 +58,7 @@ impl Worker {
             .ok_or("Missing worker")?;
         saved.remove("launch_cwd");
         saved.remove("launch_cwd_backfilled");
+        saved.remove("launch_scope_initialized");
         let mut state: crate::messaging::model::BusState =
             serde_json::from_value(value).map_err(|e| e.to_string())?;
         state = state.with_history(std::sync::Arc::clone(self.state.history()));
