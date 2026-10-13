@@ -101,12 +101,20 @@ impl StoreError {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+/// The version is checked before this is parsed, so it is not kept here.
+#[derive(Deserialize)]
 struct StoredDocument {
-    version: u64,
     state: BusState,
     /// The last journal entry this state already contains.
     #[serde(default)]
+    journal_seq: u64,
+}
+
+/// [`StoredDocument`] as written: it borrows the state instead of copying it.
+#[derive(Serialize)]
+struct StoredDocumentRef<'a> {
+    version: u64,
+    state: &'a BusState,
     journal_seq: u64,
 }
 
@@ -141,6 +149,9 @@ pub(crate) struct JsonStore {
     journal: std::sync::Mutex<JournalState>,
     #[cfg(test)]
     fail_stage: std::sync::Mutex<Option<SaveStage>>,
+    /// Completed `state.json` writes, so tests can count saves.
+    #[cfg(test)]
+    writes: std::sync::atomic::AtomicU64,
 }
 
 impl JsonStore {
@@ -150,6 +161,8 @@ impl JsonStore {
             journal: std::sync::Mutex::new(JournalState::default()),
             #[cfg(test)]
             fail_stage: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            writes: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -184,6 +197,12 @@ impl JsonStore {
         }
         let _ = stage;
         Ok(())
+    }
+
+    /// How many times this store wrote `state.json`.
+    #[cfg(test)]
+    pub(crate) fn writes(&self) -> u64 {
+        self.writes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -314,9 +333,11 @@ impl JsonStore {
             source,
         })?;
         let journal_seq = self.journal_state().seq;
-        let bytes = serde_json::to_vec_pretty(&StoredDocument {
+        // Compact: the file is rewritten whole on every save, and every
+        // reader parses it with serde, which ignores whitespace.
+        let bytes = serde_json::to_vec(&StoredDocumentRef {
             version: STORE_VERSION,
-            state: state.clone(),
+            state,
             journal_seq,
         })
         .map_err(|source| StoreError::Corrupt {
@@ -332,6 +353,9 @@ impl JsonStore {
             bytes: bytes.len(),
             source: error.source,
         })?;
+        #[cfg(test)]
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut journal = self.journal_state();
         journal.verified = Fingerprint::of(&self.path);
         // The saved state contains every entry up to `journal_seq`; loading

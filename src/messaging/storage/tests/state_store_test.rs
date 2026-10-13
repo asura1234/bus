@@ -411,3 +411,39 @@ fn state_saves_and_journal_appends_are_timed() {
     assert!(saves.count >= 1 && journals.count >= 1);
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn state_is_written_compact_and_a_pretty_file_still_loads() {
+    let dir = temp_dir("compact");
+    let path = dir.join("state.json");
+    let mut state = BusState::new();
+    state.create_room("compact").expect("room");
+    // A file an older build wrote, indented.
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": STORE_VERSION,
+            "state": state,
+            "journal_seq": 0
+        }))
+        .expect("pretty"),
+    )
+    .expect("pretty state");
+    let store = JsonStore::new(path.clone());
+    assert_eq!(store.load().expect("load").expect("state"), state);
+
+    state.create_room("second").expect("room");
+    store.save(&state).expect("save");
+    let bytes = fs::read(&path).expect("read");
+    assert!(
+        !bytes.contains(&b'\n'),
+        "state.json is rewritten on every save; indentation only costs time"
+    );
+    let document: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(document["version"], STORE_VERSION);
+    assert_eq!(
+        JsonStore::new(path).load().expect("reload").expect("state"),
+        state
+    );
+    fs::remove_dir_all(dir).expect("cleanup");
+}
