@@ -532,6 +532,17 @@ struct Archive {
     compressed: bool,
 }
 
+/// Legacy numbered rotations have no timestamp; their last write is the
+/// archive age. Only positive decimal generations belong to Bus.
+fn archive_entry_time(path: &Path, stem: &str) -> Option<SystemTime> {
+    archive_time(stem).or_else(|| {
+        let numbered = !stem.is_empty()
+            && stem.bytes().all(|byte| byte.is_ascii_digit())
+            && stem.bytes().any(|byte| byte != b'0');
+        numbered.then(|| fs::metadata(path).ok()?.modified().ok())?
+    })
+}
+
 /// Compresses archives left plain and drops those outside `policy`:
 /// older than `max_age`, then the oldest past `max_total_bytes`.
 fn maintain_archives(path: &Path, policy: &ArchivePolicy, now: SystemTime) {
@@ -555,15 +566,19 @@ pub(crate) fn archived_files(path: &Path) -> Vec<PathBuf> {
         .filter_map(|(entry, rest)| {
             let compressed = rest.ends_with(ARCHIVE_GZ);
             let stem = rest.strip_suffix(ARCHIVE_GZ).unwrap_or(&rest);
-            Some((archive_time(stem)?, compressed, entry))
+            Some((archive_entry_time(&entry, stem)?, compressed, entry))
         })
         .collect();
-    let finished: std::collections::HashSet<SystemTime> = archives
+    let finished: std::collections::HashSet<PathBuf> = archives
         .iter()
         .filter(|(_, compressed, _)| *compressed)
-        .map(|(rotated_at, _, _)| *rotated_at)
+        .map(|(_, _, path)| path.clone())
         .collect();
-    archives.retain(|(rotated_at, compressed, _)| *compressed || !finished.contains(rotated_at));
+    archives.retain(|(_, compressed, path)| {
+        let mut gz = path.as_os_str().to_os_string();
+        gz.push(ARCHIVE_GZ);
+        *compressed || !finished.contains(&PathBuf::from(gz))
+    });
     archives.sort_by_key(|(rotated_at, _, _)| *rotated_at);
     archives.into_iter().map(|(_, _, path)| path).collect()
 }
@@ -577,7 +592,7 @@ fn list_archives(path: &Path) -> Vec<Archive> {
     for (entry, rest) in archive_dir_entries(path) {
         let compressed = rest.ends_with(ARCHIVE_GZ);
         let stem = rest.strip_suffix(ARCHIVE_GZ).unwrap_or(&rest);
-        if let Some(rotated_at) = archive_time(stem) {
+        if let Some(rotated_at) = archive_entry_time(&entry, stem) {
             let archive = Archive {
                 path: entry,
                 rotated_at,
@@ -615,7 +630,7 @@ fn remove_interrupted_compressions(path: &Path) {
                 (numeric(pid) && numeric(sequence)).then_some(stem)
             })
         });
-        if stem.is_some_and(|stem| archive_time(stem).is_some()) {
+        if stem.is_some_and(|stem| archive_entry_time(&entry, stem).is_some()) {
             let _ = fs::remove_file(entry);
         }
     }
@@ -668,6 +683,7 @@ fn compress_archive(plain: &Path) -> io::Result<PathBuf> {
     staging.push(format!(".{}-{sequence}{ARCHIVE_TMP}", std::process::id()));
     let staging = PathBuf::from(staging);
     let source = File::open(plain)?;
+    let modified = source.metadata()?.modified()?;
     let staged = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -675,7 +691,11 @@ fn compress_archive(plain: &Path) -> io::Result<PathBuf> {
     let result = (|| {
         let mut encoder = flate2::write::GzEncoder::new(staged, flate2::Compression::default());
         io::copy(&mut &source, &mut encoder)?;
-        encoder.finish()?.sync_all()?;
+        let finished = encoder.finish()?;
+        // Numbered archives derive their retention age from mtime. Gzip must
+        // not renew their lifetime each time a worker recovers a plain copy.
+        finished.set_times(fs::FileTimes::new().set_modified(modified))?;
+        finished.sync_all()?;
         fs::rename(&staging, &compressed)
     })();
     if let Err(err) = result {
