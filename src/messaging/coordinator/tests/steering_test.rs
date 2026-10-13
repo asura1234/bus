@@ -570,3 +570,38 @@ fn a_claude_reply_held_for_its_own_shells_is_not_reported_stalled() {
         .unwrap();
     assert_ne!(status["requests"][0]["stage"], "stalled", "{status}");
 }
+
+/// A paste the agent keeps refusing (Bus retries every
+/// `PROMPT_NOT_SHOWN_RETRY`) never reaches the agent, so the queued stall
+/// still closes the message `QUEUED_STALL_MS` after it was sent; the retries
+/// themselves are not progress.
+#[test]
+fn a_message_whose_paste_is_refused_on_every_retry_still_expires_as_queued_stalled() {
+    use crate::messaging::model::{SubmissionOutcome, QUEUED_STALL_MS};
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let sent_at = fixture.now;
+    let message = fixture.send("look at the screenshot", false);
+    let retry_ms =
+        crate::messaging::coordinator::delivery::PROMPT_NOT_SHOWN_RETRY.as_millis() as u64;
+    let mut at = sent_at;
+    while at < sent_at + QUEUED_STALL_MS + retry_ms {
+        let mut state = fixture.worker.state.clone();
+        // Each status poll still sees the agent Idle; each attempt is refused.
+        state
+            .observe_status(fixture.agent, RuntimeStatus::Idle, at)
+            .unwrap();
+        state.begin_submission(message, "launch", 0).unwrap();
+        state
+            .record_submission(
+                message,
+                SubmissionOutcome::DefinitelyRejected {
+                    message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
+                },
+            )
+            .unwrap();
+        fixture.worker.save(state).unwrap();
+        at += retry_ms;
+    }
+    fixture.worker.expire_queued_requests(at).unwrap();
+    assert_eq!(fixture.request(message).phase, RequestPhase::Abandoned);
+}

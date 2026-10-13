@@ -517,6 +517,7 @@ fn an_ended_turn_whose_agent_is_unavailable_is_not_settling() {
 }
 
 const SHELL_HOLD_MS: u64 = 15 * 60 * 1000;
+use crate::messaging::model::QUEUED_STALL_MS;
 
 /// Holds `fixture`'s request on one shell its turn started, as Claude reports
 /// it ("Waiting on the build."), and returns the request.
@@ -625,4 +626,203 @@ fn the_shell_cap_is_the_background_shell_hold_minutes_setting() {
         fixture.reply(lead).as_deref(),
         Some("Waiting on the build.")
     );
+}
+
+/// Regression (live, 2026-10-13): a developer's MASTER message and a worker's
+/// blocker notice both went to an orchestrator whose reply was held for shells
+/// its turn started. The agent sat Idle, nothing was typed, and both messages
+/// were abandoned as `queued_stalled` two minutes later. The agent takes
+/// input while it waits, so each message is typed into the held turn and
+/// shares the reply that turn eventually gives.
+#[test]
+fn messages_to_an_agent_holding_its_reply_for_shells_are_typed_into_that_turn() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let question = fixture.send("is the first pr ready to merge?", false);
+    let blocker = fixture.send("Blocked, needs help to continue.", false);
+    fixture.deliver();
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed()[1..],
+        [
+            ("is the first pr ready to merge?".to_owned(), true),
+            ("Blocked, needs help to continue.".to_owned(), true)
+        ]
+    );
+    for id in [question, blocker] {
+        assert_eq!(fixture.request(id).group, Some(lead));
+    }
+    fixture
+        .worker
+        .expire_queued_requests(fixture.now + QUEUED_STALL_MS + 1)
+        .unwrap();
+    for id in [lead, question, blocker] {
+        assert_ne!(fixture.request(id).phase, RequestPhase::Abandoned);
+    }
+
+    // Claude runs the typed input as a turn of its own while the build runs,
+    // the second message joining it mid-turn...
+    fixture.started("turn-2", "is the first pr ready to merge?");
+    fixture.consume();
+    fixture.started("turn-2", "Blocked, needs help to continue.");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop("turn-2", "Not yet; the build runs.", &["b1"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    // ...and the build finishing wakes the turn that carries the reply.
+    fixture.started(
+        "turn-3",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop("turn-3", "Build green; pr 1 is ready.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for id in [lead, question, blocker] {
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("Build green; pr 1 is ready.")
+        );
+    }
+}
+
+/// A `--queue` message waits for the held reply instead of being typed into
+/// it, and the shell hold (bounded by its own cap) is not a queued stall.
+#[test]
+fn a_queued_message_waits_out_a_shell_hold_without_being_abandoned() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let next = fixture.send("review the next change", true);
+    fixture.deliver();
+    assert_eq!(fixture.typed().len(), 1);
+    fixture
+        .worker
+        .expire_queued_requests(fixture.now + QUEUED_STALL_MS + 1)
+        .unwrap();
+    assert_eq!(fixture.request(next).phase, RequestPhase::Queued);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+}
+
+/// E2E: a `--queue` message waited out a shell hold, then was abandoned as
+/// `queued_stalled` in the moment between the shell's wake-up turn starting
+/// (which ends the hold) and Bus seeing the agent Working. The agent's turns
+/// on the request ahead are progress, so the queue has not stalled; it is
+/// delivered once that request settles, even when its last turn started and
+/// ended between two status polls.
+#[test]
+fn a_queued_message_survives_the_wake_up_turn_that_ends_a_shell_hold() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(&mut fixture, "build it", "turn-1");
+    // The hold and the message behind it began past the stall threshold.
+    let now = fixture.now;
+    fixture.now -= QUEUED_STALL_MS + 60_000;
+    fixture.record(claude_stop("turn-1", "Waiting on the build.", &["b1"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let next = fixture.send("review the next change", true);
+    fixture.now = now;
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.deliver();
+    assert_eq!(fixture.request(next).phase, RequestPhase::Queued);
+
+    fixture.record(claude_stop("turn-2", "Build done.", &[]));
+    fixture.consume();
+    fixture.now = crate::messaging::storage::io::now_ms();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Build done."));
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed().last().unwrap(),
+        &("review the next change".into(), false)
+    );
+    assert_eq!(fixture.request(next).phase, RequestPhase::Active);
+}
+
+/// Holds `fixture`'s request on a recurring session cron, as Claude reports
+/// it: Stop lists the cron, so the reply waits with no shell hold and no cap.
+fn held_on_a_session_cron(fixture: &mut Fixture) -> RequestId {
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(fixture, "watch the deploy", "turn-1");
+    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1","last_assistant_message":"Checking every five minutes.","background_tasks":[],"session_crons":[{"cron_id":"cron-1","status":"running"}]}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    lead
+}
+
+/// A `--queue` message behind a reply held for a session cron, which has no
+/// cap, is still reported stalled once the queue has made no progress.
+#[test]
+fn a_queued_message_behind_an_uncapped_cron_hold_is_still_reported_stalled() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_session_cron(&mut fixture);
+    let next = fixture.send("review the next change", true);
+    fixture.deliver();
+    fixture.now += 24 * 60 * 60 * 1000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.worker.expire_queued_requests(fixture.now).unwrap();
+    assert_eq!(fixture.request(next).phase, RequestPhase::Abandoned);
+}
+
+/// A message typed into a turn held for shells shares the reply the shell cap
+/// delivers: the newest interim text, which answered it.
+#[test]
+fn a_message_typed_into_a_held_turn_shares_the_reply_the_shell_cap_delivers() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let question = fixture.send("is the first pr ready to merge?", false);
+    fixture.deliver();
+    fixture.started("turn-2", "is the first pr ready to merge?");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop("turn-2", "Not yet; the build runs.", &["b1"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for id in [lead, question] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("Not yet; the build runs.")
+        );
+        assert_eq!(
+            fixture.request(id).failure_reason.as_deref(),
+            Some("background_shells_timeout")
+        );
+    }
+}
+
+/// A message typed into a held turn whose start Claude never reported still
+/// settles with the group when the shell cap releases it.
+#[test]
+fn an_unreported_message_typed_into_a_held_turn_settles_at_the_shell_cap() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let question = fixture.send("is the first pr ready to merge?", false);
+    fixture.deliver();
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.request(question).phase, RequestPhase::Completed);
 }

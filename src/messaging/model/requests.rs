@@ -293,6 +293,22 @@ impl BusState {
         Ok(())
     }
 
+    /// When the agent last worked on a request it took: a turn event, or that
+    /// request settling. A turn that starts and ends between two status polls
+    /// leaves no status change, so the queue behind it counts from this too.
+    /// A refused paste returns its request to the queue and is no progress.
+    fn last_progress_ms(&self, agent: AgentId) -> u64 {
+        self.requests
+            .values()
+            .filter(|request| request.agent_id == agent && request.phase != RequestPhase::Queued)
+            .filter_map(|request| {
+                let progress = request.progress_at_ms?;
+                Some(progress.max(request.completed_at_ms.unwrap_or(0)))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Why `request` is stuck, once it has made no progress for a grace
     /// period, or `None`. A Working or Blocked agent is never stalled: a long
     /// turn is normal, and a blocked one waits on an answer, not on Bus (see
@@ -321,9 +337,26 @@ impl BusState {
         }
         match lead.phase {
             RequestPhase::Completed | RequestPhase::Abandoned => None,
+            // A reply held for shells its turn started is known work with a
+            // cap of its own; the queue behind it waits, it has not stalled.
+            // Session crons and background agents hold without a cap, so the
+            // queue behind them still stalls.
+            RequestPhase::Queued
+                if agent
+                    .current_request
+                    .and_then(|id| self.requests.get(&id))
+                    .is_some_and(|current| {
+                        current.awaiting_background && current.shell_hold.is_some()
+                    }) =>
+            {
+                None
+            }
             RequestPhase::Queued => since(
                 QUEUED_STALL_MS,
-                lead.prompt.submitted_at_ms.max(agent.status_since_ms),
+                lead.prompt
+                    .submitted_at_ms
+                    .max(agent.status_since_ms)
+                    .max(self.last_progress_ms(lead.agent_id)),
             )
             .then(|| {
                 agent
@@ -462,19 +495,25 @@ impl BusState {
     }
 
     /// The request a message may steer into: the agent's current request while
-    /// its turn visibly runs, bound by its submit hook, with no final reply yet.
+    /// its turn visibly runs, or while the idle agent holds its reply for
+    /// background work that turn started (shells, agents, session crons),
+    /// bound by its submit hook, with no final reply yet. The idle agent takes
+    /// typed input, so the message reaches it rather than waiting on the hold.
     /// Returns the first queued request and that lead, unless the queued one
     /// asked to wait (`--queue`).
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
-        if agent_state.status != RuntimeStatus::Working
-            || agent_state.dialog
+        if !matches!(
+            agent_state.status,
+            RuntimeStatus::Working | RuntimeStatus::Idle
+        ) || agent_state.dialog
             || agent_state.deletion_pending
         {
             return None;
         }
         let lead = self.requests.get(&agent_state.current_request?)?;
-        if lead.phase != RequestPhase::Active
+        if (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
+            || lead.phase != RequestPhase::Active
             || !lead.trusted_start_bound
             || lead.pending_final.is_some()
             || lead.turn_ended_at_ms.is_some()
