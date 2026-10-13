@@ -80,7 +80,8 @@ declared new dedicated test files; a missing harness connection does not authori
 Do not write tests to pad numbers either — a probe must have a meaningful failure mode and turn red when the implementation is wrong; asserting the harness's own output
 or a just-configured mock is not proof.
 
-**Review added tests for tautologies** under code-review-guide "Never pad coverage with a tautology": would this test fail if the line it covers were wrong? Flag coverage padding as a source-based test-quality finding, citing the test and its ineffective assertion; no red production-behavior probe is required for that finding. A test must assert observable behavior with an independent judging oracle, not merely execute lines.
+Review added tests under [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-guide.md#verification-boundary-prove-
+behavior-suspicions-with-tests-do-not-run-quality-gates); dimension 9 owns the finding and severity mapping.
 
 **Probe lifecycle**:
 

@@ -112,7 +112,10 @@ use `just ci` for the full sequence. Do not run two rounds in the same checkout 
 
 ## Coverage-failure remediation
 
-**Never pad coverage with a tautology.** A test added to meet a coverage threshold must assert observable behavior that a plausible bug would break: **would this test fail if the line it covers were wrong?** A tautological test has assertions that cannot fail for any implementation of the behavior under test, so it only executes lines. Asserting a value the test itself just set, recomputing the expected value with the same code under test (asserting production with production), mirroring the implementation step by step, `assert!(true)`, accepting whatever the code currently outputs as a snapshot without an independent judging oracle, or calling a function purely to touch lines does not count. Asserting only that a call did not panic or returned `Ok` does not count when the behavior has observable output. If coverage cannot be met honestly, write a real behavioral test, delete dead or unreachable code through `delete-dead-code`, or report the coverage gap with a reason through the existing exemption mechanism if one applies; never pad coverage.
+Apply [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-
+guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates) when
+remediating coverage failures. That section owns the ban and the honest remediation alternatives; a
+reported gap leaves the gate failed.
 
 ## Parallelism and remediation
 

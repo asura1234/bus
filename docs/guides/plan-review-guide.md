@@ -247,7 +247,8 @@ Common forms of ambiguity:
 
 #### Unit test coverage
 
-Never pad coverage with a tautology. Planned tests must assert observable behavior that a plausible bug would break, using an independent judging oracle: would this test fail if the line it covers were wrong? Follow code-review-guide "Never pad coverage with a tautology"; if coverage cannot be met honestly, write a real behavioral test, delete dead or unreachable code through `delete-dead-code`, or report the gap with a reason through the existing exemption mechanism if one applies.
+Apply [code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-
+not-run-quality-gates) when judging planned tests.
 
 Plan review cares about **behavior scenario coverage**, not line-coverage numbers. Coverage thresholds are checked by repository-level gates themselves (Bus has no per-file coverage gate; its gates are `just lint` / `just test`); the reviewer should not turn plan review into a textual check of "did it write 95%/100% coverage". The test plan in the plan must prove: the main usage paths, alternative paths, boundary conditions and failure paths of the new behavior all have explicit tests.
 

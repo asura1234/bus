@@ -322,7 +322,11 @@ This only takes problems that satisfy goal-relevance admission, genuinely affect
 must explain why none of the existing dimensions applies; if it is merely a naming preference, a style nit, plan completeness, a quality-gate responsibility, or an out-of-goal code observation
 outside dimension 6, discard it outright; it cannot be stuffed into "Other".
 
+Test quality belongs here when added tests violate "Never pad coverage with a tautology" below. This is a source-based judgment of assertions,
+not the gate's numerical coverage check, and is therefore admitted despite the quality-gate exclusion above. It is a SUBSTANTIVE finding.
+
 Severity:
+- an added tautological test with no meaningful behavioral protection → **needs-refinement**
 - a substantive problem locally fixable within the current diff → **needs-refinement**
 - a fundamental problem with first-party evidence that it cannot be locally salvaged → **abandon**
 
@@ -375,11 +379,21 @@ In these three dimensions, **writing a test is the reviewer's default action, no
   suspicion and directly related existing tests.
 - Read-only git / grep / file-read queries — they remain first-party sources for the review.
 
-**Never pad coverage with a tautology.** A test added to meet a coverage threshold must assert observable behavior that a plausible bug would break: **would this test fail if the line it covers were wrong?** A tautological test has assertions that cannot fail for any implementation of the behavior under test, so it only executes lines. Asserting a value the test itself just set, recomputing the expected value with the same code under test (asserting production with production), mirroring the implementation step by step, `assert!(true)`, accepting whatever the code currently outputs as a snapshot without an independent judging oracle, or calling a function purely to touch lines does not count. Asserting only that a call did not panic or returned `Ok` does not count when the behavior has observable output. If coverage cannot be met honestly, write a real behavioral test, delete dead or unreachable code through `delete-dead-code`, or report the coverage gap with a reason through the existing exemption mechanism if one applies; never pad coverage.
+**Never pad coverage with a tautology.** A test added to meet a coverage threshold must assert observable behavior that a plausible bug would break:
+**would this test fail if the line it covers were wrong?** A tautological test has assertions that cannot fail for any implementation of the behavior
+under test, so it only executes lines. Asserting a value the test itself just set, recomputing the expected value with the same code under test
+(asserting production with production), mirroring the implementation step by step, `assert!(true)`, accepting whatever the code currently outputs as a
+snapshot without an independent judging oracle, or calling a function purely to touch lines does not count. Asserting the harness's own output, a
+just-configured mock, or the same behavior under a different wrapper does not count as proof. Asserting only that a call did not panic or returned
+`Ok` does not count when the behavior has observable output. If coverage cannot be met honestly, write a real behavioral test, delete dead or
+unreachable code through `delete-dead-code`, or STOP and report the coverage gap with a reason to the developer, using the existing exemption
+mechanism if there is one. Bus has no coverage exemption mechanism: reporting a gap leaves the gate failed and does not authorize changing the floor
+or exclusions. Never pad coverage.
 
-**Review added tests against this rule.** Flag a tautology as a finding with the test path and the assertion that cannot detect a plausible bug; a green run or increased line coverage is not evidence of behavioral protection. This is a source-based test-quality finding, not a claim that production behavior is wrong, so it does not require a red production-behavior probe. Apply goal-relevance admission and the current round boundary as usual.
-
-**But do not write tests to pad the count.** A probe must have a meaningful failure mode: it should turn red if the implementation is wrong. Asserting the harness's own output, asserting that a mock you just configured was called, or re-asserting the same behavior under a different wrapper does not count as proof.
+**Review added tests against this rule.** Flag a tautology under dimension 9 with the test path and the assertion that cannot detect a plausible bug;
+a green run or increased line coverage is not evidence of behavioral protection. This is a source-based test-quality finding, not a claim that
+production behavior is wrong, so it does not require a red production-behavior probe. Apply goal-relevance admission and the current round boundary as
+usual.
 
 ### Do not
 
