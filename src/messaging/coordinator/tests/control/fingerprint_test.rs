@@ -86,3 +86,31 @@ fn spent_fingerprints_are_forgotten_once_they_expire() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn version_one_spent_fingerprint_remains_single_use_after_upgrade() {
+    let (mut worker, agent, dir) = launched_worker();
+    let fresh = fingerprint(&worker, agent, now_ms());
+    let mut state = serde_json::to_value(&worker.state).unwrap();
+    let fields = state.as_object_mut().unwrap();
+    fields.remove("spent_dialog_answers");
+    fields.remove("consumed_callbacks");
+    fields.insert(
+        "consumed_dialog_fingerprints".into(),
+        serde_json::json!([fresh]),
+    );
+    fields.insert("consumed_callback_ids".into(), serde_json::json!([]));
+    std::fs::write(
+        dir.join("state.json"),
+        serde_json::to_vec(&serde_json::json!({"version": 1, "state": state})).unwrap(),
+    )
+    .unwrap();
+    worker.state = worker.store.load().unwrap().unwrap();
+
+    // The original observation is still fresh and has the same live launch;
+    // retrying an already answered dialog must stop before any native keys.
+    let error = worker.choose_dialog_option(agent, 1, &fresh).unwrap_err();
+    assert!(error.contains("already used"), "{error}");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

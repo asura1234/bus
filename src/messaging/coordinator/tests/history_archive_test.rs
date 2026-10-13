@@ -154,17 +154,23 @@ fn a_crash_between_the_archive_and_the_save_recovers_each_request_once() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Moves the archived requests' send time `days` back, on disk only.
+/// Moves the archived requests' send and reply times `days` back, on disk only.
 fn age_in_history(dir: &Path, requests: &[RequestId], days: u64) {
     let lines: Vec<String> = history_lines(dir)
         .into_iter()
         .map(|mut line| {
             let id = line["request"]["id"].as_u64();
             if id.is_some_and(|id| requests.iter().any(|request| request.0 == id)) {
-                let sent = line["request"]["prompt"]["submitted_at_ms"]
-                    .as_u64()
-                    .unwrap();
-                line["request"]["prompt"]["submitted_at_ms"] = json!(sent - days * DAY_MS);
+                for path in [["prompt", "submitted_at_ms"], ["completed_at_ms", ""]] {
+                    let request = &mut line["request"];
+                    let time = if path[1].is_empty() {
+                        &mut request[path[0]]
+                    } else {
+                        &mut request[path[0]][path[1]]
+                    };
+                    let at = time.as_u64().unwrap();
+                    *time = json!(at - days * DAY_MS);
+                }
             }
             line.to_string()
         })
@@ -262,6 +268,74 @@ fn a_snapshot_shares_the_archive_instead_of_copying_it() {
         snapshot.state.history(),
         worker.state.history()
     ));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn callback_pruning_keeps_ids_that_can_still_match_an_open_request() {
+    let (worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let old = io::now_ms() - HISTORY_RETENTION_MS - DAY_MS;
+    let mut state = worker.state.clone();
+    state.set_draft_text(room, "long task").unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let request = state.submit_draft(room, old).unwrap()[0];
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn".into()),
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Working, old)
+        .unwrap();
+    let callback = |id: &str, sequence, at, kind| ProviderCallback {
+        callback_id: id.into(),
+        sequence,
+        occurred_at_ms: at,
+        agent_id: agent,
+        launch_id: "launch".into(),
+        provider_session_id: Some("session".into()),
+        provider_turn_id: Some("turn".into()),
+        provider_prompt_id: None,
+        prompt_payload: Some("long task".into()),
+        kind,
+    };
+    assert_eq!(
+        state.accept_callback(callback("start", 1, old, CallbackEventKind::PromptStarted)),
+        CallbackDisposition::AcceptedBinding
+    );
+    let background = callback("background", 2, old, CallbackEventKind::BackgroundPending);
+    assert_eq!(
+        state.accept_callback(background.clone()),
+        CallbackDisposition::AcceptedProgress
+    );
+    assert_eq!(
+        state.accept_callback(callback(
+            "final",
+            3,
+            io::now_ms(),
+            CallbackEventKind::Final {
+                text: "completed after background work".into()
+            }
+        )),
+        CallbackDisposition::AcceptedPendingSettlement
+    );
+    assert!(state.request(request).unwrap().pending_final.is_some());
+    state.archive(io::now_ms());
+    assert_eq!(
+        state.accept_callback(background),
+        CallbackDisposition::Rejected(CallbackRejection::DuplicateCallback),
+        "an old background callback still matches the open request and must remain single-use"
+    );
+    assert!(
+        state.request(request).unwrap().pending_final.is_some(),
+        "replaying an old background event must not erase a captured final reply"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

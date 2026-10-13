@@ -447,3 +447,178 @@ fn state_is_written_compact_and_a_pretty_file_still_loads() {
     );
     fs::remove_dir_all(dir).expect("cleanup");
 }
+
+fn settled_archive_fixture() -> (
+    PathBuf,
+    JsonStore,
+    BusState,
+    crate::messaging::model::RequestId,
+) {
+    let dir = temp_dir("archive-recovery");
+    let store = JsonStore::new(dir.join("state.json"));
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    state
+        .set_draft_text(room, "retain this settled answer")
+        .unwrap();
+    let now = super::super::io::now_ms();
+    let request = state.submit_draft(room, now - 20 * 60 * 1000).unwrap()[0];
+    state.finish_for_test(request, "durable answer", now - 20 * 60 * 1000);
+    store.save(&state).unwrap();
+    (dir, store, state, request)
+}
+
+#[test]
+fn history_append_after_failed_torn_tail_compaction_remains_reloadable() {
+    let (dir, store, _, request) = settled_archive_fixture();
+    // A process died while appending its first request line. state.json still
+    // holds the settled request, so recovering this tail must be safe.
+    fs::write(store.history_path(), b"{\"request\":{\"id\":").unwrap();
+    drop(store);
+    let reopened = JsonStore::new(dir.join("state.json"));
+    let mut state = reopened.load().unwrap().unwrap();
+    reopened.fail_once_at(SaveStage::Replace);
+    assert!(reopened.compact_history().is_err());
+    // Worker::compact_history logs and continues after this failure. Its next
+    // archive pass uses this same store to append the still-live request.
+    assert!(state.archive(super::super::io::now_ms()));
+    reopened.save(&state).unwrap();
+    let recovered = JsonStore::new(dir.join("state.json")).load();
+    assert!(
+        recovered.is_ok(),
+        "a retried archive must remain readable: {recovered:?}"
+    );
+    assert_eq!(
+        recovered
+            .unwrap()
+            .unwrap()
+            .request(request)
+            .unwrap()
+            .pending_final
+            .as_ref()
+            .unwrap()
+            .text,
+        "durable answer"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn retrying_a_partial_history_append_preserves_the_settled_answer() {
+    let (dir, store, mut state, request) = settled_archive_fixture();
+    assert!(state.archive(super::super::io::now_ms()));
+    let bytes = history_lines(state.history().items()).unwrap();
+    // write_all may write a prefix and then return ENOSPC; its retry must
+    // repair that prefix before it can remove the request from state.json.
+    fs::write(store.history_path(), &bytes[..bytes.len() / 2]).unwrap();
+    store.save(&state).unwrap();
+    let recovered = JsonStore::new(dir.join("state.json")).load();
+    assert!(
+        recovered.is_ok(),
+        "a partial append retry must preserve readable history: {recovered:?}"
+    );
+    assert_eq!(
+        recovered
+            .unwrap()
+            .unwrap()
+            .requests()
+            .filter(|seen| seen.id == request)
+            .count(),
+        1
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_save_failures_at_every_atomic_stage_preserve_one_settled_answer() {
+    for stage in [
+        SaveStage::TempCreate,
+        SaveStage::TempWrite,
+        SaveStage::TempSync,
+        SaveStage::Replace,
+        SaveStage::ParentSync,
+    ] {
+        let (dir, store, mut state, request) = settled_archive_fixture();
+        assert!(state.archive(super::super::io::now_ms()));
+        store.fail_once_at(stage);
+        assert!(store.save(&state).is_err(), "{stage:?}");
+        let reopened = JsonStore::new(dir.join("state.json"));
+        let recovered = reopened.load().unwrap().unwrap();
+        assert_eq!(
+            recovered
+                .requests()
+                .filter(|seen| seen.id == request)
+                .count(),
+            1,
+            "{stage:?}"
+        );
+        reopened.compact_history().unwrap();
+        assert_eq!(
+            JsonStore::new(dir.join("state.json"))
+                .load()
+                .unwrap()
+                .unwrap()
+                .requests()
+                .filter(|seen| seen.id == request)
+                .count(),
+            1,
+            "after prune: {stage:?}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn version_one_consumed_callback_remains_rejected_after_upgrade() {
+    let dir = temp_dir("legacy-callback");
+    let store = JsonStore::new(dir.join("state.json"));
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    let agent = state
+        .agents()
+        .find(|agent| agent.room_id == room)
+        .unwrap()
+        .id;
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: None,
+                pane_id: None,
+                session_id: None,
+            },
+        )
+        .unwrap();
+    state.set_draft_text(room, "task").unwrap();
+    let now = super::super::io::now_ms();
+    let request = state.submit_draft(room, now).unwrap()[0];
+    state.begin_submission(request, "launch", 0).unwrap();
+    let callback = ProviderCallback::final_event(
+        "spent", 1, agent, "launch", "session", "turn", "task", "done",
+    );
+    assert_eq!(
+        state.accept_callback(callback.clone()),
+        CallbackDisposition::Rejected(CallbackRejection::UnboundFinal)
+    );
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("consumed_callbacks");
+    legacy["consumed_callback_ids"] = serde_json::json!(["spent"]);
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("spent_dialog_answers");
+    legacy["consumed_dialog_fingerprints"] = serde_json::json!([]);
+    fs::write(
+        dir.join("state.json"),
+        serde_json::to_vec(&serde_json::json!({"version":1,"state":legacy})).unwrap(),
+    )
+    .unwrap();
+    let mut loaded = store.load().unwrap().unwrap();
+    assert_eq!(
+        loaded.accept_callback(callback),
+        CallbackDisposition::Rejected(CallbackRejection::DuplicateCallback),
+        "v1 callback replay protection must survive forward migration"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
