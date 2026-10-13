@@ -101,6 +101,12 @@ fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
         }
         std::thread::sleep(Duration::from_millis(60));
     }
+    // The bug this guards: Enter waited behind full `state.json` saves (170-270 ms
+    // each for this session in a debug build). Assert that no full save sits
+    // between Enter and the send rather than timing it, since wall time here also
+    // counts the journal fsync and scheduling, which a busy machine stretches.
+    let state_file = dir.join("state.json");
+    let saved_before = state_file_version(&state_file);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.send_intent.is_some() || !ui.pending.is_empty());
     let prompts_before = seed.requests().count();
@@ -111,13 +117,20 @@ fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
             && ui.locals[&master].text.text.is_empty()
             && ui.snapshot.state.requests().count() > prompts_before
     });
+    let saved_after = state_file_version(&state_file);
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     poller.join().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let sent = sent.expect("Enter with no further input never sent the message");
     eprintln!("enter -> sent: {sent:?}");
-    assert!(
-        sent < Duration::from_millis(150),
-        "Enter took {sent:?} to send; the draft-save round trips must not hold it"
+    assert_eq!(
+        saved_after, saved_before,
+        "Enter waited on a full state.json save before the send landed ({sent:?})"
     );
+}
+
+/// When and how large `state.json` was last written; a full save replaces it.
+fn state_file_version(path: &std::path::Path) -> (std::time::SystemTime, u64) {
+    let metadata = std::fs::metadata(path).unwrap();
+    (metadata.modified().unwrap(), metadata.len())
 }
