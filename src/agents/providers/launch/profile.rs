@@ -248,6 +248,17 @@ pub(crate) fn worker_claude_settings(
     .map_err(|e| e.to_string())
 }
 
+pub(crate) fn service_args() -> [String; 6] {
+    [
+        "--permission-mode".into(),
+        "dontAsk".into(),
+        "--tools".into(),
+        "Read,Glob,Grep,Bash".into(),
+        "--setting-sources".into(),
+        String::new(),
+    ]
+}
+
 pub(crate) fn install(spec: &LaunchSpec, launch: &mut PreparedLaunch) -> Result<(), String> {
     if spec.permission_handler {
         if spec.provider != ProviderKind::ClaudeCode {
@@ -255,14 +266,7 @@ pub(crate) fn install(spec: &LaunchSpec, launch: &mut PreparedLaunch) -> Result<
         }
         service_settings(&spec.hooks)?;
         service_env(&spec.hooks.binary, &mut launch.env)?;
-        launch.args.extend([
-            "--permission-mode".into(),
-            "dontAsk".into(),
-            "--tools".into(),
-            "Read,Glob,Grep,Bash".into(),
-            "--setting-sources".into(),
-            String::new(),
-        ]);
+        launch.args.extend(service_args());
         launch.profile = CLAUDE_SERVICE.into();
         return Ok(());
     }

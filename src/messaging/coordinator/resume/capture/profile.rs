@@ -63,14 +63,7 @@ pub(super) fn extras(
     if agent.permission_handler {
         crate::agents::providers::launch::profile::service_settings(hooks)?;
         crate::agents::providers::launch::profile::service_env(&context.binary, &mut env)?;
-        args.extend([
-            "--permission-mode".into(),
-            "dontAsk".into(),
-            "--tools".into(),
-            "Read,Glob,Grep,Bash".into(),
-            "--setting-sources".into(),
-            String::new(),
-        ]);
+        args.extend(crate::agents::providers::launch::profile::service_args());
         env.insert("BUS_PERMISSION_HANDLER_ID".into(), agent.id.0.to_string());
         let text = super::super::super::permissions::handler_prompt_with_binary(
             agent.room_id,
@@ -99,10 +92,18 @@ pub(super) fn extras(
         }
         if agent.provider == crate::messaging::model::Provider::Codex {
             for grant in &agent.allowed_roots {
-                let canonical = grant
-                    .path
-                    .canonicalize()
-                    .map_err(|_| "Granted root unavailable on resume")?;
+                let canonical = match grant.path.canonicalize() {
+                    Ok(path) => path,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        tracing::warn!(
+                            event = "bus.resume.granted_root_missing",
+                            agent_id = agent.id.0,
+                            "Skipping unavailable shared root without adding write authority"
+                        );
+                        continue;
+                    }
+                    Err(_) => return Err("Granted root unavailable on resume".into()),
+                };
                 if canonical != grant.path
                     || !canonical.is_dir()
                     || crate::agents::providers::launch::profile::protected_paths(hooks)
