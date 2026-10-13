@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "logging_lock_test.rs"]
 mod lock_tests;
+#[path = "logging_recovery_test.rs"]
+mod recovery_tests;
 
 fn temp_log_path(name: &str) -> PathBuf {
     let unique = format!(
@@ -35,7 +37,7 @@ fn rotate_files_shifts_existing_generations() {
         retention: Retention::Generations(2),
         file: None,
         current_size: 0,
-        disabled: false,
+        retry_at: None,
         archive_signal: None,
     };
     state.rotate_files().unwrap();
@@ -312,7 +314,7 @@ fn archives(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name != "bus.log")
+        .filter(|name| name != "bus.log" && name != ".bus.log.archive-mode")
         .collect();
     names.sort();
     names
@@ -496,7 +498,7 @@ fn archive_rotation_enforces_cap_before_background_maintenance() {
         retention: Retention::Archive(policy),
         file: None,
         current_size: 0,
-        disabled: false,
+        retry_at: None,
         archive_signal: Some(signal),
     };
     for _ in 0..4 {

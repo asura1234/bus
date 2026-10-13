@@ -2,7 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::EnvFilter;
@@ -24,6 +24,7 @@ pub(crate) const DEV_FILTER: &str =
 
 /// Process policy supplied by startup composition, including inherited hook policy.
 /// Logging itself does not read CLI, messaging or environment configuration.
+#[derive(Clone)]
 pub(crate) struct LoggingOptions {
     pub(crate) filter: EnvFilter,
     pub(crate) max_bytes: u64,
@@ -101,17 +102,34 @@ pub(crate) mod test_capture {
     }
 }
 
-pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str, options: &LoggingOptions) {
-    let Ok(make_writer) = RotatingFileMakeWriter::new(dir, file_name, options) else {
-        return;
+pub(crate) fn init_file_logging_at(
+    dir: PathBuf,
+    file_name: &str,
+    options: &LoggingOptions,
+) -> LoggingOptions {
+    let mut options = options.clone();
+    let Ok(make_writer) = RotatingFileMakeWriter::new(dir, file_name, &options) else {
+        return options;
     };
 
-    let _ = tracing_subscriber::fmt()
+    let policy = make_writer
+        .state
+        .lock()
+        .ok()
+        .map(|s| (s.max_bytes, s.retention));
+    let initialized = tracing_subscriber::fmt()
         .with_env_filter(options.filter.clone())
         .with_writer(make_writer)
         .with_ansi(false)
         .with_target(true)
         .try_init();
+    if initialized.is_ok() {
+        if let Some((max_bytes, retention)) = policy {
+            options.max_bytes = max_bytes;
+            options.retention = retention;
+        }
+    }
+    options
 }
 
 pub(crate) use super::log_events::{
@@ -173,13 +191,14 @@ impl Write for RotatingFileGuard {
         let Ok(mut state) = self.state.lock() else {
             return Ok(buf.len());
         };
-        if state.disabled {
+        if state.retry_at.is_some_and(|at| Instant::now() < at) {
             return Ok(buf.len());
         }
+        state.retry_at = None;
         // Held across check, rotation and append so no other process sharing
         // this log renames it or appends to it in between.
         let Ok(_shared) = state.lock_for_append(buf.len() as u64, SharedLogLock(None)) else {
-            state.disabled = true;
+            state.retry_after_failure();
             return Ok(buf.len());
         };
         if let Some(file) = state.file.as_mut() {
@@ -189,7 +208,7 @@ impl Write for RotatingFileGuard {
                     Ok(written)
                 }
                 Err(_) => {
-                    state.disabled = true;
+                    state.retry_after_failure();
                     Ok(buf.len())
                 }
             }
@@ -202,14 +221,14 @@ impl Write for RotatingFileGuard {
         let Ok(mut state) = self.state.lock() else {
             return Ok(());
         };
-        if state.disabled {
+        if state.retry_at.is_some() {
             return Ok(());
         }
         match state.file.as_mut() {
             Some(file) => match file.flush() {
                 Ok(()) => Ok(()),
                 Err(_) => {
-                    state.disabled = true;
+                    state.retry_after_failure();
                     Ok(())
                 }
             },
@@ -225,7 +244,7 @@ pub(crate) struct RotatingFileState {
     retention: Retention,
     file: Option<File>,
     current_size: u64,
-    disabled: bool,
+    retry_at: Option<Instant>,
     /// Wakes the archive worker; it also runs once at startup for leftovers.
     archive_signal: Option<mpsc::Sender<()>>,
 }
@@ -274,14 +293,48 @@ impl RotatingFileState {
             retention,
             file: None,
             current_size: 0,
-            disabled: false,
+            retry_at: None,
             archive_signal: None,
         };
-        if let Retention::Archive(policy) = retention {
-            state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
+        // An archive stream keeps its policy across non-dev client attaches.
+        // The empty marker is atomic and never contains partially written settings.
+        if matches!(retention, Retention::Archive(_)) {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(state.archive_mode_path())?;
+        }
+        state.inherit_archive_mode();
+        if let Retention::Archive(policy) = state.retention {
+            if state.archive_signal.is_none() {
+                state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
+            }
         }
         state.open_current_file()?;
         Ok(state)
+    }
+
+    fn retry_after_failure(&mut self) {
+        // Close even an unlinked descriptor. Retry lazily on a later record;
+        // failed logging never stalls the UI or spins on a full disk.
+        self.file.take();
+        self.retry_at = Some(Instant::now() + Duration::from_secs(1));
+    }
+
+    fn archive_mode_path(&self) -> PathBuf {
+        let mut name = std::ffi::OsString::from(".");
+        name.push(self.path.file_name().unwrap_or_default());
+        name.push(".archive-mode");
+        self.path.with_file_name(name)
+    }
+
+    fn inherit_archive_mode(&mut self) {
+        if matches!(self.retention, Retention::Generations(_)) && self.archive_mode_path().is_file()
+        {
+            self.retention = Retention::Archive(DEV_LOG_ARCHIVE);
+            self.max_bytes = DEV_MAX_LOG_BYTES;
+            self.archive_signal = Some(spawn_archive_worker(self.path.clone(), DEV_LOG_ARCHIVE));
+        }
     }
 
     /// Appends one record whole, rotating first when it would cross the limit.
@@ -331,15 +384,13 @@ impl RotatingFileState {
         incoming_len: u64,
         mut held: SharedLogLock,
     ) -> io::Result<SharedLogLock> {
-        if !matches!(self.retention, Retention::Archive(_)) {
-            self.rotate_if_needed(incoming_len)?;
-            return Ok(held);
-        }
         loop {
             if !held.covers(self.file.as_ref()) || self.rotated_by_another_writer() {
                 drop(held);
                 held = self.lock_live_file()?;
             }
+            // A dev writer can join after this short-retention writer opened.
+            self.inherit_archive_mode();
             if self.current_size == 0
                 || self.current_size.saturating_add(incoming_len) <= self.max_bytes
             {
@@ -350,6 +401,7 @@ impl RotatingFileState {
         }
     }
 
+    #[cfg(test)]
     fn rotate_if_needed(&mut self, incoming_len: u64) -> io::Result<()> {
         if self.file.is_none() || self.rotated_by_another_writer() {
             self.open_current_file()?;
@@ -369,7 +421,7 @@ impl RotatingFileState {
     #[cfg(unix)]
     fn rotated_by_another_writer(&self) -> bool {
         use std::os::unix::fs::MetadataExt;
-        let (Retention::Archive(_), Some(file)) = (self.retention, self.file.as_ref()) else {
+        let Some(file) = self.file.as_ref() else {
             return false;
         };
         let (Ok(open), path) = (file.metadata(), fs::metadata(&self.path)) else {
