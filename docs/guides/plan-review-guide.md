@@ -247,6 +247,8 @@ Common forms of ambiguity:
 
 #### Unit test coverage
 
+Apply [code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates) when judging planned tests.
+
 Plan review cares about **behavior scenario coverage**, not line-coverage numbers. Coverage thresholds are checked by repository-level gates themselves (Bus has no per-file coverage gate; its gates are `just lint` / `just test`); the reviewer should not turn plan review into a textual check of "did it write 95%/100% coverage". The test plan in the plan must prove: the main usage paths, alternative paths, boundary conditions and failure paths of the new behavior all have explicit tests.
 
 - Every new public method of the business logic layer or state layer must have at least one corresponding unit test case in the test plan

@@ -110,6 +110,12 @@ which must have the requirements installed. Missing mandatory tools fail with se
 `just coverage` consumes the immediately preceding `just unit-test` and `just integration-test`;
 use `just ci` for the full sequence. Do not run two rounds in the same checkout concurrently.
 
+## Coverage-failure remediation
+
+Apply [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates) when
+remediating coverage failures. That section owns the ban and the honest remediation alternatives; a
+reported gap leaves the gate failed.
+
 ## Parallelism and remediation
 
 - The four checks declare exclusive execution and run in lint → unit → integration → coverage

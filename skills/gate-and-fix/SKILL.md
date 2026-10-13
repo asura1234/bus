@@ -60,6 +60,11 @@ LOOP:
 
   Group all failed gate evidence by writable owner.
 
+  For a coverage failure, read and apply code-review-guide "Never pad coverage with a tautology"
+  through guide.md "Coverage-failure remediation" before choosing a repair.
+  IF the coverage gap is reported rather than repaired
+    STOP with the FAIL artifact and the reason; reporting does not waive the gate.
+
   **How the remediation is orchestrated is main's own decision**: fix sequentially itself,
   dispatch subagents grouped by owner, or mix the two. The basis is how large the failure surface
   is, whether the owners are genuinely disjoint, and how much context main has left: one or two
