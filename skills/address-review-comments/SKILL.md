@@ -140,7 +140,9 @@ For each claim, main:
    an open product/architecture choice, change the ruling to `requires-developer-decision` instead of forcing the reviewer's approach.
 
 A PR's `SUPPORTED + out-of-goal repair request` is fixed as REJECT(scope-change) and must not move to APPLY-SAFE, strengthen-with-test, or FLAG because of a red test, multiple lanes, a prior APPLY,
-or Good Samaritan permission; the truth conclusion is kept as is.
+or Good Samaritan permission; the truth conclusion is kept as is. Its line quotes the locked goal it falls outside and is marked `deferred`
+(deferred list or follow-up PR, review-response-guide "scope-change"). A FLAG whose fix adds a new cross-process or cross-repo mechanism
+offers a follow-up PR as its default option ([Own the PR's scope](../../orchestration/rules.md)).
 
 Write `<run-root>/triage.md`. The first field is fixed as `**模式**：plan|pr`. Free-form input adds one line `**闸 (d)**：free-form 输入不可判`.
 Four categories in sections; each item contains source, location, a one-sentence root cause, a **first-party citation**, and the action; one root cause is adjudicated only once. Every disposition in the ledger
