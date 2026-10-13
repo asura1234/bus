@@ -22,17 +22,19 @@ then the orchestrator `qa-orch` with APP-04's UI recipe (Claude Code, scratch PW
 `Orchestrates room` = `qa-work`). Wait until both fake terminals are ready and
 `bus state` shows both agents idle.
 
-Step 1 stages a permission dialog on the worker's screen: the fake Claude echoes
-its prompt, and an echoed Claude Bash permission prompt is what Bus's dialog
-detection reads as a blocked worker (`bash_permission_prompt` in
-`src/agents/manifest/bundled/claude.toml`). The fixture is that screen text, sent
-through the UI. The orchestrator's reply to that Blocked message stands in for a
+Step 1 stages a permission dialog on the worker's screen. It pastes a Claude Bash
+permission prompt into the worker's own terminal and does not press Enter, so the
+text stays in the fake Claude's prompt box, and Bus's dialog detection reads it as
+a blocked worker (`bash_permission_prompt` in
+`src/agents/manifest/bundled/claude.toml`). Do not send the text as a room message:
+Bus pastes it and presses Enter, and whether its dialog poll sees the text before
+the Enter is a race. The orchestrator's reply to that Blocked message stands in for a
 routine dialog approval. Step 8's progress report is an agent-authored post through
 the scratch CLI, as the fixture rule allows: it is what `send --to human` does
 when an orchestrator follows its prompt.
 
-1. Click `# qa-work`, P(`qa-worker`), paste this text into the composer and press
-   Enter:
+1. Click `# qa-work`, click the `qa-worker` agent (its fake terminal opens) and
+   paste this text into it, without pressing Enter:
    ```
    ORCH01 stage Bash(echo hi)
    Do you want to proceed?
@@ -40,7 +42,8 @@ when an orchestrator follows its prompt.
      2. No
    Esc to cancel
    ```
-   → `qa-worker` shows `Blocked` in the sidebar, and the qa-work history shows a
+   Wait until `bus state` shows `qa-worker` blocked, then press F6 → `qa-worker`
+   shows `Blocked` in the sidebar, and the qa-work history shows a
    `qa-worker → qa-orch` message `qa-worker (agent N). Blocked, needs help to continue.`
 2. Wait until `bus state` shows `qa-orch` idle → in qa-work, `qa-orch`'s reply
    `fake reply: qa-worker (agent N). Blocked, needs help to continue. …` shows
