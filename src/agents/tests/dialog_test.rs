@@ -749,3 +749,23 @@ fn claude_checkbox_toggle_preserves_dialog_identity_but_invalidates_digest() {
     assert_eq!(unchecked.id(), checked.id());
     assert_ne!(unchecked.digest(), checked.digest());
 }
+
+#[test]
+fn claude_focused_checkbox_custom_field_is_an_empty_text_question_with_stable_identity() {
+    let focused = CLAUDE_MULTI_SELECT
+        .replace("❯ 1.", "  1.")
+        .replace("  5. [ ] Type something", "❯ 5. [ ] Type something")
+        .replace(
+            "Enter to toggle · Tab/Arrow keys to navigate · Esc to cancel",
+            "Enter to toggle · Tab/Arrow keys to navigate\nctrl+g to edit in Vim · Esc to cancel",
+        );
+    let dialog = parse(&focused).unwrap();
+    assert_eq!(dialog.kind, DialogKind::Question);
+    assert!(dialog.options.is_empty());
+    assert_eq!(dialog.text, "Which caches may be removed?");
+    assert_eq!(dialog.input.as_ref().unwrap().value, "");
+    let typed = parse(&focused.replace("[ ] Type something", "[ ] MY_TOKEN")).unwrap();
+    assert_eq!(typed.input.as_ref().unwrap().value, "MY_TOKEN");
+    assert_eq!(dialog.id(), typed.id());
+    assert_ne!(dialog.digest(), typed.digest());
+}
