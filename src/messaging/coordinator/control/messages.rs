@@ -256,10 +256,27 @@ impl Worker {
         message: PromptId,
         now_ms: u64,
     ) -> Result<Value, String> {
+        self.message_delivery_at(message, now_ms, false)
+    }
+
+    pub(in crate::messaging::coordinator) fn room_message_at(
+        &self,
+        message: PromptId,
+        now_ms: u64,
+    ) -> Result<Value, String> {
+        self.message_delivery_at(message, now_ms, true)
+    }
+
+    fn message_delivery_at(
+        &self,
+        message: PromptId,
+        now_ms: u64,
+        visible_only: bool,
+    ) -> Result<Value, String> {
         let mut requests = self
             .state
             .requests()
-            .filter(|r| r.prompt.id == message)
+            .filter(|r| r.prompt.id == message && (!visible_only || self.state.request_visible(r)))
             .collect::<Vec<_>>();
         if requests.is_empty() {
             return Err("Unknown message ID".into());

@@ -213,6 +213,29 @@ impl BusState {
         }
     }
 
+    /// Default room views omit service protocol, while ID reads and settlement
+    /// continue to use the authoritative request collection.
+    pub(crate) fn request_visible(&self, request: &Request) -> bool {
+        !request.delivery_only() && self.recipient_visible(request.agent_id)
+    }
+
+    pub(crate) fn recipient_visible(&self, id: AgentId) -> bool {
+        self.agent(id).is_none_or(|agent| !agent.permission_handler)
+    }
+
+    pub(crate) fn prompt_visible(&self, prompt: &Prompt) -> bool {
+        prompt.recipient_ids.is_empty()
+            || prompt
+                .recipient_ids
+                .iter()
+                .any(|id| self.recipient_visible(*id))
+    }
+
+    pub(crate) fn room_requests(&self, room: RoomId) -> impl Iterator<Item = &Request> {
+        self.requests()
+            .filter(move |request| request.room_id == room && self.request_visible(request))
+    }
+
     /// A room's archived then live notices, in id order.
     pub(crate) fn notices(&self, room: RoomId) -> impl DoubleEndedIterator<Item = &Prompt> {
         self.history.room_notices(room).chain(

@@ -72,12 +72,17 @@ impl Worker {
                 self.expire_queued_requests(now)?;
                 let messages = self
                     .state
-                    .requests()
-                    .filter(|r| r.room_id == room && !r.delivery_only())
+                    .room_requests(room)
                     .map(|r| (r.prompt.id, &r.prompt))
+                    .chain(self.state.notices(room).map(|prompt| (prompt.id, prompt)))
                     .collect::<BTreeMap<_, _>>();
                 Ok(
-                    json!({"room_id":room,"messages":messages.iter().map(|(id,prompt)|json!({"prompt":prompt,"delivery":self.control_message_at(*id, now).ok()})).collect::<Vec<_>>()}),
+                    json!({"room_id":room,"messages":messages.iter().map(|(id,prompt)|{
+                        let mut prompt = (*prompt).clone();
+                        prompt.recipient_ids = prompt.recipient_ids.iter().copied().filter(|agent| self.state.recipient_visible(*agent)).collect();
+                        let delivery = self.room_message_at(*id, now).ok();
+                        json!({"prompt":prompt,"delivery":delivery})
+                    }).collect::<Vec<_>>()}),
                 )
             }
             _ => Err("Unknown method".into()),

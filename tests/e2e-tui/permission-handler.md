@@ -73,6 +73,11 @@ session, including failures. Do not remove other sessions' scratch paths.
    that line, no approval notice/reply in MASTER, and orchestrator was not woken
    by the approval. Take/open room screenshot; capture both histories/effects.
 
+   Assert room screenshot and work-room history contain no `Permission assignment`
+   payload or normal `Permission fixture completed` / `Permission fixture failed`
+   handler reply. Required decision audit/notice and worker/orchestrator reply
+   remain visible; explicit-ID debug inspection remains available.
+
 ### PH-02 — Destructive permission escalated in the work room
 
 1. Complete fixture setup; capture auto-Claude identity and hidden sidebar/picker
@@ -89,6 +94,11 @@ session, including failures. Do not remove other sessions' scratch paths.
    escalation or orchestrator reply in MASTER. This is PR50 worker-woken room
    routing. Take/open screenshot; capture both histories and effects.
 
+   Assert room screenshot and work-room history contain no `Permission assignment`
+   payload or normal `Permission fixture completed` / `Permission fixture failed`
+   handler reply. Required decision audit/notice and worker/orchestrator reply
+   remain visible; explicit-ID debug inspection remains available.
+
 ### PH-03 — Question routed without answering
 
 1. Complete fixture setup; capture auto-Claude identity and hidden sidebar/picker
@@ -104,6 +114,11 @@ session, including failures. Do not remove other sessions' scratch paths.
    choice, with digested episode/fingerprint context. It excludes raw question,
    options and full `d1.` context. Assert no matching notice/reply in MASTER.
    Take/open screenshot; capture both histories and effects.
+
+   Assert room screenshot and work-room history contain no `Permission assignment`
+   payload or normal `Permission fixture completed` / `Permission fixture failed`
+   handler reply. Required decision audit/notice and worker/orchestrator reply
+   remain visible; explicit-ID debug inspection remains available.
 
 ### PH-04 — Handler unavailable falls back once
 
@@ -122,3 +137,7 @@ session, including failures. Do not remove other sessions' scratch paths.
    dialog/full fingerprint and no matching notice/reply in MASTER. Observe the
    settled room again using state/history (no duplicate notice or new assignment
    for the same dialog). Take/open screenshot; capture both histories/effects.
+   Assert room screenshot and work-room history contain no `Permission assignment`
+   payload or normal `Permission fixture completed` / `Permission fixture failed`
+   handler reply. Required decision audit/notice and worker/orchestrator reply
+   remain visible; explicit-ID debug inspection remains available.
