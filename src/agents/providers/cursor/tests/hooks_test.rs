@@ -50,7 +50,8 @@ fn cursor_hooks_separate_response_completion_and_start_observations() {
         Parsed::Failure {
             session: "s".into(),
             turn: "g".into(),
-            message: "Cursor turn aborted; inspect its terminal.".into()
+            message: "Cursor turn aborted; inspect its terminal.".into(),
+            error: None,
         }
     );
     // Cursor callbacks do not require a Codex transcript path.

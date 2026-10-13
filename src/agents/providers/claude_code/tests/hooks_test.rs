@@ -193,10 +193,44 @@ fn claude_adapter_stop_failure_reports_turn_identity_without_requiring_reply_tex
             session: "s".into(),
             turn: "p".into(),
             message: "Provider turn failed; inspect its terminal.".into(),
+            error: Some("unknown".into()),
         }
     );
     assert_eq!(
         parse(&json!({"hook_event_name":"StopFailure","session_id":"s"})).unwrap_err(),
         missing_field("prompt_id")
     );
+}
+
+/// Payload measured from Claude Code 2.1.296 when a 529 ended the turn: the
+/// error text it shows is `last_assistant_message`, its category `error`.
+#[test]
+fn claude_stop_failure_names_the_api_error_that_ended_the_turn() {
+    let failure = |value: Value| match parse(&value).unwrap() {
+        Parsed::Failure { error, .. } => error.unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        failure(json!({"hook_event_name":"StopFailure","session_id":"s","prompt_id":"p",
+            "error":"server_error",
+            "last_assistant_message":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment."})),
+        "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. (server_error)"
+    );
+    // Only the category, then nothing at all.
+    assert_eq!(
+        failure(
+            json!({"hook_event_name":"StopFailure","session_id":"s","prompt_id":"p","error":"rate_limit"})
+        ),
+        "rate_limit"
+    );
+    // Kept to one bounded line for statuses and logs.
+    let long = format!("API Error:\n  {}", "é".repeat(400));
+    let error = failure(
+        json!({"hook_event_name":"StopFailure","session_id":"s","prompt_id":"p",
+        "last_assistant_message":long}),
+    );
+    assert!(!error.contains('\n'));
+    assert!(error.starts_with("API Error: éé"));
+    assert!(error.ends_with('…'));
+    assert_eq!(error.chars().count(), 301);
 }

@@ -346,18 +346,33 @@ impl BusState {
         callback: ProviderCallback,
         turn_key: Option<String>,
     ) -> CallbackDisposition {
-        let CallbackEventKind::Error { message } = callback.kind else {
+        let CallbackEventKind::Error {
+            message,
+            provider_error,
+        } = callback.kind
+        else {
             return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
+        };
+        // A provider that names its error (Claude's StopFailure) closes the
+        // turn with the same retryable reason settlement gives Codex's.
+        let (reason, message) = match provider_error {
+            Some(error) => {
+                let (reason, message) = super::settlement::provider_error_outcome(&error);
+                (Some(reason), message)
+            }
+            None => (None, message),
         };
         if self
             .requests
             .get(&request_id)
             .is_some_and(|r| r.trusted_start_bound)
         {
-            if self
-                .abandon_current_request(request_id, callback.occurred_at_ms)
-                .is_err()
-            {
+            let at_ms = callback.occurred_at_ms;
+            let closed = match reason {
+                Some(reason) => self.close_turn_with_reason(request_id, at_ms, reason),
+                None => self.abandon_current_request(request_id, at_ms),
+            };
+            if closed.is_err() {
                 return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
             }
             self.consumed_provider_turns.extend(turn_key);

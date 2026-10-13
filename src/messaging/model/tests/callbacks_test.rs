@@ -607,6 +607,7 @@ fn error_callback_is_visible_and_never_becomes_a_reply() {
         prompt_payload: Some("prompt".into()),
         kind: CallbackEventKind::Error {
             message: "provider session aborted".into(),
+            provider_error: None,
         },
     });
 

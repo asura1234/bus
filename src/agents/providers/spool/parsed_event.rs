@@ -35,10 +35,12 @@ pub(crate) enum Parsed {
     /// This must not settle a request without the coordinator's reply resolution.
     Completed { session: String, turn: String },
     /// Provider failure; the coordinator closes a matching bound request.
+    /// `error` is the provider's own description of it, when it gives one.
     Failure {
         session: String,
         turn: String,
         message: String,
+        error: Option<String>,
     },
     /// A valid hook that does not represent an interactive terminal observation.
     Ignore,
