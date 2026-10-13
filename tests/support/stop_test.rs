@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 /// How long a stopped bus may take to finish its graceful exit before teardown
 /// treats it as hung.
 #[cfg(unix)]
-pub(crate) const STOP_GRACE: Duration = Duration::from_secs(30);
+const STOP_GRACE: Duration = Duration::from_secs(30);
 
 /// Stops a spawned bus like a closing terminal does: SIGHUP and close its PTY,
 /// then wait until it has exited. portable-pty's `Child::kill` sends SIGKILL

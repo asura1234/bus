@@ -396,9 +396,7 @@ fn terminate_pid(pid: u32) {
         }
     }
 
-    // A SIGKILL during the graceful exit truncates the coverage profile bus
-    // writes last; see `stop_spawned_bus`.
-    if wait_for_pid_exit(pid_t, STOP_GRACE) {
+    if wait_for_pid_exit(pid_t, Duration::from_millis(400)) {
         return;
     }
 
@@ -488,6 +486,28 @@ pub fn wait_for_path(path: &Path, timeout: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The panic hook and atexit cleanup run while the test still holds every
+    /// PTY, so a bus there may be unable to exit at all; cleanup must give up
+    /// within its short grace instead of waiting out a long one per process.
+    #[test]
+    fn terminate_pid_gives_up_promptly_on_a_process_that_does_not_exit() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; exec sleep 60"])
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        let started = Instant::now();
+        terminate_pid(child.id());
+        let elapsed = started.elapsed();
+        let _ = child.wait();
+
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "terminate_pid waited {elapsed:?} on a process that ignores SIGTERM"
+        );
+    }
 
     fn unique_missing_runtime_dir(label: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
