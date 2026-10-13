@@ -62,7 +62,7 @@ impl BusState {
         let id = self.agents.get(&agent)?.current_request?;
         let request = self.requests.get(&id)?;
         let hold = request.shell_hold.as_ref()?;
-        if !request.awaiting_background
+        if !request.held_for_shells()
             || request.settled()
             || now_ms < hold.since_ms.saturating_add(cap_ms)
         {
