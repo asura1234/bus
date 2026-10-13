@@ -220,6 +220,10 @@ fn dialog_response(id: &str, last_status: Value) -> Response {
     response
 }
 
+fn remaining_time(deadline: Option<Instant>) -> Option<Duration> {
+    deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
+}
+
 pub(super) fn execute(
     command: ParsedCommand,
     mut send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
@@ -237,7 +241,7 @@ pub(super) fn execute(
     let mut busy_retries = 0;
     let mut transport_failures = 0;
     loop {
-        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let remaining = remaining_time(deadline);
         if remaining == Some(Duration::ZERO) {
             return timeout_response(&id, last_status);
         }
@@ -276,8 +280,7 @@ pub(super) fn execute(
         response.id.clone_from(&id);
         if is_server_busy(&response) || waiting && is_status_overloaded(&response) {
             // A wait retries until its deadline (or indefinitely); other commands a few times.
-            let remaining =
-                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            let remaining = remaining_time(deadline);
             if remaining.is_none() && !waiting {
                 if busy_retries == BUSY_RETRIES {
                     return response;
@@ -321,7 +324,7 @@ pub(super) fn execute(
             return failure;
         }
         last_status = response.result;
-        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let remaining = remaining_time(deadline);
         thread::sleep(remaining.map_or(Duration::from_millis(200), |remaining| {
             Duration::from_millis(200).min(remaining)
         }));
