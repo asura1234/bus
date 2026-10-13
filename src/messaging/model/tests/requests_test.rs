@@ -507,8 +507,8 @@ fn a_shell_held_reply_still_stalls_once_its_session_is_invalidated() {
             callback_id: "stop-1".into(),
             text: "Waiting on the build.".into(),
             received_at_ms: 2_000,
-            provider_session_id: None,
-            provider_turn_id: None,
+            provider_session_id: held.provider_session_id.clone(),
+            provider_turn_id: held.provider_turn_id.clone(),
         },
     });
     let stalled_at = 10_000 + DELIVERED_STALL_MS;
