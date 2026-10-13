@@ -35,7 +35,7 @@ SUMMARY_SECTION = "摘要"
 GOAL_SECTION = "目标"
 NON_GOAL_SECTION = "非目标"
 PHASES = ("draft", "final")
-SIZE_PATTERN = re.compile(r"^- \*\*大小\*\*：`(XS|S|M|L|XL|XXL|XXXL)`", re.MULTILINE)
+SIZE_PATTERN = re.compile(r"^- \*\*大小\*\*：`(XS|S|M|L|XL)`", re.MULTILINE)
 # Placeholders are derived from the template body, not hard-coded: a hard-coded list covers only the
 # few thought of at the time, placeholders added to the template later slip through silently, and the
 # whole point of the gate is to block template residue.
@@ -233,7 +233,7 @@ def check_body(
         ):
             problems.append(
                 "body: section `摘要` must contain `- **大小**：` with one of "
-                "`XS|S|M|L|XL|XXL|XXXL`"
+                "`XS|S|M|L|XL`"
             )
     return problems
 

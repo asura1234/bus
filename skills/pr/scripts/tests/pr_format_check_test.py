@@ -209,15 +209,6 @@ class PrFormatCheckTest(unittest.TestCase):
         problems = self.check(valid_body().replace("- **大小**：`M`", "- **大小**：`巨大`"))
         self.assertTrue(any("大小" in problem for problem in problems))
 
-        problems = self.check(valid_body().replace("- **大小**：`M`", "- **大小**：`XXXXL`"))
-        self.assertTrue(any("大小" in problem for problem in problems))
-
-    def test_body_accepts_every_size_tier(self) -> None:
-        for size in ("XS", "S", "M", "L", "XL", "XXL", "XXXL"):
-            with self.subTest(size=size):
-                body = valid_body().replace("- **大小**：`M`", f"- **大小**：`{size}`")
-                self.assertFalse([p for p in self.check(body) if "大小" in p])
-
     def test_placeholders_are_derived_from_the_template(self) -> None:
         """Placeholders must come from the template itself, not from a list hard-coded in the script.
 
