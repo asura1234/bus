@@ -31,10 +31,10 @@ that is one quoted image path as a leading `[Image #N]`, and clears a line on
 Ctrl+K or Ctrl+U. A prompt containing `fake:work N` keeps it Working for N
 seconds first, and one containing `fake:dialog N` holds the turn on a
 permission dialog (`Do you want to proceed?` with options 1 and 2) for N
-seconds, so Bus sees the agent waiting on a dialog. A prompt containing `fake:api-error` ends the turn without a
-reply, as a Claude API error does: it shows `API Error: Connection lost
-mid-response…` and fires `StopFailure` with that text and `error:
-server_error`.
+seconds, so Bus sees the agent waiting on a dialog. A prompt containing
+`fake:api-error` ends the turn without a reply, as a Claude API error does:
+it shows `API Error: Connection lost mid-response…` and fires `StopFailure`
+with that text and `error: server_error`.
 
 The fake Codex answers the same way, the way Bus sees real Codex: it fires
 every hook in the project's `.codex/hooks.json`, in order, Bus's among them

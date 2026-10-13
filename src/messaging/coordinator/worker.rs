@@ -52,13 +52,13 @@ pub(super) struct Worker {
     /// Folders listed for system sounds; None reads the operating system's.
     pub(super) sound_dirs: Option<Vec<PathBuf>>,
     /// Saves deferred to one write, while a tick applies spooled callbacks.
-    pub(super) batch: Option<SaveBatch>,
+    batch: Option<SaveBatch>,
 }
 
 /// State changes waiting for one `state.json` write, and the spool files
 /// that may be deleted only once that write is durable.
 #[derive(Default)]
-pub(super) struct SaveBatch {
+struct SaveBatch {
     /// The in-memory state before the first deferred change; restored when
     /// the write fails, as a failed immediate save leaves the state unchanged.
     before: Option<(BusState, u64)>,
@@ -179,7 +179,7 @@ impl Worker {
     }
 
     /// Defers saves until [`Self::finish_batch`], which writes them once.
-    pub(super) fn begin_batch(&mut self) {
+    fn begin_batch(&mut self) {
         debug_assert!(self.batch.is_none(), "batches do not nest");
         self.batch = Some(SaveBatch::default());
     }
@@ -200,7 +200,7 @@ impl Worker {
     /// Writes the batch's changes once, then deletes the spool files they
     /// consumed. When the write fails, the state returns to where the batch
     /// began and every spool file stays, so nothing is acknowledged unsaved.
-    pub(super) fn finish_batch(&mut self) -> Result<(), String> {
+    fn finish_batch(&mut self) -> Result<(), String> {
         let Some(batch) = self.batch.take() else {
             return Ok(());
         };
