@@ -541,3 +541,53 @@ fn persisted_report_turn_boundary_separates_the_next_report_after_restart() {
         ["All tests passed.", "All tests passed."]
     );
 }
+
+#[test]
+fn a_late_reply_to_a_developer_master_message_still_shows_in_master() {
+    // The developer asked in MASTER; the orchestrator's turn started, went
+    // idle, and its Stop hook landed after the settle window closed the
+    // request as `reply_not_captured`. The text is still the answer to the
+    // developer's MASTER message, so it belongs in MASTER, not the work room.
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (master, orchestrator) = (bus.master, bus.orchestrator);
+    let typed = bus.deliver(master, Author::Developer, orchestrator, "How is the PR?");
+    let spool = bus.dir.join("callbacks/orch");
+    callbacks::append(
+        &spool,
+        "orch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"asked","prompt":typed}),
+        &[],
+        false,
+    )
+    .unwrap();
+    bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    let mut state = bus.worker.state.clone();
+    let now = crate::messaging::storage::io::now_ms();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Working, now)
+        .unwrap();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Idle, now)
+        .unwrap();
+    assert!(state
+        .settle_ended_request(
+            orchestrator,
+            now + crate::messaging::model::TURN_SETTLE_MS,
+            |_| None
+        )
+        .is_some());
+    bus.worker.save(state).unwrap();
+    callbacks::append(
+        &spool,
+        "orch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"asked","last_assistant_message":"Review is done; merging next."}),
+        &[],
+        false,
+    )
+    .unwrap();
+    bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    assert_eq!(bus.reports(), ["Review is done; merging next."]);
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
+}

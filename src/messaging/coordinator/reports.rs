@@ -6,7 +6,10 @@
 //! so Bus shows it in the work room the orchestrator runs as its own message to
 //! the developer. MASTER carries only what needs the developer: the replies to
 //! their MASTER messages, and what the orchestrator posts there itself with
-//! `send --to human`. Bus authors nothing: the text is the agent's.
+//! `send --to human`. A final that arrives after its request already closed
+//! (`reply_not_captured`) still shows in that request's room, so a late answer
+//! to the developer's MASTER message stays in MASTER. Bus authors nothing: the
+//! text is the agent's.
 use super::{
     AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection,
     ProviderCallback, RoomId,
@@ -15,7 +18,8 @@ use super::{
 /// An orchestrator's final text, taken before `accept_callback` settles it.
 pub(super) struct PendingReport {
     master: RoomId,
-    /// Where the report shows: the work room the orchestrator runs.
+    /// Where the report shows: the room of the message whose turn it ends,
+    /// else the work room the orchestrator runs.
     room: RoomId,
     agent: AgentId,
     text: String,
@@ -38,9 +42,26 @@ pub(super) fn pending_report(
     if agent.room_id != master || !text.chars().any(char::is_alphanumeric) {
         return None;
     }
+    // A final that arrives after its request closed (say as
+    // `reply_not_captured`) still answers that request's message, so it
+    // belongs in the message's room; only a turn no message started goes to
+    // the work room.
+    let room = callback
+        .provider_turn_id
+        .as_deref()
+        .and_then(|turn| {
+            state.requests().find(|request| {
+                request.agent_id == agent.id
+                    && request.provider_turn_id.as_deref() == Some(turn)
+                    && request.provider_session_id == callback.provider_session_id
+            })
+        })
+        .map(|request| request.room_id)
+        .or(agent.orchestrates)
+        .unwrap_or(master);
     Some(PendingReport {
         master,
-        room: agent.orchestrates.unwrap_or(master),
+        room,
         agent: agent.id,
         text: text.trim().to_owned(),
         session: callback.provider_session_id.clone(),
@@ -91,7 +112,7 @@ pub(super) fn post_report(
                 agent_id = report.agent.0,
                 room_id = report.room.0,
                 message_id = message.0,
-                "Orchestrator report shown in its work room"
+                "Orchestrator report shown"
             ),
             Err(error) => tracing::warn!(event = "bus.report.failed",
                 agent_id = report.agent.0, room_id = report.room.0, %error,
