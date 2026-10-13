@@ -417,6 +417,93 @@ fn start_is_a_no_op_when_disabled() {
 }
 
 #[test]
+fn concurrent_loop_captures_keep_retention_bounded() {
+    static RELEASE: std::sync::OnceLock<std::sync::Barrier> = std::sync::OnceLock::new();
+    static COORDINATOR: LoopWatch = LoopWatch::new("test.retention.coordinator");
+    static UI: LoopWatch = LoopWatch::new("test.retention.ui");
+    fn delayed_capture(_pid: u32, path: &Path) -> bool {
+        RELEASE.get().unwrap().wait();
+        std::fs::write(path, "stacks").is_ok()
+    }
+    RELEASE.get_or_init(|| std::sync::Barrier::new(3));
+    let registry = Registry::new();
+    registry.add_watch(&COORDINATOR);
+    registry.add_watch(&UI);
+    let (mut recorder, dir) = recorder(
+        "perf-concurrent-retention",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: delayed_capture,
+        },
+    );
+    for stamp in ["20000101-000000", "20000101-000001"] {
+        std::fs::write(
+            perf_dir(&dir).join(format!("stall-{stamp}-client.txt")),
+            "old",
+        )
+        .unwrap();
+    }
+    let coordinator = COORDINATOR.enter("save");
+    let ui = UI.enter("compose");
+    recorder.watch(Instant::now(), now_us() + 2_100_000, &registry);
+    RELEASE.get().unwrap().wait();
+    recorder.wait_for_captures();
+    drop((coordinator, ui));
+    let files = std::fs::read_dir(perf_dir(&dir))
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with("-client.txt"))
+        .count();
+    let retained = recorder.options.retained_captures;
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        files <= retained,
+        "{files} capture files exceed retention limit {retained}"
+    );
+}
+
+#[test]
+fn pruning_does_not_delete_an_active_capture_output() {
+    static READY: std::sync::Barrier = std::sync::Barrier::new(2);
+    static RELEASE: std::sync::Barrier = std::sync::Barrier::new(2);
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn capture(_pid: u32, path: &Path) -> bool {
+        let first = CALLS.fetch_add(1, Ordering::SeqCst) == 0;
+        let ok = std::fs::write(path, "stacks").is_ok();
+        if first {
+            READY.wait();
+            RELEASE.wait();
+        }
+        ok
+    }
+    let (mut recorder, dir) = recorder(
+        "perf-active-output",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: capture,
+        },
+    );
+    recorder.options.retained_captures = 1;
+    recorder.capture("coordinator", "save", 2000);
+    READY.wait();
+    let active = std::fs::read_dir(perf_dir(&dir))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "txt"))
+        .unwrap();
+    recorder.capture("ui", "compose", 2000);
+    let preserved = active.is_file();
+    RELEASE.wait();
+    recorder.wait_for_captures();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        preserved,
+        "a later capture pruned the output still being written"
+    );
+}
+
+#[test]
 fn stall_warnings_carry_the_latest_process_and_system_sample() {
     static WATCH: LoopWatch = LoopWatch::new("test.rec.warn");
     let registry = Registry::new();

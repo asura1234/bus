@@ -2,7 +2,7 @@ use super::*;
 use crossterm::event::MouseEventKind::ScrollDown;
 
 #[test]
-fn room_layout_registers_separate_compose_and_history_timers() {
+fn room_layout_registers_separate_compute_view_and_history_timers() {
     let (mut ui, _, _) = fixture();
     ui.compute_view(100, 40);
     let names = crate::utils::perf::global().names();

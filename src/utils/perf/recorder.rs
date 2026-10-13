@@ -8,7 +8,7 @@
 //! window) or `{"kind":"stall",...}` (a loop blocked past the threshold, a move
 //! to another stage while still blocked, its end, or a finished stack capture).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -71,7 +71,7 @@ impl PerfOptions {
             capture_after,
             capture_cooldown: Duration::from_secs(600),
             max_bytes: 5 * 1024 * 1024,
-            // A role writes about 2 MB of windows an hour; archives compress ~10x.
+            // Volume depends on thread count and active metrics; both caps apply.
             archive: ArchivePolicy {
                 max_age: Duration::from_secs(72 * 60 * 60),
                 max_total_bytes: 64 * 1024 * 1024,
@@ -206,7 +206,7 @@ pub(super) struct Recorder {
         mpsc::Sender<FinishedCapture>,
         mpsc::Receiver<FinishedCapture>,
     ),
-    pending_captures: usize,
+    pending_captures: BTreeSet<String>,
     wake_lag_max: Option<Duration>,
 }
 
@@ -248,7 +248,7 @@ impl Recorder {
             last_capture: BTreeMap::new(),
             capture_sequence: 0,
             captures: mpsc::channel(),
-            pending_captures: 0,
+            pending_captures: BTreeSet::new(),
             wake_lag_max: None,
         })
     }
@@ -316,7 +316,6 @@ impl Recorder {
     /// Starts a stack capture on its own thread: `sample` runs for seconds,
     /// and the watchdog must keep writing windows meanwhile.
     pub(super) fn capture(&mut self, loop_name: &'static str, stage: &'static str, busy_ms: u64) {
-        self.prune_captures();
         self.capture_sequence += 1;
         let file = format!(
             "stall-{}-{}-{:016}-{}.txt",
@@ -325,6 +324,8 @@ impl Recorder {
             self.capture_sequence,
             self.role
         );
+        self.pending_captures.insert(file.clone());
+        self.prune_captures();
         let (pid, path, hook) = (self.pid, self.dir.join(&file), self.hooks.capture_stacks);
         let done = self.captures.0.clone();
         let mut finished = FinishedCapture {
@@ -341,7 +342,7 @@ impl Recorder {
                 let _ = done.send(finished);
             });
         match spawned {
-            Ok(_) => self.pending_captures += 1,
+            Ok(_) => {}
             Err(_) => self.finish_capture(FinishedCapture {
                 loop_name,
                 stage,
@@ -355,7 +356,7 @@ impl Recorder {
     /// Records captures that already finished, waiting for those still running.
     #[cfg(test)]
     pub(super) fn wait_for_captures(&mut self) {
-        while self.pending_captures > 0 {
+        while !self.pending_captures.is_empty() {
             match self.captures.1.recv() {
                 Ok(finished) => self.finish_capture(finished),
                 Err(_) => return,
@@ -364,7 +365,8 @@ impl Recorder {
     }
 
     fn finish_capture(&mut self, finished: FinishedCapture) {
-        self.pending_captures = self.pending_captures.saturating_sub(1);
+        self.pending_captures.remove(&finished.file);
+        self.prune_captures();
         let FinishedCapture {
             loop_name,
             stage,
@@ -391,8 +393,9 @@ impl Recorder {
         self.append(&Value::Object(record));
     }
 
-    /// Deletes this role's oldest stack captures so that, with the one about to
-    /// be written, at most `retained_captures` remain.
+    /// Reserves slots for this recorder's active outputs and bounds completed
+    /// files. Active outputs are never deleted, even if they temporarily exceed
+    /// the cap; completion enforces the bound as soon as those slots are free.
     fn prune_captures(&self) {
         let suffix = format!("-{}.txt", self.role);
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
@@ -403,13 +406,18 @@ impl Recorder {
             .filter(|entry| {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                name.starts_with("stall-") && name.ends_with(&suffix)
+                name.starts_with("stall-")
+                    && name.ends_with(&suffix)
+                    && !self.pending_captures.contains(name.as_ref())
             })
             .map(|entry| entry.path())
             .collect();
         // The UTC stamp in the name sorts oldest first.
         captures.sort();
-        let keep = self.options.retained_captures.saturating_sub(1);
+        let keep = self
+            .options
+            .retained_captures
+            .saturating_sub(self.pending_captures.len());
         let excess = captures.len().saturating_sub(keep);
         for old in &captures[..excess] {
             let _ = std::fs::remove_file(old);
