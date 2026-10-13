@@ -53,6 +53,7 @@ pub(crate) struct DialogOption {
     pub(crate) label: String,
     pub(crate) selected: bool,
     navigation_key: Option<&'static str>,
+    identity_label: Option<String>,
 }
 
 impl Dialog {
@@ -66,7 +67,11 @@ impl Dialog {
             hasher.update(input.skip_key.as_bytes());
         }
         for option in &self.options {
-            hasher.update(format!("\0{}\0{}", option.number, option.label));
+            hasher.update(format!(
+                "\0{}\0{}",
+                option.number,
+                option.identity_label.as_deref().unwrap_or(&option.label)
+            ));
             if let Some(key) = option.navigation_key {
                 hasher.update(key.as_bytes());
             }
@@ -433,6 +438,7 @@ fn unnumbered(lines: &[&str]) -> Option<Dialog> {
                 },
                 selected: index == marked,
                 navigation_key: None,
+                identity_label: None,
             })
             .collect(),
         hint: Some(hint.to_owned()),
@@ -520,14 +526,7 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                     .last()
                     .is_some_and(|option| option.label == "Chat about this")
             {
-                let question = title(&lines[..start])
-                    .lines()
-                    .filter(|line| !line.starts_with('☐'))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .trim()
-                    .to_owned();
-                return question_dialog(question, hint, &selected.label, "Type something.", "esc");
+                return claude::text_question(&lines[..start], hint, &selected.label);
             }
         }
     }
@@ -542,6 +541,7 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                 label: option.label,
                 selected: option.selected,
                 navigation_key: None,
+                identity_label: None,
             })
             .collect(),
         hint,

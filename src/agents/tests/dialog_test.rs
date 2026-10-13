@@ -741,3 +741,11 @@ fn claude_highlighted_submit_ignores_trailing_screen_padding() {
     assert_eq!(dialog.selected(), Some(6));
     assert_eq!(dialog.keys_for(6).unwrap(), ["enter"]);
 }
+
+#[test]
+fn claude_checkbox_toggle_preserves_dialog_identity_but_invalidates_digest() {
+    let unchecked = parse(CLAUDE_MULTI_SELECT).unwrap();
+    let checked = parse(&CLAUDE_MULTI_SELECT.replace("[ ] Build", "[✔] Build")).unwrap();
+    assert_eq!(unchecked.id(), checked.id());
+    assert_ne!(unchecked.digest(), checked.digest());
+}

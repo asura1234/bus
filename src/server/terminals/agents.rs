@@ -411,9 +411,6 @@ impl App {
                     phase: crate::terminal::SelfUpdatePhase::Stuck(_),
                     ..
                 }) => crate::protocol::api::schema::AgentStatus::Blocked,
-                _ if dialog.as_ref().is_some_and(|(_, visible)| *visible) => {
-                    crate::protocol::api::schema::AgentStatus::Blocked
-                }
                 _ => pane.agent_status,
             },
             screen_detection_skipped: false,

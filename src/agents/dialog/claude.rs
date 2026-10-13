@@ -1,7 +1,7 @@
 //! Claude AskUserQuestion panels have unnumbered buttons and horizontal tabs.
 use super::{
-    highlighted, indentation, is_separator, marked_label, option_line, title, unboxed, Dialog,
-    DialogKind, DialogOption, OptionLine, QuestionInput, Style,
+    highlighted, indentation, is_separator, marked_label, option_line, question_dialog, title,
+    unboxed, Dialog, DialogKind, DialogOption, OptionLine, Style,
 };
 
 pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
@@ -19,9 +19,14 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     }
     let footer = lines
         .iter()
-        .rposition(|line| !unboxed(line).trim().is_empty())?;
-    let hint = unboxed(lines[footer]).trim();
-    if !hint.contains("Esc to cancel")
+        .rposition(|line| unboxed(line).trim().starts_with("Enter to"))?;
+    let hint = lines[footer..]
+        .iter()
+        .map(|line| unboxed(line).trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !hint.ends_with("Esc to cancel")
         || !(hint.contains("navigate") || hint.contains("ctrl+g to edit"))
     {
         return None;
@@ -44,21 +49,18 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     if rows.iter().filter(|row| row.selected).count() != 1 {
         return None;
     }
-    let input = rows.iter().find(|row| row.selected).and_then(|row| {
-        hint.contains("ctrl+g to edit").then(|| QuestionInput {
-            value: if matches!(row.label.as_str(), "Type something." | "[ ] Type something") {
-                String::new()
-            } else {
-                row.label.clone()
-            },
-            skip_key: "esc",
-        })
-    });
+    if hint.contains("ctrl+g to edit") {
+        let selected = rows.iter().find(|row| row.selected)?;
+        let mut dialog = text_question(&lines[header..start], &hint, &selected.label)?;
+        dialog.fingerprint_context = format!("{:?}", styles[header]);
+        return Some(dialog);
+    }
     let mut options: Vec<_> = rows
         .into_iter()
         .enumerate()
         .map(|(index, row)| DialogOption {
             number: index as u32 + 1,
+            identity_label: checkbox_label(&row.label).map(str::to_owned),
             label: row.label,
             selected: row.selected,
             navigation_key: None,
@@ -71,21 +73,41 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                 label: label.to_owned(),
                 selected: false,
                 navigation_key: Some(key),
+                identity_label: None,
             });
         }
     }
     Some(Dialog {
-        kind: if input.is_some() {
-            DialogKind::Question
-        } else {
-            DialogKind::Choice
-        },
-        input,
+        kind: DialogKind::Choice,
+        input: None,
         text: title(&lines[header..start]),
         options,
-        hint: Some(hint.to_owned()),
+        hint: Some(hint),
         fingerprint_context: format!("{:?}", styles[header]),
     })
+}
+
+pub(super) fn checkbox_label(label: &str) -> Option<&str> {
+    label
+        .strip_prefix("[ ] ")
+        .or_else(|| label.strip_prefix("[✔] "))
+}
+
+pub(super) fn text_question(above: &[&str], hint: &str, value: &str) -> Option<Dialog> {
+    let question = title(above)
+        .lines()
+        .filter(|line| !line.starts_with(['☐', '←']))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned();
+    let value = checkbox_label(value).unwrap_or(value);
+    let placeholder = if value == "Type something" {
+        value
+    } else {
+        "Type something."
+    };
+    question_dialog(question, hint, value, placeholder, "esc")
 }
 
 fn collect_rows(lines: &[&str], start: usize, footer: usize) -> Option<Vec<OptionLine>> {

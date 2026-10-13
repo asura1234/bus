@@ -405,7 +405,7 @@ async fn dialog_observation_rejects_frames_inside_synchronized_output() {
 }
 
 #[tokio::test]
-async fn agent_list_reports_visible_dialog_as_blocked_even_with_idle_detection() {
+async fn agent_dialog_detection_preserves_raw_idle_status_for_poll() {
     let (mut app, _) = app_with_dialog(CLAUDE_BASH_DIALOG, Some("session"));
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
@@ -420,7 +420,7 @@ async fn agent_list_reports_visible_dialog_as_blocked_even_with_idle_detection()
     assert!(info.dialog_id.is_some());
     assert_eq!(
         info.agent_status,
-        crate::protocol::api::schema::AgentStatus::Blocked
+        crate::protocol::api::schema::AgentStatus::Idle
     );
 }
 
@@ -490,4 +490,105 @@ async fn claude_dialog_actions_send_native_rows_and_arrows_and_reject_checkbox_e
         assert_eq!(result.reason.as_deref(), Some("stale_or_changed_dialog"));
         assert!(writes.try_recv().is_err());
     }
+}
+
+const CLAUDE_TABBED_CUSTOM_ANSWER: &str = "←  ☐ Storage  ☐ Region  ✔ Submit  →\r\n\r\nWhich storage?\r\n\r\n  1. Redis\r\n  2. In memory\r\n❯ 3. Type something.\r\n     Next\r\n────────────────\r\n  4. Chat about this\r\n\r\nEnter to select · Tab/Arrow keys to navigate\r\nctrl+g to edit in Vim · Esc to cancel\r\n";
+
+#[tokio::test]
+async fn claude_tabbed_custom_answer_is_observed_as_an_option_free_text_question() {
+    // The coordinator refuses `agent answer` whenever the observation carries
+    // options ("This is a choice dialog; use agent choose").
+    let (mut app, _) = app_with_dialog(CLAUDE_TABBED_CUSTOM_ANSWER.as_bytes(), Some("session"));
+    let dialog = observe_dialog(&mut app).dialog.unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Question, "{dialog:?}");
+    assert!(
+        dialog.options.is_empty(),
+        "free-text question observed with options: {:?}",
+        dialog
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn claude_tabbed_custom_answer_writes_text_and_skip_with_a_wrapped_hint() {
+    let (mut app, mut writes) =
+        app_with_dialog(CLAUDE_TABBED_CUSTOM_ANSWER.as_bytes(), Some("session"));
+    let observed = observe_dialog(&mut app);
+    assert!(observed.dialog.as_ref().unwrap().options.is_empty());
+    let answered = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observed, Some("Redis"), false),
+    ));
+    assert!(answered.written);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"Redis")
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+    let skipped = chosen(
+        &app.handle_agent_dialog_answer("skip".into(), answer_params(&observed, None, true)),
+    );
+    assert!(skipped.written);
+    assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\x1b"));
+}
+
+#[test]
+fn claude_tabbed_custom_answer_identity_survives_typing() {
+    let untouched = crate::agents::dialog::parse(CLAUDE_TABBED_CUSTOM_ANSWER).unwrap();
+    let edited = crate::agents::dialog::parse(
+        &CLAUDE_TABBED_CUSTOM_ANSWER.replace("Type something.", "MY_TOKEN"),
+    )
+    .unwrap();
+    assert_ne!(untouched.digest(), edited.digest());
+    assert_eq!(untouched.id(), edited.id());
+}
+
+#[test]
+fn claude_checkbox_descriptions_keep_submit_before_chat() {
+    let screen = "←  ☐ Caches  ✔ Submit  →\n\nWhich caches may be removed?\n\n❯ 1. [ ] Build cache\n       target and dist outputs\n  2. [ ] Package cache\n       registry downloads\n  3. [ ] Type something\n     Submit\n────────────────\n  4. Chat about this\n\nEnter to toggle · Tab/Arrow keys to navigate · Esc to cancel\n";
+    let dialog = crate::agents::dialog::parse(screen).unwrap();
+    let labels: Vec<_> = dialog
+        .options
+        .iter()
+        .map(|option| option.label.as_str())
+        .collect();
+    assert_eq!(
+        labels[..5],
+        [
+            "[ ] Build cache target and dist outputs",
+            "[ ] Package cache registry downloads",
+            "[ ] Type something",
+            "Submit",
+            "Chat about this",
+        ]
+    );
+    assert_eq!(
+        dialog.keys_for(4).unwrap(),
+        ["down", "down", "down", "enter"]
+    );
+}
+
+#[test]
+fn claude_review_screen_under_tab_header_offers_submit_and_cancel() {
+    let screen = "←  ☒ Storage  ☒ Region  ✔ Submit  →\n\nReview your answers\n\n ● Which storage?\n   → Redis\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n";
+    let dialog = crate::agents::dialog::parse(screen).unwrap();
+    let labels: Vec<_> = dialog
+        .options
+        .iter()
+        .map(|option| option.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Submit answers", "Cancel"]);
+    assert_eq!(dialog.keys_for(1).unwrap(), ["enter"]);
 }

@@ -669,8 +669,8 @@ bus agent choose "$agent_id" --option 2 --fingerprint "$fingerprint"
 `text` (the question above the
 options), `options` (`number`, `label`, `selected`), and `hint` (the key hint
 below them), plus a `fingerprint`. Both are `null` when no dialog is visible.
-Free-text questions normally have an empty `options` array; a focused Claude
-question can retain its panel's options and tab controls.
+Free-text questions have an empty `options` array, including a focused Claude
+custom answer; use `agent answer` for text or to skip it.
 It works while the agent is still launching, before its session starts.
 
 `agent choose AGENT --option N --fingerprint FINGERPRINT` sends keys only while
