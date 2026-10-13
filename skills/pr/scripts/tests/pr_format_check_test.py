@@ -469,13 +469,46 @@ class PrFormatCheckTest(unittest.TestCase):
             prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=origin, **kw)
 
             # review-pr's mismatched-lock fallback reruns with --plan only
-            prepare_context(plan_paths=[plan], **kw)
+            with self.assertRaisesRegex(ValueError, "pr --relock"):
+                prepare_context(plan_paths=[plan], **kw)
             self.assertEqual(recorded.read_text(encoding="utf-8"), "开发者原话：只修三个埋点缺陷\n")
 
             with self.assertRaisesRegex(ValueError, "只能追加"):
                 prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=replaced, **kw)
             prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=widened, **kw)
             self.assertIn("同意加上心跳", recorded.read_text(encoding="utf-8"))
+
+    def test_changed_lock_needs_an_appended_ruling_and_survives_plan_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan, goal, non_goal, origin = (root / n for n in ("p.md", "g.md", "n.md", "o.md"))
+            plan.write_text("## 目标\n\nFix export.\n\n## 非目标\n\nDo not change codecs.\n", encoding="utf-8")
+            kw = dict(branch="feat/export", output_path=root / "ctx.md", repo_root=root)
+            prepare_context(plan_paths=[plan], **kw)
+            goal_lock, non_goal_lock = locked_context_paths(root, "feat/export")
+            origin_lock = locked_origin_path(root, "feat/export")
+            goal.write_text("Fix export and add codec selection.\n", encoding="utf-8")
+            non_goal.write_text("无\n", encoding="utf-8")
+
+            # Re-locking to a different goal without appending the ruling is refused.
+            for origin_path in (None, origin_lock):
+                with self.subTest(origin=origin_path), self.assertRaisesRegex(ValueError, "追加开发者裁决"):
+                    prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=origin_path, **kw)
+
+            origin.write_text(
+                origin_lock.read_text(encoding="utf-8")
+                + "\nQuestion: May this PR also add codec selection?\n"
+                + "Developer: Yes, include codec selection in this PR.\n",
+                encoding="utf-8",
+            )
+            prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=origin, **kw)
+
+            # review-pr's mismatch recovery reruns the original --plan; it must not undo the ruling.
+            with self.assertRaisesRegex(ValueError, "pr --relock"):
+                prepare_context(plan_paths=[plan], **kw)
+            self.assertEqual(goal_lock.read_text(encoding="utf-8"), "Fix export and add codec selection.\n")
+            self.assertEqual(non_goal_lock.read_text(encoding="utf-8"), "无\n")
+            self.assertIn("Developer: Yes, include codec selection", origin_lock.read_text(encoding="utf-8"))
 
     def test_prepare_context_rejects_mixed_plan_and_authored_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

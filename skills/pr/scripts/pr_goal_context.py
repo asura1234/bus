@@ -164,6 +164,16 @@ def prepare_context(
             "无计划时必须提供 --origin-file（开发者原话或 issue 原文）；不得从 diff 或 commit 推断"
         )
 
+    # A changed lock is a developer ruling: it must append that ruling to the origin, and a plan
+    # rerun (review-pr's mismatch recovery) must never silently undo it.
+    if not (
+        _same_as_locked(locked_goal_path, goal) and _same_as_locked(locked_non_goals_path, non_goal)
+    ) and locked_goal_path.is_file():
+        if plan_paths:
+            raise ValueError("已有锁与计划不一致；锁只能经开发者裁决改变（pr --relock），不由计划恢复覆盖")
+        if origin == recorded:
+            raise ValueError("改锁必须在 .locked-origin 后追加开发者裁决（命名改动的问题与逐字答复）")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     locked_goal_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_context(goal, non_goal), encoding="utf-8")
