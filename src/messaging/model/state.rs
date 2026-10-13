@@ -2,8 +2,9 @@
 use crate::messaging::prefs::colors;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use {
-    super::{AgentId, ModelError, Request, RequestId, Room, RoomId},
+    super::{history::History, AgentId, ModelError, Prompt, Request, RequestId, Room, RoomId},
     crate::messaging::model::RoomAgent,
 };
 
@@ -16,7 +17,17 @@ pub(crate) struct BusState {
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     pub(super) requests: BTreeMap<RequestId, Request>,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
+    /// Applied provider callbacks by id, with the launch whose spool they
+    /// came from; a re-spooled duplicate is refused while its id is kept.
+    /// `None` marks ids carried over from a version 1 file, launch unknown.
+    #[serde(default)]
+    pub(super) consumed_callbacks: BTreeMap<String, Option<String>>,
+    /// Version 1 shapes of the spent-id guards, read once on load and moved
+    /// into `consumed_callbacks` and `spent_dialog_answers`; never written.
+    #[serde(default, skip_serializing)]
     pub(super) consumed_callback_ids: BTreeSet<String>,
+    #[serde(default, skip_serializing)]
+    pub(super) consumed_dialog_fingerprints: BTreeSet<String>,
     pub(super) consumed_provider_turns: BTreeSet<String>,
     /// Provider turns the agent started on its own (a task notification, or the
     /// user typing in its terminal). Their later hooks are activity, never a
@@ -24,9 +35,14 @@ pub(crate) struct BusState {
     #[serde(default)]
     pub(super) unrelated_provider_turns: BTreeSet<String>,
     pub(super) visible_room: Option<RoomId>,
-    /// Dialog fingerprints already spent on an answer; each is single-use.
+    /// Dialog fingerprints already spent on an answer, by digest, with when
+    /// they were observed; each is single-use until it expires.
     #[serde(default)]
-    pub(super) consumed_dialog_fingerprints: BTreeSet<String>,
+    pub(super) spent_dialog_answers: BTreeMap<String, u64>,
+    /// Settled requests and notices archived in `history.jsonl`, never in
+    /// `state.json`; shared so cloning the state does not copy them.
+    #[serde(skip)]
+    pub(super) history: Arc<History>,
 }
 
 fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, RoomAgent>, D::Error>
@@ -84,11 +100,12 @@ impl BusState {
             || self.rooms != previous.rooms
             || self.requests != previous.requests
             || self.queues != previous.queues
-            || self.consumed_callback_ids != previous.consumed_callback_ids
+            || self.consumed_callbacks != previous.consumed_callbacks
             || self.consumed_provider_turns != previous.consumed_provider_turns
             || self.unrelated_provider_turns != previous.unrelated_provider_turns
             || self.visible_room != previous.visible_room
-            || self.consumed_dialog_fingerprints != previous.consumed_dialog_fingerprints
+            || self.spent_dialog_answers != previous.spent_dialog_answers
+            || self.history != previous.history
             || self.agents.len() != previous.agents.len()
         {
             return true;
@@ -117,20 +134,41 @@ impl BusState {
             agents: BTreeMap::new(),
             requests: BTreeMap::new(),
             queues: BTreeMap::new(),
+            consumed_callbacks: BTreeMap::new(),
             consumed_callback_ids: BTreeSet::new(),
+            consumed_dialog_fingerprints: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
             unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
-            consumed_dialog_fingerprints: BTreeSet::new(),
+            spent_dialog_answers: BTreeMap::new(),
+            history: Arc::default(),
         }
     }
 
-    pub(crate) fn dialog_fingerprint_consumed(&self, fingerprint: &str) -> bool {
-        self.consumed_dialog_fingerprints.contains(fingerprint)
+    /// Moves guards a version 1 file stored in its own shapes into the
+    /// current ones, so what was spent before the upgrade stays spent: callback
+    /// ids are kept for good (their launch is unknown), and each fingerprint
+    /// counts as observed now, so it stays spent for at least its remaining
+    /// lifetime.
+    pub(crate) fn adopt_version_one_guards(&mut self, now_ms: u64) {
+        for id in std::mem::take(&mut self.consumed_callback_ids) {
+            self.consumed_callbacks.entry(id).or_insert(None);
+        }
+        for token in std::mem::take(&mut self.consumed_dialog_fingerprints) {
+            self.spent_dialog_answers
+                .entry(fingerprint_digest(&token).to_owned())
+                .or_insert(now_ms);
+        }
     }
 
-    pub(crate) fn consume_dialog_fingerprint(&mut self, fingerprint: String) {
-        self.consumed_dialog_fingerprints.insert(fingerprint);
+    /// Whether the fingerprint with this digest already answered a dialog.
+    pub(crate) fn dialog_answer_spent(&self, digest: &str) -> bool {
+        self.spent_dialog_answers.contains_key(digest)
+    }
+
+    /// Spends a fingerprint, observed at `observed_at_ms`, on one answer.
+    pub(crate) fn spend_dialog_answer(&mut self, digest: String, observed_at_ms: u64) {
+        self.spent_dialog_answers.insert(digest, observed_at_ms);
     }
 
     pub(super) fn allocate_id(&mut self) -> u64 {
@@ -156,12 +194,85 @@ impl BusState {
     }
 
     pub(crate) fn request(&self, id: RequestId) -> Option<&Request> {
-        self.requests.get(&id)
+        self.requests.get(&id).or_else(|| self.history.request(id))
     }
 
+    /// Live and archived requests, in id order.
     pub(crate) fn requests(&self) -> impl Iterator<Item = &Request> {
-        self.requests.values()
+        MergeById {
+            live: self.requests.values().peekable(),
+            archived: self.history.requests.values().map(Arc::as_ref).peekable(),
+        }
     }
+
+    /// A room's archived then live notices, in id order.
+    pub(crate) fn notices(&self, room: RoomId) -> impl DoubleEndedIterator<Item = &Prompt> {
+        self.history.room_notices(room).chain(
+            self.rooms
+                .get(&room)
+                .into_iter()
+                .flat_map(|room| room.notices.iter()),
+        )
+    }
+
+    pub(crate) fn history(&self) -> &Arc<History> {
+        &self.history
+    }
+
+    /// Settles `id` with `reply`, as a final callback does, and releases its agent.
+    #[cfg(test)]
+    pub(crate) fn finish_for_test(&mut self, id: RequestId, reply: &str, at_ms: u64) {
+        let request = self.requests.get_mut(&id).expect("request");
+        request.phase = super::RequestPhase::Completed;
+        request.completed_at_ms = Some(at_ms);
+        request.pending_final = Some(super::PendingFinal {
+            callback_id: format!("final-{}", id.0),
+            text: reply.to_owned(),
+            received_at_ms: at_ms,
+            provider_session_id: None,
+            provider_turn_id: None,
+        });
+        let agent = request.agent_id;
+        if let Some(queue) = self.queues.get_mut(&agent) {
+            queue.retain(|queued| *queued != id);
+        }
+        if let Some(agent) = self.agents.get_mut(&agent) {
+            if agent.current_request == Some(id) {
+                agent.current_request = None;
+            }
+        }
+    }
+
+    /// Attaches the archive a store loaded beside `state.json`.
+    pub(crate) fn with_history(mut self, history: Arc<History>) -> Self {
+        self.history = history;
+        self
+    }
+}
+
+/// Two id-ordered request iterators merged into one id-ordered iterator.
+struct MergeById<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> {
+    live: std::iter::Peekable<L>,
+    archived: std::iter::Peekable<A>,
+}
+
+impl<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> Iterator
+    for MergeById<'a, L, A>
+{
+    type Item = &'a Request;
+
+    fn next(&mut self) -> Option<&'a Request> {
+        match (self.live.peek(), self.archived.peek()) {
+            (Some(live), Some(archived)) if archived.id < live.id => self.archived.next(),
+            (Some(_), _) => self.live.next(),
+            (None, _) => self.archived.next(),
+        }
+    }
+}
+
+/// The digest a dialog fingerprint ends with; it names the fingerprint once spent.
+pub(crate) fn fingerprint_digest(fingerprint: &str) -> &str {
+    fingerprint.rsplit('.').next().unwrap_or(fingerprint)
 }
 
 pub(super) fn normalized_name(name: &str) -> Result<String, ModelError> {

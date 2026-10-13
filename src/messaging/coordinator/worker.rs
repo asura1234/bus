@@ -8,6 +8,9 @@ use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
 
+/// How often a tick moves settled history out of `state.json`.
+const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
+
 pub(super) struct Worker {
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
@@ -53,6 +56,8 @@ pub(super) struct Worker {
     pub(super) sound_dirs: Option<Vec<PathBuf>>,
     /// Saves deferred to one write, while a tick applies spooled callbacks.
     batch: Option<SaveBatch>,
+    /// When the last archive pass ran; it runs at most once per [`ARCHIVE_EVERY`].
+    archived_at: Option<std::time::Instant>,
 }
 
 /// State changes waiting for one `state.json` write, and the spool files
@@ -116,6 +121,7 @@ impl Worker {
             settings_path: None,
             sound_dirs: None,
             batch: None,
+            archived_at: None,
         })
     }
 
@@ -175,6 +181,47 @@ impl Worker {
         }
         self.durable_state = state.clone();
         self.state = state;
+        Ok(())
+    }
+
+    /// Before serving anything, drops expired history from the file, so the
+    /// rewrite never runs on the UI thread or between commands.
+    fn compact_history(&self) {
+        match self.store.compact_history() {
+            Ok(true) => tracing::info!(
+                event = "bus.history.compacted",
+                entries = self.state.history().len(),
+                "Bus history rewritten without expired entries"
+            ),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                event = "bus.history.compact_failed",
+                %error,
+                "Bus history keeps expired entries until the next start"
+            ),
+        }
+    }
+
+    /// Runs the archive pass at most once per [`ARCHIVE_EVERY`].
+    fn archive_when_due(&mut self) -> Result<(), String> {
+        let now = std::time::Instant::now();
+        if self
+            .archived_at
+            .is_some_and(|last| now.duration_since(last) < ARCHIVE_EVERY)
+        {
+            return Ok(());
+        }
+        self.archived_at = Some(now);
+        self.archive_history(io::now_ms())
+    }
+
+    /// Archives settled requests and old notices, and drops expired history
+    /// and spent ids, in one save when anything changed.
+    pub(super) fn archive_history(&mut self, now_ms: u64) -> Result<(), String> {
+        let mut state = self.state.clone();
+        if state.archive(now_ms) {
+            self.save(state)?;
+        }
         Ok(())
     }
 
@@ -244,6 +291,7 @@ impl Worker {
         events: mpsc::Sender<BusEvent>,
         snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
+        self.compact_history();
         let interval = Duration::from_millis(500);
         let mut next_poll = std::time::Instant::now();
         let mut pending_commands = std::collections::VecDeque::new();
@@ -370,7 +418,9 @@ impl Worker {
         })?;
         // Every callback this tick applies is persisted by one write.
         self.begin_batch();
-        let consumed = self.consume_all_callbacks();
+        let consumed = self
+            .consume_all_callbacks()
+            .and_then(|()| self.archive_when_due());
         let finished = self.finish_batch();
         consumed.and(finished)?;
         self.settle_requests()?;

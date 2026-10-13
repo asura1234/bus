@@ -7,9 +7,13 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use super::journal::JournalOp;
 use super::journal::{push_coalesced, replay, JournalDocument, JournalEntry};
-use crate::messaging::model::BusState;
+use crate::messaging::model::{Archived, BusState, History, HISTORY_RETENTION_MS};
+use std::sync::Arc;
 
-pub(crate) const STORE_VERSION: u64 = 1;
+/// Version 2 keeps settled history in `history.jsonl`; a version 1 file, which
+/// still holds it inline, loads as is and is archived from on.
+pub(crate) const STORE_VERSION: u64 = 2;
+const INLINE_HISTORY_VERSION: u64 = 1;
 
 #[derive(Debug)]
 pub(crate) enum StoreError {
@@ -147,11 +151,17 @@ struct JournalState {
 pub(crate) struct JsonStore {
     path: PathBuf,
     journal: std::sync::Mutex<JournalState>,
+    /// The history `history.jsonl` holds, as of the last load or append.
+    history: std::sync::Mutex<Arc<History>>,
+    /// The file holds lines the last load dropped; `compact_history` rewrites it.
+    history_stale: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     fail_stage: std::sync::Mutex<Option<SaveStage>>,
     /// Completed `state.json` writes, so tests can count saves.
     #[cfg(test)]
     writes: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    fail_history: std::sync::atomic::AtomicBool,
 }
 
 impl JsonStore {
@@ -159,11 +169,185 @@ impl JsonStore {
         Self {
             path,
             journal: std::sync::Mutex::new(JournalState::default()),
+            history: std::sync::Mutex::new(Arc::default()),
+            history_stale: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fail_stage: std::sync::Mutex::new(None),
             #[cfg(test)]
             writes: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            fail_history: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// The append-only archive of settled requests and old notices.
+    pub(crate) fn history_path(&self) -> PathBuf {
+        self.path.with_file_name("history.jsonl")
+    }
+
+    /// Makes the next history append fail, as a full disk would.
+    #[cfg(test)]
+    pub(crate) fn fail_history_once(&self) {
+        self.fail_history
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Rewrites `history.jsonl` without the entries the last load dropped
+    /// (expired, of deleted rooms or agents, duplicated, or a torn last line).
+    /// True when it rewrote the file. Only the coordinator, which owns the
+    /// data directory, may call it.
+    pub(crate) fn compact_history(&self) -> Result<bool, StoreError> {
+        if !self
+            .history_stale
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(false);
+        }
+        let history = self.history_lock().clone();
+        let bytes = history_lines(history.items())?;
+        let path = self.history_path();
+        crate::platform::fs::atomic_write_detailed_with_checkpoint(&path, &bytes, |stage| {
+            self.injected_failure(stage)
+        })
+        .map_err(|error| StoreError::SaveIo {
+            path: error.path,
+            stage: error.stage,
+            bytes: bytes.len(),
+            source: error.source,
+        })?;
+        self.history_stale
+            .store(false, std::sync::atomic::Ordering::Release);
+        Ok(true)
+    }
+
+    fn history_lock(&self) -> std::sync::MutexGuard<'_, Arc<History>> {
+        self.history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Reads `history.jsonl`, keeping what `state` can still show: entries
+    /// younger than the retention, of rooms and agents that still exist, and
+    /// not also live in `state` (a crash between an append and its save).
+    /// A torn last line is skipped; any other unreadable line is corruption.
+    fn load_history(&self, state: &BusState) -> Result<Arc<History>, StoreError> {
+        let path = self.history_path();
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(source) => return Err(StoreError::Io { path, source }),
+        };
+        let cutoff = super::io::now_ms().saturating_sub(HISTORY_RETENTION_MS);
+        let mut history = History::default();
+        let mut stale = false;
+        let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
+        for (index, line) in lines.iter().enumerate() {
+            let last = index + 1 == lines.len();
+            if line.is_empty() {
+                continue;
+            }
+            // An append writes whole lines and syncs before state.json changes,
+            // so a last line without its newline was never committed.
+            if last {
+                stale = true;
+                continue;
+            }
+            let item = match serde_json::from_slice::<Archived>(line) {
+                Ok(item) => item,
+                Err(source) => {
+                    return Err(StoreError::Corrupt {
+                        path: path.clone(),
+                        source,
+                    })
+                }
+            };
+            let kept = item.settled_at_ms() >= cutoff
+                && state.room(item.room()).is_some()
+                && match &item {
+                    Archived::Request(request) => {
+                        state.agent(request.agent_id).is_some()
+                            && state.request(request.id).is_none()
+                    }
+                    Archived::Notice { room, prompt } => {
+                        state.notices(*room).all(|live| live.id != prompt.id)
+                    }
+                };
+            stale |= !kept || history.contains(&item);
+            if kept {
+                history.insert(item);
+            }
+        }
+        let history = Arc::new(history);
+        *self.history_lock() = Arc::clone(&history);
+        self.history_stale
+            .store(stale, std::sync::atomic::Ordering::Release);
+        Ok(history)
+    }
+
+    /// Makes the archive entries `state` added since the last append durable,
+    /// before `state.json` stops holding them.
+    fn append_history(&self, state: &BusState) -> Result<(), StoreError> {
+        let known = self.history_lock().clone();
+        if Arc::ptr_eq(&known, state.history()) {
+            return Ok(());
+        }
+        let bytes = history_lines(state.history().added_since(&known))?;
+        if !bytes.is_empty() {
+            self.append_history_bytes(&bytes)?;
+        }
+        *self.history_lock() = Arc::clone(state.history());
+        Ok(())
+    }
+
+    fn append_history_bytes(&self, bytes: &[u8]) -> Result<(), StoreError> {
+        let path = self.history_path();
+        let failed = |stage: SaveStage, source: std::io::Error| StoreError::SaveIo {
+            path: path.clone(),
+            stage,
+            bytes: bytes.len(),
+            source,
+        };
+        #[cfg(test)]
+        if self
+            .fail_history
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(failed(
+                SaveStage::TempWrite,
+                std::io::Error::from_raw_os_error(28),
+            ));
+        }
+        let created = !path.exists();
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).read(true).append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options
+            .open(&path)
+            .map_err(|source| failed(SaveStage::TempCreate, source))?;
+        // A failed or interrupted append can leave part of a line; it was never
+        // committed, and appending after it would bury it mid-file.
+        let complete =
+            complete_length(&mut file).map_err(|source| failed(SaveStage::TempCreate, source))?;
+        file.set_len(complete)
+            .map_err(|source| failed(SaveStage::TempWrite, source))?;
+        let written = std::io::Write::write_all(&mut file, bytes)
+            .map_err(|source| failed(SaveStage::TempWrite, source))
+            .and_then(|()| {
+                file.sync_all()
+                    .map_err(|source| failed(SaveStage::TempSync, source))
+            });
+        if let Err(error) = written {
+            let _ = file.set_len(complete).and_then(|()| file.sync_all());
+            return Err(error);
+        }
+        if created {
+            if let Some(parent) = path.parent() {
+                crate::platform::sync_parent_directory(parent)
+                    .map_err(|source| failed(SaveStage::ParentSync, source))?;
+            }
+        }
+        Ok(())
     }
 
     fn journal_path(&self) -> PathBuf {
@@ -217,6 +401,9 @@ impl JsonStore {
         };
         let entries = self.load_journal()?;
         replay(&mut state, &entries, base_seq);
+        state.adopt_version_one_guards(super::io::now_ms());
+        let history = self.load_history(&state)?;
+        let state = state.with_history(history);
         let mut journal = self.journal_state();
         journal.seq = entries
             .iter()
@@ -284,7 +471,7 @@ impl JsonStore {
                     "missing numeric Bus state version",
                 )),
             })?;
-        if version != STORE_VERSION {
+        if version != STORE_VERSION && version != INLINE_HISTORY_VERSION {
             return Err(StoreError::UnsupportedVersion {
                 path: self.path.clone(),
                 found: version,
@@ -332,6 +519,7 @@ impl JsonStore {
             bytes: 0,
             source,
         })?;
+        self.append_history(state)?;
         let journal_seq = self.journal_state().seq;
         // Compact: the file is rewritten whole on every save, and every
         // reader parses it with serde, which ignores whitespace.
@@ -401,6 +589,39 @@ impl JsonStore {
         journal.entries = entries;
         Ok(())
     }
+}
+
+/// The length of `file` up to and including its last newline: everything
+/// after it is a line an interrupted append left incomplete.
+fn complete_length(file: &mut std::fs::File) -> std::io::Result<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let length = file.metadata()?.len();
+    let mut end = length;
+    let mut chunk = vec![0; 64 * 1024];
+    while end > 0 {
+        let start = end.saturating_sub(chunk.len() as u64);
+        let size = usize::try_from(end - start).unwrap_or(chunk.len());
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut chunk[..size])?;
+        if let Some(newline) = chunk[..size].iter().rposition(|byte| *byte == b'\n') {
+            return Ok(start + newline as u64 + 1);
+        }
+        end = start;
+    }
+    Ok(0)
+}
+
+/// One JSON line per archived item.
+fn history_lines(items: impl Iterator<Item = Archived>) -> Result<Vec<u8>, StoreError> {
+    let mut bytes = Vec::new();
+    for item in items {
+        serde_json::to_writer(&mut bytes, &item).map_err(|source| StoreError::Corrupt {
+            path: PathBuf::from("history.jsonl"),
+            source,
+        })?;
+        bytes.push(b'\n');
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

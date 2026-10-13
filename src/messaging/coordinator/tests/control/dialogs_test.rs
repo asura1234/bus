@@ -189,7 +189,7 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
     assert!(!choose(&mut worker, "2", &fresh).ok);
     assert_eq!(native.lock().unwrap().choices.len(), 2);
     let saved = worker.store.load().unwrap().unwrap();
-    assert!(saved.dialog_fingerprint_consumed(&fresh));
+    assert!(saved.dialog_answer_spent(super::super::dialogs::fingerprint_digest(&fresh)));
     assert!(worker
         .answer_dialog(agent, Some("token"), false, &fresh)
         .is_err());
@@ -250,7 +250,7 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
         .load()
         .unwrap()
         .unwrap()
-        .dialog_fingerprint_consumed(&fresh));
+        .dialog_answer_spent(super::super::dialogs::fingerprint_digest(&fresh)));
     let answers = &native.lock().unwrap().answers;
     assert_eq!(answers[1].text.as_deref(), Some("token"));
     assert_eq!(answers[2].text, None);

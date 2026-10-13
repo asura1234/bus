@@ -200,3 +200,61 @@ fn consecutive_replies_to_one_message_are_separated_by_one_blank_row() {
         "{rows:?}"
     );
 }
+
+#[test]
+fn an_archived_group_still_shows_its_shared_reply_once() {
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(
+            room,
+            "worker",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    let mut requests = Vec::new();
+    for text in ["first task", "second task", "third task"] {
+        requests.push(
+            state
+                .submit_message_from(
+                    room,
+                    Draft {
+                        text: text.into(),
+                        files: Vec::new(),
+                        recipient_ids: [agent].into(),
+                    },
+                    Author::Developer,
+                    1_000,
+                )
+                .unwrap()[0],
+        );
+    }
+    assert!(state.coalesce_queue(requests[0]).is_some());
+    for id in requests {
+        state.finish_for_test(id, "shared completed answer", 2_000);
+    }
+    let render = |state: &BusState| {
+        History::default()
+            .lines(
+                state,
+                state.room(room).unwrap(),
+                100,
+                1,
+                3_000,
+                &mut Thumbnails::default(),
+            )
+            .iter()
+            .filter(|line| line.text.contains("shared completed answer"))
+            .count()
+    };
+    assert_eq!(render(&state), 1, "the live group shares one reply");
+    assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+    assert_eq!(state.history().len(), 3);
+    assert_eq!(
+        render(&state),
+        1,
+        "archiving must preserve the group's single shared reply"
+    );
+}

@@ -679,8 +679,8 @@ impl BusState {
 
     /// The requests that joined `lead`'s group, oldest first.
     pub(crate) fn group_members(&self, lead: RequestId) -> Vec<RequestId> {
-        self.requests
-            .values()
+        // Archived groups too: the room history shows a group's reply once.
+        self.requests()
             .filter(|request| request.group == Some(lead))
             .map(|request| request.id)
             .collect()

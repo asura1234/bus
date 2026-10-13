@@ -47,6 +47,14 @@ mod save_traffic_tests;
 #[path = "callback_batch_test.rs"]
 mod callback_batch_tests;
 
+#[path = "history_archive_test.rs"]
+mod history_archive_tests;
+
+#[path = "history_append_recovery_test.rs"]
+mod history_append_recovery_tests;
+#[path = "history_readers_test.rs"]
+mod history_readers_tests;
+
 #[test]
 fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_state() {
     for mismatch in [

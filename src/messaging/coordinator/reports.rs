@@ -97,14 +97,12 @@ pub(super) fn post_report(
         report.agent,
         report.turn.as_deref().map(|turn| (&report.session, turn)),
     );
-    let already_posted = state.room(report.master).is_some_and(|room| {
-        room.notices
-            .iter()
-            .rev()
-            .take_while(|notice| notice.id.0 >= first)
-            .find(|notice| notice.author == Author::Agent(report.agent))
-            .is_some_and(|notice| notice.text.trim() == report.text)
-    });
+    let already_posted = state
+        .notices(report.master)
+        .rev()
+        .take_while(|notice| notice.id.0 >= first)
+        .find(|notice| notice.author == Author::Agent(report.agent))
+        .is_some_and(|notice| notice.text.trim() == report.text);
     if reports && !already_posted {
         match state.post_to_developer(report.room, report.agent, report.text, Vec::new(), now_ms) {
             Ok(message) => tracing::info!(
