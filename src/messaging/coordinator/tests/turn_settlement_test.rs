@@ -707,3 +707,45 @@ fn a_queued_message_waits_out_a_shell_hold_without_being_abandoned() {
     assert_eq!(fixture.request(next).phase, RequestPhase::Queued);
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
 }
+
+/// E2E: a `--queue` message waited out a shell hold, then was abandoned as
+/// `queued_stalled` in the moment between the shell's wake-up turn starting
+/// (which ends the hold) and Bus seeing the agent Working. The agent's turns
+/// on the request ahead are progress, so the queue has not stalled; it is
+/// delivered once that request settles, even when its last turn started and
+/// ended between two status polls.
+#[test]
+fn a_queued_message_survives_the_wake_up_turn_that_ends_a_shell_hold() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(&mut fixture, "build it", "turn-1");
+    // The hold and the message behind it began past the stall threshold.
+    let now = fixture.now;
+    fixture.now -= QUEUED_STALL_MS + 60_000;
+    fixture.record(claude_stop("turn-1", "Waiting on the build.", &["b1"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let next = fixture.send("review the next change", true);
+    fixture.now = now;
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.deliver();
+    assert_eq!(fixture.request(next).phase, RequestPhase::Queued);
+
+    fixture.record(claude_stop("turn-2", "Build done.", &[]));
+    fixture.consume();
+    fixture.now = crate::messaging::storage::io::now_ms();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Build done."));
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed().last().unwrap(),
+        &("review the next change".into(), false)
+    );
+    assert_eq!(fixture.request(next).phase, RequestPhase::Active);
+}

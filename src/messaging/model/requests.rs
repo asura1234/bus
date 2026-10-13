@@ -293,6 +293,21 @@ impl BusState {
         Ok(())
     }
 
+    /// When the agent last worked on a request it took: a turn event, or that
+    /// request settling. A turn that starts and ends between two status polls
+    /// leaves no status change, so the queue behind it counts from this too.
+    fn last_progress_ms(&self, agent: AgentId) -> u64 {
+        self.requests
+            .values()
+            .filter(|request| request.agent_id == agent)
+            .filter_map(|request| {
+                let progress = request.progress_at_ms?;
+                Some(progress.max(request.completed_at_ms.unwrap_or(0)))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Why `request` is stuck, once it has made no progress for a grace
     /// period, or `None`. A Working or Blocked agent is never stalled: a long
     /// turn is normal, and a blocked one waits on an answer, not on Bus (see
@@ -333,7 +348,10 @@ impl BusState {
             }
             RequestPhase::Queued => since(
                 QUEUED_STALL_MS,
-                lead.prompt.submitted_at_ms.max(agent.status_since_ms),
+                lead.prompt
+                    .submitted_at_ms
+                    .max(agent.status_since_ms)
+                    .max(self.last_progress_ms(lead.agent_id)),
             )
             .then(|| {
                 agent
