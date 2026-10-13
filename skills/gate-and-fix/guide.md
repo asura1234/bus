@@ -112,8 +112,7 @@ use `just ci` for the full sequence. Do not run two rounds in the same checkout 
 
 ## Coverage-failure remediation
 
-Apply [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-
-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates) when
+Apply [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates) when
 remediating coverage failures. That section owns the ban and the honest remediation alternatives; a
 reported gap leaves the gate failed.
 

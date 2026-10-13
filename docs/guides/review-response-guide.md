@@ -151,8 +151,7 @@ green probe that opened no finding (review-pr records it only under "本轮探�
 test with its claim, its actual assertion, and its worktree hunk; red by itself is not worktree pollution, and does not automatically prove the reviewer's
 expectation correct. Whether to adopt is still decided by the same verification and adjudication rules, and tests are not modified before every claim is adjudicated.
 
-Before adopting or rewriting a probe, apply [code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-
-prove-behavior-suspicions-with-tests-do-not-run-quality-gates). The "adds coverage" decisions below use that behavioral criterion.
+Before adopting or rewriting a probe, apply [code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates). The "adds coverage" decisions below use that behavioral criterion.
 
 For an APPLY repair, the author takes over the corresponding test and adds it to the repair allowlist, and after fixing the root cause runs it narrowly to prove red turns green; adopted
 green coverage cases are kept as well. Tests should follow code-review-guide "Probe test naming and ownership", renaming them by actual

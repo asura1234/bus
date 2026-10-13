@@ -80,8 +80,7 @@ declared new dedicated test files; a missing harness connection does not authori
 Do not write tests to pad numbers either — a probe must have a meaningful failure mode and turn red when the implementation is wrong; asserting the harness's own output
 or a just-configured mock is not proof.
 
-Review added tests under [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-guide.md#verification-boundary-prove-
-behavior-suspicions-with-tests-do-not-run-quality-gates); dimension 9 owns the finding and severity mapping.
+Review added tests under [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates); dimension 9 owns the finding and severity mapping.
 
 **Probe lifecycle**:
 
