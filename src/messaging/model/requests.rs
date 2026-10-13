@@ -321,6 +321,16 @@ impl BusState {
         }
         match lead.phase {
             RequestPhase::Completed | RequestPhase::Abandoned => None,
+            // A reply held for shells its turn started is known work with a
+            // cap of its own; the queue behind it waits, it has not stalled.
+            RequestPhase::Queued
+                if agent
+                    .current_request
+                    .and_then(|id| self.requests.get(&id))
+                    .is_some_and(|current| current.awaiting_background) =>
+            {
+                None
+            }
             RequestPhase::Queued => since(
                 QUEUED_STALL_MS,
                 lead.prompt.submitted_at_ms.max(agent.status_since_ms),
@@ -462,19 +472,23 @@ impl BusState {
     }
 
     /// The request a message may steer into: the agent's current request while
-    /// its turn visibly runs, bound by its submit hook, with no final reply yet.
-    /// Returns the first queued request and that lead, unless the queued one
-    /// asked to wait (`--queue`).
+    /// its turn visibly runs, or while the idle agent holds its reply for
+    /// shells that turn started, bound by its submit hook, with no final reply
+    /// yet. Returns the first queued request and that lead, unless the queued
+    /// one asked to wait (`--queue`).
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
-        if agent_state.status != RuntimeStatus::Working
-            || agent_state.dialog
+        if !matches!(
+            agent_state.status,
+            RuntimeStatus::Working | RuntimeStatus::Idle
+        ) || agent_state.dialog
             || agent_state.deletion_pending
         {
             return None;
         }
         let lead = self.requests.get(&agent_state.current_request?)?;
-        if lead.phase != RequestPhase::Active
+        if (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
+            || lead.phase != RequestPhase::Active
             || !lead.trusted_start_bound
             || lead.pending_final.is_some()
             || lead.turn_ended_at_ms.is_some()
