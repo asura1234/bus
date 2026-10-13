@@ -251,6 +251,7 @@ pub(crate) struct RotatingFileState {
     retry_at: Option<Instant>,
     /// Wakes the archive worker; it also runs once at startup for leftovers.
     archive_signal: Option<mpsc::Sender<()>>,
+    archive_enabled: bool,
 }
 
 /// An exclusive lock on the live log file itself, shared by every process
@@ -287,11 +288,15 @@ impl Drop for SharedLogLock {
 }
 
 impl RotatingFileState {
-    /// Opens `path` with the shared live-inode rotation protocol. Archive
-    /// retention starts off-thread maintenance after enabling its stream.
+    /// Opens without taking the append lock, so a perf recorder can start its
+    /// async writer and sampler even while another process holds the live file.
+    /// Archive enablement happens under that lock on the writer's first append.
     pub(crate) fn open(path: PathBuf, max_bytes: u64, retention: Retention) -> io::Result<Self> {
         let mut state = Self::closed(path, max_bytes, retention);
-        state.initialize()?;
+        state.open_current_file()?;
+        if let Retention::Archive(policy) = retention {
+            state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
+        }
         Ok(state)
     }
 
@@ -304,6 +309,7 @@ impl RotatingFileState {
             current_size: 0,
             retry_at: None,
             archive_signal: None,
+            archive_enabled: false,
         }
     }
 
@@ -318,11 +324,14 @@ impl RotatingFileState {
     fn enable_archive_mode(&mut self) -> io::Result<()> {
         self.inherit_archive_mode();
         if let Retention::Archive(policy) = self.retention {
-            if self.archive_signal.is_none() {
+            if !self.archive_enabled {
                 OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(self.archive_mode_path())?;
+                self.archive_enabled = true;
+            }
+            if self.archive_signal.is_none() {
                 self.archive_signal = Some(spawn_archive_worker(self.path.clone(), policy));
             }
         }
@@ -349,6 +358,7 @@ impl RotatingFileState {
             self.retention = Retention::Archive(DEV_LOG_ARCHIVE);
             self.max_bytes = DEV_MAX_LOG_BYTES;
             self.archive_signal = Some(spawn_archive_worker(self.path.clone(), DEV_LOG_ARCHIVE));
+            self.archive_enabled = true;
         }
     }
 

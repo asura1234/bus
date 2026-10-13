@@ -41,6 +41,7 @@ fn rotate_files_shifts_existing_generations() {
         current_size: 0,
         retry_at: None,
         archive_signal: None,
+        archive_enabled: false,
     };
     state.rotate_files().unwrap();
 
@@ -502,6 +503,7 @@ fn archive_rotation_enforces_cap_before_background_maintenance() {
         current_size: 0,
         retry_at: None,
         archive_signal: Some(signal),
+        archive_enabled: false,
     };
     for _ in 0..4 {
         state.rotate_if_needed(8).unwrap();
