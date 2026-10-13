@@ -334,3 +334,43 @@ fn permission_profile_extra_dir_argv_freezes_canonical_descendant() {
     );
     std::fs::remove_dir_all(prepared.scratch_dir.unwrap()).unwrap();
 }
+
+fn assert_worker_inside_protected_root_read_only(target: bool) {
+    let fixture = Fixture::new();
+    let mut spec = fixture.spec();
+    spec.provider = ProviderKind::Codex;
+    spec.consent_project_hooks = true;
+    spec.extra_args.clear();
+    let protected = fixture.0.join(if target { "target" } else { "session" });
+    let cwd = protected.join("worker");
+    std::fs::create_dir_all(&cwd).unwrap();
+    if target {
+        spec.hooks.binary = protected.join("debug/bus");
+        std::fs::create_dir_all(spec.hooks.binary.parent().unwrap()).unwrap();
+        std::fs::write(&spec.hooks.binary, b"fixture binary").unwrap();
+    } else {
+        spec.hooks.spool = protected.join("callbacks/launch");
+        std::fs::create_dir_all(&spec.hooks.spool).unwrap();
+    }
+    spec.cwd = cwd.to_string_lossy().into_owned();
+    let prepared = launch::prepare(&spec, |_| Ok(())).unwrap();
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|a| a == ["--sandbox", "read-only"]),
+        "inside protected root received {:?}",
+        prepared.args
+    );
+    std::fs::remove_dir_all(prepared.scratch_dir.unwrap()).unwrap();
+}
+
+#[test]
+fn permission_profile_review_launch_inside_live_target_is_read_only() {
+    assert_worker_inside_protected_root_read_only(true);
+}
+
+#[test]
+fn permission_profile_review_launch_inside_live_data_is_read_only() {
+    assert_worker_inside_protected_root_read_only(false);
+}

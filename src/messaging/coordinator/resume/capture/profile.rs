@@ -46,7 +46,7 @@ pub(super) fn extras(
             Some(&context.binary),
         );
         crate::messaging::orchestration::write_prompt(&hooks.spool, &text)?;
-    } else {
+    } else if agent.orchestrates.is_none() {
         if let Some(scratch) = &agent.scratch_dir {
             env.insert("TMPDIR".into(), scratch.to_string_lossy().into_owned());
         }

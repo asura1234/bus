@@ -641,3 +641,34 @@ fn permission_profile_service_state_without_args_has_exact_allow_rule() {
     let prefix = crate::agents::providers::launch::profile::cli_prefix(&fixture.binary);
     assert!(settings["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({prefix} state)"))));
 }
+
+#[test]
+fn permission_profile_review_codex_orchestrator_resume_keeps_native_approval() {
+    for legacy in [false, true] {
+        let mut fixture = Fixture::new(Provider::Codex);
+        let room = fixture.state.agent(fixture.agent).unwrap().room_id;
+        let master = fixture.state.ensure_master_room();
+        let mut value = serde_json::to_value(&fixture.state).unwrap();
+        let agent = &mut value["agents"][fixture.agent.0.to_string()];
+        agent["room_id"] = json!(master);
+        agent["launch_profile"] = if legacy { json!(null) } else { json!("orchestrator-native-approval-v1") };
+        if legacy { agent["launch_cwd"] = json!(null); }
+        fixture.state = serde_json::from_value(value).unwrap();
+        fixture.state.bind_orchestrator(fixture.agent, room).unwrap();
+        fixture.facts.agent_name = Some(identity::managed_name(master, fixture.agent));
+        fixture.save();
+        let extras = fixture.load().unwrap();
+        assert!(!extras.args.iter().any(|a| a == "--sandbox" || a == "--ask-for-approval" || a.starts_with("sandbox_workspace_write.")), "orchestrator worker settings, legacy={legacy}: {:?}", extras.args);
+    }
+}
+
+#[test]
+fn permission_profile_review_resume_inside_live_data_is_read_only() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut value = serde_json::to_value(&fixture.state).unwrap();
+    value["agents"][fixture.agent.0.to_string()]["launch_profile"] = json!("codex-workspace-write-v1");
+    fixture.state = serde_json::from_value(value).unwrap();
+    fixture.save();
+    let extras = fixture.load().unwrap();
+    assert!(extras.args.windows(2).any(|a| a == ["--sandbox", "read-only"]), "worker inside session data received {:?}", extras.args);
+}

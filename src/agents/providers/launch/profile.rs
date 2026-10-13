@@ -73,7 +73,11 @@ pub(crate) fn codex_read_only(
     previously_read_only: bool,
 ) -> bool {
     previously_read_only
-        || cwd.is_none_or(|cwd| protected_paths(hooks).iter().any(|p| p.starts_with(cwd)))
+        || cwd.is_none_or(|cwd| {
+            protected_paths(hooks)
+                .iter()
+                .any(|p| p.starts_with(cwd) || cwd.starts_with(p))
+        })
 }
 
 fn private_scratch(hooks: &hook_json::HookContext) -> Result<PathBuf, String> {
