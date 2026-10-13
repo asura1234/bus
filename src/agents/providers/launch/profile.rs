@@ -8,33 +8,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(test)]
-mod build_scope_tests {
-    use super::*;
-    #[test]
-    fn codex_build_cache_roots_are_explicit_and_keep_approval() {
-        let args = codex_args(Some(Path::new("/private/worker-scratch")), false);
-        let roots = args
-            .iter()
-            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
-            .unwrap();
-        let home = std::env::home_dir().unwrap();
-        for relative in [".cargo", ".rustup", "Library/Caches/zig", ".cache/zig"] {
-            let path = home.join(relative);
-            if path.is_dir() {
-                assert!(
-                    roots.contains(&*path.canonicalize().unwrap().to_string_lossy()),
-                    "missing {}: {roots}",
-                    path.display()
-                );
-            }
-        }
-        assert!(args
-            .windows(2)
-            .any(|a| a == ["--ask-for-approval", "on-request"]));
-    }
-}
-
 pub(crate) const CLAUDE_SERVICE: &str = "claude-service-cli-v1";
 pub(crate) const ORCHESTRATOR_NATIVE_APPROVAL: &str = "orchestrator-native-approval-v1";
 pub(crate) const CODEX_READ_ONLY: &str = "codex-read-only-protected-overlap-v1";
@@ -346,5 +319,32 @@ pub(crate) fn strip_codex_args(args: &mut Vec<String>) {
         } else {
             i += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod build_scope_tests {
+    use super::*;
+    #[test]
+    fn codex_build_cache_roots_are_explicit_and_keep_approval() {
+        let args = codex_args(Some(Path::new("/private/worker-scratch")), false);
+        let roots = args
+            .iter()
+            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
+            .unwrap();
+        let home = std::env::home_dir().unwrap();
+        for relative in [".cargo", ".rustup", "Library/Caches/zig", ".cache/zig"] {
+            let path = home.join(relative);
+            if path.is_dir() {
+                assert!(
+                    roots.contains(&*path.canonicalize().unwrap().to_string_lossy()),
+                    "missing {}: {roots}",
+                    path.display()
+                );
+            }
+        }
+        assert!(args
+            .windows(2)
+            .any(|a| a == ["--ask-for-approval", "on-request"]));
     }
 }
