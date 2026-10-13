@@ -652,6 +652,18 @@ fn live_sound_reload_updates_bus_room_playback() {
     )
     .unwrap();
     std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // macOS checks a newly written executable on its first run, which took
+    // 0.8-1.8 s at load 25 against about 7 ms afterwards. Pay that once here,
+    // outside the playback wait below.
+    let warmed = std::process::Command::new(&player)
+        .arg("warm-up")
+        .env("BUS_SOUND_RELOAD_TEST_LOG", base.path().join("warm-up.txt"))
+        .status()
+        .unwrap();
+    assert!(
+        warmed.success(),
+        "fake audio player warm-up failed: {warmed}"
+    );
     unsafe {
         std::env::set_var("PATH", &bin);
         std::env::set_var("BUS_SOUND_RELOAD_TEST_LOG", &log);

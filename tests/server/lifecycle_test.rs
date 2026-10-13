@@ -12,7 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use support::{
     cleanup_test_base, client_shell_handshake, register_runtime_dir, register_spawned_bus_pid,
-    unregister_spawned_bus_pid, wait_for_socket, CURRENT_ENDPOINT_PROTOCOL_GENERATION,
+    stop_spawned_bus, unregister_spawned_bus_pid, wait_for_socket,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION,
 };
 
 fn unique_test_dir() -> PathBuf {
@@ -31,32 +32,11 @@ struct SpawnedBus {
     child: Box<dyn Child + Send + Sync>,
 }
 
-impl SpawnedBus {
-    fn close_master(&mut self) {
-        drop(self._master.take());
-    }
-}
-
 impl Drop for SpawnedBus {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        let _ = self.child.kill();
-        self.close_master();
-
-        if let Some(pid) = pid {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < deadline {
-                let mut status = 0;
-                let result =
-                    unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-                if result == pid as libc::pid_t || result == -1 {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
-
-            unregister_spawned_bus_pid(Some(pid));
-        }
+        stop_spawned_bus(self.child.as_mut(), self._master.take());
+        unregister_spawned_bus_pid(pid);
     }
 }
 
@@ -225,9 +205,8 @@ fn server_removes_client_socket_on_exit() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 
-    // Kill the server.
-    let _ = spawned.child.kill();
-    spawned.close_master();
+    // Stop the server.
+    stop_spawned_bus(spawned.child.as_mut(), spawned._master.take());
     let _ = spawned.child.wait();
 
     // Give it a moment to clean up.

@@ -12,10 +12,11 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-    register_spawned_bus_pid, send_client_shell_focus, send_detach, unregister_spawned_bus_pid,
-    wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_message_variants,
-    wait_for_socket, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
-    SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
+    register_spawned_bus_pid, send_client_shell_focus, send_detach, stop_spawned_bus,
+    unregister_spawned_bus_pid, wait_for_client_shell_bootstrap, wait_for_message_variant,
+    wait_for_message_variants, wait_for_socket,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
+    SERVER_MESSAGE_PANE_SURFACE_PATCH,
 };
 
 fn unique_test_dir() -> PathBuf {
@@ -30,26 +31,15 @@ fn unique_test_dir() -> PathBuf {
 }
 
 struct SpawnedBus {
-    _master: Box<dyn MasterPty + Send>,
+    _master: Option<Box<dyn MasterPty + Send>>,
     child: Box<dyn Child + Send + Sync>,
 }
 
 impl Drop for SpawnedBus {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        let _ = self.child.kill();
-        if let Some(pid) = pid {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < deadline {
-                let mut status = 0;
-                let done = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-                if done == pid as libc::pid_t || done == -1 {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
-            unregister_spawned_bus_pid(Some(pid));
-        }
+        stop_spawned_bus(self.child.as_mut(), self._master.take());
+        unregister_spawned_bus_pid(pid);
     }
 }
 
@@ -99,7 +89,7 @@ fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedBus {
     register_spawned_bus_pid(child.process_id());
     drop(pair.slave);
     SpawnedBus {
-        _master: pair.master,
+        _master: Some(pair.master),
         child,
     }
 }
@@ -130,7 +120,7 @@ fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedBus {
     register_spawned_bus_pid(child.process_id());
     drop(pair.slave);
     SpawnedBus {
-        _master: pair.master,
+        _master: Some(pair.master),
         child,
     }
 }

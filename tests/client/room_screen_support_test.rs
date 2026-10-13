@@ -264,8 +264,7 @@ impl RoomClient {
 impl Drop for RoomClient {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            drop(self.master.take());
+            super::stop_support::stop_spawned_bus(child.as_mut(), self.master.take());
             let _ = child.wait();
         }
         // Only this fixture's explicit private root is addressed. Never discover

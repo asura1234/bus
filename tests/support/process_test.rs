@@ -15,6 +15,9 @@ pub use wire::*;
 #[path = "json_test.rs"]
 mod json;
 pub use json::*;
+#[path = "stop_test.rs"]
+mod stop;
+pub use stop::*;
 
 static PID_REGISTRY: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 
@@ -90,7 +93,48 @@ pub fn wait_for_socket(path: &Path, timeout: Duration) {
         }
         thread::sleep(Duration::from_millis(25));
     }
-    panic!("socket did not appear at {}", path.display());
+    panic!(
+        "socket did not appear at {} within {timeout:?}\n{}",
+        path.display(),
+        startup_evidence(path)
+    );
+}
+
+/// What a scratch server left behind when its socket never appeared: whether
+/// the socket file exists and why connecting fails, plus the tail of every log
+/// and perf file under the test's config dir, so a startup timeout shows where
+/// the time went.
+fn startup_evidence(socket_path: &Path) -> String {
+    let mut out = format!(
+        "socket exists: {}; connect: {:?}",
+        socket_path.exists(),
+        UnixStream::connect(socket_path).err()
+    );
+    let Some(base) = socket_path.parent().and_then(Path::parent) else {
+        return out;
+    };
+    let mut pending = vec![base.join("config")];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let name = path.to_string_lossy();
+            if !(name.ends_with(".log") || name.ends_with(".jsonl")) {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            let lines: Vec<&str> = text.lines().collect();
+            let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+            out.push_str(&format!("\n--- {} ---\n{tail}", path.display()));
+        }
+    }
+    out
 }
 
 pub fn cleanup_registered_bus_pids() {
@@ -442,6 +486,28 @@ pub fn wait_for_path(path: &Path, timeout: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The panic hook and atexit cleanup run while the test still holds every
+    /// PTY, so a bus there may be unable to exit at all; cleanup must give up
+    /// within its short grace instead of waiting out a long one per process.
+    #[test]
+    fn terminate_pid_gives_up_promptly_on_a_process_that_does_not_exit() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; exec sleep 60"])
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        let started = Instant::now();
+        terminate_pid(child.id());
+        let elapsed = started.elapsed();
+        let _ = child.wait();
+
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "terminate_pid waited {elapsed:?} on a process that ignores SIGTERM"
+        );
+    }
 
     fn unique_missing_runtime_dir(label: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()

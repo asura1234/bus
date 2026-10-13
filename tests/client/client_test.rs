@@ -22,11 +22,11 @@ mod client_mode {
     use serde_json::Value;
     use support::{
         cleanup_test_base, client_shell_handshake, read_server_message, register_runtime_dir,
-        register_spawned_bus_pid, unregister_spawned_bus_pid, wait_for_client_shell_bootstrap,
-        wait_for_message_variant, wait_for_message_variants, wait_for_socket, wait_until,
-        CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
-        SERVER_MESSAGE_PANE_SURFACE_PATCH, SERVER_MESSAGE_SEMANTIC_NOTIFICATION,
-        SERVER_MESSAGE_SERVER_SHUTDOWN,
+        register_spawned_bus_pid, stop_spawned_bus, unregister_spawned_bus_pid,
+        wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_message_variants,
+        wait_for_socket, wait_until, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
+        SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
+        SERVER_MESSAGE_SEMANTIC_NOTIFICATION, SERVER_MESSAGE_SERVER_SHUTDOWN,
     };
 
     fn unique_test_dir() -> PathBuf {
@@ -54,23 +54,8 @@ mod client_mode {
     impl Drop for SpawnedBus {
         fn drop(&mut self) {
             let pid = self.child.process_id();
-            let _ = self.child.kill();
-            self.close_master();
-
-            if let Some(pid) = pid {
-                let deadline = Instant::now() + Duration::from_secs(2);
-                while Instant::now() < deadline {
-                    let mut status = 0;
-                    let result =
-                        unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-                    if result == pid as libc::pid_t || result == -1 {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-
-                unregister_spawned_bus_pid(Some(pid));
-            }
+            stop_spawned_bus(self.child.as_mut(), self._master.take());
+            unregister_spawned_bus_pid(pid);
         }
     }
 
@@ -257,7 +242,7 @@ mod cross_area {
     use serde_json::{json, Value};
     use support::{
         cleanup_test_base, client_shell_handshake, register_runtime_dir, register_spawned_bus_pid,
-        unregister_spawned_bus_pid, wait_for_socket,
+        stop_spawned_bus, unregister_spawned_bus_pid, wait_for_socket,
         CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_ENDPOINT_CONTROL,
         SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
     };
@@ -287,23 +272,8 @@ mod cross_area {
     impl Drop for SpawnedBus {
         fn drop(&mut self) {
             let pid = self.child.process_id();
-            let _ = self.child.kill();
-            self.close_master();
-
-            if let Some(pid) = pid {
-                let deadline = Instant::now() + Duration::from_secs(2);
-                while Instant::now() < deadline {
-                    let mut status = 0;
-                    let result =
-                        unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-                    if result == pid as libc::pid_t || result == -1 {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-
-                unregister_spawned_bus_pid(Some(pid));
-            }
+            stop_spawned_bus(self.child.as_mut(), self._master.take());
+            unregister_spawned_bus_pid(pid);
         }
     }
 
