@@ -246,12 +246,14 @@ impl JsonStore {
             if line.is_empty() {
                 continue;
             }
+            // An append writes whole lines and syncs before state.json changes,
+            // so a last line without its newline was never committed.
+            if last {
+                stale = true;
+                continue;
+            }
             let item = match serde_json::from_slice::<Archived>(line) {
                 Ok(item) => item,
-                Err(_) if last => {
-                    stale = true;
-                    continue;
-                }
                 Err(source) => {
                     return Err(StoreError::Corrupt {
                         path: path.clone(),
@@ -259,9 +261,7 @@ impl JsonStore {
                     })
                 }
             };
-            // A complete entry without its newline still needs one.
-            stale |= last;
-            let kept = item.submitted_at_ms() >= cutoff
+            let kept = item.settled_at_ms() >= cutoff
                 && state.room(item.room()).is_some()
                 && match &item {
                     Archived::Request(request) => {
@@ -319,16 +319,28 @@ impl JsonStore {
         }
         let created = !path.exists();
         let mut options = std::fs::OpenOptions::new();
-        options.create(true).append(true);
+        options.create(true).read(true).append(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         let mut file = options
             .open(&path)
             .map_err(|source| failed(SaveStage::TempCreate, source))?;
-        std::io::Write::write_all(&mut file, bytes)
+        // A failed or interrupted append can leave part of a line; it was never
+        // committed, and appending after it would bury it mid-file.
+        let complete =
+            complete_length(&mut file).map_err(|source| failed(SaveStage::TempCreate, source))?;
+        file.set_len(complete)
             .map_err(|source| failed(SaveStage::TempWrite, source))?;
-        file.sync_all()
-            .map_err(|source| failed(SaveStage::TempSync, source))?;
+        let written = std::io::Write::write_all(&mut file, bytes)
+            .map_err(|source| failed(SaveStage::TempWrite, source))
+            .and_then(|()| {
+                file.sync_all()
+                    .map_err(|source| failed(SaveStage::TempSync, source))
+            });
+        if let Err(error) = written {
+            let _ = file.set_len(complete).and_then(|()| file.sync_all());
+            return Err(error);
+        }
         if created {
             if let Some(parent) = path.parent() {
                 crate::platform::sync_parent_directory(parent)
@@ -389,6 +401,7 @@ impl JsonStore {
         };
         let entries = self.load_journal()?;
         replay(&mut state, &entries, base_seq);
+        state.adopt_version_one_guards(super::io::now_ms());
         let history = self.load_history(&state)?;
         let state = state.with_history(history);
         let mut journal = self.journal_state();
@@ -576,6 +589,26 @@ impl JsonStore {
         journal.entries = entries;
         Ok(())
     }
+}
+
+/// The length of `file` up to and including its last newline: everything
+/// after it is a line an interrupted append left incomplete.
+fn complete_length(file: &mut std::fs::File) -> std::io::Result<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let length = file.metadata()?.len();
+    let mut end = length;
+    let mut chunk = vec![0; 64 * 1024];
+    while end > 0 {
+        let start = end.saturating_sub(chunk.len() as u64);
+        let size = usize::try_from(end - start).unwrap_or(chunk.len());
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut chunk[..size])?;
+        if let Some(newline) = chunk[..size].iter().rposition(|byte| *byte == b'\n') {
+            return Ok(start + newline as u64 + 1);
+        }
+        end = start;
+    }
+    Ok(0)
 }
 
 /// One JSON line per archived item.

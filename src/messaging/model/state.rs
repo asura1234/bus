@@ -17,10 +17,17 @@ pub(crate) struct BusState {
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     pub(super) requests: BTreeMap<RequestId, Request>,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
-    /// Applied provider callbacks by id, with when they were applied; a
-    /// re-spooled duplicate is refused while its id is kept.
+    /// Applied provider callbacks by id, with the launch whose spool they
+    /// came from; a re-spooled duplicate is refused while its id is kept.
+    /// `None` marks ids carried over from a version 1 file, launch unknown.
     #[serde(default)]
-    pub(super) consumed_callbacks: BTreeMap<String, u64>,
+    pub(super) consumed_callbacks: BTreeMap<String, Option<String>>,
+    /// Version 1 shapes of the spent-id guards, read once on load and moved
+    /// into `consumed_callbacks` and `spent_dialog_answers`; never written.
+    #[serde(default, skip_serializing)]
+    pub(super) consumed_callback_ids: BTreeSet<String>,
+    #[serde(default, skip_serializing)]
+    pub(super) consumed_dialog_fingerprints: BTreeSet<String>,
     pub(super) consumed_provider_turns: BTreeSet<String>,
     /// Provider turns the agent started on its own (a task notification, or the
     /// user typing in its terminal). Their later hooks are activity, never a
@@ -128,11 +135,29 @@ impl BusState {
             requests: BTreeMap::new(),
             queues: BTreeMap::new(),
             consumed_callbacks: BTreeMap::new(),
+            consumed_callback_ids: BTreeSet::new(),
+            consumed_dialog_fingerprints: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
             unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
             spent_dialog_answers: BTreeMap::new(),
             history: Arc::default(),
+        }
+    }
+
+    /// Moves guards a version 1 file stored in its own shapes into the
+    /// current ones, so what was spent before the upgrade stays spent: callback
+    /// ids are kept for good (their launch is unknown), and each fingerprint
+    /// counts as observed now, so it stays spent for at least its remaining
+    /// lifetime.
+    pub(crate) fn adopt_version_one_guards(&mut self, now_ms: u64) {
+        for id in std::mem::take(&mut self.consumed_callback_ids) {
+            self.consumed_callbacks.entry(id).or_insert(None);
+        }
+        for token in std::mem::take(&mut self.consumed_dialog_fingerprints) {
+            self.spent_dialog_answers
+                .entry(fingerprint_digest(&token).to_owned())
+                .or_insert(now_ms);
         }
     }
 
@@ -243,6 +268,11 @@ impl<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> Itera
             (None, _) => self.archived.next(),
         }
     }
+}
+
+/// The digest a dialog fingerprint ends with; it names the fingerprint once spent.
+pub(crate) fn fingerprint_digest(fingerprint: &str) -> &str {
+    fingerprint.rsplit('.').next().unwrap_or(fingerprint)
 }
 
 pub(super) fn normalized_name(name: &str) -> Result<String, ModelError> {

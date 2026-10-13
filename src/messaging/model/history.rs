@@ -28,10 +28,11 @@ pub(crate) enum Archived {
 }
 
 impl Archived {
-    /// When the item was sent; retention counts from it.
-    pub(crate) fn submitted_at_ms(&self) -> u64 {
+    /// When the item settled, which retention counts from: a request's
+    /// reply (or its send time when it closed without one), a notice's post.
+    pub(crate) fn settled_at_ms(&self) -> u64 {
         match self {
-            Self::Request(request) => request.prompt.submitted_at_ms,
+            Self::Request(request) => settled_at_ms(request),
             Self::Notice { prompt, .. } => prompt.submitted_at_ms,
         }
     }
@@ -42,6 +43,12 @@ impl Archived {
             Self::Notice { room, .. } => *room,
         }
     }
+}
+
+fn settled_at_ms(request: &Request) -> u64 {
+    request
+        .completed_at_ms
+        .unwrap_or(request.prompt.submitted_at_ms)
 }
 
 impl History {
@@ -156,10 +163,7 @@ impl super::BusState {
             .values()
             .filter(|request| {
                 request.settled()
-                    && request
-                        .completed_at_ms
-                        .unwrap_or(request.prompt.submitted_at_ms)
-                        <= cutoff
+                    && settled_at_ms(request) <= cutoff
                     && !referenced.contains(&request.id)
                     && !open_groups.contains(&request.group.unwrap_or(request.id))
             })
@@ -198,7 +202,7 @@ impl super::BusState {
     }
 
     fn drop_history_before(&mut self, cutoff: u64) -> bool {
-        self.drop_history_where(|_, _, submitted_at_ms| submitted_at_ms < cutoff)
+        self.drop_history_where(|_, _, settled_at_ms| settled_at_ms < cutoff)
     }
 
     /// Drops a deleted room's archived requests and notices.
@@ -211,7 +215,7 @@ impl super::BusState {
         self.drop_history_where(|_, of, _| of == Some(agent));
     }
 
-    /// Drops archived items for which `drop(room, request agent, sent at)` holds.
+    /// Drops archived items for which `drop(room, request agent, settled at)` holds.
     fn drop_history_where(
         &mut self,
         drop: impl Fn(RoomId, Option<super::AgentId>, u64) -> bool,
@@ -224,7 +228,7 @@ impl super::BusState {
                 drop(
                     request.room_id,
                     Some(request.agent_id),
-                    request.prompt.submitted_at_ms,
+                    settled_at_ms(request),
                 )
             })
             .map(|request| request.id)
@@ -258,23 +262,26 @@ impl super::BusState {
         true
     }
 
-    /// Spent fingerprints past their lifetime, callback ids past the history's,
-    /// and provider turns of launches no agent runs any more can never match
-    /// again; keeping them would only grow every save.
+    /// Spent fingerprints past their lifetime, and callback ids and provider
+    /// turns of launches no agent runs any more, can never match again:
+    /// callbacks are consumed only from an agent's current launch. Keeping them
+    /// would only grow every save.
     fn drop_spent_ids(&mut self, now_ms: u64) -> bool {
         let answers = self.spent_dialog_answers.len();
         self.spent_dialog_answers.retain(|_, observed_at_ms| {
             now_ms.saturating_sub(*observed_at_ms) <= DIALOG_ANSWER_TTL_MS
         });
-        let callbacks = self.consumed_callbacks.len();
-        let callback_cutoff = now_ms.saturating_sub(HISTORY_RETENTION_MS);
-        self.consumed_callbacks
-            .retain(|_, consumed_at_ms| *consumed_at_ms >= callback_cutoff);
-        let launches: std::collections::BTreeSet<&str> = self
+        let launches: std::collections::BTreeSet<String> = self
             .agents
             .values()
-            .filter_map(|agent| agent.runtime_identity.launch_id.as_deref())
+            .filter_map(|agent| agent.runtime_identity.launch_id.clone())
             .collect();
+        let callbacks = self.consumed_callbacks.len();
+        self.consumed_callbacks.retain(|_, launch| {
+            launch
+                .as_ref()
+                .is_none_or(|launch| launches.contains(launch))
+        });
         let live = |key: &String| {
             key.split('\0')
                 .next()

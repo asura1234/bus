@@ -416,10 +416,7 @@ fn encode_dialog_fingerprint(claims: &DialogFingerprintClaims) -> Result<String,
     Ok(format!("d1.{encoded}.{digest}"))
 }
 
-/// The digest a fingerprint ends with; it names the fingerprint once spent.
-pub(in crate::messaging::coordinator) fn fingerprint_digest(fingerprint: &str) -> &str {
-    fingerprint.rsplit('.').next().unwrap_or(fingerprint)
-}
+pub(in crate::messaging::coordinator) use crate::messaging::model::fingerprint_digest;
 
 fn observed_at_ms(claims: &DialogFingerprintClaims) -> u64 {
     u64::try_from(claims.observed_at_ns / 1_000_000).unwrap_or(u64::MAX)

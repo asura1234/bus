@@ -16,7 +16,7 @@ use requests::rejection_reason;
 #[cfg(test)]
 pub(crate) use history::ARCHIVE_AFTER_MS;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS, HISTORY_RETENTION_MS};
-pub(crate) use state::BusState;
+pub(crate) use state::{fingerprint_digest, BusState};
 #[cfg(test)]
 use types::payload_matches;
 pub(crate) use {
