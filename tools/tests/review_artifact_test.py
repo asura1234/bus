@@ -235,6 +235,27 @@ FENCED_HEADING_MUST_SURVIVE
         self.assertEqual(result.stdout, expected)
         self.assertEqual(output.read_text(), expected)
 
+    def test_pr_finding_proof_marks_render_verbatim(self) -> None:
+        for name, evidence in (
+            (
+                "tui-run",
+                "- **证据**：已证明：APP-07 step 3 @ temp/review-pr/feature-demo/default/round-02/tui/run/report.md"
+                " — expected the draft kept, saw an empty composer",
+            ),
+            ("unproven", "- **证据**：未证明"),
+        ):
+            with self.subTest(evidence=name):
+                review = _write(
+                    self.tmp_path(name) / "round-02" / "review.md",
+                    _pr_review().replace("- **证据**：PR_EVIDENCE", evidence),
+                )
+                output = review.with_name("chat-response.md")
+
+                result = _run_cli(review, output)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(evidence, result.stdout)
+
     def test_pr_split_abandon_verdict_survives_rendering(self) -> None:
         verdict = "- **判定**：Abandon (dimension 6: multi-purpose, split with split-pr)"
         review = _write(
