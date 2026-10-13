@@ -343,29 +343,26 @@ fn a_blocked_orchestrator_fallback_tells_the_developer_once_in_work_room() {
     for wait in ["dialog-id", "question-id", "trust-id", BLOCKED] {
         let (mut worker, _, room, orchestrator, _, dir) = worker(true);
         let orchestrator = orchestrator.unwrap();
-        let master = room;
+        let work_room = room;
         worker
             .notify_dialogs(vec![(orchestrator, Some(wait.into()))])
             .unwrap();
-        assert!(sent_by(&worker, master, orchestrator).is_empty());
+        assert!(sent_by(&worker, work_room, orchestrator).is_empty());
         notify_steady(&mut worker, orchestrator, Some(wait));
         assert_eq!(
-            sent_by(&worker, master, orchestrator),
+            sent_by(&worker, work_room, orchestrator),
             [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
-        let master_room = worker.state.room(master).unwrap();
-        let notice = &master_room.notices[0];
+        let work_room_state = worker.state.room(work_room).unwrap();
+        let notice = &work_room_state.notices[0];
         assert_eq!(notice.author, Author::Agent(orchestrator));
         assert!(notice.files.is_empty());
-        assert_eq!(master_room.unread_count, 1);
-        // The agent-authored latest prompt uses the existing MASTER ring path.
-        assert_eq!(master_room.latest_prompt.as_ref().unwrap().id, notice.id);
-        assert!(worker
-            .state
-            .room(worker.state.master_room().unwrap().id)
-            .unwrap()
-            .notices
-            .is_empty());
+        assert_eq!(work_room_state.unread_count, 1);
+        // The fallback is visible only in the work room and may ring there.
+        assert_eq!(
+            work_room_state.latest_prompt.as_ref().unwrap().id,
+            notice.id
+        );
         assert!(worker
             .state
             .room(worker.state.master_room().unwrap().id)
@@ -390,15 +387,15 @@ fn notify_steady(worker: &mut Worker, agent: AgentId, wait: Option<&str>) {
 fn repeating_an_orchestrators_dialog_in_the_same_episode_adds_no_message() {
     let (mut worker, _, room, orchestrator, _, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
-    let master = room;
+    let work_room = room;
     for wait in ["dialog-id", "dialog-id", BLOCKED, "dialog-id"] {
         notify_steady(&mut worker, orchestrator, Some(wait));
     }
     assert_eq!(
-        sent_by(&worker, master, orchestrator),
+        sent_by(&worker, work_room, orchestrator),
         [(Vec::new(), expected_blocked(&worker, orchestrator))]
     );
-    assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
+    assert_eq!(worker.state.room(work_room).unwrap().unread_count, 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -497,17 +494,17 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
 fn an_unblocked_orchestrator_reports_a_new_dialog_as_a_new_episode() {
     let (mut worker, _, room, orchestrator, _, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
-    let master = room;
+    let work_room = room;
     notify_steady(&mut worker, orchestrator, Some("dialog-id"));
     notify_steady(&mut worker, orchestrator, None);
-    assert_eq!(sent_by(&worker, master, orchestrator).len(), 1);
+    assert_eq!(sent_by(&worker, work_room, orchestrator).len(), 1);
     notify_steady(&mut worker, orchestrator, Some("question-id"));
     let blocked = (Vec::new(), expected_blocked(&worker, orchestrator));
     assert_eq!(
-        sent_by(&worker, master, orchestrator),
+        sent_by(&worker, work_room, orchestrator),
         [blocked.clone(), blocked]
     );
-    assert_eq!(worker.state.room(master).unwrap().unread_count, 2);
+    assert_eq!(worker.state.room(work_room).unwrap().unread_count, 2);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -517,7 +514,7 @@ fn a_flicker_does_not_repeat_an_orchestrators_blocked_message() {
     for wait in ["dialog-id", BLOCKED] {
         let (mut worker, _, room, orchestrator, _, dir) = worker(true);
         let orchestrator = orchestrator.unwrap();
-        let master = room;
+        let work_room = room;
         notify_steady(&mut worker, orchestrator, Some(wait));
         worker.notify_dialogs(vec![(orchestrator, None)]).unwrap();
         notify_steady(&mut worker, orchestrator, Some(wait));
@@ -527,10 +524,10 @@ fn a_flicker_does_not_repeat_an_orchestrators_blocked_message() {
             notify_steady(&mut worker, orchestrator, Some(wait));
         }
         assert_eq!(
-            sent_by(&worker, master, orchestrator),
+            sent_by(&worker, work_room, orchestrator),
             [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
-        assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
+        assert_eq!(worker.state.room(work_room).unwrap().unread_count, 1);
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
