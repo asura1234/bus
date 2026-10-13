@@ -101,3 +101,155 @@ fn neutral_turn_order_keeps_session_then_submit_before_companion_finals() {
         [4, 3, 1, 5, 2]
     );
 }
+
+mod orchestrator_turn_routing {
+    use super::super::super::*;
+    use crate::messaging::native::TransportError;
+    use serde_json::json;
+
+    struct Accepting;
+    impl Transport for Accepting {
+        fn request(&mut self, _method: Method) -> Result<ResponseResult, TransportError> {
+            Ok(ResponseResult::Ok {})
+        }
+    }
+
+    struct Bus {
+        worker: Worker,
+        master: RoomId,
+        room: RoomId,
+        orchestrator: AgentId,
+        dir: PathBuf,
+    }
+
+    impl Drop for Bus {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn bus() -> Bus {
+        let dir = std::env::temp_dir().join(format!(
+            "bus-routing-{}-{}",
+            std::process::id(),
+            crate::messaging::storage::io::now_ns()
+        ));
+        let mut worker = Worker::open(dir.clone(), Box::new(Accepting)).unwrap();
+        let mut state = worker.state.clone();
+        let master = state.master_room().unwrap().id;
+        let room = state.create_room("work").unwrap();
+        let orchestrator = state
+            .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
+            .unwrap();
+        state.bind_orchestrator(orchestrator, room).unwrap();
+        state
+            .set_agent_runtime_identity(
+                orchestrator,
+                AgentRuntimeIdentity {
+                    launch_id: Some("orch".into()),
+                    terminal_id: Some("terminal-orch".into()),
+                    pane_id: Some("pane-orch".into()),
+                    session_id: Some("session-orch".into()),
+                },
+            )
+            .unwrap();
+        state.confirm_hook_setup(orchestrator).unwrap();
+        state
+            .observe_status(orchestrator, RuntimeStatus::Idle, 1)
+            .unwrap();
+        callbacks::initialize(
+            &dir.join("callbacks/orch"),
+            &callbacks::Manifest {
+                routing_key: callbacks::RoutingKey(orchestrator.0),
+                provider: Provider::ClaudeCode,
+                launch_id: "orch".into(),
+            },
+        )
+        .unwrap();
+        worker.save(state).unwrap();
+        Bus {
+            worker,
+            master,
+            room,
+            orchestrator,
+            dir,
+        }
+    }
+
+    impl Bus {
+        fn hooks(&mut self, values: &[serde_json::Value]) {
+            let spool = self.dir.join("callbacks/orch");
+            for value in values {
+                callbacks::append(
+                    &spool,
+                    "orch",
+                    Provider::ClaudeCode,
+                    value.clone(),
+                    &[],
+                    false,
+                )
+                .unwrap();
+            }
+            self.worker
+                .consume_callbacks(self.orchestrator, &spool)
+                .unwrap();
+        }
+
+        fn notices(&self, room: RoomId) -> Vec<String> {
+            self.worker
+                .state
+                .room(room)
+                .unwrap()
+                .notices
+                .iter()
+                .map(|notice| notice.text.clone())
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_background_turn_while_a_developer_message_waits_reports_in_the_work_room_and_the_developer_reply_stays_in_master(
+    ) {
+        let mut bus = bus();
+        let (master, orchestrator) = (bus.master, bus.orchestrator);
+        // A background command woke the orchestrator; its turn is running.
+        bus.hooks(&[json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"bg","prompt":"<task-notification>"})]);
+        // The developer writes in MASTER meanwhile; Bus types it.
+        let mut state = bus.worker.state.clone();
+        let request = state
+            .submit_message_from(
+                master,
+                Draft {
+                    text: "status?".into(),
+                    files: Vec::new(),
+                    recipient_ids: [orchestrator].into(),
+                },
+                Author::Developer,
+                crate::messaging::storage::io::now_ms(),
+            )
+            .unwrap()[0];
+        bus.worker.save(state).unwrap();
+        bus.worker.submit_ready().unwrap();
+        let typed = {
+            let request = bus.worker.state.request(request).unwrap();
+            request
+                .submitted_payload
+                .clone()
+                .unwrap_or_else(|| request.prompt.rendered_payload())
+        };
+        // The background turn ends; then the developer's message runs.
+        bus.hooks(&[
+            json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"bg","last_assistant_message":"Gate passed."}),
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"dev","prompt":typed}),
+            json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"dev","last_assistant_message":"All green; merging."}),
+        ]);
+        assert_eq!(bus.notices(bus.room), ["Gate passed."]);
+        assert!(bus.notices(master).is_empty(), "{:?}", bus.notices(master));
+        let request = bus.worker.state.request(request).unwrap();
+        assert_eq!(
+            request.pending_final.as_ref().map(|f| f.text.as_str()),
+            Some("All green; merging."),
+            "{request:?}"
+        );
+    }
+}

@@ -307,7 +307,8 @@ impl BusState {
 
     /// Posts an agent's message to the developer in `room`, delivered to no agent.
     /// Orchestrators report this way when no developer message is open, so the
-    /// report reaches the room's history instead of only their terminal.
+    /// report reaches the room's history instead of only their terminal. The
+    /// author is an agent in `room`, or the orchestrator of that work room.
     pub(crate) fn post_to_developer(
         &mut self,
         room: RoomId,
@@ -323,7 +324,7 @@ impl BusState {
             .agents
             .get(&author)
             .ok_or(ModelError::UnknownAgent(author))?;
-        if agent.room_id != room {
+        if agent.room_id != room && agent.orchestrates != Some(room) {
             return Err(ModelError::AgentOutsideRoom(author));
         }
         if agent.deletion_pending {
