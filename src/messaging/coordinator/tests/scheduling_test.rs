@@ -147,6 +147,25 @@ struct PollingNative {
 impl Transport for PollingNative {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
+            Method::TabCreate(params) => {
+                assert_eq!(params.label.as_deref(), Some("permission handler"));
+                assert!(params.env.contains_key("BUS_PERMISSION_HANDLER_ID"));
+                Ok(ResponseResult::TabCreated {
+    tab: serde_json::from_value(json!({"tab_id":"handler-tab", "workspace_id":"workspace", "number":2, "label":"permission handler", "focused":false, "pane_count":1, "agent_status":"unknown"})).unwrap(),
+    root_pane: serde_json::from_value(json!({"pane_id":"handler-pane", "terminal_id":"handler-terminal", "workspace_id":"workspace", "tab_id":"handler-tab", "focused":false, "agent_status":"unknown", "revision":1})).unwrap(),
+})
+            }
+            Method::AgentStart(params) => {
+                assert_eq!(params.kind, "claude");
+                assert_eq!(params.pane_id, "handler-pane");
+                let mut info = native_info("handler-pane", "claude", "handler-session");
+                info.terminal_id = "handler-terminal".into();
+                info.name = Some(params.name);
+                Ok(ResponseResult::AgentStarted {
+                    agent: info,
+                    argv: params.args,
+                })
+            }
             Method::AgentList(_) => {
                 // Model `send --async` polling during every status round trip.
                 let command = if self.shutdown {

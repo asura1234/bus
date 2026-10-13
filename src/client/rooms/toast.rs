@@ -106,6 +106,7 @@ impl BusUi {
             .snapshot
             .state
             .agents()
+            .filter(|a| !a.permission_handler)
             .filter(|agent| agent.room_id == room)
             .filter_map(|agent| {
                 agent

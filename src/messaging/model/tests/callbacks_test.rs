@@ -879,3 +879,35 @@ fn provider_error_on_an_unbound_request_does_not_claim_the_request_closed() {
     assert_eq!(phase, RequestPhase::Active);
     assert!(error.contains("API Error: 529 Overloaded."), "{error}");
 }
+
+#[test]
+fn hidden_permission_service_final_settles_without_visible_reply_or_unread() {
+    let (mut state, room, _, handler) = state_with_room_and_agents();
+    state.mark_permission_handler(handler).unwrap();
+    let other = state.create_room("other").unwrap();
+    state.select_room(other).unwrap();
+    let request = submit_text(&mut state, room, handler, "inspect dialog");
+    start_request(&mut state, request, "launch-claude", 8);
+    assert_eq!(
+        state.accept_callback(ProviderCallback::final_event(
+            "service-final",
+            10,
+            handler,
+            "launch-claude",
+            "provider-session",
+            "turn-1",
+            "inspect dialog",
+            "decision recorded"
+        )),
+        CallbackDisposition::AcceptedPendingSettlement
+    );
+    state
+        .observe_status(handler, RuntimeStatus::Idle, 30)
+        .unwrap();
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(state.room(room).unwrap().latest_replies.is_empty());
+    assert_eq!(state.room(room).unwrap().unread_count, 0);
+}

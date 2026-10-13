@@ -199,18 +199,18 @@ only for an unrelated task that should get a turn and a reply of its own.
 
 ## Unblock agents
 
-- **Dialogs:** agents stop at permission, trust and question dialogs and
-  other screens they cannot pass alone. The blocked worker sends you one
-  message, "Blocked, needs help to continue.", the same for every blocker and
-  once per episode; `bus wait` also stops early with
-  `agent_waiting_on_dialog`. Look at its terminal: `bus agent dialog AGENT`
-  shows the question or full command, the options and a fresh fingerprint
-  (`bus agent read AGENT --source visible` for any other screen). Then `bus
-  agent choose AGENT --option N --fingerprint F`, or for a free-text question
-  `bus agent answer AGENT --text "..." --fingerprint F` (`--skip` instead of
-  `--text`). Decide, answer, and check the reported `outcome`; nothing follows
-  when the dialog closes.
-  Ask the human before approving anything destructive or outward-facing.
+- **Dialogs:** the hidden, Bus-owned Claude permission handler inspects every
+  blocked episode first. It approves only standing safe work, routes questions
+  and choices without answering, and escalates unsafe or uncertain requests.
+  You receive one concise line, with worker and fingerprint/episode context.
+  Fetch raw details explicitly with `bus agent dialog AGENT` or `bus agent read
+  AGENT --source visible`. Use typed choose/answer and a fresh fingerprint after
+  the handler assignment settles or falls back; never race its lease. Ask the
+  human before destructive or outward-facing work unless already authorized.
+  `bus state` exposes the hidden service, active assignments and recent audit.
+  Bus clears the handler after each settled assignment, preserving its policy
+  and audit. Its timeout is 90 seconds including queue time; service failures
+  fall back once to this work room's orchestrator.
 - **Stuck requests:** check `bus message status` (each request's `stage` and
   `reason`), the agent's `wait_reason` in `bus state`, and `bus agent read`
   before `bus request recover`.

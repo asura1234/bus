@@ -612,3 +612,110 @@ fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_developer_
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn permission_service_room_history_projects_mixed_delivery_and_archived_audits() {
+    let (mut worker, room, agent, dir) = fixture();
+    let handler = worker
+        .state
+        .create_agent(room, "service", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    worker.state.mark_permission_handler(handler).unwrap();
+    let private = worker
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "Permission assignment secret".into(),
+                files: vec![],
+                recipient_ids: [handler].into(),
+            },
+            Author::Agent(agent),
+            1_000,
+        )
+        .unwrap()[0];
+    worker
+        .state
+        .finish_for_test(private, "Permission fixture completed secret", 2_000);
+    let mixed = worker
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "mixed debug request".into(),
+                files: vec![],
+                recipient_ids: [agent, handler].into(),
+            },
+            Author::Developer,
+            1_000,
+        )
+        .unwrap();
+    for id in mixed {
+        worker.state.finish_for_test(id, "completed", 2_000);
+    }
+    worker
+        .state
+        .post_to_developer(room, handler, "approved audit".into(), vec![], 2_000)
+        .unwrap();
+    let routed = worker
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "routed decision".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(handler),
+            2_000,
+        )
+        .unwrap()[0];
+    worker
+        .state
+        .finish_for_test(routed, "orchestrator response", 2_000);
+    let private_message = worker.state.request(private).unwrap().prompt.id;
+
+    for archived in [false, true] {
+        if archived {
+            worker
+                .archive_history(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1)
+                .unwrap();
+        }
+        let response = call(
+            &mut worker,
+            "privacy-history",
+            "room.history",
+            json!({"room":"test"}),
+        );
+        assert!(response.ok, "{response:?}");
+        let messages = response.result["messages"].as_array().unwrap();
+        assert_eq!(
+            messages.len(),
+            3,
+            "private protocol leaked or audit omitted: {messages:?}"
+        );
+        assert_eq!(messages[0]["prompt"]["text"], "mixed debug request");
+        assert_eq!(messages[0]["prompt"]["recipient_ids"], json!([agent]));
+        let requests = messages[0]["delivery"]["requests"].as_array().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["agent_id"], agent.0);
+        assert_eq!(messages[1]["prompt"]["text"], "approved audit");
+        assert_eq!(messages[2]["prompt"]["text"], "routed decision");
+        assert_eq!(
+            messages[2]["delivery"]["requests"][0]["reply"]["text"],
+            "orchestrator response"
+        );
+        let debug = worker.control_message(private_message).unwrap();
+        assert_eq!(debug["requests"][0]["agent_id"], handler.0);
+        assert_eq!(
+            debug["requests"][0]["reply"]["text"],
+            "Permission fixture completed secret"
+        );
+        assert!(
+            worker.state.request(private).is_some(),
+            "explicit debug request lost"
+        );
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -14,7 +14,7 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "state" => Ok(
-                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::platform::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().map(agent_json).collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::platform::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().map(|a| agent_json(a, &self.data_dir)).collect::<Vec<_>>(),"permission_assignments":self.state.permission_assignments().filter(|p|p.outcome.is_none()).map(permission_assignment_json).collect::<Vec<_>>(),"permission_decisions":self.state.permission_decisions().iter().rev().take(10).map(|d| json!({"worker":d.assignment.worker,"room":d.assignment.room,"handler":d.assignment.handler,"outcome":d.assignment.outcome,"summary":d.summary,"at_ms":d.at_ms,"policy_version":d.policy_version,"episode":crate::utils::time::digest(d.assignment.episode.as_bytes()),"fingerprint":d.assignment.fingerprint.as_ref().map(|fp|crate::utils::time::digest(fp.as_bytes()))})).collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json()}),
             ),
             "diagnostics" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_pause.is_some(),"storage_repair_required":matches!(self.storage_pause.as_ref(),Some(super::super::StoragePause::NeedsRepair)),"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::messaging::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
@@ -218,10 +218,37 @@ impl Worker {
 
 /// A `state` agent entry: the stored agent plus why a queued message would
 /// wait on it, which orchestrators need now that `diagnostics` is dev tier.
-fn agent_json(agent: &crate::messaging::model::RoomAgent) -> Value {
+fn agent_json(agent: &crate::messaging::model::RoomAgent, data: &std::path::Path) -> Value {
     let mut value = json!(agent);
     value["status"] = json!(agent.shown_status());
+    if agent.provider == crate::messaging::model::Provider::Codex
+        && agent
+            .launch_profile
+            .as_deref()
+            .is_some_and(|p| p.starts_with("codex-"))
+    {
+        if let Ok(binary) = std::env::current_exe() {
+            let hooks = crate::agents::providers::hook_json::HookContext {
+                binary,
+                spool: data.join("callbacks/inspection"),
+                launch_id: String::new(),
+            };
+            if crate::agents::providers::launch::profile::codex_read_only(
+                &hooks,
+                agent.launch_cwd.as_deref(),
+                agent.launch_profile.as_deref()
+                    == Some(crate::agents::providers::launch::profile::CODEX_READ_ONLY),
+            ) {
+                value["launch_profile"] =
+                    json!(crate::agents::providers::launch::profile::CODEX_READ_ONLY);
+            }
+        }
+    }
     value["wait_reason"] = json!(crate::messaging::diagnostics::wait_reason(agent));
+    value["dialog_notice"] = json!(agent
+        .dialog_notice
+        .as_ref()
+        .map(|raw| crate::utils::time::digest(raw.as_bytes())));
     value
 }
 
@@ -272,4 +299,14 @@ fn read_capture(read: &schema::PaneReadResult, read_source: schema::ReadSource) 
         capture["exhausted"] = json!(read.exhausted);
     }
     capture
+}
+
+fn permission_assignment_json(assignment: &impl serde::Serialize) -> Value {
+    let mut value = json!(assignment);
+    for field in ["fingerprint", "episode"] {
+        if let Some(raw) = value[field].as_str() {
+            value[field] = json!(crate::utils::time::digest(raw.as_bytes()));
+        }
+    }
+    value
 }

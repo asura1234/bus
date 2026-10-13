@@ -616,6 +616,7 @@ impl BusUi {
                 .snapshot
                 .state
                 .agents()
+                .filter(|a| !a.permission_handler)
                 .filter(|a| a.room_id == room.id)
                 .collect();
             let available_above = composer_y.saturating_sub(2);

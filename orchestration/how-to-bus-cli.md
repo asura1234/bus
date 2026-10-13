@@ -411,8 +411,10 @@ Verified live with each provider:
 | Cursor | Runs as the next generation once the current one ends; that generation's reply answers the group. |
 
 Bus does not type into an agent that waits on a dialog or a blocked screen;
-the message stays queued, and the agent's "Blocked, needs help to continue."
-message tells you to look at its terminal.
+the message stays queued. Every blocked notice goes to the room permission
+handler first; only a concise escalation, routed choice or unavailable-handler
+fallback asks the room orchestrator to intervene. Inspect a raw dialog explicitly
+when needed with `bus agent dialog`.
 A message sent to an idle agent starts a new turn and group, as before. When
 messages piled up while the agent could not take them (it was launching,
 blocked, or finishing another turn), Bus sends them as one prompt, in order,
@@ -656,7 +658,7 @@ while it is fully in view and no dialog covers the history.
 
 ## Answer an agent's dialog
 
-Agents run with their normal settings, so they stop at numbered choice dialogs:
+Agents retain approval escalation and may stop at numbered choice dialogs:
 permission prompts, folder-trust prompts, and question panels such as Claude
 Code's `❯ 1. Yes / 2. Yes, and don't ask again / 3. No` or Codex's
 `› 1. Yes, proceed (y)`. Bus finds any numbered option list on an agent's screen
@@ -667,17 +669,77 @@ follows it, as in Claude Code's folder trust prompt (`❯ No, exit` above
 marks such an agent `dialog: true` and `status: blocked`, using the same status
 as the agent list even when its provider still reports idle.
 
-Bus is not an agent and never sends a message as "Bus". Instead, once an
-agent has been blocked for about a second, on a dialog, a question, a trust
-prompt or any other screen it cannot pass alone, the blocked agent posts one
-message in its work room: `AGENT → ORCHESTRATOR: Blocked, needs help to
-continue.` when the room has an orchestrator, delivered and waking it like any
-agent message, or `AGENT → You: Blocked, needs help to continue.` when it has
-none. The text is the same for every blocker and carries no command, options or
-fingerprint: look at the agent's terminal with `bus agent dialog AGENT` (or
-`bus agent read AGENT --source visible`) and answer as below. It is posted once
-per blocked episode, not again while the agent stays blocked, and nothing
-follows when it is answered. An agent in MASTER posts none.
+Every confirmed blocked episode goes to the work room's hidden, Bus-owned
+Claude **permission handler** first, including unknown screens and MASTER
+orchestrators bound to that room. Bus does not classify it. The handler inspects
+`agent dialog`, uses a current single-use fingerprint to approve standing safe
+work once, and sends the orchestrator only a concise escalation or routed
+question/choice. Unknown screens receive no guessed answer. Orchestrators fetch
+raw dialogs explicitly when needed. Approved decisions are work-room audit
+lines and do not wake the orchestrator; routed/escalated lines stay in the work
+room, with no raw command dump in MASTER.
+
+`bus state` exposes `permission_handler`, provider, status, active
+`permission_assignments`, and the latest 10 compact `permission_decisions`;
+`bus history --room ROOM` retains full room decision history. The service stays
+out of sidebar/pickers, `--to all`, ordinary worker counts and compaction
+replacement notices. Explicit service IDs remain inspectable for debugging;
+ordinary agent rename/delete/setup/clear cannot replace the managed service.
+Bus runs `/clear` after each settled service assignment and waits for ready
+session rebind before releasing the next one. Policy and audit survive clear
+and resume. Assignment timeout is 90 seconds from dispatch, including queue
+time. Unavailable/start-failed/stuck/reset-failed handlers fall back once to the
+work-room orchestrator, or to a developer-visible work-room line when absent.
+
+Managed choose/answer commands include `--handler ID --assignment TOKEN`.
+Completion uses `bus agent permission-decision WORKER --handler ID --assignment
+TOKEN --fingerprint F|unavailable --outcome approved|escalated|routed --summary
+ONE_LINE`. The lease, launch identity, deadline and episode are revalidated at
+the answer boundary. Approval requires confirmed native answer delivery;
+uncertain delivery falls back without retries. The service's
+`BUS_PERMISSION_HANDLER_ID` environment guard refuses omitted or mismatched
+lease metadata. Its per-launch settings permit only narrow operational CLI
+families, pinned to the current executable; its persisted prompt and PATH are
+rebound on resume. Inherited and managed sandbox settings stay intact: the
+service adds only its assigned session's exact `sandbox.network.allowUnixSockets`
+control socket, never `allowAllUnixSockets` or worker filesystem additions.
+A stricter managed policy can still block operation, triggering bounded fallback.
+This assigned control protocol is a service exception to
+worker prohibitions on touching active Bus data/control. Human manual typed
+inspection remains available; do not race an active handler assignment.
+
+### Worker launch profiles and migration
+
+`cwd` in state is the actual observed directory. `launch_cwd` is the frozen
+canonical authorized root; native cwd drift never widens it. `scratch_dir` is
+private per-launch temporary storage outside session data, and `launch_profile`
+names the effective Bus configuration. Unknown legacy roots require escalation;
+resume with a known root that differs from restored cwd is refused for inspection.
+A missing scratch directory is recreated privately only at its frozen path with
+a verified canonical parent; symlink replacement refuses scoped resume. Bus
+retains worker scratch and never deletes it automatically.
+Old saved agents get no inferred authorization from their current cwd. Legacy
+Codex with no proven root resumes read-only with on-request escalation. Relaunch
+workers to receive new profiles; global settings and credentials are untouched.
+
+New Codex workers use `workspace-write` and `on-request`, explicit private
+scratch, no network access, and exclusions for broad `/tmp` and ambient TMPDIR
+writes. Their TMPDIR points to assigned scratch. `--add-dir` may only name
+canonical descendants of the frozen worktree; assigned scratch is already
+included. Sibling worktrees and escaping symlinks are refused. If the running
+Bus executable, target or session data overlaps the root, the effective Codex
+profile is read-only. No broad cargo, shell, cleanup or `./run` prefix is granted.
+
+Claude workers retain normal permission checking with a per-launch Bash sandbox
+proposal for frozen root/scratch and live-path write denies. Filesystem arrays
+are additive across inherited settings, and built-in file tools and hooks run
+outside the Bash sandbox; this does not prove exact kernel confinement or
+comprehensive read isolation. `autoAllowBashIfSandboxed` stays false and no
+automatic cargo/build/cleanup rules are added. Inherited user/managed policies
+and platform sandbox limitations still apply; uncertain commands reach the
+handler. MASTER orchestrators retain native approvals for their Bus protocol;
+only the managed handler gets operational CLI allow rules. Shared toolchain
+caches are not copied or widened into worker scope.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked

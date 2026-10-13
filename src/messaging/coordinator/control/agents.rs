@@ -70,6 +70,13 @@ impl Worker {
             }
             "agent.clear" => {
                 let agent = self.control_agent(required(p, "agent")?, None)?;
+                if self
+                    .state
+                    .agent(agent)
+                    .is_some_and(|a| a.permission_handler)
+                {
+                    return Err("Permission handler clear is Bus-managed".into());
+                }
                 self.control_clear(agent)
             }
             _ => Err("Unknown method".into()),

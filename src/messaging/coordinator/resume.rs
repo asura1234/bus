@@ -25,6 +25,7 @@ pub(crate) fn unstarted_codex_plan(
             return None;
         }
         args.retain(|arg| arg != "--no-daemon");
+        crate::agents::providers::launch::profile::strip_codex_args(&mut args);
         crate::agents::providers::launch::validate_args(
             crate::agents::providers::ProviderKind::Codex,
             &args,

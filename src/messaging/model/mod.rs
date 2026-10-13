@@ -1,5 +1,7 @@
 //! Messaging model facade; state operations are owned by their round-trip domain.
 mod agents;
+mod permissions;
+pub(crate) use permissions::PermissionOutcome;
 mod callbacks;
 mod compactions;
 mod history;

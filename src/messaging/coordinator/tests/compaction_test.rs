@@ -135,9 +135,14 @@ fn state_saved_before_the_compaction_marker_loads_and_still_counts() {
 
 #[test]
 fn a_compaction_hook_posts_the_notice_in_the_same_worker_tick() {
-    let (mut worker, agent, room, dir, _) = fixture(
+    let mut handler_info = native_info("handler-pane", "claude", "handler-session");
+    handler_info.terminal_id = "handler-terminal".into();
+    let (mut worker, agent, room, dir, calls) = fixture(
         Provider::ClaudeCode,
-        vec![Ok(ResponseResult::AgentList { agents: vec![] })],
+        vec![Ok(ResponseResult::TabCreated {
+    tab: serde_json::from_value(json!({"tab_id":"handler-tab", "workspace_id":"workspace", "number":2, "label":"permission handler", "focused":false, "pane_count":1, "agent_status":"unknown"})).unwrap(),
+    root_pane: serde_json::from_value(json!({"pane_id":"handler-pane", "terminal_id":"handler-terminal", "workspace_id":"workspace", "tab_id":"handler-tab", "focused":false, "agent_status":"unknown", "revision":1})).unwrap(),
+}), Ok(ResponseResult::AgentStarted { agent: handler_info, argv: vec![] }), Ok(ResponseResult::AgentList { agents: vec![] })],
     );
     let mut state = worker.state.clone();
     for _ in 0..4 {
@@ -154,6 +159,16 @@ fn a_compaction_hook_posts_the_notice_in_the_same_worker_tick() {
     worker.tick().unwrap();
     assert_eq!(worker.state.agent(agent).unwrap().compactions.count, 5);
     assert_eq!(notices(&worker, room).len(), 1);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [
+            "tab.create",
+            "agent.start",
+            "agent.list",
+            "pane.report_agent_session"
+        ]
+    );
+    assert!(worker.state.permission_handler_of(room).is_some());
     cleanup(worker, dir);
 }
 

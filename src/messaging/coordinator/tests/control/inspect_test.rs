@@ -820,3 +820,51 @@ fn state_reports_dialog_blocked_status_instead_of_raw_idle_status() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn permission_profile_state_reports_current_protected_overlap_after_rebind() {
+    let (mut worker, _, agent, dir) = fixture();
+    let binary = std::env::current_exe().unwrap();
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    value["agents"][agent.0.to_string()]["launch_cwd"] =
+        json!(binary.parent().unwrap().canonicalize().unwrap());
+    value["agents"][agent.0.to_string()]["launch_profile"] = json!("codex-workspace-write-v1");
+    worker.state = serde_json::from_value(value).unwrap();
+    let state = call(&mut worker, "effective-profile", "state", json!({}));
+    let found = state.result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == agent.0)
+        .unwrap();
+    assert_eq!(
+        found["launch_profile"],
+        "codex-read-only-protected-overlap-v1"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn permission_profile_review_state_inside_live_data_reports_read_only() {
+    let (mut worker, _, agent, dir) = fixture();
+    let cwd = dir.join("worker");
+    std::fs::create_dir(&cwd).unwrap();
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    value["agents"][agent.0.to_string()]["launch_cwd"] = json!(cwd.canonicalize().unwrap());
+    value["agents"][agent.0.to_string()]["launch_profile"] = json!("codex-workspace-write-v1");
+    worker.state = serde_json::from_value(value).unwrap();
+    let state = call(&mut worker, "descendant-profile", "state", json!({}));
+    let found = state.result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == agent.0)
+        .unwrap();
+    assert_eq!(
+        found["launch_profile"],
+        "codex-read-only-protected-overlap-v1"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

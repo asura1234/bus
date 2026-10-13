@@ -27,10 +27,11 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
         .find(|room| {
             let before = previous.room(room.id);
             room.latest_replies.iter().any(|(agent, reply)| {
-                before
-                    .and_then(|before| before.latest_replies.get(agent))
-                    .map(|known| known.request_id)
-                    != Some(reply.request_id)
+                next.recipient_visible(*agent)
+                    && before
+                        .and_then(|before| before.latest_replies.get(agent))
+                        .map(|known| known.request_id)
+                        != Some(reply.request_id)
             })
         })
         .map(|room| room.id);
@@ -53,7 +54,7 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
         .collect();
     // Dialog notices to orchestrators are delivery-only and never ring.
     next.requests()
-        .filter(|request| !request.delivery_only())
+        .filter(|request| next.request_visible(request))
         .map(|request| (request.room_id, &request.prompt))
         .chain(
             next.rooms()
@@ -64,7 +65,10 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
                 .flat_map(|room| next.notices(room.id).map(move |prompt| (room.id, prompt))),
         )
         .find(|(room, prompt)| {
-            prompt.author != Author::Developer && !known.contains(&prompt.id) && rings(*room)
+            next.prompt_visible(prompt)
+                && prompt.author != Author::Developer
+                && !known.contains(&prompt.id)
+                && rings(*room)
         })
         .map(|(room, _)| room)
 }

@@ -292,7 +292,24 @@ pub(crate) struct RoomAgent {
     /// Shown instead of `color` in color blind mode; allocated the same way.
     #[serde(default)]
     pub(crate) accessible_color: [u8; 3],
+    /// Bus-owned, hidden service; old saved agents remain ordinary workers.
+    #[serde(default)]
+    pub(crate) permission_handler: bool,
+    #[serde(default)]
+    pub(crate) permission_reset_required: bool,
+    #[serde(default)]
+    pub(crate) permission_clear_started: bool,
+    #[serde(default)]
+    pub(crate) permission_reset_at_ms: Option<u64>,
     pub(crate) provider: Provider,
+    /// Frozen creation/launch authority; runtime cwd observations never change it.
+    #[serde(default)]
+    pub(crate) launch_cwd: Option<PathBuf>,
+    /// Private launch resource, retained while terminal ownership is uncertain.
+    #[serde(default)]
+    pub(crate) scratch_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) launch_profile: Option<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,

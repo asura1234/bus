@@ -258,3 +258,121 @@ fn an_archived_group_still_shows_its_shared_reply_once() {
         "archiving must preserve the group's single shared reply"
     );
 }
+
+#[test]
+fn permission_service_history_hides_protocol_and_reply_live_and_archived() {
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    let handler = state
+        .create_agent(
+            room,
+            "service",
+            Provider::ClaudeCode,
+            "/private".into(),
+            None,
+        )
+        .unwrap();
+    state.mark_permission_handler(handler).unwrap();
+    let send = |state: &mut BusState, recipients: Vec<AgentId>, text: &str, author| {
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: text.into(),
+                    files: vec![],
+                    recipient_ids: recipients.into_iter().collect(),
+                },
+                author,
+                1_000,
+            )
+            .unwrap()
+    };
+    let private = send(
+        &mut state,
+        vec![handler],
+        "Permission assignment private protocol",
+        Author::Agent(worker),
+    )[0];
+    state.finish_for_test(private, "Permission fixture completed private ACK", 2_000);
+    let mixed = send(
+        &mut state,
+        vec![worker, handler],
+        "mixed debug task",
+        Author::Developer,
+    );
+    for id in mixed {
+        let reply = if state.request(id).unwrap().agent_id == handler {
+            "private mixed ACK"
+        } else {
+            "visible worker answer"
+        };
+        state.finish_for_test(id, reply, 2_000);
+    }
+    let escalation = send(
+        &mut state,
+        vec![worker],
+        "routed decision notice",
+        Author::Agent(handler),
+    )[0];
+    state.finish_for_test(escalation, "visible orchestrator answer", 2_000);
+    state
+        .post_to_developer(room, handler, "approved audit notice".into(), vec![], 2_000)
+        .unwrap();
+    // The newest prompt is service-only: latest-only compatibility must not leak it.
+    let last = send(
+        &mut state,
+        vec![handler],
+        "Permission assignment newest secret",
+        Author::Agent(worker),
+    )[0];
+    state.finish_for_test(last, "private final ACK", 2_000);
+    for archived in [false, true] {
+        if archived {
+            assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+        }
+        let text = History::default()
+            .lines(
+                &state,
+                state.room(room).unwrap(),
+                120,
+                1,
+                3_000,
+                &mut Thumbnails::default(),
+            )
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !text.contains("Permission assignment"),
+            "service protocol leaked (archived={archived}): {text}"
+        );
+        assert!(!text.contains("ACK"), "service reply leaked: {text}");
+        for required in [
+            "mixed debug task",
+            "visible worker answer",
+            "routed decision notice",
+            "visible orchestrator answer",
+            "approved audit notice",
+        ] {
+            assert!(text.contains(required), "missing {required}: {text}");
+        }
+        assert!(state
+            .request(private)
+            .unwrap()
+            .pending_final
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("ACK"));
+    }
+}

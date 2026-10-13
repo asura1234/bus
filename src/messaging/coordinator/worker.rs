@@ -408,6 +408,7 @@ impl Worker {
         &mut self,
         can_deliver: impl FnMut() -> bool,
     ) -> Result<(), String> {
+        self.maintain_permission_handlers()?;
         self.expire_queued_now()?;
         self.poll().inspect_err(|_| {
             tracing::warn!(
@@ -424,6 +425,7 @@ impl Worker {
         let finished = self.finish_batch();
         consumed.and(finished)?;
         self.settle_requests()?;
+        self.maintain_permissions()?;
         self.refresh_compaction_notices()?;
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(

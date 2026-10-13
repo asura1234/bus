@@ -79,3 +79,15 @@ room state files or use the server API directly. Send work as the orchestrator
 with `bus send --room ROOM --as AGENT --to WORKER --async --text TEXT`, and
 maintain the workflow path and progress in the room notes. The binding rules
 and working guide are in `rules.md` and `guide.md`.
+
+## Permission handling
+
+Every blocked episode reaches the hidden room permission handler first. The
+embedded `permission-handler.md` policy is a separate service launch prompt;
+orchestrator documentation reserves routine safe approvals for that service and
+explains concise escalation, explicit raw inspection, lease tokens, audit and
+bounded fallback. Service CLI permissions pin the current executable and add
+only the assigned control socket while preserving inherited sandbox restrictions.
+Worker profiles freeze canonical roots and private scratch metadata; Claude
+settings remain additive and keep normal approvals. Old unknown roots never gain
+authority from observed cwd. The default room notes reflect standing safe policy.

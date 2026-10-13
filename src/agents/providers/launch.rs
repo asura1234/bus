@@ -25,6 +25,9 @@ pub(crate) struct LaunchSpec {
     /// Capture paths and launch identity supplied by the caller, with no
     /// knowledge of the room or agent to which the callbacks will belong.
     pub(crate) hooks: HookContext,
+    /// Managed service has narrow control privileges, separate from workers.
+    pub(crate) permission_handler: bool,
+    pub(crate) orchestrator: bool,
 }
 
 /// Provider preparation result. This contains argv, never a shell command,
@@ -37,6 +40,8 @@ pub(crate) struct PreparedLaunch {
     /// session is already owned or may be bound remains a coordinator decision.
     pub(crate) adopted_session: Option<String>,
     pub(crate) env: HashMap<String, String>,
+    pub(crate) scratch_dir: Option<PathBuf>,
+    pub(crate) profile: String,
 }
 
 /// Provider setup information presented by the caller before consent.
@@ -46,6 +51,7 @@ pub(crate) struct SetupNotice {
     pub(crate) message: String,
 }
 
+pub(crate) mod profile;
 #[path = "launch/tokens.rs"]
 mod tokens;
 pub(crate) use tokens::{parse_path_tokens, PathParseError};
@@ -234,7 +240,8 @@ pub(crate) fn prepare(
     initialize: impl FnOnce(&HookContext) -> Result<(), String>,
 ) -> Result<PreparedLaunch, String> {
     let cwd = canonical_directory(&spec.cwd)?;
-    let (args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
+    let (mut args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
+    profile::validate_extra_dirs(&cwd, &mut args)?;
     let available = std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|dir| dir.join(executable(spec.provider)).is_file())
     });
@@ -266,13 +273,17 @@ pub(crate) fn prepare(
         )
         .map_err(|e| e.to_string())?;
     }
-    match spec.provider {
-        ProviderKind::ClaudeCode => claude_code::launch::prepare(spec, cwd, args, adopted_session),
-        ProviderKind::Codex | ProviderKind::Cursor => Ok(PreparedLaunch {
+    let mut prepared = match spec.provider {
+        ProviderKind::ClaudeCode => claude_code::launch::prepare(spec, cwd, args, adopted_session)?,
+        ProviderKind::Codex | ProviderKind::Cursor => PreparedLaunch {
             cwd,
             args,
             adopted_session,
             env: spec.hooks.env(),
-        }),
-    }
+            scratch_dir: None,
+            profile: String::new(),
+        },
+    };
+    profile::install(spec, &mut prepared)?;
+    Ok(prepared)
 }

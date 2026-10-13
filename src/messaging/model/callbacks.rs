@@ -532,7 +532,7 @@ impl BusState {
                 .requests
                 .get(id)
                 .ok_or(ModelError::UnknownRequest(*id))?;
-            if request.delivery_only() || request.settled() {
+            if !self.request_visible(request) || request.settled() {
                 continue;
             }
             replies.insert(

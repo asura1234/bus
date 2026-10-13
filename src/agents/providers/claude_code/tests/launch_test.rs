@@ -120,6 +120,8 @@ impl Fixture {
 
     fn spec(&self) -> LaunchSpec {
         LaunchSpec {
+            permission_handler: false,
+            orchestrator: false,
             provider: ProviderKind::ClaudeCode,
             cwd: self.0.to_string_lossy().into_owned(),
             extra_args: "--model sonnet".into(),
@@ -195,4 +197,180 @@ fn claude_adapter_refuses_corrupt_launch_settings_before_installing_the_statusli
     assert!(prepare(&spec, fixture.0.clone(), Vec::new(), None).is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"corrupt original");
     assert!(!spec.hooks.spool.join("claude-statusline.json").exists());
+}
+
+#[test]
+fn permission_profile_codex_defaults_scoped_scratch_and_rejects_outside_extra_dir() {
+    let fixture = Fixture::new();
+    let mut spec = fixture.spec();
+    spec.provider = ProviderKind::Codex;
+    spec.consent_project_hooks = true;
+    spec.extra_args.clear();
+    let prepared = launch::prepare(&spec, |_| Ok(())).unwrap();
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|a| a == ["--sandbox", "workspace-write"]),
+        "{:?}",
+        prepared.args
+    );
+    assert!(prepared
+        .args
+        .windows(2)
+        .any(|a| a == ["--ask-for-approval", "on-request"]));
+    let scratch = PathBuf::from(prepared.env.get("TMPDIR").expect("private scratch"));
+    assert!(scratch.is_dir());
+    assert!(prepared
+        .args
+        .iter()
+        .any(|a| a == "sandbox_workspace_write.exclude_slash_tmp=true"));
+    assert!(prepared
+        .args
+        .iter()
+        .any(|a| a == "sandbox_workspace_write.exclude_tmpdir_env_var=true"));
+    assert!(prepared
+        .args
+        .iter()
+        .any(|a| a == "sandbox_workspace_write.network_access=false"));
+    assert!(prepared
+        .args
+        .iter()
+        .any(|a| a.contains("sandbox_workspace_write.writable_roots=")
+            && a.contains(&*scratch.to_string_lossy())));
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn permission_profile_outside_extra_dir_is_refused_before_launch_side_effects() {
+    let fixture = Fixture::new();
+    let sibling = Fixture::new();
+    let mut spec = fixture.spec();
+    spec.provider = ProviderKind::Codex;
+    spec.consent_project_hooks = true;
+    spec.extra_args = format!("--add-dir '{}'", sibling.0.display());
+    let result = launch::prepare(&spec, |_| panic!("outside root reached initialization"));
+    assert!(result.is_err(), "arbitrary sibling accepted: {result:?}");
+    assert!(!fixture.0.join(".codex/hooks.json").exists());
+}
+
+#[test]
+fn permission_profile_claude_workers_keep_regular_checks_and_protect_control_paths() {
+    let fixture = Fixture::new();
+    let spec = fixture.spec();
+    let prepared = launch::prepare(&spec, |_| Ok(())).unwrap();
+    let settings: Value = serde_json::from_slice(
+        &std::fs::read(spec.hooks.spool.join("claude-settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["permissions"]["defaultMode"], "default");
+    assert_eq!(settings["sandbox"]["enabled"], true);
+    assert_eq!(settings["sandbox"]["autoAllowBashIfSandboxed"], false);
+    assert!(settings["sandbox"]["filesystem"]["denyWrite"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(spec.hooks.binary)));
+    assert!(settings["permissions"]["allow"]
+        .as_array()
+        .is_none_or(|a| a.is_empty()));
+    std::fs::remove_dir_all(prepared.env.get("TMPDIR").unwrap()).unwrap();
+}
+
+#[test]
+fn permission_profile_codex_protected_overlap_is_read_only_and_child_dirs_are_scoped() {
+    let fixture = Fixture::new();
+    let child = fixture.0.join("owned-child");
+    std::fs::create_dir(&child).unwrap();
+    let mut spec = fixture.spec();
+    spec.provider = ProviderKind::Codex;
+    spec.consent_project_hooks = true;
+    spec.hooks.binary = child.join("bus");
+    std::fs::write(&spec.hooks.binary, b"fixture binary").unwrap();
+    spec.extra_args = format!("--add-dir '{}'", child.display());
+    let prepared = launch::prepare(&spec, |_| Ok(())).unwrap();
+    assert!(prepared
+        .args
+        .windows(2)
+        .any(|a| a == ["--sandbox", "read-only"]));
+    assert_eq!(prepared.profile, "codex-read-only-protected-overlap-v1");
+    std::fs::remove_dir_all(prepared.scratch_dir.unwrap()).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_profile_symlink_extra_dir_cannot_escape_frozen_root() {
+    let fixture = Fixture::new();
+    let sibling = Fixture::new();
+    let escaped = fixture.0.join("escaped");
+    std::os::unix::fs::symlink(&sibling.0, &escaped).unwrap();
+    let mut spec = fixture.spec();
+    spec.provider = ProviderKind::Codex;
+    spec.consent_project_hooks = true;
+    spec.extra_args = format!("--add-dir={}", escaped.display());
+    assert!(launch::prepare(&spec, |_| panic!("escape reached capture")).is_err());
+    assert!(!fixture.0.join(".codex/hooks.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_profile_extra_dir_argv_freezes_canonical_descendant() {
+    let fixture = Fixture::new();
+    let child = fixture.0.join("owned-child");
+    std::fs::create_dir(&child).unwrap();
+    let alias = fixture.0.join("alias");
+    std::os::unix::fs::symlink(&child, &alias).unwrap();
+    let mut spec = fixture.spec();
+    spec.provider = ProviderKind::Codex;
+    spec.consent_project_hooks = true;
+    spec.extra_args = format!("--add-dir={}", alias.display());
+    let prepared = launch::prepare(&spec, |_| Ok(())).unwrap();
+    assert!(
+        prepared.args.contains(&format!(
+            "--add-dir={}",
+            child.canonicalize().unwrap().display()
+        )),
+        "alias can change after preparation: {:?}",
+        prepared.args
+    );
+    std::fs::remove_dir_all(prepared.scratch_dir.unwrap()).unwrap();
+}
+
+fn assert_worker_inside_protected_root_read_only(target: bool) {
+    let fixture = Fixture::new();
+    let mut spec = fixture.spec();
+    spec.provider = ProviderKind::Codex;
+    spec.consent_project_hooks = true;
+    spec.extra_args.clear();
+    let protected = fixture.0.join(if target { "target" } else { "session" });
+    let cwd = protected.join("worker");
+    std::fs::create_dir_all(&cwd).unwrap();
+    if target {
+        spec.hooks.binary = protected.join("debug/bus");
+        std::fs::create_dir_all(spec.hooks.binary.parent().unwrap()).unwrap();
+        std::fs::write(&spec.hooks.binary, b"fixture binary").unwrap();
+    } else {
+        spec.hooks.spool = protected.join("callbacks/launch");
+        std::fs::create_dir_all(&spec.hooks.spool).unwrap();
+    }
+    spec.cwd = cwd.to_string_lossy().into_owned();
+    let prepared = launch::prepare(&spec, |_| Ok(())).unwrap();
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|a| a == ["--sandbox", "read-only"]),
+        "inside protected root received {:?}",
+        prepared.args
+    );
+    std::fs::remove_dir_all(prepared.scratch_dir.unwrap()).unwrap();
+}
+
+#[test]
+fn permission_profile_review_launch_inside_live_target_is_read_only() {
+    assert_worker_inside_protected_root_read_only(true);
+}
+
+#[test]
+fn permission_profile_review_launch_inside_live_data_is_read_only() {
+    assert_worker_inside_protected_root_read_only(false);
 }
