@@ -434,7 +434,9 @@ fn permission_handler_uncertain_native_answer_falls_back_and_cannot_retry() {
     p["option"] = json!("1");
     worker.transport = Box::new(LostAnswer(FakeServer(screen.clone())));
     assert!(permission_control(&mut worker, "agent.dialog.choose", &p).is_err());
-    assert!(worker.state.dialog_fingerprint_consumed(&fp));
+    assert!(worker
+        .state
+        .dialog_answer_spent(crate::messaging::model::fingerprint_digest(&fp)));
     assert!(
         worker
             .state
