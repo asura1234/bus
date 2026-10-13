@@ -115,7 +115,9 @@ fn collect_rows(lines: &[&str], start: usize, footer: usize) -> Option<Vec<Optio
                 number: 0,
                 column: indentation(text),
                 label: label.to_owned(),
-                label_at: line.chars().count() - label.chars().count(),
+                label_at: line[..label.as_ptr() as usize - line.as_ptr() as usize]
+                    .chars()
+                    .count(),
                 line: index,
             });
         } else if text.trim().is_empty() || is_separator(text) {

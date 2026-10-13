@@ -731,3 +731,13 @@ fn claude_multi_question_next_and_review_use_their_native_controls() {
     assert_eq!(review.keys_for(1).unwrap(), ["enter"]);
     assert_eq!(review.keys_for(2).unwrap(), ["down", "enter"]);
 }
+
+#[test]
+fn claude_highlighted_submit_ignores_trailing_screen_padding() {
+    let screen = CLAUDE_MULTI_SELECT
+        .replace("❯ 1.", "  1.")
+        .replace("     Submit", "     \x1b[7mSubmit\x1b[0m            ");
+    let dialog = parse(&screen).unwrap();
+    assert_eq!(dialog.selected(), Some(6));
+    assert_eq!(dialog.keys_for(6).unwrap(), ["enter"]);
+}
