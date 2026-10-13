@@ -76,6 +76,15 @@ pub(super) fn follow_message(
             params: json!({ "message": message }),
         };
         let response = match send(&request, None) {
+            // The bounded control server can drop accepted connections at its
+            // overload limit. Connecting proves the endpoint was reachable;
+            // retry this status read, and detect a later outage on reconnect.
+            Err(message) if message.starts_with("control_io:") => {
+                transport_failures = 0;
+                pause(busy_delay);
+                busy_delay = next_busy_delay(busy_delay);
+                continue;
+            }
             Err(message) => {
                 transport_failures += 1;
                 if transport_failures >= TRANSPORT_FAILURE_LIMIT {
@@ -236,6 +245,13 @@ pub(super) fn execute(
             Ok(response) => {
                 transport_failures = 0;
                 response
+            }
+            Err(message) if waiting && message.starts_with("control_io:") => {
+                transport_failures = 0;
+                thread::sleep(remaining.map_or(busy_delay, |d| d.min(busy_delay)));
+                busy_delay = next_busy_delay(busy_delay);
+                request.id = next_request_id();
+                continue;
             }
             Err(message) => {
                 if waiting && deadline.is_none() {

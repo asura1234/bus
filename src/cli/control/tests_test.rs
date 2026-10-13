@@ -1797,6 +1797,141 @@ fn send_async_exits_when_bus_stays_down() {
 }
 
 #[test]
+fn wait_async_retries_connected_control_disconnects() {
+    let mut reads = 0;
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            reads += 1;
+            if reads <= 5 {
+                return Err("control_io: response connection closed or failed".into());
+            }
+            Ok(Response::success(
+                &request.id,
+                status(vec![recipient(1, "delivered", true)]),
+            ))
+        });
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(reads, 6);
+}
+
+#[test]
+fn connected_control_disconnects_preserve_wait_deadlines_and_send_no_replay() {
+    let mut reads = 0;
+    let (outcome, response) = run_captured(
+        &["wait", "--message", "19", "--timeout", "1"],
+        |_, remaining| {
+            assert!(remaining.is_some());
+            reads += 1;
+            Err("control_io: response connection closed or failed".into())
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "timeout");
+    assert!(reads >= 2);
+
+    let mut sends = 0;
+    let (outcome, response) = run_captured(
+        &[
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ],
+        |_, _| {
+            sends += 1;
+            Err("control_io: response connection closed or failed".into())
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "transport_error");
+    assert_eq!(sends, 1);
+}
+
+#[test]
+fn async_waiters_exit_after_a_connected_endpoint_disappears() {
+    for args in [
+        vec!["wait", "--message", "19", "--async"],
+        vec![
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ],
+    ] {
+        let mut reads = 0;
+        let (outcome, response) = run_captured(&args, |request, _| {
+            if request.method == "message.send" {
+                return Ok(Response::success(&request.id, json!({"message_id":19})));
+            }
+            reads += 1;
+            if reads == 1 {
+                Err("control_io: response connection closed or failed".into())
+            } else {
+                Err("control_unavailable: connect: connection refused".into())
+            }
+        });
+        assert!(outcome.is_err());
+        assert_eq!(response["error"]["code"], "bus_down");
+        assert_eq!(reads, 5, "{args:?}");
+    }
+}
+
+/// A live control server at its connection limit closes excess connections
+/// without a reply while its coordinator is stalled; the follower must keep
+/// following instead of reporting that Bus is down.
+#[cfg(unix)]
+#[test]
+fn async_following_survives_live_control_server_dropping_excess_connections() {
+    use std::io::Write as _;
+    let dir = std::env::temp_dir().join(format!(
+        "bcl-{:x}-{:x}",
+        std::process::id(),
+        crate::messaging::storage::io::now_ns()
+    ));
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let _server = crate::messaging::control::start(&dir, tx).unwrap();
+    let socket = dir.join("control.sock");
+    let mut stalled = Vec::new();
+    let mut streams = Vec::new();
+    for id in 0..16 {
+        let mut stream = crate::platform::ipc::connect_local_stream(&socket).unwrap();
+        let request = Request {
+            id: format!("stalled-{id}"),
+            method: "message.status".into(),
+            params: json!({"message": "19"}),
+        };
+        writeln!(stream, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+        stalled.push(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        streams.push(stream);
+    }
+    // Another overloaded caller holds the single server_busy slot.
+    let busy_holder = crate::platform::ipc::connect_local_stream(&socket).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let completed = status(vec![recipient(1, "delivered", true)]);
+    let mut calls = 0;
+    let mut transport_errors = Vec::new();
+    let response = follow_message(
+        "live-overload",
+        &json!(19),
+        &mut |request, _| {
+            calls += 1;
+            if calls > 6 {
+                return Ok(Response::success(&request.id, completed.clone()));
+            }
+            let outcome = crate::messaging::control::request(&dir, request);
+            if let Err(error) = &outcome {
+                transport_errors.push(error.clone());
+            }
+            outcome
+        },
+        &mut |_| {},
+    );
+    drop(busy_holder);
+    drop(streams);
+    drop(stalled);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        response.ok,
+        "live control server reported as {:?} after transport errors {transport_errors:?}",
+        response.error
+    );
+}
+
+#[test]
 fn async_transport_budget_resets_after_successful_status_reads() {
     let mut reads = 0;
     let mut pauses = 0;
