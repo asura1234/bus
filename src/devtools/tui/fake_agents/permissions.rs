@@ -227,7 +227,7 @@ fn validate_service_launch() -> Result<(), String> {
         .append(true)
         .open("fake-permission-cli.ndjson")
         .map_err(|e| e.to_string())?;
-    writeln!(trace, "{}", json!({"service_profile_validated":true,"self_prompt_count":0,"approval_mode":"dontAsk","available_tools":"Read,Glob,Grep,Bash"}))
+    writeln!(trace, "{}", json!({"service_profile_validated":true,"approval_mode":"dontAsk","available_tools":"Read,Glob,Grep,Bash"}))
         .map_err(|e| e.to_string())
 }
 
