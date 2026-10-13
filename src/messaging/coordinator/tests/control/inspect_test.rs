@@ -788,3 +788,35 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn state_reports_dialog_blocked_status_instead_of_raw_idle_status() {
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 10)
+        .unwrap();
+    worker.state.observe_dialog(agent, true).unwrap();
+    let shown = call(&mut worker, "dialog-state", "state", json!({}));
+    assert!(shown.ok);
+    let entry = shown.result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == json!(agent))
+        .unwrap();
+    assert_eq!(entry["dialog"], true);
+    assert_eq!(entry["status"], "blocked");
+    // Clearing the dialog restores the provider status without a new callback.
+    worker.state.observe_dialog(agent, false).unwrap();
+    let cleared = call(&mut worker, "cleared-state", "state", json!({}));
+    let entry = cleared.result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == json!(agent))
+        .unwrap();
+    assert_eq!(entry["status"], "idle");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

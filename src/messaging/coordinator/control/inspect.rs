@@ -220,6 +220,7 @@ impl Worker {
 /// wait on it, which orchestrators need now that `diagnostics` is dev tier.
 fn agent_json(agent: &crate::messaging::model::RoomAgent) -> Value {
     let mut value = json!(agent);
+    value["status"] = json!(agent.shown_status());
     value["wait_reason"] = json!(crate::messaging::diagnostics::wait_reason(agent));
     value
 }

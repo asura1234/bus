@@ -403,3 +403,23 @@ async fn dialog_observation_rejects_frames_inside_synchronized_output() {
     assert!(!runtime.synchronized_output_active());
     assert!(observe_dialog(&mut app).dialog.is_some());
 }
+
+#[tokio::test]
+async fn agent_list_reports_visible_dialog_as_blocked_even_with_idle_detection() {
+    let (mut app, _) = app_with_dialog(CLAUDE_BASH_DIALOG, Some("session"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+        .attached_terminal_id
+        .clone();
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
+    let info = app.agent_info(0, pane).unwrap();
+    assert!(info.dialog_id.is_some());
+    assert_eq!(
+        info.agent_status,
+        crate::protocol::api::schema::AgentStatus::Blocked
+    );
+}
