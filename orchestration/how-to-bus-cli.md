@@ -411,8 +411,10 @@ Verified live with each provider:
 | Cursor | Runs as the next generation once the current one ends; that generation's reply answers the group. |
 
 Bus does not type into an agent that waits on a dialog or a blocked screen;
-the message stays queued, and the agent's "Blocked, needs help to continue."
-message tells you to look at its terminal.
+the message stays queued. Every blocked notice goes to the room permission
+handler first; only a concise escalation, routed choice or unavailable-handler
+fallback asks the room orchestrator to intervene. Inspect a raw dialog explicitly
+when needed with `bus agent dialog`.
 A message sent to an idle agent starts a new turn and group, as before. When
 messages piled up while the agent could not take them (it was launching,
 blocked, or finishing another turn), Bus sends them as one prompt, in order,
@@ -713,8 +715,9 @@ canonical authorized root; native cwd drift never widens it. `scratch_dir` is
 private per-launch temporary storage outside session data, and `launch_profile`
 names the effective Bus configuration. Unknown legacy roots require escalation;
 resume with a known root that differs from restored cwd is refused for inspection.
-Missing or symlink-replaced scratch also refuses scoped resume. Bus retains
-scratch while a terminal might still use it; cleanup requires confirmed ownership.
+A missing scratch directory is recreated privately only at its frozen path with
+a verified canonical parent; symlink replacement refuses scoped resume. Bus
+retains worker scratch and never deletes it automatically.
 Old saved agents get no inferred authorization from their current cwd. Legacy
 Codex with no proven root resumes read-only with on-request escalation. Relaunch
 workers to receive new profiles; global settings and credentials are untouched.
