@@ -41,6 +41,9 @@ mod compaction_tests;
 #[path = "scheduling_test.rs"]
 mod scheduling_tests;
 
+#[path = "save_traffic_test.rs"]
+mod save_traffic_tests;
+
 #[test]
 fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_state() {
     for mismatch in [

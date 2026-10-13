@@ -216,6 +216,21 @@ impl Worker {
             .filter(|agent| agent.dialog)
             .map(|agent| agent.id)
             .collect();
+        // One write for every observation; `save` skips it when none changed.
+        if !agents.is_empty() {
+            self.observe_recipient_dialogs(agents)?;
+        }
+        self.expire_queued_requests(now_ms)?;
+        self.control_message_at(message, now_ms)
+    }
+
+    /// Re-reads each flagged recipient's screen, without opening or answering
+    /// any question, and records what it shows.
+    fn observe_recipient_dialogs(
+        &mut self,
+        agents: std::collections::BTreeSet<AgentId>,
+    ) -> Result<(), String> {
+        let mut state = self.state.clone();
         for agent in agents {
             let observation = (|| {
                 let (_, _, terminal, pane, session) = self.dialog_identity(agent)?;
@@ -225,17 +240,14 @@ impl Worker {
                 // An unreadable screen cannot prove the cached dialog closed.
                 continue;
             };
-            let mut state = self.state.clone();
             state
                 .observe_dialog(
                     agent,
                     observation.dialog.is_some() || observation.pending_question,
                 )
                 .map_err(|error| error.to_string())?;
-            self.save(state)?;
         }
-        self.expire_queued_requests(now_ms)?;
-        self.control_message_at(message, now_ms)
+        self.save(state)
     }
 
     /// `message status` as of `now_ms`, which stall detection measures against.

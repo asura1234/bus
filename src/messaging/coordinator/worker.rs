@@ -6,6 +6,7 @@ use super::{
 };
 use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
+use std::path::Path;
 
 pub(super) struct Worker {
     pub(super) state: BusState,
@@ -50,6 +51,18 @@ pub(super) struct Worker {
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
     pub(super) sound_dirs: Option<Vec<PathBuf>>,
+    /// Saves deferred to one write, while a tick applies spooled callbacks.
+    pub(super) batch: Option<SaveBatch>,
+}
+
+/// State changes waiting for one `state.json` write, and the spool files
+/// that may be deleted only once that write is durable.
+#[derive(Default)]
+pub(super) struct SaveBatch {
+    /// The in-memory state before the first deferred change; restored when
+    /// the write fails, as a failed immediate save leaves the state unchanged.
+    before: Option<(BusState, u64)>,
+    acknowledgements: Vec<(PathBuf, Vec<PathBuf>)>,
 }
 
 impl Worker {
@@ -102,6 +115,7 @@ impl Worker {
             claude_settled_shells: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
+            batch: None,
         })
     }
 
@@ -114,15 +128,43 @@ impl Worker {
         }
     }
 
+    /// Commits `state` and makes it durable. A state that differs from the
+    /// last write only in status-only observations writes nothing: those are
+    /// never persisted on their own (see `apply_poll`), so rewriting the same
+    /// durable content is pure cost. Inside a batch the write waits for
+    /// [`Self::finish_batch`].
     pub(super) fn save(&mut self, state: BusState) -> Result<(), String> {
+        if !self.store.has_unfolded_journal()
+            && !state.durable_poll_change_from(&self.durable_state)
+        {
+            if state != self.state {
+                self.state = state;
+                self.revision += 1;
+            }
+            return Ok(());
+        }
+        if let Some(batch) = self.batch.as_mut() {
+            if batch.before.is_none() {
+                batch.before = Some((self.state.clone(), self.revision));
+            }
+            self.state = state;
+            self.revision += 1;
+            return Ok(());
+        }
+        self.write(state)?;
+        self.revision += 1;
+        Ok(())
+    }
+
+    fn write(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
             self.pause_storage(&error);
             return Err(self.storage_notice().into());
         }
-        diagnostics::replies(&self.state, &state, "bus.reply.persisted");
+        diagnostics::replies(&self.durable_state, &state, "bus.reply.persisted");
         for agent in state.agents() {
             if self
-                .state
+                .durable_state
                 .agent(agent.id)
                 .is_some_and(|old| old.status != agent.status)
             {
@@ -133,7 +175,46 @@ impl Worker {
         }
         self.durable_state = state.clone();
         self.state = state;
-        self.revision += 1;
+        Ok(())
+    }
+
+    /// Defers saves until [`Self::finish_batch`], which writes them once.
+    pub(super) fn begin_batch(&mut self) {
+        debug_assert!(self.batch.is_none(), "batches do not nest");
+        self.batch = Some(SaveBatch::default());
+    }
+
+    /// Deletes consumed spool files now, or after the batch's write.
+    pub(super) fn acknowledge_spool(
+        &mut self,
+        dir: &Path,
+        paths: Vec<PathBuf>,
+    ) -> Result<(), String> {
+        if let Some(batch) = self.batch.as_mut() {
+            batch.acknowledgements.push((dir.to_path_buf(), paths));
+            return Ok(());
+        }
+        remove_spooled(dir, &paths)
+    }
+
+    /// Writes the batch's changes once, then deletes the spool files they
+    /// consumed. When the write fails, the state returns to where the batch
+    /// began and every spool file stays, so nothing is acknowledged unsaved.
+    pub(super) fn finish_batch(&mut self) -> Result<(), String> {
+        let Some(batch) = self.batch.take() else {
+            return Ok(());
+        };
+        if let Some((before, revision)) = batch.before {
+            let state = std::mem::take(&mut self.state);
+            if let Err(error) = self.write(state) {
+                self.state = before;
+                self.revision = revision + 1;
+                return Err(error);
+            }
+        }
+        for (dir, paths) in batch.acknowledgements {
+            remove_spooled(&dir, &paths)?;
+        }
         Ok(())
     }
 
@@ -168,8 +249,7 @@ impl Worker {
         let mut pending_commands = std::collections::VecDeque::new();
         loop {
             let timeout = next_poll.saturating_duration_since(std::time::Instant::now());
-            let received = pending_commands
-                .pop_front()
+            let received = next_command(&commands, &mut pending_commands)
                 .map(Ok)
                 .unwrap_or_else(|| commands.recv_timeout(timeout));
             let busy = perf::COORDINATOR_LOOP.enter("command");
@@ -288,6 +368,23 @@ impl Worker {
                 "Delivery paused for this tick"
             );
         })?;
+        // Every callback this tick applies is persisted by one write.
+        self.begin_batch();
+        let consumed = self.consume_all_callbacks();
+        let finished = self.finish_batch();
+        consumed.and(finished)?;
+        self.settle_requests()?;
+        self.refresh_compaction_notices()?;
+        self.submit_ready_while(can_deliver).inspect_err(|_| {
+            tracing::warn!(
+                event = "bus.coordinator.failed",
+                stage = "submit",
+                "Submission could not finish"
+            );
+        })
+    }
+
+    fn consume_all_callbacks(&mut self) -> Result<(), String> {
         let agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in agents {
             if agent.deletion_pending {
@@ -305,15 +402,7 @@ impl Worker {
                     })?;
             }
         }
-        self.settle_requests()?;
-        self.refresh_compaction_notices()?;
-        self.submit_ready_while(can_deliver).inspect_err(|_| {
-            tracing::warn!(
-                event = "bus.coordinator.failed",
-                stage = "submit",
-                "Submission could not finish"
-            );
-        })
+        Ok(())
     }
 
     pub(super) fn settle_requests(&mut self) -> Result<(), String> {
@@ -347,6 +436,47 @@ impl Worker {
         }
         Ok(())
     }
+}
+
+/// The next command to run: the developer's oldest UI command when only
+/// control reads (follower status polls) are queued ahead of it, else the
+/// oldest command. Control mutations and shutdown are never overtaken.
+fn next_command(
+    commands: &mpsc::Receiver<(u64, BusCommand)>,
+    pending: &mut std::collections::VecDeque<(u64, BusCommand)>,
+) -> Option<(u64, BusCommand)> {
+    for _ in 0..super::COMMAND_QUEUE_CAPACITY {
+        match commands.try_recv() {
+            Ok(command) => pending.push_back(command),
+            Err(_) => break,
+        }
+    }
+    let ui = pending.iter().position(|(_, command)| match command {
+        BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
+        _ => true,
+    });
+    match ui {
+        Some(index)
+            if !matches!(
+                pending[index].1,
+                BusCommand::Control(_) | BusCommand::Shutdown
+            ) =>
+        {
+            pending.remove(index)
+        }
+        _ => pending.pop_front(),
+    }
+}
+
+fn remove_spooled(dir: &Path, paths: &[PathBuf]) -> Result<(), String> {
+    for path in paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())
 }
 
 /// Reads are answered after this tick, without suppressing its delivery. A
