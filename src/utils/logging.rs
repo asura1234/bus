@@ -163,9 +163,13 @@ struct RotatingFileMakeWriter {
 
 impl RotatingFileMakeWriter {
     fn new(dir: PathBuf, file_name: &str, options: &LoggingOptions) -> io::Result<Self> {
-        fs::create_dir_all(&dir)?;
-        let state =
-            RotatingFileState::open(dir.join(file_name), options.max_bytes, options.retention)?;
+        let mut state =
+            RotatingFileState::closed(dir.join(file_name), options.max_bytes, options.retention);
+        if state.initialize().is_err() {
+            // Install the subscriber even when the disk/path is unavailable
+            // at startup; a later event retries instead of losing all logs.
+            state.retry_after_failure();
+        }
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
         })
@@ -283,11 +287,16 @@ impl Drop for SharedLogLock {
 }
 
 impl RotatingFileState {
-    /// Opens `path` for appending. Archive retention also starts the worker that
-    /// compresses and prunes archives, and makes the file safe to share with
-    /// other processes that append to the same path.
+    /// Opens `path` with the shared live-inode rotation protocol. Archive
+    /// retention starts off-thread maintenance after enabling its stream.
     pub(crate) fn open(path: PathBuf, max_bytes: u64, retention: Retention) -> io::Result<Self> {
-        let mut state = Self {
+        let mut state = Self::closed(path, max_bytes, retention);
+        state.initialize()?;
+        Ok(state)
+    }
+
+    fn closed(path: PathBuf, max_bytes: u64, retention: Retention) -> Self {
+        Self {
             path,
             max_bytes,
             retention,
@@ -295,23 +304,29 @@ impl RotatingFileState {
             current_size: 0,
             retry_at: None,
             archive_signal: None,
-        };
-        // An archive stream keeps its policy across non-dev client attaches.
-        // The empty marker is atomic and never contains partially written settings.
-        if matches!(retention, Retention::Archive(_)) {
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(state.archive_mode_path())?;
         }
-        state.inherit_archive_mode();
-        if let Retention::Archive(policy) = state.retention {
-            if state.archive_signal.is_none() {
-                state.archive_signal = Some(spawn_archive_worker(state.path.clone(), policy));
+    }
+
+    fn initialize(&mut self) -> io::Result<()> {
+        let _shared = self.lock_live_file()?;
+        self.enable_archive_mode()
+    }
+
+    /// Called only while the verified live-file lock is held. Enabling dev
+    /// archival must serialize with a short-retention writer's last policy
+    /// check and rotation, including at initial attach and on a lazy retry.
+    fn enable_archive_mode(&mut self) -> io::Result<()> {
+        self.inherit_archive_mode();
+        if let Retention::Archive(policy) = self.retention {
+            if self.archive_signal.is_none() {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(self.archive_mode_path())?;
+                self.archive_signal = Some(spawn_archive_worker(self.path.clone(), policy));
             }
         }
-        state.open_current_file()?;
-        Ok(state)
+        Ok(())
     }
 
     fn retry_after_failure(&mut self) {
@@ -374,8 +389,8 @@ impl RotatingFileState {
         }
     }
 
-    /// Returns the permission to append `incoming_len` bytes. In archive mode
-    /// that is the lock of the live file, granted only once its refreshed size
+    /// Returns the permission to append `incoming_len` bytes: the verified
+    /// lock of the live file, granted only once its refreshed size
     /// admits the entry (or it is empty), rotating under the lock as needed:
     /// starting from `held`, it relocks until both hold. Other writers'
     /// rotations are the only reason to loop, so it ends once one admits it.
@@ -390,7 +405,7 @@ impl RotatingFileState {
                 held = self.lock_live_file()?;
             }
             // A dev writer can join after this short-retention writer opened.
-            self.inherit_archive_mode();
+            self.enable_archive_mode()?;
             if self.current_size == 0
                 || self.current_size.saturating_add(incoming_len) <= self.max_bytes
             {
@@ -416,8 +431,8 @@ impl RotatingFileState {
         self.open_current_file()
     }
 
-    /// Another process sharing this log (a second `bus client`) renamed it into
-    /// an archive; keep writing to the live path, not into that archive.
+    /// Another writer rotated or removed this inode; follow the live path
+    /// rather than appending to a numbered archive or an unlinked descriptor.
     #[cfg(unix)]
     fn rotated_by_another_writer(&self) -> bool {
         use std::os::unix::fs::MetadataExt;
@@ -436,6 +451,9 @@ impl RotatingFileState {
     }
 
     fn open_current_file(&mut self) -> io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let file = OpenOptions::new()
             .create(true)
             .append(true)

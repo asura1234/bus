@@ -4,6 +4,8 @@ use super::*;
 mod lock_tests;
 #[path = "logging_recovery_test.rs"]
 mod recovery_tests;
+#[path = "logging_retry_test.rs"]
+mod retry_tests;
 
 fn temp_log_path(name: &str) -> PathBuf {
     let unique = format!(

@@ -81,3 +81,63 @@ fn a_short_retention_client_cannot_erase_a_dev_log_stream() {
         }
     }
 }
+
+#[test]
+fn archival_enablement_during_a_short_retention_rotation_preserves_existing_records() {
+    let path = temp_log_path("archival-enablement-during-rotation");
+    let dir = path.parent().unwrap().to_path_buf();
+    let release = LoggingOptions {
+        filter: EnvFilter::new("bus=info"),
+        max_bytes: 8,
+        retention: Retention::Generations(0),
+        dev: false,
+    };
+    let short = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &release).unwrap();
+    short.make_writer().write_all(b"KEEPME\n").unwrap();
+    let mut state = short.state.lock().unwrap();
+    let shared = state.lock_live_file().unwrap();
+    // Pause the real prewrite phases after the retention check, before rotation.
+    state.inherit_archive_mode();
+    assert!(matches!(state.retention, Retention::Generations(0)));
+    let marker = state.archive_mode_path();
+    let attach_dir = dir.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let attaching = std::thread::spawn(move || {
+        let dev = LoggingOptions {
+            filter: EnvFilter::new("bus=info"),
+            max_bytes: 8,
+            retention: Retention::Archive(DEV_LOG_ARCHIVE),
+            dev: true,
+        };
+        let long = RotatingFileMakeWriter::new(attach_dir, "bus.log", &dev).unwrap();
+        ready_tx.send(()).unwrap();
+        long
+    });
+    // A promotion serialized with the existing append may wait for this lock.
+    let _ = ready_rx.recv_timeout(Duration::from_millis(200));
+    let archive_enabled_before_rotation = marker.is_file();
+    state.rotate_files().unwrap();
+    state.open_current_file().unwrap();
+    drop(shared);
+    drop(state);
+    let long = attaching.join().unwrap();
+    long.make_writer().write_all(b"AFTER\n").unwrap();
+    let mut kept = fs::read_to_string(&path).unwrap();
+    for archive in archived_files(&path) {
+        if archive
+            .extension()
+            .is_some_and(|extension| extension == "gz")
+        {
+            kept.push_str(&gunzip(&archive));
+        } else {
+            kept.push_str(&fs::read_to_string(&archive).unwrap());
+        }
+    }
+    drop(long);
+    drop(short);
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        !archive_enabled_before_rotation || kept.contains("KEEPME\n"),
+        "a short-retention rotation deleted records after archival was enabled: {kept:?}"
+    );
+}
