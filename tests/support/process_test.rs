@@ -15,6 +15,9 @@ pub use wire::*;
 #[path = "json_test.rs"]
 mod json;
 pub use json::*;
+#[path = "stop_test.rs"]
+mod stop;
+pub use stop::*;
 
 static PID_REGISTRY: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 

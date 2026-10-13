@@ -14,44 +14,6 @@ impl Drop for SpawnedBus {
     }
 }
 
-/// How long a stopped bus may take to finish its graceful exit before teardown
-/// treats it as hung.
-pub(crate) const STOP_GRACE: Duration = Duration::from_secs(30);
-
-/// Stops a spawned bus like a closing terminal does: SIGHUP and close its PTY,
-/// then wait until it has exited. portable-pty's `Child::kill` sends SIGKILL
-/// about 200 ms after its SIGHUP, which lands inside the bus's graceful exit on
-/// a busy machine and truncates the coverage profile it writes last, failing the
-/// coverage merge. The PTY is closed before waiting because an exiting process
-/// cannot finish while its unread terminal output is still draining. SIGKILL is
-/// kept for a bus that is still running after `STOP_GRACE`.
-pub fn stop_spawned_bus(
-    child: &mut (dyn Child + Send + Sync),
-    master: Option<Box<dyn MasterPty + Send>>,
-) {
-    let Some(pid) = child.process_id() else {
-        return;
-    };
-    if matches!(child.try_wait(), Ok(None)) {
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGHUP);
-        }
-    }
-    drop(master);
-    let deadline = Instant::now() + STOP_GRACE;
-    while Instant::now() < deadline {
-        if !matches!(child.try_wait(), Ok(None)) {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    eprintln!("bus {pid} still running {STOP_GRACE:?} after SIGHUP; sending SIGKILL");
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-    }
-    let _ = child.wait();
-}
-
 pub fn cleanup_spawned_bus(spawned: SpawnedBus, base: PathBuf) {
     drop(spawned);
     cleanup_test_base(&base);

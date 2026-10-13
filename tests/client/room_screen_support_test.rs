@@ -261,36 +261,10 @@ impl RoomClient {
     }
 }
 
-/// Hang up the client, close its PTY and let it finish its graceful exit.
-/// portable-pty's `Child::kill` sends SIGKILL about 200 ms after its SIGHUP,
-/// which truncates the coverage profile a slow exit writes last; SIGKILL only
-/// after 30 s. The PTY closes first: an exiting process cannot finish while its
-/// unread terminal output is still draining.
-fn stop_client(child: &mut (dyn Child + Send + Sync), master: Option<Box<dyn MasterPty + Send>>) {
-    #[cfg(unix)]
-    if let (Some(pid), Ok(None)) = (child.process_id(), child.try_wait()) {
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGHUP);
-        }
-    }
-    drop(master);
-    #[cfg(unix)]
-    {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline {
-            if !matches!(child.try_wait(), Ok(None)) {
-                return;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
-    let _ = child.kill();
-}
-
 impl Drop for RoomClient {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            stop_client(child.as_mut(), self.master.take());
+            super::stop_support::stop_spawned_bus(child.as_mut(), self.master.take());
             let _ = child.wait();
         }
         // Only this fixture's explicit private root is addressed. Never discover

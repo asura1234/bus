@@ -5,6 +5,8 @@
 mod room_host_screen;
 #[path = "room_screen_support_test.rs"]
 mod room_screen_client;
+#[path = "../support/stop_test.rs"]
+mod stop_support;
 
 /// Observe the actual client's ANSI in a real host VT, outside the client component.
 #[test]
