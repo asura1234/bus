@@ -942,6 +942,7 @@ fn permission_profile_codex_resume_survives_removed_shared_root_without_writing_
         .any(|a| a == &*canonical.to_string_lossy()));
 }
 
+#[cfg(unix)]
 #[test]
 fn permission_profile_codex_resume_refuses_replaced_shared_root() {
     let mut fixture = Fixture::new(Provider::Codex);
