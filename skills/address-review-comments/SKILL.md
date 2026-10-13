@@ -166,6 +166,13 @@ a red FLAG probe is removed with its path, assertion, and red output in the FLAG
 "Taking ownership of PR reviewer tests". commit-and-push lands them even with no APPLY; after the push,
 `git status --porcelain --untracked-files=all -- <reviewer test paths>` must print nothing, else STOP.
 
+When adding, rewriting, or adopting tests, never pad coverage with a tautology. Require observable
+behavior that a plausible bug would break and an independent judging oracle, per code-review-guide
+"Never pad coverage with a tautology"; a green run or more executed lines alone is not a reason
+to keep a probe. If coverage cannot be met honestly, write a real behavioral test, delete dead or
+unreachable code through delete-dead-code, or report the gap with a reason through the existing
+exemption mechanism if one applies.
+
 main decides itself whether to work serially or dispatch writers: with few groups, overlapping files, or trivial changes, doing it yourself is usually faster; dispatching pays off only when the
 allowlists of multiple groups are pairwise disjoint, have no dependencies, and each group's workload is genuinely substantial. In plan mode the same plan file always has a single writer.
 

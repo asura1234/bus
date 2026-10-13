@@ -151,6 +151,8 @@ green probe that opened no finding (review-pr records it only under "本轮探�
 test with its claim, its actual assertion, and its worktree hunk; red by itself is not worktree pollution, and does not automatically prove the reviewer's
 expectation correct. Whether to adopt is still decided by the same verification and adjudication rules, and tests are not modified before every claim is adjudicated.
 
+**Coverage means behavioral protection when adopting tests.** Never pad coverage with a tautology: require observable behavior that a plausible bug would break and an independent judging oracle, per code-review-guide "Never pad coverage with a tautology". A green run or more executed lines alone is not a reason to keep a probe. If coverage cannot be met honestly, write a real behavioral test, delete dead or unreachable code through `delete-dead-code`, or report the gap with a reason through the existing exemption mechanism if one applies.
+
 For an APPLY repair, the author takes over the corresponding test and adds it to the repair allowlist, and after fixing the root cause runs it narrowly to prove red turns green; adopted
 green coverage cases are kept as well. Tests should follow code-review-guide "Probe test naming and ownership", renaming them by actual
 behavior or merging them into existing test files when needed; never manufacture green by deleting the test, changing it to skip/todo, weakening a valid assertion, or mocking out the behavior under test.

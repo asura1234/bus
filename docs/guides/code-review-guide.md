@@ -375,6 +375,10 @@ In these three dimensions, **writing a test is the reviewer's default action, no
   suspicion and directly related existing tests.
 - Read-only git / grep / file-read queries — they remain first-party sources for the review.
 
+**Never pad coverage with a tautology.** A test added to meet a coverage threshold must assert observable behavior that a plausible bug would break: **would this test fail if the line it covers were wrong?** A tautological test has assertions that cannot fail for any implementation of the behavior under test, so it only executes lines. Asserting a value the test itself just set, recomputing the expected value with the same code under test (asserting production with production), mirroring the implementation step by step, `assert!(true)`, accepting whatever the code currently outputs as a snapshot without an independent judging oracle, or calling a function purely to touch lines does not count. Asserting only that a call did not panic or returned `Ok` does not count when the behavior has observable output. If coverage cannot be met honestly, write a real behavioral test, delete dead or unreachable code through `delete-dead-code`, or report the coverage gap with a reason through the existing exemption mechanism if one applies; never pad coverage.
+
+**Review added tests against this rule.** Flag a tautology as a finding with the test path and the assertion that cannot detect a plausible bug; a green run or increased line coverage is not evidence of behavioral protection. This is a source-based test-quality finding, not a claim that production behavior is wrong, so it does not require a red production-behavior probe. Apply goal-relevance admission and the current round boundary as usual.
+
 **But do not write tests to pad the count.** A probe must have a meaningful failure mode: it should turn red if the implementation is wrong. Asserting the harness's own output, asserting that a mock you just configured was called, or re-asserting the same behavior under a different wrapper does not count as proof.
 
 ### Do not

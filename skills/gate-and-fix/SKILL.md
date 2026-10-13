@@ -60,6 +60,12 @@ LOOP:
 
   Group all failed gate evidence by writable owner.
 
+  For a coverage failure, never pad coverage with a tautology. A test added to meet the
+  threshold must assert observable behavior that a plausible bug would break: would this
+  test fail if the line it covers were wrong? Follow guide.md "Coverage-failure remediation":
+  write a real behavioral test, delete dead or unreachable code through delete-dead-code,
+  or report the coverage gap with a reason through the existing exemption mechanism if one applies.
+
   **How the remediation is orchestrated is main's own decision**: fix sequentially itself,
   dispatch subagents grouped by owner, or mix the two. The basis is how large the failure surface
   is, whether the owners are genuinely disjoint, and how much context main has left: one or two
