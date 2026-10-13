@@ -345,9 +345,7 @@ impl BusState {
                 if agent
                     .current_request
                     .and_then(|id| self.requests.get(&id))
-                    .is_some_and(|current| {
-                        current.awaiting_background && current.shell_hold.is_some()
-                    }) =>
+                    .is_some_and(Request::held_for_shells) =>
             {
                 None
             }
@@ -369,6 +367,12 @@ impl BusState {
                 let progress = lead.progress_at_ms.unwrap_or(agent.status_since_ms);
                 let invalidated =
                     agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
+                // The captured interim reply waits on known work, bounded by
+                // its shell cap. It has not failed transcript capture. Keep
+                // unavailable/session-invalidated requests recoverable.
+                if agent.status == RuntimeStatus::Idle && lead.held_for_shells() {
+                    return None;
+                }
                 if (agent.status != RuntimeStatus::Idle && !invalidated)
                     || !since(DELIVERED_STALL_MS, progress.max(agent.status_since_ms))
                 {
@@ -713,5 +717,19 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
         "agent_not_ready"
     } else {
         "delivery_rejected"
+    }
+}
+
+impl Request {
+    /// A captured interim belongs to the current shell hold, not a later
+    /// cron-only turn. Keeping old shell metadata preserves the first cap
+    /// across genuine re-holds without treating every later hold as shells.
+    pub(crate) fn held_for_shells(&self) -> bool {
+        self.awaiting_background
+            && self.provider_turn_id.is_some()
+            && self.shell_hold.as_ref().is_some_and(|hold| {
+                hold.interim.provider_turn_id == self.provider_turn_id
+                    && hold.interim.provider_session_id == self.provider_session_id
+            })
     }
 }

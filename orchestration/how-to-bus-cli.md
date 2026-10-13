@@ -359,6 +359,12 @@ new message when ready. Typed requests remain `stalled` for explicit recovery.
 | `delivered`, `joined` | 3 minutes idle with no hook event | `transcript_unmatched`: the turn ended but no final reply matched the transcript |
 | Any typed stage | 3 minutes without progress after the agent becomes unavailable with its session binding invalidated | `session_invalidated`: the turn cannot continue in that session; recover the current lead request with `request recover REQUEST_ID --confirm` to close its group |
 
+A captured reply held for background shells its own turn started does not
+stall while that current shell hold lasts. The `background_shell_hold_minutes`
+cap settles the hold with its latest interim reply if the shells never finish;
+non-queued follow-ups can join the held turn. An uncapped cron hold is still
+subject to stalled-status reporting.
+
 A Working agent never stalls, however long its turn. A Blocked agent does not
 stall either: it already asked for help. After 5 minutes blocked, `reason`
 reads `blocked_unanswered` so the block shows in `message status`, but the stage

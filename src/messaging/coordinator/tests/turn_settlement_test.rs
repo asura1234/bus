@@ -826,3 +826,78 @@ fn an_unreported_message_typed_into_a_held_turn_settles_at_the_shell_cap() {
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert_eq!(fixture.request(question).phase, RequestPhase::Completed);
 }
+
+/// disk2 replied while its file search still ran. A held reply is known
+/// progress with its own cap, not failed transcript capture.
+#[test]
+fn a_shell_held_reply_does_not_stall_its_sender_or_block_later_messages() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.now += crate::messaging::model::DELIVERED_STALL_MS + 60_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let status = fixture
+        .worker
+        .control_message_at(fixture.request(lead).prompt.id, fixture.now)
+        .unwrap();
+    assert_eq!(status["requests"][0]["stage"], "delivered", "{status}");
+    assert_eq!(status["requests"][0]["reason"], Value::Null, "{status}");
+    assert_eq!(status["requests"][0]["turn_ended"], false);
+    let next = fixture.send("go, run the approved cleanup", false);
+    fixture.deliver();
+    assert_eq!(fixture.request(next).group, Some(lead));
+    assert_eq!(
+        fixture.typed().last().unwrap(),
+        &("go, run the approved cleanup".into(), true)
+    );
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.request(next).phase, RequestPhase::Completed);
+    let later = fixture.send("next task", true);
+    fixture.deliver();
+    assert_eq!(fixture.request(later).phase, RequestPhase::Active);
+}
+
+/// A shell hold ends when the shell's wake-up turn starts. If that turn then
+/// waits on a session cron (no cap), the request is reported like any other
+/// cron hold, not as still held for shells.
+#[test]
+fn a_cron_hold_after_an_ended_shell_hold_is_reported_like_a_cron_hold() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.now += 60_000;
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-2","last_assistant_message":"Build done; checking the deploy every five minutes.","background_tasks":[],"session_crons":[{"cron_id":"cron-1","status":"running"}]}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.now += crate::messaging::model::DELIVERED_STALL_MS + 60_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let held = fixture
+        .worker
+        .control_message_at(fixture.request(lead).prompt.id, fixture.now)
+        .unwrap();
+
+    let mut cron = Fixture::new(Provider::ClaudeCode);
+    let cron_lead = held_on_a_session_cron(&mut cron);
+    cron.now += crate::messaging::model::DELIVERED_STALL_MS + 60_000;
+    cron.status(RuntimeStatus::Idle);
+    cron.consume();
+    let cron_status = cron
+        .worker
+        .control_message_at(cron.request(cron_lead).prompt.id, cron.now)
+        .unwrap();
+    assert_eq!(
+        held["requests"][0]["stage"], cron_status["requests"][0]["stage"],
+        "held: {held}\ncron: {cron_status}"
+    );
+}

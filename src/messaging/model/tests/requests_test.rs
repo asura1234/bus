@@ -491,3 +491,35 @@ fn invalidated_typed_requests_preserve_live_status_and_progress_grace() {
         );
     }
 }
+
+#[test]
+fn a_shell_held_reply_still_stalls_once_its_session_is_invalidated() {
+    let (mut state, agent, request) = idle_with_queued(1_000, "build it");
+    start_request(&mut state, request, "launch-codex", 5);
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 2_000)
+        .unwrap();
+    let held = state.requests.get_mut(&request).unwrap();
+    held.awaiting_background = true;
+    held.shell_hold = Some(types::ShellHold {
+        since_ms: 2_000,
+        interim: PendingFinal {
+            callback_id: "stop-1".into(),
+            text: "Waiting on the build.".into(),
+            received_at_ms: 2_000,
+            provider_session_id: held.provider_session_id.clone(),
+            provider_turn_id: held.provider_turn_id.clone(),
+        },
+    });
+    let stalled_at = 10_000 + DELIVERED_STALL_MS;
+    assert_eq!(stall_at(&state, request, stalled_at), None);
+
+    state.invalidate_agent_session(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
+        .unwrap();
+    assert_eq!(
+        stall_at(&state, request, stalled_at).as_deref(),
+        Some("session_invalidated")
+    );
+}
