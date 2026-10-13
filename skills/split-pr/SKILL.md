@@ -149,7 +149,10 @@ or a root part when base_ref is not origin/master (`pr` only targets master):
     ELSE: git push origin refs/heads/<branch>:refs/heads/<branch>
     Write goal and non-goal files from this part's purpose, then:
       python3 skills/pr/scripts/pr_goal_context.py --branch <branch> \
-        --output <ctx> --goal-file <goal> --non-goal-file <non-goals>
+        --output <ctx> --goal-file <goal> --non-goal-file <non-goals> \
+        --origin-file <origin>
+    (origin = the source branch's temp/review-pr/<source-slug>/.locked-origin, else the
+    confirmed split plan's entry for this part)
     Read skills/pr/references/pr-template.md and .github/pull_request_template.md.
     Write a Draft body (its self-test boxes `- [ ] <name> — pending`) from
     git diff <onto>...<branch> only, with `H stack PLAN --part <id>` output as

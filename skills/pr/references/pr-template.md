@@ -58,7 +58,8 @@
 ### 目标
 
 > `pr_goal_context.py` 生成本节与「非目标」节。有计划时，正文逐字采用每份计划的同名
-> section body，并按参数顺序以一个空行连接；无计划时采用 agent 根据 PR 事实源撰写的目标。
+> section body，并按参数顺序以一个空行连接；无计划时采用依据来源请求（开发者原话或 issue，
+> 逐字记录在 `.locked-origin`）撰写的目标，绝不依据 diff 或 commit。
 
 ### 非目标
 
