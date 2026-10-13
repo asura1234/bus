@@ -209,11 +209,23 @@ room that already has one fails.
 
 An orchestrator's final reply to a human message lands in MASTER by itself.
 When a worker's message or a background command starts its turn instead, the
-turn's final message is routine status and shows in the work room the
-orchestrator runs, never in MASTER: as the reply under the worker's message, or,
-for a turn no message started, as the orchestrator's message to you. Anything that needs you, such as a question, a decision, a "waiting
-on you" ask, or a result you asked for, reaches MASTER only if the
-orchestrator posts it there:
+turn's final message shows in the work room the orchestrator runs, never in
+MASTER: as the reply under the worker's message, or, for a turn no message
+started, as the orchestrator's message to you.
+
+MASTER carries progress, questions and blockers; work details stay in the work
+room. Whatever started its turn, an orchestrator sends MASTER these itself,
+briefly:
+
+- a progress report when a step or milestone finishes or fails (a PR merged, a
+  task done, a gate failed);
+- every question or decision for you;
+- every blocker that waits on you (a dialog you must approve, a destructive
+  action);
+- anything that changes the plan.
+
+Routine dialog approvals, worker hand-offs, step-by-step details and "nothing
+is waiting on you" notes stay in the work room. To post in MASTER:
 
 ```sh
 bus send --room master --as claude-orch --to human \

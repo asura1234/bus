@@ -4,6 +4,23 @@ fn temp_root(label: &str) -> PathBuf {
     crate::utils::test_temp::unique_temp_path(&format!("bus-orch-{label}"))
 }
 
+/// `text` with every whitespace run as one space, so a pinned phrase may wrap.
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// What MASTER carries (progress, questions, blockers, plan changes) and what
+/// stays in the work room, as the prompt and rules word it.
+const MASTER_REPORT_PHRASES: [&str; 7] = [
+    "Report progress, questions and blockers in MASTER; keep details in your room.",
+    "Bus shows it in your work room, never in MASTER.",
+    "a progress report when a step or milestone finishes or fails (a PR merged, a task done, a gate failed);",
+    "every question or decision for the developer;",
+    "every blocker that waits on the developer (a dialog they must approve, a destructive action);",
+    "anything that changes the plan.",
+    "Keep in your work room: routine dialog approvals, worker hand-offs, step-by-step details, and \"nothing is waiting on you\" notes.",
+];
+
 fn values(room: Option<(&str, u64)>, data: &Path) -> PromptValues {
     PromptValues {
         room: room.map(|(name, id)| (name.into(), RoomId(id))),
@@ -78,10 +95,12 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("/data/docs/how-to-bus-cli.md"));
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
-    // A turn's final is routine status: Bus shows it in the work room unless
-    // the developer's MASTER message started the turn. Anything that needs the
-    // developer goes to MASTER with `send --to human`.
-    assert!(text.contains("Bus shows it in your work room"), "{text}");
+    // A turn's final shows in the work room unless the developer's MASTER
+    // message started the turn. Progress, questions, blockers and plan changes
+    // go to MASTER with `send --to human`; details stay in the work room.
+    for phrase in MASTER_REPORT_PHRASES {
+        assert!(flat(&text).contains(phrase), "missing {phrase}: {text}");
+    }
     assert!(!text.contains("automatically, whatever woke you"), "{text}");
     assert!(
         text.contains("bus send --room master --as orch --to human"),
@@ -164,13 +183,31 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     }
     let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
     assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
-    assert!(rules.contains("**Post only what needs the developer to MASTER.**"));
-    assert!(rules.contains("Bus shows it in your work room"), "{rules}");
+    assert!(flat(&rules).contains(
+        "**Report progress, questions and blockers in MASTER; keep details in your room.**"
+    ));
+    for phrase in MASTER_REPORT_PHRASES {
+        assert!(flat(&rules).contains(phrase), "missing {phrase}: {rules}");
+    }
     assert!(
         !rules.contains("Bus posts that message to MASTER"),
         "{rules}"
     );
     assert!(rules.contains("bus send --room master --as YOUR_NAME --to human"));
+    let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
+    for phrase in [
+        "An orchestrator's final reply to a human message lands in MASTER by itself.",
+        "shows in the work room the orchestrator runs, never in MASTER",
+        "MASTER carries progress, questions and blockers; work details stay in the work room.",
+        "a progress report when a step or milestone finishes or fails (a PR merged, a task done, a gate failed);",
+        "every question or decision for you;",
+        "every blocker that waits on you (a dialog you must approve, a destructive action);",
+        "anything that changes the plan.",
+        "Routine dialog approvals, worker hand-offs, step-by-step details and \"nothing is waiting on you\" notes stay in the work room.",
+        "bus send --room master --as claude-orch --to human",
+    ] {
+        assert!(cli.contains(phrase), "missing {phrase}: {cli}");
+    }
     assert!(rules.contains("**Parallelism is king.**"));
     assert!(rules.contains("**Compartmentalize, within reason.**"));
     assert!(rules.contains("**Size the team to the current step.**"));

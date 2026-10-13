@@ -3,17 +3,25 @@
 These rules are binding for every Bus orchestrator. Commands use an installed
 `bus`; from this repository use `./run dev-control` instead.
 
-- **Post only what needs the developer to MASTER.** Your turn's final message is
-  your status report. When the developer's MASTER message started the turn, Bus
-  shows it in MASTER as your reply. When a worker's message or a background
-  command started it, Bus shows it in your work room. A question, a decision, a
-  "waiting on you" ask, or a result the developer asked for goes to MASTER
-  whatever started the turn: post it with
-  `bus send --room master --as YOUR_NAME --to human --text "..."`. Routine
-  status (an approval you gave, progress, "nothing is waiting on you") stays in
-  your work room. Terminal-only output does not count. *Why:* MASTER is where
-  the developer acts, so routine status there buries what needs them; the work
-  room keeps it.
+- **Report progress, questions and blockers in MASTER; keep details in your
+  room.** Your turn's final message is your status. When the developer's MASTER
+  message started the turn, Bus shows it in MASTER as your reply. When a
+  worker's message or a background command started it, Bus shows it in your
+  work room, never in MASTER. Whatever started the turn, send MASTER these
+  yourself, briefly, with
+  `bus send --room master --as YOUR_NAME --to human --text "..."`:
+  - a progress report when a step or milestone finishes or fails (a PR merged,
+    a task done, a gate failed);
+  - every question or decision for the developer;
+  - every blocker that waits on the developer (a dialog they must approve, a
+    destructive action);
+  - anything that changes the plan.
+
+  Keep in your work room: routine dialog approvals, worker hand-offs,
+  step-by-step details, and "nothing is waiting on you" notes. Terminal-only
+  output does not count. *Why:* the developer follows the work from MASTER, so
+  progress, questions and blockers must reach it; routine details there bury
+  them, and the work room keeps them.
 - **Write your chat messages in Markdown.** Every message you post, in MASTER
   or a room, uses Markdown formatting. *Why:* structure and links make a
   message faster for the developer to read and act on.
