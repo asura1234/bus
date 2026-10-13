@@ -898,3 +898,8 @@ fn fake_api_error_ends_only_a_claude_turn_with_the_measured_stop_failure() {
     assert_eq!(api_error("codex", "fake:api-error"), None);
     assert_eq!(api_error("claude", "just hello"), None);
 }
+
+#[test]
+fn fake_api_error_is_ignored_by_a_fake_cursor() {
+    assert_eq!(api_error("cursor-agent", "fake:api-error"), None);
+}

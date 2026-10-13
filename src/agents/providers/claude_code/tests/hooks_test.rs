@@ -234,3 +234,33 @@ fn claude_stop_failure_names_the_api_error_that_ended_the_turn() {
     assert!(error.ends_with('…'));
     assert_eq!(error.chars().count(), 301);
 }
+
+#[test]
+fn claude_stop_failure_with_blank_or_non_text_error_fields_falls_back_to_the_category() {
+    let failure = |value: Value| match parse(&value).unwrap() {
+        Parsed::Failure { error, .. } => error.unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        failure(
+            json!({"hook_event_name":"StopFailure","session_id":"s","prompt_id":"p",
+            "error":"server_error","last_assistant_message":" \n\t "})
+        ),
+        "server_error"
+    );
+    assert_eq!(
+        failure(
+            json!({"hook_event_name":"StopFailure","session_id":"s","prompt_id":"p",
+            "error":{"type":"overloaded"},"last_assistant_message":"API Error: 529 Overloaded"})
+        ),
+        "API Error: 529 Overloaded"
+    );
+    let exact = "x".repeat(300);
+    assert_eq!(
+        failure(
+            json!({"hook_event_name":"StopFailure","session_id":"s","prompt_id":"p",
+            "last_assistant_message":exact.clone()})
+        ),
+        exact
+    );
+}
