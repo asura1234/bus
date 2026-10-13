@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 mod recorder;
 mod writer;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) use recorder::ThreadUsage;
 pub(crate) use recorder::{exit, start, PerfHooks, PerfOptions, ProcessUsage};
 
 /// An operation this slow blocks a 60 Hz UI for several frames.
@@ -460,7 +462,7 @@ impl Registry {
     }
 
     #[cfg(test)]
-    fn names(&self) -> Vec<&'static str> {
+    pub(crate) fn names(&self) -> Vec<&'static str> {
         let timers = self.timers().into_iter().map(|timer| timer.name);
         let gauges = self.gauges().into_iter().map(|gauge| gauge.name);
         let counters = self.counters().into_iter().map(|counter| counter.name);

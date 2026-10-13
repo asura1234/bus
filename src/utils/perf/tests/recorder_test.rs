@@ -30,6 +30,7 @@ fn usage(cpu_ms: u64) -> ProcessUsage {
         cpus: 12,
         system_cpu_ticks: Some((cpu_ms * 3, cpu_ms * 4)),
         swap_used_bytes: Some(2 * 1024 * 1024 * 1024),
+        thread_cpu: None,
     }
 }
 
@@ -117,6 +118,57 @@ fn cpu_percent_is_cpu_time_over_wall_time() {
         cpu_percent((start, Duration::ZERO), (start, Duration::ZERO)),
         0.0
     );
+}
+
+#[test]
+fn windows_report_each_threads_cpu_delta_and_reset_missing_threads() {
+    let registry = Registry::new();
+    let (mut recorder, dir) = recorder(
+        "perf-thread-deltas",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    let sampled = |ui_ms, coordinator_ms| {
+        let mut usage = usage(ui_ms + coordinator_ms);
+        usage.thread_cpu = Some(vec![
+            ThreadUsage {
+                id: 11,
+                name: "ui".into(),
+                cpu_time: Duration::from_millis(ui_ms),
+            },
+            ThreadUsage {
+                id: 22,
+                name: "coordinator".into(),
+                cpu_time: Duration::from_millis(coordinator_ms),
+            },
+        ]);
+        usage
+    };
+    let start = Instant::now();
+    let first = recorder.window_record(start, Some(sampled(100, 1000)), &registry);
+    assert!(first["thread_cpu"][0].get("cpu_pct").is_none());
+    let second = recorder.window_record(
+        start + Duration::from_secs(2),
+        Some(sampled(600, 2500)),
+        &registry,
+    );
+    assert_eq!(second["thread_cpu"][0]["id"], 11);
+    assert_eq!(second["thread_cpu"][0]["name"], "ui");
+    assert_eq!(second["thread_cpu"][0]["cpu_pct"], 25.0);
+    assert_eq!(second["thread_cpu"][1]["cpu_pct"], 75.0);
+    recorder.window_record(start + Duration::from_secs(3), Some(usage(4000)), &registry);
+    let returned = recorder.window_record(
+        start + Duration::from_secs(4),
+        Some(sampled(700, 2600)),
+        &registry,
+    );
+    assert!(
+        returned["thread_cpu"][0].get("cpu_pct").is_none(),
+        "missing sample breaks the baseline"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -296,6 +348,57 @@ fn watchdog_lag_is_recorded_when_the_perf_thread_wakes_late() {
 }
 
 #[test]
+fn coordinator_capture_does_not_suppress_later_ui_capture() {
+    static COORDINATOR: LoopWatch = LoopWatch::new("test.independent.coordinator");
+    static UI: LoopWatch = LoopWatch::new("test.independent.ui");
+    let registry = Registry::new();
+    registry.add_watch(&COORDINATOR);
+    registry.add_watch(&UI);
+    let (mut recorder, dir) = recorder(
+        "perf-independent-captures",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: no_capture,
+        },
+    );
+    let start = Instant::now();
+    let coordinator = COORDINATOR.enter("save");
+    recorder.watch(start, now_us() + 2_100_000, &registry);
+    recorder.wait_for_captures();
+    drop(coordinator);
+    recorder.watch(start, now_us(), &registry);
+    let ui = UI.enter("compose");
+    recorder.watch(
+        start + Duration::from_secs(60),
+        now_us() + 2_100_000,
+        &registry,
+    );
+    recorder.wait_for_captures();
+    recorder.watch(
+        start + Duration::from_secs(61),
+        now_us() + 2_200_000,
+        &registry,
+    );
+    recorder.wait_for_captures();
+    drop(ui);
+    recorder.flush();
+    let records = lines(&perf_dir(&dir).join("client.jsonl"));
+    let captures: Vec<_> = records.iter().filter(|r| r["state"] == "capture").collect();
+    assert_eq!(
+        captures.len(),
+        2,
+        "each loop gets its own cooldown: {records:?}"
+    );
+    assert_eq!(captures[0]["loop"], "test.independent.coordinator");
+    assert_eq!(captures[1]["loop"], "test.independent.ui");
+    assert_ne!(
+        captures[0]["file"], captures[1]["file"],
+        "captures must not overwrite each other"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn start_is_a_no_op_when_disabled() {
     let dir = crate::utils::test_temp::unique_temp_path("perf-off");
     let mut disabled = options();
@@ -311,6 +414,93 @@ fn start_is_a_no_op_when_disabled() {
     )
     .is_none());
     assert!(!perf_dir(&dir).exists());
+}
+
+#[test]
+fn concurrent_loop_captures_keep_retention_bounded() {
+    static RELEASE: std::sync::OnceLock<std::sync::Barrier> = std::sync::OnceLock::new();
+    static COORDINATOR: LoopWatch = LoopWatch::new("test.retention.coordinator");
+    static UI: LoopWatch = LoopWatch::new("test.retention.ui");
+    fn delayed_capture(_pid: u32, path: &Path) -> bool {
+        RELEASE.get().unwrap().wait();
+        std::fs::write(path, "stacks").is_ok()
+    }
+    RELEASE.get_or_init(|| std::sync::Barrier::new(3));
+    let registry = Registry::new();
+    registry.add_watch(&COORDINATOR);
+    registry.add_watch(&UI);
+    let (mut recorder, dir) = recorder(
+        "perf-concurrent-retention",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: delayed_capture,
+        },
+    );
+    for stamp in ["20000101-000000", "20000101-000001"] {
+        std::fs::write(
+            perf_dir(&dir).join(format!("stall-{stamp}-client.txt")),
+            "old",
+        )
+        .unwrap();
+    }
+    let coordinator = COORDINATOR.enter("save");
+    let ui = UI.enter("compose");
+    recorder.watch(Instant::now(), now_us() + 2_100_000, &registry);
+    RELEASE.get().unwrap().wait();
+    recorder.wait_for_captures();
+    drop((coordinator, ui));
+    let files = std::fs::read_dir(perf_dir(&dir))
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with("-client.txt"))
+        .count();
+    let retained = recorder.options.retained_captures;
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        files <= retained,
+        "{files} capture files exceed retention limit {retained}"
+    );
+}
+
+#[test]
+fn pruning_does_not_delete_an_active_capture_output() {
+    static READY: std::sync::Barrier = std::sync::Barrier::new(2);
+    static RELEASE: std::sync::Barrier = std::sync::Barrier::new(2);
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn capture(_pid: u32, path: &Path) -> bool {
+        let first = CALLS.fetch_add(1, Ordering::SeqCst) == 0;
+        let ok = std::fs::write(path, "stacks").is_ok();
+        if first {
+            READY.wait();
+            RELEASE.wait();
+        }
+        ok
+    }
+    let (mut recorder, dir) = recorder(
+        "perf-active-output",
+        PerfHooks {
+            sample: no_sample,
+            capture_stacks: capture,
+        },
+    );
+    recorder.options.retained_captures = 1;
+    recorder.capture("coordinator", "save", 2000);
+    READY.wait();
+    let active = std::fs::read_dir(perf_dir(&dir))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "txt"))
+        .unwrap();
+    recorder.capture("ui", "compose", 2000);
+    let preserved = active.is_file();
+    RELEASE.wait();
+    recorder.wait_for_captures();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        preserved,
+        "a later capture pruned the output still being written"
+    );
 }
 
 #[test]
@@ -371,8 +561,12 @@ fn high_machine_load_warns_at_most_once_a_minute() {
     let start = Instant::now();
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
-        loaded.window_record(start, Some(busy), &registry);
-        loaded.window_record(start + Duration::from_secs(1), Some(busy), &registry);
+        loaded.window_record(start, Some(busy.clone()), &registry);
+        loaded.window_record(
+            start + Duration::from_secs(1),
+            Some(busy.clone()),
+            &registry,
+        );
         loaded.window_record(start + Duration::from_secs(61), Some(busy), &registry);
     });
     let text = capture.text();
@@ -862,6 +1056,9 @@ fn exit_drain_gives_up_at_the_deadline_and_reports_the_undrained_records() {
 
 #[test]
 fn dropping_the_running_recorder_stops_it_promptly() {
+    if isolated_lifecycle_test("dropping_the_running_recorder_stops_it_promptly") {
+        return;
+    }
     let dir = crate::utils::test_temp::unique_temp_path("perf-stop");
     let running = start(
         &dir,
@@ -934,6 +1131,11 @@ fn shutdown_deadline_does_not_wait_for_a_locked_diagnostic_log() {
 #[cfg(unix)]
 #[test]
 fn dropping_recorder_keeps_exit_deadline_when_watchdog_is_logging_a_stall() {
+    if isolated_lifecycle_test(
+        "dropping_recorder_keeps_exit_deadline_when_watchdog_is_logging_a_stall",
+    ) {
+        return;
+    }
     static WATCH: LoopWatch = LoopWatch::new("test.rec.exit.blocked_log");
     let dir = crate::utils::test_temp::unique_temp_path("perf-stop-log-lock");
     std::fs::create_dir_all(&dir).unwrap();
@@ -984,6 +1186,30 @@ fn dropping_recorder_keeps_exit_deadline_when_watchdog_is_logging_a_stall() {
         elapsed < Duration::from_millis(2300),
         "recorder exit exceeded the 2 s drain budget while joining watchdog: {elapsed:?}"
     );
+}
+
+// Lifecycle tests need a fresh process: start is once-only, and logging plus
+// the global watch registry outlive individual libtest cases.
+fn isolated_lifecycle_test(name: &str) -> bool {
+    const CHILD: &str = "BUS_PERF_LIFECYCLE_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(format!("utils::perf::recorder::recorder_test::{name}"))
+        .arg("--nocapture")
+        .env(CHILD, name)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("running 1 test"), "{stdout}");
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
 }
 
 #[cfg(unix)]

@@ -225,6 +225,9 @@ impl BusUi {
     }
 
     pub fn compute_view(&mut self, cols: u16, rows: u16) {
+        static COMPUTE_VIEW: crate::utils::perf::Timer =
+            crate::utils::perf::Timer::new("client.compute_view");
+        let _timer = COMPUTE_VIEW.start();
         self.sync_toast();
         let key = super::super::ViewKey {
             room: self.room,
