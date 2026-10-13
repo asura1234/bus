@@ -77,8 +77,7 @@ IF exit != 0 AND output says multiple / named lanes make a bare invocation ambig
 ELSE IF exit != 0 AND FAIL names missing, blank, or mismatched locked Goal/Non-goals:
   IF --plan was supplied:
     run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --plan <plan-file>;
-    IF it refuses because the lock differs from the plan (a developer ruling re-locked it): the lock wins; rerun the
-    prologue once without --plan. ELSE rerun the prologue once. Relay any remaining FAIL verbatim and STOP.
+    rerun the prologue once (without --plan if the script refused: a developer ruling re-locked it); relay any FAIL and STOP.
   ELSE:
     ask the developer for the PR's originating request (their words or the issue), its one-sentence single Goal,
     and its explicit Non-goals (`无` when none); write the goal and non-goal replies verbatim to ignored temp goal and non-goal
