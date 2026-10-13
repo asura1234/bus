@@ -209,9 +209,9 @@ room that already has one fails.
 
 An orchestrator's final reply to a human message lands in MASTER by itself.
 When a worker's message or a background command starts its turn instead, the
-turn's final message is routine status: Bus shows it in the work room the
-orchestrator runs, as written by that orchestrator and addressed to you, never
-in MASTER. Anything that needs you, such as a question, a decision, a "waiting
+turn's final message is routine status and shows in the work room the
+orchestrator runs, never in MASTER: as the reply under the worker's message, or,
+for a turn no message started, as the orchestrator's message to you. Anything that needs you, such as a question, a decision, a "waiting
 on you" ask, or a result you asked for, reaches MASTER only if the
 orchestrator posts it there:
 

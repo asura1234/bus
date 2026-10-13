@@ -131,6 +131,18 @@ impl Fixture {
             .unwrap_or_else(|| request.prompt.rendered_payload())
     }
 
+    /// The reply the orchestrator's current request took from its final, and
+    /// the room that request was posted in.
+    fn reply(&self) -> Option<(RoomId, String)> {
+        let state = &self.worker.state;
+        let request = state
+            .agent(self.orchestrator)?
+            .current_request
+            .and_then(|request| state.request(request))?;
+        let reply = request.pending_final.as_ref()?;
+        Some((request.room_id, reply.text.clone()))
+    }
+
     /// The orchestrator's messages to the developer in MASTER.
     fn reports(&self) -> Vec<String> {
         self.notices(self.master)
@@ -219,7 +231,7 @@ fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
 }
 
 #[test]
-fn a_turn_that_answers_a_worker_is_reported_in_its_work_room() {
+fn a_turn_that_answers_a_worker_replies_in_its_work_room_only() {
     let mut bus = fixture(Provider::ClaudeCode);
     let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
     let typed = bus.deliver(
@@ -234,12 +246,18 @@ fn a_turn_that_answers_a_worker_is_reported_in_its_work_room() {
         &typed,
         "builder finished; tests pass.",
     );
-    assert_eq!(bus.room_reports(), ["builder finished; tests pass."]);
+    // The final is the reply to the worker's message, which shows in the work
+    // room under it; no report repeats it there or in MASTER.
+    assert_eq!(
+        bus.reply(),
+        Some((room, "builder finished; tests pass.".to_owned()))
+    );
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
     assert!(bus.reports().is_empty(), "{:?}", bus.reports());
 }
 
 #[test]
-fn a_worker_blocked_on_a_dialog_wakes_a_turn_reported_in_its_work_room() {
+fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_replies_in_its_work_room_only() {
     // The 11:21 case: a worker's open dialog sends "Blocked, needs help to
     // continue." to the orchestrator, which approves it and ends its turn.
     let mut bus = fixture(Provider::ClaudeCode);
@@ -257,9 +275,13 @@ fn a_worker_blocked_on_a_dialog_wakes_a_turn_reported_in_its_work_room() {
         "I approved formatting one test file. Nothing is waiting on you.",
     );
     assert_eq!(
-        bus.room_reports(),
-        ["I approved formatting one test file. Nothing is waiting on you."]
+        bus.reply(),
+        Some((
+            room,
+            "I approved formatting one test file. Nothing is waiting on you.".to_owned()
+        ))
     );
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
     assert!(bus.reports().is_empty(), "{:?}", bus.reports());
 }
 

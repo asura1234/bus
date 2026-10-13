@@ -1,10 +1,12 @@
-//! An orchestrator's status report. When a MASTER orchestrator ends a turn that
-//! no message in MASTER started (a background command exited, a worker
-//! messaged it, a worker said it is blocked), that turn's final text is routine
-//! status, so Bus shows it in the work room the orchestrator runs as its own
-//! message to the developer. MASTER carries only what needs the developer: the
-//! replies to their MASTER messages, and what the orchestrator posts there
-//! itself with `send --to human`. Bus authors nothing: the text is the agent's.
+//! An orchestrator's status report. A turn that answers a message ends in that
+//! message's reply, which shows in the message's own room: MASTER for the
+//! developer's message, the work room for a worker's (a worker said it is
+//! done or blocked). When a MASTER orchestrator ends a turn no message started
+//! (a background command exited), that turn's final text is routine status,
+//! so Bus shows it in the work room the orchestrator runs as its own message to
+//! the developer. MASTER carries only what needs the developer: the replies to
+//! their MASTER messages, and what the orchestrator posts there itself with
+//! `send --to human`. Bus authors nothing: the text is the agent's.
 use super::{
     AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection,
     ProviderCallback, RoomId,
@@ -20,9 +22,6 @@ pub(super) struct PendingReport {
     /// The provider session and turn the final ends.
     session: Option<String>,
     turn: Option<String>,
-    /// The final answers a message posted in MASTER, so it already shows
-    /// there as that message's reply.
-    shown_in_master: bool,
 }
 
 /// The report a final callback would make, if its agent is in MASTER. Workers
@@ -39,12 +38,6 @@ pub(super) fn pending_report(
     if agent.room_id != master || !text.chars().any(char::is_alphanumeric) {
         return None;
     }
-    let shown_in_master = agent.current_request.is_some_and(|lead| {
-        std::iter::once(lead)
-            .chain(state.group_members(lead))
-            .filter_map(|request| state.request(request))
-            .any(|request| request.room_id == master)
-    });
     Some(PendingReport {
         master,
         room: agent.orchestrates.unwrap_or(master),
@@ -52,15 +45,14 @@ pub(super) fn pending_report(
         text: text.trim().to_owned(),
         session: callback.provider_session_id.clone(),
         turn: callback.provider_turn_id.clone(),
-        shown_in_master,
     })
 }
 
-/// Posts the report once its callback is applied. A final accepted for a
-/// request outside MASTER (a worker's message; the request itself settles once
-/// the agent is idle) or ending a turn Bus did not start is a report; a
-/// duplicate or rejected final is not. Each final callback is
-/// applied once, so a turn reports at most once.
+/// Posts the report once its callback is applied. Only a final ending a turn
+/// Bus did not start is a report; a final accepted for a request is that
+/// request's reply and already shows in its room, and a duplicate or rejected
+/// final is not a report. Each final callback is applied once, so a turn
+/// reports at most once.
 pub(super) fn post_report(
     state: &mut BusState,
     report: PendingReport,
@@ -69,7 +61,7 @@ pub(super) fn post_report(
 ) {
     let reports = match disposition {
         CallbackDisposition::AcceptedCompleted | CallbackDisposition::AcceptedPendingSettlement => {
-            !report.shown_in_master
+            false
         }
         CallbackDisposition::Rejected(
             CallbackRejection::UnrelatedTurn | CallbackRejection::NoActiveRequest,
