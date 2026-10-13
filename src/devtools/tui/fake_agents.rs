@@ -347,6 +347,17 @@ impl FakeAgent {
         let reply = self
             .permission_reply(prompt)
             .unwrap_or_else(|| format!("fake reply: {}", prompts.join("\n")));
+        if permission_working {
+            permissions::finish_service_turn(&mut out, &reply, || {
+                self.hook(
+                    "Stop",
+                    Some(&turn),
+                    json!({"last_assistant_message": reply, "stop_hook_active": false}),
+                );
+            });
+            self.draw_prompt();
+            return None;
+        }
         permissions::end_work(&mut out, permission_working);
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));

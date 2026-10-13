@@ -28,6 +28,16 @@ pub(super) fn end_work(out: &mut impl Write, active: bool) {
     }
 }
 
+pub(super) fn finish_service_turn(out: &mut impl Write, reply: &str, stop: impl FnOnce()) {
+    // The fake's input loop cannot process /clear until its synchronous hook
+    // returns. Keep the native busy frame until that boundary, like a provider
+    // that is still finishing its turn, rather than advertising false readiness.
+    stop();
+    end_work(out, true);
+    let _ = write!(out, "⏺ {}\r\n", reply.replace('\n', "\r\n  "));
+    let _ = out.flush();
+}
+
 pub(super) fn fixture_kind(prompt: &str) -> Option<&str> {
     let kind = prompt.strip_prefix("fake:permission ")?.trim();
     [
@@ -421,6 +431,57 @@ pub(super) fn pseudo_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_fixture_stop_hook_keeps_native_service_busy_until_return() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Captured(Rc<RefCell<Vec<u8>>>);
+        impl Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let mut out = Captured(Rc::clone(&bytes));
+        begin_work(&mut out, true);
+        finish_service_turn(&mut out, "assignment settled", || {
+            let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
+            terminal.write(&bytes.borrow());
+            let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
+            let detected = crate::agents::manifest::detect_with_osc(
+                crate::agents::AgentKind::Claude,
+                crate::agents::manifest::DetectionInput {
+                    screen: &screen,
+                    osc_title: "",
+                    osc_progress: "",
+                },
+            );
+            assert!(
+                detected.visible_working,
+                "fake looks idle while synchronous Stop hook blocks input: {screen}"
+            );
+        });
+        let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
+        terminal.write(&bytes.borrow());
+        let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
+        assert!(screen.contains("assignment settled"));
+        assert!(
+            !crate::agents::manifest::detect_with_osc(
+                crate::agents::AgentKind::Claude,
+                crate::agents::manifest::DetectionInput {
+                    screen: &screen,
+                    osc_title: "",
+                    osc_progress: "",
+                },
+            )
+            .visible_working
+        );
+    }
 
     #[test]
     fn permission_fixture_claude_busy_frame_confirms_native_acceptance() {
