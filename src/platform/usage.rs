@@ -82,7 +82,7 @@ fn thread_cpu(threads: u32) -> Option<Vec<ThreadUsage>> {
     let size = (ids.len() * std::mem::size_of::<u64>()) as libc::c_int;
     let read =
         unsafe { libc::proc_pidinfo(pid, PROC_PIDLISTTHREADS, 0, ids.as_mut_ptr().cast(), size) };
-    if read <= 0 || read >= size || read as usize % std::mem::size_of::<u64>() != 0 {
+    if read <= 0 || read >= size || !(read as usize).is_multiple_of(std::mem::size_of::<u64>()) {
         return None;
     }
     ids.truncate(read as usize / std::mem::size_of::<u64>());
@@ -118,7 +118,7 @@ fn thread_cpu(threads: u32) -> Option<Vec<ThreadUsage>> {
     Some(samples)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn thread_cpu(_threads: u32) -> Option<Vec<crate::utils::perf::ThreadUsage>> {
     None
 }
