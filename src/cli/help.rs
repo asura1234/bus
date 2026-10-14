@@ -14,7 +14,8 @@ pub(crate) fn write_stdout_line(arguments: std::fmt::Arguments<'_>) {
 
 /// Agent-tier commands, which every session answers. `bus --help` prints only
 /// these; the tier of each command is `coordinator::control::METHODS`.
-pub const AGENT_HELP: &str = "Commands (connect to the running Bus in BUS_DATA_DIR; they never start one):
+pub const AGENT_HELP: &str =
+    "Commands (connect to the running Bus in BUS_DATA_DIR; they never start one):
   state
   room create NAME
   room rename ROOM NAME
