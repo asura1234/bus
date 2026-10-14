@@ -53,16 +53,14 @@ impl Worker {
             let Some(agent) = self.state.agent(id) else {
                 continue;
             };
-            if !steady || agent.dialog_notice == wait || agent.deletion_pending {
+            if !steady || agent.deletion_pending {
                 continue;
             }
-            // An unreadable redraw cannot prove a new dialog. Keep the last
-            // reported id so the same dialog returning does not post again.
-            if wait.as_deref() == Some(BLOCKED) && agent.dialog_notice.is_some() {
-                continue;
-            }
+            let notice = agent.dialog_notice.clone();
             if wait.is_none() {
-                self.finish_answered_dialog(id)?;
+                if notice.is_some() {
+                    self.finish_answered_dialog(id)?;
+                }
                 continue;
             }
             // Native ids change with question/command text and options, but
@@ -90,6 +88,14 @@ impl Worker {
                         }
                     }
                 }
+            }
+            if notice == wait {
+                continue;
+            }
+            // An unreadable redraw cannot prove a new dialog. Keep the last
+            // reported id so the same dialog returning does not post again.
+            if wait.as_deref() == Some(BLOCKED) && notice.is_some() {
+                continue;
             }
             let mut state = self.state.clone();
             if starts {
