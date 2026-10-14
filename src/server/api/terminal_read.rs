@@ -149,10 +149,13 @@ pub(in crate::server) enum AltScreenReadConflict {
 }
 
 impl HeadlessServer {
-    pub(in crate::server) fn agent_read_not_idle_error(
+    /// A working agent's alternate screen keeps no history, and scrolling it
+    /// mid-turn would disturb the agent, so a longer read returns the visible
+    /// screen with this note instead.
+    pub(in crate::server) fn agent_read_not_idle_note(
         &self,
         request: &schema::Request,
-    ) -> Option<schema::ErrorBody> {
+    ) -> Option<String> {
         use schema::{Method, ReadFormat, ReadSource};
 
         let Method::AgentRead(params) = &request.method else {
@@ -187,13 +190,10 @@ impl HeadlessServer {
             return None;
         }
         let status = crate::agents::manifest::agent_state_label(terminal.state);
-        Some(schema::ErrorBody {
-            code: "agent_not_idle".into(),
-            message: format!(
-                "cannot read {requested} lines while {} is {status}: its alternate-screen history can only be captured by scrolling while idle. Wait and retry, or use --source visible",
-                params.target
-            ),
-        })
+        Some(format!(
+            "only the visible screen was read while {} is {status}: its alternate-screen history can only be captured by scrolling while idle. Retry when it is idle for older lines",
+            params.target
+        ))
     }
 
     pub(in crate::server) fn alt_screen_read_spec(

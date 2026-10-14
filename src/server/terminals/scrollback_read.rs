@@ -601,6 +601,7 @@ mod tests {
                 returned_lines: 0,
                 available_lines: None,
                 exhausted: None,
+                note: None,
             },
             lines,
             false,

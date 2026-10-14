@@ -271,5 +271,8 @@ fn read_capture(read: &schema::PaneReadResult, read_source: schema::ReadSource) 
         capture["available_lines"] = json!(read.available_lines);
         capture["exhausted"] = json!(read.exhausted);
     }
+    if let Some(note) = &read.note {
+        capture["note"] = json!(note);
+    }
     capture
 }

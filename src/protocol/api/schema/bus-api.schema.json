@@ -4053,6 +4053,13 @@
             "format": {
               "$ref": "#/schemas/subscription_event/$defs/ReadFormat"
             },
+            "note": {
+              "description": "Why fewer lines came back than were asked for, when the read could not go further.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "pane_id": {
               "type": "string"
             },
@@ -5438,6 +5445,13 @@
             },
             "format": {
               "$ref": "#/schemas/success_response/$defs/ReadFormat"
+            },
+            "note": {
+              "description": "Why fewer lines came back than were asked for, when the read could not go further.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "pane_id": {
               "type": "string"

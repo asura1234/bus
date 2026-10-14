@@ -110,6 +110,7 @@ fn subscription_event_envelope_round_trips() {
                 returned_lines: 1,
                 available_lines: Some(1),
                 exhausted: Some(true),
+                note: None,
             },
         }),
     };

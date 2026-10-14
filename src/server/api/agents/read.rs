@@ -50,6 +50,7 @@ impl App {
                     returned_lines: snapshot.returned_lines,
                     available_lines: snapshot.available_lines,
                     exhausted: snapshot.exhausted,
+                    note: None,
                 },
             },
         )
