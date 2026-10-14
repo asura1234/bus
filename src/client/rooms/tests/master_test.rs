@@ -862,3 +862,19 @@ fn agents_header_names_the_selected_room_in_one_dim_truncated_row() {
     let rows = sidebar_rows(&mut ui);
     assert_eq!(rows[9], "a-very-long-room-name-th…", "{rows:?}");
 }
+
+#[test]
+fn scrolled_master_sidebar_reaches_its_last_orchestrator_below_the_room_name() {
+    let (mut ui, master, pr, _, orchestrator) = master_fixture();
+    ui.open_room(master);
+    ui.compute_view(100, 12);
+    // MASTER, gap, ROOMS, gap, two rooms, divider, AGENTS, room name, gap,
+    // then a four-row orchestrator card below the leading blank row.
+    assert_eq!(ui.view.sidebar_max_scroll, 15 - 10);
+    ui.sidebar_scroll = usize::MAX;
+    ui.compute_view(100, 12);
+    let rows_of = |action| hit_rows(&ui, action);
+    assert_eq!(rows_of(render::Action::Agent(orchestrator)), [6, 6, 7]);
+    assert_eq!(rows_of(render::Action::Room(pr)), [0, 0, 8]);
+    assert_eq!(rows_of(render::Action::NewAgent), [3]);
+}

@@ -135,8 +135,8 @@ fn sidebar_rooms_header(state: &BusState, _selected: Option<RoomId>) -> usize {
     }
 }
 
-/// The logical sidebar row of a room while `selected` is open: MASTER is the
-/// first entry, alone above the rest; work rooms follow the ROOMS header.
+/// The logical sidebar row of a room: MASTER is the first entry, alone above
+/// the rest; work rooms follow the ROOMS header regardless of selection.
 pub(in crate::client::rooms) fn sidebar_room_row(
     state: &BusState,
     room: RoomId,
