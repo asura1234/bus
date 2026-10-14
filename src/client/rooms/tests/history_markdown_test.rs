@@ -306,7 +306,13 @@ fn markdown_rendering_survives_a_visit_to_another_room() {
         .unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     saved_exchange(&mut ui, room, agent, "first prompt", "**first reply**");
-    saved_exchange(&mut ui, other, other_agent, "other prompt", "**other reply**");
+    saved_exchange(
+        &mut ui,
+        other,
+        other_agent,
+        "other prompt",
+        "**other reply**",
+    );
     let snapshot = Arc::clone(&ui.snapshot);
     let rendered_reply = |ui: &mut BusUi, id| {
         ui.history.lines(

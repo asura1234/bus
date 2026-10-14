@@ -53,46 +53,7 @@ impl History {
         let reason = rebuild_reason(self.key, key);
         self.rendered = 0;
         let groups = groups(state);
-        let mut exchanges = BTreeMap::new();
-        // Dialog notices to orchestrators are delivery-only, never history.
-        for request in state
-            .requests()
-            .filter(|r| r.room_id == room.id && !r.delivery_only())
-        {
-            let prompt = &request.prompt;
-            exchanges
-                .entry((prompt.submitted_at_ms, prompt.id.0))
-                .or_insert_with(|| Exchange {
-                    prompt,
-                    requests: BTreeMap::new(),
-                })
-                .requests
-                .insert(request.agent_id, request);
-        }
-        // Bus notices for the developer read like messages addressed to nobody.
-        for prompt in state.notices(room.id) {
-            exchanges.insert(
-                (prompt.submitted_at_ms, prompt.id.0),
-                Exchange {
-                    prompt,
-                    requests: BTreeMap::new(),
-                },
-            );
-        }
-        // Retain compatibility with saved latest-only records.
-        if let Some(prompt) = room.latest_prompt.as_ref().filter(|prompt| {
-            !exchanges
-                .values()
-                .any(|exchange| exchange.prompt.id == prompt.id)
-        }) {
-            exchanges.insert(
-                (prompt.submitted_at_ms, prompt.id.0),
-                Exchange {
-                    prompt,
-                    requests: BTreeMap::new(),
-                },
-            );
-        }
+        let exchanges = exchanges(state, room);
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
         for exchange in exchanges.into_values() {
@@ -109,20 +70,7 @@ impl History {
                 &groups,
                 width,
             );
-            lines.push(Line {
-                text: String::new(),
-                action: None,
-                tone: Tone::Text,
-                spans: Vec::new(),
-                styles: Vec::new(),
-                links: None,
-                thumbnail: None,
-                raw_markdown: None,
-                continued: false,
-                rejoin_space: false,
-                copy_from: 0,
-                anchor: RowAnchor::new(prompt.id, None, RowKind::Gap),
-            });
+            lines.push(blank_row(RowAnchor::new(prompt.id, None, RowKind::Gap)));
         }
         self.room_markdown.insert(room.id, active_markdown);
         self.room_markdown.retain(|id, _| state.room(*id).is_some());
@@ -264,20 +212,11 @@ impl History {
             // One blank row between replies, as at every other block
             // boundary; the exchange's own Gap row follows the last one.
             if replied {
-                lines.push(Line {
-                    text: String::new(),
-                    action: None,
-                    tone: Tone::Text,
-                    spans: Vec::new(),
-                    styles: Vec::new(),
-                    links: None,
-                    thumbnail: None,
-                    raw_markdown: None,
-                    continued: false,
-                    rejoin_space: false,
-                    copy_from: 0,
-                    anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Gap),
-                });
+                lines.push(blank_row(RowAnchor::new(
+                    prompt.id,
+                    Some(*agent_id),
+                    RowKind::Gap,
+                )));
             }
             replied = true;
             let reply_header = vec![
@@ -404,6 +343,70 @@ fn wrap_header(
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
+/// The room's history entries in display order: requests grouped by prompt,
+/// then notices and any saved latest-only prompt.
+fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
+    let mut exchanges = BTreeMap::new();
+    // Dialog notices to orchestrators are delivery-only, never history.
+    for request in state
+        .requests()
+        .filter(|r| r.room_id == room.id && !r.delivery_only())
+    {
+        let prompt = &request.prompt;
+        exchanges
+            .entry((prompt.submitted_at_ms, prompt.id.0))
+            .or_insert_with(|| Exchange {
+                prompt,
+                requests: BTreeMap::new(),
+            })
+            .requests
+            .insert(request.agent_id, request);
+    }
+    // Bus notices for the developer read like messages addressed to nobody.
+    for prompt in state.notices(room.id) {
+        exchanges.insert(
+            (prompt.submitted_at_ms, prompt.id.0),
+            Exchange {
+                prompt,
+                requests: BTreeMap::new(),
+            },
+        );
+    }
+    // Retain compatibility with saved latest-only records.
+    if let Some(prompt) = room.latest_prompt.as_ref().filter(|prompt| {
+        !exchanges
+            .values()
+            .any(|exchange| exchange.prompt.id == prompt.id)
+    }) {
+        exchanges.insert(
+            (prompt.submitted_at_ms, prompt.id.0),
+            Exchange {
+                prompt,
+                requests: BTreeMap::new(),
+            },
+        );
+    }
+    exchanges
+}
+
+/// An empty separator row.
+fn blank_row(anchor: RowAnchor) -> Line {
+    Line {
+        text: String::new(),
+        action: None,
+        tone: Tone::Text,
+        spans: Vec::new(),
+        styles: Vec::new(),
+        links: None,
+        thumbnail: None,
+        raw_markdown: None,
+        continued: false,
+        rejoin_space: false,
+        copy_from: 0,
+        anchor,
+    }
+}
+
 /// Each group lead's members, as `BusState::group_members` lists them, from
 /// one pass over all requests instead of one pass per reply.
 fn groups(state: &BusState) -> BTreeMap<RequestId, Vec<RequestId>> {
