@@ -210,83 +210,95 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rows = Vec::new();
         for id in targets {
-            let agent = state.agent(id).ok_or("Unknown agent")?;
-            let mut row = json!({"agent_id": id, "name": agent.name});
-            let status = agent.shown_status();
-            match status {
-                RuntimeStatus::Idle => {
-                    // Nothing to stop. A turn Bus still holds (settling, or
-                    // waiting on background shells) and the queue close.
-                    let closed = state
-                        .close_interrupted(id, now)
-                        .map_err(|e| e.to_string())?;
-                    // Their waiters point to the history for who stopped them.
-                    if !closed.is_empty() {
-                        state
-                            .post_interrupt_notice(room, interrupter.clone(), id, now)
-                            .map_err(|e| e.to_string())?;
-                    }
-                    row["outcome"] = json!("already_idle");
-                }
-                RuntimeStatus::Working | RuntimeStatus::Blocked => {
-                    let key = interrupt_key(agent.provider);
-                    let Some(pane) = agent.runtime_identity.pane_id.clone() else {
-                        row["outcome"] = json!("failed");
-                        row["reason"] = json!("The agent has no terminal yet");
-                        rows.push(row);
-                        continue;
-                    };
-                    // One press only: a second Esc opens Claude's rewind or
-                    // Codex's edit-previous-message, a second Ctrl+C quits Cursor.
-                    let sent = self.transport.request(Method::AgentSendKeys(
-                        schema::AgentSendKeysParams {
-                            target: pane,
-                            keys: vec![key.into()],
-                        },
-                    ));
-                    match sent {
-                        Err(error) if error.definitely_rejected => {
-                            tracing::warn!(
-                                event = "bus.agent.interrupt",
-                                agent_id = id.0,
-                                key,
-                                error = %error.message,
-                                "Stop key refused"
-                            );
-                            row["outcome"] = json!("failed");
-                            row["reason"] = json!(error.message);
-                        }
-                        // An uncertain failure may have pressed the key; the
-                        // CLI's wait for idle decides.
-                        _ => {
-                            tracing::info!(
-                                event = "bus.agent.interrupt",
-                                agent_id = id.0,
-                                key,
-                                "Stop key pressed"
-                            );
-                            state.begin_interrupt(id).map_err(|e| e.to_string())?;
-                            state
-                                .post_interrupt_notice(room, interrupter.clone(), id, now)
-                                .map_err(|e| e.to_string())?;
-                            row["outcome"] = json!("interrupting");
-                            row["key"] = json!(key);
-                        }
-                    }
-                }
-                other => {
-                    row["outcome"] = json!("failed");
-                    row["reason"] = json!(format!(
-                        "agent {} is {}; there is no turn to interrupt",
-                        agent.name,
-                        json!(other).as_str().unwrap_or("not running")
-                    ));
-                }
-            }
-            rows.push(row);
+            rows.push(self.interrupt_agent(&mut state, id, room, &interrupter, now)?);
         }
         self.save(state)?;
         Ok(json!({"room_id": room, "agents": rows}))
+    }
+
+    /// One agent's part of an interrupt, as its result row: the stop key for
+    /// a working or blocked agent, the held turn and queue closed for an idle one.
+    fn interrupt_agent(
+        &mut self,
+        state: &mut crate::messaging::model::BusState,
+        id: AgentId,
+        room: RoomId,
+        interrupter: &crate::messaging::model::Author,
+        now: u64,
+    ) -> Result<Value, String> {
+        let agent = state.agent(id).ok_or("Unknown agent")?;
+        let mut row = json!({"agent_id": id, "name": agent.name});
+        let status = agent.shown_status();
+        match status {
+            RuntimeStatus::Idle => {
+                // Nothing to stop. A turn Bus still holds (settling, or
+                // waiting on background shells) and the queue close.
+                let closed = state
+                    .close_interrupted(id, now)
+                    .map_err(|e| e.to_string())?;
+                // Their waiters point to the history for who stopped them.
+                if !closed.is_empty() {
+                    state
+                        .post_interrupt_notice(room, interrupter.clone(), id, now)
+                        .map_err(|e| e.to_string())?;
+                }
+                row["outcome"] = json!("already_idle");
+            }
+            RuntimeStatus::Working | RuntimeStatus::Blocked => {
+                let key = interrupt_key(agent.provider);
+                let Some(pane) = agent.runtime_identity.pane_id.clone() else {
+                    row["outcome"] = json!("failed");
+                    row["reason"] = json!("The agent has no terminal yet");
+                    return Ok(row);
+                };
+                // One press only: a second Esc opens Claude's rewind or
+                // Codex's edit-previous-message, a second Ctrl+C quits Cursor.
+                let sent =
+                    self.transport
+                        .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
+                            target: pane,
+                            keys: vec![key.into()],
+                        }));
+                match sent {
+                    Err(error) if error.definitely_rejected => {
+                        tracing::warn!(
+                            event = "bus.agent.interrupt",
+                            agent_id = id.0,
+                            key,
+                            error = %error.message,
+                            "Stop key refused"
+                        );
+                        row["outcome"] = json!("failed");
+                        row["reason"] = json!(error.message);
+                    }
+                    // An uncertain failure may have pressed the key; the
+                    // CLI's wait for idle decides.
+                    _ => {
+                        tracing::info!(
+                            event = "bus.agent.interrupt",
+                            agent_id = id.0,
+                            key,
+                            "Stop key pressed"
+                        );
+                        state.begin_interrupt(id).map_err(|e| e.to_string())?;
+                        state
+                            .post_interrupt_notice(room, interrupter.clone(), id, now)
+                            .map_err(|e| e.to_string())?;
+                        row["outcome"] = json!("interrupting");
+                        row["key"] = json!(key);
+                    }
+                }
+            }
+            other => {
+                row["outcome"] = json!("failed");
+                row["reason"] = json!(format!(
+                    "agent {} is {}; there is no turn to interrupt",
+                    agent.name,
+                    json!(other).as_str().unwrap_or("not running")
+                ));
+            }
+        }
+        Ok(row)
     }
 }
 
