@@ -1,6 +1,6 @@
-//! Lets a room know when one of its agents is blocked on something it cannot
-//! pass alone: a permission dialog, a question, a trust prompt or any other
-//! blocked screen. The blocked agent itself says so, once per episode.
+//! Reports a steady dialog wait to the room and resolves earlier help when it
+//! settles. A readable native screen suppresses stale blocked metadata. The
+//! blocked agent itself sends each notice, once per episode.
 #[cfg(test)]
 use super::{
     schema, AgentRuntimeIdentity, BTreeMap, Method, ModelError, PathBuf, PromptId, Provider,
@@ -8,7 +8,7 @@ use super::{
 };
 use super::{AgentId, Author, BusState, Draft, Worker};
 
-/// The notice key for a blocked screen without a readable dialog.
+/// Fallback notice key for blocked list metadata without a dialog id.
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
@@ -16,10 +16,24 @@ const STEADY_POLLS: u8 = 2;
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
-    /// A confirmed answer can close a dialog between status polls. Retire its
-    /// notice so the next form can start an episode even with identical text.
-    pub(super) fn finish_answered_dialog(&mut self, id: AgentId) -> Result<(), String> {
+    /// Resolve earlier help and retire a closed dialog's notice so the next
+    /// form can start an episode even with identical text.
+    pub(super) fn finish_closed_dialog(&mut self, id: AgentId) -> Result<(), String> {
         let mut state = self.state.clone();
+        if let Some(agent) = state
+            .agent(id)
+            .filter(|agent| agent.dialog_notice.is_some())
+        {
+            let readable = agent.dialog_notice.as_deref() != Some(BLOCKED);
+            let text = format!(
+                "{} (agent {}). Resolved; dialog is gone; previous blocked notice needs no action",
+                agent.name, id.0
+            );
+            post_dialog_notice(&mut state, id, readable, text)?;
+        }
+        state
+            .observe_dialog(id, false)
+            .map_err(|error| error.to_string())?;
         state
             .set_dialog_notice(id, None)
             .map_err(|error| error.to_string())?;
@@ -50,21 +64,57 @@ impl Worker {
             let Some(agent) = self.state.agent(id) else {
                 continue;
             };
-            if !steady || agent.dialog_notice == wait || agent.deletion_pending {
+            if !steady || agent.deletion_pending {
                 continue;
             }
-            // An unreadable redraw cannot prove a new dialog. Keep the last
-            // reported id so the same dialog returning does not post again.
-            if wait.as_deref() == Some(BLOCKED) && agent.dialog_notice.is_some() {
-                continue;
-            }
-            // 保留已发出的 blocked 标记，屏幕来回闪时不再把同一条通知发第二次。
-            if wait.is_none() && agent.dialog_notice.as_deref() == Some(BLOCKED) {
+            let notice = agent.dialog_notice.clone();
+            if wait.is_none() && notice.is_none() {
                 continue;
             }
             // Native ids change with question/command text and options, but
             // ignore selection redraws. A changed id needs another answer.
             let starts = wait.is_some();
+            if wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
+                // AgentList metadata can outlive an answer or manual close.
+                // Never open a pending panel or send keys while verifying.
+                if let Ok((_, _, terminal, pane, session)) = self.dialog_identity(id) {
+                    let Ok(current) =
+                        self.native_dialog(&pane, &terminal, session.as_deref(), false)
+                    else {
+                        continue;
+                    };
+                    if current.dialog.is_none() && !current.pending_question {
+                        self.finish_closed_dialog(id)?;
+                        continue;
+                    }
+                    // Missing list metadata can be an unreadable redraw. An
+                    // open dialog or pending question keeps earlier help live.
+                    if wait.is_none() {
+                        continue;
+                    }
+                    if let Some(dialog) = current.dialog {
+                        if wait.as_deref() != Some(BLOCKED)
+                            && wait.as_deref() != Some(dialog.id.as_str())
+                        {
+                            self.dialog_seen.insert(id, (Some(dialog.id), 1));
+                            continue;
+                        }
+                    }
+                }
+            }
+            if wait.is_none() {
+                // Keep the existing fallback for agents without a bound pane.
+                self.finish_closed_dialog(id)?;
+                continue;
+            }
+            if notice == wait {
+                continue;
+            }
+            // An unreadable redraw cannot prove a new dialog. Keep the last
+            // reported id so the same dialog returning does not post again.
+            if wait.as_deref() == Some(BLOCKED) && notice.is_some() {
+                continue;
+            }
             let mut state = self.state.clone();
             if starts {
                 post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;
@@ -86,11 +136,21 @@ impl Worker {
 /// the developer directly, since MASTER cannot itself be orchestrated.
 fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
-    let room = agent.room_id;
     let text = format!(
         "{} (agent {}). {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
         agent.name, id.0, id.0
     );
+    post_dialog_notice(state, id, open_dialog, text)
+}
+
+/// Blocked and resolved notices share the existing room/recipient policy.
+fn post_dialog_notice(
+    state: &mut BusState,
+    id: AgentId,
+    open_dialog: bool,
+    text: String,
+) -> Result<(), String> {
+    let room = state.agent(id).ok_or("Unknown agent")?.room_id;
     if state.room(room).is_none() {
         return Ok(());
     }

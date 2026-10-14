@@ -318,7 +318,7 @@ impl Worker {
             option.is_some(),
         );
         if outcome == "closed" {
-            self.finish_answered_dialog(id)?;
+            self.finish_closed_dialog(id)?;
         }
         let mut result = json!({
             "agent_id": id,
@@ -350,11 +350,20 @@ impl Worker {
             if poll > 0 {
                 std::thread::sleep(DIALOG_SETTLE_INTERVAL);
             }
-            let Ok(observation) = self.native_dialog(pane_id, terminal_id, session_id, false)
-            else {
-                outcome = "unknown";
-                break;
-            };
+            let observation =
+                match self.native_dialog_checked(pane_id, terminal_id, session_id, false) {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        tracing::debug!(event = "bus.dialog.settle_observation_failed", pane_id,
+                        poll, code = ?error.code, message = %error.message,
+                        "Post-answer observation failed; keys will not be resent");
+                        outcome = "unknown";
+                        if error.code.as_deref() == Some("dialog_observation_unavailable") {
+                            continue;
+                        }
+                        break;
+                    }
+                };
             outcome = match &observation.dialog {
                 None => "closed",
                 Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
@@ -376,7 +385,8 @@ impl Worker {
     }
 
     fn record_dialog_answer(&mut self, id: AgentId, option: Option<u32>) -> Result<(), String> {
-        // Its closing is expected now, so no "closed on its own" follow-up.
+        // Record the answer before verification; retire its notice only once
+        // the dialog closes, so help is not resolved on an uncertain outcome.
         if let Some(option) = option {
             let mut answered = self.state.clone();
             answered

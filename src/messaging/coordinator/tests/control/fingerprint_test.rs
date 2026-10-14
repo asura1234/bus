@@ -114,3 +114,49 @@ fn version_one_spent_fingerprint_remains_single_use_after_upgrade() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn unavailable_dialog_snapshots_do_not_resolve_an_existing_help_notice() {
+    struct RedrawServer;
+    impl crate::messaging::native::Transport for RedrawServer {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentList(_) => Ok(ResponseResult::AgentList {
+                    agents: vec![serde_json::from_value(serde_json::json!({
+                        "terminal_id": "terminal", "pane_id": "pane", "name": "builder",
+                        "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
+                        "interactive_ready": true, "revision": 1,
+                        "agent_status": "idle", "dialog_id": null,
+                    }))
+                    .unwrap()],
+                }),
+                Method::AgentDialogObserve(_) => Err(TransportError {
+                    code: Some("dialog_observation_unavailable".into()),
+                    message: "Synchronized redraw has no coherent snapshot".into(),
+                    definitely_rejected: true,
+                }),
+                other => panic!("unexpected request: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, agent, dir) = launched_worker();
+    worker.transport = Box::new(RedrawServer);
+    let mut state = worker.state.clone();
+    state.observe_dialog(agent, true).unwrap();
+    state
+        .set_dialog_notice(agent, Some("still-open-dialog".into()))
+        .unwrap();
+    worker.save(state).unwrap();
+
+    // agent.list cannot parse a dialog while its snapshot is unavailable;
+    // Independent screen detection can publish idle from partial redraw text.
+    worker.poll().unwrap();
+    worker.poll().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().dialog_notice.as_deref(),
+        Some("still-open-dialog"),
+        "an unreadable redraw cannot prove the dialog closed"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
