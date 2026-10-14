@@ -21,6 +21,9 @@ impl Worker {
     pub(super) fn finish_answered_dialog(&mut self, id: AgentId) -> Result<(), String> {
         let mut state = self.state.clone();
         state
+            .observe_dialog(id, false)
+            .map_err(|error| error.to_string())?;
+        state
             .set_dialog_notice(id, None)
             .map_err(|error| error.to_string())?;
         self.save(state)?;
@@ -58,13 +61,36 @@ impl Worker {
             if wait.as_deref() == Some(BLOCKED) && agent.dialog_notice.is_some() {
                 continue;
             }
-            // 保留已发出的 blocked 标记，屏幕来回闪时不再把同一条通知发第二次。
-            if wait.is_none() && agent.dialog_notice.as_deref() == Some(BLOCKED) {
+            if wait.is_none() {
+                self.finish_answered_dialog(id)?;
                 continue;
             }
             // Native ids change with question/command text and options, but
             // ignore selection redraws. A changed id needs another answer.
             let starts = wait.is_some();
+            if starts && wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
+                // AgentList metadata can outlive a handler or manual answer.
+                // Never open a pending panel or send keys while verifying.
+                if let Ok((_, _, terminal, pane, session)) = self.dialog_identity(id) {
+                    let Ok(current) =
+                        self.native_dialog(&pane, &terminal, session.as_deref(), false)
+                    else {
+                        continue;
+                    };
+                    if current.dialog.is_none() && !current.pending_question {
+                        self.finish_answered_dialog(id)?;
+                        continue;
+                    }
+                    if let Some(dialog) = current.dialog {
+                        if wait.as_deref() != Some(BLOCKED)
+                            && wait.as_deref() != Some(dialog.id.as_str())
+                        {
+                            self.dialog_seen.insert(id, (Some(dialog.id), 1));
+                            continue;
+                        }
+                    }
+                }
+            }
             let mut state = self.state.clone();
             if starts {
                 post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;

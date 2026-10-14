@@ -350,11 +350,20 @@ impl Worker {
             if poll > 0 {
                 std::thread::sleep(DIALOG_SETTLE_INTERVAL);
             }
-            let Ok(observation) = self.native_dialog(pane_id, terminal_id, session_id, false)
-            else {
-                outcome = "unknown";
-                break;
-            };
+            let observation =
+                match self.native_dialog_checked(pane_id, terminal_id, session_id, false) {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        tracing::debug!(event = "bus.dialog.settle_observation_failed", pane_id,
+                        poll, code = ?error.code, message = %error.message,
+                        "Post-answer observation failed; keys will not be resent");
+                        outcome = "unknown";
+                        if error.code.as_deref() == Some("dialog_observation_unavailable") {
+                            continue;
+                        }
+                        break;
+                    }
+                };
             outcome = match &observation.dialog {
                 None => "closed",
                 Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",

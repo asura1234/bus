@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 /// What the fake server shows for the watched agent's screen.
 #[derive(Clone, Default)]
 struct Screen {
+    settle_errors: u32,
+    answer_sent: bool,
     dialog: bool,
     blocked: bool,
     question: bool,
@@ -62,6 +64,14 @@ impl Screen {
 impl Transport for FakeServer {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         let screen = self.0.lock().unwrap().clone();
+        if matches!(&method, Method::AgentDialogObserve(_)) && screen.answer_sent && screen.settle_errors > 0 {
+            self.0.lock().unwrap().settle_errors -= 1;
+            return Err(TransportError {
+                code: Some("dialog_observation_unavailable".into()),
+                message: "Agent screen changed while it was being observed".into(),
+                definitely_rejected: true,
+            });
+        }
         match method {
             Method::AgentList(_) => Ok(ResponseResult::AgentList {
                 agents: vec![serde_json::from_value(json!({
@@ -86,6 +96,7 @@ impl Transport for FakeServer {
             }),
             Method::AgentDialogChoose(_) | Method::AgentDialogAnswer(_) => {
                 let mut screen = self.0.lock().unwrap();
+                screen.answer_sent = true;
                 if let Some((question, text)) = screen.next_dialog.take() {
                     screen.dialog = true;
                     screen.question = question;
@@ -186,6 +197,14 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
         })
         .collect();
     std::mem::take(&mut sent).into_values().collect()
+}
+
+fn expected_resolved(worker: &Worker, id: AgentId) -> String {
+    format!(
+        "{} (agent {}). Resolved; dialog is gone; previous blocked notice needs no action",
+        worker.state.agent(id).unwrap().name,
+        id.0
+    )
 }
 
 fn expected_blocked(worker: &Worker, id: AgentId) -> String {
@@ -1045,6 +1064,72 @@ fn message_status_saves_once_when_several_recipients_dialogs_closed() {
         writes + 1,
         "one status call persists all of its dialog observations in one write"
     );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+
+#[test]
+fn choosing_reports_closed_after_transient_redraw() {
+    let (mut worker, agent, _, _, screen, dir) = worker(false);
+    screen.lock().unwrap().dialog = true;
+    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    screen.lock().unwrap().settle_errors = 2;
+    let result = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
+    assert_eq!(result["outcome"], "closed");
+    assert!(result["dialog"].is_null());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn settled_dialog_does_not_send_a_stale_blocked_notice() {
+    let (mut worker, agent, room, _, _, dir) = worker(true);
+    // Two cached AgentList observations still describe the old dialog, but
+    // a native inspection now sees the approval completed.
+    notify_steady(&mut worker, agent, Some("old-dialog"));
+    assert!(sent_by(&worker, room, agent).is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn manual_dialog_close_marks_the_previous_notice_resolved_once() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    screen.lock().unwrap().dialog = false;
+    polls(&mut worker, 4);
+    let messages = sent_by(&worker, room, agent);
+    assert_eq!(messages.len(), 2);
+    assert!(messages[1].1.contains("Resolved"));
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn closed_dialog_resolves_help_even_while_blocked_metadata_stays_cached() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    let episode = screen.lock().unwrap().current_dialog().unwrap().id;
+    notify_steady(&mut worker, agent, Some(&episode));
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    screen.lock().unwrap().dialog = false;
+    notify_steady(&mut worker, agent, Some(&episode));
+    assert_eq!(sent_by(&worker, room, agent).len(), 2);
+    assert_eq!(
+        sent_by(&worker, room, agent)[1].1,
+        expected_resolved(&worker, agent)
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    // The stale generic blocked fallback must not resurrect the settled help.
+    notify_steady(&mut worker, agent, Some(BLOCKED));
+    assert_eq!(sent_by(&worker, room, agent).len(), 2);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
