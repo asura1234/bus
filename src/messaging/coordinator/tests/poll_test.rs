@@ -279,7 +279,19 @@ mod status_tests {
         let failed_again = failed.clone();
         let (mut worker, agent, room, dir, _) = fixture(
             Provider::Codex,
-            vec![failed, failed_again, pane_listing(Some("codex"), "idle")],
+            vec![
+                failed,
+                failed_again,
+                // The second blocked poll now verifies its notice against a
+                // native snapshot. This status-only fixture cannot supply one;
+                // keep that read from consuming the following agent.list reply.
+                Err(TransportError {
+                    code: Some("dialog_observation_unavailable".into()),
+                    message: "status-only fixture has no screen snapshot".into(),
+                    definitely_rejected: true,
+                }),
+                pane_listing(Some("codex"), "idle"),
+            ],
         );
         let shown = |worker: &Worker| worker.state.agent(agent).unwrap().actionable_error.clone();
         worker.poll().unwrap();
