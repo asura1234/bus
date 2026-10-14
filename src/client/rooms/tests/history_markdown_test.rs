@@ -296,6 +296,52 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
 }
 
 #[test]
+fn markdown_rendering_survives_a_visit_to_another_room() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    let other_agent = snapshot
+        .state
+        .create_agent(other, "helper", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    saved_exchange(&mut ui, room, agent, "first prompt", "**first reply**");
+    saved_exchange(
+        &mut ui,
+        other,
+        other_agent,
+        "other prompt",
+        "**other reply**",
+    );
+    let snapshot = Arc::clone(&ui.snapshot);
+    let rendered_reply = |ui: &mut BusUi, id| {
+        ui.history.lines(
+            &snapshot.state,
+            snapshot.state.room(id).expect("room"),
+            80,
+            snapshot.revision,
+            1_000,
+            &mut Default::default(),
+        );
+        ui.history
+            .cached()
+            .iter()
+            .filter(|line| is_reply(line))
+            .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
+            .expect("rendered reply source")
+    };
+
+    let first = rendered_reply(&mut ui, room);
+    rendered_reply(&mut ui, other);
+    let back = rendered_reply(&mut ui, room);
+
+    assert!(
+        Arc::ptr_eq(&first, &back),
+        "returning to a room reuses its rendered Markdown instead of re-rendering the whole room"
+    );
+}
+
+#[test]
 fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
     use ratatui::style::Modifier;
 
@@ -392,5 +438,55 @@ fn a_history_copy_of_a_wrapped_list_item_skips_its_continuation_indent() {
     assert_eq!(
         copy_markdown_body_at_width(&mut ui, room, 20, false),
         "• alpha beta gamma delta epsilon zeta"
+    );
+}
+
+#[test]
+fn markdown_returning_to_a_room_after_a_resize_elsewhere_lays_out_at_the_new_width() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    let other_agent = snapshot
+        .state
+        .create_agent(other, "helper", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau";
+    saved_exchange(&mut ui, room, agent, "first prompt", long);
+    saved_exchange(
+        &mut ui,
+        other,
+        other_agent,
+        "other prompt",
+        "**other reply**",
+    );
+    let snapshot = Arc::clone(&ui.snapshot);
+    let reply_rows = |ui: &mut BusUi, id, width| -> Vec<String> {
+        ui.history.lines(
+            &snapshot.state,
+            snapshot.state.room(id).expect("room"),
+            width,
+            snapshot.revision,
+            1_000,
+            &mut Default::default(),
+        );
+        ui.history
+            .cached()
+            .iter()
+            .filter(|line| is_reply(line))
+            .map(|line| line.text.clone())
+            .collect()
+    };
+
+    let wide = reply_rows(&mut ui, room, 120);
+    reply_rows(&mut ui, other, 30);
+    let narrow = reply_rows(&mut ui, room, 30);
+
+    assert!(narrow.len() > wide.len(), "wide {wide:?} narrow {narrow:?}");
+    assert!(
+        narrow
+            .iter()
+            .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 30),
+        "rows fit the new width: {narrow:?}"
     );
 }

@@ -65,6 +65,11 @@ impl MarkdownBlock {
         }
     }
 
+    /// Whether `lines` at this width reuses the cached rows.
+    pub(super) fn is_laid_out(&self, width: u16) -> bool {
+        self.width == Some(width)
+    }
+
     pub(super) fn lines(
         &mut self,
         width: u16,

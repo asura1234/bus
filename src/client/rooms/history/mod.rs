@@ -9,7 +9,7 @@ pub(super) use exchange::reply;
 use exchange::timestamp;
 use markdown::MarkdownBlock;
 use ratatui::style::Style;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -112,6 +112,12 @@ pub(super) struct History {
     signature: u64,
     lines: Vec<Line>,
     markdown: BTreeMap<MarkdownSource, MarkdownBlock>,
+    /// The Markdown each visited room showed at its last rebuild. Rendering
+    /// a long room is the costly part, so a block stays cached while any
+    /// visited room still shows it, not only the room on screen.
+    room_markdown: BTreeMap<RoomId, BTreeSet<MarkdownSource>>,
+    /// Markdown blocks laid out afresh during the current rebuild.
+    rendered: usize,
 }
 
 impl History {
