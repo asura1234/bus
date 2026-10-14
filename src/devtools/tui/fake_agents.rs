@@ -10,6 +10,7 @@
 //! starts its session with the first prompt. The fake Cursor fires the hooks
 //! Bus writes to the project's `.cursor/hooks.json` and draws Cursor's `→`
 //! composer. All answer every prompt with `fake reply: <prompt>`.
+mod dialogs;
 mod directives;
 mod question;
 
@@ -308,6 +309,11 @@ impl FakeAgent {
             "UserPromptSubmit"
         };
         self.hook(submit, Some(&turn), json!({"prompt": prompt}));
+        if dialogs::redraw_requested(prompt) {
+            if let Err(code) = self.settlement_dialog() {
+                return Some(code);
+            }
+        }
         if let Some(seconds) = dialog_seconds(prompt) {
             show_dialog(seconds);
         }
