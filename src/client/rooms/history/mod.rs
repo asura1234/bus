@@ -103,7 +103,7 @@ impl RowAnchor {
 
 /// Inputs to a history layout: content signature, room, width, age-label
 /// minute, and thumbnail cell size.
-pub(super) type LayoutKey = (u64, RoomId, u16, u64, Option<(u32, u32)>);
+type LayoutKey = (u64, RoomId, u16, u64, Option<(u32, u32)>);
 
 #[derive(Default)]
 pub(super) struct History {

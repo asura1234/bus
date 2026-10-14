@@ -52,7 +52,7 @@ impl History {
         let started = std::time::Instant::now();
         let reason = rebuild_reason(self.key, key);
         self.rendered = 0;
-        let groups = groups(state);
+        let groups = state.groups();
         let exchanges = exchanges(state, room);
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
@@ -339,10 +339,6 @@ fn wrap_header(
         .collect()
 }
 
-// Prompts and completed finals are immutable after creation. Check their
-// identity/settlement metadata, not their potentially large text, when a
-// global poll/draft revision arrives. Only a changed room history, names,
-// width, or age label requires sorting and wrapping those immutable bodies.
 /// The room's history entries in display order: requests grouped by prompt,
 /// then notices and any saved latest-only prompt.
 fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
@@ -389,7 +385,6 @@ fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Ex
     exchanges
 }
 
-/// An empty separator row.
 fn blank_row(anchor: RowAnchor) -> Line {
     Line {
         text: String::new(),
@@ -405,18 +400,6 @@ fn blank_row(anchor: RowAnchor) -> Line {
         copy_from: 0,
         anchor,
     }
-}
-
-/// Each group lead's members, as `BusState::group_members` lists them, from
-/// one pass over all requests instead of one pass per reply.
-fn groups(state: &BusState) -> BTreeMap<RequestId, Vec<RequestId>> {
-    let mut groups: BTreeMap<RequestId, Vec<RequestId>> = BTreeMap::new();
-    for request in state.requests() {
-        if let Some(lead) = request.group {
-            groups.entry(lead).or_default().push(request.id);
-        }
-    }
-    groups
 }
 
 /// Which layout input changed, for the rebuild's slow-operation detail.
@@ -466,6 +449,10 @@ fn participant_tone(participant: &Author) -> Tone {
     }
 }
 
+// Prompts and completed finals are immutable after creation. Check their
+// identity/settlement metadata, not their potentially large text, when a
+// global poll/draft revision arrives. Only a changed room history, names,
+// width, or age label requires sorting and wrapping those immutable bodies.
 fn signature(state: &BusState, room: &Room) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for request in state

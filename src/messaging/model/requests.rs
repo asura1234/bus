@@ -690,6 +690,18 @@ impl BusState {
             .collect()
     }
 
+    /// Every group's members by lead, oldest first: `group_members` for all
+    /// leads in one pass, for views that place every group at once.
+    pub(crate) fn groups(&self) -> std::collections::BTreeMap<RequestId, Vec<RequestId>> {
+        let mut groups = std::collections::BTreeMap::<RequestId, Vec<RequestId>>::new();
+        for request in self.requests() {
+            if let Some(lead) = request.group {
+                groups.entry(lead).or_default().push(request.id);
+            }
+        }
+        groups
+    }
+
     pub(crate) fn next_queued_request(&self, agent: AgentId) -> Option<RequestId> {
         let agent_state = self.agents.get(&agent)?;
         if agent_state.current_request.is_some() || agent_state.deletion_pending {
