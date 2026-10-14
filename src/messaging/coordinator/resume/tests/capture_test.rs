@@ -600,6 +600,13 @@ fn permission_profile_resume_restores_service_identity_and_current_executable_ru
         .unwrap();
     fixture.save();
     let extras = fixture.load().unwrap();
+    for pair in [
+        ["--permission-mode", "dontAsk"],
+        ["--tools", "Read,Glob,Grep,Bash"],
+        ["--setting-sources", ""],
+    ] {
+        assert!(extras.args.windows(2).any(|args| args == pair));
+    }
     assert!(extras.env.contains(&(
         "BUS_PERMISSION_HANDLER_ID".into(),
         fixture.agent.0.to_string()
@@ -735,6 +742,26 @@ fn permission_profile_service_state_without_args_has_exact_allow_rule() {
         .as_array()
         .unwrap()
         .contains(&json!(format!("Bash({prefix} state)"))));
+}
+
+#[test]
+fn permission_profile_codex_resume_includes_audited_shared_root() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let shared = fixture.root.with_extension("shared-work");
+    std::fs::create_dir(&shared).unwrap();
+    let canonical = shared.canonicalize().unwrap();
+    let mut value = serde_json::to_value(&fixture.state).unwrap();
+    let agent = &mut value["agents"][fixture.agent.0.to_string()];
+    agent["launch_profile"] = json!("codex-workspace-write-v1");
+    agent["allowed_roots"] = json!([{"path":canonical,"granted_by":99,"granted_at_ms":1}]);
+    fixture.state = serde_json::from_value(value).unwrap();
+    fixture.save();
+    let extras = fixture.load().unwrap();
+    assert!(extras
+        .args
+        .windows(2)
+        .any(|a| a[0] == "--add-dir" && a[1] == canonical.to_string_lossy()));
+    std::fs::remove_dir_all(shared).unwrap();
 }
 
 #[test]
@@ -890,4 +917,45 @@ fn permission_profile_resume_refuses_replaced_scratch_symlink_before_capture_rew
         "Bus resume scratch escaped its frozen path"
     );
     assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), bytes);
+}
+
+#[test]
+fn permission_profile_codex_resume_survives_removed_shared_root_without_writing_it() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let shared = fixture.root.with_extension("removed-shared-work");
+    std::fs::create_dir(&shared).unwrap();
+    let canonical = shared.canonicalize().unwrap();
+    let mut value = serde_json::to_value(&fixture.state).unwrap();
+    let agent = &mut value["agents"][fixture.agent.0.to_string()];
+    agent["launch_profile"] = json!("codex-workspace-write-v1");
+    agent["allowed_roots"] = json!([{"path":canonical,"granted_by":99,"granted_at_ms":1}]);
+    fixture.state = serde_json::from_value(value).unwrap();
+    fixture.save();
+    // A shared temp worktree is closed while the worker keeps its own root.
+    std::fs::remove_dir(&shared).unwrap();
+    let extras = fixture
+        .load()
+        .expect("a vanished shared grant must not suspend the worker's own resume");
+    assert!(!extras
+        .args
+        .iter()
+        .any(|a| a == &*canonical.to_string_lossy()));
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_profile_codex_resume_refuses_replaced_shared_root() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let shared = fixture.root.with_extension("replaced-shared-work");
+    std::fs::create_dir(&shared).unwrap();
+    let canonical = shared.canonicalize().unwrap();
+    let mut value = serde_json::to_value(&fixture.state).unwrap();
+    value["agents"][fixture.agent.0.to_string()]["allowed_roots"] =
+        json!([{"path":canonical,"granted_by":99,"granted_at_ms":1}]);
+    fixture.state = serde_json::from_value(value).unwrap();
+    fixture.save();
+    std::fs::remove_dir(&shared).unwrap();
+    std::os::unix::fs::symlink(&fixture.root, &shared).unwrap();
+    assert!(fixture.load().unwrap_err().contains("Granted root changed"));
+    std::fs::remove_file(shared).unwrap();
 }

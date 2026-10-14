@@ -242,6 +242,46 @@ fn permission_profile_codex_defaults_scoped_scratch_and_rejects_outside_extra_di
 }
 
 #[test]
+fn permission_handler_service_read_tools_are_preallowed() {
+    let fixture = Fixture::new();
+    let mut spec = fixture.spec();
+    spec.permission_handler = true;
+    spec.hooks.spool = fixture.0.join("callbacks/service");
+    let prepared = launch::prepare(&spec, |_| Ok(())).unwrap();
+    let settings: Value = serde_json::from_slice(
+        &std::fs::read(spec.hooks.spool.join("claude-settings.json")).unwrap(),
+    )
+    .unwrap();
+    let allow = settings["permissions"]["allow"].as_array().unwrap();
+    for rule in [
+        "Read",
+        "Glob",
+        "Grep",
+        "Bash(cat *)",
+        "Bash(ls *)",
+        "Bash(realpath *)",
+        "Bash(grep *)",
+        "Bash(head *)",
+        "Bash(test *)",
+    ] {
+        assert!(allow.contains(&json!(rule)), "missing {rule}: {allow:?}");
+    }
+    assert_eq!(settings["permissions"]["defaultMode"], "dontAsk");
+    assert!(prepared
+        .args
+        .windows(2)
+        .any(|a| a == ["--permission-mode", "dontAsk"]));
+    assert!(prepared
+        .args
+        .windows(2)
+        .any(|a| a == ["--tools", "Read,Glob,Grep,Bash"]));
+    assert!(!prepared
+        .args
+        .iter()
+        .any(|a| a == "--dangerously-skip-permissions"));
+}
+
+#[test]
 fn permission_profile_outside_extra_dir_is_refused_before_launch_side_effects() {
     let fixture = Fixture::new();
     let sibling = Fixture::new();

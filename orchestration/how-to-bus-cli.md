@@ -698,10 +698,12 @@ ONE_LINE`. The lease, launch identity, deadline and episode are revalidated at
 the answer boundary. Approval requires confirmed native answer delivery;
 uncertain delivery falls back without retries. The service's
 `BUS_PERMISSION_HANDLER_ID` environment guard refuses omitted or mismatched
-lease metadata. Its per-launch settings permit only narrow operational CLI
-families, pinned to the current executable; its persisted prompt and PATH are
-rebound on resume. Inherited and managed sandbox settings stay intact: the
-service adds only its assigned session's exact `sandbox.network.allowUnixSockets`
+lease metadata. Its per-launch settings preallow Read/Glob/Grep, standalone
+read-only inspection Bash, and exact operational CLI families pinned to the
+current executable. `dontAsk` denies unlisted operations without prompting;
+`--setting-sources ""` excludes user/project/local settings, while managed
+restrictions remain effective. Its persisted prompt and PATH are rebound on
+resume. The service adds only its assigned session's exact `sandbox.network.allowUnixSockets`
 control socket, never `allowAllUnixSockets` or worker filesystem additions.
 A stricter managed policy can still block operation, triggering bounded fallback.
 This assigned control protocol is a service exception to
@@ -713,20 +715,30 @@ inspection remains available; do not race an active handler assignment.
 `cwd` in state is the actual observed directory. `launch_cwd` is the frozen
 canonical authorized root; native cwd drift never widens it. `scratch_dir` is
 private per-launch temporary storage outside session data, and `launch_profile`
-names the effective Bus configuration. Unknown legacy roots require escalation;
+names the effective Bus configuration. On the first load of legacy state, Bus
+freezes the canonical existing saved cwd before runtime polling and records
+`launch_cwd_backfilled=true`. The initialization marker prevents a failed
+migration from adopting a later observed cwd. A backfilled root has the same
+authority as a frozen root; roots still unknown require escalation;
 resume with a known root that differs from restored cwd is refused for inspection.
 A missing scratch directory is recreated privately only at its frozen path with
 a verified canonical parent; symlink replacement refuses scoped resume. Bus
 retains worker scratch and never deletes it automatically.
-Old saved agents get no inferred authorization from their current cwd. Legacy
-Codex with no proven root resumes read-only with on-request escalation. Relaunch
+Old saved agents get no authorization inferred later from native cwd drift.
+Legacy Codex with no proven root resumes read-only with on-request escalation. Relaunch
 workers to receive new profiles; global settings and credentials are untouched.
 
 New Codex workers use `workspace-write` and `on-request`, explicit private
 scratch, no network access, and exclusions for broad `/tmp` and ambient TMPDIR
-writes. Their TMPDIR points to assigned scratch. `--add-dir` may only name
-canonical descendants of the frozen worktree; assigned scratch is already
-included. Sibling worktrees and escaping symlinks are refused. If the running
+writes. Their TMPDIR points to assigned scratch. Canonical cargo/rustup/zig
+cache and toolchain directories are additional writable roots; SDK/Xcode stay
+read-only. An orchestrator explicitly grants a shared directory with
+`bus agent allow-root WORKER ABSOLUTE_PATH --by ORCHESTRATOR`; state records
+the canonical path, grantor and time. These grants authorize handler approvals
+immediately and become Codex `--add-dir` roots on the next native resume.
+Missing shared directories are skipped without write authority; replaced roots
+and live-resource overlaps refuse resume. Unassigned sibling worktrees and
+escaping symlinks are refused. If the running
 Bus executable, target or session data overlaps the root, the effective Codex
 profile is read-only. No broad cargo, shell, cleanup or `./run` prefix is granted.
 
@@ -738,8 +750,8 @@ comprehensive read isolation. `autoAllowBashIfSandboxed` stays false and no
 automatic cargo/build/cleanup rules are added. Inherited user/managed policies
 and platform sandbox limitations still apply; uncertain commands reach the
 handler. MASTER orchestrators retain native approvals for their Bus protocol;
-only the managed handler gets operational CLI allow rules. Shared toolchain
-caches are not copied or widened into worker scope.
+only the managed handler gets operational CLI allow rules. Codex cache access
+does not grant broad build command prefixes or disable approvals.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked

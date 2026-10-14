@@ -26,6 +26,7 @@ pub const AGENT_HELP: &str = "Commands (connect to the running Bus in BUS_DATA_D
   agent read AGENT --source visible
   agent read AGENT [--source recent] --lines N
   agent dialog AGENT
+  agent allow-root AGENT PATH --by ORCHESTRATOR
   agent choose AGENT --option N --fingerprint FINGERPRINT
   agent answer AGENT (--text TEXT | --skip) --fingerprint FINGERPRINT
   agent permission-decision AGENT --handler HANDLER --assignment TOKEN --fingerprint F --outcome approved|escalated|routed --summary TEXT
