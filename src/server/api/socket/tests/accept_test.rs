@@ -412,6 +412,7 @@ fn wait_for_output_stops_when_client_disconnects() {
                                 returned_lines: 0,
                                 available_lines: None,
                                 exhausted: None,
+                                note: None,
                             },
                         },
                     })

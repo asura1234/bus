@@ -85,6 +85,8 @@ with history when it exits.
 message status, wait and history keep raw Markdown and list attached files as absolute paths.
 agent read also works while an agent is launching (e.g. to see a provider trust prompt);
 runtime.session_verified is false until its provider session starts.
+While an agent on the alternate screen (Codex) is busy, a recent read returns its visible screen
+with capture.exhausted false and capture.note saying why; retry when it is idle for older lines.
 Every control command emits exactly one JSON object, including failures.
 Every session answers these commands.";
 

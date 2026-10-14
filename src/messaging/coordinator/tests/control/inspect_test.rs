@@ -248,6 +248,7 @@ fn room_orchestrator_core_worker_visible_read_returns_viewport_and_correlation_f
                             returned_lines: 24,
                             available_lines: None,
                             exhausted: None,
+                            note: None,
                         },
                     })
                 }
@@ -433,6 +434,7 @@ fn room_orchestrator_core_worker_recent_read_forwards_selected_lines_and_reports
                             returned_lines: 80,
                             available_lines: Some(81),
                             exhausted: Some(false),
+                            note: Some("only the visible screen was read".into()),
                         },
                     })
                 }
@@ -469,6 +471,10 @@ fn room_orchestrator_core_worker_recent_read_forwards_selected_lines_and_reports
     assert_eq!(result.result["capture"]["returned_lines"], 80);
     assert_eq!(result.result["capture"]["available_lines"], 81);
     assert_eq!(result.result["capture"]["exhausted"], false);
+    assert_eq!(
+        result.result["capture"]["note"],
+        "only the visible screen was read"
+    );
     assert!(result.result["capture"].get("native_max_lines").is_none());
     assert!(result.result["capture"].get("limit").is_none());
     drop(worker);
@@ -505,6 +511,7 @@ fn room_orchestrator_core_worker_recent_read_has_no_one_thousand_line_clamp() {
                             returned_lines: 1200,
                             available_lines: Some(1200),
                             exhausted: Some(true),
+                            note: None,
                         },
                     })
                 }
@@ -537,6 +544,7 @@ fn room_orchestrator_core_worker_recent_read_has_no_one_thousand_line_clamp() {
     assert_eq!(result.result["capture"]["returned_lines"], 1200);
     assert_eq!(result.result["capture"]["truncated"], false);
     assert_eq!(result.result["capture"]["exhausted"], true);
+    assert!(result.result["capture"].get("note").is_none());
     assert!(result.result["capture"].get("limit").is_none());
     assert!(result.result["capture"].get("native_max_lines").is_none());
     drop(worker);
@@ -613,6 +621,7 @@ fn dev_visible_read_works_while_launching_but_keeps_terminal_identity_checks() {
                         returned_lines: 50,
                         available_lines: None,
                         exhausted: None,
+                        note: None,
                     },
                 }),
                 other => panic!("unexpected native method: {other:?}"),

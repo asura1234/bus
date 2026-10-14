@@ -30,6 +30,20 @@ fn apply_frozen_pane_read(response: &mut String, frozen: TerminalReadObservation
     }
 }
 
+/// Older history exists but was not read, so the read is not exhausted.
+fn apply_not_idle_note(response: &mut String, note: String) {
+    let Ok(mut success) = serde_json::from_str::<schema::SuccessResponse>(response) else {
+        return;
+    };
+    if let schema::ResponseResult::PaneRead { read } = &mut success.result {
+        read.exhausted = Some(false);
+        read.note = Some(note);
+        if let Ok(serialized) = serde_json::to_string(&success) {
+            *response = serialized;
+        }
+    }
+}
+
 type PaneApiState = (
     usize,
     crate::utils::ids::PaneId,
@@ -124,15 +138,7 @@ impl HeadlessServer {
         let pane_states_before = self.capture_api_pane_states();
 
         self.sync_foreground_client_state();
-        if let Some(error) = self.agent_read_not_idle_error(&msg.request) {
-            let response = serde_json::to_string(&schema::ErrorResponse {
-                id: msg.request.id.clone(),
-                error,
-            })
-            .unwrap_or_else(|_| "{}".to_owned());
-            let _ = msg.respond_to.send(response);
-            return changed;
-        }
+        let not_idle_note = self.agent_read_not_idle_note(&msg.request);
         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request);
         if matches!(
             &msg.request.method,
@@ -148,6 +154,9 @@ impl HeadlessServer {
         let mut response = self.dispatch_foreground_api_request(msg.request);
         if let Some(frozen) = frozen_alt_screen_read {
             apply_frozen_pane_read(&mut response, frozen);
+        }
+        if let Some(note) = not_idle_note {
+            apply_not_idle_note(&mut response, note);
         }
         if let Some(spec) = alt_screen_read_spec {
             if let Ok(success) = serde_json::from_str::<schema::SuccessResponse>(&response) {

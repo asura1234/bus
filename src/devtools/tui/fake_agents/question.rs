@@ -1,0 +1,171 @@
+//! `fake:question`: a Codex turn that queues an async question and keeps
+//! working, drawn as Codex 0.162 draws it (tests/fixtures/codex-question):
+//! on the alternate screen, with a startup warning beside the shortcuts hint.
+//! Shift+Left opens the question, Up/Down move, Enter answers.
+use super::FakeAgent;
+use std::io::Write;
+use std::time::{Duration, Instant};
+
+const DIRECTIVE: &str = "fake:question";
+const OPTIONS: [&str; 3] = ["Alpha", "Beta", "Other"];
+
+pub(super) fn requested(provider: &str, prompt: &str) -> bool {
+    provider == "codex" && prompt.trim() == DIRECTIVE
+}
+
+fn collapsed() -> String {
+    concat!(
+        "• Working (0s • esc to interrupt)\r\n\r\n",
+        "• Queued follow-up inputs\r\n",
+        "  ? 1 question\r\n",
+        "    ⇧← to answer\r\n\r\n\r\n",
+        "› Ask Codex to do anything\r\n\r\n",
+        "  gpt-fake · fake codex\r\n",
+        "  ? for shortcuts                                        ⚠ 1 warning · f2 to view\r\n",
+    )
+    .into()
+}
+
+fn expanded(selected: usize) -> String {
+    let options: String = OPTIONS
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let marker = if index == selected { "›" } else { " " };
+            format!("  {marker} {}. {label}\r\n", index + 1)
+        })
+        .collect();
+    format!(
+        "• Working (0s • esc to interrupt)\r\n\r\n• Queued follow-up inputs\r\n\r\n\r\n  Which design should the worker use?\r\n\r\n{options}\r\n  enter submit   ⌃] skip   ⇧→ main prompt\r\n"
+    )
+}
+
+enum Key {
+    Open,
+    Up,
+    Down,
+    Enter,
+    Interrupt,
+}
+
+/// Keys this fixture reacts to; every other byte is dropped.
+fn keys(pending: &mut Vec<u8>) -> Vec<Key> {
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < pending.len() {
+        let rest = &pending[i..];
+        let matched = [
+            (&b"\x1b[1;2D"[..], Key::Open),
+            (b"\x1b[A", Key::Up),
+            (b"\x1bOA", Key::Up),
+            (b"\x1b[B", Key::Down),
+            (b"\x1bOB", Key::Down),
+            (b"\x1b[13u", Key::Enter),
+            (b"\r", Key::Enter),
+            (b"\x03", Key::Interrupt),
+        ]
+        .into_iter()
+        .find(|(sequence, _)| rest.starts_with(sequence));
+        match matched {
+            Some((sequence, key)) => {
+                found.push(key);
+                i += sequence.len();
+            }
+            // Wait for the rest of a sequence split across reads.
+            None if rest[0] == 0x1b && rest.len() < 6 => break,
+            None => i += 1,
+        }
+    }
+    pending.drain(..i);
+    found
+}
+
+impl FakeAgent {
+    /// Holds the turn on the queued question until it is answered (bounded at
+    /// 600 seconds), then leaves the alternate screen and lets the turn reply.
+    pub(super) fn queued_question(&mut self) -> Result<(), i32> {
+        let mut out = std::io::stdout();
+        let draw = |out: &mut std::io::Stdout, screen: &str| {
+            let _ = write!(out, "\x1b[H\x1b[J{screen}");
+            let _ = out.flush();
+        };
+        let _ = write!(out, "\x1b[?1049h");
+        draw(&mut out, &collapsed());
+        let result = self.hold_question(&mut out, draw);
+        let _ = write!(out, "\x1b[?1049l");
+        let _ = out.flush();
+        result
+    }
+
+    fn hold_question(
+        &mut self,
+        out: &mut std::io::Stdout,
+        draw: impl Fn(&mut std::io::Stdout, &str),
+    ) -> Result<(), i32> {
+        let started = Instant::now();
+        let mut selected: Option<usize> = None;
+        while started.elapsed() < Duration::from_secs(600) {
+            let bytes = match self
+                .input
+                .as_ref()
+                .map(|rx| rx.recv_timeout(Duration::from_millis(100)))
+            {
+                Some(Ok(bytes)) => bytes,
+                Some(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => continue,
+                _ => return Err(0),
+            };
+            self.pending.extend(bytes);
+            for key in keys(&mut self.pending) {
+                match (key, selected) {
+                    (Key::Interrupt, _) => return Err(0),
+                    (Key::Open, None) => selected = Some(0),
+                    (Key::Up, Some(index)) => selected = Some(index.saturating_sub(1)),
+                    (Key::Down, Some(index)) => selected = Some((index + 1).min(OPTIONS.len() - 1)),
+                    (Key::Enter, Some(index)) if index + 1 < OPTIONS.len() => return Ok(()),
+                    _ => continue,
+                }
+                if let Some(index) = selected {
+                    draw(out, &expanded(index));
+                }
+            }
+        }
+        Err(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screen(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+
+    #[test]
+    fn question_fixture_is_a_pending_codex_question_that_opens_into_its_choices() {
+        assert!(requested("codex", "fake:question"));
+        assert!(!requested("claude", "fake:question"));
+        let collapsed = screen(&collapsed());
+        assert!(crate::agents::dialog::codex_question_pending(&collapsed));
+        assert!(crate::agents::dialog::parse(&collapsed).is_none());
+        let dialog = crate::agents::dialog::parse(&screen(&expanded(0))).unwrap();
+        assert_eq!(dialog.text, "Which design should the worker use?");
+        assert_eq!(dialog.options.len(), 3);
+        assert_eq!(dialog.selected(), Some(1));
+        assert_eq!(dialog.keys_for(2), Some(vec!["down", "enter"]));
+    }
+
+    #[test]
+    fn question_keys_wait_for_split_sequences_and_drop_the_rest() {
+        let mut pending = b"x\x1b[1;".to_vec();
+        assert!(keys(&mut pending).is_empty());
+        assert_eq!(pending, b"\x1b[1;");
+        pending.extend(b"2D\x1b[B\r");
+        let found = keys(&mut pending);
+        assert!(matches!(
+            found.as_slice(),
+            [Key::Open, Key::Down, Key::Enter]
+        ));
+        assert!(pending.is_empty());
+    }
+}

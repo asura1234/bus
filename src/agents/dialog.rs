@@ -263,11 +263,14 @@ pub(crate) fn codex_question_pending(screen: &str) -> bool {
             .rfind(|line| line.starts_with('›'))
             .is_some_and(|line| empty_composer(line));
     }
+    // Codex 0.162 right-aligns status such as `⚠ 1 warning · f2 to view` on the hint row.
+    let shortcuts_hint = |line: &str| {
+        line.strip_prefix("? for shortcuts")
+            .is_some_and(|status| status.is_empty() || status.starts_with("  "))
+    };
     empty_composer(tail[0])
         && (tail.len() == 1
-            || (tail.len() == 3
-                && tail[2] == "? for shortcuts"
-                && !tail[1].starts_with(['•', '›'])))
+            || (tail.len() == 3 && shortcuts_hint(tail[2]) && !tail[1].starts_with(['•', '›'])))
 }
 
 fn codex_text_footer(line: &str) -> bool {

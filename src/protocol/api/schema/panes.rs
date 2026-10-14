@@ -197,6 +197,9 @@ pub struct PaneReadResult {
     pub available_lines: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exhausted: Option<bool>,
+    /// Why fewer lines came back than were asked for, when the read could not go further.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 pub use super::layout::{

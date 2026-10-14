@@ -44,6 +44,11 @@ image paths as text. Each turn shows Codex's
 `• Working (Ns • esc to interrupt)` line over a live composer as soon as the
 prompt is sent, for N seconds with `fake:work N`: a message Bus types in
 meanwhile joins the running turn, and the turn's one reply answers both.
+A Codex prompt of exactly `fake:question` keeps the turn working on the
+alternate screen with Codex 0.162's collapsed queued question (`? 1 question`,
+`⇧← to answer`, a warning beside `? for shortcuts`). Shift+Left opens it
+(`Which design should the worker use?`: Alpha, Beta, Other), Up/Down move, and
+Enter on Alpha or Beta answers it; the turn then replies as usual.
 
 The fake Cursor answers the same way, the way Bus sees real Cursor: it fires
 every hook in the project's `.cursor/hooks.json` (Bus adds its own after the

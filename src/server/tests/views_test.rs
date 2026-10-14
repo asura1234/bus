@@ -159,7 +159,7 @@ async fn geometry_reapply_replaces_a_controller_that_left_the_tab() {
 }
 
 #[test]
-fn room_orchestrator_core_headless_explicit_agent_history_read_requires_idle_on_alternate_screen() {
+fn room_orchestrator_core_headless_working_agent_history_read_returns_visible_lines_with_note() {
     with_terminal_session_test_server(
         |server, terminal_id, _terminal_id_string, public_pane_id| {
             let terminal = server
@@ -168,7 +168,7 @@ fn room_orchestrator_core_headless_explicit_agent_history_read_requires_idle_on_
                 .terminals
                 .get_mut(&terminal_id)
                 .expect("terminal");
-            terminal.detected_agent = Some(crate::agents::AgentKind::Claude);
+            terminal.detected_agent = Some(crate::agents::AgentKind::Codex);
             terminal.state = crate::agents::AgentState::Working;
             server.app.terminal_runtimes.insert(
                 terminal_id,
@@ -178,40 +178,47 @@ fn room_orchestrator_core_headless_explicit_agent_history_read_requires_idle_on_
                     b"\x1b[?1049hworking",
                 ),
             );
-            let request = api::schema::Request {
-                id: "read".into(),
-                method: api::schema::Method::AgentRead(api::schema::AgentReadParams {
-                    target: public_pane_id.clone(),
-                    source: api::schema::ReadSource::Recent,
-                    lines: Some(200),
-                    format: api::schema::ReadFormat::Text,
-                    strip_ansi: true,
-                }),
+            let read = |server: &mut HeadlessServer, source, lines| {
+                let (respond_to, response_rx) = std::sync::mpsc::channel();
+                server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+                    request: api::schema::Request {
+                        id: "read".into(),
+                        method: api::schema::Method::AgentRead(api::schema::AgentReadParams {
+                            target: public_pane_id.clone(),
+                            source,
+                            lines,
+                            format: api::schema::ReadFormat::Text,
+                            strip_ansi: true,
+                        }),
+                    },
+                    respond_to,
+                });
+                let response = response_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("read response");
+                serde_json::from_str::<serde_json::Value>(&response).unwrap()
             };
 
+            let response = read(server, api::schema::ReadSource::Recent, Some(200));
+            assert!(response["error"].is_null(), "{response}");
+            let capture = &response["result"]["read"];
+            assert!(capture["text"].as_str().unwrap().contains("working"), "{response}");
+            assert_eq!(capture["exhausted"], false, "{response}");
             assert_eq!(
-                    server.agent_read_not_idle_error(&request),
-                    Some(api::schema::ErrorBody {
-                        code: "agent_not_idle".into(),
-                        message: format!(
-                            "cannot read 200 lines while {public_pane_id} is working: its alternate-screen history can only be captured by scrolling while idle. Wait and retry, or use --source visible"
-                        ),
-                    })
-                );
+                capture["note"],
+                format!(
+                    "only the visible screen was read while {public_pane_id} is working: its alternate-screen history can only be captured by scrolling while idle. Retry when it is idle for older lines"
+                ),
+                "{response}"
+            );
 
-            let mut default_request = request.clone();
-            let api::schema::Method::AgentRead(params) = &mut default_request.method else {
-                unreachable!();
-            };
-            params.lines = None;
-            assert_eq!(server.agent_read_not_idle_error(&default_request), None);
-
-            let mut visible_request = request;
-            let api::schema::Method::AgentRead(params) = &mut visible_request.method else {
-                unreachable!();
-            };
-            params.source = api::schema::ReadSource::Visible;
-            assert_eq!(server.agent_read_not_idle_error(&visible_request), None);
+            for (source, lines) in [
+                (api::schema::ReadSource::Recent, None),
+                (api::schema::ReadSource::Visible, None),
+            ] {
+                let response = read(server, source, lines);
+                assert!(response["result"]["read"]["note"].is_null(), "{response}");
+            }
         },
     );
 }
