@@ -50,7 +50,10 @@ impl History {
         let _rebuild_timer = REBUILD.start();
         let mut exchanges = BTreeMap::new();
         // Dialog notices to orchestrators are delivery-only, never history.
-        for request in state.room_requests(room.id) {
+        for request in state
+            .requests()
+            .filter(|r| r.room_id == room.id && !r.delivery_only())
+        {
             let prompt = &request.prompt;
             exchanges
                 .entry((prompt.submitted_at_ms, prompt.id.0))
@@ -73,10 +76,9 @@ impl History {
         }
         // Retain compatibility with saved latest-only records.
         if let Some(prompt) = room.latest_prompt.as_ref().filter(|prompt| {
-            state.prompt_visible(prompt)
-                && !exchanges
-                    .values()
-                    .any(|exchange| exchange.prompt.id == prompt.id)
+            !exchanges
+                .values()
+                .any(|exchange| exchange.prompt.id == prompt.id)
         }) {
             exchanges.insert(
                 (prompt.submitted_at_ms, prompt.id.0),
@@ -150,7 +152,6 @@ impl History {
         for (index, agent) in prompt
             .recipient_ids
             .iter()
-            .filter(|id| state.recipient_visible(**id))
             .filter_map(|id| state.agent(*id))
             .enumerate()
         {
@@ -205,11 +206,7 @@ impl History {
             return;
         }
         let mut replied = false;
-        for agent_id in prompt
-            .recipient_ids
-            .iter()
-            .filter(|id| state.recipient_visible(**id))
-        {
+        for agent_id in &prompt.recipient_ids {
             let Some(agent) = state.agent(*agent_id) else {
                 continue;
             };
@@ -219,9 +216,9 @@ impl History {
             if let Some(request) = request {
                 let members = state.group_members(request.group.unwrap_or(request.id));
                 let newest = members.iter().rev().find(|id| {
-                    state.request(**id).is_some_and(|member| {
-                        member.room_id == room.id && state.request_visible(member)
-                    })
+                    state
+                        .request(**id)
+                        .is_some_and(|member| member.room_id == room.id && !member.delivery_only())
                 });
                 if newest.is_some_and(|last| *last != request.id) {
                     continue;
@@ -410,7 +407,10 @@ fn participant_tone(participant: &Author) -> Tone {
 
 fn signature(state: &BusState, room: &Room) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for request in state.room_requests(room.id) {
+    for request in state
+        .requests()
+        .filter(|r| r.room_id == room.id && !r.delivery_only())
+    {
         request.id.0.hash(&mut hash);
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
@@ -440,7 +440,8 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         .map(|a| a.id)
         .collect();
     let prompts = state
-        .room_requests(room.id)
+        .requests()
+        .filter(|r| r.room_id == room.id && !r.delivery_only())
         .map(|r| &r.prompt)
         .chain(state.notices(room.id))
         .chain(room.latest_prompt.as_ref());
@@ -454,7 +455,7 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         id.0.hash(&mut hash);
         state
             .agent(id)
-            .map(|agent| (&agent.name, agent.color, agent.permission_handler))
+            .map(|agent| (&agent.name, agent.color))
             .hash(&mut hash);
     }
     hash.finish()

@@ -164,7 +164,6 @@ impl Fixture {
             session_name: Some("bus".into()),
             config_root: self.root.join("herdr-config"),
             project: self.project.clone(),
-            cwd: self.project.clone(),
             binary: self.binary.clone(),
         }
     }
@@ -195,71 +194,40 @@ impl Drop for Fixture {
 #[test]
 fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     let mut fixture = Fixture::new(Provider::Codex);
-    let mut identity = fixture
-        .state
-        .agent(fixture.agent)
-        .unwrap()
-        .runtime_identity
-        .clone();
+    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
     identity.session_id = None;
-    fixture
-        .state
-        .set_agent_runtime_identity(fixture.agent, identity)
-        .unwrap();
+    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
     fixture.facts.session = None;
-    fixture.plan =
-        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
+        &fixture.facts, None,
+    ).unwrap();
     fixture.save();
     let extras = fixture.load().unwrap();
     assert_eq!(extras.env, fixture.expected_env());
     let argv: Vec<_> = fixture.plan.argv.iter().chain(extras.args.iter()).collect();
-    assert_eq!(
-        argv.iter()
-            .filter(|arg| arg.as_str() == "--no-daemon")
-            .count(),
-        1
-    );
+    assert_eq!(argv.iter().filter(|arg| arg.as_str() == "--no-daemon").count(), 1);
     assert!(extras.session.is_none());
-    assert!(fixture
-        .state
-        .agent(fixture.agent)
-        .unwrap()
-        .runtime_identity
-        .session_id
-        .is_none());
+    assert!(fixture.state.agent(fixture.agent).unwrap().runtime_identity.session_id.is_none());
 
-    std::fs::write(
-        fixture.root.join("callbacks/owned-launch/adopted-session"),
-        "reserved-session",
-    )
-    .unwrap();
-    assert_eq!(
-        fixture.load().unwrap_err(),
-        "Bus resume cannot replace an adopted session with an empty launch"
-    );
+    std::fs::write(fixture.root.join("callbacks/owned-launch/adopted-session"), "reserved-session").unwrap();
+    assert_eq!(fixture.load().unwrap_err(),
+        "Bus resume cannot replace an adopted session with an empty launch");
 }
 
 #[test]
 fn unstarted_resume_rejects_a_bound_owner_and_noninteractive_argv() {
     let mut fixture = Fixture::new(Provider::Codex);
     fixture.facts.session = None;
-    fixture.plan =
-        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
-    assert!(
-        fixture.load().is_err(),
-        "a bound owner must keep its conversation"
-    );
-    for argv in [
-        vec!["codex", "resume", "previous"],
-        vec!["codex", "exec", "prompt"],
-        vec!["codex", "--config", "x=y"],
-    ] {
+    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
+        &fixture.facts, None,
+    ).unwrap();
+    assert!(fixture.load().is_err(), "a bound owner must keep its conversation");
+    for argv in [vec!["codex", "resume", "previous"], vec!["codex", "exec", "prompt"],
+        vec!["codex", "--config", "x=y"]] {
         let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
         assert!(crate::messaging::coordinator::resume::unstarted_codex_plan(
-            &fixture.facts,
-            Some(&argv),
-        )
-        .is_none());
+            &fixture.facts, Some(&argv),
+        ).is_none());
     }
 }
 
@@ -589,305 +557,4 @@ fn bus_resume_refuses_callback_spool_symlink_escape_before_touching_capture() {
         state_before
     );
     assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), hooks_before);
-}
-
-#[test]
-fn permission_profile_resume_restores_service_identity_and_current_executable_rules() {
-    let mut fixture = Fixture::new(Provider::ClaudeCode);
-    fixture
-        .state
-        .mark_permission_handler(fixture.agent)
-        .unwrap();
-    fixture.save();
-    let extras = fixture.load().unwrap();
-    assert!(extras.env.contains(&(
-        "BUS_PERMISSION_HANDLER_ID".into(),
-        fixture.agent.0.to_string()
-    )));
-    assert!(extras.env.iter().any(|(k, v)| k == "PATH"
-        && std::env::split_paths(std::ffi::OsStr::new(v))
-            .next()
-            .as_deref()
-            == fixture.binary.parent()));
-    let settings: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
-    assert!(settings["permissions"]["allow"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|v| v.as_str().unwrap().contains("agent permission-decision")));
-}
-
-#[test]
-fn permission_profile_resume_refuses_observed_cwd_drift_before_capture_rewrite() {
-    let fixture = Fixture::new(Provider::Codex);
-    let bytes = std::fs::read(fixture.hook_path()).unwrap();
-    let mut context = fixture.context();
-    context.cwd = fixture.root.clone();
-    std::fs::create_dir_all(fixture.root.join(".codex")).unwrap();
-    std::fs::write(fixture.root.join(".codex/hooks.json"), &bytes).unwrap();
-    assert!(
-        load(&context, &fixture.facts, &fixture.plan).is_err(),
-        "resume silently widened root"
-    );
-    assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), bytes);
-}
-
-#[test]
-fn permission_profile_resume_new_binary_overlap_downgrades_codex() {
-    let mut fixture = Fixture::new(Provider::Codex);
-    let scratch = fixture.root.join("scratch");
-    std::fs::create_dir(&scratch).unwrap();
-    let mut value = serde_json::to_value(&fixture.state).unwrap();
-    value["agents"][fixture.agent.0.to_string()]["scratch_dir"] =
-        json!(scratch.canonicalize().unwrap());
-    value["agents"][fixture.agent.0.to_string()]["launch_profile"] =
-        json!("codex-workspace-write-v1");
-    fixture.state = serde_json::from_value(value).unwrap();
-    fixture.save();
-    let mut context = fixture.context();
-    context.binary = fixture.project.join("target/debug/bus");
-    std::fs::create_dir_all(context.binary.parent().unwrap()).unwrap();
-    std::fs::write(&context.binary, b"fixture binary").unwrap();
-    let extras = load(&context, &fixture.facts, &fixture.plan).unwrap();
-    assert!(
-        extras
-            .args
-            .windows(2)
-            .any(|args| args == ["--sandbox", "read-only"]),
-        "new running binary must remain protected: {:?}",
-        extras.args
-    );
-}
-
-#[test]
-fn permission_profile_resume_rebinds_claude_worker_protected_paths() {
-    let mut fixture = Fixture::new(Provider::ClaudeCode);
-    let scratch = fixture.root.join("scratch");
-    std::fs::create_dir(&scratch).unwrap();
-    let mut value = serde_json::to_value(&fixture.state).unwrap();
-    value["agents"][fixture.agent.0.to_string()]["scratch_dir"] =
-        json!(scratch.canonicalize().unwrap());
-    value["agents"][fixture.agent.0.to_string()]["launch_profile"] =
-        json!("claude-additive-sandbox-regular-approval-v1");
-    fixture.state = serde_json::from_value(value).unwrap();
-    fixture.save();
-    let mut context = fixture.context();
-    context.binary = fixture.project.join("new-target/debug/bus");
-    load(&context, &fixture.facts, &fixture.plan).unwrap();
-    let settings: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
-    assert!(settings["sandbox"]["filesystem"]["denyWrite"]
-        .as_array()
-        .unwrap()
-        .contains(&json!(context.binary)));
-}
-
-#[test]
-fn permission_profile_service_socket_exception_is_exact_and_preserves_inherited_sandbox() {
-    let mut fixture = Fixture::new(Provider::ClaudeCode);
-    fixture
-        .state
-        .mark_permission_handler(fixture.agent)
-        .unwrap();
-    fixture.save();
-    let inherited = json!({
-        "enabled": true,
-        "filesystem": {"denyWrite": ["/inherited/protected"], "allowWrite": ["/inherited/work"]},
-        "network": {"allowAllUnixSockets": false, "allowedDomains": ["restricted.example"]}
-    });
-    let mut settings: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
-    settings["sandbox"] = inherited.clone();
-    std::fs::write(fixture.hook_path(), serde_json::to_vec(&settings).unwrap()).unwrap();
-    fixture.load().unwrap();
-    let settings: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
-    assert_eq!(
-        settings["sandbox"]["network"]["allowUnixSockets"],
-        json!([fixture.root.canonicalize().unwrap().join("control.sock")])
-    );
-    assert_eq!(settings["sandbox"]["enabled"], inherited["enabled"]);
-    assert_eq!(settings["sandbox"]["filesystem"], inherited["filesystem"]);
-    assert_eq!(
-        settings["sandbox"]["network"]["allowAllUnixSockets"],
-        inherited["network"]["allowAllUnixSockets"]
-    );
-    assert_eq!(
-        settings["sandbox"]["network"]["allowedDomains"],
-        inherited["network"]["allowedDomains"]
-    );
-}
-
-#[test]
-fn permission_profile_service_state_without_args_has_exact_allow_rule() {
-    let mut fixture = Fixture::new(Provider::ClaudeCode);
-    fixture
-        .state
-        .mark_permission_handler(fixture.agent)
-        .unwrap();
-    fixture.save();
-    fixture.load().unwrap();
-    let settings: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.hook_path()).unwrap()).unwrap();
-    let prefix = crate::agents::providers::launch::profile::cli_prefix(&fixture.binary);
-    assert!(settings["permissions"]["allow"]
-        .as_array()
-        .unwrap()
-        .contains(&json!(format!("Bash({prefix} state)"))));
-}
-
-#[test]
-fn permission_profile_review_codex_orchestrator_resume_keeps_native_approval() {
-    for legacy in [false, true] {
-        let mut fixture = Fixture::new(Provider::Codex);
-        let room = fixture.state.agent(fixture.agent).unwrap().room_id;
-        let master = fixture.state.ensure_master_room();
-        let mut value = serde_json::to_value(&fixture.state).unwrap();
-        let agent = &mut value["agents"][fixture.agent.0.to_string()];
-        agent["room_id"] = json!(master);
-        agent["launch_profile"] = if legacy {
-            json!(null)
-        } else {
-            json!("orchestrator-native-approval-v1")
-        };
-        if legacy {
-            agent["launch_cwd"] = json!(null);
-        }
-        fixture.state = serde_json::from_value(value).unwrap();
-        fixture
-            .state
-            .bind_orchestrator(fixture.agent, room)
-            .unwrap();
-        fixture.facts.agent_name = Some(identity::managed_name(master, fixture.agent));
-        fixture.save();
-        let extras = fixture.load().unwrap();
-        assert!(
-            !extras.args.iter().any(|a| a == "--sandbox"
-                || a == "--ask-for-approval"
-                || a.starts_with("sandbox_workspace_write.")),
-            "orchestrator worker settings, legacy={legacy}: {:?}",
-            extras.args
-        );
-    }
-}
-
-#[test]
-fn permission_profile_review_resume_inside_live_data_is_read_only() {
-    let mut fixture = Fixture::new(Provider::Codex);
-    let mut value = serde_json::to_value(&fixture.state).unwrap();
-    value["agents"][fixture.agent.0.to_string()]["launch_profile"] =
-        json!("codex-workspace-write-v1");
-    fixture.state = serde_json::from_value(value).unwrap();
-    fixture.save();
-    let extras = fixture.load().unwrap();
-    assert!(
-        extras
-            .args
-            .windows(2)
-            .any(|a| a == ["--sandbox", "read-only"]),
-        "worker inside session data received {:?}",
-        extras.args
-    );
-}
-
-#[test]
-fn scoped_codex_worker_launched_in_git_subdirectory_resumes_from_its_repository_root() {
-    let mut fixture = Fixture::new(Provider::Codex);
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&fixture.project)
-        .args(["init", "-q"])
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let subdirectory = fixture.project.join("crates/worker");
-    std::fs::create_dir_all(&subdirectory).unwrap();
-    let mut value = serde_json::to_value(&fixture.state).unwrap();
-    let agent = &mut value["agents"][fixture.agent.0.to_string()];
-    agent["cwd"] = json!(subdirectory);
-    agent["launch_cwd"] = json!(subdirectory.canonicalize().unwrap());
-    agent["launch_profile"] = json!("codex-workspace-write-v1");
-    fixture.state = serde_json::from_value(value).unwrap();
-    fixture.save();
-    let mut context = fixture.context();
-    // The native server derives the resume project from the pane cwd's git toplevel.
-    context.project = crate::agents::providers::launch::project_root(&subdirectory);
-    context.cwd = subdirectory.clone();
-    assert_ne!(context.project, subdirectory.canonicalize().unwrap());
-    let result = load(&context, &fixture.facts, &fixture.plan);
-    assert!(
-        result.is_ok(),
-        "worker launched in a repository subdirectory could not resume: {result:?}"
-    );
-    let extras = result.unwrap();
-    // This fixture repository is inside its isolated Bus data root, so resume
-    // must preserve the protected-path downgrade even when cwd is a subdirectory.
-    assert!(extras
-        .args
-        .windows(2)
-        .any(|args| args == ["--sandbox", "read-only"]));
-    assert!(extras
-        .args
-        .windows(2)
-        .any(|args| args == ["--ask-for-approval", "on-request"]));
-}
-
-#[test]
-fn scoped_codex_worker_resumes_after_its_private_scratch_was_removed_by_temp_cleanup() {
-    let mut fixture = Fixture::new(Provider::Codex);
-    let scratch = fixture.root.join("scratch");
-    std::fs::create_dir(&scratch).unwrap();
-    let scratch = scratch.canonicalize().unwrap();
-    let mut value = serde_json::to_value(&fixture.state).unwrap();
-    value["agents"][fixture.agent.0.to_string()]["scratch_dir"] = json!(scratch);
-    value["agents"][fixture.agent.0.to_string()]["launch_profile"] =
-        json!("codex-workspace-write-v1");
-    fixture.state = serde_json::from_value(value).unwrap();
-    fixture.save();
-    // Reboot or an OS temp cleaner removes the idle private scratch directory.
-    std::fs::remove_dir(&scratch).unwrap();
-    let extras = fixture.load();
-    assert!(
-        extras.is_ok(),
-        "removed scratch blocked the worker's conversation resume: {extras:?}"
-    );
-    let tmpdir = extras
-        .unwrap()
-        .env
-        .into_iter()
-        .find(|(key, _)| key == "TMPDIR")
-        .map(|(_, value)| PathBuf::from(value))
-        .expect("scoped worker keeps a private TMPDIR");
-    assert_eq!(tmpdir, scratch);
-    assert!(tmpdir.is_dir(), "TMPDIR {tmpdir:?} does not exist");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(tmpdir).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn permission_profile_resume_refuses_replaced_scratch_symlink_before_capture_rewrite() {
-    let mut fixture = Fixture::new(Provider::Codex);
-    let scratch = fixture.root.join("scratch");
-    std::fs::create_dir(&scratch).unwrap();
-    let scratch = scratch.canonicalize().unwrap();
-    let mut value = serde_json::to_value(&fixture.state).unwrap();
-    value["agents"][fixture.agent.0.to_string()]["scratch_dir"] = json!(scratch);
-    fixture.state = serde_json::from_value(value).unwrap();
-    fixture.save();
-    let bytes = std::fs::read(fixture.hook_path()).unwrap();
-    std::fs::remove_dir(&scratch).unwrap();
-    std::os::unix::fs::symlink(&fixture.project, &scratch).unwrap();
-    assert_eq!(
-        fixture.load().unwrap_err(),
-        "Bus resume scratch escaped its frozen path"
-    );
-    assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), bytes);
 }

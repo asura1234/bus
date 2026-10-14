@@ -55,10 +55,7 @@ impl BusState {
     /// agent being deleted does not count.
     pub(crate) fn room_status(&self, room: RoomId) -> RuntimeStatus {
         let mut status = RuntimeStatus::Idle;
-        for agent in self
-            .agents()
-            .filter(|agent| !agent.permission_handler && agent.room_id == room)
-        {
+        for agent in self.agents().filter(|agent| agent.room_id == room) {
             match agent.shown_status() {
                 RuntimeStatus::Blocked => return RuntimeStatus::Blocked,
                 RuntimeStatus::Unavailable if !agent.deletion_pending => {

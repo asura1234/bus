@@ -9,7 +9,6 @@ use crate::agents::{
 use crate::messaging::{identity, storage::state_store::JsonStore};
 
 mod ownership;
-mod profile;
 
 /// An immutable snapshot extracted by the server. No PTY/state handle crosses
 /// this boundary, and the snapshot alone does not attest ownership.
@@ -36,7 +35,6 @@ pub(crate) struct NativeResumeContext {
     pub(crate) session_name: Option<String>,
     pub(crate) config_root: PathBuf,
     pub(crate) project: PathBuf,
-    pub(crate) cwd: PathBuf,
     pub(crate) binary: PathBuf,
 }
 
@@ -111,7 +109,6 @@ pub(crate) fn load(
     {
         return Err("Bus resume is suspended by deletion or invalidated identity".into());
     }
-    profile::validate_scope(agent, &context.cwd)?;
     let hooks = ownership::verified_capture(root, agent, &context.binary)?;
     if facts.session.is_none()
         && crate::agents::providers::launch::reserved_session(&hooks.spool).is_some()
@@ -123,14 +120,21 @@ pub(crate) fn load(
         tracing::info!(event = "bus.resume.hooks_rebound", agent_id = agent.id.0,
             path = %path.display(), "Bus hooks moved back to this executable for resume");
     }
-    let env = profile::extras(context, agent, &hooks, root, &mut args)?;
     // Prompt policy stays with messaging; provider-specific argv stays below it.
     args.extend(crate::messaging::orchestration::resume_prompt_args(
         agent.provider,
         &hooks.spool,
     )?);
-    let mut env: Vec<_> = env.into_iter().collect();
-    env.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut env = hooks.env();
+    let env = ["BUS_LAUNCH_ID", "BUS_CALLBACK_DIR"]
+        .map(|key| {
+            (
+                key.to_owned(),
+                env.remove(key)
+                    .expect("HookContext sets both capture variables"),
+            )
+        })
+        .into();
     Ok(LaunchExtras {
         env,
         args,

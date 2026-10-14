@@ -207,8 +207,6 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         "history" => ("room.history", json!({"room": required(args, "room")?})),
         _ => return Err("unknown command".into()),
     };
-    let service = std::env::var("BUS_PERMISSION_HANDLER_ID").ok();
-    managed_permission_params(method, &params, service.as_deref())?;
     Ok(ParsedCommand {
         method,
         params,
@@ -291,9 +289,7 @@ fn agent_cli() -> Command {
             subcommand("choose")
                 .arg(value_arg("agent").required(true))
                 .arg(option("option"))
-                .arg(option("fingerprint"))
-                .arg(value_arg("handler").long("handler"))
-                .arg(value_arg("assignment").long("assignment")),
+                .arg(option("fingerprint")),
         )
         .subcommand(
             subcommand("answer")
@@ -305,18 +301,7 @@ fn agent_cli() -> Command {
                         .conflicts_with("skip"),
                 )
                 .arg(flag("skip").required_unless_present("text"))
-                .arg(option("fingerprint"))
-                .arg(value_arg("handler").long("handler"))
-                .arg(value_arg("assignment").long("assignment")),
-        )
-        .subcommand(
-            subcommand("permission-decision")
-                .arg(value_arg("agent").required(true))
-                .arg(option("handler"))
-                .arg(option("assignment"))
-                .arg(option("fingerprint"))
-                .arg(option("outcome").value_parser(["approved", "escalated", "routed"]))
-                .arg(option("summary")),
+                .arg(option("fingerprint")),
         )
         .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
         .subcommand(subcommand("clear").arg(value_arg("agent").required(true)))
@@ -339,7 +324,7 @@ fn agent_cli() -> Command {
 }
 
 fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
-    let (method, mut params) = match args.subcommand() {
+    Ok(match args.subcommand() {
         Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
         Some(("clear", args)) => ("agent.clear", json!({"agent": required(args, "agent")?})),
         Some(("details", args)) => (
@@ -356,24 +341,18 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
             "agent.dialog.observe",
             json!({"agent": required(args, "agent")?}),
         ),
-        Some(("permission-decision", args)) => (
-            "agent.permission-decision",
-            json!({"agent":required(args,"agent")?, "handler":required(args,"handler")?, "assignment":required(args,"assignment")?, "fingerprint":required(args,"fingerprint")?, "outcome":required(args,"outcome")?, "summary":required(args,"summary")?}),
-        ),
         Some(("choose", args)) => (
             "agent.dialog.choose",
             json!({
                 "agent": required(args, "agent")?,
                 "option": required(args, "option")?,
                 "fingerprint": required(args, "fingerprint")?,
-                "handler": args.get_one::<String>("handler"),
-                "assignment": args.get_one::<String>("assignment"),
             }),
         ),
         Some(("answer", args)) => (
             "agent.dialog.answer",
             json!({"agent": required(args, "agent")?, "text":if args.get_flag("skip") {None} else {Some(required(args,"text")?)},
-                "skip":args.get_flag("skip"), "fingerprint":required(args,"fingerprint")?, "handler":args.get_one::<String>("handler"), "assignment":args.get_one::<String>("assignment")}),
+                "skip":args.get_flag("skip"), "fingerprint":required(args,"fingerprint")?}),
         ),
         Some(("setup-confirm", args)) => (
             "agent.setup-confirm",
@@ -384,11 +363,7 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
             json!({"agent": required(args, "agent")?, "confirm": confirmed(args)?}),
         ),
         _ => return Err("unknown agent command".into()),
-    };
-    if let Some(obj) = params.as_object_mut() {
-        obj.retain(|k, v| !(matches!(k.as_str(), "handler" | "assignment") && v.is_null()));
-    }
-    Ok((method, params))
+    })
 }
 
 fn parse_room(args: &ArgMatches) -> Result<(&'static str, Value), String> {
@@ -495,30 +470,4 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
         return Err("--async waits for agents; a message to the developer has none".into());
     }
     Ok((params, follow))
-}
-
-/// A managed service cannot accidentally enter the human answer path by
-/// omitting its lease flags. This is an identity hint, not a same-user security boundary.
-pub(super) fn managed_permission_params(
-    method: &str,
-    params: &Value,
-    handler: Option<&str>,
-) -> Result<(), String> {
-    let Some(handler) = handler.filter(|id| !id.is_empty()) else {
-        return Ok(());
-    };
-    if !matches!(
-        method,
-        "agent.dialog.choose" | "agent.dialog.answer" | "agent.permission-decision"
-    ) {
-        return Ok(());
-    }
-    if params["handler"].as_str() != Some(handler)
-        || params["assignment"]
-            .as_str()
-            .is_none_or(|token| token.trim().is_empty())
-    {
-        return Err("Managed permission handler requires its own --handler ID and --assignment TOKEN; manual answers are not allowed".into());
-    }
-    Ok(())
 }

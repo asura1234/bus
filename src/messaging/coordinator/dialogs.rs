@@ -3,17 +3,16 @@
 //! blocked screen. The blocked agent itself says so, once per episode.
 #[cfg(test)]
 use super::{
-    schema, AgentRuntimeIdentity, Author, BTreeMap, Draft, Method, ModelError, PathBuf, PromptId,
-    Provider, ResponseResult, RoomId, RuntimeStatus, Transport,
+    schema, AgentRuntimeIdentity, BTreeMap, Method, ModelError, PathBuf, PromptId, Provider,
+    ResponseResult, RoomId, RuntimeStatus, Transport,
 };
-use super::{AgentId, BusState, Worker};
+use super::{AgentId, Author, BusState, Draft, Worker};
 
 /// The notice key for a blocked screen without a readable dialog.
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
 /// Common notice sentence; each notice also names the worker and its inspection command.
-#[cfg(test)]
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
@@ -68,9 +67,6 @@ impl Worker {
             let starts = wait.is_some();
             let mut state = self.state.clone();
             if starts {
-                state
-                    .set_dialog_notice(id, wait.clone())
-                    .map_err(|e| e.to_string())?;
                 post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;
             }
             state
@@ -84,25 +80,45 @@ impl Worker {
     }
 }
 
-/// Route every blocked episode to the room service; only unavailable-service
-/// fallback reaches the orchestrator or developer directly in that work room.
+/// The blocked agent's own message in its work room: to the room's
+/// orchestrator, which delivers it like any agent message and wakes the
+/// orchestrator, or else to the developer. A blocked MASTER orchestrator tells
+/// the developer directly, since MASTER cannot itself be orchestrated.
 fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
-    let episode = state
-        .agent(id)
-        .and_then(|a| a.dialog_notice.clone())
-        .unwrap_or_else(|| {
-            if open_dialog {
-                "readable".into()
-            } else {
-                BLOCKED.into()
-            }
-        });
-    state.dispatch_permission(
-        &super::permissions::permission_cli()?,
-        id,
-        episode,
-        crate::messaging::storage::io::now_ms(),
-    )
+    let agent = state.agent(id).ok_or("Unknown agent")?;
+    let room = agent.room_id;
+    let text = format!(
+        "{} (agent {}). {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
+        agent.name, id.0, id.0
+    );
+    if state.room(room).is_none() {
+        return Ok(());
+    }
+    let now = crate::messaging::storage::io::now_ms();
+    let orchestrator = state
+        .orchestrator_of(room)
+        .filter(|orchestrator| {
+            open_dialog && orchestrator.id != id && !orchestrator.deletion_pending
+        })
+        .map(|orchestrator| orchestrator.id);
+    match orchestrator {
+        Some(orchestrator) => state
+            .submit_message_from(
+                room,
+                Draft {
+                    text,
+                    files: Vec::new(),
+                    recipient_ids: [orchestrator].into(),
+                },
+                Author::Agent(id),
+                now,
+            )
+            .map(|_| ()),
+        None => state
+            .post_to_developer(room, id, text, Vec::new(), now)
+            .map(|_| ()),
+    }
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

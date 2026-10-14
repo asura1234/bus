@@ -3,7 +3,6 @@ mod agents;
 mod dialogs;
 mod inspect;
 mod messages;
-mod permissions;
 mod rooms;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod ui_hits;
@@ -243,7 +242,6 @@ impl Worker {
             | "agent.setup-confirm"
             | "agent.add"
             | "agent.clear" => self.execute_agents(method, p, events),
-            "agent.permission-decision" => self.execute_permission_decision(p),
             "agent.dialog.observe" | "agent.dialog.choose" | "agent.dialog.answer" => {
                 self.execute_dialogs(method, p, events)
             }
@@ -408,35 +406,14 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "agent.dialog.choose",
         "agent choose",
-        &["agent", "option", "fingerprint", "handler", "assignment"],
+        &["agent", "option", "fingerprint"],
         true,
         Tier::Agent,
     ),
     spec(
         "agent.dialog.answer",
         "agent answer",
-        &[
-            "agent",
-            "text",
-            "skip",
-            "fingerprint",
-            "handler",
-            "assignment",
-        ],
-        true,
-        Tier::Agent,
-    ),
-    spec(
-        "agent.permission-decision",
-        "agent permission-decision",
-        &[
-            "agent",
-            "handler",
-            "assignment",
-            "fingerprint",
-            "outcome",
-            "summary",
-        ],
+        &["agent", "text", "skip", "fingerprint"],
         true,
         Tier::Agent,
     ),

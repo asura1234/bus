@@ -37,8 +37,8 @@ pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<Stri
 pub(crate) fn supported_option(name: &str) -> Option<LaunchOption> {
     use LaunchOption::{Choice, Flag, Value};
     match name {
-        // Extra directories are canonical descendants validated by preparation;
-        // the sandbox and approval policy stay Bus-owned.
+        // Extra writable roots, e.g. a sibling git worktree; the sandbox and
+        // approval policy themselves stay Bus-owned.
         "--model" | "-m" | "--add-dir" => Some(Value),
         "--no-alt-screen" | "--strict-config" | "--oss" | "--search" => Some(Flag),
         "--local-provider" => Some(Choice(&["ollama", "lmstudio"])),

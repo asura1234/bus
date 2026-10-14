@@ -180,7 +180,6 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
         let mut child = Command::new(env!("CARGO_BIN_EXE_bus"))
             .args(["--bus-callback", "codex-hook"])
             .env("HERDR_ENV", "1")
-            .env("BUS_DEV", "1")
             .env("BUS_CALLBACK_DIR", &dir)
             .env("BUS_LAUNCH_ID", launch)
             .stdin(Stdio::piped())
@@ -199,15 +198,7 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     files.sort();
-    assert_eq!(
-        files,
-        [
-            ".hook.log.archive-mode",
-            "diagnostics.lock",
-            "hook.log",
-            "manifest.json"
-        ]
-    );
+    assert_eq!(files, ["diagnostics.lock", "hook.log", "manifest.json"]);
     let log = std::fs::read_to_string(dir.join("hook.log")).unwrap();
     assert_eq!(
         log.matches("bus.callback.capture_failed").count(),

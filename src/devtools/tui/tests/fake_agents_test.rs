@@ -1,53 +1,6 @@
 use super::*;
 
 #[test]
-fn permission_fixture_clear_rebinds_without_a_turn() {
-    let mut agent = FakeAgent::new("claude", Value::Null);
-    let before = agent.session.clone();
-    assert_eq!(agent.submit("/clear"), None);
-    assert_ne!(agent.session, before);
-    assert_eq!(agent.turns, 0);
-}
-
-#[test]
-fn permission_fixture_exit_terminates_instead_of_echoing() {
-    let mut agent = FakeAgent::new("claude", Value::Null);
-    assert_eq!(agent.submit("fake:exit"), Some(0));
-    assert_eq!(agent.turns, 0);
-}
-
-#[test]
-fn permission_fixture_worker_waits_for_native_enter() {
-    let mut agent = FakeAgent::new("codex", Value::Null);
-    let (sender, receiver) = mpsc::channel();
-    agent.input = Some(receiver);
-    let send = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        sender.send(b"\x1b[13u".to_vec()).unwrap();
-    });
-    let start = Instant::now();
-    assert_eq!(agent.submit("fake:permission safe"), None);
-    assert!(start.elapsed() >= std::time::Duration::from_millis(100));
-    send.join().unwrap();
-}
-
-#[test]
-fn permission_fixture_safe_does_not_accept_permanent_approval_option() {
-    let mut agent = FakeAgent::new("codex", Value::Null);
-    let (sender, receiver) = mpsc::channel();
-    agent.input = Some(receiver);
-    let send = std::thread::spawn(move || {
-        sender.send(b"\x1b[B\r".to_vec()).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        sender.send(b"\x1b[A\x1b[13u".to_vec()).unwrap();
-    });
-    let start = Instant::now();
-    assert_eq!(agent.submit("fake:permission safe"), None);
-    assert!(start.elapsed() >= std::time::Duration::from_millis(100));
-    send.join().unwrap();
-}
-
-#[test]
 fn input_splits_text_keys_and_pastes() {
     let mut pending = b"ab\x1b[200~line\nmore\x1b[201~\x7f\r\x1b[13u\x1b[A\x03".to_vec();
     assert_eq!(
@@ -57,7 +10,6 @@ fn input_splits_text_keys_and_pastes() {
             Input::Backspace,
             Input::Enter,
             Input::Enter,
-            Input::Navigate(-1),
             Input::Interrupt,
         ]
     );

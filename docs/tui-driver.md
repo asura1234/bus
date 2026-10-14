@@ -36,19 +36,6 @@ seconds, so Bus sees the agent waiting on a dialog. A prompt containing
 it shows `API Error: Connection lost mid-response…` and fires `StopFailure`
 with that text and `error: server_error`.
 
-Permission-handler QA uses explicit `fake:permission safe|destructive|question`
-worker prompts. They hold a native Codex command chooser or Alpha/Beta choice
-until terminal input (bounded at 600 seconds), never executing the displayed
-command. The safe fixture accepts only its one-time option. A fake Claude with
-Bus's managed permission-handler identity inspects actual scratch CLI state and
-dialogs, then uses fingerprinted typed decisions; its deterministic fixture
-classification is not evidence of real Claude judgment. Its private cwd contains
-`fake-permission-cli.ndjson` with actual CLI observations/results; preserve that
-file before stopping when a test needs a transient approved dialog's evidence.
-All fakes understand `/clear` as a fresh session rather than an echoed turn, and
-the explicit debugging directive `fake:exit` exits the fake process. See
-`tests/e2e-tui/permission-handler.md` for the fixed four-case run contract.
-
 The fake Codex answers the same way, the way Bus sees real Codex: it fires
 every hook in the project's `.codex/hooks.json`, in order, Bus's among them
 (Bus adds its own after the consent form on add), starts its session with the
