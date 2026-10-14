@@ -64,6 +64,7 @@ impl BusState {
                 compactions: Compactions::default(),
                 last_compaction_callback: None,
                 session_reset_pending: false,
+                interrupt_pending: false,
                 status_since_ms: 0,
                 observed_at_ms: 0,
                 delivery_rejection: None,
@@ -352,6 +353,11 @@ impl BusState {
         }
         agent_state.observed_at_ms = now_ms;
         if status == RuntimeStatus::Idle {
+            // No hook reports an interrupted turn; the idle screen is its end.
+            // Codex reports Idle under an approval dialog, which is not one.
+            if agent_state.interrupt_pending && !agent_state.dialog {
+                self.close_interrupted(agent, now_ms)?;
+            }
             self.complete_pending_final(agent, now_ms)?;
             self.note_turn_end(agent, now_ms);
             let settled_idle = self.unbound_request(agent).is_some_and(|request| {

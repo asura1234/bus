@@ -305,6 +305,17 @@ fn agent_cli() -> Command {
         )
         .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
         .subcommand(subcommand("clear").arg(value_arg("agent").required(true)))
+        .subcommand(
+            subcommand("interrupt")
+                .arg(
+                    value_arg("agent")
+                        .required_unless_present("room")
+                        .conflicts_with("room"),
+                )
+                .arg(value_arg("room").long("room"))
+                .arg(value_arg("text").long("text"))
+                .arg(value_arg("as").long("as")),
+        )
         .subcommand(toggle("details").arg(value_arg("agent").required(true)))
         .subcommand(
             subcommand("rename")
@@ -327,6 +338,17 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
     Ok(match args.subcommand() {
         Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
         Some(("clear", args)) => ("agent.clear", json!({"agent": required(args, "agent")?})),
+        Some(("interrupt", args)) => {
+            // `text` is the CLI's own follow-up send; it never reaches
+            // agent.interrupt.
+            let mut params = json!({});
+            for field in ["agent", "room", "text", "as"] {
+                if args.contains_id(field) {
+                    params[field] = json!(required(args, field)?);
+                }
+            }
+            ("agent.interrupt", params)
+        }
         Some(("details", args)) => (
             "agent.details",
             json!({"agent": required(args, "agent")?, "on": on_off(args, "agent details")?}),

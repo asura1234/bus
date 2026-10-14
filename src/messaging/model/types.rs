@@ -349,6 +349,10 @@ pub(crate) struct RoomAgent {
     /// different provider session rebinds this agent to it instead of being rejected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) session_reset_pending: bool,
+    /// `agent interrupt` pressed the provider's stop key: the next idle status
+    /// closes the running turn and the queue as interrupted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) interrupt_pending: bool,
     /// When the agent entered its current `status`, from status polls. Stall
     /// detection measures how long an agent has sat idle on a request.
     #[serde(default)]

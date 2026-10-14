@@ -1,4 +1,5 @@
 //! Client commands for an already running Bus instance.
+mod interrupt;
 mod parse;
 mod wait;
 #[cfg(test)]
@@ -107,6 +108,9 @@ fn run_with_pause(
 ) -> io::Result<()> {
     let request_id = next_request_id();
     let response = match parse(args, &request_id) {
+        Ok(command) if command.method == "agent.interrupt" => {
+            interrupt::run(command, send, &mut pause)
+        }
         Ok(command) => {
             let follow = command.follow;
             let sent = execute(command, &mut *send);
@@ -141,7 +145,10 @@ fn run_with_pause(
             message,
         }
         .into(),
-        "message_abandoned" | "message_provider_error" => CliExit { code: 1, message }.into(),
+        "message_abandoned"
+        | "message_provider_error"
+        | "message_interrupted"
+        | "interrupt_failed" => CliExit { code: 1, message }.into(),
         _ => Box::<dyn std::error::Error + Send + Sync>::from(message),
     }))
 }

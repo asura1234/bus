@@ -15,7 +15,7 @@ mod directives;
 mod question;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
-use directives::{api_error, dialog_seconds, show_dialog, spin, work_seconds};
+use directives::{api_error, dialog_seconds, show_dialog, work_seconds};
 use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -141,6 +141,9 @@ struct FakeAgent {
 /// What a keystroke ended in, besides editing the draft.
 enum Typed {
     Submit(String),
+    /// The provider's stop key during a turn: Esc for Claude Code and
+    /// Codex, Ctrl+C for Cursor.
+    Stop,
     Exit,
 }
 
@@ -280,6 +283,11 @@ impl FakeAgent {
                 return Some(Typed::Submit(prompt));
             }
             Input::Enter => return None,
+            Input::Escape if self.working.is_some() && !self.cursor() => return Some(Typed::Stop),
+            Input::Escape => return None,
+            Input::Interrupt if self.working.is_some() && self.cursor() => {
+                return Some(Typed::Stop)
+            }
             Input::Interrupt => return Some(Typed::Exit),
         }
         self.redraw();
@@ -322,16 +330,28 @@ impl FakeAgent {
                 return Some(code);
             }
         }
+        let mut stopped = false;
         match work_seconds(prompt) {
             Some(seconds) if self.live_turn() => match self.work(seconds) {
-                Ok(steered) => prompts.extend(steered.iter().map(|p| p.trim().to_owned())),
+                Ok(Turn::Done(steered)) => {
+                    prompts.extend(steered.iter().map(|p| p.trim().to_owned()));
+                }
+                Ok(Turn::Stopped(steered)) => {
+                    prompts.extend(steered.iter().map(|p| p.trim().to_owned()));
+                    stopped = true;
+                }
                 Err(code) => return Some(code),
             },
-            Some(seconds) => spin(seconds),
+            Some(seconds) => stopped = self.spin(seconds),
             None => {}
         }
         if self.live_turn() {
             self.end_turn(&prompts[1..]);
+        }
+        if stopped {
+            // No provider reports an interrupted turn with a hook.
+            self.stop_turn(prompt);
+            return None;
         }
         if let Some(payload) = api_error(&self.provider, prompt) {
             let text = payload["last_assistant_message"]
@@ -376,11 +396,59 @@ impl FakeAgent {
         self.working = Some((Instant::now(), 0));
     }
 
+    /// Claude's working line, redrawn in place for `seconds` while its box
+    /// is hidden. Typed input waits for the turn to end, except Esc, which
+    /// stops it: returns whether it did.
+    fn spin(&mut self, seconds: u64) -> bool {
+        let started = Instant::now();
+        let mut out = std::io::stdout();
+        let mut frame = 0;
+        let mut stopped = false;
+        while started.elapsed().as_secs() < seconds {
+            let _ = write!(
+                out,
+                "\r\x1b[2K{}",
+                working_line(&self.provider, frame, started.elapsed().as_secs())
+            );
+            let _ = out.flush();
+            frame += 1;
+            let tick = std::time::Duration::from_millis(120);
+            match self.input.as_ref().map(|input| input.recv_timeout(tick)) {
+                // Bus writes a key in one piece; a lone Esc is the key.
+                Some(Ok(bytes)) if bytes == b"\x1b" => {
+                    stopped = true;
+                    break;
+                }
+                Some(Ok(bytes)) => self.pending.extend_from_slice(&bytes),
+                Some(Err(mpsc::RecvTimeoutError::Timeout)) => {}
+                _ => std::thread::sleep(tick),
+            }
+        }
+        let _ = write!(out, "\r\x1b[2K");
+        let _ = out.flush();
+        stopped
+    }
+
+    /// Ends a turn the stop key interrupted, without a reply or a hook, as
+    /// each provider does: Codex notes it in the transcript, Claude Code puts
+    /// the prompt back into its box, Cursor returns to its composer.
+    fn stop_turn(&mut self, prompt: &str) {
+        let mut out = std::io::stdout();
+        if self.codex() {
+            let _ = write!(out, "{CODEX_INTERRUPTED}\r\n");
+        } else if !self.cursor() {
+            self.draft = prompt.to_owned();
+        }
+        let _ = out.flush();
+        self.draw_prompt();
+    }
+
     /// Keeps a live turn working until `seconds` after it began, reading
     /// input, so Bus can type a steering message into the running turn. Each
     /// prompt entered meanwhile joins the turn, whose one reply answers it
-    /// too. Returns those prompts, or the exit code when interrupted.
-    fn work(&mut self, seconds: u64) -> Result<Vec<String>, i32> {
+    /// too. Returns those prompts and whether the stop key ended the turn
+    /// early, or the exit code when the provider was quit.
+    fn work(&mut self, seconds: u64) -> Result<Turn, i32> {
         let mut steered = Vec::new();
         while let Some((started, frame)) = self.working {
             if started.elapsed().as_secs() >= seconds {
@@ -399,6 +467,7 @@ impl FakeAgent {
             for input in drain_input(&mut self.pending) {
                 match self.apply(input) {
                     Some(Typed::Submit(prompt)) => steered.push(prompt),
+                    Some(Typed::Stop) => return Ok(Turn::Stopped(steered)),
                     Some(Typed::Exit) => return Err(0),
                     None => {}
                 }
@@ -406,7 +475,7 @@ impl FakeAgent {
             self.working = Some((started, frame + 1));
             self.redraw();
         }
-        Ok(steered)
+        Ok(Turn::Done(steered))
     }
 
     /// Ends a live turn: its working block goes, and the prompts `steered`
@@ -428,11 +497,16 @@ impl FakeAgent {
 
     fn read_loop(&mut self) -> i32 {
         loop {
-            let Some(Ok(bytes)) = self.input.as_ref().map(|input| input.recv()) else {
-                return 0;
-            };
-            self.pending.extend_from_slice(&bytes);
-            for input in drain_input(&mut self.pending) {
+            // Input typed during a Claude turn waited in `pending`.
+            let inputs = drain_input(&mut self.pending);
+            if inputs.is_empty() {
+                let Some(Ok(bytes)) = self.input.as_ref().map(|input| input.recv()) else {
+                    return 0;
+                };
+                self.pending.extend_from_slice(&bytes);
+                continue;
+            }
+            for input in inputs {
                 match self.apply(input) {
                     Some(Typed::Submit(prompt)) => {
                         if let Some(code) = self.submit(&prompt) {
@@ -440,7 +514,7 @@ impl FakeAgent {
                         }
                     }
                     Some(Typed::Exit) => return 0,
-                    None => {}
+                    Some(Typed::Stop) | None => {}
                 }
             }
         }
@@ -515,6 +589,17 @@ fn composer_top(provider: &str) -> String {
         _ => format!("{}\r\n", "─".repeat(60)),
     }
 }
+
+/// How a live turn ended: on its own, or stopped by the stop key; either way
+/// with the prompts typed into it.
+enum Turn {
+    Done(Vec<String>),
+    Stopped(Vec<String>),
+}
+
+/// What Codex 0.162 prints when Esc interrupts a turn (live capture).
+const CODEX_INTERRUPTED: &str =
+    "■ Conversation interrupted - use /feedback if something went wrong";
 
 /// Codex's empty composer text, one Bus reads as an empty composer.
 const CODEX_PLACEHOLDER: &str = "Ask Codex to do anything";
@@ -681,6 +766,8 @@ enum Input {
     /// Ctrl+K or Ctrl+U.
     KillLine,
     Enter,
+    /// A lone Esc, as Bus sends the key in one write.
+    Escape,
     Interrupt,
 }
 
@@ -737,7 +824,10 @@ fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
             0x1b => {
                 // CSI sequences end at a byte in 0x40..=0x7e; `CSI 13 u` is Enter.
                 if rest.len() < 2 {
-                    break;
+                    flush(&mut text, &mut events);
+                    events.push(Input::Escape);
+                    i += 1;
+                    continue;
                 }
                 if rest[1] != b'[' {
                     i += 2;

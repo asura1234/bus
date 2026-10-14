@@ -34,7 +34,9 @@ permission dialog (`Do you want to proceed?` with options 1 and 2) for N
 seconds, so Bus sees the agent waiting on a dialog. A prompt containing
 `fake:api-error` ends the turn without a reply, as a Claude API error does:
 it shows `API Error: Connection lost mid-response…` and fires `StopFailure`
-with that text and `error: server_error`.
+with that text and `error: server_error`. Esc during a `fake:work` turn stops
+it the way it stops Claude Code: no reply and no hook, and the prompt goes
+back into the box.
 
 The scratch directive `fake:dialog-settle redraw` holds an inert native Codex
 command chooser until Enter. After input, it shows an approval acknowledgement
@@ -48,7 +50,9 @@ first prompt, draws Codex's `›` composer with its model line below, and keeps
 image paths as text. Each turn shows Codex's
 `• Working (Ns • esc to interrupt)` line over a live composer as soon as the
 prompt is sent, for N seconds with `fake:work N`: a message Bus types in
-meanwhile joins the running turn, and the turn's one reply answers both.
+meanwhile joins the running turn, and the turn's one reply answers both. Esc
+stops the turn with no reply and no hook, printing Codex's
+`■ Conversation interrupted` line.
 A Codex prompt of exactly `fake:question` keeps the turn working on the
 alternate screen with Codex 0.162's collapsed queued question (`? 1 question`,
 `⇧← to answer`, a warning beside `? for shortcuts`). Shift+Left opens it
@@ -63,7 +67,8 @@ placeholder, and keeps image paths as text. Each turn shows a
 `⬢ Generating (Ns)` line over a live `Add a follow-up` composer as soon as the
 prompt is sent; with `fake:work N` a message typed in meanwhile joins the
 running turn, as with the fake Codex. It reports the reply with
-`afterAgentResponse`, then a completed `stop`.
+`afterAgentResponse`, then a completed `stop`. Ctrl+C during a turn stops it
+with no reply and no hook; Ctrl+C at an idle composer quits it.
 
 The same PATH holds recording stand-ins for `open`, `osascript`,
 `terminal-notifier` and `afplay`, the commands Bus uses on macOS to open links

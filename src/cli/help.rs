@@ -30,6 +30,7 @@ pub const AGENT_HELP: &str =
   agent choose AGENT --option N --fingerprint FINGERPRINT
   agent answer AGENT (--text TEXT | --skip) --fingerprint FINGERPRINT
   agent clear AGENT
+  agent interrupt (AGENT | --room ROOM) [--text TEXT] [--as AGENT]
   agent rename AGENT NAME
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
@@ -62,6 +63,13 @@ send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
 send --room master --as AGENT --to human posts a MASTER agent's message to the developer
 in MASTER chat, with no agent recipient and nothing to wait for; it rings like a reply.
+agent interrupt stops an agent's running turn: Bus presses the provider's stop key once
+(Esc for claude and codex, Ctrl+C for cursor), waits up to 15 s until the agent is idle,
+and reports stopped, already_idle, or failed with a reason (exit 1). The turn, the messages
+typed into it and those queued for the agent close as interrupted, so wait and send --async
+end with message_interrupted; the room history records who interrupted whom. --text then
+sends a normal new message; --room stops every working agent in the room but the --as one.
+It kills no process and keeps the context; use send to steer a working agent instead.
 agent clear starts a fresh provider context in an idle agent's terminal (/clear for claude
 and codex, /new-chat for cursor) and keeps the agent bound to the new provider session.
 settings shows the settings every Bus shares: color blind mode, MASTER's sound and

@@ -72,6 +72,7 @@ impl Worker {
                 let agent = self.control_agent(required(p, "agent")?, None)?;
                 self.control_clear(agent)
             }
+            "agent.interrupt" => self.control_interrupt(p),
             _ => Err("Unknown method".into()),
         }
     }
@@ -157,6 +158,129 @@ impl Worker {
             Err(error) => return Err(error.message),
         }
         Ok(json!({"agent_id": id, "sent": text, "stage": "cleared"}))
+    }
+}
+
+impl Worker {
+    /// Presses the provider's stop key in one agent's terminal, or in every
+    /// working or blocked agent's of a room but the author's. Nothing is
+    /// killed and the context stays. The turn closes as interrupted when Bus
+    /// next sees the agent idle; the CLI waits for that to report the stop.
+    pub(in crate::messaging::coordinator) fn control_interrupt(
+        &mut self,
+        p: &Value,
+    ) -> Result<Value, String> {
+        let (room, agent) = match (optional_text(p, "agent")?, optional_text(p, "room")?) {
+            (Some(agent), None) => {
+                let id = self.control_agent(agent, None)?;
+                (
+                    self.state.agent(id).ok_or("Unknown agent")?.room_id,
+                    Some(id),
+                )
+            }
+            (None, Some(room)) => (self.control_room(room)?, None),
+            _ => return Err("Name one agent, or a room with --room".into()),
+        };
+        let author = optional_text(p, "as")?
+            .map(|selector| self.control_author(room, selector))
+            .transpose()?;
+        let targets: Vec<AgentId> = match agent {
+            Some(id) if author == Some(id) => {
+                return Err("An agent cannot interrupt itself".into());
+            }
+            Some(id) => vec![id],
+            None => self
+                .state
+                .agents()
+                .filter(|a| a.room_id == room && Some(a.id) != author && !a.deletion_pending)
+                .filter(|a| {
+                    matches!(
+                        a.shown_status(),
+                        RuntimeStatus::Working | RuntimeStatus::Blocked
+                    )
+                })
+                .map(|a| a.id)
+                .collect(),
+        };
+        let now = crate::messaging::storage::io::now_ms();
+        let mut state = self.state.clone();
+        let mut rows = Vec::new();
+        for id in targets {
+            let agent = state.agent(id).ok_or("Unknown agent")?;
+            let mut row = json!({"agent_id": id, "name": agent.name});
+            let status = agent.shown_status();
+            match status {
+                RuntimeStatus::Idle => {
+                    // Nothing to stop. A turn Bus still holds (settling, or
+                    // waiting on background shells) and the queue close.
+                    state
+                        .close_interrupted(id, now)
+                        .map_err(|e| e.to_string())?;
+                    row["outcome"] = json!("already_idle");
+                }
+                RuntimeStatus::Working | RuntimeStatus::Blocked => {
+                    let key = interrupt_key(agent.provider);
+                    let Some(pane) = agent.runtime_identity.pane_id.clone() else {
+                        row["outcome"] = json!("failed");
+                        row["reason"] = json!("The agent has no terminal yet");
+                        rows.push(row);
+                        continue;
+                    };
+                    // One press only: a second Esc opens Claude's rewind or
+                    // Codex's edit-previous-message, a second Ctrl+C quits Cursor.
+                    let sent = self.transport.request(Method::AgentSendKeys(
+                        schema::AgentSendKeysParams {
+                            target: pane,
+                            keys: vec![key.into()],
+                        },
+                    ));
+                    match sent {
+                        Err(error) if error.definitely_rejected => {
+                            row["outcome"] = json!("failed");
+                            row["reason"] = json!(error.message);
+                        }
+                        // An uncertain failure may have pressed the key; the
+                        // CLI's wait for idle decides.
+                        _ => {
+                            state.begin_interrupt(id).map_err(|e| e.to_string())?;
+                            state
+                                .post_interrupt_notice(
+                                    room,
+                                    author.map_or(
+                                        crate::messaging::model::Author::Developer,
+                                        crate::messaging::model::Author::Agent,
+                                    ),
+                                    id,
+                                    now,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            row["outcome"] = json!("interrupting");
+                            row["key"] = json!(key);
+                        }
+                    }
+                }
+                other => {
+                    row["outcome"] = json!("failed");
+                    row["reason"] = json!(format!(
+                        "agent {} is {}; there is no turn to interrupt",
+                        agent.name,
+                        json!(other).as_str().unwrap_or("not running")
+                    ));
+                }
+            }
+            rows.push(row);
+        }
+        self.save(state)?;
+        Ok(json!({"room_id": room, "agents": rows}))
+    }
+}
+
+/// The key that stops a running turn, from each provider's own working hint:
+/// Claude Code and Codex show `esc to interrupt`, Cursor `ctrl+c to stop`.
+fn interrupt_key(provider: Provider) -> &'static str {
+    match provider {
+        Provider::ClaudeCode | Provider::Codex => "esc",
+        Provider::Cursor => "ctrl+c",
     }
 }
 

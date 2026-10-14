@@ -12,6 +12,9 @@ use std::sync::{
 #[path = "turn_settlement_test.rs"]
 mod turn_settlement_tests;
 
+#[path = "interrupt_test.rs"]
+mod interrupt_tests;
+
 #[path = "delivery_batch_test.rs"]
 mod delivery_batch_tests;
 
