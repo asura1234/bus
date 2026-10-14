@@ -11,6 +11,7 @@
 //! Bus writes to the project's `.cursor/hooks.json` and draws Cursor's `→`
 //! composer. All answer every prompt with `fake reply: <prompt>`.
 mod directives;
+mod question;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
 use directives::{api_error, dialog_seconds, show_dialog, spin, work_seconds};
@@ -309,6 +310,11 @@ impl FakeAgent {
         self.hook(submit, Some(&turn), json!({"prompt": prompt}));
         if let Some(seconds) = dialog_seconds(prompt) {
             show_dialog(seconds);
+        }
+        if question::requested(&self.provider, prompt) {
+            if let Err(code) = self.queued_question() {
+                return Some(code);
+            }
         }
         match work_seconds(prompt) {
             Some(seconds) if self.live_turn() => match self.work(seconds) {
