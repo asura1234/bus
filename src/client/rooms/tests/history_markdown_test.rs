@@ -296,6 +296,46 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
 }
 
 #[test]
+fn markdown_rendering_survives_a_visit_to_another_room() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    let other_agent = snapshot
+        .state
+        .create_agent(other, "helper", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    saved_exchange(&mut ui, room, agent, "first prompt", "**first reply**");
+    saved_exchange(&mut ui, other, other_agent, "other prompt", "**other reply**");
+    let snapshot = Arc::clone(&ui.snapshot);
+    let rendered_reply = |ui: &mut BusUi, id| {
+        ui.history.lines(
+            &snapshot.state,
+            snapshot.state.room(id).expect("room"),
+            80,
+            snapshot.revision,
+            1_000,
+            &mut Default::default(),
+        );
+        ui.history
+            .cached()
+            .iter()
+            .filter(|line| is_reply(line))
+            .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
+            .expect("rendered reply source")
+    };
+
+    let first = rendered_reply(&mut ui, room);
+    rendered_reply(&mut ui, other);
+    let back = rendered_reply(&mut ui, room);
+
+    assert!(
+        Arc::ptr_eq(&first, &back),
+        "returning to a room reuses its rendered Markdown instead of re-rendering the whole room"
+    );
+}
+
+#[test]
 fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
     use ratatui::style::Modifier;
 

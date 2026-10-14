@@ -1,7 +1,9 @@
 //! Durable request grouping, history caching, headers and age labels.
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
-use super::{History, Line, LinkScope, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone};
+use super::{
+    History, LayoutKey, Line, LinkScope, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone,
+};
 use crate::messaging::model::{
     AgentId, Author, BusState, Prompt, Request, RequestId, RequestPhase, Room, RoomId,
 };
@@ -47,7 +49,10 @@ impl History {
         if self.key == Some(key) {
             return &self.lines;
         }
-        let _rebuild_timer = REBUILD.start();
+        let started = std::time::Instant::now();
+        let reason = rebuild_reason(self.key, key);
+        self.rendered = 0;
+        let groups = groups(state);
         let mut exchanges = BTreeMap::new();
         // Dialog notices to orchestrators are delivery-only, never history.
         for request in state
@@ -101,6 +106,7 @@ impl History {
                 state,
                 room,
                 &exchange,
+                &groups,
                 width,
             );
             lines.push(Line {
@@ -118,10 +124,21 @@ impl History {
                 anchor: RowAnchor::new(prompt.id, None, RowKind::Gap),
             });
         }
-        self.markdown
-            .retain(|source, _| active_markdown.contains(source));
+        self.room_markdown.insert(room.id, active_markdown);
+        self.room_markdown.retain(|id, _| state.room(*id).is_some());
+        let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
+        self.markdown.retain(|source, _| shown.contains(source));
         self.key = Some(key);
         self.lines = lines;
+        REBUILD.record_op(
+            started.elapsed(),
+            &format!(
+                "room={} reason={reason} rows={} rendered={}",
+                room.id.0,
+                self.lines.len(),
+                self.rendered
+            ),
+        );
         &self.lines
     }
     fn push_prompt_lines(
@@ -176,8 +193,10 @@ impl History {
         let prompt_source = MarkdownSource::Prompt(prompt.id);
         active_markdown.insert(prompt_source);
         let scope = link_scope(state, &prompt.author);
+        let block = self.markdown_block(prompt_source, &prompt.text);
+        let cold = !block.is_laid_out(width);
         lines.extend(
-            self.markdown_block(prompt_source, &prompt.text)
+            block
                 .lines(
                     width,
                     prompt_source,
@@ -190,6 +209,7 @@ impl History {
                     ..line.clone()
                 }),
         );
+        self.rendered += usize::from(cold);
     }
 
     fn push_reply_lines(
@@ -199,6 +219,7 @@ impl History {
         state: &BusState,
         room: &Room,
         exchange: &Exchange<'_>,
+        groups: &BTreeMap<RequestId, Vec<RequestId>>,
         width: u16,
     ) {
         let prompt = exchange.prompt;
@@ -214,7 +235,9 @@ impl History {
             // A group's messages share one reply per room, shown under that
             // room's newest visible message even when the group spans MASTER.
             if let Some(request) = request {
-                let members = state.group_members(request.group.unwrap_or(request.id));
+                let members = groups
+                    .get(&request.group.unwrap_or(request.id))
+                    .map_or(&[][..], Vec::as_slice);
                 let newest = members.iter().rev().find(|id| {
                     state
                         .request(**id)
@@ -272,8 +295,10 @@ impl History {
                 let source = MarkdownSource::Reply(request);
                 active_markdown.insert(source);
                 let scope = link_scope(state, &Author::Agent(*agent_id));
+                let block = self.markdown_block(source, text);
+                let cold = !block.is_laid_out(width);
                 lines.extend(
-                    self.markdown_block(source, text)
+                    block
                         .lines(width, source, "    ", reply_anchor)
                         .iter()
                         .map(|line| Line {
@@ -281,6 +306,7 @@ impl History {
                             ..line.clone()
                         }),
                 );
+                self.rendered += usize::from(cold);
                 lines.push(Line {
                     text: "    Quote".into(),
                     action: Some(Action::Quote(request)),
@@ -378,6 +404,38 @@ fn wrap_header(
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
+/// Each group lead's members, as `BusState::group_members` lists them, from
+/// one pass over all requests instead of one pass per reply.
+fn groups(state: &BusState) -> BTreeMap<RequestId, Vec<RequestId>> {
+    let mut groups: BTreeMap<RequestId, Vec<RequestId>> = BTreeMap::new();
+    for request in state.requests() {
+        if let Some(lead) = request.group {
+            groups.entry(lead).or_default().push(request.id);
+        }
+    }
+    groups
+}
+
+/// Which layout input changed, for the rebuild's slow-operation detail.
+fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str {
+    let Some((signature, room, width, minute, thumbnails)) = previous else {
+        return "first";
+    };
+    if room != next.1 {
+        "room"
+    } else if width != next.2 {
+        "width"
+    } else if signature != next.0 {
+        "content"
+    } else if thumbnails != next.4 {
+        "thumbnails"
+    } else if minute != next.3 {
+        "minute"
+    } else {
+        "unchanged"
+    }
+}
+
 fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
         Author::Developer => "You".into(),

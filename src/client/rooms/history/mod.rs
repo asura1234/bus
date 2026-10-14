@@ -9,7 +9,7 @@ pub(super) use exchange::reply;
 use exchange::timestamp;
 use markdown::MarkdownBlock;
 use ratatui::style::Style;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -103,7 +103,7 @@ impl RowAnchor {
 
 /// Inputs to a history layout: content signature, room, width, age-label
 /// minute, and thumbnail cell size.
-type LayoutKey = (u64, RoomId, u16, u64, Option<(u32, u32)>);
+pub(super) type LayoutKey = (u64, RoomId, u16, u64, Option<(u32, u32)>);
 
 #[derive(Default)]
 pub(super) struct History {
@@ -112,6 +112,12 @@ pub(super) struct History {
     signature: u64,
     lines: Vec<Line>,
     markdown: BTreeMap<MarkdownSource, MarkdownBlock>,
+    /// The Markdown each visited room showed at its last rebuild. Rendering
+    /// a long room is the costly part, so a block stays cached while any
+    /// visited room still shows it, not only the room on screen.
+    room_markdown: BTreeMap<RoomId, BTreeSet<MarkdownSource>>,
+    /// Markdown blocks laid out afresh during the current rebuild.
+    rendered: usize,
 }
 
 impl History {

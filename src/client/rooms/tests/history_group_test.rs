@@ -258,3 +258,17 @@ fn an_archived_group_still_shows_its_shared_reply_once() {
         "archiving must preserve the group's single shared reply"
     );
 }
+
+#[test]
+fn a_rebuild_names_the_layout_input_that_changed() {
+    let key = (1, RoomId(1), 80, 10, None);
+    assert_eq!(rebuild_reason(None, key), "first");
+    assert_eq!(rebuild_reason(Some((1, RoomId(2), 80, 10, None)), key), "room");
+    assert_eq!(rebuild_reason(Some((1, RoomId(1), 100, 10, None)), key), "width");
+    assert_eq!(rebuild_reason(Some((2, RoomId(1), 80, 9, None)), key), "content");
+    assert_eq!(
+        rebuild_reason(Some((1, RoomId(1), 80, 10, Some((8, 16)))), key),
+        "thumbnails"
+    );
+    assert_eq!(rebuild_reason(Some((1, RoomId(1), 80, 9, None)), key), "minute");
+}
