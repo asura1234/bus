@@ -385,7 +385,8 @@ impl Worker {
     }
 
     fn record_dialog_answer(&mut self, id: AgentId, option: Option<u32>) -> Result<(), String> {
-        // Its closing is expected now, so no "closed on its own" follow-up.
+        // Record the answer before verification; retire its notice only once
+        // the dialog closes, so help is not resolved on an uncertain outcome.
         if let Some(option) = option {
             let mut answered = self.state.clone();
             answered

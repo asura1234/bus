@@ -78,7 +78,7 @@ impl Worker {
             // ignore selection redraws. A changed id needs another answer.
             let starts = wait.is_some();
             if starts && wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
-                // AgentList metadata can outlive a handler or manual answer.
+                // AgentList metadata can outlive an answer or manual close.
                 // Never open a pending panel or send keys while verifying.
                 if let Ok((_, _, terminal, pane, session)) = self.dialog_identity(id) {
                     let Ok(current) =
