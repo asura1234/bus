@@ -126,26 +126,17 @@ const MASTER_SECTION_ROWS: usize = 2;
 /// Rows of a MASTER agent: name, provider, orchestrated room and a gap.
 const MASTER_AGENT_ROWS: usize = 4;
 
-/// The logical row of the ROOMS header while `selected` is open. With MASTER
-/// open, its AGENTS section sits between MASTER and ROOMS.
-fn sidebar_rooms_header(state: &BusState, selected: Option<RoomId>) -> usize {
-    let Some(master) = state.master_room().map(|master| master.id) else {
-        return 1;
-    };
-    if selected != Some(master) {
-        return 1 + MASTER_SECTION_ROWS;
+/// The logical row of the ROOMS header, below the permanent MASTER entry.
+fn sidebar_rooms_header(state: &BusState, _selected: Option<RoomId>) -> usize {
+    if state.master_room().is_some() {
+        1 + MASTER_SECTION_ROWS
+    } else {
+        1
     }
-    let agents = state
-        .agents()
-        .filter(|a| !a.permission_handler)
-        .filter(|agent| agent.room_id == master)
-        .count();
-    // AGENTS header, gap, the agents, then the divider.
-    1 + MASTER_SECTION_ROWS + 2 + agents * MASTER_AGENT_ROWS + 1
 }
 
-/// The logical sidebar row of a room while `selected` is open: MASTER is the
-/// first entry, alone above the rest; work rooms follow the ROOMS header.
+/// The logical sidebar row of a room: MASTER is the first entry, alone above
+/// the rest; work rooms follow the ROOMS header regardless of selection.
 pub(in crate::client::rooms) fn sidebar_room_row(
     state: &BusState,
     room: RoomId,
@@ -304,7 +295,7 @@ impl BusUi {
         } else {
             0
         };
-        let content_height = 6
+        let content_height = 7
             + master_header_rows
             + rooms.len()
             + agents.iter().map(|entry| entry.height).sum::<usize>();
@@ -325,24 +316,13 @@ impl BusUi {
             offset,
             visible_end,
         };
-        // A work room lists ROOMS, then its AGENTS; MASTER lists its
-        // orchestrator AGENTS first, so it is clear whose agents they are.
-        let master_open = self
-            .snapshot
-            .state
-            .master_room()
-            .is_some_and(|master| Some(master.id) == self.room);
         let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
         let work_rooms = rooms
             .iter()
             .filter(|room| room.kind == RoomKind::Work)
             .count();
-        let (divider_row, agents_header) = if master_open {
-            (rooms_header - 1, 1 + MASTER_SECTION_ROWS)
-        } else {
-            let divider = rooms_header + 2 + work_rooms;
-            (divider, divider + 1)
-        };
+        let divider_row = rooms_header + 2 + work_rooms;
+        let agents_header = divider_row + 1;
         self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
         view.sidebar_divider = viewport.at(1, divider_row, sw);
         self.sidebar_agent_rows(view, viewport, agents, agents_header);
@@ -486,7 +466,11 @@ impl BusUi {
             false,
             false,
         );
-        y += 2;
+        if let Some(room) = self.room.and_then(|room| self.snapshot.state.room(room)) {
+            let label = room_label(room, usize::from(sw) + 2);
+            view.row(viewport.at(1, y + 1, sw), &label[2..], None, false, true);
+        }
+        y += 3;
         for SidebarAgent {
             agent,
             in_master,
