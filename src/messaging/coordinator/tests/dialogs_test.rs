@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 /// What the fake server shows for the watched agent's screen.
 #[derive(Clone, Default)]
 struct Screen {
+    pending_question: bool,
     settle_errors: u32,
     answer_sent: bool,
     dialog: bool,
@@ -88,7 +89,7 @@ impl Transport for FakeServer {
             }),
             Method::AgentDialogObserve(params) => Ok(ResponseResult::AgentDialog {
                 observation: schema::AgentDialogObservation {
-                    pending_question: false,
+                    pending_question: screen.pending_question,
                     terminal_id: "terminal".into(),
                     // Every watched agent shows the same screen in its own pane.
                     pane_id: params.target,
@@ -1155,4 +1156,54 @@ fn closed_dialog_resolves_help_even_while_blocked_metadata_stays_cached() {
     assert_eq!(sent_by(&worker, room, agent).len(), 2);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn uncertain_close_retains_help_until_a_readable_observation_confirms_settlement() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let episode = worker.state.agent(agent).unwrap().dialog_notice.clone();
+    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    screen.lock().unwrap().settle_errors = 22;
+    let result = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
+    assert_eq!(result["outcome"], "unknown");
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, episode);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    notify_steady(&mut worker, agent, episode.as_deref());
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    notify_steady(&mut worker, agent, episode.as_deref());
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, None);
+    assert_eq!(
+        sent_by(&worker, room, agent)[1],
+        (
+            vec![orchestrator.unwrap()],
+            expected_resolved(&worker, agent)
+        )
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn absent_metadata_keeps_help_while_a_native_dialog_or_question_remains() {
+    for pending_question in [false, true] {
+        let (mut worker, agent, room, _, screen, dir) = worker(true);
+        screen.lock().unwrap().dialog = true;
+        polls(&mut worker, 3);
+        let episode = worker.state.agent(agent).unwrap().dialog_notice.clone();
+        if pending_question {
+            let mut current = screen.lock().unwrap();
+            current.dialog = false;
+            current.pending_question = true;
+        }
+        notify_steady(&mut worker, agent, None);
+        assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, episode);
+        assert_eq!(sent_by(&worker, room, agent).len(), 1);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

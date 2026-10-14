@@ -1,6 +1,6 @@
-//! Lets a room know when one of its agents is blocked on something it cannot
-//! pass alone: a permission dialog, a question, a trust prompt or any other
-//! blocked screen. The blocked agent itself says so, once per episode.
+//! Reports a steady dialog wait to the room and resolves earlier help when it
+//! settles. A readable native screen suppresses stale blocked metadata. The
+//! blocked agent itself sends each notice, once per episode.
 #[cfg(test)]
 use super::{
     schema, AgentRuntimeIdentity, BTreeMap, Method, ModelError, PathBuf, PromptId, Provider,
@@ -8,7 +8,7 @@ use super::{
 };
 use super::{AgentId, Author, BusState, Draft, Worker};
 
-/// The notice key for a blocked screen without a readable dialog.
+/// Fallback notice key for blocked list metadata without a dialog id.
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
@@ -16,9 +16,9 @@ const STEADY_POLLS: u8 = 2;
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
-    /// A confirmed answer can close a dialog between status polls. Retire its
-    /// notice so the next form can start an episode even with identical text.
-    pub(super) fn finish_answered_dialog(&mut self, id: AgentId) -> Result<(), String> {
+    /// Resolve earlier help and retire a closed dialog's notice so the next
+    /// form can start an episode even with identical text.
+    pub(super) fn finish_closed_dialog(&mut self, id: AgentId) -> Result<(), String> {
         let mut state = self.state.clone();
         if let Some(agent) = state
             .agent(id)
@@ -68,16 +68,13 @@ impl Worker {
                 continue;
             }
             let notice = agent.dialog_notice.clone();
-            if wait.is_none() {
-                if notice.is_some() {
-                    self.finish_answered_dialog(id)?;
-                }
+            if wait.is_none() && notice.is_none() {
                 continue;
             }
             // Native ids change with question/command text and options, but
             // ignore selection redraws. A changed id needs another answer.
             let starts = wait.is_some();
-            if starts && wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
+            if wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
                 // AgentList metadata can outlive an answer or manual close.
                 // Never open a pending panel or send keys while verifying.
                 if let Ok((_, _, terminal, pane, session)) = self.dialog_identity(id) {
@@ -87,7 +84,12 @@ impl Worker {
                         continue;
                     };
                     if current.dialog.is_none() && !current.pending_question {
-                        self.finish_answered_dialog(id)?;
+                        self.finish_closed_dialog(id)?;
+                        continue;
+                    }
+                    // Missing list metadata can be an unreadable redraw. An
+                    // open dialog or pending question keeps earlier help live.
+                    if wait.is_none() {
                         continue;
                     }
                     if let Some(dialog) = current.dialog {
@@ -99,6 +101,11 @@ impl Worker {
                         }
                     }
                 }
+            }
+            if wait.is_none() {
+                // Keep the existing fallback for agents without a bound pane.
+                self.finish_closed_dialog(id)?;
+                continue;
             }
             if notice == wait {
                 continue;

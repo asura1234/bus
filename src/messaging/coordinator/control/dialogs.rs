@@ -318,7 +318,7 @@ impl Worker {
             option.is_some(),
         );
         if outcome == "closed" {
-            self.finish_answered_dialog(id)?;
+            self.finish_closed_dialog(id)?;
         }
         let mut result = json!({
             "agent_id": id,
