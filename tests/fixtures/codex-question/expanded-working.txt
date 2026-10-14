@@ -42,4 +42,3 @@
     3. Other
 
   enter submit   ⌃] skip   ⇧→ main prompt
-
