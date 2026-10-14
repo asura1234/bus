@@ -914,7 +914,6 @@ fn fake_dialog_is_read_as_a_dialog_and_holds_for_its_seconds() {
     assert_eq!(dialog.options.len(), 2);
 }
 
-
 #[test]
 fn settlement_redraw_fixture_holds_a_synchronized_approval_frame() {
     let mut agent = FakeAgent::new("codex", Value::Null);

@@ -20,6 +20,17 @@ impl Worker {
     /// notice so the next form can start an episode even with identical text.
     pub(super) fn finish_answered_dialog(&mut self, id: AgentId) -> Result<(), String> {
         let mut state = self.state.clone();
+        if let Some(agent) = state
+            .agent(id)
+            .filter(|agent| agent.dialog_notice.is_some())
+        {
+            let readable = agent.dialog_notice.as_deref() != Some(BLOCKED);
+            let text = format!(
+                "{} (agent {}). Resolved; dialog is gone; previous blocked notice needs no action",
+                agent.name, id.0
+            );
+            post_dialog_notice(&mut state, id, readable, text)?;
+        }
         state
             .observe_dialog(id, false)
             .map_err(|error| error.to_string())?;
@@ -118,11 +129,21 @@ impl Worker {
 /// the developer directly, since MASTER cannot itself be orchestrated.
 fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
-    let room = agent.room_id;
     let text = format!(
         "{} (agent {}). {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
         agent.name, id.0, id.0
     );
+    post_dialog_notice(state, id, open_dialog, text)
+}
+
+/// Blocked and resolved notices share the existing room/recipient policy.
+fn post_dialog_notice(
+    state: &mut BusState,
+    id: AgentId,
+    open_dialog: bool,
+    text: String,
+) -> Result<(), String> {
+    let room = state.agent(id).ok_or("Unknown agent")?.room_id;
     if state.room(room).is_none() {
         return Ok(());
     }
