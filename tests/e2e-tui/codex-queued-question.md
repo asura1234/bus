@@ -24,24 +24,33 @@ T bus room create question-lab
 T bus agent add --room question-lab --name worker --provider codex --pwd WORK --consent-hooks
 ```
 
-Wait on `bus state` until the worker is idle. CLI calls beyond setup are limited to the
-read-only `state`, `history --room question-lab`, `agent read worker ...` and
-`agent dialog worker`, plus the one `agent choose` in step 4, which is the feature under test.
+Wait on `bus state` until the worker and the auto-created `permission handler` are idle. Bus
+routes every blocked episode to that handler: for this question its fake Claude runs the real
+`bus agent dialog` (which opens the queued question) and posts a `Routed` notice to the room
+without answering. CLI calls beyond setup are limited to the read-only `state`,
+`history --room question-lab`, `agent read worker ...` and `agent dialog worker`, plus the one
+`agent choose` in step 4, which is the feature under test.
 
 ### CQ-01 — Collapsed question beside a footer warning is readable and answerable
 
 1. Complete setup. Click `room:question-lab`, press `ctrl+p`, click `recipient:worker`, click
    `composer`, paste `fake:permission question-warning`, press `enter` (one driver call each).
-   Wait until `T bus agent read worker --source visible` shows `? 1 question`, `⇧← to answer`
-   and `⚠ 1 warning · f2 to view`, and state shows the worker `working`. Capture both.
-2. Run `T bus agent read worker --source recent --lines 120`. It succeeds (no `error`), its
-   `text` contains `? 1 question`, `capture.exhausted` is `false`, and `capture.note` says only
-   the visible screen was read while the worker is working and to retry when idle.
-3. Wait up to 30s until the worker's `dialog_notice` in `T bus state` is non-null and
-   `T bus history --room question-lab` holds a `Blocked, needs help` notice about the worker.
-   Then run `T bus agent dialog worker`: `dialog` is non-null, its text is
-   `Which design should the worker use?`, its options are `Alpha` and `Beta` (1 selected),
-   and `fingerprint` is non-null. Take and open a screenshot of the room.
+   Wait up to 30s until `T bus history --room question-lab` holds the handler's notice about the
+   worker (`worker (agent N): Routed; ...; Inspect: bus agent dialog N`). The scratch server log
+   (copied into the run folder at stop, or read under the session's data dir) has a
+   `bus.dialog.observed` line for the worker with `status=Working` and
+   `listed_dialog_id=Some("codex:pending_question")`: Bus saw the collapsed question while the
+   turn was working, with the warning on the footer row. The handler's private
+   `fake-permission-cli.ndjson` shows its `agent dialog` returned the `Which design should the
+   worker use?` choice with a fingerprint. Preserve both.
+2. Run `T bus agent read worker --source recent --lines 120` while the worker is still not idle.
+   It succeeds (no `error`), `capture.exhausted` is `false`, `capture.note` says only the
+   visible screen was read while the worker is busy and to retry when idle, and `text` holds the
+   question `Which design should the worker use?`.
+3. Run `T bus agent dialog worker`: `dialog` is non-null, its text is
+   `Which design should the worker use?`, its options are `Alpha` and `Beta` (1 selected), and
+   `fingerprint` is non-null. The worker's `dialog_notice` in `T bus state` is non-null. Take and
+   open a screenshot of the room.
 4. Run `T bus agent choose worker --option 2 --fingerprint F` with that fingerprint. The
    outcome is `closed`. Within 30s `T bus agent dialog worker` returns `dialog: null`, the
    worker returns to `idle`, and the room history has the worker's
