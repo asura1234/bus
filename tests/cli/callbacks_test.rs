@@ -180,6 +180,7 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
         let mut child = Command::new(env!("CARGO_BIN_EXE_bus"))
             .args(["--bus-callback", "codex-hook"])
             .env("HERDR_ENV", "1")
+            .env("BUS_DEV", "1")
             .env("BUS_CALLBACK_DIR", &dir)
             .env("BUS_LAUNCH_ID", launch)
             .stdin(Stdio::piped())

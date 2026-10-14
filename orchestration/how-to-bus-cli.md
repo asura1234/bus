@@ -677,7 +677,8 @@ none. The text is the same for every blocker and carries no command, options or
 fingerprint: look at the agent's terminal with `bus agent dialog AGENT` (or
 `bus agent read AGENT --source visible`) and answer as below. It is posted once
 per blocked episode, not again while the agent stays blocked, and nothing
-follows when it is answered. An agent in MASTER posts none.
+follows when it is answered. A blocked MASTER orchestrator notifies the developer
+in MASTER, since MASTER has no orchestrator of its own.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked
