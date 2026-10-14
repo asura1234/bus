@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────╮
+│ ✨ Update available! 0.162.0 -> 0.162.1         │
+│ Run npm install -g @openai/codex to update.     │
+│                                                 │
+│ See full release notes:                         │
+│ https://github.com/openai/codex/releases/latest │
+╰─────────────────────────────────────────────────╯
+
+
+  >_ OpenAI Codex (v0.162.0)
+     /private/tmp/claude-501/-Users-dylanliu-work-bus/d3daa8f0-68f0-452f-b650-824471794a9c/scratchpad/ws
+
+
+› Test of a UI. First call request_user_input_async exactly once with one question titled "Which capture mode should Bus use? This is
+  a deliberately long question so it wraps across lines in the terminal to test wrapping." and options ["Plain screen", "ANSI
+  screen"]. Then, without waiting for the answer, run the shell command: sleep 240 . After that reply done.
+
+
+• Which capture mode should Bus use? This is a deliberately long question so it wraps across lines in the terminal to test wrapping.
+
+  • Plain screen
+  • ANSI screen
+
+• I’ll run the requested sleep, then reply done.
+
+
+
+
+
+
+
+
+
+
+• Working (48s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+
+• Queued follow-up inputs
+  ? 1 question
+    ⇧← to answer
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol low fast · /private/tmp/claude-501/-Users-dylanliu-work-bus/d3daa8f0-68f0-452f-b650-824471794a9c/scratchpad/ws · Test U…
+  ? for shortcuts                                                                                            ⚠ 1 warning · f2 to view

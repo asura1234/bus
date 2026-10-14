@@ -585,6 +585,41 @@ fn codex_pending_question_requires_a_live_queue_and_empty_composer() {
 }
 
 #[test]
+fn codex_pending_question_tolerates_status_beside_the_footer_hint() {
+    let screen = include_str!("../../../tests/fixtures/codex-question/collapsed-warning.txt");
+    assert!(codex_question_pending(screen));
+    assert!(parse(screen).is_none());
+    assert!(codex_question_pending(
+        &screen.replace("⚠ 1 warning · f2 to view", "42% context left")
+    ));
+    for stale in [
+        screen.replace("? for shortcuts", "? for shortcutsX"),
+        screen.replace("? for shortcuts  ", "• New output    "),
+    ] {
+        assert!(!codex_question_pending(&stale), "{stale}");
+    }
+}
+
+#[test]
+fn codex_expanded_question_while_working_carries_the_full_question() {
+    let screen = include_str!("../../../tests/fixtures/codex-question/expanded-working.txt");
+    let dialog = parse(screen).unwrap();
+    assert_eq!(dialog.kind, DialogKind::Choice);
+    assert_eq!(
+        dialog.text,
+        "Which capture mode should Bus use? This is a deliberately long question so it wraps across lines in the terminal to test wrapping."
+    );
+    assert_eq!(
+        labels(&dialog),
+        [
+            (1, "Plain screen", true),
+            (2, "ANSI screen", false),
+            (3, "Other", false)
+        ]
+    );
+}
+
+#[test]
 fn codex_expanded_question_identity_ignores_the_working_timer_above_the_queue() {
     let expanded = include_str!("../../../tests/fixtures/codex-question/expanded.txt");
     let ticked = expanded.replace("Working (1m 16s", "Working (1m 17s");

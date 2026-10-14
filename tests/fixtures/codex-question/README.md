@@ -11,3 +11,11 @@ the workspace and Bus data directory are isolated under /private/tmp.
 - other-typed.txt: after typing T; the focused last row now contains T.
 
 Screens retain the real blank lines, wrapping, native key glyphs and working indicator.
+
+Captured from Codex CLI 0.162.0 on 2026-10-14 in a 134x45 PTY (rendered with pyte, trailing
+spaces trimmed), while the turn kept working after `request_user_input_async`:
+
+- collapsed-warning.txt: queued question banner while Working, with a background terminal in the
+  working line and a startup warning right-aligned on the `? for shortcuts` footer row. Live room
+  agents showed the same footer; Bus missed the question there.
+- expanded-working.txt: the same question after Shift+Left, still Working above the queue.
