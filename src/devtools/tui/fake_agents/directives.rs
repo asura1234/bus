@@ -1,9 +1,7 @@
 //! Prompt directives that make a fake provider act out a turn: `fake:work N`,
 //! `fake:dialog N` and `fake:api-error`.
-use super::working_line;
 use serde_json::{json, Value};
 use std::io::Write;
-use std::time::Instant;
 
 /// A prompt containing `fake:work N` keeps the fake busy for N seconds (at
 /// most 600), so a driver can see a Working agent and a live spinner.
@@ -37,26 +35,6 @@ pub(super) fn show_dialog(seconds: u64) {
     std::thread::sleep(std::time::Duration::from_secs(seconds));
     let rows = DIALOG.matches("\r\n").count();
     let _ = write!(out, "\x1b[{rows}A\r\x1b[J");
-    let _ = out.flush();
-}
-
-/// Claude's working line, redrawn in place: `✻ Working… (3s · esc to
-/// interrupt)`. Claude hides its prompt box meanwhile; input waits.
-pub(super) fn spin(seconds: u64) {
-    let started = Instant::now();
-    let mut out = std::io::stdout();
-    let mut index = 0;
-    while started.elapsed().as_secs() < seconds {
-        let _ = write!(
-            out,
-            "\r\x1b[2K{}",
-            working_line("claude", index, started.elapsed().as_secs())
-        );
-        let _ = out.flush();
-        index += 1;
-        std::thread::sleep(std::time::Duration::from_millis(120));
-    }
-    let _ = write!(out, "\r\x1b[2K");
     let _ = out.flush();
 }
 

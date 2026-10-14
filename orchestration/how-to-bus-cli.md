@@ -431,6 +431,54 @@ notifier. A future
 `send --wait` convenience may only compose the existing durable `send` and
 `wait` primitives.
 
+### Interrupt an agent
+
+A message never stops a turn: Codex takes it into the running turn and Claude
+Code queues it for its next step. To stop a worker, or to redirect it onto
+something else, interrupt its turn:
+
+```sh
+bus agent interrupt "$agent_id" --as "$me" --text "Stop. Reply with your status."
+```
+
+Bus presses the provider's stop key in the agent's terminal, once: Esc for
+Claude Code and Codex, Ctrl+C for Cursor, the keys each shows as its own
+"esc to interrupt" / "ctrl+c to stop" hint. A second press would open Claude's
+rewind, Codex's edit-previous-message or quit Cursor, so Bus never repeats it.
+It then waits up to 15 seconds for Bus to see the agent idle and reports one
+JSON object with `outcome`:
+
+| `outcome` | Meaning |
+| --- | --- |
+| `stopped` | The turn ended after the key. |
+| `already_idle` | The agent was not working; nothing was typed. |
+| `failed` | `reason` says why: the agent is launching or unavailable, it was still working after 15 seconds, or the key could not be sent. The command exits 1 with code `interrupt_failed`. |
+
+The interrupted message, the messages typed into its turn and those queued for
+the agent close with reason `interrupted`; nothing replays later. A `wait` or
+`send --async` on one of them ends with error code `message_interrupted`
+(exit 1) rather than waiting on, and `message status` reports stage `abandoned`
+with reason `interrupted`. If the agent finished and Bus captured its reply
+before the key took effect, that reply still completes the message. An idle
+agent's request that Bus still holds (a settling turn, or one waiting on
+background shells) closes the same way. The room history records the
+interrupt as a message by the interrupter (`--as`, otherwise you) reading
+`Interrupted NAME.`
+
+`--text` is sent after the stop as a normal message, with its own reply, so
+`bus agent interrupt AGENT --text "pause; reply with status"` is one call. The
+result then includes its `message_id`; follow it with `wait`. When Claude Code
+is interrupted before it answered, it puts the interrupted prompt back into its
+input box; Bus clears it before typing the next message.
+
+`--room ROOM` instead stops every working or blocked agent in the room except
+the `--as` agent, and returns one entry per agent under `agents`; `--text` then
+goes to every agent that stopped. The generic form is
+`agent interrupt (AGENT | --room ROOM) [--text TEXT] [--as AGENT]`.
+
+Interrupting kills no process and keeps the provider context; to start a fresh
+context, use `agent clear` once the agent is idle.
+
 ### Give an agent a fresh context
 
 Start a fresh provider context in an idle agent's terminal before an unrelated
@@ -574,6 +622,11 @@ Read the durable message history for a room:
 ```sh
 bus history --room "$room_id"
 ```
+
+Each entry has the message (`prompt`: author, text, files, recipients and
+`submitted_at_ms`) and its `delivery` status. Messages delivered to nobody,
+such as a MASTER agent's report to the human or an interrupt record, have
+`delivery: null`.
 
 Read the complete current terminal viewport for one managed agent:
 

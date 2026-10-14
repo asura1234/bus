@@ -70,14 +70,17 @@ impl Worker {
                 let room = self.control_room(required(p, "room")?)?;
                 let now = super::super::io::now_ms();
                 self.expire_queued_requests(now)?;
-                let messages = self
+                // Messages carry their delivery; notices (reports to the
+                // developer, interrupts) were delivered to nobody.
+                let mut messages = self
                     .state
                     .requests()
                     .filter(|r| r.room_id == room && !r.delivery_only())
-                    .map(|r| (r.prompt.id, &r.prompt))
+                    .map(|r| (r.prompt.id, (&r.prompt, true)))
                     .collect::<BTreeMap<_, _>>();
+                messages.extend(self.state.notices(room).map(|n| (n.id, (n, false))));
                 Ok(
-                    json!({"room_id":room,"messages":messages.iter().map(|(id,prompt)|json!({"prompt":prompt,"delivery":self.control_message_at(*id, now).ok()})).collect::<Vec<_>>()}),
+                    json!({"room_id":room,"messages":messages.iter().map(|(id,(prompt,delivered))|json!({"prompt":prompt,"delivery":delivered.then(|| self.control_message_at(*id, now).ok()).flatten()})).collect::<Vec<_>>()}),
                 )
             }
             _ => Err("Unknown method".into()),

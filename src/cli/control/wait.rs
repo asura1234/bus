@@ -149,8 +149,9 @@ fn settled_without_reply(r: &Value) -> bool {
     r["stage"] == "abandoned" && r["reason"] == "reply_not_captured"
 }
 
-/// The first abandoned request as an error: `message_provider_error` when a
-/// provider error ended its turn (worth a retry), else `message_abandoned`.
+/// The first abandoned request as an error: `message_interrupted` when
+/// `agent interrupt` stopped its turn, `message_provider_error` when a
+/// provider error ended it (worth a retry), else `message_abandoned`.
 /// An async follower takes a turn settled without a reply as done, as it does
 /// any ended turn; a bounded wait needs the reply, so it fails on that too.
 fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)> {
@@ -159,6 +160,15 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
         .iter()
         .find(|r| r["stage"] == "abandoned" && !(follower && settled_without_reply(r)))?;
     let agent = abandoned["agent_name"].as_str().unwrap_or("unknown");
+    if abandoned["reason"] == crate::messaging::model::INTERRUPTED {
+        return Some((
+            "message_interrupted",
+            format!(
+                "agent {agent}'s turn on message {} was interrupted; the room history shows who stopped it",
+                status["message_id"],
+            ),
+        ));
+    }
     if let Some(error) = abandoned["reason"]
         .as_str()
         .and_then(|reason| reason.strip_prefix("provider_error: "))

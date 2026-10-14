@@ -114,6 +114,10 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   AGENT --text "..." --fingerprint F` / `--skip` for text questions.
   Answer promptly. Ask the developer before approving anything
   destructive or outward-facing.
+- Steer a working agent with a plain `bus send`; it joins the running turn.
+  To stop or redirect a worker, use `bus agent interrupt AGENT --as
+  {{AGENT_NAME}} [--text "..."]`: a message saying "pause" does not stop a
+  turn. A wait on the interrupted message ends with `message_interrupted`.
 - Delivery is not completion. A task is done when `bus message status` shows
   `complete: true` and you have read the reply.
 

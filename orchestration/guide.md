@@ -197,6 +197,23 @@ the turn's reply answers the original task and every correction together:
 `bus wait` on any of those messages returns the same reply. Send with `--queue`
 only for an unrelated task that should get a turn and a reply of its own.
 
+A plain send never stops a turn: Codex takes it into the running turn and
+Claude Code queues it, so "pause" or "stop" in a message is just more work. To
+stop a worker, or to redirect it onto something else, interrupt it:
+
+```sh
+bus agent interrupt AGENT --as YOU --text "Stop. Reply with your status."
+```
+
+Bus presses the provider's stop key once, waits until the turn has ended and
+reports `stopped`, `already_idle` or `failed` with a reason. `--text` then
+arrives as a normal new message with its own reply. The interrupted message
+closes as `interrupted`: a running `send --async` or `wait` on it ends with
+`message_interrupted` instead of waiting on. Messages queued for the worker
+close with it, so send what it should do next with `--text`. `--room ROOM`
+stops every working or blocked agent in the room. Nothing is killed and the worker keeps
+its context.
+
 ## Unblock agents
 
 - **Dialogs:** agents stop at permission, trust and question dialogs and

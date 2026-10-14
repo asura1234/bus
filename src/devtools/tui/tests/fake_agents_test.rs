@@ -21,8 +21,10 @@ fn unfinished_sequences_wait_for_more_bytes() {
     let mut pending = b"x\x1b[200~half".to_vec();
     assert_eq!(drain_input(&mut pending), vec![Input::Text("x".into())]);
     assert_eq!(pending, b"\x1b[200~half");
+    // Bus writes each key in one piece, so a lone Esc is the Esc key.
     let mut lone = b"\x1b".to_vec();
-    assert!(drain_input(&mut lone).is_empty());
+    assert_eq!(drain_input(&mut lone), vec![Input::Escape]);
+    assert!(lone.is_empty());
     let mut alt = b"\x1bb\x01z".to_vec();
     assert_eq!(drain_input(&mut alt), vec![Input::Text("z".into())]);
 }

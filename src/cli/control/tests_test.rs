@@ -119,6 +119,7 @@ const SAMPLES: &[&[&str]] = &[
     ],
     &["agent", "answer", "a", "--skip", "--fingerprint", "f"],
     &["agent", "clear", "a"],
+    &["agent", "interrupt", "a"],
     &["agent", "rename", "a", "b"],
     &["agent", "setup-confirm", "a", "--confirm"],
     &["agent", "delete", "a", "--confirm"],
@@ -2240,4 +2241,291 @@ fn rev_b_claude_r5_bounded_wait_fails_on_any_abandoned_request() {
         assert_eq!(exit_code(&outcome), Some(1), "{reason}: {response}");
         assert_eq!(response["error"]["code"], code, "{reason}: {response}");
     }
+}
+
+#[test]
+fn agent_interrupt_names_one_agent_or_one_room_with_optional_text_and_author() {
+    let parsed = command(&["agent", "interrupt", "worker", "--as", "orch"]).unwrap();
+    assert_eq!(parsed.method, "agent.interrupt");
+    assert_eq!(parsed.params, json!({"agent": "worker", "as": "orch"}));
+    let parsed = command(&["agent", "interrupt", "--room", "lab", "--text", "pause"]).unwrap();
+    assert_eq!(parsed.params, json!({"room": "lab", "text": "pause"}));
+    for args in [
+        &["agent", "interrupt"][..],
+        &["agent", "interrupt", "worker", "--room", "lab"][..],
+        &["agent", "interrupt", "worker", "--text", " "][..],
+    ] {
+        assert!(command(args).is_err(), "must reject {args:?}");
+    }
+}
+
+/// One agent row of a `state` result.
+fn agent_row(id: u64, status: &str, pending: bool) -> Value {
+    let mut row = json!({"id": id, "name": format!("a{id}"), "room_id": 7, "status": status});
+    if pending {
+        row["interrupt_pending"] = json!(true);
+    }
+    row
+}
+
+/// Runs `agent interrupt` against a scripted `agent.interrupt` receipt and
+/// scripted `state` reads; returns the outcome, the one printed response,
+/// every request sent, and the pauses between state reads.
+fn run_interrupt(
+    args: &[&str],
+    receipt: Value,
+    states: impl IntoIterator<Item = Vec<Value>>,
+) -> (io::Result<()>, Value, Vec<Request>, Vec<Duration>) {
+    let mut states = states.into_iter();
+    let mut requests = Vec::new();
+    let mut pauses = Vec::new();
+    let mut output = Vec::new();
+    let outcome = run_with_pause(
+        &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+        &mut output,
+        &mut |request: &Request, _| {
+            requests.push(request.clone());
+            Ok(Response::success(
+                &request.id,
+                match request.method.as_str() {
+                    "agent.interrupt" => receipt.clone(),
+                    "state" => json!({"agents": states.next().expect("read past the last state")}),
+                    "message.send" => {
+                        json!({"message_id": 30, "request_ids": [31], "stage": "queued"})
+                    }
+                    other => panic!("unexpected {other}"),
+                },
+            ))
+        },
+        |pause| pauses.push(pause),
+    );
+    let output = String::from_utf8(output).unwrap();
+    assert_eq!(output.lines().count(), 1, "one JSON response: {output:?}");
+    (
+        outcome,
+        serde_json::from_str(&output).unwrap(),
+        requests,
+        pauses,
+    )
+}
+
+fn interrupting(agent: u64) -> Value {
+    json!({"room_id": 7, "agents": [{"agent_id": agent, "name": format!("a{agent}"), "outcome": "interrupting", "key": "esc"}]})
+}
+
+#[test]
+fn agent_interrupt_reports_stopped_once_bus_saw_the_turn_end() {
+    let (outcome, response, requests, pauses) = run_interrupt(
+        &["agent", "interrupt", "a4"],
+        interrupting(4),
+        [
+            vec![agent_row(4, "working", true)],
+            vec![agent_row(4, "idle", true)],
+            vec![agent_row(4, "idle", false)],
+        ],
+    );
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(
+        response["result"],
+        json!({"agent_id": 4, "name": "a4", "room_id": 7, "outcome": "stopped", "key": "esc"})
+    );
+    let methods: Vec<_> = requests.iter().map(|r| r.method.as_str()).collect();
+    assert_eq!(methods, ["agent.interrupt", "state", "state", "state"]);
+    assert_eq!(pauses, [Duration::from_millis(200); 2]);
+}
+
+#[test]
+fn agent_interrupt_text_is_sent_as_a_new_message_after_the_stop() {
+    let (outcome, response, requests, _) = run_interrupt(
+        &[
+            "agent",
+            "interrupt",
+            "a4",
+            "--text",
+            "pause; reply with status",
+            "--as",
+            "orch",
+        ],
+        interrupting(4),
+        [vec![agent_row(4, "idle", false)]],
+    );
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(response["result"]["outcome"], "stopped");
+    assert_eq!(response["result"]["message_id"], 30);
+    let send = requests.last().unwrap();
+    assert_eq!(send.method, "message.send");
+    assert_eq!(
+        send.params,
+        json!({"room": "7", "to": ["4"], "text": "pause; reply with status", "files": [], "as": "orch"})
+    );
+    // The interrupt itself carries only the agent and its author.
+    assert_eq!(requests[0].params, json!({"agent": "a4", "as": "orch"}));
+}
+
+#[test]
+fn agent_interrupt_of_an_idle_agent_still_delivers_the_text() {
+    let receipt =
+        json!({"room_id": 7, "agents": [{"agent_id": 4, "name": "a4", "outcome": "already_idle"}]});
+    let (outcome, response, requests, _) = run_interrupt(
+        &["agent", "interrupt", "a4", "--text", "next task"],
+        receipt,
+        [],
+    );
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(response["result"]["outcome"], "already_idle");
+    assert_eq!(response["result"]["message_id"], 30);
+    let methods: Vec<_> = requests.iter().map(|r| r.method.as_str()).collect();
+    assert_eq!(methods, ["agent.interrupt", "message.send"]);
+}
+
+#[test]
+fn agent_interrupt_fails_with_a_reason_when_the_turn_does_not_stop() {
+    let (outcome, response, requests, pauses) = run_interrupt(
+        &["agent", "interrupt", "a4", "--text", "pause"],
+        interrupting(4),
+        std::iter::repeat_with(|| vec![agent_row(4, "working", true)]),
+    );
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "interrupt_failed");
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("still working"),
+        "{response}"
+    );
+    assert_eq!(response["result"]["outcome"], "failed");
+    assert!(requests.iter().all(|r| r.method != "message.send"));
+    assert!(pauses.iter().sum::<Duration>() >= Duration::from_secs(15));
+
+    let (outcome, response, _, _) = run_interrupt(
+        &["agent", "interrupt", "a4"],
+        interrupting(4),
+        [vec![agent_row(4, "unavailable", true)]],
+    );
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unavailable"),
+        "{response}"
+    );
+
+    let refused = json!({"room_id": 7, "agents": [{"agent_id": 4, "name": "a4", "outcome": "failed", "reason": "agent a4 is unavailable"}]});
+    let (outcome, response, requests, _) = run_interrupt(
+        &["agent", "interrupt", "a4", "--text", "pause"],
+        refused,
+        [],
+    );
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(response["error"]["code"], "interrupt_failed");
+    assert_eq!(requests.len(), 1);
+}
+
+#[test]
+fn a_room_interrupt_reports_every_agent_and_texts_the_stopped_ones() {
+    let receipt = json!({"room_id": 7, "agents": [
+        {"agent_id": 4, "name": "a4", "outcome": "interrupting", "key": "esc"},
+        {"agent_id": 5, "name": "a5", "outcome": "interrupting", "key": "ctrl+c"},
+    ]});
+    let (outcome, response, requests, _) = run_interrupt(
+        &["agent", "interrupt", "--room", "lab", "--text", "pause"],
+        receipt,
+        [
+            vec![agent_row(4, "idle", false), agent_row(5, "working", true)],
+            vec![agent_row(4, "idle", false), agent_row(5, "idle", false)],
+        ],
+    );
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(response["result"]["agents"][0]["outcome"], "stopped");
+    assert_eq!(response["result"]["agents"][1]["outcome"], "stopped");
+    assert_eq!(response["result"]["message_id"], 30);
+    assert_eq!(requests.last().unwrap().params["to"], json!(["4", "5"]));
+}
+
+#[test]
+fn waits_end_with_message_interrupted_when_the_recipient_was_interrupted() {
+    let mut interrupted = recipient(1, "abandoned", false);
+    interrupted["reason"] = json!("interrupted");
+    let (outcome, lines, _, _) = run_async(&[], [status(vec![interrupted.clone()])]);
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(lines[0]["error"]["code"], "message_interrupted");
+    assert!(
+        lines[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("interrupted"),
+        "{lines:?}"
+    );
+    for args in [
+        &["wait", "--message", "19", "--async"][..],
+        &["wait", "--message", "19", "--timeout", "5"][..],
+    ] {
+        let read = status(vec![interrupted.clone()]);
+        let (outcome, response) = run_captured(args, |request, _| {
+            Ok(Response::success(&request.id, read.clone()))
+        });
+        assert_eq!(exit_code(&outcome), Some(1), "{args:?}");
+        assert_eq!(response["error"]["code"], "message_interrupted", "{args:?}");
+    }
+}
+
+#[test]
+fn a_room_interrupt_delivers_follow_up_to_stopped_agents_despite_another_failure() {
+    let receipt = json!({"room_id": 7, "agents": [
+        {"agent_id": 4, "name": "a4", "outcome": "interrupting", "key": "esc"},
+        {"agent_id": 5, "name": "a5", "outcome": "failed", "reason": "The agent has no terminal yet"},
+    ]});
+    let (outcome, response, requests, _) = run_interrupt(
+        &[
+            "agent",
+            "interrupt",
+            "--room",
+            "lab",
+            "--text",
+            "report status",
+        ],
+        receipt,
+        [vec![agent_row(4, "idle", false)]],
+    );
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(response["result"]["agents"][0]["outcome"], "stopped");
+    let sends: Vec<_> = requests
+        .iter()
+        .filter(|r| r.method == "message.send")
+        .collect();
+    assert_eq!(
+        sends.len(),
+        1,
+        "the stopped worker must receive its follow-up despite another worker failing: {response}"
+    );
+    assert_eq!(sends[0].params["to"], json!(["4"]));
+    assert_eq!(sends[0].params["text"], "report status");
+}
+
+#[test]
+fn interrupt_state_reads_are_bounded_by_the_stop_deadline() {
+    let mut output = Vec::new();
+    let outcome = run_with_pause(
+        &["agent", "interrupt", "a4"].map(String::from),
+        &mut output,
+        &mut |request: &Request, timeout| match request.method.as_str() {
+            "agent.interrupt" => Ok(Response::success(&request.id, interrupting(4))),
+            "state" => {
+                assert!(
+                    timeout.is_some_and(|duration| duration <= Duration::from_secs(15)),
+                    "a status read must not outlive the advertised stop deadline: {timeout:?}"
+                );
+                Ok(Response::success(
+                    &request.id,
+                    json!({"agents": [agent_row(4, "idle", false)]}),
+                ))
+            }
+            other => panic!("unexpected {other}"),
+        },
+        |_| {},
+    );
+    assert!(outcome.is_ok());
 }
