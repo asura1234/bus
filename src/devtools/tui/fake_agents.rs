@@ -334,12 +334,13 @@ impl FakeAgent {
             self.end_turn(&prompts[1..]);
         }
         if let Some(payload) = api_error(&self.provider, prompt) {
+            self.hook("StopFailure", Some(&turn), payload.clone());
+            permissions::end_work(&mut out, claude_working);
             let text = payload["last_assistant_message"]
                 .as_str()
                 .unwrap_or_default();
             let _ = write!(out, "  ⎿  {text}\r\n");
             let _ = out.flush();
-            self.hook("StopFailure", Some(&turn), payload);
             self.draw_prompt();
             return None;
         }
