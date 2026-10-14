@@ -11,11 +11,9 @@
 //! Bus writes to the project's `.cursor/hooks.json` and draws Cursor's `→`
 //! composer. All answer every prompt with `fake reply: <prompt>`.
 mod directives;
-mod permissions;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
 use directives::{api_error, dialog_seconds, show_dialog, spin, work_seconds};
-use permissions::pseudo_uuid;
 use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -281,7 +279,6 @@ impl FakeAgent {
             }
             Input::Enter => return None,
             Input::Interrupt => return Some(Typed::Exit),
-            Input::Navigate(_) | Input::OpenQuestion => return None,
         }
         self.redraw();
         None
@@ -289,15 +286,11 @@ impl FakeAgent {
 
     /// Answers `prompt` in one turn; the exit code when interrupted meanwhile.
     fn submit(&mut self, prompt: &str) -> Option<i32> {
-        if let Some(result) = self.fixture_control(prompt) {
-            return result;
-        }
         self.turns += 1;
         let turn = format!("{}-{}", self.session, self.turns);
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
-        let claude_working = permissions::begin_submit(&mut out, &self.provider);
         let mut prompts = vec![prompt.trim().to_owned()];
         if self.live_turn() {
             // Codex and Cursor clear the composer and show their working line
@@ -314,11 +307,6 @@ impl FakeAgent {
             "UserPromptSubmit"
         };
         self.hook(submit, Some(&turn), json!({"prompt": prompt}));
-        if let Some(kind) = permissions::fixture_kind(prompt) {
-            if let Err(code) = self.permission_dialog(kind) {
-                return Some(code);
-            }
-        }
         if let Some(seconds) = dialog_seconds(prompt) {
             show_dialog(seconds);
         }
@@ -330,34 +318,20 @@ impl FakeAgent {
             Some(seconds) => spin(seconds),
             None => {}
         }
-        if self.working.is_some() {
+        if self.live_turn() {
             self.end_turn(&prompts[1..]);
         }
         if let Some(payload) = api_error(&self.provider, prompt) {
-            self.hook("StopFailure", Some(&turn), payload.clone());
-            permissions::end_work(&mut out, claude_working);
             let text = payload["last_assistant_message"]
                 .as_str()
                 .unwrap_or_default();
             let _ = write!(out, "  ⎿  {text}\r\n");
             let _ = out.flush();
+            self.hook("StopFailure", Some(&turn), payload);
             self.draw_prompt();
             return None;
         }
-        let reply = self
-            .permission_reply(prompt)
-            .unwrap_or_else(|| format!("fake reply: {}", prompts.join("\n")));
-        if claude_working {
-            permissions::finish_claude_turn(&mut out, &reply, || {
-                self.hook(
-                    "Stop",
-                    Some(&turn),
-                    json!({"last_assistant_message": reply, "stop_hook_active": false}),
-                );
-            });
-            self.draw_prompt();
-            return None;
-        }
+        let reply = format!("fake reply: {}", prompts.join("\n"));
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();
@@ -696,8 +670,6 @@ enum Input {
     KillLine,
     Enter,
     Interrupt,
-    Navigate(i32),
-    OpenQuestion,
 }
 
 /// Splits raw terminal input into text, Enter, Backspace and Ctrl+C/D,
@@ -766,12 +738,6 @@ fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
                 if sequence == b"\x1b[13u" {
                     flush(&mut text, &mut events);
                     events.push(Input::Enter);
-                } else if sequence == b"\x1b[1;2D" {
-                    flush(&mut text, &mut events);
-                    events.push(Input::OpenQuestion);
-                } else if sequence == b"\x1b[A" || sequence == b"\x1b[B" {
-                    flush(&mut text, &mut events);
-                    events.push(Input::Navigate(if sequence == b"\x1b[A" { -1 } else { 1 }));
                 }
                 i += end + 3;
             }
@@ -795,6 +761,23 @@ fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn pseudo_uuid() -> String {
+    use sha2::Digest as _;
+    let seed = format!("{:?}-{}", std::time::SystemTime::now(), std::process::id());
+    let hex: String = sha2::Sha256::digest(seed.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!(
+        "{}-{}-4{}-a{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[13..16],
+        &hex[17..20],
+        &hex[20..32]
+    )
 }
 
 #[cfg(test)]

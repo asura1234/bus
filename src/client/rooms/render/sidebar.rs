@@ -338,7 +338,6 @@ impl BusUi {
         // and hit targets. Expanded paths supply both height and display lines.
         state
             .agents()
-            .filter(|a| !a.permission_handler)
             .filter(|a| Some(a.room_id) == room)
             .map(|agent| {
                 // MASTER agents show name, provider and orchestrated room only.

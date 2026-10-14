@@ -51,15 +51,7 @@ impl Worker {
                 let option = required(p, "option")?
                     .parse::<u32>()
                     .map_err(|_| "Option must be a number")?;
-                let managed = self.managed_dialog_lease(agent, p)?;
-                if managed {
-                    self.start_managed_answer(agent, required(p, "fingerprint")?)?;
-                }
-                let result = self.choose_dialog_option(agent, option, required(p, "fingerprint")?);
-                if managed {
-                    self.managed_dialog_result(agent, &result)?;
-                }
-                result
+                self.choose_dialog_option(agent, option, required(p, "fingerprint")?)
             }
             "agent.dialog.answer" => {
                 let agent = self.control_agent(required(p, "agent")?, None)?;
@@ -69,53 +61,10 @@ impl Worker {
                     optional_text(p, "text")?
                 };
                 let skip = optional_bool(p, "skip")?;
-                let managed = self.managed_dialog_lease(agent, p)?;
-                if managed {
-                    self.start_managed_answer(agent, required(p, "fingerprint")?)?;
-                }
-                let result = self.answer_dialog(agent, text, skip, required(p, "fingerprint")?);
-                if managed {
-                    self.managed_dialog_result(agent, &result)?;
-                }
-                result
+                self.answer_dialog(agent, text, skip, required(p, "fingerprint")?)
             }
             _ => Err("Unknown method".into()),
         }
-    }
-
-    pub(super) fn validate_permission_fingerprint(
-        &self,
-        worker: AgentId,
-        fingerprint: &str,
-    ) -> Result<(), String> {
-        let claims = decode_dialog_fingerprint(fingerprint)?;
-        let (room, launch, terminal, pane, session) = self.dialog_identity(worker)?;
-        if claims.agent_id != worker
-            || claims.room_id != room
-            || claims.launch_id != launch
-            || claims.terminal_id != terminal
-            || claims.pane_id != pane
-            || claims.session_id != session
-        {
-            return Err("Permission fingerprint belongs to another worker launch".into());
-        }
-        if self
-            .state
-            .permission_assignment(worker)
-            .is_some_and(|a| a.outcome.is_none() && a.episode != claims.dialog_shape)
-        {
-            return Err(
-                "Dialog episode changed; old permission assignment cannot authorize this screen"
-                    .into(),
-            );
-        }
-        Ok(())
-    }
-    fn start_managed_answer(&mut self, worker: AgentId, fingerprint: &str) -> Result<(), String> {
-        self.validate_permission_fingerprint(worker, fingerprint)?;
-        let mut state = self.state.clone();
-        state.permission_answer_attempt(worker, fingerprint)?;
-        self.save(state)
     }
 
     /// The agent's launch identity: launch, terminal and pane are required;
@@ -227,17 +176,10 @@ impl Worker {
         // Inspection resolves an already-notified collapsed episode into its
         // concrete shape; opening the panel does not ask for help a second time.
         if self.state.agent(id).is_some_and(|agent| {
-            matches!(
-                agent.dialog_notice.as_deref(),
-                Some(
-                    crate::agents::dialog::CODEX_PENDING_QUESTION_ID
-                        | super::super::dialogs::BLOCKED
-                )
-            )
+            agent.dialog_notice.as_deref() == Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID)
         }) {
             if let Some(dialog) = &observation.dialog {
                 let mut state = self.state.clone();
-                state.resolve_permission_dialog(id, &dialog.id);
                 state
                     .set_dialog_notice(id, Some(dialog.id.clone()))
                     .map_err(|error| error.to_string())?;

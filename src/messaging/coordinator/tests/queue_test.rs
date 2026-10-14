@@ -50,27 +50,6 @@ fn queued_delete_is_applied_before_background_delivery_of_earlier_submit() {
                 .lock()
                 .unwrap()
                 .push(crate::protocol::api::api_method_name(&method));
-            match &method {
-                Method::TabCreate(params) => {
-                    assert_eq!(params.label.as_deref(), Some("permission handler"));
-                    return Ok(ResponseResult::TabCreated {
-    tab: serde_json::from_value(json!({"tab_id":"handler-tab", "workspace_id":"workspace", "number":2, "label":"permission handler", "focused":false, "pane_count":1, "agent_status":"unknown"})).unwrap(),
-    root_pane: serde_json::from_value(json!({"pane_id":"handler-pane", "terminal_id":"handler-terminal", "workspace_id":"workspace", "tab_id":"handler-tab", "focused":false, "agent_status":"unknown", "revision":1})).unwrap(),
-});
-                }
-                Method::AgentStart(params) => {
-                    assert_eq!(params.kind, "claude");
-                    assert_eq!(params.pane_id, "handler-pane");
-                    let mut info = native_info("handler-pane", "claude", "handler-session");
-                    info.terminal_id = "handler-terminal".into();
-                    info.name = Some(params.name.clone());
-                    return Ok(ResponseResult::AgentStarted {
-                        agent: info,
-                        argv: params.args.clone(),
-                    });
-                }
-                _ => {}
-            }
             if matches!(method, Method::AgentList(_)) {
                 if let Some((commands, agent)) = self.delete_during_poll.take() {
                     commands.send((2, BusCommand::DeleteAgent(agent))).unwrap();
@@ -110,12 +89,7 @@ fn queued_delete_is_applied_before_background_delivery_of_earlier_submit() {
         }
         worker.run(receiver, events, Arc::clone(&snapshots));
         let expected = if during_poll {
-            vec![
-                "tab.create",
-                "agent.start",
-                "agent.list",
-                "pane.close_if_identity",
-            ]
+            vec!["agent.list", "pane.close_if_identity"]
         } else {
             vec!["pane.close_if_identity"]
         };

@@ -141,13 +141,12 @@ impl BusState {
             self.queues.entry(agent_id).or_default().push(request_id);
             request_ids.push(request_id);
         }
-        let prompt_visible = self.prompt_visible(&prompt);
         let room_state = self
             .rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
         // Bus dialog notices are delivery-only (see `Request::delivery_only`).
-        if prompt.author != Author::Bus && prompt_visible {
+        if prompt.author != Author::Bus {
             // An agent's message is news for the developer, like a reply; their own is not.
             if prompt.author != Author::Developer && self.visible_room != Some(room) {
                 room_state.unread_count = room_state.unread_count.saturating_add(1);

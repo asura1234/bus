@@ -147,10 +147,7 @@ impl BusUi {
                     .room(id)
                     .map_or("room", |room| room.name.as_str());
                 let state = &self.snapshot.state;
-                let count = state
-                    .agents()
-                    .filter(|agent| !agent.permission_handler && agent.room_id == id)
-                    .count();
+                let count = state.agents().filter(|agent| agent.room_id == id).count();
                 // The orchestrator lives in MASTER but exists only for this room.
                 let orchestrator = state.orchestrator_of(id).map_or(String::new(), |agent| {
                     format!(" and its orchestrator \"{}\" in MASTER", agent.name)

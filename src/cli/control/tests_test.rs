@@ -108,9 +108,6 @@ const SAMPLES: &[&[&str]] = &[
     ],
     &["agent", "read", "a", "--source", "visible"],
     &["agent", "dialog", "a"],
-    &["agent", "allow-root", "a", "/shared", "--by", "orch"],
-    #[cfg(feature = "dev-tools")]
-    &["agent", "legacy-fixture", "a"],
     &[
         "agent",
         "choose",
@@ -121,21 +118,6 @@ const SAMPLES: &[&[&str]] = &[
         "f",
     ],
     &["agent", "answer", "a", "--skip", "--fingerprint", "f"],
-    &[
-        "agent",
-        "permission-decision",
-        "a",
-        "--handler",
-        "h",
-        "--assignment",
-        "p",
-        "--fingerprint",
-        "unavailable",
-        "--outcome",
-        "routed",
-        "--summary",
-        "unknown screen",
-    ],
     &["agent", "clear", "a"],
     &["agent", "rename", "a", "b"],
     &["agent", "setup-confirm", "a", "--confirm"],
@@ -2258,33 +2240,4 @@ fn rev_b_claude_r5_bounded_wait_fails_on_any_abandoned_request() {
         assert_eq!(exit_code(&outcome), Some(1), "{reason}: {response}");
         assert_eq!(response["error"]["code"], code, "{reason}: {response}");
     }
-}
-
-#[test]
-fn permission_handler_cli_identity_rejects_missing_or_wrong_lease_metadata_after_fallback() {
-    use super::parse::managed_permission_params;
-    assert!(managed_permission_params(
-        "agent.dialog.choose",
-        &json!({"agent":"2","fingerprint":"f","option":"1"}),
-        Some("14")
-    )
-    .is_err());
-    assert!(managed_permission_params(
-        "agent.dialog.answer",
-        &json!({"agent":"2","fingerprint":"f","text":"yes","handler":"15","assignment":"p"}),
-        Some("14")
-    )
-    .is_err());
-    assert!(managed_permission_params(
-        "agent.permission-decision",
-        &json!({"handler":"14","assignment":"p"}),
-        Some("14")
-    )
-    .is_ok());
-    assert!(managed_permission_params(
-        "agent.dialog.choose",
-        &json!({"agent":"2","fingerprint":"f","option":"1"}),
-        None
-    )
-    .is_ok());
 }

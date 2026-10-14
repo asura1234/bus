@@ -2,7 +2,6 @@
 pub(crate) mod agents;
 mod delivery;
 mod expiry;
-mod permissions;
 mod poll;
 mod storage;
 mod worker;

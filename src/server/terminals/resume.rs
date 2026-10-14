@@ -68,7 +68,6 @@ fn for_native_resume(
         session_name,
         config_root,
         project,
-        cwd: cwd.to_path_buf(),
         binary,
     };
     crate::messaging::coordinator::resume::for_native_resume(&context, &facts, plan)

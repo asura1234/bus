@@ -420,33 +420,3 @@ fn docs_written_for_agents_name_no_dev_tool_and_no_dev_flag() {
     }
     std::fs::remove_dir_all(data).unwrap();
 }
-
-#[test]
-fn permission_profile_embedded_docs_keep_orchestrators_on_escalations_and_explain_migration() {
-    for (_, text) in DOCS
-        .iter()
-        .filter(|(name, _)| !name.contains('/') && *name != "workflow-create.md")
-    {
-        assert!(
-            text.contains("permission handler"),
-            "missing handler contract"
-        );
-    }
-    assert!(DEFAULT_PROMPT.contains("Routine safe approvals belong to the permission handler"));
-    let cli = DOCS
-        .iter()
-        .find(|(name, _)| *name == "how-to-bus-cli.md")
-        .unwrap()
-        .1;
-    for required in [
-        "launch_cwd",
-        "scratch_dir",
-        "90 seconds",
-        "latest 10",
-        "legacy",
-        "additive",
-        "BUS_PERMISSION_HANDLER_ID",
-    ] {
-        assert!(cli.contains(required), "missing {required}");
-    }
-}

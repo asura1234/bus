@@ -275,12 +275,6 @@ pub(crate) enum RoomKind {
 }
 
 pub(crate) const MASTER_ROOM_NAME: &str = "MASTER";
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct AllowedRoot {
-    pub(crate) path: PathBuf,
-    pub(crate) granted_by: AgentId,
-    pub(crate) granted_at_ms: u64,
-}
 /// The `send --to` selector for a message to the developer; no agent may take it.
 pub(crate) const DEVELOPER_RECIPIENT: &str = "human";
 /// Never produced by the ID allocator, which starts at 1, so adding MASTER to a
@@ -298,33 +292,7 @@ pub(crate) struct RoomAgent {
     /// Shown instead of `color` in color blind mode; allocated the same way.
     #[serde(default)]
     pub(crate) accessible_color: [u8; 3],
-    /// Bus-owned, hidden service; old saved agents remain ordinary workers.
-    #[serde(default)]
-    pub(crate) permission_handler: bool,
-    #[serde(default)]
-    pub(crate) permission_reset_required: bool,
-    #[serde(default)]
-    pub(crate) permission_clear_started: bool,
-    #[serde(default)]
-    pub(crate) permission_reset_at_ms: Option<u64>,
     pub(crate) provider: Provider,
-    /// Frozen creation/launch authority; runtime cwd observations never change it.
-    #[serde(default)]
-    pub(crate) launch_cwd: Option<PathBuf>,
-    /// Current registration or a completed one-time legacy migration attempt.
-    /// A missing root must not be adopted from a later runtime cwd observation.
-    #[serde(default)]
-    pub(crate) launch_scope_initialized: bool,
-    /// Legacy authority frozen from the saved cwd before runtime polling.
-    #[serde(default)]
-    pub(crate) launch_cwd_backfilled: bool,
-    #[serde(default)]
-    pub(crate) allowed_roots: Vec<AllowedRoot>,
-    /// Private launch resource, retained while terminal ownership is uncertain.
-    #[serde(default)]
-    pub(crate) scratch_dir: Option<PathBuf>,
-    #[serde(default)]
-    pub(crate) launch_profile: Option<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,

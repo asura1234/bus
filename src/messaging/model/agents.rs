@@ -11,33 +11,6 @@ use {
 };
 
 impl BusState {
-    pub(crate) fn grant_agent_root(
-        &mut self,
-        id: AgentId,
-        by: AgentId,
-        path: PathBuf,
-        now: u64,
-    ) -> Result<(), String> {
-        let agent = self.agent(id).ok_or("Unknown worker")?;
-        if agent.permission_handler || agent.orchestrates.is_some() || agent.deletion_pending {
-            return Err("Only active ordinary workers can receive roots".into());
-        }
-        if self
-            .orchestrator_of(agent.room_id)
-            .is_none_or(|a| a.id != by || a.deletion_pending)
-        {
-            return Err("Root grant requires this worker room's orchestrator".into());
-        }
-        let agent = self.agents.get_mut(&id).ok_or("Unknown worker")?;
-        if !agent.allowed_roots.iter().any(|g| g.path == path) {
-            agent.allowed_roots.push(super::types::AllowedRoot {
-                path,
-                granted_by: by,
-                granted_at_ms: now,
-            });
-        }
-        Ok(())
-    }
     pub(crate) fn create_agent(
         &mut self,
         room_id: RoomId,
@@ -69,17 +42,7 @@ impl BusState {
                 name,
                 color,
                 accessible_color,
-                permission_handler: false,
-                permission_reset_required: false,
-                permission_clear_started: false,
-                permission_reset_at_ms: None,
                 provider,
-                launch_cwd: cwd.canonicalize().ok(),
-                launch_scope_initialized: true,
-                launch_cwd_backfilled: false,
-                allowed_roots: Vec::new(),
-                scratch_dir: None,
-                launch_profile: None,
                 cwd,
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
@@ -108,23 +71,6 @@ impl BusState {
         );
         self.queues.insert(id, Vec::new());
         Ok(id)
-    }
-
-    pub(crate) fn set_agent_launch_scope(
-        &mut self,
-        id: AgentId,
-        cwd: PathBuf,
-        scratch: Option<PathBuf>,
-        profile: String,
-    ) -> Result<(), ModelError> {
-        let agent = self
-            .agents
-            .get_mut(&id)
-            .ok_or(ModelError::UnknownAgent(id))?;
-        agent.launch_cwd = Some(cwd);
-        agent.scratch_dir = scratch;
-        agent.launch_profile = Some(profile);
-        Ok(())
     }
 
     pub(crate) fn record_compaction(&mut self, id: AgentId, at_ms: u64) -> Result<(), ModelError> {
@@ -161,9 +107,6 @@ impl BusState {
 
     pub(crate) fn rename_agent(&mut self, id: AgentId, name: &str) -> Result<(), ModelError> {
         let name = agent_name(name)?;
-        if self.agent(id).is_some_and(|a| a.permission_handler) {
-            return Err(ModelError::ReservedAgentName);
-        }
         self.agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
@@ -426,9 +369,7 @@ impl BusState {
 
 fn agent_name(name: &str) -> Result<String, ModelError> {
     let name = normalized_name(name)?;
-    if name.eq_ignore_ascii_case(DEVELOPER_RECIPIENT)
-        || name.eq_ignore_ascii_case("permission handler")
-    {
+    if name.eq_ignore_ascii_case(DEVELOPER_RECIPIENT) {
         return Err(ModelError::ReservedAgentName);
     }
     Ok(name)

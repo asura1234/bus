@@ -46,13 +46,13 @@ impl BusUi {
             .map(|recalled| (recalled.at_ms, recalled.text.as_str()))
             .collect();
         let prompts = state
-            .room_requests(room)
+            .requests()
+            .filter(|request| request.room_id == room && !request.delivery_only())
             .map(|request| &request.prompt)
             .chain(
                 state
                     .room(room)
-                    .and_then(|room| room.latest_prompt.as_ref())
-                    .filter(|prompt| state.prompt_visible(prompt)),
+                    .and_then(|room| room.latest_prompt.as_ref()),
             );
         stamped.extend(prompts.map(|prompt| (prompt.submitted_at_ms, prompt.text.as_str())));
         // Stable, so same-millisecond entries keep local-before-persisted order.

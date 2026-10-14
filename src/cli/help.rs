@@ -14,7 +14,8 @@ pub(crate) fn write_stdout_line(arguments: std::fmt::Arguments<'_>) {
 
 /// Agent-tier commands, which every session answers. `bus --help` prints only
 /// these; the tier of each command is `coordinator::control::METHODS`.
-pub const AGENT_HELP: &str = "Commands (connect to the running Bus in BUS_DATA_DIR; they never start one):
+pub const AGENT_HELP: &str =
+    "Commands (connect to the running Bus in BUS_DATA_DIR; they never start one):
   state
   room create NAME
   room rename ROOM NAME
@@ -26,10 +27,8 @@ pub const AGENT_HELP: &str = "Commands (connect to the running Bus in BUS_DATA_D
   agent read AGENT --source visible
   agent read AGENT [--source recent] --lines N
   agent dialog AGENT
-  agent allow-root AGENT PATH --by ORCHESTRATOR
   agent choose AGENT --option N --fingerprint FINGERPRINT
   agent answer AGENT (--text TEXT | --skip) --fingerprint FINGERPRINT
-  agent permission-decision AGENT --handler HANDLER --assignment TOKEN --fingerprint F --outcome approved|escalated|routed --summary TEXT
   agent clear AGENT
   agent rename AGENT NAME
   agent setup-confirm AGENT --confirm
@@ -57,9 +56,7 @@ It returns a single-use fingerprint. agent choose selects a native row with Up/D
 including Claude checkbox toggles and Submit/Next; its question-tab options send Left/Right.
 Use the returned option numbers. agent answer pastes
 text and presses Enter, or skips the question. Both require the exact observed dialog.
-Bus sends every blocked notice to its hidden Claude permission handler first; only concise escalations, routed choices or unavailable-handler fallbacks reach the work room orchestrator.
-Managed choose/answer require --handler ID --assignment TOKEN; typed decisions and bounded recent audit appear in state.
-The handler clears with /clear between settled assignments and keeps its launch policy; assignments expire after 90 seconds.
+Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.

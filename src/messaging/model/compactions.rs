@@ -13,8 +13,7 @@ impl BusState {
             self.agents
                 .values()
                 .filter(|agent| {
-                    !agent.permission_handler
-                        && !agent.deletion_pending
+                    !agent.deletion_pending
                         && agent.orchestrates.is_none()
                         && self.rooms.get(&agent.room_id).is_some_and(|room| {
                             room.kind == RoomKind::Work && !room.deletion_pending

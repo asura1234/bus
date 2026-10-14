@@ -180,7 +180,7 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
                 prompt.id,
                 (
                     prompt.recipient_ids.iter().copied().collect(),
-                    prompt.text.split("; episode ").next().unwrap().to_owned(),
+                    prompt.text.clone(),
                 ),
             )
         })
@@ -190,7 +190,7 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
 
 fn expected_blocked(worker: &Worker, id: AgentId) -> String {
     format!(
-        "{} (agent {}): Fallback; permission handler unavailable; Blocked, needs help to continue.; Inspect: bus agent dialog {}",
+        "{} (agent {}). Blocked, needs help to continue.\nInspect: bus agent dialog {}",
         worker.state.agent(id).unwrap().name,
         id.0,
         id.0
@@ -226,18 +226,19 @@ fn polls(worker: &mut Worker, count: usize) {
 }
 
 #[test]
-fn a_blocked_screen_without_an_open_dialog_uses_unavailable_handler_fallback() {
+fn a_blocked_screen_without_an_open_dialog_does_not_queue_an_orchestrator_request() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
-        [(
-            vec![orchestrator.unwrap()],
-            expected_blocked(&worker, agent)
-        )]
+        [(Vec::new(), expected_blocked(&worker, agent))]
     );
-    assert_eq!(worker.state.queued_requests(orchestrator.unwrap()).len(), 1);
+    assert!(worker
+        .state
+        .queued_requests(orchestrator.unwrap())
+        .is_empty());
+    assert_eq!(worker.state.requests().count(), 0);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -339,36 +340,29 @@ fn without_an_orchestrator_the_blocked_worker_tells_the_developer() {
 }
 
 #[test]
-fn a_blocked_orchestrator_fallback_tells_the_developer_once_in_work_room() {
+fn a_blocked_orchestrator_tells_the_developer_once_in_master() {
     for wait in ["dialog-id", "question-id", "trust-id", BLOCKED] {
         let (mut worker, _, room, orchestrator, _, dir) = worker(true);
         let orchestrator = orchestrator.unwrap();
-        let work_room = room;
+        let master = worker.state.master_room().unwrap().id;
         worker
             .notify_dialogs(vec![(orchestrator, Some(wait.into()))])
             .unwrap();
-        assert!(sent_by(&worker, work_room, orchestrator).is_empty());
+        assert!(sent_by(&worker, master, orchestrator).is_empty());
         notify_steady(&mut worker, orchestrator, Some(wait));
         assert_eq!(
-            sent_by(&worker, work_room, orchestrator),
+            sent_by(&worker, master, orchestrator),
             [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
-        let work_room_state = worker.state.room(work_room).unwrap();
-        let notice = &work_room_state.notices[0];
+        let master_room = worker.state.room(master).unwrap();
+        let notice = &master_room.notices[0];
         assert_eq!(notice.author, Author::Agent(orchestrator));
         assert!(notice.files.is_empty());
-        assert_eq!(work_room_state.unread_count, 1);
-        // The fallback is visible only in the work room and may ring there.
-        assert_eq!(
-            work_room_state.latest_prompt.as_ref().unwrap().id,
-            notice.id
-        );
-        assert!(worker
-            .state
-            .room(worker.state.master_room().unwrap().id)
-            .unwrap()
-            .notices
-            .is_empty());
+        assert_eq!(master_room.unread_count, 1);
+        // The agent-authored latest prompt uses the existing MASTER ring path.
+        assert_eq!(master_room.latest_prompt.as_ref().unwrap().id, notice.id);
+        assert!(master_room.sound_enabled());
+        assert!(worker.state.room(room).unwrap().notices.is_empty());
         assert_eq!(worker.state.requests().count(), 0);
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
@@ -385,17 +379,17 @@ fn notify_steady(worker: &mut Worker, agent: AgentId, wait: Option<&str>) {
 
 #[test]
 fn repeating_an_orchestrators_dialog_in_the_same_episode_adds_no_message() {
-    let (mut worker, _, room, orchestrator, _, dir) = worker(true);
+    let (mut worker, _, _, orchestrator, _, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
-    let work_room = room;
+    let master = worker.state.master_room().unwrap().id;
     for wait in ["dialog-id", "dialog-id", BLOCKED, "dialog-id"] {
         notify_steady(&mut worker, orchestrator, Some(wait));
     }
     assert_eq!(
-        sent_by(&worker, work_room, orchestrator),
+        sent_by(&worker, master, orchestrator),
         [(Vec::new(), expected_blocked(&worker, orchestrator))]
     );
-    assert_eq!(worker.state.room(work_room).unwrap().unread_count, 1);
+    assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -418,8 +412,9 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
                 state
                     .set_agent_runtime_identity(orchestrator, identity)
                     .unwrap();
+                let master = state.master_room().unwrap().id;
                 worker.save(state).unwrap();
-                (orchestrator, room, Vec::new())
+                (orchestrator, master, Vec::new())
             } else {
                 (agent, room, vec![orchestrator])
             };
@@ -492,19 +487,19 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
 
 #[test]
 fn an_unblocked_orchestrator_reports_a_new_dialog_as_a_new_episode() {
-    let (mut worker, _, room, orchestrator, _, dir) = worker(true);
+    let (mut worker, _, _, orchestrator, _, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
-    let work_room = room;
+    let master = worker.state.master_room().unwrap().id;
     notify_steady(&mut worker, orchestrator, Some("dialog-id"));
     notify_steady(&mut worker, orchestrator, None);
-    assert_eq!(sent_by(&worker, work_room, orchestrator).len(), 1);
+    assert_eq!(sent_by(&worker, master, orchestrator).len(), 1);
     notify_steady(&mut worker, orchestrator, Some("question-id"));
     let blocked = (Vec::new(), expected_blocked(&worker, orchestrator));
     assert_eq!(
-        sent_by(&worker, work_room, orchestrator),
+        sent_by(&worker, master, orchestrator),
         [blocked.clone(), blocked]
     );
-    assert_eq!(worker.state.room(work_room).unwrap().unread_count, 2);
+    assert_eq!(worker.state.room(master).unwrap().unread_count, 2);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -512,9 +507,9 @@ fn an_unblocked_orchestrator_reports_a_new_dialog_as_a_new_episode() {
 #[test]
 fn a_flicker_does_not_repeat_an_orchestrators_blocked_message() {
     for wait in ["dialog-id", BLOCKED] {
-        let (mut worker, _, room, orchestrator, _, dir) = worker(true);
+        let (mut worker, _, _, orchestrator, _, dir) = worker(true);
         let orchestrator = orchestrator.unwrap();
-        let work_room = room;
+        let master = worker.state.master_room().unwrap().id;
         notify_steady(&mut worker, orchestrator, Some(wait));
         worker.notify_dialogs(vec![(orchestrator, None)]).unwrap();
         notify_steady(&mut worker, orchestrator, Some(wait));
@@ -524,10 +519,10 @@ fn a_flicker_does_not_repeat_an_orchestrators_blocked_message() {
             notify_steady(&mut worker, orchestrator, Some(wait));
         }
         assert_eq!(
-            sent_by(&worker, work_room, orchestrator),
+            sent_by(&worker, master, orchestrator),
             [(Vec::new(), expected_blocked(&worker, orchestrator))]
         );
-        assert_eq!(worker.state.room(work_room).unwrap().unread_count, 1);
+        assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1053,6 +1048,3 @@ fn message_status_saves_once_when_several_recipients_dialogs_closed() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
-
-#[path = "permissions_test.rs"]
-mod permission_tests;

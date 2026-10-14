@@ -11,14 +11,6 @@ impl Worker {
         command: BusCommand,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
-        if let BusCommand::RenameAgent(id, _)
-        | BusCommand::DeleteAgent(id)
-        | BusCommand::CompleteHookSetup(id) = &command
-        {
-            if self.state.agent(*id).is_some_and(|a| a.permission_handler) {
-                return Err("Permission handler is Bus-owned".into());
-            }
-        }
         let mut state = self.state.clone();
         let queued = matches!(command, BusCommand::SubmitQueued(_));
         let result = match command {
