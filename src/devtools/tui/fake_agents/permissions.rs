@@ -19,6 +19,12 @@ pub(super) fn begin_work(out: &mut impl Write, active: bool) {
     }
 }
 
+pub(super) fn begin_submit(out: &mut impl Write, provider: &str) -> bool {
+    let active = provider == "claude";
+    begin_work(out, active);
+    active
+}
+
 pub(super) fn end_work(out: &mut impl Write, active: bool) {
     if active {
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
@@ -28,7 +34,7 @@ pub(super) fn end_work(out: &mut impl Write, active: bool) {
     }
 }
 
-pub(super) fn finish_service_turn(out: &mut impl Write, reply: &str, stop: impl FnOnce()) {
+pub(super) fn finish_claude_turn(out: &mut impl Write, reply: &str, stop: impl FnOnce()) {
     // The fake's input loop cannot process /clear until its synchronous hook
     // returns. Keep the native busy frame until that boundary, like a provider
     // that is still finishing its turn, rather than advertising false readiness.
@@ -433,6 +439,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn permission_fixture_claude_worker_shows_busy_before_submit_hooks() {
+        let mut bytes = super::super::submitted("fake:permission safe").into_bytes();
+        begin_submit(&mut bytes, "claude");
+        let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
+        terminal.write(&bytes);
+        let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
+        let detected = crate::agents::manifest::detect_with_osc(
+            crate::agents::AgentKind::Claude,
+            crate::agents::manifest::DetectionInput {
+                screen: &screen,
+                osc_title: "",
+                osc_progress: "",
+            },
+        );
+        assert!(
+            detected.visible_working,
+            "ordinary fake Claude cannot confirm Enter while its submit hook blocks: {screen}"
+        );
+    }
+
+    #[test]
     fn permission_fixture_stop_hook_keeps_native_service_busy_until_return() {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -449,7 +476,7 @@ mod tests {
         let bytes = Rc::new(RefCell::new(Vec::new()));
         let mut out = Captured(Rc::clone(&bytes));
         begin_work(&mut out, true);
-        finish_service_turn(&mut out, "assignment settled", || {
+        finish_claude_turn(&mut out, "assignment settled", || {
             let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
             terminal.write(&bytes.borrow());
             let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
