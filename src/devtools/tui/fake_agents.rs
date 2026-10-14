@@ -281,7 +281,7 @@ impl FakeAgent {
             }
             Input::Enter => return None,
             Input::Interrupt => return Some(Typed::Exit),
-            Input::Navigate(_) | Input::OpenQuestion => return None,
+            Input::Navigate(_) => return None,
         }
         self.redraw();
         None
@@ -297,7 +297,8 @@ impl FakeAgent {
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
-        let claude_working = permissions::begin_submit(&mut out, &self.provider);
+        let permission_working = permissions::service_prompt(&self.provider, prompt);
+        permissions::begin_work(&mut out, permission_working);
         let mut prompts = vec![prompt.trim().to_owned()];
         if self.live_turn() {
             // Codex and Cursor clear the composer and show their working line
@@ -334,30 +335,19 @@ impl FakeAgent {
             self.end_turn(&prompts[1..]);
         }
         if let Some(payload) = api_error(&self.provider, prompt) {
-            self.hook("StopFailure", Some(&turn), payload.clone());
-            permissions::end_work(&mut out, claude_working);
             let text = payload["last_assistant_message"]
                 .as_str()
                 .unwrap_or_default();
             let _ = write!(out, "  ⎿  {text}\r\n");
             let _ = out.flush();
+            self.hook("StopFailure", Some(&turn), payload);
             self.draw_prompt();
             return None;
         }
         let reply = self
             .permission_reply(prompt)
             .unwrap_or_else(|| format!("fake reply: {}", prompts.join("\n")));
-        if claude_working {
-            permissions::finish_claude_turn(&mut out, &reply, || {
-                self.hook(
-                    "Stop",
-                    Some(&turn),
-                    json!({"last_assistant_message": reply, "stop_hook_active": false}),
-                );
-            });
-            self.draw_prompt();
-            return None;
-        }
+        permissions::end_work(&mut out, permission_working);
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();
@@ -697,7 +687,6 @@ enum Input {
     Enter,
     Interrupt,
     Navigate(i32),
-    OpenQuestion,
 }
 
 /// Splits raw terminal input into text, Enter, Backspace and Ctrl+C/D,
@@ -766,9 +755,6 @@ fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
                 if sequence == b"\x1b[13u" {
                     flush(&mut text, &mut events);
                     events.push(Input::Enter);
-                } else if sequence == b"\x1b[1;2D" {
-                    flush(&mut text, &mut events);
-                    events.push(Input::OpenQuestion);
                 } else if sequence == b"\x1b[A" || sequence == b"\x1b[B" {
                     flush(&mut text, &mut events);
                     events.push(Input::Navigate(if sequence == b"\x1b[A" { -1 } else { 1 }));

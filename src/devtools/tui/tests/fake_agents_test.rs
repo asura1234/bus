@@ -1,54 +1,5 @@
 use super::*;
 
-#[cfg(unix)]
-#[test]
-fn fake_claude_api_failure_returns_to_native_idle_screen() {
-    use std::os::fd::AsRawFd;
-    struct RestoreStdout(i32);
-    impl Drop for RestoreStdout {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dup2(self.0, libc::STDOUT_FILENO);
-                libc::close(self.0);
-            }
-        }
-    }
-    let path = std::env::temp_dir().join(format!(
-        "bus-fake-api-failure-screen-{}-{}",
-        std::process::id(),
-        crate::utils::time::now_ns()
-    ));
-    let file = std::fs::File::create(&path).unwrap();
-    std::io::stdout().flush().unwrap();
-    let saved = unsafe { libc::dup(libc::STDOUT_FILENO) };
-    assert!(saved >= 0);
-    let restore = RestoreStdout(saved);
-    assert!(unsafe { libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO) } >= 0);
-    let mut agent = FakeAgent::new("claude", Value::Null);
-    let result = agent.submit("fake:api-error");
-    std::io::stdout().flush().unwrap();
-    drop(restore);
-    assert_eq!(result, None);
-    let bytes = std::fs::read(&path).unwrap();
-    std::fs::remove_file(path).unwrap();
-    let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
-    terminal.write(&bytes);
-    let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
-    assert!(screen.contains("API Error"));
-    let detection = crate::agents::manifest::detect_with_osc(
-        crate::agents::AgentKind::Claude,
-        crate::agents::manifest::DetectionInput {
-            screen: &screen,
-            osc_title: "",
-            osc_progress: "",
-        },
-    );
-    assert!(
-        !detection.visible_working,
-        "completed failed turn remains working: {screen}"
-    );
-}
-
 #[test]
 fn permission_fixture_clear_rebinds_without_a_turn() {
     let mut agent = FakeAgent::new("claude", Value::Null);

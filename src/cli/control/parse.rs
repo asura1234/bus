@@ -287,13 +287,6 @@ fn agent_cli() -> Command {
                 ),
         )
         .subcommand(subcommand("dialog").arg(value_arg("agent").required(true)))
-        .subcommand(subcommand("legacy-fixture").arg(value_arg("agent").required(true)))
-        .subcommand(
-            subcommand("allow-root")
-                .arg(value_arg("agent").required(true))
-                .arg(value_arg("path").required(true))
-                .arg(option("by")),
-        )
         .subcommand(
             subcommand("choose")
                 .arg(value_arg("agent").required(true))
@@ -358,14 +351,6 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
             json!({"agent": required(args, "agent")?, "name": required(args, "name")?}),
         ),
         Some(("add", args)) => return parse_agent_add(args),
-        Some(("legacy-fixture", args)) => (
-            "agent.legacy-fixture",
-            json!({"agent":required(args,"agent")?}),
-        ),
-        Some(("allow-root", args)) => (
-            "agent.allow-root",
-            json!({"agent":required(args,"agent")?, "path":required(args,"path")?, "by":required(args,"by")?}),
-        ),
         Some(("read", args)) => return parse_agent_read(args),
         Some(("dialog", args)) => (
             "agent.dialog.observe",

@@ -108,9 +108,6 @@ const SAMPLES: &[&[&str]] = &[
     ],
     &["agent", "read", "a", "--source", "visible"],
     &["agent", "dialog", "a"],
-    &["agent", "allow-root", "a", "/shared", "--by", "orch"],
-    #[cfg(feature = "dev-tools")]
-    &["agent", "legacy-fixture", "a"],
     &[
         "agent",
         "choose",

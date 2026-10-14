@@ -11,33 +11,6 @@ use {
 };
 
 impl BusState {
-    pub(crate) fn grant_agent_root(
-        &mut self,
-        id: AgentId,
-        by: AgentId,
-        path: PathBuf,
-        now: u64,
-    ) -> Result<(), String> {
-        let agent = self.agent(id).ok_or("Unknown worker")?;
-        if agent.permission_handler || agent.orchestrates.is_some() || agent.deletion_pending {
-            return Err("Only active ordinary workers can receive roots".into());
-        }
-        if self
-            .orchestrator_of(agent.room_id)
-            .is_none_or(|a| a.id != by || a.deletion_pending)
-        {
-            return Err("Root grant requires this worker room's orchestrator".into());
-        }
-        let agent = self.agents.get_mut(&id).ok_or("Unknown worker")?;
-        if !agent.allowed_roots.iter().any(|g| g.path == path) {
-            agent.allowed_roots.push(super::types::AllowedRoot {
-                path,
-                granted_by: by,
-                granted_at_ms: now,
-            });
-        }
-        Ok(())
-    }
     pub(crate) fn create_agent(
         &mut self,
         room_id: RoomId,
@@ -75,9 +48,6 @@ impl BusState {
                 permission_reset_at_ms: None,
                 provider,
                 launch_cwd: cwd.canonicalize().ok(),
-                launch_scope_initialized: true,
-                launch_cwd_backfilled: false,
-                allowed_roots: Vec::new(),
                 scratch_dir: None,
                 launch_profile: None,
                 cwd,

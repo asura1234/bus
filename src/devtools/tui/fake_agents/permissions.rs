@@ -19,12 +19,6 @@ pub(super) fn begin_work(out: &mut impl Write, active: bool) {
     }
 }
 
-pub(super) fn begin_submit(out: &mut impl Write, provider: &str) -> bool {
-    let active = provider == "claude";
-    begin_work(out, active);
-    active
-}
-
 pub(super) fn end_work(out: &mut impl Write, active: bool) {
     if active {
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
@@ -34,46 +28,16 @@ pub(super) fn end_work(out: &mut impl Write, active: bool) {
     }
 }
 
-pub(super) fn finish_claude_turn(out: &mut impl Write, reply: &str, stop: impl FnOnce()) {
-    // The fake's input loop cannot process /clear until its synchronous hook
-    // returns. Keep the native busy frame until that boundary, like a provider
-    // that is still finishing its turn, rather than advertising false readiness.
-    stop();
-    end_work(out, true);
-    let _ = write!(out, "⏺ {}\r\n", reply.replace('\n', "\r\n  "));
-    let _ = out.flush();
-}
-
 pub(super) fn fixture_kind(prompt: &str) -> Option<&str> {
     let kind = prompt.strip_prefix("fake:permission ")?.trim();
-    [
-        "safe",
-        "collapsed",
-        "shared",
-        "visible-script",
-        "truncated",
-        "gh-read",
-        "gh-post",
-        "master-push",
-        "destructive",
-        "question",
-    ]
-    .contains(&kind)
-    .then_some(kind)
+    ["safe", "destructive", "question"]
+        .contains(&kind)
+        .then_some(kind)
 }
 
 fn screen(kind: &str) -> String {
-    if kind == "collapsed" {
-        return "• Working (0s • esc to interrupt)\r\n\r\n• Queued follow-up inputs\r\n  ? 1 question\r\n    ⇧← to answer\r\n\r\n› Ask Codex to do anything\r\n\r\n  gpt-fake · fake codex\r\n  ? for shortcuts\r\n".into();
-    }
     let title = match kind {
-        "safe" => "Would you like to run the following command?\r\n\r\n$ CARGO_TARGET_DIR=./target cargo test permission_safe_probe --locked",
-        "shared" => "Would you like to run the following command?\r\n\r\n$ printf permission-shared > ../shared/permission-probe",
-        "visible-script" => "Would you like to run the following command?\r\n\r\n$ python3 -c 'from pathlib import Path; Path(\"permission-probe\").write_text(\"safe\")'",
-        "truncated" => "Would you like to run the following command?\r\n\r\n$ python3 -c 'from pathlib import Path; ...'\r\n51 more lines hidden",
-        "gh-read" => "Would you like to run the following command?\r\n\r\n$ gh api repos/example/project/pulls --method GET",
-        "gh-post" => "Would you like to run the following command?\r\n\r\n$ gh api repos/example/project/issues --method POST -f title=publish",
-        "master-push" => "Would you like to run the following command?\r\n\r\n$ git push origin HEAD:master",
+        "safe" => "Would you like to run the following command?\r\n\r\n$ cargo test permission_safe_probe --locked",
         "destructive" => "Would you like to run the following command?\r\n\r\n$ rm -rf /outside-worker-worktree/important-data",
         _ => "Which design should the worker use?",
     };
@@ -109,22 +73,12 @@ impl FakeAgent {
         if self.live_turn() {
             self.end_turn(&[]);
         }
-        let mut rendered = if self.provider == "claude" {
-            screen(kind)
-                .replace(
-                    "Would you like to run the following command?",
-                    "Do you want to proceed?",
-                )
-                .replace("› 1.", "❯ 1.")
-        } else {
-            screen(kind)
-        };
+        let rendered = screen(kind);
         let mut out = std::io::stdout();
         let _ = write!(out, "{rendered}");
         let _ = out.flush();
         let started = Instant::now();
         let mut selected = 1i32;
-        let mut collapsed = kind == "collapsed";
         while started.elapsed() < Duration::from_secs(600) {
             let bytes = match self
                 .input
@@ -138,17 +92,7 @@ impl FakeAgent {
             self.pending.extend(bytes);
             for input in drain_input(&mut self.pending) {
                 match input {
-                    Input::OpenQuestion if collapsed => {
-                        let rows = rendered.matches("\r\n").count();
-                        rendered = screen("safe");
-                        collapsed = false;
-                        let _ = write!(out, "\x1b[{rows}A\r\x1b[J{rendered}");
-                        let _ = out.flush();
-                    }
-                    Input::Enter
-                        if !collapsed
-                            && (!["safe", "collapsed"].contains(&kind) || selected == 1) =>
-                    {
+                    Input::Enter if kind != "safe" || selected == 1 => {
                         let rows = rendered.matches("\r\n").count();
                         let _ = write!(out, "\x1b[{rows}A\r\x1b[J");
                         let _ = out.flush();
@@ -178,73 +122,11 @@ impl FakeAgent {
             return None;
         }
         let handler = std::env::var("BUS_PERMISSION_HANDLER_ID").ok()?;
-        Some(
-            match validate_service_launch().and_then(|()| service_decision(&handler, prompt)) {
-                Ok(outcome) => format!("Permission fixture completed: {outcome}."),
-                Err(error) => format!("Permission fixture failed: {error}"),
-            },
-        )
+        Some(match service_decision(&handler, prompt) {
+            Ok(outcome) => format!("Permission fixture completed: {outcome}."),
+            Err(error) => format!("Permission fixture failed: {error}"),
+        })
     }
-}
-
-fn validate_service_launch() -> Result<(), String> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let path = super::settings_path(&args).ok_or("Service settings missing")?;
-    let settings: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    let allow = settings["permissions"]["allow"]
-        .as_array()
-        .ok_or("Service allowlist missing")?;
-    for rule in [
-        "Read",
-        "Glob",
-        "Grep",
-        "Bash(cat *)",
-        "Bash(ls *)",
-        "Bash(realpath *)",
-        "Bash(grep *)",
-        "Bash(head *)",
-        "Bash(test *)",
-    ] {
-        if !allow.contains(&json!(rule)) {
-            return Err(format!("Service inspection would prompt: missing {rule}"));
-        }
-    }
-    if settings["permissions"]["defaultMode"] != "dontAsk"
-        || !args
-            .windows(2)
-            .any(|a| a == ["--permission-mode", "dontAsk"])
-        || !args
-            .windows(2)
-            .any(|a| a == ["--tools", "Read,Glob,Grep,Bash"])
-    {
-        return Err("Service unlisted work can still prompt".into());
-    }
-    let binary = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let prefix = crate::agents::providers::launch::profile::cli_prefix(&binary);
-    for family in [
-        "agent dialog",
-        "agent choose",
-        "agent answer",
-        "agent permission-decision",
-    ] {
-        if !allow.contains(&json!(format!("Bash({prefix} {family} *)"))) {
-            return Err(format!("Service protocol would prompt: {family}"));
-        }
-    }
-    if !allow.contains(&json!(format!("Bash({prefix} state)"))) {
-        return Err("Service state would prompt".into());
-    }
-    let mut trace = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("fake-permission-cli.ndjson")
-        .map_err(|e| e.to_string())?;
-    writeln!(trace, "{}", json!({"service_profile_validated":true,"approval_mode":"dontAsk","available_tools":"Read,Glob,Grep,Bash"}))
-        .map_err(|e| e.to_string())
 }
 
 fn bus(args: &[&str]) -> Result<Value, String> {
@@ -305,11 +187,7 @@ fn service_decision_with(
     let worker = assignment["worker"].to_string();
     let observed = call(&["agent", "dialog", &worker])?;
     let text = observed["dialog"]["text"].as_str().unwrap_or_default();
-    let (mut outcome, mut summary) = fixture_decision(text);
-    if outcome == "approved" && !fixture_scope_valid(&state, assignment, text) {
-        outcome = "escalated";
-        summary = "fixture command lacks a canonical allowed root";
-    }
+    let (outcome, summary) = fixture_decision(text);
     let fingerprint = observed["fingerprint"].as_str().unwrap_or("unavailable");
     if outcome == "approved" {
         let answer = call(&[
@@ -348,30 +226,8 @@ fn service_decision_with(
 }
 
 fn fixture_decision(text: &str) -> (&'static str, &'static str) {
-    if text.contains("$ CARGO_TARGET_DIR=./target cargo test permission_safe_probe --locked") {
+    if text.contains("$ cargo test permission_safe_probe --locked") {
         ("approved", "safe worker test command")
-    } else if text.contains("$ printf permission-shared > ../shared/permission-probe") {
-        ("approved", "write inside explicit granted shared root")
-    } else if text.contains(
-        "$ python3 -c 'from pathlib import Path; Path(\"permission-probe\").write_text(\"safe\")'",
-    ) {
-        (
-            "approved",
-            "complete visible script writes inside worker root",
-        )
-    } else if text.contains("$ gh api repos/example/project/pulls --method GET") {
-        (
-            "approved",
-            "read-only GitHub GET without fields or credentials",
-        )
-    } else if text.contains("51 more lines hidden")
-        || text.contains("--method POST")
-        || text.contains("HEAD:master")
-    {
-        (
-            "escalated",
-            "opaque script, GitHub mutation or protected master push",
-        )
     } else if text.contains("$ rm -rf /outside-worker-worktree/important-data") {
         (
             "escalated",
@@ -383,38 +239,6 @@ fn fixture_decision(text: &str) -> (&'static str, &'static str) {
             "not permission-related; worker choice or unknown screen needs orchestrator decision",
         )
     }
-}
-
-fn fixture_scope_valid(state: &Value, assignment: &Value, text: &str) -> bool {
-    let Some(worker) = state["agents"]
-        .as_array()
-        .and_then(|agents| agents.iter().find(|a| a["id"] == assignment["worker"]))
-    else {
-        return false;
-    };
-    let Some(root) = worker["launch_cwd"].as_str().map(std::path::Path::new) else {
-        return false;
-    };
-    if root.canonicalize().ok().as_deref() != Some(root) {
-        return false;
-    }
-    if text.contains("permission-shared") {
-        let Some(shared) = root
-            .parent()
-            .map(|p| p.join("shared"))
-            .and_then(|p| p.canonicalize().ok())
-        else {
-            return false;
-        };
-        return worker["allowed_roots"].as_array().is_some_and(|grants| {
-            grants.iter().any(|g| {
-                g["path"]
-                    .as_str()
-                    .is_some_and(|p| std::path::Path::new(p) == shared)
-            })
-        });
-    }
-    true
 }
 
 pub(super) fn pseudo_uuid() -> String {
@@ -437,78 +261,6 @@ pub(super) fn pseudo_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn permission_fixture_claude_worker_shows_busy_before_submit_hooks() {
-        let mut bytes = super::super::submitted("fake:permission safe").into_bytes();
-        begin_submit(&mut bytes, "claude");
-        let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
-        terminal.write(&bytes);
-        let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
-        let detected = crate::agents::manifest::detect_with_osc(
-            crate::agents::AgentKind::Claude,
-            crate::agents::manifest::DetectionInput {
-                screen: &screen,
-                osc_title: "",
-                osc_progress: "",
-            },
-        );
-        assert!(
-            detected.visible_working,
-            "ordinary fake Claude cannot confirm Enter while its submit hook blocks: {screen}"
-        );
-    }
-
-    #[test]
-    fn permission_fixture_stop_hook_keeps_native_service_busy_until_return() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        struct Captured(Rc<RefCell<Vec<u8>>>);
-        impl Write for Captured {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.borrow_mut().extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let bytes = Rc::new(RefCell::new(Vec::new()));
-        let mut out = Captured(Rc::clone(&bytes));
-        begin_work(&mut out, true);
-        finish_claude_turn(&mut out, "assignment settled", || {
-            let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
-            terminal.write(&bytes.borrow());
-            let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
-            let detected = crate::agents::manifest::detect_with_osc(
-                crate::agents::AgentKind::Claude,
-                crate::agents::manifest::DetectionInput {
-                    screen: &screen,
-                    osc_title: "",
-                    osc_progress: "",
-                },
-            );
-            assert!(
-                detected.visible_working,
-                "fake looks idle while synchronous Stop hook blocks input: {screen}"
-            );
-        });
-        let mut terminal = crate::terminal::vt::Terminal::new(132, 45, 0).unwrap();
-        terminal.write(&bytes.borrow());
-        let screen = terminal.read_text_screen((0, 0), (131, 44), false).unwrap();
-        assert!(screen.contains("assignment settled"));
-        assert!(
-            !crate::agents::manifest::detect_with_osc(
-                crate::agents::AgentKind::Claude,
-                crate::agents::manifest::DetectionInput {
-                    screen: &screen,
-                    osc_title: "",
-                    osc_progress: "",
-                },
-            )
-            .visible_working
-        );
-    }
 
     #[test]
     fn permission_fixture_claude_busy_frame_confirms_native_acceptance() {
@@ -565,31 +317,6 @@ mod tests {
     }
 
     #[test]
-    fn permission_fixture_coverage_has_safe_and_excluded_native_screens() {
-        for (kind, outcome) in [
-            ("shared", "approved"),
-            ("visible-script", "approved"),
-            ("truncated", "escalated"),
-            ("gh-read", "approved"),
-            ("gh-post", "escalated"),
-            ("master-push", "escalated"),
-        ] {
-            assert_eq!(fixture_kind(&format!("fake:permission {kind}")), Some(kind));
-            let dialog = crate::agents::dialog::parse(&screen(kind)).unwrap();
-            assert_eq!(fixture_decision(&dialog.text).0, outcome, "{kind}");
-        }
-    }
-
-    #[test]
-    fn permission_fixture_collapsed_codex_question_is_native_pending() {
-        assert_eq!(fixture_kind("fake:permission collapsed"), Some("collapsed"));
-        assert!(crate::agents::dialog::codex_question_pending(&screen(
-            "collapsed"
-        )));
-        assert!(crate::agents::dialog::parse(&screen("collapsed")).is_none());
-    }
-
-    #[test]
     fn permission_fixture_service_uses_observed_fingerprint_and_active_lease() {
         for (kind, expected) in [
             ("safe", "approved"),
@@ -601,7 +328,7 @@ mod tests {
             let result = service_decision_with("7", "Permission assignment p8-123. Worker worker", |args| {
                 calls.push(args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
                     let result = match args {
-                    ["state"] => json!({"agents":[{"id":6,"launch_cwd":std::env::current_dir().unwrap().canonicalize().unwrap()}],"permission_assignments":[{"worker":6,"handler":7,"token":"p8-123"}]}),
+                    ["state"] => json!({"permission_assignments":[{"worker":6,"handler":7,"token":"p8-123"}]}),
                     ["agent", "dialog", "6"] => json!({"dialog":{"text":text},"fingerprint":"d1.observed"}),
                     ["agent", "choose", ..] => json!({"outcome":"closed"}),
                     ["agent", "permission-decision", ..] => json!({"recorded":true}),

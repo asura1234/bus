@@ -155,20 +155,6 @@ impl Worker {
             .cloned()
             .collect();
         for handler in handlers {
-            // A confirmed fresh session is authoritative even after the timer.
-            // The deadline must not permanently poison a recovered service.
-            if !handler.session_reset_pending
-                && handler.permission_clear_started
-                && handler.status == RuntimeStatus::Idle
-                && handler.hook_setup_confirmed
-            {
-                let mut state = self.state.clone();
-                state
-                    .finish_permission_reset(handler.id)
-                    .map_err(|e| e.to_string())?;
-                self.save(state)?;
-                continue;
-            }
             if handler
                 .permission_reset_at_ms
                 .is_some_and(|at| now >= at.saturating_add(90_000))
@@ -181,14 +167,20 @@ impl Worker {
                     )
                     .map_err(|e| e.to_string())?;
                 self.save(state)?;
-                // A blocked prior turn can consume the waiting deadline before
-                // /clear was ever sent. Once idle, send that FIRST clear. Never
-                // retry a reset that might already have reached the provider.
-                if handler.permission_clear_started || handler.session_reset_pending {
-                    continue;
-                }
+                continue;
             }
             if handler.session_reset_pending {
+                continue;
+            }
+            if handler.permission_clear_started
+                && handler.status == RuntimeStatus::Idle
+                && handler.hook_setup_confirmed
+            {
+                let mut state = self.state.clone();
+                state
+                    .finish_permission_reset(handler.id)
+                    .map_err(|e| e.to_string())?;
+                self.save(state)?;
                 continue;
             }
             if handler.status == RuntimeStatus::Idle
