@@ -3,7 +3,7 @@
 use super::{next_request_id, ParsedCommand};
 use crate::messaging::control::{Request, Response};
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(200);
 /// Claude Code and Codex went idle within two seconds of the key, live.
@@ -44,22 +44,24 @@ pub(super) fn run(
     } else {
         json!({"room_id": room, "agents": rows})
     };
-    if !failures.is_empty() {
-        let mut failure = Response::failure(&id, "interrupt_failed", failures.join("; "));
-        failure.result = result;
-        return failure;
-    }
-    let Some(text) = text else {
-        return Response::success(&id, result);
-    };
+    // Agents that did stop get --text even when another one failed: their
+    // turn and queue are closed already, so it is the only work they have.
     let recipients: Vec<String> = rows
         .iter()
         .filter(|row| row["outcome"] == "stopped" || row["outcome"] == "already_idle")
         .map(|row| row["agent_id"].to_string())
         .collect();
-    if recipients.is_empty() {
-        return Response::success(&id, result);
-    }
+    let finish = |result: Value| {
+        if failures.is_empty() {
+            return Response::success(&id, result);
+        }
+        let mut failure = Response::failure(&id, "interrupt_failed", failures.join("; "));
+        failure.result = result;
+        failure
+    };
+    let Some(text) = text.filter(|_| !recipients.is_empty()) else {
+        return finish(result);
+    };
     let mut params = json!({"room": room.to_string(), "to": recipients, "text": text, "files": []});
     if let Some(author) = author {
         params["as"] = author;
@@ -77,12 +79,12 @@ pub(super) fn run(
     );
     if !sent.ok {
         let mut failure = sent;
-        failure.id = id;
+        failure.id = id.clone();
         failure.result = result;
         return failure;
     }
     result["message_id"] = sent.result["message_id"].clone();
-    Response::success(&id, result)
+    finish(result)
 }
 
 /// Reads state until every `interrupting` row's agent is idle with its
@@ -93,6 +95,8 @@ fn wait_for_stops(
     send: &mut impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
     pause: &mut impl FnMut(Duration),
 ) {
+    // Pauses and reads both count, so a slow or failing read cannot stretch
+    // the deadline; each read is bounded by what is left of it.
     let mut waited = Duration::ZERO;
     let interrupting = |row: &Value| row["outcome"] == "interrupting";
     while rows.iter().any(interrupting) {
@@ -101,8 +105,12 @@ fn wait_for_stops(
             method: "state".into(),
             params: json!({}),
         };
+        let remaining = STOP_DEADLINE.saturating_sub(waited).max(POLL);
+        let read_started = Instant::now();
+        let read = send(&request, Some(remaining));
+        waited += read_started.elapsed();
         // A missed read only delays the check; the deadline still holds.
-        if let Ok(state) = send(&request, None).map(|response| response.result) {
+        if let Ok(state) = read.map(|response| response.result) {
             for row in rows.iter_mut().filter(|row| interrupting(row)) {
                 let agent = state["agents"]
                     .as_array()

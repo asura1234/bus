@@ -273,3 +273,54 @@ fn room_history_shows_the_interrupt_with_its_author_and_time() {
     assert!(notice["prompt"]["submitted_at_ms"].as_u64().unwrap() > 0);
     assert!(notice["delivery"].is_null());
 }
+
+#[test]
+fn closing_an_idle_agents_held_turn_as_interrupted_records_the_interrupt_in_history() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    let response = interrupt(&mut fixture, json!({"agent": "builder"}));
+    assert_eq!(response.result["agents"][0]["outcome"], "already_idle");
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    // `wait` on this message says "the room history shows who stopped it".
+    let notices: Vec<String> = fixture
+        .worker
+        .state
+        .notices(fixture.room)
+        .map(|notice| notice.text.clone())
+        .collect();
+    assert_eq!(notices, ["Interrupted builder."]);
+}
+
+#[test]
+fn a_message_sent_after_the_agent_restarted_is_not_closed_by_a_stale_interrupt() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    running(&mut fixture, "write the parser", "turn-1");
+    assert!(interrupt(&mut fixture, json!({"agent": "builder"})).ok);
+    // The provider died before Bus saw it idle; the CLI reported failed.
+    fixture.status(RuntimeStatus::Unavailable);
+    fixture.status(RuntimeStatus::Launching);
+    let later = fixture.send("start over on the lexer", false);
+    fixture.status(RuntimeStatus::Idle);
+    assert_ne!(
+        fixture.request(later).failure_reason.as_deref(),
+        Some("interrupted"),
+        "{:?}",
+        fixture.request(later)
+    );
+}
+
+#[test]
+fn a_reply_captured_after_the_key_but_before_idle_completes_normally() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    assert!(interrupt(&mut fixture, json!({"agent": "builder"})).ok);
+    fixture.stopped("turn-1", "Parser written.");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Parser written."));
+}

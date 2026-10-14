@@ -351,6 +351,14 @@ impl BusState {
         if matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked) {
             agent_state.busy_revision = revision;
         }
+        // A provider that died or relaunched before Bus saw the stop ends
+        // that interrupt (the CLI reported it failed); later work is new.
+        if matches!(
+            status,
+            RuntimeStatus::Unavailable | RuntimeStatus::Launching
+        ) {
+            agent_state.interrupt_pending = false;
+        }
         agent_state.observed_at_ms = now_ms;
         if status == RuntimeStatus::Idle {
             // No hook reports an interrupted turn; the idle screen is its end.

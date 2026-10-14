@@ -68,7 +68,7 @@ agent interrupt stops an agent's running turn: Bus presses the provider's stop k
 and reports stopped, already_idle, or failed with a reason (exit 1). The turn, the messages
 typed into it and those queued for the agent close as interrupted, so wait and send --async
 end with message_interrupted; the room history records who interrupted whom. --text then
-sends a normal new message; --room stops every working agent in the room but the --as one.
+sends a normal new message; --room stops every working or blocked agent in the room but the --as one.
 It kills no process and keeps the context; use send to steer a working agent instead.
 agent clear starts a fresh provider context in an idle agent's terminal (/clear for claude
 and codex, /new-chat for cursor) and keeps the agent bound to the new provider session.

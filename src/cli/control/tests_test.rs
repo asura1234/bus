@@ -2471,3 +2471,61 @@ fn waits_end_with_message_interrupted_when_the_recipient_was_interrupted() {
         assert_eq!(response["error"]["code"], "message_interrupted", "{args:?}");
     }
 }
+
+#[test]
+fn a_room_interrupt_delivers_follow_up_to_stopped_agents_despite_another_failure() {
+    let receipt = json!({"room_id": 7, "agents": [
+        {"agent_id": 4, "name": "a4", "outcome": "interrupting", "key": "esc"},
+        {"agent_id": 5, "name": "a5", "outcome": "failed", "reason": "The agent has no terminal yet"},
+    ]});
+    let (outcome, response, requests, _) = run_interrupt(
+        &[
+            "agent",
+            "interrupt",
+            "--room",
+            "lab",
+            "--text",
+            "report status",
+        ],
+        receipt,
+        [vec![agent_row(4, "idle", false)]],
+    );
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(response["result"]["agents"][0]["outcome"], "stopped");
+    let sends: Vec<_> = requests
+        .iter()
+        .filter(|r| r.method == "message.send")
+        .collect();
+    assert_eq!(
+        sends.len(),
+        1,
+        "the stopped worker must receive its follow-up despite another worker failing: {response}"
+    );
+    assert_eq!(sends[0].params["to"], json!(["4"]));
+    assert_eq!(sends[0].params["text"], "report status");
+}
+
+#[test]
+fn interrupt_state_reads_are_bounded_by_the_stop_deadline() {
+    let mut output = Vec::new();
+    let outcome = run_with_pause(
+        &["agent", "interrupt", "a4"].map(String::from),
+        &mut output,
+        &mut |request: &Request, timeout| match request.method.as_str() {
+            "agent.interrupt" => Ok(Response::success(&request.id, interrupting(4))),
+            "state" => {
+                assert!(
+                    timeout.is_some_and(|duration| duration <= Duration::from_secs(15)),
+                    "a status read must not outlive the advertised stop deadline: {timeout:?}"
+                );
+                Ok(Response::success(
+                    &request.id,
+                    json!({"agents": [agent_row(4, "idle", false)]}),
+                ))
+            }
+            other => panic!("unexpected {other}"),
+        },
+        |_| {},
+    );
+    assert!(outcome.is_ok());
+}

@@ -211,7 +211,7 @@ arrives as a normal new message with its own reply. The interrupted message
 closes as `interrupted`: a running `send --async` or `wait` on it ends with
 `message_interrupted` instead of waiting on. Messages queued for the worker
 close with it, so send what it should do next with `--text`. `--room ROOM`
-stops every working agent in the room. Nothing is killed and the worker keeps
+stops every working or blocked agent in the room. Nothing is killed and the worker keeps
 its context.
 
 ## Unblock agents

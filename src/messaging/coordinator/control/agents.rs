@@ -203,6 +203,10 @@ impl Worker {
                 .collect(),
         };
         let now = crate::messaging::storage::io::now_ms();
+        let interrupter = author.map_or(
+            crate::messaging::model::Author::Developer,
+            crate::messaging::model::Author::Agent,
+        );
         let mut state = self.state.clone();
         let mut rows = Vec::new();
         for id in targets {
@@ -213,9 +217,15 @@ impl Worker {
                 RuntimeStatus::Idle => {
                     // Nothing to stop. A turn Bus still holds (settling, or
                     // waiting on background shells) and the queue close.
-                    state
+                    let closed = state
                         .close_interrupted(id, now)
                         .map_err(|e| e.to_string())?;
+                    // Their waiters point to the history for who stopped them.
+                    if !closed.is_empty() {
+                        state
+                            .post_interrupt_notice(room, interrupter.clone(), id, now)
+                            .map_err(|e| e.to_string())?;
+                    }
                     row["outcome"] = json!("already_idle");
                 }
                 RuntimeStatus::Working | RuntimeStatus::Blocked => {
@@ -236,23 +246,28 @@ impl Worker {
                     ));
                     match sent {
                         Err(error) if error.definitely_rejected => {
+                            tracing::warn!(
+                                event = "bus.agent.interrupt",
+                                agent_id = id.0,
+                                key,
+                                error = %error.message,
+                                "Stop key refused"
+                            );
                             row["outcome"] = json!("failed");
                             row["reason"] = json!(error.message);
                         }
                         // An uncertain failure may have pressed the key; the
                         // CLI's wait for idle decides.
                         _ => {
+                            tracing::info!(
+                                event = "bus.agent.interrupt",
+                                agent_id = id.0,
+                                key,
+                                "Stop key pressed"
+                            );
                             state.begin_interrupt(id).map_err(|e| e.to_string())?;
                             state
-                                .post_interrupt_notice(
-                                    room,
-                                    author.map_or(
-                                        crate::messaging::model::Author::Developer,
-                                        crate::messaging::model::Author::Agent,
-                                    ),
-                                    id,
-                                    now,
-                                )
+                                .post_interrupt_notice(room, interrupter.clone(), id, now)
                                 .map_err(|e| e.to_string())?;
                             row["outcome"] = json!("interrupting");
                             row["key"] = json!(key);

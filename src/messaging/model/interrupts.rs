@@ -47,6 +47,15 @@ impl BusState {
             }
             closed.push(queued);
         }
+        for request in &closed {
+            tracing::info!(
+                event = "bus.message.recovered",
+                request_id = request.0,
+                agent_id = agent.0,
+                reason = INTERRUPTED,
+                "Interrupted request closed"
+            );
+        }
         Ok(closed)
     }
 
