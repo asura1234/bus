@@ -804,3 +804,14 @@ fn claude_focused_checkbox_custom_field_is_an_empty_text_question_with_stable_id
     assert_eq!(dialog.id(), typed.id());
     assert_ne!(dialog.digest(), typed.digest());
 }
+
+#[test]
+fn codex_queued_message_hides_the_question_and_owns_shift_left() {
+    // Real Codex 0.162 with a pending question, a steered message and a Tab-queued
+    // message: the question count is gone and Shift+Left edits the queued message.
+    let screen =
+        include_str!("../../../tests/fixtures/codex-question/queued-message-hides-question.txt");
+    assert!(screen.contains("⇧← edit last queued message"));
+    assert!(!codex_question_pending(screen));
+    assert!(parse(screen).is_none());
+}

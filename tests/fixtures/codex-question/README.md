@@ -19,3 +19,6 @@ spaces trimmed), while the turn kept working after `request_user_input_async`:
   working line and a startup warning right-aligned on the `? for shortcuts` footer row. Live room
   agents showed the same footer; Bus missed the question there.
 - expanded-working.txt: the same question after Shift+Left, still Working above the queue.
+- queued-message-hides-question.txt: a pending question plus one steered and one Tab-queued
+  message. Codex hides the question while messages are queued, and Shift+Left edits the last
+  queued message instead of opening the question.
