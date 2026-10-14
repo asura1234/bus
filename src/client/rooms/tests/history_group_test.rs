@@ -284,3 +284,103 @@ fn a_rebuild_names_the_layout_input_that_changed() {
         "minute"
     );
 }
+
+#[test]
+fn returning_to_a_room_reuses_layout_until_width_changes() {
+    let mut state = BusState::default();
+    let first = state.create_room("first").unwrap();
+    let second = state.create_room("second").unwrap();
+    for room in [first, second] {
+        let agent = state
+            .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+            .unwrap();
+        let request = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "**prompt**".into(),
+                    files: Vec::new(),
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1_000,
+            )
+            .unwrap()[0];
+        state.finish_for_test(request, "**reply**", 2_000);
+    }
+    let mut history = History::default();
+    for (room, width, expected) in [
+        (first, 80, 2),
+        (second, 80, 2),
+        (first, 80, 0),
+        (first, 40, 2),
+    ] {
+        history.lines(
+            &state,
+            state.room(room).unwrap(),
+            width,
+            1,
+            3_000,
+            &mut Thumbnails::default(),
+        );
+        assert_eq!(history.rendered, expected, "room={room:?} width={width}");
+        assert!(history
+            .cached()
+            .iter()
+            .any(|line| line.text.trim() == "reply"));
+    }
+    state.delete_room(second).unwrap();
+    history.lines(
+        &state,
+        state.room(first).unwrap(),
+        40,
+        2,
+        63_000,
+        &mut Thumbnails::default(),
+    );
+    assert_eq!(history.room_markdown.len(), 1);
+    assert_eq!(
+        history.markdown.len(),
+        2,
+        "deleted room's blocks are released"
+    );
+    assert_eq!(history.rendered, 0);
+}
+
+#[test]
+fn rebuild_counts_only_markdown_laid_out_afresh_across_room_switches() {
+    let mut state = BusState::default();
+    let mut rooms = Vec::new();
+    for name in ["first", "second"] {
+        let room = state.create_room(name).unwrap();
+        let agent = state
+            .create_agent(room, "agent", Provider::Codex, "/project".into(), None)
+            .unwrap();
+        state.set_draft_recipients(room, [agent]).unwrap();
+        for i in 0..3 {
+            state
+                .set_draft_text(room, &format!("**{name}** prompt {i}"))
+                .unwrap();
+            state.submit_draft(room, 1_000 + i).unwrap();
+        }
+        rooms.push(room);
+    }
+    let mut history = History::default();
+    let mut thumbnails = Thumbnails::default();
+    let mut rendered = |history: &mut History, room, width| {
+        history.lines(
+            &state,
+            state.room(room).unwrap(),
+            width,
+            1,
+            3_000,
+            &mut thumbnails,
+        );
+        history.rendered
+    };
+
+    assert_eq!(rendered(&mut history, rooms[0], 80), 3, "first visit");
+    assert_eq!(rendered(&mut history, rooms[1], 80), 3, "other room");
+    assert_eq!(rendered(&mut history, rooms[0], 80), 0, "switch back");
+    assert_eq!(rendered(&mut history, rooms[0], 60), 3, "new width");
+}

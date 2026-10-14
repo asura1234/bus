@@ -440,3 +440,53 @@ fn a_history_copy_of_a_wrapped_list_item_skips_its_continuation_indent() {
         "• alpha beta gamma delta epsilon zeta"
     );
 }
+
+#[test]
+fn markdown_returning_to_a_room_after_a_resize_elsewhere_lays_out_at_the_new_width() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    let other_agent = snapshot
+        .state
+        .create_agent(other, "helper", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau";
+    saved_exchange(&mut ui, room, agent, "first prompt", long);
+    saved_exchange(
+        &mut ui,
+        other,
+        other_agent,
+        "other prompt",
+        "**other reply**",
+    );
+    let snapshot = Arc::clone(&ui.snapshot);
+    let reply_rows = |ui: &mut BusUi, id, width| -> Vec<String> {
+        ui.history.lines(
+            &snapshot.state,
+            snapshot.state.room(id).expect("room"),
+            width,
+            snapshot.revision,
+            1_000,
+            &mut Default::default(),
+        );
+        ui.history
+            .cached()
+            .iter()
+            .filter(|line| is_reply(line))
+            .map(|line| line.text.clone())
+            .collect()
+    };
+
+    let wide = reply_rows(&mut ui, room, 120);
+    reply_rows(&mut ui, other, 30);
+    let narrow = reply_rows(&mut ui, room, 30);
+
+    assert!(narrow.len() > wide.len(), "wide {wide:?} narrow {narrow:?}");
+    assert!(
+        narrow
+            .iter()
+            .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 30),
+        "rows fit the new width: {narrow:?}"
+    );
+}
