@@ -33,8 +33,9 @@ read-only `state`, `history --room question-lab` and `agent read worker ...`, pl
 
 1. Complete setup. Click `room:question-lab`, press `ctrl+p`, click `recipient:worker`, click
    `composer`, paste `fake:question`, press `enter` (one driver call each). Wait up to 30s until
-   the worker's `dialog_notice` in `T bus state` is non-null and
-   `T bus history --room question-lab` holds the worker's `Blocked, needs help` notice. Capture
+   the worker's `dialog_notice` in `T bus state` is non-null and the room shows the worker's
+   notice `worker (agent N). Blocked, needs help to continue.` with `Inspect: bus agent dialog N`
+   (`wait --text`; Bus posts it to the developer, so `history` does not list it). Capture
    both, and `T bus agent read worker --source visible`, which shows `? 1 question`,
    `⇧← to answer` and `⚠ 1 warning · f2 to view` on its footer row.
 2. Run `T bus agent read worker --source recent --lines 120` while the worker is still not idle.
