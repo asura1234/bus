@@ -92,7 +92,7 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
         rows[8].starts_with("AGENTS") && rows[8].ends_with('+'),
         "{rows:?}"
     );
-    assert!(rows[10].starts_with("worker"), "{rows:?}");
+    assert!(rows[11].starts_with("worker"), "{rows:?}");
     assert!(
         !rows.iter().any(|row| row.trim() == "MASTER"),
         "no MASTER section header: {rows:?}"
@@ -104,7 +104,7 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
     assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [5, 5]);
     assert_eq!(hit_rows(&ui, render::Action::Room(other)), [6, 6]);
     assert_eq!(hit_rows(&ui, render::Action::NewAgent), [8]);
-    assert_eq!(hit_rows(&ui, render::Action::Agent(worker))[0], 10);
+    assert_eq!(hit_rows(&ui, render::Action::Agent(worker))[0], 11);
     assert!(hit_rows(&ui, render::Action::Agent(orchestrator)).is_empty());
 
     click(&mut ui, 6);
@@ -112,57 +112,59 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
 }
 
 #[test]
-fn master_sidebar_lists_its_agents_before_rooms() {
+fn master_sidebar_lists_master_then_rooms_then_its_agents() {
     let (mut ui, master, pr, other, orchestrator) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .create_agent(pr, "worker", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
-    assert_eq!(rows[0], "", "{rows:?}");
     assert_eq!(rows[1], "# MASTER", "{rows:?}");
-    assert_eq!(rows[2], "", "{rows:?}");
     assert!(
-        rows[3].starts_with("AGENTS") && rows[3].ends_with('+'),
+        rows[3].starts_with("ROOMS") && rows[3].ends_with('+'),
         "{rows:?}"
     );
-    assert!(rows[5].starts_with("claude-orch"), "{rows:?}");
-    assert_eq!(rows[6], "Claude Code", "{rows:?}");
-    assert_eq!(rows[7], "# pr-123", "{rows:?}");
-    // The card names its room exactly as the ROOMS list below does.
+    assert_eq!(rows[5], "# pr-123           Idle", "{rows:?}");
+    assert_eq!(rows[6], "# pr-456           Idle", "{rows:?}");
+    assert!(rows[7].starts_with('─'), "{rows:?}");
     assert!(
-        rows[10..].iter().any(|row| row.starts_with("# pr-123 ")),
+        rows[8].starts_with("AGENTS") && rows[8].ends_with('+'),
         "{rows:?}"
     );
-    assert_eq!(rows[8], "", "{rows:?}");
-    assert!(rows[9].starts_with('─'), "{rows:?}");
+    assert!(rows[11].starts_with("claude-orch"), "{rows:?}");
+    assert_eq!(rows[12], "Claude Code", "{rows:?}");
+    assert_eq!(rows[13], "# pr-123", "{rows:?}");
     assert!(
-        rows[10].starts_with("ROOMS") && rows[10].ends_with('+'),
+        !rows.iter().any(|row| row.starts_with("worker")),
         "{rows:?}"
     );
-    assert_eq!(rows[12], "# pr-123           Idle", "{rows:?}");
-    assert_eq!(rows[13], "# pr-456           Idle", "{rows:?}");
-    // The open MASTER room never offers deletion.
     assert!(deletable_rooms(&ui).is_empty());
-
     assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1]);
-    assert_eq!(hit_rows(&ui, render::Action::NewAgent), [3]);
+    assert_eq!(hit_rows(&ui, render::Action::NewRoom), [3]);
+    assert_eq!(hit_rows(&ui, render::Action::NewAgent), [8]);
     assert_eq!(
         hit_rows(&ui, render::Action::Agent(orchestrator)),
-        [5, 5, 6]
+        [11, 11, 12]
     );
-    assert_eq!(hit_rows(&ui, render::Action::NewRoom), [10]);
-    // The orchestrator's #pr-123 line opens its room; it never reassigns.
-    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [12, 12, 7]);
-    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [13, 13]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [5, 5, 13]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [6, 6]);
     assert_eq!(
         render::sidebar_room_row(&ui.snapshot.state, other, Some(master)),
-        Some(13)
+        Some(6)
     );
-
-    // Clicking a room under MASTER's agents opens it in the work order.
-    click(&mut ui, 13);
-    assert_eq!(ui.room, Some(other));
+    click(&mut ui, 5);
+    assert_eq!(ui.room, Some(pr));
     let rows = sidebar_rows(&mut ui);
     assert!(rows[3].starts_with("ROOMS"), "{rows:?}");
-    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [6, 6]);
+    assert!(rows[8].starts_with("AGENTS"), "{rows:?}");
+    assert!(rows[11].starts_with("worker"), "{rows:?}");
+    assert!(
+        !rows.iter().any(|row| row.starts_with("claude-orch")),
+        "{rows:?}"
+    );
 }
 
 #[test]
@@ -180,12 +182,11 @@ fn master_agents_show_three_lines_without_an_expand_control() {
     });
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
-    assert!(rows[5].starts_with("claude-orch"), "{rows:?}");
-    assert_eq!(rows[6], "Claude Code", "{rows:?}");
-    assert_eq!(rows[7], "# pr-123", "{rows:?}");
-    // Even disclosed, no branch or cwd lines follow before the divider.
-    assert_eq!(rows[8], "", "{rows:?}");
-    assert!(rows[9].starts_with('─'), "{rows:?}");
+    assert!(rows[11].starts_with("claude-orch"), "{rows:?}");
+    assert_eq!(rows[12], "Claude Code", "{rows:?}");
+    assert_eq!(rows[13], "# pr-123", "{rows:?}");
+    // Even disclosed, no branch or cwd lines follow the orchestrated room.
+    assert_eq!(rows[14], "", "{rows:?}");
     assert!(!rows.iter().any(|row| row.contains("/repo")), "{rows:?}");
     assert!(!ui
         .view
@@ -200,8 +201,8 @@ fn master_agents_show_three_lines_without_an_expand_control() {
             .map(|hit| hit.rect.y)
             .collect::<Vec<_>>()
     };
-    assert!(hit_row(render::Action::Room(pr)).contains(&7));
-    assert!(hit_row(render::Action::Agent(orchestrator)).contains(&6));
+    assert!(hit_row(render::Action::Room(pr)).contains(&13));
+    assert!(hit_row(render::Action::Agent(orchestrator)).contains(&12));
 }
 
 #[test]
@@ -526,7 +527,7 @@ fn an_orchestrators_room_line_opens_its_room_and_never_reassigns() {
         .view
         .hits
         .iter()
-        .any(|hit| hit.action == render::Action::Room(pr) && hit.rect.y == 7));
+        .any(|hit| hit.action == render::Action::Room(pr) && hit.rect.y == 13));
     assert!(ui
         .view
         .hits
@@ -836,4 +837,28 @@ fn permission_handler_is_hidden_from_sidebar_and_normal_recipient_picker() {
         ui.locals.get(&room).unwrap().recipients,
         AgentRecipients::from([worker])
     );
+}
+
+#[test]
+fn agents_header_names_the_selected_room_in_one_dim_truncated_row() {
+    let (mut ui, master, pr, _, _) = master_fixture();
+    for (room, name) in [(master, "MASTER"), (pr, "pr-123")] {
+        ui.open_room(room);
+        let rows = sidebar_rows(&mut ui);
+        assert_eq!(rows[9], name, "{rows:?}");
+        assert_eq!(rows[10], "", "{rows:?}");
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        assert_eq!(buffer[(1, 9)].fg, ratatui::style::Color::Rgb(145, 148, 159));
+        assert!(!ui.view.hits.iter().any(|hit| hit.rect.y == 9));
+    }
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut value = serde_json::to_value(&snapshot.state).unwrap();
+    value["rooms"][pr.0.to_string()]["name"] =
+        serde_json::json!("a-very-long-room-name-that-overflows");
+    snapshot.state = serde_json::from_value(value).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let rows = sidebar_rows(&mut ui);
+    assert_eq!(rows[9], "a-very-long-room-name-th…", "{rows:?}");
 }

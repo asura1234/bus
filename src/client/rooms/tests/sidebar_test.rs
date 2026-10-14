@@ -39,7 +39,7 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
             .view
             .hits
             .iter()
-            .any(|hit| { hit.action == render::Action::Agent(second) && hit.rect.y == 10 }));
+            .any(|hit| { hit.action == render::Action::Agent(second) && hit.rect.y == 11 }));
     }
 }
 
@@ -59,7 +59,7 @@ fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
     }
     ui.receive_snapshot(Arc::new(snapshot));
     ui.compute_view(100, 16);
-    assert_eq!(ui.view.sidebar_max_scroll, 2);
+    assert_eq!(ui.view.sidebar_max_scroll, 3);
     ui.sidebar_scroll = usize::MAX;
     ui.compute_view(100, 16);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 16));
