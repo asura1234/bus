@@ -199,6 +199,9 @@ fn resumed_launch_preserves_original_options_without_adding_bypass_flags() {
         (Provider::Codex, "--model gpt-test --add-dir '/work/sibling dir' --no-alt-screen"),
         (Provider::ClaudeCode, "--model sonnet --effort high --verbose"),
         (Provider::Cursor, "--model test --mode=plan"),
+        (Provider::Codex, "--yolo -c 'model_reasoning_effort=\"high\"' --sandbox danger-full-access --ask-for-approval never"),
+        (Provider::ClaudeCode, "--dangerously-skip-permissions --permission-mode bypassPermissions --settings /tmp/user.json"),
+        (Provider::Cursor, "--yolo --force --sandbox disabled --approve-mcps"),
     ] {
         for adopted in [false, true] {
             let fixture = Fixture::new(provider);
@@ -237,20 +240,20 @@ fn resumed_launch_preserves_original_options_without_adding_bypass_flags() {
             launch::take_adopted_session(kind, &mut prepared.args).unwrap();
             let resumed = fixture.load().unwrap();
             assert_eq!(resumed.args, prepared.args, "lost launch flags for {provider:?}");
-            assert!(!resumed.args.iter().any(|arg| arg == "--yolo" || arg.contains("bypass")));
+            assert_eq!(launch::saved_options(kind, &fixture.root.join("callbacks/owned-launch")).unwrap(), launch::parse_path_tokens(options).unwrap());
         }
     }
 }
 
 #[test]
-fn saved_resume_options_reject_bypass_malformed_and_unreadable_records() {
+fn saved_resume_options_reject_only_launch_breakers_malformed_and_unreadable_records() {
     let fixture = Fixture::new(Provider::Codex);
-    let path = fixture.root.join("callbacks/owned-launch/launch-options.json");
+    let path = fixture
+        .root
+        .join("callbacks/owned-launch/launch-options.json");
     for bytes in [
-        r#"["--yolo"]"#,
-        r#"["--dangerously-bypass-approvals-and-sandbox"]"#,
-        r#"["--model"]"#,
-        r#"["--no-daemon"]"#,
+        r#"["exec"]"#,
+        r#"["--unknown=has\u0000nul"]"#,
         "broken json",
         r#"{"options":[]}"#,
     ] {
@@ -265,56 +268,112 @@ fn saved_resume_options_reject_bypass_malformed_and_unreadable_records() {
 #[test]
 fn unstarted_resume_replays_saved_options() {
     let mut fixture = Fixture::new(Provider::Codex);
-    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
     identity.session_id = None;
-    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
     fixture.save();
     fixture.facts.session = None;
-    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
-        &fixture.facts, None,
-    ).unwrap();
-    let path = fixture.root.join("callbacks/owned-launch/launch-options.json");
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+    let path = fixture
+        .root
+        .join("callbacks/owned-launch/launch-options.json");
     std::fs::write(&path, r#"["--model","gpt-test"]"#).unwrap();
-    assert_eq!(fixture.load().unwrap().args, ["--model", "gpt-test", "--no-daemon"]);
+    assert_eq!(
+        fixture.load().unwrap().args,
+        ["--model", "gpt-test", "--no-daemon"]
+    );
+}
+
+#[test]
+fn resume_does_not_duplicate_an_explicit_private_runtime_option() {
+    let fixture = Fixture::new(Provider::Codex);
+    std::fs::write(
+        fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json"),
+        r#"["--yolo","--no-daemon"]"#,
+    )
+    .unwrap();
+    assert_eq!(fixture.load().unwrap().args, ["--yolo", "--no-daemon"]);
 }
 
 #[test]
 fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     let mut fixture = Fixture::new(Provider::Codex);
-    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
     identity.session_id = None;
-    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
     fixture.facts.session = None;
-    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
-        &fixture.facts, None,
-    ).unwrap();
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
     fixture.save();
     let extras = fixture.load().unwrap();
     assert_eq!(extras.env, fixture.expected_env());
     let argv: Vec<_> = fixture.plan.argv.iter().chain(extras.args.iter()).collect();
-    assert_eq!(argv.iter().filter(|arg| arg.as_str() == "--no-daemon").count(), 1);
+    assert_eq!(
+        argv.iter()
+            .filter(|arg| arg.as_str() == "--no-daemon")
+            .count(),
+        1
+    );
     assert!(extras.session.is_none());
-    assert!(fixture.state.agent(fixture.agent).unwrap().runtime_identity.session_id.is_none());
+    assert!(fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .session_id
+        .is_none());
 
-    std::fs::write(fixture.root.join("callbacks/owned-launch/adopted-session"), "reserved-session").unwrap();
-    assert_eq!(fixture.load().unwrap_err(),
-        "Bus resume cannot replace an adopted session with an empty launch");
+    std::fs::write(
+        fixture.root.join("callbacks/owned-launch/adopted-session"),
+        "reserved-session",
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.load().unwrap_err(),
+        "Bus resume cannot replace an adopted session with an empty launch"
+    );
 }
 
 #[test]
 fn unstarted_resume_rejects_a_bound_owner_and_noninteractive_argv() {
     let mut fixture = Fixture::new(Provider::Codex);
     fixture.facts.session = None;
-    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
-        &fixture.facts, None,
-    ).unwrap();
-    assert!(fixture.load().is_err(), "a bound owner must keep its conversation");
-    for argv in [vec!["codex", "resume", "previous"], vec!["codex", "exec", "prompt"],
-        vec!["codex", "--config", "x=y"]] {
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+    assert!(
+        fixture.load().is_err(),
+        "a bound owner must keep its conversation"
+    );
+    for argv in [
+        vec!["codex", "resume", "previous"],
+        vec!["codex", "exec", "prompt"],
+        vec!["codex", "--yolo", "resume", "previous"],
+    ] {
         let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
         assert!(crate::messaging::coordinator::resume::unstarted_codex_plan(
-            &fixture.facts, Some(&argv),
-        ).is_none());
+            &fixture.facts,
+            Some(&argv),
+        )
+        .is_none());
     }
 }
 
@@ -649,9 +708,17 @@ fn bus_resume_refuses_callback_spool_symlink_escape_before_touching_capture() {
 #[test]
 fn unstarted_resume_from_saved_launch_argv_does_not_repeat_original_options() {
     let mut fixture = Fixture::new(Provider::Codex);
-    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
     identity.session_id = None;
-    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
     fixture.save();
     fixture.facts.session = None;
     // The pane's persisted launch argv is the executable plus prepared args.
@@ -659,13 +726,24 @@ fn unstarted_resume_from_saved_launch_argv_does_not_repeat_original_options() {
         .map(str::to_owned)
         .into();
     fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
-        &fixture.facts, Some(&launch_argv),
-    ).unwrap();
+        &fixture.facts,
+        Some(&launch_argv),
+    )
+    .unwrap();
     std::fs::write(
-        fixture.root.join("callbacks/owned-launch/launch-options.json"),
+        fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json"),
         r#"["--model","gpt-test"]"#,
-    ).unwrap();
+    )
+    .unwrap();
     let extras = fixture.load().unwrap();
-    let argv: Vec<String> = fixture.plan.argv.iter().chain(extras.args.iter()).cloned().collect();
+    let argv: Vec<String> = fixture
+        .plan
+        .argv
+        .iter()
+        .chain(extras.args.iter())
+        .cloned()
+        .collect();
     assert_eq!(argv, launch_argv);
 }

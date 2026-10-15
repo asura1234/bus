@@ -49,12 +49,8 @@ pub(crate) struct SetupNotice {
 #[path = "launch/tokens.rs"]
 mod tokens;
 pub(crate) use tokens::{parse_path_tokens, PathParseError};
-
-pub(crate) enum LaunchOption {
-    Flag,
-    Value,
-    Choice(&'static [&'static str]),
-}
+mod arguments;
+pub(crate) use arguments::argument_positions;
 
 pub(crate) const fn provider_kind(provider: ProviderKind) -> &'static str {
     provider.label()
@@ -88,14 +84,6 @@ fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
         ProviderKind::Codex => codex::launch::resume_args(session),
         ProviderKind::ClaudeCode => claude_code::launch::resume_args(session),
         ProviderKind::Cursor => cursor::launch::resume_args(session),
-    }
-}
-
-fn supported_option(provider: ProviderKind, name: &str) -> Option<LaunchOption> {
-    match provider {
-        ProviderKind::Codex => codex::launch::supported_option(name),
-        ProviderKind::ClaudeCode => claude_code::launch::supported_option(name),
-        ProviderKind::Cursor => cursor::launch::supported_option(name),
     }
 }
 
@@ -143,56 +131,77 @@ pub(crate) fn launch_args(
     let mut args = parse_path_tokens(extra_args).map_err(|e| e.to_string())?;
     let adopted = take_adopted_session(provider, &mut args)?;
     validate_args(provider, &args)?;
+    extend_capture_args(provider, &mut args, runtime_args(provider));
     if let Some(session) = &adopted {
         args.splice(0..0, resume_args(provider, session));
     }
-    args.extend(runtime_args(provider));
     Ok((args, adopted))
 }
 
+/// Preserve user argv and omit a generated duplicate: Codex rejects a repeated
+/// --no-daemon even though the caller is entitled to supply it explicitly.
+pub(crate) fn extend_capture_args(
+    provider: ProviderKind,
+    args: &mut Vec<String>,
+    capture: Vec<String>,
+) {
+    let private_runtime = provider == ProviderKind::Codex
+        && argument_positions(provider, args)
+            .into_iter()
+            .any(|index| args[index] == "--no-daemon");
+    args.extend(
+        capture
+            .into_iter()
+            .filter(|arg| !private_runtime || arg != "--no-daemon"),
+    );
+}
+
 pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(), String> {
-    let mut tokens = args.iter();
-    while let Some(arg) = tokens.next() {
-        if arg.contains('\0') {
-            return Err("Launch arguments cannot contain NUL".into());
-        }
-        // Only Codex advertises -m. Support its separated and attached value
-        // forms without accepting other short options or option clusters.
-        let (name, attached) = if provider == ProviderKind::Codex && arg.starts_with("-m") {
-            let rest = &arg[2..];
-            (
-                "-m",
-                (!rest.is_empty()).then(|| rest.strip_prefix('=').unwrap_or(rest)),
-            )
-        } else {
-            arg.split_once('=')
-                .map_or((arg.as_str(), None), |(name, value)| (name, Some(value)))
+    if args.iter().any(|arg| arg.contains('\0')) {
+        return Err("Launch arguments cannot contain NUL".into());
+    }
+    for index in argument_positions(provider, args) {
+        let arg = args[index].as_str();
+        let incompatible = match provider {
+            ProviderKind::Codex => matches!(arg, "exec" | "e" | "review"),
+            ProviderKind::ClaudeCode => matches!(
+                arg,
+                "-p" | "--print" | "--bg" | "--background" | "--bare" | "--safe-mode"
+            ),
+            ProviderKind::Cursor => matches!(arg, "-p" | "--print"),
         };
-        let kind = supported_option(provider, name).ok_or_else(|| {
-            format!("Unsupported {} launch argument {name}. Bus accepts only supported interactive model/display options, not subcommands or permission, hook, configuration, or workspace overrides.", provider_kind(provider))
-        })?;
-        if matches!(kind, LaunchOption::Flag) {
-            if attached.is_some() {
-                return Err(format!("Launch option {name} does not take a value"));
-            }
-            continue;
-        }
-        let value = attached
-            .or_else(|| tokens.next().map(String::as_str))
-            .filter(|value| !value.is_empty() && !value.starts_with('-') && !value.contains('\0'))
-            .ok_or_else(|| {
-                format!("Launch option {name} requires a nonempty value, not another option")
-            })?;
-        if let LaunchOption::Choice(choices) = kind {
-            if !choices.contains(&value) {
-                return Err(format!(
-                    "Launch option {name} must be one of: {}",
-                    choices.join(", ")
-                ));
-            }
+        if incompatible {
+            return Err(format!("{} launch argument {arg} disables the interactive terminal or observation hooks Bus needs; see docs/launch-args.md", provider_kind(provider)));
         }
     }
     Ok(())
+}
+
+/// Only unambiguous UUID selectors are normalized for ownership reservation.
+/// Native pickers, names and duplicate selectors remain the provider's input.
+pub(crate) fn take_resume_option(provider: ProviderKind, args: &mut Vec<String>) -> Option<String> {
+    let selectors: Vec<_> = argument_positions(provider, args)
+        .into_iter()
+        .filter(|&index| {
+            args[index] == "--resume"
+                || args[index].starts_with("--resume=")
+                || (provider == ProviderKind::ClaudeCode && args[index] == "-r")
+        })
+        .collect();
+    let [index] = selectors.as_slice() else {
+        return None;
+    };
+    let index = *index;
+    let (value, count) = if let Some((_, value)) = args[index].split_once('=') {
+        (value.to_owned(), 1)
+    } else {
+        (args.get(index + 1)?.clone(), 2)
+    };
+    if !is_session_uuid(&value) {
+        return None;
+    }
+    args.drain(index..index + count);
+    Some(value)
 }
 
 pub(crate) fn reserved_session(spool: &Path) -> Option<String> {
@@ -204,7 +213,7 @@ pub(crate) fn reserved_session(spool: &Path) -> Option<String> {
 
 /// User options belong to the launch, independently of generated capture
 /// arguments and the conversation it currently owns. Never invent missing
-/// flags or accept a bypass from a damaged record.
+/// flags or re-interpret permission/configuration choices on resume.
 pub(crate) fn saved_options(provider: ProviderKind, spool: &Path) -> Result<Vec<String>, String> {
     let bytes = match std::fs::read(spool.join("launch-options.json")) {
         Ok(bytes) => bytes,

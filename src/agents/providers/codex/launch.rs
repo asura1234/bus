@@ -1,5 +1,8 @@
 //! Codex-specific interactive argv and project setup metadata.
-use super::super::launch::{is_session_uuid, LaunchOption, SetupNotice};
+use super::super::{
+    launch::{argument_positions, is_session_uuid, SetupNotice},
+    ProviderKind,
+};
 use std::path::Path;
 
 /// Each launch hosts its own runtime so hooks inherit that launch's environment.
@@ -11,39 +14,26 @@ pub(crate) fn resume_args(session: &str) -> Vec<String> {
     vec!["resume".into(), session.into()]
 }
 
-/// Only a leading `resume ID` is a subcommand; later `resume` can be a value.
+/// Options can precede the command; option values named `resume` are literal.
 pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<String>, String> {
-    let mut found = None;
-    while args.first().is_some_and(|arg| arg == "resume") {
-        if found.is_some() {
-            return Err("Give at most one session to resume".into());
-        }
-        args.remove(0);
-        let value = if args.is_empty() {
-            String::new()
-        } else {
-            args.remove(0)
-        };
-        if !is_session_uuid(&value) {
-            return Err(format!(
-                "Resume needs a session ID (a UUID), not {value:?}; pickers, --continue and --last are not supported"
-            ));
-        }
-        found = Some(value);
+    let Some(index) = argument_positions(ProviderKind::Codex, args)
+        .into_iter()
+        .find(|&index| !args[index].starts_with('-'))
+    else {
+        return Ok(None);
+    };
+    if args[index] != "resume" {
+        return Ok(None);
     }
-    Ok(found)
-}
-
-pub(crate) fn supported_option(name: &str) -> Option<LaunchOption> {
-    use LaunchOption::{Choice, Flag, Value};
-    match name {
-        // Extra writable roots, e.g. a sibling git worktree; the sandbox and
-        // approval policy themselves stay Bus-owned.
-        "--model" | "-m" | "--add-dir" => Some(Value),
-        "--no-alt-screen" | "--strict-config" | "--oss" | "--search" => Some(Flag),
-        "--local-provider" => Some(Choice(&["ollama", "lmstudio"])),
-        _ => None,
-    }
+    let Some(value) = args
+        .get(index + 1)
+        .filter(|value| is_session_uuid(value))
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    args.drain(index..index + 2);
+    Ok(Some(value))
 }
 
 /// The caller resolves the project root before requesting the notice.

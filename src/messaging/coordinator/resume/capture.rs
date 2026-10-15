@@ -120,7 +120,11 @@ pub(crate) fn load(
         &hooks.spool,
     )?;
     let (path, capture, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
-    args.extend(capture);
+    crate::agents::providers::launch::extend_capture_args(
+        identity::provider_kind(agent.provider),
+        &mut args,
+        capture,
+    );
     if rebound {
         tracing::info!(event = "bus.resume.hooks_rebound", agent_id = agent.id.0,
             path = %path.display(), "Bus hooks moved back to this executable for resume");
