@@ -1,6 +1,81 @@
 use super::*;
 
 #[test]
+fn selected_sidebar_rows_have_accent_bar_bold_name_and_tinted_background() {
+    use ratatui::{
+        buffer::Buffer,
+        layout::Rect,
+        style::{Color, Modifier},
+    };
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let master = snapshot.state.ensure_master_room();
+    ui.receive_snapshot(Arc::new(snapshot));
+    for color_blind in [false, true] {
+        ui.settings.color_blind_mode = color_blind;
+        for selected in [
+            render::Action::Room(master),
+            render::Action::Room(room),
+            render::Action::Agent(agent),
+        ] {
+            ui.open_room(if selected == render::Action::Room(master) {
+                master
+            } else {
+                room
+            });
+            if selected == render::Action::Agent(agent) {
+                ui.terminal = Some(agent);
+            }
+            ui.compute_view(100, 30);
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 30));
+            ui.render(&mut buffer);
+            for action in [
+                render::Action::Room(master),
+                render::Action::Room(room),
+                render::Action::Agent(agent),
+            ] {
+                let Some(hit) = ui.view.hits.iter().find(|hit| hit.action == action) else {
+                    continue;
+                };
+                let rect = hit.rect;
+                assert_eq!(rect.x, 1, "names retain their column");
+                let is_selected = action == selected;
+                assert_eq!(
+                    buffer[(0, rect.y)].symbol(),
+                    if is_selected { "▌" } else { " " }
+                );
+                assert_eq!(
+                    buffer[(rect.x, rect.y)].modifier.contains(Modifier::BOLD),
+                    is_selected
+                );
+                assert_eq!(
+                    buffer[(rect.x, rect.y)].bg,
+                    if is_selected {
+                        Color::Rgb(40, 72, 48)
+                    } else {
+                        Color::Rgb(24, 24, 28)
+                    }
+                );
+                if is_selected {
+                    assert_eq!(buffer[(0, rect.y)].fg, Color::Rgb(102, 255, 102));
+                }
+                if action == render::Action::Agent(agent) {
+                    let agent = ui.snapshot.state.agent(agent).unwrap();
+                    let [r, g, b] = if color_blind {
+                        agent.accessible_color
+                    } else {
+                        agent.color
+                    };
+                    assert_eq!(buffer[(rect.x, rect.y)].fg, Color::Rgb(r, g, b));
+                } else {
+                    assert_eq!(buffer[(rect.x + 2, rect.y)].fg, Color::Rgb(222, 222, 226));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
     for (invalidated, deleting) in [(false, false), (true, false), (false, true)] {
         let (mut ui, room, agent) = fixture();
