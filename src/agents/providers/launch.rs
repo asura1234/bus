@@ -50,7 +50,7 @@ pub(crate) struct SetupNotice {
 mod tokens;
 pub(crate) use tokens::{parse_path_tokens, PathParseError};
 mod arguments;
-pub(crate) use arguments::argument_positions;
+pub(crate) use arguments::{argument_positions, resumable_options};
 
 pub(crate) const fn provider_kind(provider: ProviderKind) -> &'static str {
     provider.label()
@@ -131,7 +131,7 @@ pub(crate) fn launch_args(
     let mut args = parse_path_tokens(extra_args).map_err(|e| e.to_string())?;
     let adopted = take_adopted_session(provider, &mut args)?;
     validate_args(provider, &args)?;
-    extend_capture_args(provider, &mut args, runtime_args(provider));
+    extend_generated_args(provider, &mut args, runtime_args(provider));
     if let Some(session) = &adopted {
         args.splice(0..0, resume_args(provider, session));
     }
@@ -140,7 +140,7 @@ pub(crate) fn launch_args(
 
 /// Preserve user argv and omit a generated duplicate: Codex rejects a repeated
 /// --no-daemon even though the caller is entitled to supply it explicitly.
-pub(crate) fn extend_capture_args(
+pub(crate) fn extend_generated_args(
     provider: ProviderKind,
     args: &mut Vec<String>,
     capture: Vec<String>,
@@ -149,11 +149,16 @@ pub(crate) fn extend_capture_args(
         && argument_positions(provider, args)
             .into_iter()
             .any(|index| args[index] == "--no-daemon");
-    args.extend(
-        capture
-            .into_iter()
-            .filter(|arg| !private_runtime || arg != "--no-daemon"),
-    );
+    let capture = capture
+        .into_iter()
+        .filter(|arg| !private_runtime || arg != "--no-daemon");
+    // Prefix the complete user sequence when a token could be the literal
+    // boundary. This also avoids splitting an option from a value named `--`.
+    if args.iter().any(|arg| arg == "--") {
+        args.splice(0..0, capture);
+    } else {
+        args.extend(capture);
+    }
 }
 
 pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(), String> {

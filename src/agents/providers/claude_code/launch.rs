@@ -2,7 +2,7 @@
 
 use super::hooks;
 use crate::agents::providers::{
-    launch::{take_resume_option, LaunchSpec, PreparedLaunch},
+    launch::{extend_generated_args, take_resume_option, LaunchSpec, PreparedLaunch},
     ProviderKind,
 };
 use std::path::PathBuf;
@@ -32,7 +32,11 @@ pub(crate) fn prepare(
     adopted_session: Option<String>,
 ) -> Result<PreparedLaunch, String> {
     let settings = hooks::install(&spec.hooks, &cwd)?;
-    args.extend(["--settings".into(), settings.to_string_lossy().into_owned()]);
+    extend_generated_args(
+        ProviderKind::ClaudeCode,
+        &mut args,
+        vec!["--settings".into(), settings.to_string_lossy().into_owned()],
+    );
     Ok(PreparedLaunch {
         cwd,
         args,

@@ -2,46 +2,112 @@
 //! passed through and ends inspection: guessing arity could reject a value.
 use super::super::ProviderKind;
 
-/// Option positions plus the first positional command/prompt. Values and the
-/// tail after `--` are never interpreted as Bus-owned selectors or modes.
+/// Option positions plus the first positional command/prompt. Later options
+/// still count; values and the tail after `--` are never modes or selectors.
 pub(crate) fn argument_positions(provider: ProviderKind, args: &[String]) -> Vec<usize> {
     let mut positions = Vec::new();
     let mut index = 0;
+    let mut seen_positional = false;
     while let Some(arg) = args.get(index) {
         if arg == "--" {
             break;
         }
-        positions.push(index);
         if !arg.starts_with('-') {
-            break;
-        }
-        if arg.contains('=') {
-            index += 1;
-            continue;
-        }
-        // Codex's single-value short options accept attached values too.
-        if provider == ProviderKind::Codex
-            && arg.len() > 2
-            && ["-c", "-m", "-p", "-s", "-a", "-C", "-i"]
-                .iter()
-                .any(|prefix| arg.starts_with(prefix))
-        {
-            index += 1;
-            continue;
-        }
-        match arity(provider, arg) {
-            Some(0) => index += 1,
-            Some(1) => index += 2,
-            Some(_) => {
-                index += 1;
-                while args.get(index).is_some_and(|value| !value.starts_with('-')) {
-                    index += 1;
-                }
+            if !seen_positional {
+                positions.push(index);
+                seen_positional = true;
             }
+            index += 1;
+            continue;
+        }
+        positions.push(index);
+        match option_end(provider, args, index) {
+            Some(end) => index = end,
             None => break,
         }
     }
     positions
+}
+
+/// A bound conversation already consumed its startup prompt/selector. Keep
+/// option spans, including options after a prompt, in their original order.
+/// Unknown arity preserves the entire remaining input rather than guessing.
+pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<String> {
+    let mut options = Vec::new();
+    let mut index = 0;
+    let mut seen_positional = false;
+    let mut codex_selector = false;
+    while let Some(arg) = args.get(index) {
+        if arg == "--" {
+            break;
+        }
+        if !arg.starts_with('-') {
+            if !seen_positional
+                && provider == ProviderKind::Codex
+                && matches!(arg.as_str(), "resume" | "fork")
+            {
+                codex_selector = true;
+                index += 1;
+                if args.get(index).is_some_and(|value| !value.starts_with('-')) {
+                    index += 1;
+                }
+            } else {
+                index += 1;
+            }
+            seen_positional = true;
+            continue;
+        }
+        let name = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
+        let selector = match provider {
+            ProviderKind::Codex => codex_selector && matches!(name, "--last" | "--all"),
+            ProviderKind::ClaudeCode => matches!(
+                name,
+                "--resume" | "-r" | "--session-id" | "--continue" | "-c" | "--fork-session"
+            ),
+            ProviderKind::Cursor => matches!(name, "--resume" | "--continue"),
+        };
+        if selector {
+            index += 1;
+            if !arg.contains('=')
+                && matches!(name, "--resume" | "-r" | "--session-id")
+                && args.get(index).is_some_and(|value| !value.starts_with('-'))
+            {
+                index += 1;
+            }
+            continue;
+        }
+        let Some(end) = option_end(provider, args, index) else {
+            options.extend_from_slice(&args[index..]);
+            break;
+        };
+        options.extend_from_slice(&args[index..end]);
+        index = end;
+    }
+    options
+}
+
+fn option_end(provider: ProviderKind, args: &[String], index: usize) -> Option<usize> {
+    let arg = &args[index];
+    if arg.contains('=')
+        || (provider == ProviderKind::Codex
+            && arg.len() > 2
+            && ["-c", "-m", "-p", "-s", "-a", "-C", "-i"]
+                .iter()
+                .any(|prefix| arg.starts_with(prefix)))
+    {
+        return Some(index + 1);
+    }
+    match arity(provider, arg)? {
+        0 => Some(index + 1),
+        1 => Some((index + 2).min(args.len())),
+        _ => {
+            let mut end = index + 1;
+            while args.get(end).is_some_and(|value| !value.starts_with('-')) {
+                end += 1;
+            }
+            Some(end)
+        }
+    }
 }
 
 // This metadata only distinguishes option values. A missing name never makes

@@ -747,3 +747,170 @@ fn unstarted_resume_from_saved_launch_argv_does_not_repeat_original_options() {
         .collect();
     assert_eq!(argv, launch_argv);
 }
+
+#[test]
+fn resume_of_a_started_conversation_does_not_replay_its_initial_prompt_or_selector() {
+    use crate::agents::providers::{hook_json::HookContext, launch};
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let mut replayed = Vec::new();
+    for (provider, input, launch_only) in [
+        (
+            Provider::Codex,
+            "--yolo 'summarize the repo'",
+            vec!["summarize the repo"],
+        ),
+        (Provider::Codex, "resume --last", vec!["resume", "--last"]),
+        (
+            Provider::ClaudeCode,
+            "--dangerously-skip-permissions 'summarize the repo'",
+            vec!["summarize the repo"],
+        ),
+    ] {
+        let fixture = Fixture::new(provider);
+        let kind = identity::provider_kind(provider);
+        let bin = fixture.root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
+        let previous = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+        let prepared = launch::prepare(
+            &launch::LaunchSpec {
+                provider: kind,
+                cwd: fixture.project.display().to_string(),
+                extra_args: input.into(),
+                consent_project_hooks: true,
+                hooks: HookContext {
+                    binary: fixture.binary.clone(),
+                    spool: fixture.root.join("callbacks/owned-launch"),
+                    launch_id: "owned-launch".into(),
+                },
+            },
+            |_| Ok(()),
+        );
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        prepared.unwrap();
+        // The saved conversation already received this prompt or was chosen by
+        // this selector; the resume plan names the conversation itself.
+        let extras = fixture.load().unwrap();
+        let argv: Vec<String> = fixture
+            .plan
+            .argv
+            .iter()
+            .chain(extras.args.iter())
+            .cloned()
+            .collect();
+        if launch_only
+            .iter()
+            .any(|token| extras.args.iter().any(|arg| arg == token))
+        {
+            replayed.push(format!("{provider:?}: {argv:?}"));
+        }
+    }
+    assert!(
+        replayed.is_empty(),
+        "resume replays launch-only tokens: {replayed:#?}"
+    );
+}
+
+#[test]
+fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched() {
+    use crate::agents::providers::launch;
+    for (provider, original, expected) in [
+        (
+            Provider::Codex,
+            "'already submitted' --yolo -c 'key=\"resume\"' --sandbox danger-full-access",
+            "--yolo -c 'key=\"resume\"' --sandbox danger-full-access",
+        ),
+        (
+            Provider::ClaudeCode,
+            "'already submitted' --permission-mode bypassPermissions --system-prompt '--resume'",
+            "--permission-mode bypassPermissions --system-prompt '--resume'",
+        ),
+        (
+            Provider::Cursor,
+            "'already submitted' --yolo --sandbox disabled",
+            "--yolo --sandbox disabled",
+        ),
+        (
+            Provider::Codex,
+            "--yolo resume --last -c key=value",
+            "--yolo -c key=value",
+        ),
+        (
+            Provider::ClaudeCode,
+            "--resume named-session --continue --fork-session --dangerously-skip-permissions",
+            "--dangerously-skip-permissions",
+        ),
+        (
+            Provider::Cursor,
+            "--resume named-session --continue --yolo",
+            "--yolo",
+        ),
+        (
+            Provider::Codex,
+            "--future-config '--resume' value --yolo",
+            "--future-config '--resume' value --yolo",
+        ),
+    ] {
+        let fixture = Fixture::new(provider);
+        let kind = identity::provider_kind(provider);
+        let original = launch::parse_path_tokens(original).unwrap();
+        let path = fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json");
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let mut expected = launch::parse_path_tokens(expected).unwrap();
+        expected.extend(match provider {
+            Provider::Codex => vec!["--no-daemon".to_owned()],
+            Provider::ClaudeCode => vec![
+                "--settings".into(),
+                fixture.hook_path().to_string_lossy().into_owned(),
+            ],
+            Provider::Cursor => Vec::new(),
+        });
+        assert_eq!(
+            fixture.load().unwrap().args,
+            expected,
+            "{provider:?}: {original:?}"
+        );
+        assert_eq!(
+            launch::saved_options(kind, path.parent().unwrap()).unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+fn unstarted_resume_preserves_literal_initial_input_with_capture_options_before_it() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
+    identity.session_id = None;
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
+    fixture.save();
+    fixture.facts.session = None;
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+    std::fs::write(
+        fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json"),
+        r#"["--yolo","--","first prompt"]"#,
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.load().unwrap().args,
+        ["--no-daemon", "--yolo", "--", "first prompt"]
+    );
+}

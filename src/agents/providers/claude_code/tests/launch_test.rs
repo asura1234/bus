@@ -183,3 +183,22 @@ fn claude_adapter_refuses_corrupt_launch_settings_before_installing_the_statusli
     assert_eq!(std::fs::read(path).unwrap(), b"corrupt original");
     assert!(!spec.hooks.spool.join("claude-statusline.json").exists());
 }
+
+#[test]
+fn claude_capture_settings_precede_a_literal_argument_tail() {
+    let fixture = Fixture::new();
+    let mut spec = fixture.spec();
+    spec.extra_args = "-- '--dangerously-skip-permissions literal prompt'".into();
+    let initial = argv(&["--", "--dangerously-skip-permissions literal prompt"]);
+    let result = prepare(&spec, fixture.0.clone(), initial, None).unwrap();
+    let settings = spec.hooks.spool.join("claude-settings.json");
+    assert_eq!(
+        result.args,
+        argv(&[
+            "--settings",
+            settings.to_str().unwrap(),
+            "--",
+            "--dangerously-skip-permissions literal prompt",
+        ])
+    );
+}

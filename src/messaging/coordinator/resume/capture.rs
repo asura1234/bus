@@ -119,8 +119,14 @@ pub(crate) fn load(
         identity::provider_kind(agent.provider),
         &hooks.spool,
     )?;
+    if facts.session.is_some() {
+        args = crate::agents::providers::launch::resumable_options(
+            identity::provider_kind(agent.provider),
+            &args,
+        );
+    }
     let (path, capture, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
-    crate::agents::providers::launch::extend_capture_args(
+    crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),
         &mut args,
         capture,
@@ -130,10 +136,12 @@ pub(crate) fn load(
             path = %path.display(), "Bus hooks moved back to this executable for resume");
     }
     // Prompt policy stays with messaging; provider-specific argv stays below it.
-    args.extend(crate::messaging::orchestration::resume_prompt_args(
-        agent.provider,
-        &hooks.spool,
-    )?);
+    let prompt = crate::messaging::orchestration::resume_prompt_args(agent.provider, &hooks.spool)?;
+    crate::agents::providers::launch::extend_generated_args(
+        identity::provider_kind(agent.provider),
+        &mut args,
+        prompt,
+    );
     let mut env = hooks.env();
     let env = ["BUS_LAUNCH_ID", "BUS_CALLBACK_DIR"]
         .map(|key| {

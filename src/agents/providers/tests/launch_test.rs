@@ -212,6 +212,25 @@ fn codex_launch_does_not_duplicate_an_explicit_private_runtime_option() {
             .0,
         vec!["--yolo", "--no-daemon"]
     );
+    assert_eq!(
+        launch_args(Provider::Codex, "'first prompt' --no-daemon")
+            .unwrap()
+            .0,
+        vec!["first prompt", "--no-daemon"]
+    );
+}
+
+#[test]
+fn codex_capture_runtime_precedes_a_literal_argument_tail() {
+    let (args, adopted) = launch_args(Provider::Codex, "-- '--yolo literal prompt'").unwrap();
+    assert_eq!(adopted, None);
+    assert_eq!(args, ["--no-daemon", "--", "--yolo literal prompt"]);
+}
+
+#[test]
+fn generated_args_do_not_split_an_option_from_a_value_named_separator() {
+    let (args, _) = launch_args(Provider::Codex, "--model '--'").unwrap();
+    assert_eq!(args, ["--no-daemon", "--model", "--"]);
 }
 
 #[test]

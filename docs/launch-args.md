@@ -12,14 +12,21 @@ claude: --dangerously-skip-permissions --permission-mode bypassPermissions
 cursor: --yolo --force --sandbox disabled --approve-mcps
 ```
 
-Bus saves these user tokens in the launch's `launch-options.json` and replays
-them on resume. It never invents a bypass flag or removes an original one.
+Bus saves the original user tokens in the launch's `launch-options.json` and
+replays permission/configuration options on resume. It never invents a bypass
+flag or removes an original one. A bound conversation has already consumed its
+initial prompt and native session selector, so those one-time inputs are not
+sent again. Options after an initial prompt are retained. An unstarted launch
+retains all initial input. Unknown option arity preserves the remaining tokens
+without guessing which of them are values or one-time input.
 Bus separately supplies its capture arguments (`--no-daemon` for Codex and
 `--settings <capture-file>` for Claude) and the saved conversation selector.
 When the user supplies Codex `--no-daemon`, Bus omits its generated copy:
 Codex 0.162.0 rejects the same flag appearing twice.
 An explicit UUID resume selector can be normalized and reserved for ownership;
-native pickers, names and other selectors remain the provider's input.
+on add, native pickers, names and other selectors remain the provider's input.
+Bus-generated capture and orchestration options precede a literal `--` tail,
+preserving the original user token order and literal prompt.
 
 Bus does not validate provider option names, required values or choices. Unknown
 syntax passes through; when its arity is unclear, Bus stops inspecting it rather
