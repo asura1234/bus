@@ -192,42 +192,188 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn resumed_launch_preserves_original_options_without_adding_bypass_flags() {
+    use crate::agents::providers::{hook_json::HookContext, launch};
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    for (provider, options) in [
+        (Provider::Codex, "--model gpt-test --add-dir '/work/sibling dir' --no-alt-screen"),
+        (Provider::ClaudeCode, "--model sonnet --effort high --verbose"),
+        (Provider::Cursor, "--model test --mode=plan"),
+        (Provider::Codex, "--yolo -c 'model_reasoning_effort=\"high\"' --sandbox danger-full-access --ask-for-approval never"),
+        (Provider::ClaudeCode, "--dangerously-skip-permissions --permission-mode bypassPermissions --settings /tmp/user.json"),
+        (Provider::Cursor, "--yolo --force --sandbox disabled --approve-mcps"),
+    ] {
+        for adopted in [false, true] {
+            let fixture = Fixture::new(provider);
+            let kind = identity::provider_kind(provider);
+            let session = "160d1f8b-9023-44b8-9bc7-24333effb185";
+            let input = if adopted {
+                match provider {
+                    Provider::Codex => format!("resume {session} {options}"),
+                    _ => format!("--resume {session} {options}"),
+                }
+            } else {
+                options.into()
+            };
+            let bin = fixture.root.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
+            let previous = std::env::var_os("PATH");
+            std::env::set_var("PATH", &bin);
+            let prepared = launch::prepare(&launch::LaunchSpec {
+                provider: kind,
+                cwd: fixture.project.display().to_string(),
+                extra_args: input,
+                consent_project_hooks: true,
+                hooks: HookContext {
+                    binary: fixture.binary.clone(),
+                    spool: fixture.root.join("callbacks/owned-launch"),
+                    launch_id: "owned-launch".into(),
+                },
+            }, |_| Ok(()));
+            if let Some(previous) = previous {
+                std::env::set_var("PATH", previous);
+            } else {
+                std::env::remove_var("PATH");
+            }
+            let mut prepared = prepared.unwrap();
+            launch::take_adopted_session(kind, &mut prepared.args).unwrap();
+            let resumed = fixture.load().unwrap();
+            assert_eq!(resumed.args, prepared.args, "lost launch flags for {provider:?}");
+            assert_eq!(launch::saved_options(kind, &fixture.root.join("callbacks/owned-launch")).unwrap(), launch::parse_path_tokens(options).unwrap());
+        }
+    }
+}
+
+#[test]
+fn saved_resume_options_reject_only_launch_breakers_malformed_and_unreadable_records() {
+    let fixture = Fixture::new(Provider::Codex);
+    let path = fixture
+        .root
+        .join("callbacks/owned-launch/launch-options.json");
+    for bytes in [
+        r#"["exec"]"#,
+        r#"["--unknown=has\u0000nul"]"#,
+        "broken json",
+        r#"{"options":[]}"#,
+    ] {
+        std::fs::write(&path, bytes).unwrap();
+        assert!(fixture.load().is_err(), "accepted {bytes}");
+    }
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(fixture.load().is_err());
+}
+
+#[test]
+fn unstarted_resume_replays_saved_options() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
+    identity.session_id = None;
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
+    fixture.save();
+    fixture.facts.session = None;
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+    let path = fixture
+        .root
+        .join("callbacks/owned-launch/launch-options.json");
+    std::fs::write(&path, r#"["--model","gpt-test"]"#).unwrap();
+    assert_eq!(
+        fixture.load().unwrap().args,
+        ["--model", "gpt-test", "--no-daemon"]
+    );
+}
+
+#[test]
+fn resume_does_not_duplicate_an_explicit_private_runtime_option() {
+    let fixture = Fixture::new(Provider::Codex);
+    std::fs::write(
+        fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json"),
+        r#"["--yolo","--no-daemon"]"#,
+    )
+    .unwrap();
+    assert_eq!(fixture.load().unwrap().args, ["--yolo", "--no-daemon"]);
+}
+
+#[test]
 fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     let mut fixture = Fixture::new(Provider::Codex);
-    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
     identity.session_id = None;
-    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
     fixture.facts.session = None;
-    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
-        &fixture.facts, None,
-    ).unwrap();
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
     fixture.save();
     let extras = fixture.load().unwrap();
     assert_eq!(extras.env, fixture.expected_env());
     let argv: Vec<_> = fixture.plan.argv.iter().chain(extras.args.iter()).collect();
-    assert_eq!(argv.iter().filter(|arg| arg.as_str() == "--no-daemon").count(), 1);
+    assert_eq!(
+        argv.iter()
+            .filter(|arg| arg.as_str() == "--no-daemon")
+            .count(),
+        1
+    );
     assert!(extras.session.is_none());
-    assert!(fixture.state.agent(fixture.agent).unwrap().runtime_identity.session_id.is_none());
+    assert!(fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .session_id
+        .is_none());
 
-    std::fs::write(fixture.root.join("callbacks/owned-launch/adopted-session"), "reserved-session").unwrap();
-    assert_eq!(fixture.load().unwrap_err(),
-        "Bus resume cannot replace an adopted session with an empty launch");
+    std::fs::write(
+        fixture.root.join("callbacks/owned-launch/adopted-session"),
+        "reserved-session",
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.load().unwrap_err(),
+        "Bus resume cannot replace an adopted session with an empty launch"
+    );
 }
 
 #[test]
 fn unstarted_resume_rejects_a_bound_owner_and_noninteractive_argv() {
     let mut fixture = Fixture::new(Provider::Codex);
     fixture.facts.session = None;
-    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
-        &fixture.facts, None,
-    ).unwrap();
-    assert!(fixture.load().is_err(), "a bound owner must keep its conversation");
-    for argv in [vec!["codex", "resume", "previous"], vec!["codex", "exec", "prompt"],
-        vec!["codex", "--config", "x=y"]] {
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+    assert!(
+        fixture.load().is_err(),
+        "a bound owner must keep its conversation"
+    );
+    for argv in [
+        vec!["codex", "resume", "previous"],
+        vec!["codex", "exec", "prompt"],
+        vec!["codex", "--yolo", "resume", "previous"],
+    ] {
         let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
         assert!(crate::messaging::coordinator::resume::unstarted_codex_plan(
-            &fixture.facts, Some(&argv),
-        ).is_none());
+            &fixture.facts,
+            Some(&argv),
+        )
+        .is_none());
     }
 }
 
@@ -557,4 +703,214 @@ fn bus_resume_refuses_callback_spool_symlink_escape_before_touching_capture() {
         state_before
     );
     assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), hooks_before);
+}
+
+#[test]
+fn unstarted_resume_from_saved_launch_argv_does_not_repeat_original_options() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
+    identity.session_id = None;
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
+    fixture.save();
+    fixture.facts.session = None;
+    // The pane's persisted launch argv is the executable plus prepared args.
+    let launch_argv: Vec<String> = ["codex", "--model", "gpt-test", "--no-daemon"]
+        .map(str::to_owned)
+        .into();
+    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
+        &fixture.facts,
+        Some(&launch_argv),
+    )
+    .unwrap();
+    std::fs::write(
+        fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json"),
+        r#"["--model","gpt-test"]"#,
+    )
+    .unwrap();
+    let extras = fixture.load().unwrap();
+    let argv: Vec<String> = fixture
+        .plan
+        .argv
+        .iter()
+        .chain(extras.args.iter())
+        .cloned()
+        .collect();
+    assert_eq!(argv, launch_argv);
+}
+
+#[test]
+fn resume_of_a_started_conversation_does_not_replay_its_initial_prompt_or_selector() {
+    use crate::agents::providers::{hook_json::HookContext, launch};
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let mut replayed = Vec::new();
+    for (provider, input, launch_only) in [
+        (
+            Provider::Codex,
+            "--yolo 'summarize the repo'",
+            vec!["summarize the repo"],
+        ),
+        (Provider::Codex, "resume --last", vec!["resume", "--last"]),
+        (
+            Provider::ClaudeCode,
+            "--dangerously-skip-permissions 'summarize the repo'",
+            vec!["summarize the repo"],
+        ),
+    ] {
+        let fixture = Fixture::new(provider);
+        let kind = identity::provider_kind(provider);
+        let bin = fixture.root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
+        let previous = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+        let prepared = launch::prepare(
+            &launch::LaunchSpec {
+                provider: kind,
+                cwd: fixture.project.display().to_string(),
+                extra_args: input.into(),
+                consent_project_hooks: true,
+                hooks: HookContext {
+                    binary: fixture.binary.clone(),
+                    spool: fixture.root.join("callbacks/owned-launch"),
+                    launch_id: "owned-launch".into(),
+                },
+            },
+            |_| Ok(()),
+        );
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        prepared.unwrap();
+        // The saved conversation already received this prompt or was chosen by
+        // this selector; the resume plan names the conversation itself.
+        let extras = fixture.load().unwrap();
+        let argv: Vec<String> = fixture
+            .plan
+            .argv
+            .iter()
+            .chain(extras.args.iter())
+            .cloned()
+            .collect();
+        if launch_only
+            .iter()
+            .any(|token| extras.args.iter().any(|arg| arg == token))
+        {
+            replayed.push(format!("{provider:?}: {argv:?}"));
+        }
+    }
+    assert!(
+        replayed.is_empty(),
+        "resume replays launch-only tokens: {replayed:#?}"
+    );
+}
+
+#[test]
+fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched() {
+    use crate::agents::providers::launch;
+    for (provider, original, expected) in [
+        (
+            Provider::Codex,
+            "'already submitted' --yolo -c 'key=\"resume\"' --sandbox danger-full-access",
+            "--yolo -c 'key=\"resume\"' --sandbox danger-full-access",
+        ),
+        (
+            Provider::ClaudeCode,
+            "'already submitted' --permission-mode bypassPermissions --system-prompt '--resume'",
+            "--permission-mode bypassPermissions --system-prompt '--resume'",
+        ),
+        (
+            Provider::Cursor,
+            "'already submitted' --yolo --sandbox disabled",
+            "--yolo --sandbox disabled",
+        ),
+        (
+            Provider::Codex,
+            "--yolo resume --last -c key=value",
+            "--yolo -c key=value",
+        ),
+        (
+            Provider::ClaudeCode,
+            "--resume named-session --continue --fork-session --dangerously-skip-permissions",
+            "--dangerously-skip-permissions",
+        ),
+        (
+            Provider::Cursor,
+            "--resume named-session --continue --yolo",
+            "--yolo",
+        ),
+        (
+            Provider::Codex,
+            "--future-config '--resume' value --yolo",
+            "--future-config '--resume' value --yolo",
+        ),
+    ] {
+        let fixture = Fixture::new(provider);
+        let kind = identity::provider_kind(provider);
+        let original = launch::parse_path_tokens(original).unwrap();
+        let path = fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json");
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let mut expected = launch::parse_path_tokens(expected).unwrap();
+        expected.extend(match provider {
+            Provider::Codex => vec!["--no-daemon".to_owned()],
+            Provider::ClaudeCode => vec![
+                "--settings".into(),
+                fixture.hook_path().to_string_lossy().into_owned(),
+            ],
+            Provider::Cursor => Vec::new(),
+        });
+        assert_eq!(
+            fixture.load().unwrap().args,
+            expected,
+            "{provider:?}: {original:?}"
+        );
+        assert_eq!(
+            launch::saved_options(kind, path.parent().unwrap()).unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+fn unstarted_resume_preserves_literal_initial_input_with_capture_options_before_it() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut identity = fixture
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
+    identity.session_id = None;
+    fixture
+        .state
+        .set_agent_runtime_identity(fixture.agent, identity)
+        .unwrap();
+    fixture.save();
+    fixture.facts.session = None;
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+    std::fs::write(
+        fixture
+            .root
+            .join("callbacks/owned-launch/launch-options.json"),
+        r#"["--yolo","--","first prompt"]"#,
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.load().unwrap().args,
+        ["--no-daemon", "--yolo", "--", "first prompt"]
+    );
 }

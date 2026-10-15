@@ -546,7 +546,11 @@ impl Worker {
         let adopted = prepared.adopted_session.is_some();
         let path = orchestrator::write_prompt(&hooks.spool, &text)?;
         match orchestrator::prompt_args(input.provider, &path, adopted)? {
-            Some(args) => prepared.args.extend(args),
+            Some(args) => launch::extend_generated_args(
+                identity::provider_kind(input.provider),
+                &mut prepared.args,
+                args,
+            ),
             // Queued until the agent is ready, like any room message.
             None => {
                 let master = input.room;

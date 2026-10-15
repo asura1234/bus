@@ -1,5 +1,4 @@
 use super::launch;
-use crate::agents::providers::launch::LaunchOption;
 use std::path::Path;
 
 fn args(tokens: &[&str]) -> Vec<String> {
@@ -27,46 +26,15 @@ fn cursor_adoption_accepts_separate_and_attached_resume_at_any_position() {
         "--resume=not-a-uuid",
         "--resume=--continue",
     ] {
-        assert!(
-            launch::take_adopted_session(&mut args(&[input])).is_err(),
-            "{input}"
-        );
+        let mut tokens = args(&[input]);
+        assert_eq!(launch::take_adopted_session(&mut tokens).unwrap(), None);
+        assert_eq!(tokens, args(&[input]));
     }
     assert_eq!(
         launch::take_adopted_session(&mut args(&["--resume", id, &format!("--resume={id}")]))
-            .unwrap_err(),
-        "Give at most one session to resume"
+            .unwrap(),
+        None
     );
-}
-
-#[test]
-fn cursor_interactive_options_do_not_accept_trust_or_headless_aliases() {
-    assert!(matches!(
-        launch::supported_option("--model"),
-        Some(LaunchOption::Value)
-    ));
-    assert!(matches!(
-        launch::supported_option("--plan"),
-        Some(LaunchOption::Flag)
-    ));
-    assert!(matches!(
-        launch::supported_option("--mode"),
-        Some(LaunchOption::Choice(["plan", "ask"]))
-    ));
-    for option in [
-        "--force",
-        "--yolo",
-        "--trust",
-        "--sandbox",
-        "--approve-mcps",
-        "-f",
-        "-p",
-        "worker",
-        "--plugin-dir",
-        "--continue",
-    ] {
-        assert!(launch::supported_option(option).is_none(), "{option}");
-    }
 }
 
 #[test]

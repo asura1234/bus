@@ -39,41 +39,34 @@ fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)>
 }
 
 #[test]
-fn launch_args_cannot_replace_hooks_or_bypass_trust() {
-    for (provider, arg) in [
-        (
-            Provider::Codex,
-            "--dangerously-bypass-approvals-and-sandbox",
-        ),
-        (Provider::ClaudeCode, "--settings"),
-        (Provider::Cursor, "--force"),
+fn launch_args_preserve_permission_configuration_and_unknown_options() {
+    for (provider, input) in [
+        (Provider::Codex, "--yolo -c 'model_reasoning_effort=\"high\"' --sandbox danger-full-access --ask-for-approval never -a=never -sdanger-full-access --dangerously-bypass-approvals-and-sandbox"),
+        (Provider::ClaudeCode, "--dangerously-skip-permissions --permission-mode bypassPermissions --settings=/tmp/user.json --allowed-tools Bash --add-dir /work/sibling"),
+        (Provider::Cursor, "--force --yolo --sandbox=disabled --trust --approve-mcps --plugin-dir /tmp/plugin"),
+        (Provider::Codex, "--future-option future-value --model="),
+        (Provider::ClaudeCode, "--future-option=anything --effort=unknown"),
+        (Provider::Cursor, "--future-option=anything --mode=agent"),
     ] {
-        assert!(validate_args(provider, &[arg.into()]).is_err(), "{arg}");
+        let mut expected = files::parse_path_tokens(input).unwrap();
+        expected.extend(runtime_args(provider));
+        assert_eq!(launch_args(provider, input).unwrap(), (expected, None), "{provider:?}: {input}");
     }
-    assert!(validate_args(Provider::Codex, &["--model".into(), "gpt-test".into()]).is_ok());
 }
 
 #[test]
-fn provider_launch_options_reject_safeguard_aliases_and_noninteractive_commands() {
+fn provider_launch_options_reject_only_proven_noninteractive_or_hookless_modes() {
     for (provider, inputs) in [
         (
             Provider::Codex,
             vec![
-                "-a never -s danger-full-access",
-                "-anever",
-                "-a=never",
-                "-sdanger-full-access",
-                "--ask-for-approval=never",
-                "--sandbox=danger-full-access",
+                "exec",
                 "e",
                 "review",
+                "--yolo exec",
+                "-c key=value exec",
                 "--model test e",
                 "--model=test review",
-                "-p untrusted-profile",
-                "-cfeatures.hooks=false",
-                "--remote unix:///tmp/other.sock",
-                "--unknown-option=value",
-                "-- review",
             ],
         ),
         (
@@ -83,31 +76,12 @@ fn provider_launch_options_reject_safeguard_aliases_and_noninteractive_commands(
                 "--safe-mode",
                 "--bg",
                 "--background",
-                "--dangerously-skip-permissions",
-                "--allowed-tools Bash",
-                "--settings=/tmp/hooks.json",
-                "-phello",
-                "--print=hello",
-                "review",
-                "--unknown-option=value",
+                "-p",
+                "--print",
+                "--dangerously-skip-permissions --print",
             ],
         ),
-        (
-            Provider::Cursor,
-            vec![
-                "-f",
-                "--force",
-                "--yolo",
-                "--auto-review",
-                "--approve-mcps",
-                "--sandbox=disabled",
-                "--trust",
-                "--plugin-dir=/tmp/hooks",
-                "-phello",
-                "worker",
-                "--unknown-option=value",
-            ],
-        ),
+        (Provider::Cursor, vec!["-p", "--print", "--yolo --print"]),
     ] {
         for input in inputs {
             let args = files::parse_path_tokens(input).unwrap();
@@ -120,7 +94,7 @@ fn provider_launch_options_reject_safeguard_aliases_and_noninteractive_commands(
 }
 
 #[test]
-fn provider_launch_options_preserve_supported_interactive_values_and_reject_ambiguous_syntax() {
+fn provider_launch_options_do_not_misread_values_or_positional_prompts_as_modes() {
     for (provider, input) in [
             (Provider::Codex, "-m gpt-test --no-alt-screen --strict-config"),
             (Provider::Codex, "-mgpt-test --oss --local-provider=ollama"),
@@ -129,30 +103,21 @@ fn provider_launch_options_preserve_supported_interactive_values_and_reject_ambi
             (Provider::ClaudeCode, "--model=sonnet --effort high --verbose --append-system-prompt 'Use literal @mentions and paths'"),
             (Provider::Cursor, "--model 'sonnet[effort=high]' --mode=plan"),
             (Provider::Cursor, "--plan"),
+            (Provider::Codex, "--model exec"),
+            (Provider::Codex, "-c 'key=\"exec\"' --model review"),
+            (Provider::Codex, "-- exec"),
+            (Provider::ClaudeCode, "--system-prompt '--resume' --model '--print'"),
+            (Provider::ClaudeCode, "--append-system-prompt '--bare'"),
+            (Provider::ClaudeCode, "review"),
+            (Provider::Cursor, "--model '--print'"),
+            (Provider::Cursor, "worker"),
+            (Provider::Cursor, "-- --print"),
         ] {
             let args = files::parse_path_tokens(input).unwrap();
             assert!(validate_args(provider, &args).is_ok(), "rejected {provider:?}: {input}");
         }
-    for (provider, input) in [
-        (Provider::Codex, "--model --ask-for-approval=never"),
-        (Provider::Codex, "--model="),
-        (Provider::Codex, "--model"),
-        (Provider::Codex, "--no-alt-screen=review"),
-        (Provider::Codex, "--local-provider=unknown"),
-        (Provider::Codex, "--add-dir"),
-        (Provider::Codex, "--add-dir --sandbox=danger-full-access"),
-        (Provider::ClaudeCode, "--add-dir /work/bus-sibling"),
-        (Provider::ClaudeCode, "-m sonnet"),
-        (Provider::ClaudeCode, "--effort=unknown"),
-        (Provider::Cursor, "--mode=agent"),
-        (Provider::Cursor, "--model sonnet review"),
-        (Provider::Cursor, "--model=sonnet\0--force"),
-    ] {
-        let args = files::parse_path_tokens(input).unwrap();
-        assert!(
-            validate_args(provider, &args).is_err(),
-            "accepted {provider:?}: {input}"
-        );
+    for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
+        assert!(validate_args(provider, &["--unknown=value\0suffix".into()]).is_err());
     }
 }
 
@@ -222,8 +187,8 @@ fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
         (Provider::Cursor, "--continue"),
     ] {
         assert!(
-            launch_args(provider, input).is_err(),
-            "accepted {provider:?}: {input}"
+            launch_args(provider, input).is_ok(),
+            "rejected {provider:?}: {input}"
         );
     }
 }
@@ -236,8 +201,67 @@ fn codex_launches_host_their_own_runtime_so_hooks_inherit_launch_env() {
     );
     assert!(runtime_args(Provider::ClaudeCode).is_empty());
     assert!(runtime_args(Provider::Cursor).is_empty());
-    // Bus owns this flag; a user-supplied copy stays outside the allowlist.
-    assert!(validate_args(Provider::Codex, &["--no-daemon".into()]).is_err());
+    assert!(validate_args(Provider::Codex, &["--no-daemon".into()]).is_ok());
+}
+
+#[test]
+fn codex_launch_does_not_duplicate_an_explicit_private_runtime_option() {
+    assert_eq!(
+        launch_args(Provider::Codex, "--yolo --no-daemon")
+            .unwrap()
+            .0,
+        vec!["--yolo", "--no-daemon"]
+    );
+    assert_eq!(
+        launch_args(Provider::Codex, "'first prompt' --no-daemon")
+            .unwrap()
+            .0,
+        vec!["first prompt", "--no-daemon"]
+    );
+}
+
+#[test]
+fn codex_capture_runtime_precedes_a_literal_argument_tail() {
+    let (args, adopted) = launch_args(Provider::Codex, "-- '--yolo literal prompt'").unwrap();
+    assert_eq!(adopted, None);
+    assert_eq!(args, ["--no-daemon", "--", "--yolo literal prompt"]);
+}
+
+#[test]
+fn generated_args_do_not_split_an_option_from_a_value_named_separator() {
+    let (args, _) = launch_args(Provider::Codex, "--model '--'").unwrap();
+    assert_eq!(args, ["--no-daemon", "--model", "--"]);
+}
+
+#[test]
+fn launch_args_adoption_distinguishes_selectors_from_literal_option_values() {
+    let id = "160d1f8b-9023-44b8-9bc7-24333effb185";
+    for (provider, input) in [
+        (
+            Provider::ClaudeCode,
+            "--system-prompt '--resume'".to_owned(),
+        ),
+        (
+            Provider::ClaudeCode,
+            "--system-prompt '--resume=not-a-selector'".to_owned(),
+        ),
+        (Provider::Cursor, "--model '--resume'".to_owned()),
+        (Provider::Codex, "-c 'key=\"resume\"'".to_owned()),
+    ] {
+        let mut expected = files::parse_path_tokens(&input).unwrap();
+        expected.extend(runtime_args(provider));
+        assert_eq!(launch_args(provider, &input).unwrap(), (expected, None));
+    }
+    assert_eq!(
+        launch_args(Provider::Codex, &format!("--yolo -c key=value resume {id}")).unwrap(),
+        (
+            vec!["resume", id, "--yolo", "-c", "key=value", "--no-daemon"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            Some(id.into())
+        )
+    );
 }
 
 include!("hook_json_test.rs");

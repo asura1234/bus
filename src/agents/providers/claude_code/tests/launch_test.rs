@@ -16,7 +16,7 @@ fn validate_args(args: &[String]) -> Result<(), String> {
 }
 
 #[test]
-fn claude_adapter_accepts_interactive_values_and_rejects_owned_settings_and_trust_overrides() {
+fn claude_adapter_accepts_configuration_and_permission_overrides() {
     assert!(validate_args(&argv(&[
         "--model=sonnet",
         "--effort",
@@ -26,6 +26,9 @@ fn claude_adapter_accepts_interactive_values_and_rejects_owned_settings_and_trus
         "--append-system-prompt",
         "Use literal @mentions and paths",
         "--system-prompt=custom",
+        "--dangerously-skip-permissions",
+        "--permission-mode=bypassPermissions",
+        "--settings=/tmp/hooks.json",
     ]))
     .is_ok());
     for arg in [
@@ -33,44 +36,26 @@ fn claude_adapter_accepts_interactive_values_and_rejects_owned_settings_and_trus
         "--safe-mode",
         "--bg",
         "--background",
-        "--dangerously-skip-permissions",
-        "--allowed-tools",
-        "--settings=/tmp/hooks.json",
-        "-phello",
-        "--print=hello",
-        "review",
-        "--unknown-option=value",
-        "-m",
-        "--continue",
-        "--fork-session",
-        "--session-id",
-        "--resume",
+        "-p",
+        "--print",
     ] {
         assert!(validate_args(&argv(&[arg])).is_err(), "{arg}");
     }
 }
 
 #[test]
-fn claude_adapter_retains_missing_value_choice_and_nul_refusals() {
+fn claude_adapter_leaves_provider_validation_to_claude_but_rejects_nul() {
     for args in [
         argv(&["--model"]),
         argv(&["--model="]),
         argv(&["--model", "--verbose"]),
         argv(&["--verbose=true"]),
         argv(&["--effort=unknown"]),
-        argv(&["--model=sonnet\0--settings"]),
-        argv(&["--model", "sonnet\0"]),
     ] {
-        assert!(validate_args(&args).is_err(), "{args:?}");
+        assert!(validate_args(&args).is_ok(), "{args:?}");
     }
-    assert_eq!(
-        validate_args(&argv(&["--effort=unknown"])).unwrap_err(),
-        "Launch option --effort must be one of: low, medium, high, xhigh, max"
-    );
-    assert_eq!(
-        validate_args(&argv(&["--model", "--verbose"])).unwrap_err(),
-        "Launch option --model requires a nonempty value, not another option"
-    );
+    assert!(validate_args(&argv(&["--model=sonnet\0--settings"])).is_err());
+    assert!(validate_args(&argv(&["--model", "sonnet\0"])).is_err());
 }
 
 #[test]
@@ -81,7 +66,7 @@ fn claude_adapter_resume_argv_is_separate_from_user_options_and_has_no_runtime_f
 }
 
 #[test]
-fn claude_adapter_adoption_extracts_one_uuid_without_accepting_a_picker_or_duplicate() {
+fn claude_adapter_adoption_extracts_one_uuid_and_leaves_native_selectors_untouched() {
     let session = "160d1f8b-9023-44b8-9bc7-24333effb185";
     for mut args in [
         argv(&["--model", "sonnet", "--resume", session]),
@@ -99,7 +84,9 @@ fn claude_adapter_adoption_extracts_one_uuid_without_accepting_a_picker_or_dupli
         argv(&["--resume", "--last"]),
         argv(&["--resume", session, "--resume", session]),
     ] {
-        assert!(take_adopted_session(&mut args).is_err());
+        let original = args.clone();
+        assert_eq!(take_adopted_session(&mut args).unwrap(), None);
+        assert_eq!(args, original);
     }
 }
 
@@ -195,4 +182,23 @@ fn claude_adapter_refuses_corrupt_launch_settings_before_installing_the_statusli
     assert!(prepare(&spec, fixture.0.clone(), Vec::new(), None).is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"corrupt original");
     assert!(!spec.hooks.spool.join("claude-statusline.json").exists());
+}
+
+#[test]
+fn claude_capture_settings_precede_a_literal_argument_tail() {
+    let fixture = Fixture::new();
+    let mut spec = fixture.spec();
+    spec.extra_args = "-- '--dangerously-skip-permissions literal prompt'".into();
+    let initial = argv(&["--", "--dangerously-skip-permissions literal prompt"]);
+    let result = prepare(&spec, fixture.0.clone(), initial, None).unwrap();
+    let settings = spec.hooks.spool.join("claude-settings.json");
+    assert_eq!(
+        result.args,
+        argv(&[
+            "--settings",
+            settings.to_str().unwrap(),
+            "--",
+            "--dangerously-skip-permissions literal prompt",
+        ])
+    );
 }

@@ -1,5 +1,8 @@
 //! Cursor-specific interactive argv and project setup metadata.
-use super::super::launch::{is_session_uuid, LaunchOption, SetupNotice};
+use super::super::{
+    launch::{take_resume_option, SetupNotice},
+    ProviderKind,
+};
 use std::path::Path;
 
 pub(crate) fn runtime_args() -> Vec<String> {
@@ -12,44 +15,7 @@ pub(crate) fn resume_args(session: &str) -> Vec<String> {
 
 /// Cursor accepts `--resume ID` and `--resume=ID`, in any argument position.
 pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<String>, String> {
-    let mut found = None;
-    let mut index = 0;
-    while index < args.len() {
-        let attached = if args[index] == "--resume" {
-            None
-        } else if let Some(value) = args[index].strip_prefix("--resume=") {
-            Some(value.to_owned())
-        } else {
-            index += 1;
-            continue;
-        };
-        if found.is_some() {
-            return Err("Give at most one session to resume".into());
-        }
-        args.remove(index);
-        let value = match attached {
-            Some(value) => value,
-            None if index < args.len() => args.remove(index),
-            None => String::new(),
-        };
-        if !is_session_uuid(&value) {
-            return Err(format!(
-                "Resume needs a session ID (a UUID), not {value:?}; pickers, --continue and --last are not supported"
-            ));
-        }
-        found = Some(value);
-    }
-    Ok(found)
-}
-
-pub(crate) fn supported_option(name: &str) -> Option<LaunchOption> {
-    use LaunchOption::{Choice, Flag, Value};
-    match name {
-        "--model" => Some(Value),
-        "--plan" => Some(Flag),
-        "--mode" => Some(Choice(&["plan", "ask"])),
-        _ => None,
-    }
+    Ok(take_resume_option(ProviderKind::Cursor, args))
 }
 
 /// The caller resolves the project root before requesting the notice.
