@@ -205,10 +205,7 @@ pub(crate) fn reserved_session(spool: &Path) -> Option<String> {
 /// User options belong to the launch, independently of generated capture
 /// arguments and the conversation it currently owns. Never invent missing
 /// flags or accept a bypass from a damaged record.
-pub(crate) fn saved_options(
-    provider: ProviderKind,
-    spool: &Path,
-) -> Result<Vec<String>, String> {
+pub(crate) fn saved_options(provider: ProviderKind, spool: &Path) -> Result<Vec<String>, String> {
     let bytes = match std::fs::read(spool.join("launch-options.json")) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
