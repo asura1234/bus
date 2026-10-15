@@ -645,3 +645,27 @@ fn bus_resume_refuses_callback_spool_symlink_escape_before_touching_capture() {
     );
     assert_eq!(std::fs::read(fixture.hook_path()).unwrap(), hooks_before);
 }
+
+#[test]
+fn unstarted_resume_from_saved_launch_argv_does_not_repeat_original_options() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
+    fixture.save();
+    fixture.facts.session = None;
+    // The pane's persisted launch argv is the executable plus prepared args.
+    let launch_argv: Vec<String> = ["codex", "--model", "gpt-test", "--no-daemon"]
+        .map(str::to_owned)
+        .into();
+    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
+        &fixture.facts, Some(&launch_argv),
+    ).unwrap();
+    std::fs::write(
+        fixture.root.join("callbacks/owned-launch/launch-options.json"),
+        r#"["--model","gpt-test"]"#,
+    ).unwrap();
+    let extras = fixture.load().unwrap();
+    let argv: Vec<String> = fixture.plan.argv.iter().chain(extras.args.iter()).cloned().collect();
+    assert_eq!(argv, launch_argv);
+}

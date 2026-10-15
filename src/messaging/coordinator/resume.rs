@@ -31,10 +31,11 @@ pub(crate) fn unstarted_codex_plan(
         )
         .ok()?;
     }
-    args.insert(0, "codex".into());
+    // Snapshot argv only verifies an interactive, unstarted launch. User
+    // options have one owner: the launch record loaded by capture::load.
     Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
-        argv: args,
+        argv: vec!["codex".into()],
         dedupe_key: format!("bus-unstarted\0{}", facts.agent_name.as_deref()?),
     })
 }
