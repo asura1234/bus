@@ -115,7 +115,12 @@ pub(crate) fn load(
     {
         return Err("Bus resume cannot replace an adopted session with an empty launch".into());
     }
-    let (path, mut args, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
+    let mut args = crate::agents::providers::launch::saved_options(
+        identity::provider_kind(agent.provider),
+        &hooks.spool,
+    )?;
+    let (path, capture, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
+    args.extend(capture);
     if rebound {
         tracing::info!(event = "bus.resume.hooks_rebound", agent_id = agent.id.0,
             path = %path.display(), "Bus hooks moved back to this executable for resume");

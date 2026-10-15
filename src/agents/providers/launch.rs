@@ -202,6 +202,24 @@ pub(crate) fn reserved_session(spool: &Path) -> Option<String> {
         .filter(|session| !session.is_empty())
 }
 
+/// User options belong to the launch, independently of generated capture
+/// arguments and the conversation it currently owns. Never invent missing
+/// flags or accept a bypass from a damaged record.
+pub(crate) fn saved_options(
+    provider: ProviderKind,
+    spool: &Path,
+) -> Result<Vec<String>, String> {
+    let bytes = match std::fs::read(spool.join("launch-options.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Cannot read saved launch options: {error}")),
+    };
+    let options: Vec<String> = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Invalid saved launch options: {error}"))?;
+    validate_args(provider, &options)?;
+    Ok(options)
+}
+
 pub(crate) fn project_root(cwd: &Path) -> PathBuf {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -259,6 +277,13 @@ pub(crate) fn prepare(
         )?;
     }
     initialize(&spec.hooks)?;
+    let mut options = parse_path_tokens(&spec.extra_args).map_err(|error| error.to_string())?;
+    take_adopted_session(spec.provider, &mut options)?;
+    hook_json::atomic_write(
+        &spec.hooks.spool.join("launch-options.json"),
+        &serde_json::to_vec(&options).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     if let Some(session) = &adopted_session {
         hook_json::atomic_write(
             &spec.hooks.spool.join(ADOPTED_SESSION_FILE),

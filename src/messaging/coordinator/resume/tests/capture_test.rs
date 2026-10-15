@@ -192,6 +192,93 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn resumed_launch_preserves_original_options_without_adding_bypass_flags() {
+    use crate::agents::providers::{hook_json::HookContext, launch};
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    for (provider, options) in [
+        (Provider::Codex, "--model gpt-test --add-dir '/work/sibling dir' --no-alt-screen"),
+        (Provider::ClaudeCode, "--model sonnet --effort high --verbose"),
+        (Provider::Cursor, "--model test --mode=plan"),
+    ] {
+        for adopted in [false, true] {
+            let fixture = Fixture::new(provider);
+            let kind = identity::provider_kind(provider);
+            let session = "160d1f8b-9023-44b8-9bc7-24333effb185";
+            let input = if adopted {
+                match provider {
+                    Provider::Codex => format!("resume {session} {options}"),
+                    _ => format!("--resume {session} {options}"),
+                }
+            } else {
+                options.into()
+            };
+            let bin = fixture.root.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
+            let previous = std::env::var_os("PATH");
+            std::env::set_var("PATH", &bin);
+            let prepared = launch::prepare(&launch::LaunchSpec {
+                provider: kind,
+                cwd: fixture.project.display().to_string(),
+                extra_args: input,
+                consent_project_hooks: true,
+                hooks: HookContext {
+                    binary: fixture.binary.clone(),
+                    spool: fixture.root.join("callbacks/owned-launch"),
+                    launch_id: "owned-launch".into(),
+                },
+            }, |_| Ok(()));
+            if let Some(previous) = previous {
+                std::env::set_var("PATH", previous);
+            } else {
+                std::env::remove_var("PATH");
+            }
+            let mut prepared = prepared.unwrap();
+            launch::take_adopted_session(kind, &mut prepared.args).unwrap();
+            let resumed = fixture.load().unwrap();
+            assert_eq!(resumed.args, prepared.args, "lost launch flags for {provider:?}");
+            assert!(!resumed.args.iter().any(|arg| arg == "--yolo" || arg.contains("bypass")));
+        }
+    }
+}
+
+#[test]
+fn saved_resume_options_reject_bypass_malformed_and_unreadable_records() {
+    let fixture = Fixture::new(Provider::Codex);
+    let path = fixture.root.join("callbacks/owned-launch/launch-options.json");
+    for bytes in [
+        r#"["--yolo"]"#,
+        r#"["--dangerously-bypass-approvals-and-sandbox"]"#,
+        r#"["--model"]"#,
+        r#"["--no-daemon"]"#,
+        "broken json",
+        r#"{"options":[]}"#,
+    ] {
+        std::fs::write(&path, bytes).unwrap();
+        assert!(fixture.load().is_err(), "accepted {bytes}");
+    }
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(fixture.load().is_err());
+}
+
+#[test]
+fn unstarted_resume_replays_saved_options() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
+    fixture.save();
+    fixture.facts.session = None;
+    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
+        &fixture.facts, None,
+    ).unwrap();
+    let path = fixture.root.join("callbacks/owned-launch/launch-options.json");
+    std::fs::write(&path, r#"["--model","gpt-test"]"#).unwrap();
+    assert_eq!(fixture.load().unwrap().args, ["--model", "gpt-test", "--no-daemon"]);
+}
+
+#[test]
 fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     let mut fixture = Fixture::new(Provider::Codex);
     let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
