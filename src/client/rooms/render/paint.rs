@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
 };
 
 impl BusUi {
@@ -59,7 +59,9 @@ impl BusUi {
                     .border_style(Style::default().fg(ACCENT))
                     .render(rect, buffer);
             }
-            paint_row(row, buffer);
+            let sidebar_selected =
+                row.selected && self.view.sidebar.contains((row.x, row.y).into());
+            paint_row(row, buffer, sidebar_selected);
         }
         if !selection_painted {
             paint_selection(&self.view.selection, buffer);
@@ -128,7 +130,7 @@ fn paint_selection(selection: &[Rect], buffer: &mut Buffer) {
     }
 }
 
-fn paint_row(row: &Row, buffer: &mut Buffer) {
+fn paint_row(row: &Row, buffer: &mut Buffer, sidebar_selected: bool) {
     if row.y >= buffer.area.bottom() || row.x >= buffer.area.right() {
         return;
     }
@@ -137,14 +139,24 @@ fn paint_row(row: &Row, buffer: &mut Buffer) {
     } else {
         Color::Rgb(222, 222, 226)
     });
-    let style = Style::default()
+    let mut style = Style::default()
         .fg(foreground)
-        .bg(if row.selected {
+        .bg(if sidebar_selected {
+            Color::Rgb(40, 72, 48)
+        } else if row.selected {
             Color::Rgb(46, 48, 58)
         } else {
             Color::Rgb(24, 24, 28)
         })
         .patch(row.style.unwrap_or_default());
+    if sidebar_selected {
+        style = style.add_modifier(Modifier::BOLD);
+        // Sidebar names start at column 1; reuse their left padding without
+        // moving text, truncation boundaries or click targets.
+        if row.x > buffer.area.x {
+            buffer.set_stringn(row.x - 1, row.y, "▌", 1, style.fg(ACCENT));
+        }
+    }
     buffer.set_stringn(
         row.x,
         row.y,
