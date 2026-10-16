@@ -130,7 +130,7 @@ first), in reading order: top to bottom, then left to right.
 Run `bus --dev tui VERB --help` for one verb.
 
 ### start
-`start [--name NAME] [--size COLSxROWS] [--run-dir DIR] [--graphics kitty|none]`
+`start [--name NAME] [--size COLSxROWS] [--run-dir DIR] [--graphics kitty|none] [--yolo]`
 
 Starts a fresh scratch Bus (default size 160x45) and waits until it answers
 `bus state` and has drawn its first room. Prints the session status with
@@ -141,7 +141,9 @@ writes under `~` never touch the developer's home; the caller's terminal
 identity (`TERM_PROGRAM`, `LC_TERMINAL`, ...) is dropped. `--graphics` picks
 how Bus draws pictures instead: `kitty` (default) draws them with the Kitty
 graphics protocol, which the driver's screen and `screenshot --real` show;
-`none` makes Bus show attachments as file names.
+`none` makes Bus show attachments as file names. `--yolo` starts the scratch
+Bus with `--yolo`, so the run shows what a permission-bypass session shows
+(the sidebar's `YOLO` badge); `status` reports it as `yolo`.
 Refused when the session name is running or still starting, when 4 sessions
 run, when the target belongs to a live Bus, when inherited
 `BUS_*`/`HERDR_*` variables point at it, or when the binary is

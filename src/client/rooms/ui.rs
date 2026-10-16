@@ -121,6 +121,8 @@ pub(in crate::client) struct BusUi {
     pub(super) seed_first_room: bool,
     pub(super) quitting: Option<std::time::Instant>,
     pub(super) force_exit_available: bool,
+    /// The daemon runs with `--yolo`, as its connect capabilities report.
+    pub(super) yolo: bool,
     pub exit_ready: bool,
     pub(super) history_search: Option<HistorySearch>,
     /// The open Ctrl+F search over the room's chat history.
@@ -218,6 +220,7 @@ impl BusUi {
             seed_first_room,
             quitting: None,
             force_exit_available: false,
+            yolo: false,
             exit_ready: false,
             history_search: None,
             chat_search: None,

@@ -8,7 +8,10 @@ use super::geometry::layout;
 use super::text::cells;
 use super::{cell_width, provider, status, wrap, Action, View, ACCENT};
 use crate::messaging::model::{BusState, Room, RoomAgent, RoomId, RoomKind, RuntimeStatus};
-use ratatui::{layout::Rect, style::Color};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Style},
+};
 
 const WORKING_MID: Color = Color::Rgb(68, 190, 84);
 const WORKING_DIM: Color = Color::Rgb(36, 112, 52);
@@ -210,6 +213,10 @@ impl SidebarViewport {
         }
     }
 }
+
+/// Black on bright red, so a permission-bypass run is never missed.
+const YOLO_BADGE: &str = "YOLO";
+const YOLO_BADGE_RED: Color = Color::Rgb(255, 0, 0);
 
 impl BusUi {
     pub fn cursor(&self) -> Option<crate::protocol::wire::CursorState> {
@@ -629,6 +636,18 @@ impl BusUi {
             matches!(self.form, Some(Form::Settings)),
             false,
         );
+        // A plain label at the row's right edge, wherever the sidebar ends;
+        // it never covers the Settings button, so a narrow sidebar drops it.
+        if self.yolo && sw > settings_width + YOLO_BADGE.len() as u16 {
+            let badge = Rect::new(
+                1 + sw - YOLO_BADGE.len() as u16,
+                rows.saturating_sub(1),
+                YOLO_BADGE.len() as u16,
+                1,
+            );
+            view.row(badge, YOLO_BADGE, None, false, false);
+            view.style_last_row(badge, Style::default().fg(Color::Black).bg(YOLO_BADGE_RED));
+        }
     }
 }
 pub(super) fn status_name(value: RuntimeStatus) -> &'static str {

@@ -64,6 +64,8 @@ pub(super) struct HostOptions {
     pub run_dir: PathBuf,
     pub token: String,
     pub graphics: super::session::Graphics,
+    /// Start the scratch Bus with `--yolo`, as a developer would.
+    pub yolo: bool,
 }
 
 /// Entry of the hidden `bus --dev tui __host` process.
@@ -115,6 +117,9 @@ fn start(
         .map_err(|e| e.to_string())?;
     let mut command = CommandBuilder::new(&binary);
     command.arg("--dev");
+    if options.yolo {
+        command.arg("--yolo");
+    }
     command.env_clear();
     for (key, value) in env.iter().chain(&options.graphics.env(paths)) {
         command.env(key, value);
@@ -172,6 +177,7 @@ fn start(
         size: (options.cols, options.rows),
         home: paths.home_dir(),
         graphics: options.graphics,
+        yolo: options.yolo,
     };
     Ok(Host {
         paths: paths.clone(),

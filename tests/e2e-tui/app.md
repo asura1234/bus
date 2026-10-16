@@ -464,6 +464,19 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 **Pass criteria:** the overlay appears only while toggled on, shows CPU, memory and FPS on row 0, refreshes about once a second, and disappears completely when toggled off.
 
+### APP-24 — YOLO badge on the Settings row
+
+**Preconditions/setup:** two fresh scratch sessions at 120×40, default room `bus` open: one started with the driver's `--yolo` (`start --yolo`), one without. Steps 1–3 run in the `--yolo` session, step 4 in the other.
+
+1. Read the sidebar's bottom row (the Settings row) → it reads `Settings` at the left and `YOLO` flush with the row's right edge, one column before the sidebar divider, with at least one blank cell between them; nothing else in the sidebar mentions YOLO (no per-agent mark).
+2. Capture the four `YOLO` cells' styles → every cell has black foreground and bright red background (`rgb(255,0,0)`); the `Settings` cells keep their ordinary sidebar styling.
+3. Click `Settings` → the Settings form opens (its `Settings` heading and `[ ] Color blind mode` row are visible); hover and click the `YOLO` cells → nothing changes and `hits` lists no target over them. Press Esc → the badge is still drawn in the same place.
+4. In the session started without `--yolo`, read the Settings row → it reads only `Settings`; no `YOLO` text and no red background cells anywhere on that row; `status` reports `yolo: false`.
+
+**Evidence:** steps 1 and 4: Settings-row text from snapshot/find and the session `status`; step 2: `cells` for the badge and Settings columns; step 3: hits over the badge, form text after the click, and the badge cells after Esc.
+
+**Pass criteria:** the badge shows only in a `--yolo` run, as black on bright red at the Settings row's right edge, and clicking Settings still opens Settings.
+
 ## Decisions
 
 - **Shortcuts / product finding:** test Ctrl+O files, Ctrl+P recipients, Ctrl+F find, literal @/+ typing and Ctrl+C draft-clear (terminal Ctrl+C interrupts); CLI help's conflicting shortcuts are a product documentation finding, not a reason to change these expectations (`rooms/help.rs`, `rooms/input/{composer,mod}.rs`, `cli/help.rs`).

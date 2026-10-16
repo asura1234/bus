@@ -219,6 +219,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         .map(|value| session::Graphics::parse(&value))
         .transpose()?
         .unwrap_or_default();
+    let yolo = parsed.take_switch("--yolo");
     parsed.finish()?;
     if let Some(message) = effects::unsupported_os(std::env::consts::OS) {
         return Ok(failure("refused", message));
@@ -259,6 +260,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         .args(["--size", &format!("{cols}x{rows}")])
         .args(["--token", &claim.token])
         .args(["--graphics", graphics.as_str()])
+        .args(if yolo { &["--yolo"][..] } else { &[] })
         .arg("--run-dir")
         .arg(&run_dir)
         .stdin(Stdio::null())
@@ -714,6 +716,7 @@ fn run_host(args: &[String]) -> i32 {
             .map(|value| session::Graphics::parse(&value))
             .transpose()?
             .unwrap_or_default();
+        let yolo = parsed.take_switch("--yolo");
         parsed.finish()?;
         Ok(host::HostOptions {
             name,
@@ -722,6 +725,7 @@ fn run_host(args: &[String]) -> i32 {
             run_dir,
             token,
             graphics,
+            yolo,
         })
     })();
     match options {
