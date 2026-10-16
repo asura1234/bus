@@ -111,6 +111,11 @@ impl BusUi {
         if self.agent_choice_key(code) {
             return;
         }
+        // While the PWD list is shown, Tab/Shift+Tab only move the highlight and
+        // Enter takes the highlighted path: neither leaves the field nor adds the agent.
+        if matches!(self.form, Some(Form::Agent { .. })) && self.pwd_suggestion_key(code) {
+            return;
+        }
         // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
         if code == KeyCode::Enter
             && !modifiers.contains(KeyModifiers::CONTROL)
@@ -282,6 +287,23 @@ impl BusUi {
             return true;
         }
         false
+    }
+
+    /// Handles a key while the agent form's PWD suggestions are expanded; false
+    /// when no list is shown or the key is not one of Tab, Shift+Tab or Enter.
+    fn pwd_suggestion_key(&mut self, code: KeyCode) -> bool {
+        let count = self.suggestions.entries.len();
+        if count == 0 || self.form.as_ref().and_then(Form::path_query).is_none() {
+            return false;
+        }
+        let selected = self.suggestions.selected;
+        match code {
+            KeyCode::Tab => self.suggestions.selected = (selected + 1) % count,
+            KeyCode::BackTab => self.suggestions.selected = (selected + count - 1) % count,
+            KeyCode::Enter => self.complete_path(),
+            _ => return false,
+        }
+        true
     }
 
     pub(super) fn query_paths(&mut self) {
