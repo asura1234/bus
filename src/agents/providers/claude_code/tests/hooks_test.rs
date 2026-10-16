@@ -331,3 +331,18 @@ fn bus_wait_shells_preserve_work_on_either_side_and_quoted_message_text() {
         assert!(is_bus_wait(command), "only Bus waits: {command}");
     }
 }
+
+/// A stream redirection such as `2>&1` belongs to the Bus command it follows;
+/// its `&` is not a command separator, so the shell is still only a Bus wait.
+#[test]
+fn bus_wait_shells_with_stream_redirections_are_still_bus_waits() {
+    for command in [
+        "bus send --to qa --async --text ready 2>&1",
+        "bus wait --message 7 --timeout 600 2>&1",
+        "bus wait 7 >&2 <&0",
+        "bus wait 7 &>/tmp/bus-wait.log",
+        "bus wait 7 >|/tmp/bus-wait.log",
+    ] {
+        assert!(is_bus_wait(command), "only Bus waits: {command}");
+    }
+}

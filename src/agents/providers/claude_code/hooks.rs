@@ -306,6 +306,9 @@ fn bus_wait_segments(command: &str) -> Option<Vec<&str>> {
             escaped = true;
             continue;
         }
+        if is_redirect_operator(command, index, ch) {
+            continue;
+        }
         if quote != Some('\'')
             && (ch == '`' || (ch == '$' && chars.peek().is_some_and(|(_, ch)| *ch == '(')))
         {
@@ -329,6 +332,14 @@ fn bus_wait_segments(command: &str) -> Option<Vec<&str>> {
     }
     segments.push(&command[start..]);
     Some(segments)
+}
+
+fn is_redirect_operator(command: &str, index: usize, ch: char) -> bool {
+    match ch {
+        '&' => command[..index].ends_with(['>', '<']) || command[index + 1..].starts_with('>'),
+        '|' => command[..index].ends_with('>'),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
