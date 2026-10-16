@@ -290,12 +290,19 @@ fn yolo_badge_sits_at_the_settings_row_right_edge_in_black_on_red() {
         let (buffer, y, right) = settings_row(&mut ui, cols, 30);
         let badge = right - 4..right;
         assert_eq!(
-            badge.clone().map(|x| buffer[(x, y)].symbol()).collect::<String>(),
+            badge
+                .clone()
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>(),
             "YOLO",
             "cols={cols}"
         );
         for x in badge.clone() {
-            assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Black, "cols={cols} x={x}");
+            assert_eq!(
+                buffer[(x, y)].fg,
+                ratatui::style::Color::Black,
+                "cols={cols} x={x}"
+            );
             assert_eq!(
                 buffer[(x, y)].bg,
                 ratatui::style::Color::Rgb(255, 0, 0),
@@ -303,7 +310,11 @@ fn yolo_badge_sits_at_the_settings_row_right_edge_in_black_on_red() {
             );
             assert_eq!(ui.view.hit_at(x, y), None, "badge is a plain label");
         }
-        assert_eq!(buffer[(badge.start - 1, y)].symbol(), " ", "gap before the badge");
+        assert_eq!(
+            buffer[(badge.start - 1, y)].symbol(),
+            " ",
+            "gap before the badge"
+        );
         let settings = ui
             .view
             .hits
@@ -320,8 +331,18 @@ fn yolo_badge_sits_at_the_settings_row_right_edge_in_black_on_red() {
         );
     }
     assert!(ui.form.is_none());
-    mouse(&mut ui, crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left), 2, 29);
-    mouse(&mut ui, crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left), 2, 29);
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        2,
+        29,
+    );
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+        2,
+        29,
+    );
     assert!(matches!(ui.form, Some(forms::Form::Settings)));
 }
 
@@ -329,7 +350,9 @@ fn yolo_badge_sits_at_the_settings_row_right_edge_in_black_on_red() {
 fn without_yolo_the_settings_row_shows_no_badge() {
     let (mut ui, _, _) = fixture();
     let (buffer, y, right) = settings_row(&mut ui, 100, 30);
-    let row = (1..right).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    let row = (1..right)
+        .map(|x| buffer[(x, y)].symbol())
+        .collect::<String>();
     assert_eq!(row.trim_end(), "Settings");
     for x in right - 4..right {
         assert_ne!(buffer[(x, y)].bg, ratatui::style::Color::Rgb(255, 0, 0));
