@@ -330,3 +330,92 @@ fn yolo_adds_bypass_when_prompt_value_follows_current_unmodeled_claude_option() 
         ]
     );
 }
+
+#[test]
+fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
+    use crate::agents::providers::launch::{prepare, LaunchSpec};
+
+    struct Cleanup {
+        root: std::path::PathBuf,
+        env: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for (key, value) in &self.env {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let cleanup = Cleanup {
+        root: crate::utils::test_temp::unique_temp_path("codex-fresh-yolo-options"),
+        env: ["BUS_YOLO", "PATH"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+    };
+    let project = cleanup.root.join("project");
+    let bin = cleanup.root.join("bin");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("codex"), "fixture executable").unwrap();
+    std::env::set_var("PATH", &bin);
+    let spec = LaunchSpec {
+        provider: Provider::Codex,
+        cwd: project.display().to_string(),
+        extra_args: "--ask-for-approval on-request -c 'developer_instructions=\"--ask-for-approval\"' --sandbox workspace-write -- '--approve-for-me'".into(),
+        consent_project_hooks: true,
+        hooks: hook_json::HookContext {
+            binary: std::env::current_exe().unwrap(),
+            spool: cleanup.root.join("capture"),
+            launch_id: "fresh-launch".into(),
+        },
+    };
+    let original = [
+        "--ask-for-approval",
+        "on-request",
+        "-c",
+        "developer_instructions=\"--ask-for-approval\"",
+        "--sandbox",
+        "workspace-write",
+        "--",
+        "--approve-for-me",
+    ];
+    let saved = serde_json::to_vec(&original).unwrap();
+    for enabled in [true, false] {
+        if enabled {
+            std::env::set_var("BUS_YOLO", "1");
+        } else {
+            std::env::remove_var("BUS_YOLO");
+        }
+        let prepared = prepare(&spec, |hooks| {
+            std::fs::create_dir_all(&hooks.spool).map_err(|error| error.to_string())
+        })
+        .unwrap();
+        let expected: Vec<&str> = if enabled {
+            vec![
+                "--yolo",
+                "--no-daemon",
+                "-c",
+                "developer_instructions=\"--ask-for-approval\"",
+                "--sandbox",
+                "workspace-write",
+                "--",
+                "--approve-for-me",
+            ]
+        } else {
+            std::iter::once("--no-daemon").chain(original).collect()
+        };
+        assert_eq!(prepared.args, expected, "enabled={enabled}");
+        assert_eq!(
+            std::fs::read(spec.hooks.spool.join("launch-options.json")).unwrap(),
+            saved,
+            "effective permissions must not replace the saved user options"
+        );
+    }
+}

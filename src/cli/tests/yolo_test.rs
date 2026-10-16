@@ -145,3 +145,56 @@ fn yolo_startup_flag_is_recorded_in_every_accepted_position() {
         assert!(!parse_invocation(&args(&input)).unwrap().yolo, "{input:?}");
     }
 }
+
+// Review probe (claude-yolo R2): approval selectors after positionals, greedy
+// image values and unmodeled options are still removed from yolo argv only.
+#[test]
+fn yolo_codex_removes_approval_after_subcommand_images_and_unknown_options() {
+    use crate::agents::providers::{launch, ProviderKind};
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    std::env::set_var("BUS_YOLO", "1");
+    let cases = [
+        (
+            vec![
+                "resume",
+                "019a0000-0000-7000-8000-000000000000",
+                "-a",
+                "never",
+            ],
+            vec!["--yolo", "resume", "019a0000-0000-7000-8000-000000000000"],
+        ),
+        (
+            vec![
+                "-i",
+                "a.png",
+                "b.png",
+                "--approve-for-me",
+                "-s",
+                "read-only",
+            ],
+            vec!["--yolo", "-i", "a.png", "b.png", "-s", "read-only"],
+        ),
+        (
+            vec!["--future-flag", "--ask-for-approval", "never", "-m", "-a"],
+            vec!["--yolo", "--future-flag", "-m", "-a"],
+        ),
+        (
+            vec!["-a", "never", "--", "-a", "never"],
+            vec!["--yolo", "--", "-a", "never"],
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (input, want) in cases {
+        let mut argv = args(&input);
+        launch::apply_run_permissions(ProviderKind::Codex, &mut argv);
+        if argv != args(&want) {
+            failures.push(format!("{input:?} -> {argv:?}, want {want:?}"));
+        }
+    }
+    std::env::remove_var("BUS_YOLO");
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
