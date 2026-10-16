@@ -72,8 +72,8 @@ fn print_paths(root: &std::path::Path, base: &std::path::Path, dev: bool) -> io:
     Ok(())
 }
 
-/// `--dev` reaches the server, coordinator and logging through the environment.
-fn apply_dev_environment(dev: bool) {
+/// Run flags reach the daemon and coordinator through the environment.
+fn apply_run_environment(dev: bool, yolo: bool) {
     if dev {
         std::env::set_var("BUS_DEV", "1");
         std::env::set_var("BUS_LOG", crate::utils::logging::DEV_FILTER);
@@ -81,6 +81,13 @@ fn apply_dev_environment(dev: bool) {
         std::env::remove_var("BUS_DEV");
     }
     std::env::remove_var("BUS_DEV_EXISTING_SERVER");
+    // Public invocations must opt in even when launched by a yolo agent.
+    // The private daemon inherits this handoff without parsing the public CLI.
+    if yolo {
+        std::env::set_var(crate::utils::env::YOLO_ENV_VAR, "1");
+    } else {
+        std::env::remove_var(crate::utils::env::YOLO_ENV_VAR);
+    }
 }
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
@@ -115,15 +122,7 @@ fn last_session(
 
 fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     let dev = invocation.dev;
-    apply_dev_environment(dev);
-    // Only this invocation opts in. In particular, a Bus started by an agent
-    // must not inherit its parent's bypass mode. The private daemon inherits
-    // this value directly, without going through the public CLI parser.
-    if invocation.yolo {
-        std::env::set_var(crate::utils::env::YOLO_ENV_VAR, "1");
-    } else {
-        std::env::remove_var(crate::utils::env::YOLO_ENV_VAR);
-    }
+    apply_run_environment(dev, invocation.yolo);
     if invocation.action == Action::Help {
         print_help(dev);
         return Ok(());
