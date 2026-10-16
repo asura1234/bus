@@ -270,9 +270,7 @@ fn claude_stop_failure_with_blank_or_non_text_error_fields_falls_back_to_the_cat
 /// waits are not work the reply depends on; other shells still hold it.
 #[test]
 fn claude_running_shells_leave_out_bus_send_and_wait_commands() {
-    let shell = |id: &str, command: &str| {
-        json!({"id":id,"type":"shell","status":"running","description":"Run","command":command})
-    };
+    let shell = |id: &str, command: &str| json!({"id":id,"type":"shell","status":"running","description":"Run","command":command});
     let value = json!({"background_tasks":[
         shell("b1", "bus send --async --room qa --as orch --to worker --text 'go'"),
         shell("b2", "/Users/me/work/bus/target/debug/bus --dev send --room master --to orch --text hi"),
@@ -283,7 +281,9 @@ fn claude_running_shells_leave_out_bus_send_and_wait_commands() {
         shell("b7", "sleep 45"),
     ]});
     assert_eq!(
-        claude_running_shells(&value).into_iter().collect::<Vec<_>>(),
+        claude_running_shells(&value)
+            .into_iter()
+            .collect::<Vec<_>>(),
         ["b5", "b6", "b7"]
     );
     assert!(is_bus_wait("bus send --to a --text b"));

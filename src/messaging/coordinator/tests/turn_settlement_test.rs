@@ -959,12 +959,21 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     }
     assert_eq!(fixture.error(), None);
     assert_eq!(
-        fixture.worker.state.agent(fixture.agent).unwrap().current_request,
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
         None
     );
     // The Stop that comes later is the agent's own activity: no error, and the
     // settled replies stand.
-    fixture.record(claude_stop("turn-3", "The add-agent fix is ready to test.", &[]));
+    fixture.record(claude_stop(
+        "turn-3",
+        "The add-agent fix is ready to test.",
+        &[],
+    ));
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.error(), None);
@@ -991,11 +1000,16 @@ fn a_restart_under_the_wake_turn_delivers_the_shell_held_reply() {
     // session resumed, the agent Idle again.
     let dir = fixture.dir.clone();
     let native = fixture.native.clone();
-    let parked = Worker::open(dir.join("restart-parking"), Box::new(Native(native.clone()))).unwrap();
+    let parked = Worker::open(
+        dir.join("restart-parking"),
+        Box::new(Native(native.clone())),
+    )
+    .unwrap();
     drop(std::mem::replace(&mut fixture.worker, parked));
     fixture.worker = Worker::open(dir, Box::new(Native(native))).unwrap();
     fixture.status(RuntimeStatus::Unavailable);
-    fixture.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"resume"}));
+    fixture
+        .record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"resume"}));
     fixture.consume();
     fixture.now += 3_000;
     fixture.status(RuntimeStatus::Idle);
@@ -1004,7 +1018,10 @@ fn a_restart_under_the_wake_turn_delivers_the_shell_held_reply() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
-    assert_eq!(fixture.reply(lead).as_deref(), Some("Waiting on the build."));
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
     assert_eq!(
         fixture.request(lead).failure_reason.as_deref(),
         Some("background_shells_interim")

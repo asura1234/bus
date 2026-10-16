@@ -10,13 +10,14 @@
 //! starts its session with the first prompt. The fake Cursor fires the hooks
 //! Bus writes to the project's `.cursor/hooks.json` and draws Cursor's `→`
 //! composer. All answer every prompt with `fake reply: <prompt>`.
+mod background;
 mod dialogs;
 mod directives;
 mod input;
 mod question;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
-use directives::{api_error, dialog_seconds, shell_name, show_dialog, wake_seconds, work_seconds};
+use directives::{api_error, dialog_seconds, show_dialog, work_seconds};
 use input::{drain_input, Input};
 use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
@@ -381,54 +382,11 @@ impl FakeAgent {
             self.hook("afterAgentResponse", Some(&turn), json!({"text": reply}));
             self.hook("stop", Some(&turn), json!({"status": "completed"}));
         } else {
-            if let Some(shell) = shell_name(prompt).filter(|_| !self.codex()) {
-                if let Some(seconds) = wake_seconds(prompt) {
-                    let at = Instant::now() + std::time::Duration::from_secs(seconds.min(600));
-                    self.wake = Some((at, shell.clone()));
-                }
-                self.shells.push(shell);
-            }
-            let mut payload = json!({"last_assistant_message": reply, "stop_hook_active": false});
-            if !self.codex() {
-                payload["background_tasks"] = self.background_tasks();
-                payload["session_crons"] = json!([]);
-            }
+            let payload = self.stop_payload(prompt, &reply);
             self.hook("Stop", Some(&turn), payload);
         }
         self.draw_prompt();
         None
-    }
-
-    /// The running shells as Claude Code 2.1.296 lists them on `Stop`.
-    fn background_tasks(&self) -> Value {
-        Value::Array(
-            self.shells
-                .iter()
-                .map(|id| {
-                    json!({"id": id, "type": "shell", "status": "running", "description": "Run", "command": "sleep 45"})
-                })
-                .collect(),
-        )
-    }
-
-    /// The newest shell ends: Claude wakes a turn with its task notification
-    /// (a `UserPromptSubmit`), works a moment, and shows its prompt box again
-    /// without a `Stop`, as Claude Code does when the next notification folds
-    /// into that turn.
-    fn wake(&mut self) {
-        let Some((_, shell)) = self.wake.take() else {
-            return;
-        };
-        self.shells.retain(|running| *running != shell);
-        self.turns += 1;
-        let turn = format!("{}-{}", self.session, self.turns);
-        let prompt = format!("<task-notification>{shell} completed</task-notification>");
-        let mut out = std::io::stdout();
-        let _ = write!(out, "{}", submitted(&prompt));
-        let _ = out.flush();
-        self.hook("UserPromptSubmit", Some(&turn), json!({"prompt": prompt}));
-        self.spin(1);
-        self.draw_prompt();
     }
 
     /// Starts a live turn below the sent prompt: the working line over a
@@ -551,10 +509,7 @@ impl FakeAgent {
                 let Some(input) = self.input.as_ref() else {
                     return 0;
                 };
-                let received = match self.wake.as_ref().map(|(at, _)| *at) {
-                    Some(at) => input.recv_timeout(at.saturating_duration_since(Instant::now())),
-                    None => input.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-                };
+                let received = Self::receive_or_wake(input, self.wake.as_ref().map(|(at, _)| *at));
                 match received {
                     Ok(bytes) => self.pending.extend_from_slice(&bytes),
                     Err(mpsc::RecvTimeoutError::Timeout) => self.wake(),
