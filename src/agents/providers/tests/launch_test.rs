@@ -273,19 +273,60 @@ fn yolo_preserves_explicit_bypass_after_opaque_options_and_ignores_literal_value
     let old = std::env::var_os("BUS_YOLO");
     std::env::set_var("BUS_YOLO", "1");
     let mut failures = Vec::new();
-    for (provider, flag) in [(Provider::ClaudeCode, "--dangerously-skip-permissions"), (Provider::Codex, "--yolo"), (Provider::Cursor, "--force")] {
+    for (provider, flag) in [
+        (Provider::ClaudeCode, "--dangerously-skip-permissions"),
+        (Provider::Codex, "--yolo"),
+        (Provider::Cursor, "--force"),
+    ] {
         for (input, expected) in [
-            (vec!["--future-option", "value", flag], vec!["--future-option", "value", flag]),
+            (
+                vec!["--future-option", "value", flag],
+                vec!["--future-option", "value", flag],
+            ),
             (vec!["--model", flag], vec![flag, "--model", flag]),
             (vec!["--", flag], vec![flag, "--", flag]),
             (vec!["--model", "--"], vec![flag, "--model", "--"]),
         ] {
             let mut args: Vec<_> = input.iter().map(|a| (*a).to_owned()).collect();
             crate::agents::providers::launch::apply_run_permissions(provider, &mut args);
-            if args != expected { failures.push(format!("{provider:?}: {input:?} -> {args:?}, want {expected:?}")); }
+            if args != expected {
+                failures.push(format!(
+                    "{provider:?}: {input:?} -> {args:?}, want {expected:?}"
+                ));
+            }
         }
     }
     std::env::remove_var("BUS_YOLO");
-    if let Some(old) = old { std::env::set_var("BUS_YOLO", old); }
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn yolo_adds_bypass_when_prompt_value_follows_current_unmodeled_claude_option() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    std::env::set_var("BUS_YOLO", "1");
+    // --brief is a current Claude flag. The later bypass spelling belongs to
+    // --append-system-prompt and must not suppress the run's real option.
+    let mut args = vec![
+        "--brief".to_owned(),
+        "--append-system-prompt".to_owned(),
+        "--dangerously-skip-permissions".to_owned(),
+    ];
+    crate::agents::providers::launch::apply_run_permissions(Provider::ClaudeCode, &mut args);
+    std::env::remove_var("BUS_YOLO");
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    assert_eq!(
+        args,
+        [
+            "--dangerously-skip-permissions",
+            "--brief",
+            "--append-system-prompt",
+            "--dangerously-skip-permissions",
+        ]
+    );
 }

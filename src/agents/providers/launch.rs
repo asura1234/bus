@@ -75,6 +75,9 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
     if !crate::utils::env::yolo_enabled() {
         return;
     }
+    if provider == ProviderKind::Codex {
+        arguments::remove_codex_approval_options(args);
+    }
     let (flag, aliases): (&str, &[&str]) = match provider {
         ProviderKind::ClaudeCode => (
             "--dangerously-skip-permissions",

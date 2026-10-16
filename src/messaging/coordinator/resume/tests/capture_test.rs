@@ -26,8 +26,16 @@ fn yolo_applies_to_new_and_resumed_agents_without_persisting_or_duplicating() {
     let old_path = std::env::var_os("PATH");
     let mut failures = Vec::new();
     for (provider, flag, aliases) in [
-        (Provider::ClaudeCode, "--dangerously-skip-permissions", vec!["--dangerously-skip-permissions"]),
-        (Provider::Codex, "--yolo", vec!["--yolo", "--dangerously-bypass-approvals-and-sandbox"]),
+        (
+            Provider::ClaudeCode,
+            "--dangerously-skip-permissions",
+            vec!["--dangerously-skip-permissions"],
+        ),
+        (
+            Provider::Codex,
+            "--yolo",
+            vec!["--yolo", "--dangerously-bypass-approvals-and-sandbox"],
+        ),
         (Provider::Cursor, "--force", vec!["--force", "--yolo", "-f"]),
     ] {
         for input in std::iter::once("").chain(aliases.iter().copied()) {
@@ -39,32 +47,70 @@ fn yolo_applies_to_new_and_resumed_agents_without_persisting_or_duplicating() {
             std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
             std::env::set_var("PATH", &bin);
             std::env::set_var("BUS_YOLO", "1");
-            let prepared = launch::prepare(&launch::LaunchSpec {
-                provider: kind,
-                cwd: fixture.project.display().to_string(),
-                extra_args: input.into(),
-                consent_project_hooks: true,
-                hooks: HookContext { binary: fixture.binary.clone(), spool: spool.clone(), launch_id: "owned-launch".into() },
-            }, |_| Ok(())).unwrap();
+            let prepared = launch::prepare(
+                &launch::LaunchSpec {
+                    provider: kind,
+                    cwd: fixture.project.display().to_string(),
+                    extra_args: input.into(),
+                    consent_project_hooks: true,
+                    hooks: HookContext {
+                        binary: fixture.binary.clone(),
+                        spool: spool.clone(),
+                        launch_id: "owned-launch".into(),
+                    },
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
             let resumed = fixture.load().unwrap();
             for (phase, argv) in [("new", prepared.args), ("resume", resumed.args)] {
-                let actual: Vec<_> = argv.iter().filter(|a| aliases.contains(&a.as_str())).map(String::as_str).collect();
+                let actual: Vec<_> = argv
+                    .iter()
+                    .filter(|a| aliases.contains(&a.as_str()))
+                    .map(String::as_str)
+                    .collect();
                 let expected = if input.is_empty() { flag } else { input };
                 if actual != [expected] {
-                    failures.push(format!("{provider:?} {phase} input={input:?}: {actual:?}, want {expected}"));
+                    failures.push(format!(
+                        "{provider:?} {phase} input={input:?}: {actual:?}, want {expected}"
+                    ));
                 }
             }
             let saved = std::fs::read(spool.join("launch-options.json")).unwrap();
-            assert_eq!(launch::saved_options(kind, &spool).unwrap(), if input.is_empty() { Vec::<String>::new() } else { vec![input.to_owned()] });
+            assert_eq!(
+                launch::saved_options(kind, &spool).unwrap(),
+                if input.is_empty() {
+                    Vec::<String>::new()
+                } else {
+                    vec![input.to_owned()]
+                }
+            );
             std::env::remove_var("BUS_YOLO");
             let normal = fixture.load().unwrap();
-            let count = normal.args.iter().filter(|a| aliases.contains(&a.as_str())).count();
-            assert_eq!(count, usize::from(!input.is_empty()), "{provider:?} subsequent normal run");
-            assert_eq!(std::fs::read(spool.join("launch-options.json")).unwrap(), saved);
+            let count = normal
+                .args
+                .iter()
+                .filter(|a| aliases.contains(&a.as_str()))
+                .count();
+            assert_eq!(
+                count,
+                usize::from(!input.is_empty()),
+                "{provider:?} subsequent normal run"
+            );
+            assert_eq!(
+                std::fs::read(spool.join("launch-options.json")).unwrap(),
+                saved
+            );
         }
     }
-    if let Some(old) = old { std::env::set_var("BUS_YOLO", old); }
-    if let Some(old_path) = old_path { std::env::set_var("PATH", old_path); } else { std::env::remove_var("PATH"); }
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    if let Some(old_path) = old_path {
+        std::env::set_var("PATH", old_path);
+    } else {
+        std::env::remove_var("PATH");
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -964,5 +1010,70 @@ fn unstarted_resume_preserves_literal_initial_input_with_capture_options_before_
     assert_eq!(
         fixture.load().unwrap().args,
         ["--no-daemon", "--yolo", "--", "first prompt"]
+    );
+}
+
+// Codex 0.163 rejects its bypass flag together with an explicit approval
+// policy ("the argument '--dangerously-bypass-approvals-and-sandbox' cannot be
+// used with '--ask-for-approval'"), so a yolo run must not produce that argv.
+#[test]
+fn yolo_resume_does_not_combine_codex_bypass_with_an_explicit_approval_policy() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    std::env::set_var("BUS_YOLO", "1");
+    let mut failures = Vec::new();
+    for saved in [
+        r#"["--ask-for-approval","on-request"]"#,
+        r#"["-a","never"]"#,
+        r#"["--ask-for-approval=on-request"]"#,
+        r#"["--approve-for-me"]"#,
+        r#"["-anever"]"#,
+    ] {
+        let fixture = Fixture::new(Provider::Codex);
+        std::fs::write(
+            fixture
+                .root
+                .join("callbacks/owned-launch/launch-options.json"),
+            saved,
+        )
+        .unwrap();
+        let args = fixture.load().unwrap().args;
+        let bypass = args
+            .iter()
+            .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox");
+        let approval = args.iter().any(|a| {
+            a == "-a" || a == "--ask-for-approval" || a.starts_with("--ask-for-approval=")
+        });
+        if !bypass
+            || approval
+            || args
+                .iter()
+                .any(|a| a == "--approve-for-me" || a.starts_with("-a"))
+        {
+            failures.push(format!("{saved} -> {args:?}"));
+        }
+        assert_eq!(
+            std::fs::read_to_string(
+                fixture
+                    .root
+                    .join("callbacks/owned-launch/launch-options.json")
+            )
+            .unwrap(),
+            saved
+        );
+        std::env::remove_var("BUS_YOLO");
+        let normal = fixture.load().unwrap().args;
+        let original: Vec<String> = serde_json::from_str(saved).unwrap();
+        assert_eq!(&normal[..original.len()], original);
+        std::env::set_var("BUS_YOLO", "1");
+    }
+    std::env::remove_var("BUS_YOLO");
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    assert!(
+        failures.is_empty(),
+        "Codex would refuse to start:\n{}",
+        failures.join("\n")
     );
 }
