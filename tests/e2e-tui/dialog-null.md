@@ -28,7 +28,7 @@ history, visible agent reads, and the dialog and choose APIs being tested.
    Wait for the worker's blocked notice. Capture `bus state` and
    `bus agent read worker --source visible`. The visible read contains all three
    permission options, the wrapped second option, and its shell redirection.
-   Its viewport columns are below the second option's 114-column width.
+   Its viewport columns are below the second option's 122-column width.
 2. Run `bus agent dialog worker`. It returns a non-null choice dialog and fingerprint,
    all three options, and option 1 selected. Option 2 retains the complete command
    and `> /tmp/dialog-probe.log 2>&1` continuation. Capture and open a screenshot.

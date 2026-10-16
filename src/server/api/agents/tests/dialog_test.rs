@@ -1,9 +1,69 @@
 use super::*;
 
-// Minimized from the captured Codex screen in dialog-null/captured/034.txt:
+// Minimized from a captured Codex permission screen:
 // a wrapped option followed by an indented shell redirection continuation.
 const CODEX_SOFT_WRAPPED_PERMISSION: &str =
     include_str!("fixtures/codex_soft_wrapped_permission.txt");
+
+#[tokio::test]
+async fn soft_wrapped_highlighted_option_rejects_a_changed_command_suffix() {
+    let screen = " Choose a policy\r\n\r\n   1. Allow once\r\n\x1b[7m   2. Allow commands that start with cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1\x1b[0m\r\n   3. Deny\r\n\r\n Enter to select · Esc to cancel\r\n";
+    let (mut app, _) = app_with_dialog(b"", Some("session"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(40, 24);
+    runtime.test_process_pty_bytes(screen.as_bytes());
+    app.state.insert_test_runtime(pane, runtime);
+    let observed = observe_dialog(&mut app);
+    let dialog = observed
+        .dialog
+        .as_ref()
+        .expect("soft-wrapped highlighted choice");
+    assert_eq!(dialog.options.len(), 3);
+    assert_eq!(
+        dialog
+            .options
+            .iter()
+            .map(|option| option.selected)
+            .collect::<Vec<_>>(),
+        [false, true, false]
+    );
+    assert_eq!(dialog.options[1].label, "Allow commands that start with cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1");
+
+    let edited = screen.replace("dialog-probe.log", "different-target.log");
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{edited}").as_bytes());
+    let current = observe_dialog(&mut app);
+    assert_ne!(dialog.digest, current.dialog.as_ref().unwrap().digest);
+    let rejected = chosen(&choose(
+        &mut app,
+        &observed,
+        Some("session"),
+        &dialog.digest,
+        1,
+    ));
+    assert!(!rejected.written);
+    assert_eq!(rejected.reason.as_deref(), Some("stale_or_changed_dialog"));
+    assert!(writes.try_recv().is_err());
+
+    let accepted = chosen(&choose(
+        &mut app,
+        &current,
+        Some("session"),
+        &current.dialog.as_ref().unwrap().digest,
+        1,
+    ));
+    assert!(accepted.written);
+    assert_eq!(accepted.keys, ["up", "enter"]);
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x1b[A"));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+}
 
 #[tokio::test]
 async fn codex_soft_wrapped_question_footer_is_observed_and_answerable() {
