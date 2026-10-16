@@ -20,6 +20,8 @@ use std::{
 #[path = "support_test.rs"]
 mod support;
 use support::*;
+#[path = "callback_binding_test.rs"]
+mod callback_binding_tests;
 #[path = "delivery_test.rs"]
 mod delivery_tests;
 #[path = "queue_test.rs"]

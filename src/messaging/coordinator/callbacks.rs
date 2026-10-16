@@ -19,6 +19,8 @@ enum CallbackFlow {
     Stop,
 }
 
+#[path = "callback_binding.rs"]
+mod binding;
 #[path = "provider_turns.rs"]
 mod provider_turns;
 #[path = "reports.rs"]
@@ -126,6 +128,7 @@ impl Worker {
         state: &mut BusState,
         callback: ProviderCallback,
     ) -> Result<bool, String> {
+        let _binding = binding::span(state, &callback).entered();
         if matches!(
             callback.kind,
             CallbackEventKind::Final { .. } | CallbackEventKind::BackgroundPending
@@ -528,6 +531,8 @@ impl Worker {
                 tracing::warn!(
                     event = "bus.callback.rejected",
                     reason = "session_mismatch",
+                    expected_session_id = ?agent.runtime_identity.session_id,
+                    callback_session_id = %session,
                     "Callback does not own this terminal session"
                 );
                 // Retain the attested identity even on uncertain sends. Clearing
