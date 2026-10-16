@@ -7,6 +7,7 @@ mod history_links;
 mod hits;
 mod paint;
 mod room;
+mod settings;
 mod sidebar;
 mod text;
 mod view;
