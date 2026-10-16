@@ -1,6 +1,89 @@
 use super::*;
 
 #[test]
+fn selected_agent_names_keep_minimum_text_contrast_on_the_selection_tint() {
+    use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+    // WCAG 2.2 contrast ratio. 3:1 is the lowest bar WCAG sets for any text
+    // (large text); every allocatable agent color met it on the old tint.
+    fn contrast(a: Color, b: Color) -> f64 {
+        let luminance = |color: Color| {
+            let Color::Rgb(r, g, b) = color else {
+                panic!("rgb expected: {color:?}")
+            };
+            let [r, g, b] = [r, g, b].map(|channel| {
+                let channel = f64::from(channel) / 255.0;
+                if channel <= 0.04045 {
+                    channel / 12.92
+                } else {
+                    ((channel + 0.055) / 1.055).powf(2.4)
+                }
+            });
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+    let (mut ui, room, first) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut agents = vec![first];
+    for index in 1..8 {
+        agents.push(
+            snapshot
+                .state
+                .create_agent(
+                    room,
+                    &format!("agent{index}"),
+                    Provider::Codex,
+                    "/project".into(),
+                    None,
+                )
+                .unwrap(),
+        );
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    let mut unreadable = Vec::new();
+    let mut selected_background = Color::Reset;
+    for color_blind in [false, true] {
+        ui.settings.color_blind_mode = color_blind;
+        for &agent in &agents {
+            ui.open_room(room);
+            ui.terminal = Some(agent);
+            ui.compute_view(100, 60);
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 60));
+            ui.render(&mut buffer);
+            let hit = ui
+                .view
+                .hits
+                .iter()
+                .find(|hit| hit.action == render::Action::Agent(agent))
+                .unwrap();
+            let cell = &buffer[(hit.rect.x, hit.rect.y)];
+            selected_background = cell.bg;
+            let ratio = contrast(cell.fg, cell.bg);
+            if ratio < 3.0 {
+                unreadable.push(format!(
+                    "color_blind={color_blind} fg={:?} bg={:?} ratio={ratio:.2}",
+                    cell.fg, cell.bg
+                ));
+            }
+        }
+    }
+    // Allocation searches this entire RGB grid. Cover every possible identity
+    // color, including the accessible subset, beyond the first eight agents.
+    for r in (0..=255).step_by(17) {
+        for g in (0..=255).step_by(17) {
+            for b in (0..=255).step_by(17) {
+                if crate::messaging::prefs::colors::is_agent_color([r, g, b]) {
+                    let ratio = contrast(Color::Rgb(r, g, b), selected_background);
+                    assert!(ratio >= 3.0, "{r},{g},{b} contrast={ratio:.2}");
+                }
+            }
+        }
+    }
+    assert!(unreadable.is_empty(), "{unreadable:#?}");
+}
+
+#[test]
 fn selected_sidebar_rows_have_accent_bar_bold_name_and_tinted_background() {
     use ratatui::{
         buffer::Buffer,
@@ -51,7 +134,7 @@ fn selected_sidebar_rows_have_accent_bar_bold_name_and_tinted_background() {
                 assert_eq!(
                     buffer[(rect.x, rect.y)].bg,
                     if is_selected {
-                        Color::Rgb(40, 72, 48)
+                        Color::Rgb(28, 52, 34)
                     } else {
                         Color::Rgb(24, 24, 28)
                     }

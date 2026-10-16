@@ -142,7 +142,7 @@ fn paint_row(row: &Row, buffer: &mut Buffer, sidebar_selected: bool) {
     let mut style = Style::default()
         .fg(foreground)
         .bg(if sidebar_selected {
-            Color::Rgb(40, 72, 48)
+            Color::Rgb(28, 52, 34)
         } else if row.selected {
             Color::Rgb(46, 48, 58)
         } else {
