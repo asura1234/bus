@@ -41,9 +41,10 @@ in scratch state. For later cases, R is setup and does not depend on APP-02.
 Tab → provider choices; use Up/Down to highlight the named provider and Enter →
 provider selected, PWD focused. Press Ctrl+A then Ctrl+K, type the absolute scratch
 workspace directory without a trailing slash; wait for its matching directory
-suggestion and select it with Up/Down if needed. First Tab completes PWD (may append
-`/`) and keeps PWD focused; second Tab focuses optional args. Confirm the focused
-field, leave args empty, click `Add (Enter)`
+suggestion and highlight it with Up/Down or Tab if needed (Tab cycles the highlight
+and leaves the PWD text untouched). Enter completes PWD (may append `/`), closes the
+list and keeps PWD focused without adding the agent; then Tab focuses optional args.
+Confirm the focused field, leave args empty, click `Add (Enter)`
 → agent appears and its fake terminal opens. If a hook-write consent form appears,
 capture it and click Add only for the isolated scratch project → creation continues.
 Wait for the fake terminal's identifiable ready screen, press F6 → original room.
@@ -109,7 +110,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** R(`qa-master-target`), no orchestrator; fake Claude ready.
 
 1. Click `# MASTER`, press Ctrl+N → form includes `Orchestrates room` and a populated system prompt. Tab to Agent field → menu offers Claude Code and Cursor.
-2. Fill name `qa-master`, select Claude Code, set scratch PWD using A's completion recipe: first Tab completes the matching directory, second Tab focuses optional args. Leave args empty; one more Tab focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then click Add → fake terminal opens.
+2. Fill name `qa-master`, select Claude Code, set scratch PWD using A's completion recipe: Enter completes the highlighted directory without adding, then Tab focuses optional args. Leave args empty; one more Tab focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then click Add → fake terminal opens.
 3. Press F6 → MASTER chat; click `# qa-master-target` beneath that agent → target room opens. Click MASTER, then agent name → its terminal opens, not target chat.
 4. Press F6, press F2 on MASTER → a fixed-room error; name stays MASTER and no delete × is offered for it.
 
@@ -477,5 +478,5 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 - **Evidence:** a normal open records the unchanged URL or absolute path X; a reveal records the platform's reveal operation/arguments (macOS `open -R X`). Capture arguments so reveal and normal open are distinguishable; neither requires an external application display (`effects.rs`, `platform/desktop/{macos,linux}.rs`, `platform/windows/desktop.rs`). Screenshots are judged by the runner; unavailable clipboard/pixels/effects → affected step SKIP with reason. Desktop banners are out of scope; terminal-visible notices/recorded effects remain in scope.
 - **Link boundaries:** hidden-label Markdown links and paths split across rows are outside clickable-link acceptance; LINK-09 checks that hidden labels do not open.
 - **Click boundaries / launchers:** filename hover/click areas cover the name, thumbnail clicks cover picture cells, and opening requires a press/release on the same cell without movement or selection; even a drag entirely inside a picture cancels opening. Quoted paths retain spaces and URLs retain balanced parentheses (`render/history_links.rs`, `selection.rs`, `links.rs`). Executable regular files on Unix and launcher extensions such as .app/.command/.terminal/.webloc/.fileloc reveal in the file manager. Symlinks are also judged by their resolved target; a symlink to an app reveals the clicked link path instead of opening/running its target (`effects.rs`, `platform/fs.rs`).
-- **Runner-neutral edits / quit:** Find uses Backspace to remove query characters; PWD completion consumes the first Tab while a matching suggestion is shown (`chat_search.rs`, `input/forms.rs`). Observe live drafts on screen; saved files may lag. Judge quit from exit status and finalized terminal-restore output; a shell prompt is optional (`client/run.rs`, `client/host_terminal/setup.rs`).
+- **Runner-neutral edits / quit:** Find uses Backspace to remove query characters; while PWD suggestions are shown, Tab/Shift+Tab only move the highlight, and Enter completes the highlighted path instead of adding the agent (`chat_search.rs`, `input/forms.rs`). Observe live drafts on screen; saved files may lag. Judge quit from exit status and finalized terminal-restore output; a shell prompt is optional (`client/run.rs`, `client/host_terminal/setup.rs`).
 - **Recall acceptance:** APP-12 requires the first Up to restore the archived draft. This includes the separately landing recall-order product fix; an older train build still fails that assertion until rebased onto the fix from master. Keep the precise expectation when judging that build.
