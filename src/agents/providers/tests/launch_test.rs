@@ -266,3 +266,26 @@ fn launch_args_adoption_distinguishes_selectors_from_literal_option_values() {
 
 include!("hook_json_test.rs");
 include!("suggest_test.rs");
+
+#[test]
+fn yolo_preserves_explicit_bypass_after_opaque_options_and_ignores_literal_values() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    std::env::set_var("BUS_YOLO", "1");
+    let mut failures = Vec::new();
+    for (provider, flag) in [(Provider::ClaudeCode, "--dangerously-skip-permissions"), (Provider::Codex, "--yolo"), (Provider::Cursor, "--force")] {
+        for (input, expected) in [
+            (vec!["--future-option", "value", flag], vec!["--future-option", "value", flag]),
+            (vec!["--model", flag], vec![flag, "--model", flag]),
+            (vec!["--", flag], vec![flag, "--", flag]),
+            (vec!["--model", "--"], vec![flag, "--model", "--"]),
+        ] {
+            let mut args: Vec<_> = input.iter().map(|a| (*a).to_owned()).collect();
+            crate::agents::providers::launch::apply_run_permissions(provider, &mut args);
+            if args != expected { failures.push(format!("{provider:?}: {input:?} -> {args:?}, want {expected:?}")); }
+        }
+    }
+    std::env::remove_var("BUS_YOLO");
+    if let Some(old) = old { std::env::set_var("BUS_YOLO", old); }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

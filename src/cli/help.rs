@@ -105,6 +105,7 @@ pub const DEV_HELP: &str = include_str!("../../docs/dev-tools.md");
 
 pub(super) fn print_help(dev: bool) {
     write_stdout_line(format_args!("{}\n", AGENT_HELP));
+    write_stdout_line(format_args!("--yolo bypasses provider permission prompts for all workers and MASTER orchestrators\n(new and resumed) in this run only. It is off by default and is never saved.\n"));
     if dev {
         write_stdout_line(format_args!("{}", DEV_HELP));
     }

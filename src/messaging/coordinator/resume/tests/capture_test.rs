@@ -16,6 +16,58 @@ use std::{
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
+// Catch bypass injection missing from either preparation or resume, duplicate
+// aliases, and generated flags accidentally becoming durable user options.
+#[test]
+fn yolo_applies_to_new_and_resumed_agents_without_persisting_or_duplicating() {
+    use crate::agents::providers::{hook_json::HookContext, launch};
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    let old_path = std::env::var_os("PATH");
+    let mut failures = Vec::new();
+    for (provider, flag, aliases) in [
+        (Provider::ClaudeCode, "--dangerously-skip-permissions", vec!["--dangerously-skip-permissions"]),
+        (Provider::Codex, "--yolo", vec!["--yolo", "--dangerously-bypass-approvals-and-sandbox"]),
+        (Provider::Cursor, "--force", vec!["--force", "--yolo", "-f"]),
+    ] {
+        for input in std::iter::once("").chain(aliases.iter().copied()) {
+            let fixture = Fixture::new(provider);
+            let kind = identity::provider_kind(provider);
+            let spool = fixture.root.join("callbacks/owned-launch");
+            let bin = fixture.root.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
+            std::env::set_var("PATH", &bin);
+            std::env::set_var("BUS_YOLO", "1");
+            let prepared = launch::prepare(&launch::LaunchSpec {
+                provider: kind,
+                cwd: fixture.project.display().to_string(),
+                extra_args: input.into(),
+                consent_project_hooks: true,
+                hooks: HookContext { binary: fixture.binary.clone(), spool: spool.clone(), launch_id: "owned-launch".into() },
+            }, |_| Ok(())).unwrap();
+            let resumed = fixture.load().unwrap();
+            for (phase, argv) in [("new", prepared.args), ("resume", resumed.args)] {
+                let actual: Vec<_> = argv.iter().filter(|a| aliases.contains(&a.as_str())).map(String::as_str).collect();
+                let expected = if input.is_empty() { flag } else { input };
+                if actual != [expected] {
+                    failures.push(format!("{provider:?} {phase} input={input:?}: {actual:?}, want {expected}"));
+                }
+            }
+            let saved = std::fs::read(spool.join("launch-options.json")).unwrap();
+            assert_eq!(launch::saved_options(kind, &spool).unwrap(), if input.is_empty() { Vec::<String>::new() } else { vec![input.to_owned()] });
+            std::env::remove_var("BUS_YOLO");
+            let normal = fixture.load().unwrap();
+            let count = normal.args.iter().filter(|a| aliases.contains(&a.as_str())).count();
+            assert_eq!(count, usize::from(!input.is_empty()), "{provider:?} subsequent normal run");
+            assert_eq!(std::fs::read(spool.join("launch-options.json")).unwrap(), saved);
+        }
+    }
+    if let Some(old) = old { std::env::set_var("BUS_YOLO", old); }
+    if let Some(old_path) = old_path { std::env::set_var("PATH", old_path); } else { std::env::remove_var("PATH"); }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 struct Fixture {
     root: PathBuf,
     project: PathBuf,

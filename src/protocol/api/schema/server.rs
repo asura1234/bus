@@ -16,4 +16,7 @@ pub struct ServerCapabilities {
     /// Whether this server supports endpoint health probes.
     #[serde(default)]
     pub health_check: bool,
+    /// Permission bypass selected for this daemon's current run.
+    #[serde(default)]
+    pub yolo: bool,
 }

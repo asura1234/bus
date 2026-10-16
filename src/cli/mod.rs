@@ -116,6 +116,14 @@ fn last_session(
 fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     let dev = invocation.dev;
     apply_dev_environment(dev);
+    // Only this invocation opts in. In particular, a Bus started by an agent
+    // must not inherit its parent's bypass mode. The private daemon inherits
+    // this value directly, without going through the public CLI parser.
+    if invocation.yolo {
+        std::env::set_var(crate::utils::env::YOLO_ENV_VAR, "1");
+    } else {
+        std::env::remove_var(crate::utils::env::YOLO_ENV_VAR);
+    }
     if invocation.action == Action::Help {
         print_help(dev);
         return Ok(());
@@ -343,12 +351,16 @@ mod tests {
         values.iter().map(|value| (*value).to_owned()).collect()
     }
 
+    #[path = "yolo_test.rs"]
+    mod yolo_tests;
+
     #[test]
     fn empty_arguments_mean_a_fresh_session() {
         assert_eq!(
             parse_invocation(&[]).unwrap(),
             Invocation {
                 dev: false,
+                yolo: false,
                 action: Action::Run,
             }
         );
@@ -360,6 +372,7 @@ mod tests {
             parse_invocation(&args(&["--dev", "resume", "0123456789abcdef"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Resume(ResumeTarget::Id("0123456789abcdef".into())),
             }
         );
@@ -367,6 +380,7 @@ mod tests {
             parse_invocation(&args(&["resume", "--last", "--dev"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Resume(ResumeTarget::Last),
             }
         );
@@ -389,6 +403,7 @@ mod tests {
             parse_invocation(&args(&["stop", "--dev"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Stop,
             }
         );
@@ -407,6 +422,7 @@ mod tests {
             .unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Tui(args(&["start", "--dev", "--size", "80x24"])),
             }
         );
@@ -414,6 +430,7 @@ mod tests {
             parse_invocation(&args(&["tui"])).unwrap(),
             Invocation {
                 dev: false,
+                yolo: false,
                 action: Action::Tui(vec![]),
             }
         );
@@ -425,6 +442,7 @@ mod tests {
             parse_invocation(&args(&["--dev", "agent", "read", "Codex1"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Control(args(&["agent", "read", "Codex1"])),
             }
         );

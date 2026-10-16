@@ -2,6 +2,31 @@
 //! passed through and ends inspection: guessing arity could reject a value.
 use super::super::ProviderKind;
 
+/// Known option values and literal tails are not flags. After opaque syntax,
+/// avoid adding a second explicit spelling without guessing its arity.
+pub(super) fn contains_flag(provider: ProviderKind, args: &[String], aliases: &[&str]) -> bool {
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        if arg == "--" {
+            return false;
+        }
+        if aliases.contains(&arg.as_str()) {
+            return true;
+        }
+        if !arg.starts_with('-') {
+            index += 1;
+        } else if let Some(end) = option_end(provider, args, index) {
+            index = end;
+        } else {
+            return args[index + 1..]
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| aliases.contains(&arg.as_str()));
+        }
+    }
+    false
+}
+
 /// Option positions plus the first positional command/prompt. Later options
 /// still count; values and the tail after `--` are never modes or selectors.
 pub(crate) fn argument_positions(provider: ProviderKind, args: &[String]) -> Vec<usize> {

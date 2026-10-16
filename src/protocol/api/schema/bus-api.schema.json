@@ -6474,6 +6474,11 @@
               "default": false,
               "description": "Whether this server supports explicit client-shell surface interest.",
               "type": "boolean"
+            },
+            "yolo": {
+              "default": false,
+              "description": "Permission bypass selected for this daemon's current run.",
+              "type": "boolean"
             }
           },
           "type": "object"
