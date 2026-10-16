@@ -384,8 +384,8 @@ impl ClientShellState {
     }
 
     pub(in crate::client) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
-        if self.bus.is_some() {
-            return crate::client::rooms::layout(cols, rows);
+        if let Some(bus) = &self.bus {
+            return crate::client::rooms::layout(cols, rows, bus.sidebar_width());
         }
         // Without Bus (the hidden test client) the pane surface fills the terminal.
         ClientShellLayout {

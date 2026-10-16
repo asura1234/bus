@@ -268,7 +268,7 @@ Files are split by ownership, not by helper.
     - `widgets/{editor,recipients}.rs`, `dialogs/{forms,deletion}.rs`
     - `input/`: `mod.rs`, `composer.rs`, `history.rs`, `forms.rs`, `settings.rs`
     - `history/`: `mod.rs`, `exchange.rs`, `markdown.rs`
-    - `render/`: `mod.rs` (view model and hits), `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`,
+    - `render/`: `mod.rs` (view model and hits), `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `settings.rs`, `paint.rs`, `thumbnails.rs`,
       `hits.rs` (dev variant only: names each hit and publishes them for `ui hits`)
     - `tests/`: `support_test.rs` (fixtures, input drivers, screen capture), `deletion_test.rs`, `sidebar_test.rs`, `toasts_test.rs`,
       `composer_test.rs`, `forms_test.rs`, `layout_test.rs`, `native_shell_test.rs`, `attachments_test.rs`, `selection_test.rs`,

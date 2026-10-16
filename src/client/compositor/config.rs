@@ -107,7 +107,13 @@ impl ClientShellConfig {
 
     pub(crate) fn initial_surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {
         if crate::utils::env::bus_data_dir().is_some() {
-            let surface = crate::client::rooms::layout(cols, rows).pane_surface;
+            // The saved width, so the first pane size already matches the
+            // sidebar the Bus UI draws once it loads the same settings.
+            let sidebar_width = crate::messaging::prefs::settings::path()
+                .and_then(|path| crate::messaging::prefs::settings::load(&path).ok())
+                .unwrap_or_default()
+                .sidebar_width;
+            let surface = crate::client::rooms::layout(cols, rows, sidebar_width).pane_surface;
             return ClientSurfaceSize {
                 cols: surface.width.max(1),
                 rows: surface.height.max(1),

@@ -354,7 +354,7 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 **Pass criteria:** both state and painted identity colours change/revert; checkbox-only proof fails.
 
-### APP-15 — Sound settings, new-room defaults and compaction limit
+### APP-15 — Sound settings, new-room defaults, compaction limit and sidebar width
 
 **Preconditions/setup:** default isolated settings; R(`qa-sound-a`), R(`qa-sound-b`).
 
@@ -362,10 +362,11 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 2. Click qa-sound-a's checkbox → it alone turns off; All rooms becomes mixed `[-]`. Enter on All rooms → both on. Close, R(`qa-sound-new`), reopen Settings → new room also on; MASTER's separate setting is unaffected.
 3. Focus a sound row, press Right then Left → installed sound choice changes and returns, with previews. If only Default exists, record that inventory; no different sound name is expected. Preview evidence: recorded effect, sound with target selected sound name; SKIP with reason for the preview assertion if the runner cannot capture this evidence.
 4. Move to `Max compactions per agent (1–100)`, record value, change with Left/Right within bounds → displayed integer changes; close/reopen → value persists.
+5. Move to `Sidebar width (20–60)` under `SIDEBAR` → it shows `28`; record the column of the sidebar's vertical divider. Press Right three times → `31`, and on the same screen the divider and the Settings form are three columns further right; no restart. Press Esc → the room view's sidebar keeps the new width: its `+` controls and the divider sit three columns further right, and nothing in the chat area overlaps the sidebar. Reopen Settings → `31` persists; press Left three times → `28` and the divider returns to its recorded column.
 
-**Evidence:** checkbox/sound/limit text at each step, scratch settings and per-room sound state; step 3 preview: recorded effect, sound with target selected sound name. SKIP with reason for preview evidence unavailable to the runner; settings assertions remain independently scored.
+**Evidence:** checkbox/sound/limit/width text at each step, scratch settings and per-room sound state; step 3 preview: recorded effect, sound with target selected sound name; step 5: divider/`+` columns from find/cells before and after, and the saved `sidebar_width`. SKIP with reason for preview evidence unavailable to the runner; settings assertions remain independently scored.
 
-**Pass criteria:** toggles/default inheritance/mixed state/limit edits work; no model compaction required.
+**Pass criteria:** toggles/default inheritance/mixed state/limit edits work and a width change redraws the sidebar at once; no model compaction required.
 
 ### APP-16 — New-message sound notifications
 

@@ -224,6 +224,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
             "color_blind_mode": false,
             "max_compactions_per_agent": 5,
             "background_shell_hold_minutes": 15,
+            "sidebar_width": 28,
             "master_sound": {"enabled": false, "name": "Blow"},
             "room_sound": {"enabled": true, "name": null},
         })
@@ -245,4 +246,25 @@ fn dev_settings_show_and_set_the_global_sounds() {
     assert_eq!(find(room)["sound_name"], "Default");
     drop(worker);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sidebar_width_is_saved_clamped_and_announced_to_the_ui() {
+    let root = root("sidebar-width");
+    let mut worker = session(&root, "sidebar-width");
+    let (events, receiver) = mpsc::channel();
+    for (requested, saved) in [(40, 40), (5, 20), (500, 60)] {
+        worker
+            .command(BusCommand::SetSidebarWidth(requested), &events)
+            .unwrap();
+        assert!(
+            matches!(receiver.recv().unwrap(), BusEvent::SettingsChanged(settings) if settings.sidebar_width == saved),
+            "{requested}"
+        );
+        let loaded = settings::load(&root.join("settings.json")).unwrap();
+        assert_eq!(loaded.sidebar_width, saved);
+        // Other sessions' settings are untouched.
+        assert!(loaded.master_sound.enabled);
+    }
+    let _ = std::fs::remove_dir_all(root);
 }

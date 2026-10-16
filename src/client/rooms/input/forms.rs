@@ -188,7 +188,9 @@ impl BusUi {
         match code {
             KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
             KeyCode::Down => {
-                let last = self.perf_overlay_field().unwrap_or(targets.len() + 1);
+                let last = self
+                    .perf_overlay_field()
+                    .unwrap_or_else(|| self.sidebar_width_field());
                 self.settings_field = (self.settings_field + 1).min(last);
             }
             // Enter alone toggles (Space is deliberately inert in Settings).
@@ -202,8 +204,10 @@ impl BusUi {
                 }
             },
             KeyCode::Left | KeyCode::Right => {
-                if self.settings_field == targets.len() + 1 {
+                if self.settings_field == self.compaction_field() {
                     self.adjust_compaction_limit(code == KeyCode::Right);
+                } else if self.settings_field == self.sidebar_width_field() {
+                    self.adjust_sidebar_width(code == KeyCode::Right);
                 } else if let Some(target) = self
                     .settings_field
                     .checked_sub(1)

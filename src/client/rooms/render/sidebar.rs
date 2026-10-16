@@ -242,7 +242,7 @@ impl BusUi {
         {
             self.full_repaint = true;
         }
-        let layout = layout(cols, rows);
+        let layout = layout(cols, rows, self.settings.sidebar_width);
         let sidebar = layout.sidebar;
         let main = layout.pane_surface;
         let mut view = View {

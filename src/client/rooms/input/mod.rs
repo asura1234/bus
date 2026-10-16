@@ -585,6 +585,7 @@ impl BusUi {
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::TogglePerfOverlay => self.toggle_perf_overlay(),
             Action::AdjustCompactionLimit(forward) => self.adjust_compaction_limit(forward),
+            Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),
             Action::Cancel => {
                 if let Some(room) = self.room {
                     self.open_room(room);

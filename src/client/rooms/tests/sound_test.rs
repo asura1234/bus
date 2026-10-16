@@ -85,11 +85,13 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     )));
     assert_eq!(ui.settings_field, 4);
     assert_eq!(queued_sound(&ui).last(), Some(&(rooms[1], true)));
-    // The new compaction setting follows the last room.
+    // The compaction limit follows the last room, then the sidebar width.
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     assert_eq!(ui.settings_field, 5);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 5);
+    assert_eq!(ui.settings_field, 6);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, 6);
     assert!(!ui.settings.color_blind_mode);
 }
 
@@ -784,13 +786,14 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
         rows[..row].iter().any(|row| row.ends_with("DEVELOPER")),
         "{rows:#?}"
     );
-    // Color blind, MASTER, All rooms, one room, compactions, then the overlay.
-    for _ in 0..5 {
+    // Color blind, MASTER, All rooms, one room, compactions, sidebar width,
+    // then the overlay.
+    for _ in 0..6 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    assert_eq!(ui.settings_field, 5);
+    assert_eq!(ui.settings_field, 6);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 5, "the overlay row is the last field");
+    assert_eq!(ui.settings_field, 6, "the overlay row is the last field");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(crate::client::perf::OVERLAY.is_on());
     let rows = settings_rows(&mut ui, 40);

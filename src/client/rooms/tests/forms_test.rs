@@ -68,6 +68,8 @@ fn settings_compaction_limit_is_visible_and_editable_with_arrow_keys() {
     for _ in 0..10 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
+    // The compaction limit sits one row above the last (sidebar width) row.
+    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(
         serde_json::to_value(&ui.settings).unwrap()["max_compactions_per_agent"],
@@ -103,6 +105,90 @@ fn settings_compaction_limit_mouse_controls_respect_the_allowed_range() {
     ui.action(render::Action::AdjustCompactionLimit(false));
     assert_eq!(ui.settings.max_compactions_per_agent, 1);
     assert_eq!(ui.pending.len(), before);
+}
+
+#[test]
+fn settings_sidebar_width_is_visible_and_editable_with_arrow_keys() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    let screen = room_screen(&mut ui, 120, 40);
+    assert!(screen.contains("SIDEBAR"), "{screen}");
+    assert!(screen.contains("Sidebar width (20–60)"), "{screen}");
+    assert!(screen.contains("‹ 28 ›"), "{screen}");
+    // Down stops on the last row, the sidebar width.
+    for _ in 0..10 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(ui.settings.sidebar_width, 29);
+    assert!(ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::SetSidebarWidth(29))));
+    // The sidebar itself is already wider on the next frame.
+    room_screen(&mut ui, 120, 40);
+    assert_eq!(ui.view.sidebar.width, 29);
+    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
+    assert_eq!(ui.settings.sidebar_width, 28);
+    assert!(room_screen(&mut ui, 120, 40).contains("‹ 28 ›"));
+}
+
+#[test]
+fn quick_stepper_presses_survive_the_echo_of_an_earlier_press() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    room_screen(&mut ui, 120, 40);
+    for _ in 0..10 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    // Three presses before the coordinator answers the first.
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(ui.settings.sidebar_width, 31);
+    let echo = |width| {
+        BusEvent::SettingsChanged(crate::messaging::prefs::settings::BusSettings {
+            sidebar_width: width,
+            color_blind_mode: true,
+            ..Default::default()
+        })
+    };
+    ui.receive_event(echo(29));
+    assert_eq!(ui.settings.sidebar_width, 31, "the first echo must not undo later presses");
+    assert!(ui.settings.color_blind_mode, "other fields still arrive");
+    assert!(room_screen(&mut ui, 120, 40).contains("‹ 31 ›"));
+    // Once every press is answered, the echo is the truth again.
+    for pending in ui.pending.iter_mut() {
+        pending.result = Some(Ok(()));
+    }
+    ui.receive_event(echo(31));
+    assert_eq!(ui.settings.sidebar_width, 31);
+    ui.receive_event(echo(40));
+    assert_eq!(ui.settings.sidebar_width, 40);
+}
+
+#[test]
+fn settings_sidebar_width_mouse_controls_respect_the_allowed_range() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    room_screen(&mut ui, 120, 40);
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::AdjustSidebarWidth(true)));
+    ui.settings.sidebar_width = 60;
+    let before = ui.pending.len();
+    ui.action(render::Action::AdjustSidebarWidth(true));
+    assert_eq!(ui.settings.sidebar_width, 60);
+    assert_eq!(ui.pending.len(), before);
+    ui.settings.sidebar_width = 20;
+    ui.action(render::Action::AdjustSidebarWidth(false));
+    assert_eq!(ui.settings.sidebar_width, 20);
+    assert_eq!(ui.pending.len(), before);
+    ui.action(render::Action::AdjustSidebarWidth(true));
+    assert_eq!(ui.settings.sidebar_width, 21);
+    assert_eq!(ui.pending.len(), before + 1);
 }
 
 #[test]

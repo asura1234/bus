@@ -132,7 +132,8 @@ pub(in crate::client) struct BusUi {
     pub(super) settings: crate::messaging::prefs::settings::BusSettings,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
-    /// Settings focus: color blind mode, sound rows, then the compaction limit.
+    /// Settings focus: color blind mode, sound rows, the compaction limit,
+    /// then the sidebar width.
     pub(super) settings_field: usize,
     pub(super) settings_scroll: usize,
     /// Dev builds show a Developer group in Settings (the performance overlay).
@@ -259,10 +260,24 @@ impl BusUi {
         }
     }
 
-    /// The overlay row's Settings focus index, after the compaction limit.
+    /// The saved sidebar width; the shell's layout clamps it to the terminal.
+    pub(in crate::client) fn sidebar_width(&self) -> u16 {
+        self.settings.sidebar_width
+    }
+
+    /// The compaction limit's Settings focus index, after the sound rows.
+    pub(super) fn compaction_field(&self) -> usize {
+        self.sound_settings_targets().len() + 1
+    }
+
+    /// The sidebar width's Settings focus index, after the compaction limit.
+    pub(super) fn sidebar_width_field(&self) -> usize {
+        self.compaction_field() + 1
+    }
+
+    /// The overlay row's Settings focus index, after the sidebar width.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings
-            .then(|| self.sound_settings_targets().len() + 2)
+        self.dev_settings.then(|| self.sidebar_width_field() + 1)
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -287,10 +302,25 @@ impl BusUi {
         });
         id
     }
+    /// The coordinator echoes the saved settings for every stepper press
+    /// before that press's command is finished, so a quick second press
+    /// would be undone by the first press's echo. A stepper value whose
+    /// command is still pending stays as shown; the final echo matches it.
+    fn receive_settings(&mut self, mut settings: crate::messaging::prefs::settings::BusSettings) {
+        let pending = |is: fn(&BusCommand) -> bool| {
+            self.pending
+                .iter()
+                .any(|p| p.result.is_none() && is(&p.command))
+        };
+        if pending(|command| matches!(command, BusCommand::SetSidebarWidth(_))) {
+            settings.sidebar_width = self.settings.sidebar_width;
+        }
+        self.settings = settings;
+    }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
-            BusEvent::SettingsChanged(settings) => self.settings = settings,
+            BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {
