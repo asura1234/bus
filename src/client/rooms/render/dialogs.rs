@@ -251,7 +251,7 @@ impl BusUi {
             }
             Form::Consent { notice, .. } => {
                 let text = format!(
-                    "{}\n{}\n\nAdd confirms writing these Bus-owned hook entries. Bus will become ready automatically; this does not approve provider permissions.",
+                    "{}\n{}\n\nPress Add to write the hooks. This only connects the agent to Bus; it doesn't approve any of the agent's own permissions.",
                     notice.message,
                     notice.path.display()
                 );
