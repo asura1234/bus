@@ -1115,3 +1115,53 @@ fn a_late_stop_within_the_held_reply_window_is_still_the_turn_reply() {
         assert_eq!(fixture.request(id).failure_reason, None);
     }
 }
+
+/// A wake turn ended without a `Stop` (say Bus restarted under it), and the
+/// turn's second shell finishes inside the held-reply window: Claude wakes a
+/// new turn for it, whose `Stop` carries the real reply. That captured reply,
+/// not the older interim, is what the held messages get.
+#[test]
+fn a_second_wake_turn_inside_the_held_reply_window_carries_the_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(&mut fixture, "build it", "turn-1");
+    fixture.record(claude_stop(
+        "turn-1",
+        "Waiting on the build.",
+        &["b1", "b2"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert!(fixture.request(lead).awaiting_background);
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.now += 2_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert!(fixture.request(lead).turn_ended_at_ms.is_some());
+    fixture.now += 10_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.started(
+        "turn-3",
+        "<task-notification>b2 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.now += 5_000;
+    fixture.record(claude_stop("turn-3", "Both builds passed.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += HELD_REPLY_GRACE_MS + 1;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Both builds passed."));
+}

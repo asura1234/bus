@@ -112,7 +112,7 @@ impl BusState {
     /// when it belongs to the request's current provider session. A wake turn
     /// that ends without a `Stop` (Bus restarted under it, or Claude folded the
     /// next task notification into it) leaves it as the reply Bus captured.
-    fn held_interim(request: &Request) -> Option<PendingFinal> {
+    pub(super) fn held_interim(request: &Request) -> Option<PendingFinal> {
         request
             .shell_hold
             .as_ref()

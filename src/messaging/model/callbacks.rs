@@ -198,10 +198,12 @@ impl BusState {
         // A turn that wakes after the request paused for background work carries
         // the real reply. Once the request holds a final reply, a new turn is the
         // agent's own activity and must not replace or discard that reply.
+        // A shell-held interim still leaves that door open if another shell
+        // wakes a turn during the no-Stop settlement window.
         let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
             && request.trusted_start_bound
             && request.pending_final.is_none()
-            && request.turn_ended_at_ms.is_none()
+            && (request.turn_ended_at_ms.is_none() || Self::held_interim(request).is_some())
             && request.provider_session_id.is_some()
             && callback.provider_session_id == request.provider_session_id
             && request.provider_turn_id.is_some()
