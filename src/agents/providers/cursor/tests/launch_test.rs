@@ -43,12 +43,10 @@ fn cursor_notice_keeps_four_hook_consent_and_cursor_adapter() {
     assert_eq!(notice.path, Path::new("/project/.cursor/hooks.json"));
     assert!(notice
         .message
-        .starts_with("Bus will add a few hooks to this project's Cursor settings"));
-    assert!(notice
-        .message
-        .contains("Complete Cursor's usual trust and setup prompts."));
-    assert!(notice
-        .message
-        .contains("Messages you send before it is ready wait and are delivered once it is."));
+        .starts_with("Bus will add a few hooks to this project's agent settings"));
+    assert!(notice.message.contains(
+        "Messages you send before the agent is ready wait and are delivered once it is."
+    ));
+    assert!(!notice.message.contains("Cursor"), "{}", notice.message);
     assert!(notice.message.ends_with("--bus-callback cursor-hook."));
 }

@@ -40,10 +40,11 @@ fn codex_setup_notice_preserves_project_consent_and_callback_adapter() {
     assert_eq!(notice.path, Path::new("/project/.codex/hooks.json"));
     assert!(notice
         .message
-        .starts_with("Bus will add a few hooks to this project's Codex settings"));
+        .starts_with("Bus will add a few hooks to this project's agent settings"));
     assert!(notice
         .message
-        .contains("Codex will then ask you to trust this project and the new hooks"));
+        .contains("The agent may ask you to trust this project and the new hooks"));
+    assert!(!notice.message.contains("Codex"), "{}", notice.message);
     assert!(notice
         .message
         .contains("Your existing hooks stay as they are."));

@@ -22,6 +22,6 @@ pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<Stri
 pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
     SetupNotice {
         path: root.join(".cursor/hooks.json"),
-        message: "Bus will add a few hooks to this project's Cursor settings, so room messages can reach this agent and its replies can reach the room. Complete Cursor's usual trust and setup prompts. Messages you send before it is ready wait and are delivered once it is. Your existing hooks stay as they are. To undo, delete the entries that run this Bus executable with --bus-callback cursor-hook.".into(),
+        message: super::super::launch::hook_notice_message("cursor-hook"),
     }
 }

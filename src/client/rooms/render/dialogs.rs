@@ -250,11 +250,7 @@ impl BusUi {
                 y = self.agent_fields(view, main, form);
             }
             Form::Consent { notice, .. } => {
-                let text = format!(
-                    "{}\n{}\n\nPress Add to write the hooks. This only connects the agent to Bus; it doesn't approve any of the agent's own permissions.",
-                    notice.message,
-                    notice.path.display()
-                );
+                let text = format!("{}\n{}", notice.message, notice.path.display());
                 let height = wrap(&text, width).len() as u16;
                 view.lines(Rect::new(x, y, width, height), &text, None, false);
                 y += height + 2;

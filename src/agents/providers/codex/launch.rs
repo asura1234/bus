@@ -40,6 +40,6 @@ pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<Stri
 pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
     SetupNotice {
         path: root.join(".codex/hooks.json"),
-        message: "Bus will add a few hooks to this project's Codex settings, so room messages can reach this agent and its replies can reach the room. Codex will then ask you to trust this project and the new hooks; accept them. Your existing hooks stay as they are. To undo, delete the entries that run this Bus executable with --bus-callback codex-hook.".into(),
+        message: super::super::launch::hook_notice_message("codex-hook"),
     }
 }
