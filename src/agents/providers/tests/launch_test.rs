@@ -1,4 +1,6 @@
 // Included only in messaging::provider_glue::launch::tests to retain case IDs.
+#[path = "yolo_options_test.rs"]
+mod yolo_options;
 use crate::agents::providers::{
     hook_json::{self, HookContract},
     launch::{launch_args, runtime_args, validate_args},
