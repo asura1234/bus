@@ -1,0 +1,9 @@
+  Would you like to run the following command?
+  Environment: local
+  Reason: Run the targeted regression tests?
+  $ cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `CARGO_INCREMENTAL=0 cargo test --locked --bin bus dialog_probe
+     > /tmp/dialog-probe.log 2>&1` (p)
+  3. No, and tell Codex what to do differently (esc)
+  Press enter to confirm or esc to cancel

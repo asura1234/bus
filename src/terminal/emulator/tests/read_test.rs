@@ -329,3 +329,41 @@ fn key_event_utf8_is_independent_of_source_mutation() {
 
     assert_eq!(encoder.encode(&event).unwrap(), b"a");
 }
+
+#[test]
+fn unwrapped_ansi_keeps_hard_line_breaks_of_full_width_rows() {
+    let (tx, _rx) = mpsc::channel(4);
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 4, 100).unwrap();
+    terminal.write(b"  1. Yes, proceed yy\r\n  2. No\x1b[3;1H01234567890123456789\x1b[4;1Hnext");
+    let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+
+    let plain: Vec<String> = pane
+        .visible_ansi_unwrapped()
+        .lines()
+        .map(|line| {
+            let mut text = String::new();
+            let mut chars = line.chars();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    text.push(c);
+                }
+            }
+            text.trim_end().to_owned()
+        })
+        .collect();
+    assert_eq!(
+        plain,
+        [
+            "  1. Yes, proceed yy",
+            "  2. No",
+            "01234567890123456789",
+            "next"
+        ]
+    );
+}

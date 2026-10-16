@@ -24,7 +24,7 @@ impl TerminalRuntime {
             .content_write_lock
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if crate::agents::dialog::codex_question_pending(&self.terminal.visible_ansi()) {
+        if crate::agents::dialog::codex_question_pending(&self.terminal.visible_ansi_unwrapped()) {
             let key = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Left,
                 crossterm::event::KeyModifiers::SHIFT,
@@ -48,7 +48,7 @@ impl TerminalRuntime {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi())
+        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped())
             .filter(|dialog| dialog.digest() == expected_digest)
         else {
             return Ok(DialogChoice::Stale);
@@ -101,7 +101,8 @@ impl TerminalRuntime {
         &self,
         label: &str,
     ) -> Result<DialogChoice, String> {
-        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi()) else {
+        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped())
+        else {
             return Ok(DialogChoice::Stale);
         };
         let Some(option) = dialog
@@ -128,7 +129,7 @@ impl TerminalRuntime {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi())
+        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped())
             .filter(|dialog| dialog.digest() == expected_digest)
         else {
             return Ok(DialogChoice::Stale);

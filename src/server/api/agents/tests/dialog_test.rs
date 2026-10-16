@@ -1,5 +1,173 @@
 use super::*;
 
+// Minimized from a captured Codex permission screen:
+// a wrapped option followed by an indented shell redirection continuation.
+const CODEX_SOFT_WRAPPED_PERMISSION: &str =
+    include_str!("fixtures/codex_soft_wrapped_permission.txt");
+
+#[tokio::test]
+async fn unwrapped_ansi_keeps_indentation_of_cursor_positioned_dialog_rows() {
+    // ratatui-style diff rendering never writes untouched blank cells, so the
+    // indentation of each row exists only as cursor positioning.
+    let (mut app, _) = app_with_dialog(b"", Some("session"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(
+        160,
+        12,
+        b"\x1b[1;3HWould you like to run the following command?\
+          \x1b[2;3H$ cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1\
+          \x1b[3;1H\xe2\x80\xba 1. Yes, proceed (y)\
+          \x1b[4;3H2. Yes, and don't ask again for commands that start with `cargo test dialog_probe\
+          \x1b[5;6H> /tmp/dialog-probe.log 2>&1` (p)\
+          \x1b[6;3H3. No, and tell Codex what to do differently (esc)\
+          \x1b[7;3HPress enter to confirm or esc to cancel",
+    );
+    app.state.insert_test_runtime(pane, runtime);
+    let dialog = observe_dialog(&mut app)
+        .dialog
+        .expect("cursor-positioned Codex permission dialog");
+    assert_eq!(dialog.options.len(), 3);
+    assert_eq!(
+        dialog.options[1].label,
+        "Yes, and don't ask again for commands that start with `cargo test dialog_probe > /tmp/dialog-probe.log 2>&1` (p)"
+    );
+}
+
+#[tokio::test]
+async fn soft_wrapped_highlighted_option_rejects_a_changed_command_suffix() {
+    let screen = " Choose a policy\r\n\r\n   1. Allow once\r\n\x1b[7m   2. Allow commands that start with cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1\x1b[0m\r\n   3. Deny\r\n\r\n Enter to select · Esc to cancel\r\n";
+    let (mut app, _) = app_with_dialog(b"", Some("session"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(40, 24);
+    runtime.test_process_pty_bytes(screen.as_bytes());
+    app.state.insert_test_runtime(pane, runtime);
+    let observed = observe_dialog(&mut app);
+    let dialog = observed
+        .dialog
+        .as_ref()
+        .expect("soft-wrapped highlighted choice");
+    assert_eq!(dialog.options.len(), 3);
+    assert_eq!(
+        dialog
+            .options
+            .iter()
+            .map(|option| option.selected)
+            .collect::<Vec<_>>(),
+        [false, true, false]
+    );
+    assert_eq!(dialog.options[1].label, "Allow commands that start with cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1");
+
+    let edited = screen.replace("dialog-probe.log", "different-target.log");
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{edited}").as_bytes());
+    let current = observe_dialog(&mut app);
+    assert_ne!(dialog.digest, current.dialog.as_ref().unwrap().digest);
+    let rejected = chosen(&choose(
+        &mut app,
+        &observed,
+        Some("session"),
+        &dialog.digest,
+        1,
+    ));
+    assert!(!rejected.written);
+    assert_eq!(rejected.reason.as_deref(), Some("stale_or_changed_dialog"));
+    assert!(writes.try_recv().is_err());
+
+    let accepted = chosen(&choose(
+        &mut app,
+        &current,
+        Some("session"),
+        &current.dialog.as_ref().unwrap().digest,
+        1,
+    ));
+    assert!(accepted.written);
+    assert_eq!(accepted.keys, ["up", "enter"]);
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x1b[A"));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+}
+
+#[tokio::test]
+async fn codex_soft_wrapped_question_footer_is_observed_and_answerable() {
+    let (mut app, _) = app_with_dialog(b"", Some("session"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(40, 24);
+    runtime.test_process_pty_bytes(CODEX_TEXT_DIALOG);
+    app.state.insert_test_runtime(pane, runtime);
+    let observed = observe_dialog(&mut app);
+    let dialog = observed
+        .dialog
+        .as_ref()
+        .expect("question with a soft-wrapped footer");
+    assert_eq!(dialog.kind, AgentDialogKind::Question);
+    assert_eq!(dialog.text, "What token should Bus use?");
+    assert!(dialog.options.is_empty());
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observed, Some("probe"), false),
+    ));
+    assert!(result.written);
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"probe"));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+}
+
+#[tokio::test]
+async fn codex_soft_wrapped_permission_is_observed_and_answerable_after_resize() {
+    let (mut app, _) = app_with_dialog(b"", Some("session"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(160, 45);
+    runtime.test_process_pty_bytes(
+        CODEX_SOFT_WRAPPED_PERMISSION
+            .replace('\n', "\r\n")
+            .as_bytes(),
+    );
+    app.state.insert_test_runtime(pane, runtime);
+    assert_eq!(observe_dialog(&mut app).dialog.unwrap().options.len(), 3);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .resize(45, 80, 0, 0);
+    let observed = observe_dialog(&mut app);
+    let dialog = observed
+        .dialog
+        .as_ref()
+        .expect("visible permission after terminal reflow");
+    assert_eq!(dialog.options.len(), 3);
+    assert!(dialog.options[0].selected);
+    assert_eq!(dialog.options[1].label, "Yes, and don't ask again for commands that start with `CARGO_INCREMENTAL=0 cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1` (p)");
+    let result = chosen(&choose(
+        &mut app,
+        &observed,
+        Some("session"),
+        &dialog.digest,
+        3,
+    ));
+    assert!(result.written);
+    assert_eq!(result.keys, ["down", "down", "enter"]);
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"\x1b[B\x1b[B")
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+}
+
 #[tokio::test]
 async fn missed_blocker_screen_payload_is_excluded_by_dev_logging_policy() {
     let (mut app, _) = app_with_dialog(b"private-token=dialog-secret-value\r\n", None);

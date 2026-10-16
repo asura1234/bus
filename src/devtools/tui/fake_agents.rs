@@ -320,7 +320,7 @@ impl FakeAgent {
         };
         self.hook(submit, Some(&turn), json!({"prompt": prompt}));
         if dialogs::redraw_requested(prompt) {
-            if let Err(code) = self.settlement_dialog() {
+            if let Err(code) = self.settlement_dialog(prompt) {
                 return Some(code);
             }
         }
