@@ -69,28 +69,55 @@ impl BusState {
             return None;
         }
         let interim = hold.interim.clone();
+        self.deliver_held_interim(agent, id, interim, now_ms, "background_shells_timeout")
+    }
+
+    /// Settles the agent's current request `id`, with its group, on `interim`:
+    /// the newest text a `Stop` gave while the turn held for its shells.
+    /// `reason` says why the hold ended short of the real reply.
+    fn deliver_held_interim(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        interim: PendingFinal,
+        now_ms: u64,
+        reason: &str,
+    ) -> Option<RequestId> {
         let mut closed = self.group_members(id);
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
         closed.push(id);
         let request = self.requests.get_mut(&id)?;
         request.awaiting_background = false;
+        request.turn_ended_at_ms = None;
         request.pending_final = Some(interim);
         if !self.complete_pending_final(agent, now_ms).ok()? {
             return None;
         }
         for request in closed {
             if let Some(request) = self.requests.get_mut(&request) {
-                request.failure_reason = Some("background_shells_timeout".into());
+                request.failure_reason = Some(reason.to_owned());
             }
         }
         tracing::info!(
             event = "bus.message.recovered",
             request_id = id.0,
             agent_id = agent.0,
-            reason = "background_shells_timeout",
-            "Held reply released at the background shell cap"
+            reason,
+            "Held reply delivered"
         );
         Some(id)
+    }
+
+    /// The interim text a `Stop` gave while this request held for its shells,
+    /// when it belongs to the request's current provider session. A wake turn
+    /// that ends without a `Stop` (Bus restarted under it, or Claude folded the
+    /// next task notification into it) leaves it as the reply Bus captured.
+    fn held_interim(request: &Request) -> Option<PendingFinal> {
+        request
+            .shell_hold
+            .as_ref()
+            .filter(|hold| hold.interim.provider_session_id == request.provider_session_id)
+            .map(|hold| hold.interim.clone())
     }
 
     /// The agent's current request when its turn ended without a reply and
@@ -124,7 +151,12 @@ impl BusState {
     /// Run after callback consumption, so a final spooled at the deadline wins.
     /// No reply is invented when capture failed; the sender sees `abandoned`
     /// with a reason: `provider_error: ...` when `provider_error` finds the
-    /// error that ended the turn, else `reply_not_captured`.
+    /// error that ended the turn, else `reply_not_captured`. A reply captured
+    /// earlier and held for the turn's shells is never lost that way: it is
+    /// delivered with reason `background_shells_interim` (live, 2026-10-16: an
+    /// orchestrator's wake turns ended without a `Stop`, under a Bus restart
+    /// and under a folded task notification, and both groups of MASTER
+    /// messages were abandoned with their captured replies).
     pub(crate) fn settle_ended_request(
         &mut self,
         agent: AgentId,
@@ -137,6 +169,17 @@ impl BusState {
             return None;
         }
         let provider_error = provider_error(request);
+        if provider_error.is_none() {
+            if let Some(interim) = Self::held_interim(request) {
+                return self.deliver_held_interim(
+                    agent,
+                    id,
+                    interim,
+                    now_ms,
+                    "background_shells_interim",
+                );
+            }
+        }
         let (reason, error) = match &provider_error {
             Some(message) => provider_error_outcome(message),
             None => (

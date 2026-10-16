@@ -901,3 +901,133 @@ fn a_cron_hold_after_an_ended_shell_hold_is_reported_like_a_cron_hold() {
         "held: {held}\ncron: {cron_status}"
     );
 }
+
+/// Live (MASTER, 2026-10-16 16:44, requests 13199/13201/13213/13215): the
+/// orchestrator's reply was captured but held for shells its turn started; a
+/// developer message typed into the held turn joined it; the next `Stop` held
+/// again. Then a shell finished and Claude woke a turn, which Bus took as the
+/// continuation carrying the real reply (clearing the hold), and that turn
+/// ended with no `Stop` (Claude folded the next task notification into it).
+/// Settlement abandoned the whole group as `reply_not_captured` and the held
+/// text was lost; the late `Stop` was rejected with no active request. A reply
+/// Bus captured is never lost: the interim is the group's reply.
+#[test]
+fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let joined = fixture.send("let me know when I can test the add agent thing", false);
+    fixture.deliver();
+    assert_eq!(fixture.request(joined).group, Some(lead));
+    fixture.started("turn-2", "let me know when I can test the add agent thing");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop(
+        "turn-2",
+        "#78 was tested with e2e-test; waiting on its review.",
+        &["b1", "b2"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert!(fixture.request(lead).awaiting_background);
+    // Shell b1 finishes: the wake turn starts, which ends the hold...
+    fixture.started(
+        "turn-3",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    assert!(!fixture.request(lead).awaiting_background);
+    // ...and the agent is Idle 2 s later with no Stop hook.
+    fixture.now += 2_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert!(fixture.request(lead).turn_ended_at_ms.is_some());
+    fixture.now += CALLBACK_GRACE_MS + 1;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for id in [lead, joined] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("#78 was tested with e2e-test; waiting on its review.")
+        );
+        assert_eq!(
+            fixture.request(id).failure_reason.as_deref(),
+            Some("background_shells_interim")
+        );
+    }
+    assert_eq!(fixture.error(), None);
+    assert_eq!(
+        fixture.worker.state.agent(fixture.agent).unwrap().current_request,
+        None
+    );
+    // The Stop that comes later is the agent's own activity: no error, and the
+    // settled replies stand.
+    fixture.record(claude_stop("turn-3", "The add-agent fix is ready to test.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.error(), None);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("#78 was tested with e2e-test; waiting on its review.")
+    );
+}
+
+/// Live (MASTER, 2026-10-16 16:40, requests 13175/13188): Bus was stopped
+/// while the wake turn ran and resumed Claude; the agent came back Idle with
+/// no `Stop` for that turn. The held interim is still the reply.
+#[test]
+fn a_restart_under_the_wake_turn_delivers_the_shell_held_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    // Bus goes down and comes back: a fresh worker on the same state, the
+    // session resumed, the agent Idle again.
+    let dir = fixture.dir.clone();
+    let native = fixture.native.clone();
+    let parked = Worker::open(dir.join("restart-parking"), Box::new(Native(native.clone()))).unwrap();
+    drop(std::mem::replace(&mut fixture.worker, parked));
+    fixture.worker = Worker::open(dir, Box::new(Native(native))).unwrap();
+    fixture.status(RuntimeStatus::Unavailable);
+    fixture.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"resume"}));
+    fixture.consume();
+    fixture.now += 3_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += CALLBACK_GRACE_MS + 1;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Waiting on the build."));
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("background_shells_interim")
+    );
+}
+
+/// A turn that ended without a `Stop` and never held a reply still closes as
+/// `reply_not_captured`: no reply is invented.
+#[test]
+fn a_turn_without_a_held_reply_still_closes_as_reply_not_captured() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(&mut fixture, "build it", "turn-1");
+    fixture.status(RuntimeStatus::Working);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += CALLBACK_GRACE_MS + 1;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+}
