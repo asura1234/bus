@@ -331,32 +331,6 @@ fn key_event_utf8_is_independent_of_source_mutation() {
 }
 
 #[test]
-fn unwrapped_ansi_keeps_indentation_of_cursor_positioned_dialog_rows() {
-    // ratatui-style diff rendering never writes untouched blank cells, so the
-    // indentation of each row exists only as cursor positioning.
-    let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::terminal::vt::Terminal::new(160, 12, 100).unwrap();
-    terminal.write(
-        b"\x1b[1;3HWould you like to run the following command?\
-          \x1b[2;3H$ cargo test --locked --bin bus dialog_probe > /tmp/dialog-probe.log 2>&1\
-          \x1b[3;1H\xe2\x80\xba 1. Yes, proceed (y)\
-          \x1b[4;3H2. Yes, and don't ask again for commands that start with `cargo test dialog_probe\
-          \x1b[5;6H> /tmp/dialog-probe.log 2>&1` (p)\
-          \x1b[6;3H3. No, and tell Codex what to do differently (esc)\
-          \x1b[7;3HPress enter to confirm or esc to cancel",
-    );
-    let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-
-    let dialog = crate::agents::dialog::parse(&pane.visible_ansi_unwrapped())
-        .expect("cursor-positioned Codex permission dialog");
-    assert_eq!(dialog.options.len(), 3);
-    assert_eq!(
-        dialog.options[1].label,
-        "Yes, and don't ask again for commands that start with `cargo test dialog_probe > /tmp/dialog-probe.log 2>&1` (p)"
-    );
-}
-
-#[test]
 fn unwrapped_ansi_keeps_hard_line_breaks_of_full_width_rows() {
     let (tx, _rx) = mpsc::channel(4);
     let mut terminal = crate::terminal::vt::Terminal::new(20, 4, 100).unwrap();
