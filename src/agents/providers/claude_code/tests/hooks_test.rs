@@ -346,3 +346,20 @@ fn bus_wait_shells_with_stream_redirections_are_still_bus_waits() {
         assert!(is_bus_wait(command), "only Bus waits: {command}");
     }
 }
+
+/// Real work after a redirected Bus wait still holds the reply: only the
+/// redirection's own `&` or `|` is joined to the command, never a separator.
+#[test]
+fn bus_wait_shells_keep_work_after_a_stream_redirection() {
+    for command in [
+        "bus wait 7 2>&1 && cargo build",
+        "bus wait 7 2>&1&& cargo build",
+        "bus wait 7 >&2; cargo build",
+        "bus wait 7 2>&1 | tee /tmp/log",
+        "bus wait 7 &>/tmp/log & cargo build",
+        "bus wait 7 >|/tmp/log || cargo build",
+        "bus wait 7 &&>/tmp/log cargo build",
+    ] {
+        assert!(!is_bus_wait(command), "must hold work: {command}");
+    }
+}
