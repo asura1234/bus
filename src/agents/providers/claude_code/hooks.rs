@@ -255,24 +255,80 @@ pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet
         .collect()
 }
 
-/// Whether a shell command is a Bus wait: a `bus` invocation (by name or
-/// path, with any leading `--` flags such as `--dev`) whose subcommand is
-/// `send` or `wait`, anywhere in the command line.
+/// Exclude only shells made up of Bus waits and setup. A build that reports
+/// through Bus is still real background work. Quotes and escapes keep message
+/// text from being mistaken for command separators; unfamiliar shell constructs
+/// conservatively keep the hold.
 pub(crate) fn is_bus_wait(command: &str) -> bool {
-    let mut words = command.split_whitespace().peekable();
-    while let Some(word) = words.next() {
-        let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
-        if name != "bus" && name != "bus.exe" {
+    let Some(segments) = bus_wait_segments(command) else {
+        return false;
+    };
+    let mut saw_bus = false;
+    for segment in segments {
+        let mut words = segment.split_whitespace().peekable();
+        while words.peek().is_some_and(|word| word.contains('=')) {
+            words.next();
+        }
+        let Some(program) = words.next() else {
             continue;
+        };
+        if program == "cd" {
+            continue;
+        }
+        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+        if name != "bus" && name != "bus.exe" {
+            return false;
         }
         while words.peek().is_some_and(|next| next.starts_with("--")) {
             words.next();
         }
-        if matches!(words.peek(), Some(&"send") | Some(&"wait")) {
-            return true;
+        if !matches!(words.next(), Some("send" | "wait")) {
+            return false;
+        }
+        saw_bus = true;
+    }
+    saw_bus
+}
+
+// Keep unsupported compound shell syntax held instead of guessing its work.
+fn bus_wait_segments(command: &str) -> Option<Vec<&str>> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut start = 0;
+    let mut chars = command.char_indices().peekable();
+    let mut segments = Vec::new();
+    while let Some((index, ch)) = chars.next() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if quote != Some('\'')
+            && (ch == '`' || (ch == '$' && chars.peek().is_some_and(|(_, ch)| *ch == '(')))
+        {
+            return None;
+        }
+        if let Some(open) = quote {
+            if ch == open {
+                quote = None;
+            }
+        } else if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if matches!(ch, '(' | ')' | '{' | '}') {
+            return None;
+        } else if matches!(ch, '&' | '|' | ';' | '\n') {
+            segments.push(&command[start..index]);
+            start = index + ch.len_utf8();
         }
     }
-    false
+    if quote.is_some() || escaped {
+        return None;
+    }
+    segments.push(&command[start..]);
+    Some(segments)
 }
 
 #[cfg(test)]

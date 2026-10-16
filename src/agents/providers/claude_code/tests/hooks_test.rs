@@ -292,3 +292,42 @@ fn claude_running_shells_leave_out_bus_send_and_wait_commands() {
     assert!(!is_bus_wait("busybox send"));
     assert!(!is_bus_wait("echo bus"));
 }
+
+/// A background shell that runs real work and only then reports over Bus
+/// (`cargo build && bus send ...`) is work the reply waits on: its exit
+/// wakes the turn with the build's outcome, so it still holds the reply.
+#[test]
+fn claude_running_shells_keep_work_that_ends_with_a_bus_send() {
+    let value = json!({"background_tasks":[
+        {"id":"b1","type":"shell","status":"running","description":"Build","command":"cargo build --release && bus send --to qa --text 'build ready'"},
+    ]});
+    assert_eq!(
+        claude_running_shells(&value)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["b1"]
+    );
+}
+
+#[test]
+fn bus_wait_shells_preserve_work_on_either_side_and_quoted_message_text() {
+    for command in [
+        "bus wait 7 && cargo build",
+        "cargo build; bus send --to qa --text ready",
+        "echo bus send --to qa --text ready",
+        "bus send --to qa --text \"$(cargo build)\"",
+        "bus send --to qa --text `cargo build`",
+        "(bus wait 7)",
+        "cd /tmp",
+    ] {
+        assert!(!is_bus_wait(command), "must hold work: {command}");
+    }
+    for command in [
+        "cd /tmp && BUS_DATA_DIR=/scratch bus --dev wait 7",
+        "bus wait 7; bus send --to qa --text 'ready && checked; a | b'",
+        "bus send --to qa --text 'literal $(cargo build)'",
+        "bus send --to qa --text ready\\;checked",
+    ] {
+        assert!(is_bus_wait(command), "only Bus waits: {command}");
+    }
+}
