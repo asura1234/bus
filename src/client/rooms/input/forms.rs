@@ -113,7 +113,9 @@ impl BusUi {
         }
         // While the PWD list is shown, Tab/Shift+Tab only move the highlight and
         // Enter takes the highlighted path: neither leaves the field nor adds the agent.
-        if matches!(self.form, Some(Form::Agent { .. })) && self.pwd_suggestion_key(code) {
+        // Ctrl+Enter still confirms the typed directory, as with the list closed.
+        if matches!(self.form, Some(Form::Agent { .. })) && self.pwd_suggestion_key(code, modifiers)
+        {
             return;
         }
         // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
@@ -290,8 +292,8 @@ impl BusUi {
     }
 
     /// Handles a key while the agent form's PWD suggestions are expanded; false
-    /// when no list is shown or the key is not one of Tab, Shift+Tab or Enter.
-    fn pwd_suggestion_key(&mut self, code: KeyCode) -> bool {
+    /// when no list is shown or the key is not one of Tab, Shift+Tab or plain Enter.
+    fn pwd_suggestion_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         let count = self.suggestions.entries.len();
         if count == 0 || self.form.as_ref().and_then(Form::path_query).is_none() {
             return false;
@@ -300,7 +302,7 @@ impl BusUi {
         match code {
             KeyCode::Tab => self.suggestions.selected = (selected + 1) % count,
             KeyCode::BackTab => self.suggestions.selected = (selected + count - 1) % count,
-            KeyCode::Enter => self.complete_path(),
+            KeyCode::Enter if !modifiers.contains(KeyModifiers::CONTROL) => self.complete_path(),
             _ => return false,
         }
         true

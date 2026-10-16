@@ -538,3 +538,43 @@ fn pwd_tab_moves_the_suggestion_highlight_and_enter_takes_the_path_without_addin
         assert_eq!(added_cwd(&ui).as_deref(), Some("/projects/fresh/"));
     }
 }
+
+#[test]
+fn ctrl_enter_confirms_the_typed_pwd_even_with_directory_suggestions_open() {
+    use crate::agents::providers::suggest::PathSuggestion;
+
+    for expanded in [false, true] {
+        let (mut ui, room, _) = fixture();
+        ui.form = Some(forms::Form::Agent {
+            name: editor::Editor::new("frontend".into()),
+            provider: Some(Provider::ClaudeCode),
+            provider_cursor: Provider::ClaudeCode,
+            cwd: editor::Editor::new("/projects/".into()),
+            args: Box::new(editor::Editor::new(String::new())),
+            field: 2,
+            orchestrates: None,
+            prompt: None,
+        });
+        if expanded {
+            ui.receive_event(BusEvent::Suggestions {
+                query_id: ui.suggestions.query_id,
+                result: Ok(vec![PathSuggestion {
+                    path: "/projects/frontend".into(),
+                    is_directory: true,
+                }]),
+            });
+        }
+
+        key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
+
+        let submitted = ui.pending.iter().find_map(|pending| match &pending.command {
+            BusCommand::AddAgent(input) => Some((input.room, input.cwd.as_str())),
+            _ => None,
+        });
+        assert_eq!(
+            submitted,
+            Some((room, "/projects/")),
+            "Ctrl+Enter confirms the form's typed directory; suggestions open: {expanded}"
+        );
+    }
+}
