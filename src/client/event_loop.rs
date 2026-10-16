@@ -1,4 +1,7 @@
 //! Input, resize, timer, and connection event coordination.
+#[cfg(test)]
+#[path = "tests/event_loop_test.rs"]
+mod tests;
 #[cfg(not(windows))]
 use crate::client::host_terminal::geometry::query_host_terminal_appearance;
 #[cfg(unix)]
@@ -414,7 +417,14 @@ impl ClientLoopDriver {
         let Some(shell) = self.state.shell.as_mut() else {
             return Ok(false);
         };
-        let outcome = input(shell);
+        let (cols, rows) = self.state.reported_size;
+        let previous_size = shell.surface_size(cols, rows);
+        let mut outcome = input(shell);
+        if previous_size != shell.surface_size(cols, rows) {
+            // Settings changes alter the pane geometry without a host resize.
+            shell.invalidate_pane_surface();
+            outcome.resize = true;
+        }
         let frame = outcome
             .repaint
             .then(|| {
