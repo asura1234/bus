@@ -97,6 +97,13 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   developer-approved. *Why:* a worker cannot verify who is behind a message, so
   the label adds no authority, only noise; brief workers the way you would brief
   your own subagents.
+- **Require a root-cause analysis in every bug-fix brief.** When dispatching a
+  bug fix, ask the worker to establish the root cause from evidence (logs, a
+  reproduction, a failing test) before changing behavior. If the root cause is
+  not clear, the fix PR adds only diagnostic logging and error reporting that
+  will capture the evidence next time; the worker does not guess a fix from
+  incomplete evidence. *Why:* a guessed fix can hide the real bug and adds
+  entropy; better evidence makes the next fix certain.
 - **Ask the developer before steering on an unclear instruction.** You are the
   buffer between the developer and the workers. When the developer's
   instruction is unclear, contradicts itself or an earlier decision, or lacks
