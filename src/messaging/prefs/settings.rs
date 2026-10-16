@@ -72,7 +72,9 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = u64::deserialize(deserializer)?;
-    Ok(clamp_sidebar_width(u16::try_from(value).unwrap_or(u16::MAX)))
+    Ok(clamp_sidebar_width(
+        u16::try_from(value).unwrap_or(u16::MAX),
+    ))
 }
 
 pub(crate) fn validate_compaction_limit(value: u32) -> Result<(), String> {
@@ -209,7 +211,10 @@ mod tests {
         let path = root.join("settings.json");
         assert_eq!(BusSettings::default().sidebar_width, DEFAULT_SIDEBAR_WIDTH);
         assert_eq!(DEFAULT_SIDEBAR_WIDTH, 28);
-        assert_eq!(serde_json::to_value(load(&path).unwrap()).unwrap()["sidebar_width"], 28);
+        assert_eq!(
+            serde_json::to_value(load(&path).unwrap()).unwrap()["sidebar_width"],
+            28
+        );
         for (written, loaded) in [(20, 20), (45, 45), (60, 60), (5, 20), (500, 60), (0, 20)] {
             std::fs::write(&path, format!("{{\"sidebar_width\":{written}}}")).unwrap();
             assert_eq!(load(&path).unwrap().sidebar_width, loaded, "{written}");
