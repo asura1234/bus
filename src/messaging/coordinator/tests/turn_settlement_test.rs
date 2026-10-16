@@ -1031,3 +1031,31 @@ fn a_turn_without_a_held_reply_still_closes_as_reply_not_captured() {
         Some("reply_not_captured")
     );
 }
+
+/// Live (2026-10-16): the orchestrator's replies were held behind its own
+/// `bus send --async` waits on workers. Those are not work the reply waits
+/// on, so a Stop listing only Bus waits is the final reply at once.
+#[test]
+fn a_claude_reply_is_not_held_by_the_agents_own_bus_waits() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(claude_startup());
+    fixture.consume();
+    let lead = running(&mut fixture, "dispatch the review", "turn-1");
+    fixture.record(json!({
+        "hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1",
+        "last_assistant_message":"Review dispatched; I'll report when it lands.",
+        "background_tasks":[
+            {"id":"w1","type":"shell","status":"running","description":"Wait","command":"bus send --async --room qa --as orch --to rev --text 'review #1'"},
+            {"id":"w2","type":"shell","status":"running","description":"Wait","command":"/opt/bus/bin/bus --dev wait 12"}
+        ],
+        "session_crons":[]
+    }));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Review dispatched; I'll report when it lands.")
+    );
+}

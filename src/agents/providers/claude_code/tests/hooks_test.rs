@@ -1,4 +1,4 @@
-use super::{claude_image_placeholders, parse};
+use super::{claude_image_placeholders, claude_running_shells, is_bus_wait, parse};
 use crate::agents::providers::{hook_json::HookContract, spool::Parsed, ProviderKind};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -263,4 +263,32 @@ fn claude_stop_failure_with_blank_or_non_text_error_fields_falls_back_to_the_cat
         ),
         exact
     );
+}
+
+/// Live (2026-10-16): an orchestrator's every reply was held behind its own
+/// `bus send --async` waits on workers, which run for minutes or hours. Bus's
+/// waits are not work the reply depends on; other shells still hold it.
+#[test]
+fn claude_running_shells_leave_out_bus_send_and_wait_commands() {
+    let shell = |id: &str, command: &str| {
+        json!({"id":id,"type":"shell","status":"running","description":"Run","command":command})
+    };
+    let value = json!({"background_tasks":[
+        shell("b1", "bus send --async --room qa --as orch --to worker --text 'go'"),
+        shell("b2", "/Users/me/work/bus/target/debug/bus --dev send --room master --to orch --text hi"),
+        shell("b3", "cd /tmp && bus --dev wait 42 --timeout 600"),
+        shell("b4", "bus.exe wait 7"),
+        shell("b5", "cargo test --locked"),
+        shell("b6", "bus history --room 0 | grep send"),
+        shell("b7", "sleep 45"),
+    ]});
+    assert_eq!(
+        claude_running_shells(&value).into_iter().collect::<Vec<_>>(),
+        ["b5", "b6", "b7"]
+    );
+    assert!(is_bus_wait("bus send --to a --text b"));
+    assert!(is_bus_wait("BUS_DATA_DIR=/x ./bus --dev --yolo wait 3"));
+    assert!(!is_bus_wait("bus state"));
+    assert!(!is_bus_wait("busybox send"));
+    assert!(!is_bus_wait("echo bus"));
 }
