@@ -7,7 +7,7 @@ impl BusUi {
         use crate::messaging::prefs::settings::{
             MAX_COMPACTIONS_PER_AGENT, MIN_COMPACTIONS_PER_AGENT,
         };
-        self.settings_field = self.sound_settings_targets().len() + 1;
+        self.settings_field = self.compaction_field();
         let current = self.settings.max_compactions_per_agent;
         let next = if forward {
             current.saturating_add(1).min(MAX_COMPACTIONS_PER_AGENT)
@@ -17,6 +17,23 @@ impl BusUi {
         if next != current {
             self.settings.max_compactions_per_agent = next;
             self.queue(BusCommand::SetMaxCompactionsPerAgent(next), Effect::None);
+        }
+    }
+
+    /// Shown at the new width on the next frame; the coordinator saves it
+    /// and every Bus session reads it back from `SettingsChanged`.
+    pub(super) fn adjust_sidebar_width(&mut self, wider: bool) {
+        use crate::messaging::prefs::settings::clamp_sidebar_width;
+        self.settings_field = self.sidebar_width_field();
+        let current = self.settings.sidebar_width;
+        let next = clamp_sidebar_width(if wider {
+            current.saturating_add(1)
+        } else {
+            current.saturating_sub(1)
+        });
+        if next != current {
+            self.settings.sidebar_width = next;
+            self.queue(BusCommand::SetSidebarWidth(next), Effect::None);
         }
     }
 
@@ -105,6 +122,7 @@ impl BusUi {
             matches!(line,
                 super::super::render::SoundSettingsLine::Sound { field, .. }
                 | super::super::render::SoundSettingsLine::Compactions { field }
+                | super::super::render::SoundSettingsLine::SidebarWidth { field }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
                 if *field == self.settings_field)
         }) else {

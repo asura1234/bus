@@ -43,6 +43,23 @@ impl Worker {
         Ok(())
     }
 
+    /// The sidebar width is global like the other settings; the UI redraws
+    /// from the `SettingsChanged` it gets back.
+    pub(super) fn set_sidebar_width(
+        &mut self,
+        width: u16,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let width = settings::clamp_sidebar_width(width);
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.sidebar_width = width)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        Ok(())
+    }
+
     /// At launch, MASTER takes the global sound.
     pub(super) fn apply_global_settings(&mut self) -> Result<(), String> {
         let Some(path) = self.settings_path.clone() else {

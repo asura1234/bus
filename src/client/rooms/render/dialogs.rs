@@ -70,7 +70,12 @@ impl BusUi {
         lines.push(SoundSettingsLine::Empty(""));
         lines.push(SoundSettingsLine::Heading("AGENTS"));
         lines.push(SoundSettingsLine::Compactions {
-            field: self.sound_settings_targets().len() + 1,
+            field: self.compaction_field(),
+        });
+        lines.push(SoundSettingsLine::Empty(""));
+        lines.push(SoundSettingsLine::Heading("SIDEBAR"));
+        lines.push(SoundSettingsLine::SidebarWidth {
+            field: self.sidebar_width_field(),
         });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
@@ -370,7 +375,24 @@ impl BusUi {
                 view.row(rect, *text, None, false, true);
             }
             SoundSettingsLine::Compactions { field } => {
-                self.compaction_settings_row(view, rect, *field);
+                self.stepper_settings_row(
+                    view,
+                    rect,
+                    *field,
+                    "Max compactions per agent (1–100)",
+                    self.settings.max_compactions_per_agent.to_string(),
+                    Action::AdjustCompactionLimit,
+                );
+            }
+            SoundSettingsLine::SidebarWidth { field } => {
+                self.stepper_settings_row(
+                    view,
+                    rect,
+                    *field,
+                    "Sidebar width (20–60)",
+                    self.settings.sidebar_width.to_string(),
+                    Action::AdjustSidebarWidth,
+                );
             }
             SoundSettingsLine::PerfOverlay { field } => {
                 let on = crate::client::perf::OVERLAY.is_on();
@@ -435,9 +457,18 @@ impl BusUi {
         }
     }
 
-    fn compaction_settings_row(&self, view: &mut View, rect: Rect, field: usize) {
+    /// A numeric Settings row: its label, then `‹ value ›` at the right edge
+    /// where each arrow is a click target for `adjust(false)` / `adjust(true)`.
+    fn stepper_settings_row(
+        &self,
+        view: &mut View,
+        rect: Rect,
+        field: usize,
+        label: &str,
+        value: String,
+        adjust: fn(bool) -> Action,
+    ) {
         let selected = self.settings_field == field;
-        let value = self.settings.max_compactions_per_agent.to_string();
         let choice_width = value.len() as u16 + 4;
         let choice_x = rect.x + rect.width.saturating_sub(choice_width);
         view.row(
@@ -447,7 +478,7 @@ impl BusUi {
                 rect.width.saturating_sub(choice_width + 1),
                 1,
             ),
-            "Max compactions per agent (1–100)",
+            label,
             None,
             selected,
             false,
@@ -455,14 +486,14 @@ impl BusUi {
         view.row(
             Rect::new(choice_x, rect.y, 2, 1),
             "‹",
-            Some(Action::AdjustCompactionLimit(false)),
+            Some(adjust(false)),
             selected,
             true,
         );
         view.row(
             Rect::new(choice_x + 2, rect.y, choice_width - 2, 1),
             format!("{value} ›"),
-            Some(Action::AdjustCompactionLimit(true)),
+            Some(adjust(true)),
             selected,
             false,
         );

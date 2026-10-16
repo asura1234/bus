@@ -2,11 +2,14 @@
 use super::super::forms::Form;
 use ratatui::layout::Rect;
 
+/// `sidebar_width` is the saved setting; a narrow terminal still keeps the
+/// sidebar to a third so the chat and agent panes stay usable.
 pub(in crate::client) fn layout(
     cols: u16,
     rows: u16,
+    sidebar_width: u16,
 ) -> crate::client::compositor::ClientShellLayout {
-    let width = 28.min(cols / 3).max(1).min(cols);
+    let width = sidebar_width.min(cols / 3).max(1).min(cols);
     crate::client::compositor::ClientShellLayout {
         sidebar: Rect::new(0, 0, width, rows),
         pane_surface: Rect::new(width, 0, cols - width, rows),

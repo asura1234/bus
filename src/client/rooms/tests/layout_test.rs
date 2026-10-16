@@ -529,3 +529,55 @@ fn master_room_shows_no_notes_and_f3_never_focuses_them() {
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     assert!(ui.notes_focus, "work rooms keep their notes");
 }
+
+#[test]
+fn layout_takes_the_sidebar_width_from_settings_and_clamps_to_a_third() {
+    use ratatui::layout::Rect;
+    assert_eq!(layout(100, 30, 28).sidebar, Rect::new(0, 0, 28, 30));
+    assert_eq!(layout(100, 30, 28).pane_surface, Rect::new(28, 0, 72, 30));
+    // A wide setting on a narrow terminal still leaves the chat two thirds.
+    assert_eq!(layout(90, 30, 40).sidebar.width, 30);
+    assert_eq!(layout(200, 30, 60).sidebar.width, 60);
+    assert_eq!(layout(200, 30, 60).pane_surface, Rect::new(60, 0, 140, 30));
+    assert_eq!(layout(2, 30, 60).sidebar.width, 1);
+}
+
+#[test]
+fn sidebar_width_setting_applies_at_once_to_hits_scroll_and_pane_surface() {
+    let (mut ui, _, _) = fixture();
+    ui.compute_view(120, 40);
+    assert_eq!(ui.view.sidebar.width, 28);
+    let plus = |ui: &BusUi| {
+        ui.view
+            .hits
+            .iter()
+            .find(|hit| hit.action == render::Action::NewAgent)
+            .map(|hit| hit.rect.x)
+    };
+    assert_eq!(plus(&ui), Some(25));
+    ui.receive_event(BusEvent::SettingsChanged(
+        crate::messaging::prefs::settings::BusSettings {
+            sidebar_width: 40,
+            ..Default::default()
+        },
+    ));
+    ui.compute_view(120, 40);
+    assert_eq!(ui.view.sidebar.width, 40);
+    assert_eq!(ui.view.sidebar_body.width, 40);
+    assert_eq!(plus(&ui), Some(37));
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 120, 40));
+    ui.render(&mut buffer);
+    for y in 0..40 {
+        assert_eq!(buffer[(39, y)].symbol(), "│", "divider row {y}");
+    }
+    // Mouse hit-testing follows: a click right of the old edge still lands
+    // in the sidebar.
+    assert!(ui.view.sidebar.right() == 40);
+    // A narrow terminal clamps the saved width at render time.
+    ui.compute_view(90, 40);
+    assert_eq!(ui.view.sidebar.width, 30);
+    // The agent pane surface starts where the wider sidebar ends.
+    let shell = shell_with(ui);
+    assert_eq!(shell.layout(120, 30).pane_surface.x, 40);
+    assert_eq!(shell.surface_size(120, 30).cols, 80);
+}

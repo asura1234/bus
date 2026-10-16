@@ -14,6 +14,14 @@ use crate::messaging::storage::{io, sessions as local_sessions};
 pub(crate) const MIN_COMPACTIONS_PER_AGENT: u32 = 1;
 pub(crate) const MAX_COMPACTIONS_PER_AGENT: u32 = 100;
 pub(crate) const MAX_BACKGROUND_SHELL_HOLD_MINUTES: u32 = 24 * 60;
+/// The sidebar width before it was adjustable, so unchanged settings look
+/// the same as before.
+pub(crate) const DEFAULT_SIDEBAR_WIDTH: u16 = 28;
+/// Narrower would leave an agent name next to `Not ready ×` no room at all.
+pub(crate) const MIN_SIDEBAR_WIDTH: u16 = 20;
+/// Wider sidebars only pay off on very wide terminals; the layout also caps
+/// the sidebar at a third of the terminal, so the chat keeps two thirds.
+pub(crate) const MAX_SIDEBAR_WIDTH: u16 = 60;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
@@ -31,6 +39,10 @@ pub(crate) struct BusSettings {
     /// started; then the latest interim text is delivered as the reply.
     #[serde(deserialize_with = "deserialize_shell_hold_minutes")]
     pub(crate) background_shell_hold_minutes: u32,
+    /// The room sidebar's width in cells; the layout clamps it again on a
+    /// narrow terminal.
+    #[serde(deserialize_with = "deserialize_sidebar_width")]
+    pub(crate) sidebar_width: u16,
 }
 
 impl Default for BusSettings {
@@ -44,8 +56,23 @@ impl Default for BusSettings {
             room_sound: SoundPref::default(),
             max_compactions_per_agent: 5,
             background_shell_hold_minutes: 15,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         }
     }
+}
+
+/// A hand-edited or out-of-date width is brought into range rather than
+/// making the whole settings file unreadable.
+pub(crate) fn clamp_sidebar_width(value: u16) -> u16 {
+    value.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
+}
+
+fn deserialize_sidebar_width<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    Ok(clamp_sidebar_width(u16::try_from(value).unwrap_or(u16::MAX)))
 }
 
 pub(crate) fn validate_compaction_limit(value: u32) -> Result<(), String> {
@@ -172,6 +199,24 @@ mod tests {
             std::fs::write(&path, format!("{{\"max_compactions_per_agent\":{value}}}")).unwrap();
             assert!(load(&path).is_err(), "invalid limit {value}");
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sidebar_width_defaults_to_today_and_clamps_config_values() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-sidebar-width-settings");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        assert_eq!(BusSettings::default().sidebar_width, DEFAULT_SIDEBAR_WIDTH);
+        assert_eq!(DEFAULT_SIDEBAR_WIDTH, 28);
+        assert_eq!(serde_json::to_value(load(&path).unwrap()).unwrap()["sidebar_width"], 28);
+        for (written, loaded) in [(20, 20), (45, 45), (60, 60), (5, 20), (500, 60), (0, 20)] {
+            std::fs::write(&path, format!("{{\"sidebar_width\":{written}}}")).unwrap();
+            assert_eq!(load(&path).unwrap().sidebar_width, loaded, "{written}");
+        }
+        assert_eq!(clamp_sidebar_width(19), MIN_SIDEBAR_WIDTH);
+        assert_eq!(clamp_sidebar_width(61), MAX_SIDEBAR_WIDTH);
+        assert_eq!(clamp_sidebar_width(33), 33);
         std::fs::remove_dir_all(root).unwrap();
     }
 

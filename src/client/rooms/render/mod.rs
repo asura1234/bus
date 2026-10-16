@@ -62,6 +62,8 @@ pub(super) enum Action {
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
     AdjustCompactionLimit(bool),
+    /// Widens (true) or narrows the room sidebar by one cell.
+    AdjustSidebarWidth(bool),
     Cancel,
     Add,
 }
@@ -153,6 +155,9 @@ pub(super) enum SoundSettingsLine {
         field: usize,
     },
     Compactions {
+        field: usize,
+    },
+    SidebarWidth {
         field: usize,
     },
     /// Dev builds only.

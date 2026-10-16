@@ -130,7 +130,8 @@ pub(in crate::client) struct BusUi {
     pub(super) settings: crate::messaging::prefs::settings::BusSettings,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
-    /// Settings focus: color blind mode, sound rows, then the compaction limit.
+    /// Settings focus: color blind mode, sound rows, the compaction limit,
+    /// then the sidebar width.
     pub(super) settings_field: usize,
     pub(super) settings_scroll: usize,
     /// Dev builds show a Developer group in Settings (the performance overlay).
@@ -256,10 +257,24 @@ impl BusUi {
         }
     }
 
-    /// The overlay row's Settings focus index, after the compaction limit.
+    /// The saved sidebar width; the shell's layout clamps it to the terminal.
+    pub(in crate::client) fn sidebar_width(&self) -> u16 {
+        self.settings.sidebar_width
+    }
+
+    /// The compaction limit's Settings focus index, after the sound rows.
+    pub(super) fn compaction_field(&self) -> usize {
+        self.sound_settings_targets().len() + 1
+    }
+
+    /// The sidebar width's Settings focus index, after the compaction limit.
+    pub(super) fn sidebar_width_field(&self) -> usize {
+        self.compaction_field() + 1
+    }
+
+    /// The overlay row's Settings focus index, after the sidebar width.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings
-            .then(|| self.sound_settings_targets().len() + 2)
+        self.dev_settings.then(|| self.sidebar_width_field() + 1)
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
