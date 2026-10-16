@@ -166,6 +166,7 @@ fn session_directories_are_created_marked_and_removed() {
         size: (80, 24),
         home: paths.home_dir(),
         graphics: Graphics::None,
+        yolo: false,
     };
     paths.write_info(&info).unwrap();
     assert_eq!(paths.read_info(), Some(info.clone()));

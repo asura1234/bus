@@ -80,6 +80,8 @@ pub(super) struct SessionInfo {
     pub home: PathBuf,
     #[serde(default)]
     pub graphics: Graphics,
+    #[serde(default)]
+    pub yolo: bool,
 }
 
 /// Who reserved a session directory: the token its host must present, and
