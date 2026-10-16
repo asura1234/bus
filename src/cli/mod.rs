@@ -72,8 +72,8 @@ fn print_paths(root: &std::path::Path, base: &std::path::Path, dev: bool) -> io:
     Ok(())
 }
 
-/// `--dev` reaches the server, coordinator and logging through the environment.
-fn apply_dev_environment(dev: bool) {
+/// Run flags reach the daemon and coordinator through the environment.
+fn apply_run_environment(dev: bool, yolo: bool) {
     if dev {
         std::env::set_var("BUS_DEV", "1");
         std::env::set_var("BUS_LOG", crate::utils::logging::DEV_FILTER);
@@ -81,6 +81,13 @@ fn apply_dev_environment(dev: bool) {
         std::env::remove_var("BUS_DEV");
     }
     std::env::remove_var("BUS_DEV_EXISTING_SERVER");
+    // Public invocations must opt in even when launched by a yolo agent.
+    // The private daemon inherits this handoff without parsing the public CLI.
+    if yolo {
+        std::env::set_var(crate::utils::env::YOLO_ENV_VAR, "1");
+    } else {
+        std::env::remove_var(crate::utils::env::YOLO_ENV_VAR);
+    }
 }
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
@@ -115,7 +122,7 @@ fn last_session(
 
 fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     let dev = invocation.dev;
-    apply_dev_environment(dev);
+    apply_run_environment(dev, invocation.yolo);
     if invocation.action == Action::Help {
         print_help(dev);
         return Ok(());
@@ -343,12 +350,16 @@ mod tests {
         values.iter().map(|value| (*value).to_owned()).collect()
     }
 
+    #[path = "yolo_test.rs"]
+    mod yolo_tests;
+
     #[test]
     fn empty_arguments_mean_a_fresh_session() {
         assert_eq!(
             parse_invocation(&[]).unwrap(),
             Invocation {
                 dev: false,
+                yolo: false,
                 action: Action::Run,
             }
         );
@@ -360,6 +371,7 @@ mod tests {
             parse_invocation(&args(&["--dev", "resume", "0123456789abcdef"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Resume(ResumeTarget::Id("0123456789abcdef".into())),
             }
         );
@@ -367,6 +379,7 @@ mod tests {
             parse_invocation(&args(&["resume", "--last", "--dev"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Resume(ResumeTarget::Last),
             }
         );
@@ -389,6 +402,7 @@ mod tests {
             parse_invocation(&args(&["stop", "--dev"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Stop,
             }
         );
@@ -407,6 +421,7 @@ mod tests {
             .unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Tui(args(&["start", "--dev", "--size", "80x24"])),
             }
         );
@@ -414,6 +429,7 @@ mod tests {
             parse_invocation(&args(&["tui"])).unwrap(),
             Invocation {
                 dev: false,
+                yolo: false,
                 action: Action::Tui(vec![]),
             }
         );
@@ -425,6 +441,7 @@ mod tests {
             parse_invocation(&args(&["--dev", "agent", "read", "Codex1"])).unwrap(),
             Invocation {
                 dev: true,
+                yolo: false,
                 action: Action::Control(args(&["agent", "read", "Codex1"])),
             }
         );

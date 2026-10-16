@@ -125,6 +125,10 @@ pub(crate) fn load(
             &args,
         );
     }
+    crate::agents::providers::launch::apply_run_permissions(
+        identity::provider_kind(agent.provider),
+        &mut args,
+    );
     let (path, capture, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
     crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),

@@ -68,6 +68,34 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
     }
 }
 
+/// A run-scoped permission choice, kept separate from saved user options.
+/// Inspect option positions so a literal prompt or option value is not
+/// mistaken for an explicit bypass. Provider aliases suppress our copy too.
+pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<String>) {
+    if !crate::utils::env::yolo_enabled() {
+        return;
+    }
+    if provider == ProviderKind::Codex {
+        arguments::remove_codex_approval_options(args);
+    }
+    let (flag, aliases): (&str, &[&str]) = match provider {
+        ProviderKind::ClaudeCode => (
+            "--dangerously-skip-permissions",
+            &["--dangerously-skip-permissions"],
+        ),
+        ProviderKind::Codex => (
+            "--yolo",
+            &["--yolo", "--dangerously-bypass-approvals-and-sandbox"],
+        ),
+        ProviderKind::Cursor => ("--force", &["--force", "--yolo", "-f"]),
+    };
+    if !arguments::contains_flag(provider, args, aliases) {
+        // Prefix rather than append: the provider must see it before any
+        // literal tail or opaque option whose value arity Bus cannot know.
+        args.insert(0, flag.into());
+    }
+}
+
 pub(crate) fn take_adopted_session(
     provider: ProviderKind,
     args: &mut Vec<String>,
@@ -218,7 +246,8 @@ pub(crate) fn reserved_session(spool: &Path) -> Option<String> {
 
 /// User options belong to the launch, independently of generated capture
 /// arguments and the conversation it currently owns. Never invent missing
-/// flags or re-interpret permission/configuration choices on resume.
+/// flags into this record or re-interpret user choices on resume. Run-scoped
+/// permissions are applied separately after these options are loaded.
 pub(crate) fn saved_options(provider: ProviderKind, spool: &Path) -> Result<Vec<String>, String> {
     let bytes = match std::fs::read(spool.join("launch-options.json")) {
         Ok(bytes) => bytes,
@@ -263,7 +292,7 @@ pub(crate) fn prepare(
     initialize: impl FnOnce(&HookContext) -> Result<(), String>,
 ) -> Result<PreparedLaunch, String> {
     let cwd = canonical_directory(&spec.cwd)?;
-    let (args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
+    let (mut args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
     let available = std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|dir| dir.join(executable(spec.provider)).is_file())
     });
@@ -302,6 +331,7 @@ pub(crate) fn prepare(
         )
         .map_err(|e| e.to_string())?;
     }
+    apply_run_permissions(spec.provider, &mut args);
     match spec.provider {
         ProviderKind::ClaudeCode => claude_code::launch::prepare(spec, cwd, args, adopted_session),
         ProviderKind::Codex | ProviderKind::Cursor => Ok(PreparedLaunch {

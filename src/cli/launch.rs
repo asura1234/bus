@@ -153,6 +153,11 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
     };
 
     let capabilities = status.capabilities.as_ref();
+    if capabilities.is_some_and(|capabilities| capabilities.yolo)
+        != crate::utils::env::yolo_enabled()
+    {
+        return Err(io::Error::other("This Bus server was started with a different --yolo setting. Quit its UI or run `bus stop`, then resume with the desired --yolo setting."));
+    }
     let endpoint_generation =
         capabilities.and_then(|capabilities| capabilities.endpoint_protocol_generation);
     let surface_interest = capabilities.is_some_and(|capabilities| capabilities.surface_interest);
@@ -608,4 +613,6 @@ test "$sid" = "$$"
         crate::utils::paths::clear_explicit_session_for_test();
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    include!("tests/daemon_yolo_test.rs");
 }

@@ -29,6 +29,7 @@ pub(super) fn default_capabilities() -> ServerCapabilities {
         ),
         surface_interest: true,
         health_check: true,
+        yolo: crate::utils::env::yolo_enabled(),
     }
 }
 

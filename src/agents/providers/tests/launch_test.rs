@@ -1,4 +1,6 @@
 // Included only in messaging::provider_glue::launch::tests to retain case IDs.
+#[path = "yolo_options_test.rs"]
+mod yolo_options;
 use crate::agents::providers::{
     hook_json::{self, HookContract},
     launch::{launch_args, runtime_args, validate_args},
@@ -266,3 +268,156 @@ fn launch_args_adoption_distinguishes_selectors_from_literal_option_values() {
 
 include!("hook_json_test.rs");
 include!("suggest_test.rs");
+
+#[test]
+fn yolo_preserves_explicit_bypass_after_opaque_options_and_ignores_literal_values() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    std::env::set_var("BUS_YOLO", "1");
+    let mut failures = Vec::new();
+    for (provider, flag) in [
+        (Provider::ClaudeCode, "--dangerously-skip-permissions"),
+        (Provider::Codex, "--yolo"),
+        (Provider::Cursor, "--force"),
+    ] {
+        for (input, expected) in [
+            (
+                vec!["--future-option", "value", flag],
+                vec!["--future-option", "value", flag],
+            ),
+            (vec!["--model", flag], vec![flag, "--model", flag]),
+            (vec!["--", flag], vec![flag, "--", flag]),
+            (vec!["--model", "--"], vec![flag, "--model", "--"]),
+        ] {
+            let mut args: Vec<_> = input.iter().map(|a| (*a).to_owned()).collect();
+            crate::agents::providers::launch::apply_run_permissions(provider, &mut args);
+            if args != expected {
+                failures.push(format!(
+                    "{provider:?}: {input:?} -> {args:?}, want {expected:?}"
+                ));
+            }
+        }
+    }
+    std::env::remove_var("BUS_YOLO");
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn yolo_adds_bypass_when_prompt_value_follows_current_unmodeled_claude_option() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    std::env::set_var("BUS_YOLO", "1");
+    // --brief is a current Claude flag. The later bypass spelling belongs to
+    // --append-system-prompt and must not suppress the run's real option.
+    let mut args = vec![
+        "--brief".to_owned(),
+        "--append-system-prompt".to_owned(),
+        "--dangerously-skip-permissions".to_owned(),
+    ];
+    crate::agents::providers::launch::apply_run_permissions(Provider::ClaudeCode, &mut args);
+    std::env::remove_var("BUS_YOLO");
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    assert_eq!(
+        args,
+        [
+            "--dangerously-skip-permissions",
+            "--brief",
+            "--append-system-prompt",
+            "--dangerously-skip-permissions",
+        ]
+    );
+}
+
+#[test]
+fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
+    use crate::agents::providers::launch::{prepare, LaunchSpec};
+
+    struct Cleanup {
+        root: std::path::PathBuf,
+        env: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for (key, value) in &self.env {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let cleanup = Cleanup {
+        root: crate::utils::test_temp::unique_temp_path("codex-fresh-yolo-options"),
+        env: ["BUS_YOLO", "PATH"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+    };
+    let project = cleanup.root.join("project");
+    let bin = cleanup.root.join("bin");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("codex"), "fixture executable").unwrap();
+    std::env::set_var("PATH", &bin);
+    let spec = LaunchSpec {
+        provider: Provider::Codex,
+        cwd: project.display().to_string(),
+        extra_args: "--ask-for-approval on-request -c 'developer_instructions=\"--ask-for-approval\"' --sandbox workspace-write -- '--approve-for-me'".into(),
+        consent_project_hooks: true,
+        hooks: hook_json::HookContext {
+            binary: std::env::current_exe().unwrap(),
+            spool: cleanup.root.join("capture"),
+            launch_id: "fresh-launch".into(),
+        },
+    };
+    let original = [
+        "--ask-for-approval",
+        "on-request",
+        "-c",
+        "developer_instructions=\"--ask-for-approval\"",
+        "--sandbox",
+        "workspace-write",
+        "--",
+        "--approve-for-me",
+    ];
+    let saved = serde_json::to_vec(&original).unwrap();
+    for enabled in [true, false] {
+        if enabled {
+            std::env::set_var("BUS_YOLO", "1");
+        } else {
+            std::env::remove_var("BUS_YOLO");
+        }
+        let prepared = prepare(&spec, |hooks| {
+            std::fs::create_dir_all(&hooks.spool).map_err(|error| error.to_string())
+        })
+        .unwrap();
+        let expected: Vec<&str> = if enabled {
+            vec![
+                "--yolo",
+                "--no-daemon",
+                "-c",
+                "developer_instructions=\"--ask-for-approval\"",
+                "--sandbox",
+                "workspace-write",
+                "--",
+                "--approve-for-me",
+            ]
+        } else {
+            std::iter::once("--no-daemon").chain(original).collect()
+        };
+        assert_eq!(prepared.args, expected, "enabled={enabled}");
+        assert_eq!(
+            std::fs::read(spec.hooks.spool.join("launch-options.json")).unwrap(),
+            saved,
+            "effective permissions must not replace the saved user options"
+        );
+    }
+}

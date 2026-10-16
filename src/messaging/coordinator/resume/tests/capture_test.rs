@@ -16,6 +16,248 @@ use std::{
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
+#[test]
+fn yolo_resumed_codex_master_uses_current_run_without_persisting() {
+    use crate::agents::{
+        providers::{hook_json, spool, ProviderKind},
+        resume::catalog::{self, AgentSessionRef, PersistedAgentSession},
+    };
+    use crate::messaging::{
+        coordinator::resume::{self, NativeResumeContext, NativeResumeFacts},
+        identity,
+        model::{AgentRuntimeIdentity, BusState, Provider},
+        storage::state_store::JsonStore,
+    };
+
+    struct Cleanup {
+        root: PathBuf,
+        previous_yolo: Option<std::ffi::OsString>,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            match &self.previous_yolo {
+                Some(value) => std::env::set_var("BUS_YOLO", value),
+                None => std::env::remove_var("BUS_YOLO"),
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let cleanup = Cleanup {
+        root: crate::utils::test_temp::unique_temp_path("codex-master-resume"),
+        previous_yolo: std::env::var_os("BUS_YOLO"),
+    };
+    let project = cleanup.root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let binary = std::env::current_exe().unwrap();
+    let mut state = BusState::new();
+    let room = state.create_room("saved-work").unwrap();
+    let master = state.ensure_master_room();
+    // A saved MASTER fixture bypasses only new-agent admission, which remains refused.
+    assert!(crate::messaging::orchestration::check_new_orchestrator(Provider::Codex).is_err());
+    let agent = state
+        .create_agent(
+            master,
+            "saved-master",
+            Provider::Codex,
+            project.clone(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(agent, room).unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("saved-master-launch".into()),
+                terminal_id: Some("saved-terminal".into()),
+                pane_id: Some("saved-pane".into()),
+                session_id: Some("saved-conversation".into()),
+            },
+        )
+        .unwrap();
+    JsonStore::new(cleanup.root.join("state.json"))
+        .save(&state)
+        .unwrap();
+    let capture = cleanup.root.join("callbacks/saved-master-launch");
+    spool::initialize(
+        &capture,
+        &spool::Manifest {
+            routing_key: spool::RoutingKey(agent.0),
+            provider: ProviderKind::Codex,
+            launch_id: "saved-master-launch".into(),
+        },
+    )
+    .unwrap();
+    hook_json::install_hooks(
+        &project.join(".codex/hooks.json"),
+        hook_json::HookContract::for_provider(ProviderKind::Codex),
+        &binary,
+    )
+    .unwrap();
+    let prompt =
+        crate::messaging::orchestration::write_prompt(&capture, "Coordinate saved-work.").unwrap();
+    let session = PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: AgentSessionRef::id("saved-conversation").unwrap(),
+    };
+    let plan = catalog::plan(&session.source, &session.agent, &session.session_ref).unwrap();
+    let facts = NativeResumeFacts {
+        agent_name: Some(identity::managed_name(master, agent)),
+        managed_agent: Some("codex".into()),
+        session: Some(session),
+    };
+    let context = NativeResumeContext {
+        root: Some(cleanup.root.clone()),
+        session_name: Some("bus".into()),
+        config_root: cleanup.root.join("herdr-config"),
+        project,
+        binary,
+    };
+    for explicit in [
+        None,
+        Some("--yolo"),
+        Some("--dangerously-bypass-approvals-and-sandbox"),
+    ] {
+        let options: Vec<&str> = explicit.into_iter().collect();
+        let saved = serde_json::to_vec(&options).unwrap();
+        std::fs::write(capture.join("launch-options.json"), &saved).unwrap();
+        for enabled in [true, false, true] {
+            if enabled {
+                std::env::set_var("BUS_YOLO", "1");
+            } else {
+                std::env::remove_var("BUS_YOLO");
+            }
+            let extras = resume::load(&context, &facts, &plan).unwrap();
+            let bypass: Vec<_> = extras
+                .args
+                .iter()
+                .filter(|arg| {
+                    matches!(
+                        arg.as_str(),
+                        "--yolo" | "--dangerously-bypass-approvals-and-sandbox"
+                    )
+                })
+                .map(String::as_str)
+                .collect();
+            let expected: Vec<_> = explicit
+                .or(enabled.then_some("--yolo"))
+                .into_iter()
+                .collect();
+            assert_eq!(bypass, expected, "enabled={enabled}, explicit={explicit:?}");
+            assert!(extras.args.iter().any(|arg| arg == "--no-daemon"));
+            assert!(extras.args.iter().any(|arg| {
+                arg.starts_with("developer_instructions=")
+                    && arg.contains(&prompt.display().to_string())
+            }));
+            assert_eq!(
+                std::fs::read(capture.join("launch-options.json")).unwrap(),
+                saved
+            );
+        }
+    }
+}
+
+// Catch bypass injection missing from either preparation or resume, duplicate
+// aliases, and generated flags accidentally becoming durable user options.
+#[test]
+fn yolo_applies_to_new_and_resumed_agents_without_persisting_or_duplicating() {
+    use crate::agents::providers::{hook_json::HookContext, launch};
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    let old_path = std::env::var_os("PATH");
+    let mut failures = Vec::new();
+    for (provider, flag, aliases) in [
+        (
+            Provider::ClaudeCode,
+            "--dangerously-skip-permissions",
+            vec!["--dangerously-skip-permissions"],
+        ),
+        (
+            Provider::Codex,
+            "--yolo",
+            vec!["--yolo", "--dangerously-bypass-approvals-and-sandbox"],
+        ),
+        (Provider::Cursor, "--force", vec!["--force", "--yolo", "-f"]),
+    ] {
+        for input in std::iter::once("").chain(aliases.iter().copied()) {
+            let fixture = Fixture::new(provider);
+            let kind = identity::provider_kind(provider);
+            let spool = fixture.root.join("callbacks/owned-launch");
+            let bin = fixture.root.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
+            std::env::set_var("PATH", &bin);
+            std::env::set_var("BUS_YOLO", "1");
+            let prepared = launch::prepare(
+                &launch::LaunchSpec {
+                    provider: kind,
+                    cwd: fixture.project.display().to_string(),
+                    extra_args: input.into(),
+                    consent_project_hooks: true,
+                    hooks: HookContext {
+                        binary: fixture.binary.clone(),
+                        spool: spool.clone(),
+                        launch_id: "owned-launch".into(),
+                    },
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+            let resumed = fixture.load().unwrap();
+            for (phase, argv) in [("new", prepared.args), ("resume", resumed.args)] {
+                let actual: Vec<_> = argv
+                    .iter()
+                    .filter(|a| aliases.contains(&a.as_str()))
+                    .map(String::as_str)
+                    .collect();
+                let expected = if input.is_empty() { flag } else { input };
+                if actual != [expected] {
+                    failures.push(format!(
+                        "{provider:?} {phase} input={input:?}: {actual:?}, want {expected}"
+                    ));
+                }
+            }
+            let saved = std::fs::read(spool.join("launch-options.json")).unwrap();
+            assert_eq!(
+                launch::saved_options(kind, &spool).unwrap(),
+                if input.is_empty() {
+                    Vec::<String>::new()
+                } else {
+                    vec![input.to_owned()]
+                }
+            );
+            std::env::remove_var("BUS_YOLO");
+            let normal = fixture.load().unwrap();
+            let count = normal
+                .args
+                .iter()
+                .filter(|a| aliases.contains(&a.as_str()))
+                .count();
+            assert_eq!(
+                count,
+                usize::from(!input.is_empty()),
+                "{provider:?} subsequent normal run"
+            );
+            assert_eq!(
+                std::fs::read(spool.join("launch-options.json")).unwrap(),
+                saved
+            );
+        }
+    }
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    if let Some(old_path) = old_path {
+        std::env::set_var("PATH", old_path);
+    } else {
+        std::env::remove_var("PATH");
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 struct Fixture {
     root: PathBuf,
     project: PathBuf,
@@ -912,5 +1154,70 @@ fn unstarted_resume_preserves_literal_initial_input_with_capture_options_before_
     assert_eq!(
         fixture.load().unwrap().args,
         ["--no-daemon", "--yolo", "--", "first prompt"]
+    );
+}
+
+// Codex 0.163 rejects its bypass flag together with an explicit approval
+// policy ("the argument '--dangerously-bypass-approvals-and-sandbox' cannot be
+// used with '--ask-for-approval'"), so a yolo run must not produce that argv.
+#[test]
+fn yolo_resume_does_not_combine_codex_bypass_with_an_explicit_approval_policy() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("BUS_YOLO");
+    std::env::set_var("BUS_YOLO", "1");
+    let mut failures = Vec::new();
+    for saved in [
+        r#"["--ask-for-approval","on-request"]"#,
+        r#"["-a","never"]"#,
+        r#"["--ask-for-approval=on-request"]"#,
+        r#"["--approve-for-me"]"#,
+        r#"["-anever"]"#,
+    ] {
+        let fixture = Fixture::new(Provider::Codex);
+        std::fs::write(
+            fixture
+                .root
+                .join("callbacks/owned-launch/launch-options.json"),
+            saved,
+        )
+        .unwrap();
+        let args = fixture.load().unwrap().args;
+        let bypass = args
+            .iter()
+            .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox");
+        let approval = args.iter().any(|a| {
+            a == "-a" || a == "--ask-for-approval" || a.starts_with("--ask-for-approval=")
+        });
+        if !bypass
+            || approval
+            || args
+                .iter()
+                .any(|a| a == "--approve-for-me" || a.starts_with("-a"))
+        {
+            failures.push(format!("{saved} -> {args:?}"));
+        }
+        assert_eq!(
+            std::fs::read_to_string(
+                fixture
+                    .root
+                    .join("callbacks/owned-launch/launch-options.json")
+            )
+            .unwrap(),
+            saved
+        );
+        std::env::remove_var("BUS_YOLO");
+        let normal = fixture.load().unwrap().args;
+        let original: Vec<String> = serde_json::from_str(saved).unwrap();
+        assert_eq!(&normal[..original.len()], original);
+        std::env::set_var("BUS_YOLO", "1");
+    }
+    std::env::remove_var("BUS_YOLO");
+    if let Some(old) = old {
+        std::env::set_var("BUS_YOLO", old);
+    }
+    assert!(
+        failures.is_empty(),
+        "Codex would refuse to start:\n{}",
+        failures.join("\n")
     );
 }

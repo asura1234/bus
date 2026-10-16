@@ -2,6 +2,50 @@
 //! passed through and ends inspection: guessing arity could reject a value.
 use super::super::ProviderKind;
 
+/// Known option values and literal tails are not flags, even after opaque syntax.
+pub(super) fn contains_flag(provider: ProviderKind, args: &[String], aliases: &[&str]) -> bool {
+    permission_option_spans(provider, args)
+        .iter()
+        .any(|&(start, _)| aliases.contains(&args[start].as_str()))
+}
+
+/// Only effective yolo argv is changed; callers retain the saved user options.
+pub(super) fn remove_codex_approval_options(args: &mut Vec<String>) {
+    for (start, end) in permission_option_spans(ProviderKind::Codex, args)
+        .into_iter()
+        .rev()
+    {
+        let arg = &args[start];
+        if arg == "--approve-for-me"
+            || arg == "--ask-for-approval"
+            || arg.starts_with("--ask-for-approval=")
+            || arg.starts_with("-a")
+        {
+            args.drain(start..end);
+        }
+    }
+}
+
+// Permission flags may follow opaque syntax. Inspect subsequent known spans
+// without treating their values as flags; admission/resume stay conservative.
+fn permission_option_spans(provider: ProviderKind, args: &[String]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        if arg == "--" {
+            break;
+        }
+        if !arg.starts_with('-') {
+            index += 1;
+        } else {
+            let end = option_end(provider, args, index).unwrap_or(index + 1);
+            spans.push((index, end));
+            index = end;
+        }
+    }
+    spans
+}
+
 /// Option positions plus the first positional command/prompt. Later options
 /// still count; values and the tail after `--` are never modes or selectors.
 pub(crate) fn argument_positions(provider: ProviderKind, args: &[String]) -> Vec<usize> {

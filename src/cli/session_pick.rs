@@ -1,7 +1,7 @@
 //! Process invocation grammar and local session selection.
 use crate::messaging::storage::sessions::ResumeTarget;
 
-pub(super) const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last\n       bus stop\n       bus perf [--since <minutes>m|<hours>h | --all]";
+pub(super) const USAGE: &str = "Usage: bus [--dev] [--yolo] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id> [--yolo]\n       bus [--dev] resume --last [--yolo]\n       bus stop\n       bus perf [--since <minutes>m|<hours>h | --all]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Action {
@@ -19,17 +19,23 @@ pub(super) enum Action {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Invocation {
     pub(super) dev: bool,
+    pub(super) yolo: bool,
     pub(super) action: Action,
 }
 
 pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut dev = false;
+    let mut yolo = false;
     let mut action = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--dev" if !dev => {
                 dev = true;
+                index += 1;
+            }
+            "--yolo" if !yolo => {
+                yolo = true;
                 index += 1;
             }
             "--paths" if action.is_none() => {
@@ -54,6 +60,7 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 while index < args.len() {
                     match args[index].as_str() {
                         "--dev" if !dev => dev = true,
+                        "--yolo" if !yolo => yolo = true,
                         "--last" if target.is_none() => target = Some(ResumeTarget::Last),
                         value if target.is_none() && !value.starts_with('-') => {
                             target = Some(ResumeTarget::Id(value.to_owned()));
@@ -77,6 +84,7 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     }
     Ok(Invocation {
         dev,
+        yolo,
         action: action.unwrap_or(Action::Run),
     })
 }
