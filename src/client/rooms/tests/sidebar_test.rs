@@ -4,7 +4,8 @@ use super::*;
 fn selected_agent_names_keep_minimum_text_contrast_on_the_selection_tint() {
     use ratatui::{buffer::Buffer, layout::Rect, style::Color};
     // WCAG 2.2 contrast ratio. 3:1 is the lowest bar WCAG sets for any text
-    // (large text); every allocatable agent color met it on the old tint.
+    // (large text); every allocatable agent color met it on the pre-#73
+    // selected background, RGB(46, 48, 58).
     fn contrast(a: Color, b: Color) -> f64 {
         let luminance = |color: Color| {
             let Color::Rgb(r, g, b) = color else {
