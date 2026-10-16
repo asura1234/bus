@@ -92,6 +92,7 @@ impl crate::client::compositor::ClientShellState {
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
         bus.handle = Some(handle);
+        bus.yolo = server_yolo();
         bus.dev_settings = crate::client::perf::overlay_available();
         // Only the client that owns the coordinator plays room sounds, so each rings once.
         bus.sound_config = Some(sound.clone());
@@ -233,6 +234,24 @@ impl BusUi {
         (self.terminal.is_some() && self.deletion.is_none() && self.form.is_none())
             .then_some(self.target_pane.as_deref())
             .flatten()
+    }
+}
+
+/// Whether the daemon this client attached to runs with `--yolo`. The run
+/// flag is the server's, not this process's environment, so a resumed client
+/// shows what the daemon reports in its connect capabilities.
+fn server_yolo() -> bool {
+    let socket = crate::utils::paths::api_socket_path_for(Some(
+        crate::messaging::coordinator::DEFAULT_SESSION,
+    ));
+    match crate::protocol::api::read_runtime_status_at(&socket, std::time::Duration::from_secs(2)) {
+        Ok(status) => status
+            .and_then(|status| status.capabilities)
+            .is_some_and(|capabilities| capabilities.yolo),
+        Err(error) => {
+            tracing::warn!(%error, "Bus server capabilities unreadable; no YOLO badge");
+            false
+        }
     }
 }
 

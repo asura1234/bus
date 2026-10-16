@@ -273,6 +273,69 @@ fn sidebar_pins_green_divider_and_settings_button_to_lower_left() {
     );
 }
 
+fn settings_row(ui: &mut BusUi, cols: u16, rows: u16) -> (ratatui::buffer::Buffer, u16, u16) {
+    ui.compute_view(cols, rows);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+    ui.render(&mut buffer);
+    // The footer rows span the sidebar minus its left pad and divider.
+    let row_right = 1 + ui.view.sidebar.width - 3;
+    (buffer, rows - 1, row_right)
+}
+
+#[test]
+fn yolo_badge_sits_at_the_settings_row_right_edge_in_black_on_red() {
+    let (mut ui, _, _) = fixture();
+    ui.yolo = true;
+    for cols in [100, 60] {
+        let (buffer, y, right) = settings_row(&mut ui, cols, 30);
+        let badge = right - 4..right;
+        assert_eq!(
+            badge.clone().map(|x| buffer[(x, y)].symbol()).collect::<String>(),
+            "YOLO",
+            "cols={cols}"
+        );
+        for x in badge.clone() {
+            assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Black, "cols={cols} x={x}");
+            assert_eq!(
+                buffer[(x, y)].bg,
+                ratatui::style::Color::Rgb(255, 0, 0),
+                "cols={cols} x={x}"
+            );
+            assert_eq!(ui.view.hit_at(x, y), None, "badge is a plain label");
+        }
+        assert_eq!(buffer[(badge.start - 1, y)].symbol(), " ", "gap before the badge");
+        let settings = ui
+            .view
+            .hits
+            .iter()
+            .find(|hit| hit.action == render::Action::Settings)
+            .expect("settings button")
+            .rect;
+        assert_eq!((settings.x, settings.y), (1, y));
+        assert_eq!(
+            (settings.x..settings.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>(),
+            "Settings"
+        );
+    }
+    assert!(ui.form.is_none());
+    mouse(&mut ui, crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left), 2, 29);
+    mouse(&mut ui, crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left), 2, 29);
+    assert!(matches!(ui.form, Some(forms::Form::Settings)));
+}
+
+#[test]
+fn without_yolo_the_settings_row_shows_no_badge() {
+    let (mut ui, _, _) = fixture();
+    let (buffer, y, right) = settings_row(&mut ui, 100, 30);
+    let row = (1..right).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    assert_eq!(row.trim_end(), "Settings");
+    for x in right - 4..right {
+        assert_ne!(buffer[(x, y)].bg, ratatui::style::Color::Rgb(255, 0, 0));
+    }
+}
+
 #[test]
 fn color_blind_mode_defaults_off_and_switches_agent_identity_colors() {
     let (mut ui, room, agent) = fixture();
