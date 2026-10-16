@@ -41,9 +41,12 @@ fn cursor_adoption_accepts_separate_and_attached_resume_at_any_position() {
 fn cursor_notice_keeps_four_hook_consent_and_cursor_adapter() {
     let notice = launch::setup_notice(Path::new("/project"));
     assert_eq!(notice.path, Path::new("/project/.cursor/hooks.json"));
-    assert!(notice.message.starts_with("Add Bus-owned sessionStart, beforeSubmitPrompt, afterAgentResponse and stop observation hooks."));
     assert!(notice
         .message
-        .contains("Complete normal Cursor trust/setup."));
+        .starts_with("Bus will add a few hooks to this project's agent settings"));
+    assert!(notice.message.contains(
+        "Messages you send before the agent is ready wait and are delivered once it is."
+    ));
+    assert!(!notice.message.contains("Cursor"), "{}", notice.message);
     assert!(notice.message.ends_with("--bus-callback cursor-hook."));
 }

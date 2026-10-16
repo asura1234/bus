@@ -22,6 +22,6 @@ pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<Stri
 pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
     SetupNotice {
         path: root.join(".cursor/hooks.json"),
-        message: "Add Bus-owned sessionStart, beforeSubmitPrompt, afterAgentResponse and stop observation hooks. Complete normal Cursor trust/setup. Bus enables room delivery automatically when the terminal is ready; queued prompts wait until then. Cleanup: remove only entries whose command is this Bus executable plus --bus-callback cursor-hook.".into(),
+        message: super::super::launch::hook_notice_message("cursor-hook"),
     }
 }

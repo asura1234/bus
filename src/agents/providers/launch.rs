@@ -46,6 +46,14 @@ pub(crate) struct SetupNotice {
     pub(crate) message: String,
 }
 
+/// The hook-consent notice is the same plain-language text for every
+/// provider; only the callback command in its undo line differs.
+pub(crate) fn hook_notice_message(callback: &str) -> String {
+    format!(
+        "Bus will add a few hooks to this project's agent settings, so room messages can reach this agent and its replies can reach the room. The agent may ask you to trust this project and the new hooks; accept them. Messages you send before the agent is ready wait and are delivered once it is. Your existing hooks stay as they are. To undo, delete the entries that run this Bus executable with --bus-callback {callback}."
+    )
+}
+
 #[path = "launch/tokens.rs"]
 mod tokens;
 pub(crate) use tokens::{parse_path_tokens, PathParseError};

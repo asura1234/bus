@@ -40,6 +40,6 @@ pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<Stri
 pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
     SetupNotice {
         path: root.join(".codex/hooks.json"),
-        message: "Add Bus-owned SessionStart, UserPromptSubmit and Stop observation hooks. Trust this project and all three definitions in Codex. Bus enables room delivery automatically when the terminal is ready. Codex emits SessionStart with the first room prompt; no priming message or restart is needed. Existing hooks/notify remain. Cleanup: remove only entries whose command is this Bus executable plus --bus-callback codex-hook.".into(),
+        message: super::super::launch::hook_notice_message("codex-hook"),
     }
 }
