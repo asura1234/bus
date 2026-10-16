@@ -134,6 +134,40 @@ fn settings_sidebar_width_is_visible_and_editable_with_arrow_keys() {
 }
 
 #[test]
+fn quick_stepper_presses_survive_the_echo_of_an_earlier_press() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    room_screen(&mut ui, 120, 40);
+    for _ in 0..10 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    // Three presses before the coordinator answers the first.
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(ui.settings.sidebar_width, 31);
+    let echo = |width| {
+        BusEvent::SettingsChanged(crate::messaging::prefs::settings::BusSettings {
+            sidebar_width: width,
+            color_blind_mode: true,
+            ..Default::default()
+        })
+    };
+    ui.receive_event(echo(29));
+    assert_eq!(ui.settings.sidebar_width, 31, "the first echo must not undo later presses");
+    assert!(ui.settings.color_blind_mode, "other fields still arrive");
+    assert!(room_screen(&mut ui, 120, 40).contains("‹ 31 ›"));
+    // Once every press is answered, the echo is the truth again.
+    for pending in ui.pending.iter_mut() {
+        pending.result = Some(Ok(()));
+    }
+    ui.receive_event(echo(31));
+    assert_eq!(ui.settings.sidebar_width, 31);
+    ui.receive_event(echo(40));
+    assert_eq!(ui.settings.sidebar_width, 40);
+}
+
+#[test]
 fn settings_sidebar_width_mouse_controls_respect_the_allowed_range() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::Settings);

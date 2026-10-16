@@ -299,10 +299,28 @@ impl BusUi {
         });
         id
     }
+    /// The coordinator echoes the saved settings for every stepper press
+    /// before that press's command is finished, so a quick second press
+    /// would be undone by the first press's echo. A stepper value whose
+    /// command is still pending stays as shown; the final echo matches it.
+    fn receive_settings(&mut self, mut settings: crate::messaging::prefs::settings::BusSettings) {
+        let pending = |is: fn(&BusCommand) -> bool| {
+            self.pending
+                .iter()
+                .any(|p| p.result.is_none() && is(&p.command))
+        };
+        if pending(|command| matches!(command, BusCommand::SetSidebarWidth(_))) {
+            settings.sidebar_width = self.settings.sidebar_width;
+        }
+        if pending(|command| matches!(command, BusCommand::SetMaxCompactionsPerAgent(_))) {
+            settings.max_compactions_per_agent = self.settings.max_compactions_per_agent;
+        }
+        self.settings = settings;
+    }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
-            BusEvent::SettingsChanged(settings) => self.settings = settings,
+            BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {
