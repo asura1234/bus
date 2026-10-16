@@ -218,7 +218,7 @@ fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
     }
     ui.receive_snapshot(Arc::new(snapshot));
     ui.compute_view(100, 16);
-    assert_eq!(ui.view.sidebar_max_scroll, 3);
+    assert_eq!(ui.view.sidebar_max_scroll, 2);
     ui.sidebar_scroll = usize::MAX;
     ui.compute_view(100, 16);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 16));
@@ -447,7 +447,12 @@ fn sidebar_has_uppercase_headings_and_a_matching_divider_after_room_names() {
         ui.render(&mut buffer);
         let row_text = |y| (1..26).map(|x| buffer[(x, y)].symbol()).collect::<String>();
         assert!(row_text(1).starts_with("ROOMS"));
-        assert!(row_text(4 + count).starts_with("AGENTS"));
+        // The agents header names the open room in the ROOMS `#` style.
+        assert!(
+            row_text(4 + count).starts_with("#room"),
+            "{}",
+            row_text(4 + count)
+        );
         let color = buffer[(27, 0)].fg;
         for x in 1..26 {
             assert_eq!(buffer[(x, 3 + count)].symbol(), "─");
@@ -641,7 +646,7 @@ fn room_renders_without_native_snapshot_and_only_approved_chrome_and_collapsed_m
         2,
         "sidebar and room heading"
     );
-    for required in ["ROOMS", "AGENTS", "# room", "author", "Codex", "Quote"] {
+    for required in ["ROOMS", "#room", "# room", "author", "Codex", "Quote"] {
         if required != "Quote" {
             assert!(text.contains(required), "missing {required}");
         }

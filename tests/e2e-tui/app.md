@@ -71,7 +71,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 **Preconditions/setup:** pristine scratch data/settings; no pre-created workers.
 
-1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and AGENTS list have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
+1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and agents list (headed `#bus`, with `+` at the right) have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
 2. Inspect room notes → seeded text includes `Goal: stay in the room to coordinate selected agents.` and `Non-goals: automatic handoffs or permission approval.`
 3. Press Enter on the empty composer → no message, error or agent is created.
 4. Type `/help`, press Enter, scroll with PageDown, then Esc → local `Keyboard shortcuts` guide opens and closes; `/help` is not sent or retained as a message.
@@ -121,7 +121,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 **Preconditions/setup:** R(`qa-left`), A with `left-agent`; R(`qa-right`), A with `right-agent`; distinct identifiable fake terminal screens.
 
-1. Click `# qa-left` → header/history/composer belong to qa-left; AGENTS lists left-agent. Click left-agent → its fake terminal replaces the main chat area.
+1. Click `# qa-left` → header/history/composer belong to qa-left; the agents header reads `#qa-left` and lists left-agent. Click left-agent → its fake terminal replaces the main chat area.
 2. Press F6 → qa-left chat returns. Click qa-right and right-agent → qa-right's worker terminal appears; press F6 → qa-right chat.
 3. Click `>` beside right-agent's provider → PWD details expand; click `v` → collapse. Agent/room selection remains usable.
 

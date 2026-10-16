@@ -295,7 +295,9 @@ impl BusUi {
         } else {
             0
         };
-        let content_height = 7
+        // Leading gap, ROOMS header, gap, divider, `#room` agents header,
+        // gap: six fixed rows around the room and agent entries.
+        let content_height = 6
             + master_header_rows
             + rooms.len()
             + agents.iter().map(|entry| entry.height).sum::<usize>();
@@ -457,7 +459,20 @@ impl BusUi {
     ) {
         let sw = viewport.sidebar.width.saturating_sub(3);
         let mut y = agents_header;
-        view.row(viewport.at(1, y, sw), "AGENTS", None, false, true);
+        // The header names the open room, `#name`, so the list below reads
+        // as that room's agents; a generic AGENTS heading said less. The
+        // name stops two cells short of the `+` so the two never collide.
+        if let Some(room) = self.room.and_then(|room| self.snapshot.state.room(room)) {
+            let label = room_label(room, usize::from(sw.saturating_sub(1)));
+            let header = format!("#{}", &label[2..]);
+            view.row(
+                viewport.at(1, y, sw.saturating_sub(2)),
+                &header,
+                None,
+                false,
+                true,
+            );
+        }
         view.row(
             viewport.at(viewport.sidebar.width.saturating_sub(3), y, 1),
             "+",
@@ -465,11 +480,7 @@ impl BusUi {
             false,
             false,
         );
-        if let Some(room) = self.room.and_then(|room| self.snapshot.state.room(room)) {
-            let label = room_label(room, usize::from(sw) + 2);
-            view.row(viewport.at(1, y + 1, sw), &label[2..], None, false, true);
-        }
-        y += 3;
+        y += 2;
         for SidebarAgent {
             agent,
             in_master,
