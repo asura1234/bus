@@ -1,5 +1,5 @@
 //! Prompt directives that make a fake provider act out a turn: `fake:work N`,
-//! `fake:dialog N` and `fake:api-error`.
+//! `fake:dialog N`, `fake:api-error`, `fake:shell NAME` and `fake:wake N`.
 use serde_json::{json, Value};
 use std::io::Write;
 
@@ -13,6 +13,23 @@ pub(super) fn work_seconds(prompt: &str) -> Option<u64> {
 /// seconds (at most 600), so a driver can see an agent wait on a dialog.
 pub(super) fn dialog_seconds(prompt: &str) -> Option<u64> {
     directive_seconds(prompt, "fake:dialog")
+}
+
+/// A Claude prompt containing `fake:shell NAME` starts background shell NAME
+/// in that turn: the turn's `Stop` lists it running, as Claude Code's does, so
+/// Bus holds the reply for it.
+pub(super) fn shell_name(prompt: &str) -> Option<String> {
+    let rest = prompt.split("fake:shell").nth(1)?;
+    rest.split_whitespace().next().map(str::to_owned)
+}
+
+/// A Claude prompt containing `fake:wake N` ends its newest shell N seconds
+/// after the turn's `Stop` (at most 600): the fake wakes a turn with the task
+/// notification, as Claude Code does, works a second, and returns to its
+/// prompt box without a `Stop`, as Claude Code does when it folds the next
+/// notification into that turn.
+pub(super) fn wake_seconds(prompt: &str) -> Option<u64> {
+    directive_seconds(prompt, "fake:wake")
 }
 
 fn directive_seconds(prompt: &str, directive: &str) -> Option<u64> {

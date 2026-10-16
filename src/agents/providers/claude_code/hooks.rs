@@ -234,6 +234,9 @@ fn claude_turn_awaits_background(value: &Value) -> bool {
 
 /// The ids of the background shells a Claude `Stop` lists as running. Each one
 /// that finishes wakes a turn of its own, whose `Stop` no longer lists it.
+/// Bus's own waits (`bus send`, `bus wait`) are not work the reply depends on:
+/// an orchestrator's reply is final while its waits on workers run for
+/// minutes or hours, so they are left out.
 pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet<String> {
     value
         .get("background_tasks")
@@ -243,9 +246,100 @@ pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet
         .filter(|task| {
             task.get("type").and_then(Value::as_str) == Some("shell")
                 && task.get("status").and_then(Value::as_str) == Some("running")
+                && !task
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_bus_wait)
         })
         .filter_map(|task| task.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect()
+}
+
+/// Exclude only shells made up of Bus waits and setup. A build that reports
+/// through Bus is still real background work. Quotes and escapes keep message
+/// text from being mistaken for command separators; unfamiliar shell constructs
+/// conservatively keep the hold.
+pub(crate) fn is_bus_wait(command: &str) -> bool {
+    let Some(segments) = bus_wait_segments(command) else {
+        return false;
+    };
+    let mut saw_bus = false;
+    for segment in segments {
+        let mut words = segment.split_whitespace().peekable();
+        while words.peek().is_some_and(|word| word.contains('=')) {
+            words.next();
+        }
+        let Some(program) = words.next() else {
+            continue;
+        };
+        if program == "cd" {
+            continue;
+        }
+        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+        if name != "bus" && name != "bus.exe" {
+            return false;
+        }
+        while words.peek().is_some_and(|next| next.starts_with("--")) {
+            words.next();
+        }
+        if !matches!(words.next(), Some("send" | "wait")) {
+            return false;
+        }
+        saw_bus = true;
+    }
+    saw_bus
+}
+
+// Keep unsupported compound shell syntax held instead of guessing its work.
+fn bus_wait_segments(command: &str) -> Option<Vec<&str>> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut start = 0;
+    let mut chars = command.char_indices().peekable();
+    let mut segments = Vec::new();
+    while let Some((index, ch)) = chars.next() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if is_redirect_operator(command, index, ch) {
+            continue;
+        }
+        if quote != Some('\'')
+            && (ch == '`' || (ch == '$' && chars.peek().is_some_and(|(_, ch)| *ch == '(')))
+        {
+            return None;
+        }
+        if let Some(open) = quote {
+            if ch == open {
+                quote = None;
+            }
+        } else if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if matches!(ch, '(' | ')' | '{' | '}') {
+            return None;
+        } else if matches!(ch, '&' | '|' | ';' | '\n') {
+            segments.push(&command[start..index]);
+            start = index + ch.len_utf8();
+        }
+    }
+    if quote.is_some() || escaped {
+        return None;
+    }
+    segments.push(&command[start..]);
+    Some(segments)
+}
+
+fn is_redirect_operator(command: &str, index: usize, ch: char) -> bool {
+    match ch {
+        '&' => command[..index].ends_with(['>', '<']) || command[index + 1..].starts_with('>'),
+        '|' => command[..index].ends_with('>'),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

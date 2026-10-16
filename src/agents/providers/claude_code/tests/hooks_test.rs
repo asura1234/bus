@@ -1,4 +1,4 @@
-use super::{claude_image_placeholders, parse};
+use super::{claude_image_placeholders, claude_running_shells, is_bus_wait, parse};
 use crate::agents::providers::{hook_json::HookContract, spool::Parsed, ProviderKind};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -263,4 +263,103 @@ fn claude_stop_failure_with_blank_or_non_text_error_fields_falls_back_to_the_cat
         ),
         exact
     );
+}
+
+/// Live (2026-10-16): an orchestrator's every reply was held behind its own
+/// `bus send --async` waits on workers, which run for minutes or hours. Bus's
+/// waits are not work the reply depends on; other shells still hold it.
+#[test]
+fn claude_running_shells_leave_out_bus_send_and_wait_commands() {
+    let shell = |id: &str, command: &str| json!({"id":id,"type":"shell","status":"running","description":"Run","command":command});
+    let value = json!({"background_tasks":[
+        shell("b1", "bus send --async --room qa --as orch --to worker --text 'go'"),
+        shell("b2", "/Users/me/work/bus/target/debug/bus --dev send --room master --to orch --text hi"),
+        shell("b3", "cd /tmp && bus --dev wait 42 --timeout 600"),
+        shell("b4", "bus.exe wait 7"),
+        shell("b5", "cargo test --locked"),
+        shell("b6", "bus history --room 0 | grep send"),
+        shell("b7", "sleep 45"),
+    ]});
+    assert_eq!(
+        claude_running_shells(&value)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["b5", "b6", "b7"]
+    );
+    assert!(is_bus_wait("bus send --to a --text b"));
+    assert!(is_bus_wait("BUS_DATA_DIR=/x ./bus --dev --yolo wait 3"));
+    assert!(!is_bus_wait("bus state"));
+    assert!(!is_bus_wait("busybox send"));
+    assert!(!is_bus_wait("echo bus"));
+}
+
+/// A background shell that runs real work and only then reports over Bus
+/// (`cargo build && bus send ...`) is work the reply waits on: its exit
+/// wakes the turn with the build's outcome, so it still holds the reply.
+#[test]
+fn claude_running_shells_keep_work_that_ends_with_a_bus_send() {
+    let value = json!({"background_tasks":[
+        {"id":"b1","type":"shell","status":"running","description":"Build","command":"cargo build --release && bus send --to qa --text 'build ready'"},
+    ]});
+    assert_eq!(
+        claude_running_shells(&value)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["b1"]
+    );
+}
+
+#[test]
+fn bus_wait_shells_preserve_work_on_either_side_and_quoted_message_text() {
+    for command in [
+        "bus wait 7 && cargo build",
+        "cargo build; bus send --to qa --text ready",
+        "echo bus send --to qa --text ready",
+        "bus send --to qa --text \"$(cargo build)\"",
+        "bus send --to qa --text `cargo build`",
+        "(bus wait 7)",
+        "cd /tmp",
+    ] {
+        assert!(!is_bus_wait(command), "must hold work: {command}");
+    }
+    for command in [
+        "cd /tmp && BUS_DATA_DIR=/scratch bus --dev wait 7",
+        "bus wait 7; bus send --to qa --text 'ready && checked; a | b'",
+        "bus send --to qa --text 'literal $(cargo build)'",
+        "bus send --to qa --text ready\\;checked",
+    ] {
+        assert!(is_bus_wait(command), "only Bus waits: {command}");
+    }
+}
+
+/// A stream redirection such as `2>&1` belongs to the Bus command it follows;
+/// its `&` is not a command separator, so the shell is still only a Bus wait.
+#[test]
+fn bus_wait_shells_with_stream_redirections_are_still_bus_waits() {
+    for command in [
+        "bus send --to qa --async --text ready 2>&1",
+        "bus wait --message 7 --timeout 600 2>&1",
+        "bus wait 7 >&2 <&0",
+        "bus wait 7 &>/tmp/bus-wait.log",
+        "bus wait 7 >|/tmp/bus-wait.log",
+    ] {
+        assert!(is_bus_wait(command), "only Bus waits: {command}");
+    }
+}
+
+/// Real work after a redirected Bus wait still holds the reply: only the
+/// redirection's own `&` or `|` is joined to the command, never a separator.
+#[test]
+fn bus_wait_shells_keep_work_after_a_stream_redirection() {
+    for command in [
+        "bus wait 7 2>&1 && cargo build",
+        "bus wait 7 2>&1&& cargo build",
+        "bus wait 7 >&2; cargo build",
+        "bus wait 7 2>&1 | tee /tmp/log",
+        "bus wait 7 &>/tmp/log & cargo build",
+        "bus wait 7 >|/tmp/log || cargo build",
+        "bus wait 7 &&>/tmp/log cargo build",
+    ] {
+        assert!(!is_bus_wait(command), "must hold work: {command}");
+    }
 }

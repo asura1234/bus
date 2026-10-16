@@ -486,6 +486,11 @@ pub(crate) const UNBOUND_SETTLE_MS: u64 = 5_000;
 
 /// Allow completion hooks and transcript writes to arrive after the idle poll.
 pub(crate) const TURN_SETTLE_MS: u64 = 5_000;
+/// How long a turn that ended without a `Stop` keeps the door open for a late
+/// one before its shell-held interim becomes the reply. Claude's `Stop` can
+/// trail the idle screen by seconds (its hooks run first), and a folded task
+/// notification starts a new turn that restarts this wait.
+pub(crate) const HELD_REPLY_SETTLE_MS: u64 = 30_000;
 
 /// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
 pub(super) fn clock(at_ms: u64) -> String {

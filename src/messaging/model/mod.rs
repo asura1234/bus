@@ -28,8 +28,8 @@ pub(crate) use {
         CallbackEventKind, CallbackRejection, Compactions, Draft, ModelError, PendingFinal, Prompt,
         PromptId, Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, Room,
         RoomId, RoomKind, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, DELIVERED_STALL_MS,
-        DEVELOPER_RECIPIENT, MASTER_ROOM_NAME, QUEUED_STALL_MS, STEERING_SETTLE_MS, TURN_SETTLE_MS,
-        UNBOUND_SETTLE_MS,
+        DEVELOPER_RECIPIENT, HELD_REPLY_SETTLE_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS,
+        STEERING_SETTLE_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },
 };
 

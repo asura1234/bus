@@ -36,7 +36,13 @@ seconds, so Bus sees the agent waiting on a dialog. A prompt containing
 it shows `API Error: Connection lost mid-response…` and fires `StopFailure`
 with that text and `error: server_error`. Esc during a `fake:work` turn stops
 it the way it stops Claude Code: no reply and no hook, and the prompt goes
-back into the box.
+back into the box. A prompt containing `fake:shell NAME` starts background
+shell NAME in that turn: its `Stop` (and every later one) lists the shell
+running, as Claude Code 2.1.296 does, so Bus holds the reply for it. With
+`fake:wake N` in the same prompt, the shell ends N seconds after that `Stop`:
+the fake wakes a turn with `<task-notification>NAME completed</task-notification>`
+(a `UserPromptSubmit`), works a second, and returns to its prompt box with no
+`Stop`, as Claude Code does when it folds the next notification into that turn.
 
 The scratch directive `fake:dialog-settle redraw` holds an inert native Codex
 command chooser until Enter. After input, it shows an approval acknowledgement

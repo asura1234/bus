@@ -10,6 +10,7 @@
 //! starts its session with the first prompt. The fake Cursor fires the hooks
 //! Bus writes to the project's `.cursor/hooks.json` and draws Cursor's `→`
 //! composer. All answer every prompt with `fake reply: <prompt>`.
+mod background;
 mod dialogs;
 mod directives;
 mod input;
@@ -138,6 +139,10 @@ struct FakeAgent {
     draft: String,
     /// While a live turn runs: when it started and its spinner frame.
     working: Option<(Instant, usize)>,
+    /// Background shells `fake:shell` started, listed on every Claude `Stop`.
+    shells: Vec<String>,
+    /// When the newest shell ends and wakes a turn (`fake:wake N`).
+    wake: Option<(Instant, String)>,
 }
 
 /// What a keystroke ended in, besides editing the draft.
@@ -161,6 +166,8 @@ impl FakeAgent {
             pending: Vec::new(),
             draft: String::new(),
             working: None,
+            shells: Vec::new(),
+            wake: None,
         }
     }
 
@@ -375,11 +382,8 @@ impl FakeAgent {
             self.hook("afterAgentResponse", Some(&turn), json!({"text": reply}));
             self.hook("stop", Some(&turn), json!({"status": "completed"}));
         } else {
-            self.hook(
-                "Stop",
-                Some(&turn),
-                json!({"last_assistant_message": reply, "stop_hook_active": false}),
-            );
+            let payload = self.stop_payload(prompt, &reply);
+            self.hook("Stop", Some(&turn), payload);
         }
         self.draw_prompt();
         None
@@ -502,10 +506,15 @@ impl FakeAgent {
             // Input typed during a Claude turn waited in `pending`.
             let inputs = drain_input(&mut self.pending);
             if inputs.is_empty() {
-                let Some(Ok(bytes)) = self.input.as_ref().map(|input| input.recv()) else {
+                let Some(input) = self.input.as_ref() else {
                     return 0;
                 };
-                self.pending.extend_from_slice(&bytes);
+                let received = Self::receive_or_wake(input, self.wake.as_ref().map(|(at, _)| *at));
+                match received {
+                    Ok(bytes) => self.pending.extend_from_slice(&bytes),
+                    Err(mpsc::RecvTimeoutError::Timeout) => self.wake(),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return 0,
+                }
                 continue;
             }
             for input in inputs {
