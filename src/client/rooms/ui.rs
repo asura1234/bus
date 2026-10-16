@@ -312,9 +312,6 @@ impl BusUi {
         if pending(|command| matches!(command, BusCommand::SetSidebarWidth(_))) {
             settings.sidebar_width = self.settings.sidebar_width;
         }
-        if pending(|command| matches!(command, BusCommand::SetMaxCompactionsPerAgent(_))) {
-            settings.max_compactions_per_agent = self.settings.max_compactions_per_agent;
-        }
         self.settings = settings;
     }
     pub fn receive_event(&mut self, event: BusEvent) {
