@@ -1,7 +1,7 @@
 //! Close finished turns after giving their completion callbacks time to arrive.
 use super::{
     types::ShellHold, AgentId, BusState, ModelError, PendingFinal, Request, RequestId,
-    RuntimeStatus, TURN_SETTLE_MS,
+    RuntimeStatus, HELD_REPLY_SETTLE_MS, TURN_SETTLE_MS,
 };
 
 impl BusState {
@@ -152,8 +152,9 @@ impl BusState {
     /// No reply is invented when capture failed; the sender sees `abandoned`
     /// with a reason: `provider_error: ...` when `provider_error` finds the
     /// error that ended the turn, else `reply_not_captured`. A reply captured
-    /// earlier and held for the turn's shells is never lost that way: it is
-    /// delivered with reason `background_shells_interim` (live, 2026-10-16: an
+    /// earlier and held for the turn's shells is never lost that way: once
+    /// `HELD_REPLY_SETTLE_MS` has passed with no late `Stop`, it is delivered
+    /// with reason `background_shells_interim` (live, 2026-10-16: an
     /// orchestrator's wake turns ended without a `Stop`, under a Bus restart
     /// and under a folded task notification, and both groups of MASTER
     /// messages were abandoned with their captured replies).
@@ -165,20 +166,24 @@ impl BusState {
     ) -> Option<RequestId> {
         let request = self.settle_candidate(agent)?;
         let id = request.id;
-        if now_ms < request.turn_ended_at_ms?.saturating_add(TURN_SETTLE_MS) {
+        let held = Self::held_interim(request);
+        let settle_ms = if held.is_some() {
+            HELD_REPLY_SETTLE_MS
+        } else {
+            TURN_SETTLE_MS
+        };
+        if now_ms < request.turn_ended_at_ms?.saturating_add(settle_ms) {
             return None;
         }
         let provider_error = provider_error(request);
-        if provider_error.is_none() {
-            if let Some(interim) = Self::held_interim(request) {
-                return self.deliver_held_interim(
-                    agent,
-                    id,
-                    interim,
-                    now_ms,
-                    "background_shells_interim",
-                );
-            }
+        if let (None, Some(interim)) = (&provider_error, held) {
+            return self.deliver_held_interim(
+                agent,
+                id,
+                interim,
+                now_ms,
+                "background_shells_interim",
+            );
         }
         let (reason, error) = match &provider_error {
             Some(message) => provider_error_outcome(message),

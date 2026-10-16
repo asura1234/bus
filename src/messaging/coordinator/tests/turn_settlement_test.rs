@@ -2,6 +2,7 @@ use super::*;
 
 // The callback spool gets a bounded grace period after the first settled poll.
 const CALLBACK_GRACE_MS: u64 = crate::messaging::model::TURN_SETTLE_MS;
+const HELD_REPLY_GRACE_MS: u64 = crate::messaging::model::HELD_REPLY_SETTLE_MS;
 
 #[test]
 fn failed_provider_turn_closes_its_group_and_releases_the_queue() {
@@ -943,7 +944,7 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert!(fixture.request(lead).turn_ended_at_ms.is_some());
-    fixture.now += CALLBACK_GRACE_MS + 1;
+    fixture.now += HELD_REPLY_GRACE_MS + 1;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     for id in [lead, joined] {
@@ -1014,7 +1015,7 @@ fn a_restart_under_the_wake_turn_delivers_the_shell_held_reply() {
     fixture.now += 3_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    fixture.now += CALLBACK_GRACE_MS + 1;
+    fixture.now += HELD_REPLY_GRACE_MS + 1;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
@@ -1075,4 +1076,42 @@ fn a_claude_reply_is_not_held_by_the_agents_own_bus_waits() {
         fixture.reply(lead).as_deref(),
         Some("Review dispatched; I'll report when it lands.")
     );
+}
+
+/// E2E (scratch Bus, 2026-10-16): the fake Claude's `Stop` reached Bus 6 s
+/// after its screen went idle, past the 5 s settle window, so the held interim
+/// had already become the reply and the real one was posted as a stray report.
+/// Claude's `Stop` can trail the idle screen (its hooks run first), so a turn
+/// holding a reply waits `HELD_REPLY_SETTLE_MS` for a late `Stop`, which then
+/// settles the turn as usual: as the reply, or held again for its shells.
+#[test]
+fn a_late_stop_within_the_held_reply_window_is_still_the_turn_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let joined = fixture.send("is it ready?", false);
+    fixture.deliver();
+    fixture.started("turn-2", "is it ready?");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert!(fixture.request(lead).turn_ended_at_ms.is_some());
+    // Past the plain settle window the turn is still open for its Stop...
+    fixture.now += CALLBACK_GRACE_MS + 1_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert!(fixture.worker.state.settling(fixture.request(joined)));
+    // ...and that Stop, with no shell left running, is the reply.
+    fixture.record(claude_stop("turn-2", "Ready: the build passed.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    for id in [lead, joined] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("Ready: the build passed.")
+        );
+        assert_eq!(fixture.request(id).failure_reason, None);
+    }
 }
