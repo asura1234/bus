@@ -125,6 +125,7 @@ pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneL
     // Keep configuration (CLAUDE_CONFIG_DIR, ANTHROPIC_*, CODEX_HOME, etc.);
     // these prefixes also contain user settings, so do not remove them wholesale.
     for key in [
+        crate::utils::env::YOLO_ENV_VAR,
         "CLAUDECODE",
         "CLAUDE_CODE_CHILD_SESSION",
         "CLAUDE_CODE_ENTRYPOINT",

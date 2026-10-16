@@ -1,6 +1,30 @@
 use super::*;
 use std::io;
 
+#[cfg(unix)]
+#[test]
+fn pane_launch_env_keeps_yolo_private_to_bus() {
+    for override_marker in [false, true] {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args([
+            "-c",
+            "test -z \"${BUS_YOLO+x}\" && test \"$BUS_LAUNCH_ID\" = own-launch",
+        ]);
+        cmd.env("BUS_YOLO", "1");
+        let mut extra = vec![("BUS_LAUNCH_ID".into(), "own-launch".into())];
+        if override_marker {
+            extra.push(("BUS_YOLO".into(), "1".into()));
+        }
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extra));
+        let mut spawned =
+            crate::terminal::runtime::spawn::spawn_with_portable_pty(24, 80, cmd).unwrap();
+        assert!(
+            spawned.child.wait().unwrap().success(),
+            "private mode leaked into pane"
+        );
+    }
+}
+
 #[test]
 fn pane_launch_env_removes_outer_codex_thread_id() {
     let mut cmd = CommandBuilder::new("shell");
