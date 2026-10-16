@@ -4,7 +4,10 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 pub(super) fn redraw_requested(prompt: &str) -> bool {
-    prompt.trim() == "fake:dialog-settle redraw"
+    matches!(
+        prompt.trim(),
+        "fake:dialog-settle redraw" | "fake:dialog-null"
+    )
 }
 
 const SCREEN: &str = "Would you like to run the following command?\r\n\r\n$ CARGO_TARGET_DIR=./target cargo test dialog_settle_probe --locked\r\n\r\n› 1. Yes, proceed (y)\r\n  2. No, and tell Codex what to do differently (esc)\r\n\r\npress enter to confirm or esc to cancel\r\n";
@@ -12,12 +15,21 @@ const SCREEN: &str = "Would you like to run the following command?\r\n\r\n$ CARG
 impl FakeAgent {
     /// Hold until native input, then deliberately tear post-answer snapshots.
     /// The displayed shell command is never executed.
-    pub(super) fn settlement_dialog(&mut self) -> Result<(), i32> {
+    pub(super) fn settlement_dialog(&mut self, prompt: &str) -> Result<(), i32> {
         if self.live_turn() {
             self.end_turn(&[]);
         }
         let mut out = std::io::stdout();
-        let _ = write!(out, "{SCREEN}");
+        let soft_wrapped = prompt.trim() == "fake:dialog-null";
+        let screen = if soft_wrapped {
+            include_str!(
+                "../../../server/api/agents/tests/fixtures/codex_soft_wrapped_permission.txt"
+            )
+            .replace('\n', "\r\n")
+        } else {
+            SCREEN.to_owned()
+        };
+        let _ = write!(out, "{screen}");
         let _ = out.flush();
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(600) {
@@ -36,8 +48,13 @@ impl FakeAgent {
                     Input::Enter => {
                         // Let native choose acknowledge its one write first.
                         std::thread::sleep(Duration::from_millis(50));
-                        let rows = SCREEN.matches("\r\n").count();
-                        let _ = write!(out, "\x1b[?2026h\x1b[{rows}A\r\x1b[J• You approved codex to run the fixture this time\r\n");
+                        let rows = screen.matches("\r\n").count();
+                        let clear = if soft_wrapped {
+                            "\x1b[2J\x1b[H".to_owned()
+                        } else {
+                            format!("\x1b[{rows}A\r\x1b[J")
+                        };
+                        let _ = write!(out, "\x1b[?2026h{clear}• You approved codex to run the fixture this time\r\n");
                         let _ = out.flush();
                         std::thread::sleep(Duration::from_millis(350));
                         let _ = write!(out, "\x1b[?2026l");

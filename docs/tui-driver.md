@@ -43,6 +43,10 @@ command chooser until Enter. After input, it shows an approval acknowledgement
 inside a 350ms synchronized redraw, so post-answer dialog reads must retry.
 It never runs the displayed command and needs no permission handler.
 
+`fake:dialog-null` uses the same inert chooser with a captured Codex permission
+layout whose long second option soft-wraps at 80 columns. It exercises dialog
+observation and answering when a wrapped command includes a `>` continuation.
+
 The fake Codex answers the same way, the way Bus sees real Codex: it fires
 every hook in the project's `.codex/hooks.json`, in order, Bus's among them
 (Bus adds its own after the consent form on add), starts its session with the

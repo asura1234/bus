@@ -36,7 +36,15 @@ impl GhosttyPaneTerminal {
         self.core
             .lock()
             .ok()
-            .and_then(|core| ghostty_visible_ansi(&core).ok())
+            .and_then(|core| ghostty_visible_ansi(&core, false).ok())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn visible_ansi_unwrapped(&self) -> String {
+        self.core
+            .lock()
+            .ok()
+            .and_then(|core| ghostty_visible_ansi(&core, true).ok())
             .unwrap_or_default()
     }
 
@@ -131,7 +139,10 @@ pub(super) fn ghostty_visible_text(
     Ok(lines_to_text(lines))
 }
 
-fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::terminal::vt::Error> {
+fn ghostty_visible_ansi(
+    core: &GhosttyPaneCore,
+    unwrap: bool,
+) -> Result<String, crate::terminal::vt::Error> {
     let rows = core.terminal.rows()?;
     let cols = core.terminal.cols()?;
     if rows == 0 || cols == 0 {
@@ -141,6 +152,7 @@ fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::termina
         (0, 0),
         (cols.saturating_sub(1), u32::from(rows.saturating_sub(1))),
         false,
+        unwrap,
     )
 }
 
