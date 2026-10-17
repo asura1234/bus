@@ -101,6 +101,16 @@ impl BusUi {
                         Region::Composer
                     }
                     None | Some(Action::OpenFile(_)) if self.view.history_text.contains(point) => {
+                        // Quote-row padding is inert, including for selection.
+                        let index = self.main_scroll + usize::from(row - self.view.history_text.y);
+                        if self
+                            .history
+                            .cached()
+                            .get(index)
+                            .is_some_and(|line| matches!(line.action, Some(Action::Quote(_))))
+                        {
+                            return true;
+                        }
                         Region::History
                     }
                     _ => return false,
