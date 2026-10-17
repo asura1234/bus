@@ -367,14 +367,7 @@ impl BusUi {
             if let Some(path) = attachment {
                 view.attachment_link(rect, line, path);
             }
-            if let Some(action @ Action::Quote(_)) = &line.action {
-                let label = line.text.trim_start();
-                let indent = (line.text.width() - label.width()) as u16;
-                let cells = (label.width() as u16).min(width.saturating_sub(indent));
-                if cells > 0 {
-                    view.hit(Rect::new(x + indent, rect.y, cells, 1), action.clone());
-                }
-            }
+            view.quote_link(rect, line);
             if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
                 // Partly scrolled thumbnails keep their blank rows and name.
                 thumbnail.row == 0

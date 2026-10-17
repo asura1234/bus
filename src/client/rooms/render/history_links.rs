@@ -7,6 +7,19 @@ use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 impl View {
+    /// Quote keeps its row's paint, but only visible label cells are a hit.
+    pub(super) fn quote_link(&mut self, row: Rect, line: &Line) {
+        let Some(action @ Action::Quote(_)) = &line.action else {
+            return;
+        };
+        let label = line.text.trim_start();
+        let indent = (line.text.width() - label.width()) as u16;
+        let cells = (label.width() as u16).min(row.width.saturating_sub(indent));
+        if cells > 0 {
+            self.hit(Rect::new(row.x + indent, row.y, cells, 1), action.clone());
+        }
+    }
+
     /// An attachment is a link over its name or picture only, so a press
     /// beside it, or a drag across it, selects like any row.
     pub(super) fn attachment_link(&mut self, row: Rect, line: &Line, path: &Path) {
