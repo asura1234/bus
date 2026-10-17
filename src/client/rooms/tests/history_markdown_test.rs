@@ -573,3 +573,40 @@ fn markdown_returning_to_a_room_after_a_resize_elsewhere_lays_out_at_the_new_wid
         "rows fit the new width: {narrow:?}"
     );
 }
+
+#[test]
+fn quote_padding_in_a_scrolled_history_is_inert_while_neighbor_rows_still_select() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+
+    let (mut ui, room, agent) = fixture();
+    saved_history(&mut ui, room, agent, 30);
+    ui.history_follow_tail = false;
+    ui.compute_view(100, 40);
+    let target = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.text.trim() == "prompt-10")
+        .unwrap();
+    ui.main_scroll = target - 5;
+    ui.compute_view(100, 40);
+    assert_eq!(ui.main_scroll, target - 5);
+    let text = ui.view.history_text;
+    let edge = text.right() - 1;
+    let mut quotes = 0;
+    for row in text.y..text.bottom() {
+        let line = ui.history.cached()[ui.main_scroll + usize::from(row - text.y)].clone();
+        let quote = matches!(line.action, Some(render::Action::Quote(_)));
+        quotes += usize::from(quote);
+        ui.history_selection = None;
+        assert_eq!(pointer(&mut ui, Down(Left), edge, row), None);
+        assert_eq!(
+            ui.history_selection.is_some(),
+            !quote && line.action.is_none(),
+            "row {row} ({:?}) padding press",
+            line.text
+        );
+        pointer(&mut ui, Up(Left), edge, row);
+    }
+    assert!(quotes > 1, "the scrolled screen shows several Quote rows");
+}
