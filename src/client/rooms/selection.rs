@@ -101,6 +101,10 @@ impl BusUi {
                         Region::Composer
                     }
                     None | Some(Action::OpenFile(_)) if self.view.history_text.contains(point) => {
+                        // Quote-row padding is inert, including for selection.
+                        if self.quote_row(row) {
+                            return true;
+                        }
                         Region::History
                     }
                     _ => return false,
@@ -184,6 +188,16 @@ impl BusUi {
             }
             _ => false,
         }
+    }
+
+    fn quote_row(&self, row: u16) -> bool {
+        row.checked_sub(self.view.history_text.y)
+            .and_then(|index| {
+                self.history
+                    .cached()
+                    .get(self.main_scroll + usize::from(index))
+            })
+            .is_some_and(|line| matches!(line.action, Some(Action::Quote(_))))
     }
 
     /// Any motion makes the gesture a drag, even where it selects no text,

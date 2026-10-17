@@ -349,7 +349,8 @@ impl BusUi {
             .enumerate()
         {
             let rect = Rect::new(x, history_y + index as u16, width, 1);
-            // An attachment's hit is its link, not the whole row.
+            // Attachments and Quote have bounded hits, painted separately.
+            let quote = matches!(line.action, Some(Action::Quote(_)));
             let attachment = match &line.action {
                 Some(Action::OpenFile(path)) => Some(path),
                 _ => None,
@@ -357,13 +358,16 @@ impl BusUi {
             view.row(
                 rect,
                 &line.text,
-                line.action.clone().filter(|_| attachment.is_none()),
+                line.action
+                    .clone()
+                    .filter(|_| attachment.is_none() && !quote),
                 false,
                 matches!(line.tone, Tone::Muted),
             );
             if let Some(path) = attachment {
                 view.attachment_link(rect, line, path);
             }
+            view.quote_link(rect, line);
             if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
                 // Partly scrolled thumbnails keep their blank rows and name.
                 thumbnail.row == 0

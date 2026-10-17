@@ -229,6 +229,89 @@ fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_direct
 }
 
 #[test]
+fn clicking_right_of_quote_does_nothing() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+
+    let (mut ui, room, agent) = fixture();
+    let request = saved_exchange(&mut ui, room, agent, "prompt", "reply");
+    ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft stays".into());
+    ui.compute_view(100, 40);
+    let (label_x, y) = locate(&ui, "Quote");
+    assert_eq!(ui.view.hit_at(label_x + 5, y), None);
+
+    assert_eq!(pointer(&mut ui, Down(Left), label_x + 5, y), None);
+    assert_eq!(pointer(&mut ui, Up(Left), label_x + 5, y), None);
+
+    assert_eq!(ui.locals[&room].text.text, "draft stays");
+    assert!(
+        ui.history_selection.is_none(),
+        "blank Quote cells must not start selection"
+    );
+    assert!(
+        ui.last_click.is_none(),
+        "blank Quote cells must not dispatch an action"
+    );
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::Quote(request)));
+}
+
+#[test]
+fn quote_padding_preserves_selection_and_draft() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(&mut ui, room, agent, "prompt", "reply");
+    ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft stays".into());
+    ui.compute_view(100, 40);
+    let (x, y) = locate(&ui, "Quote");
+    let point = selection::Point { line: 0, offset: 0 };
+    let selection = Some((point, point));
+    ui.history_selection = selection;
+    for column in ui.view.history_text.x..ui.view.history_text.right() {
+        if (x..x + 5).contains(&column) {
+            continue;
+        }
+        assert_eq!(pointer(&mut ui, Down(Left), column, y), None);
+        assert_eq!(pointer(&mut ui, Up(Left), column, y), None);
+        assert_eq!(ui.locals[&room].text.text, "draft stays");
+        assert_eq!(ui.history_selection, selection);
+        assert!(ui.drag.is_none());
+        assert!(ui.last_click.is_none());
+    }
+}
+
+#[test]
+fn quote_hit_tracks_visible_label_cells_after_resize() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+
+    let (mut ui, room, agent) = fixture();
+    let request = saved_exchange(&mut ui, room, agent, "prompt", "reply");
+    for cols in [36, 38, 80, 100] {
+        ui.compute_view(cols, 40);
+        let (x, y) = locate(&ui, "Quote");
+        let visible = 5.min(ui.view.history_text.right().saturating_sub(x));
+        let hit = ui
+            .view
+            .hits
+            .iter()
+            .find(|hit| hit.action == render::Action::Quote(request));
+        assert_eq!(
+            hit.map(|hit| hit.rect),
+            (visible > 0).then_some(ratatui::layout::Rect::new(x, y, visible, 1))
+        );
+        for column in x..x + visible {
+            ui.locals.get_mut(&room).unwrap().text = editor::Editor::default();
+            mouse(&mut ui, Down(Left), column, y);
+            mouse(&mut ui, Up(Left), column, y);
+            assert_eq!(ui.locals[&room].text.text, "author: \"reply\"\n");
+        }
+    }
+}
+
+#[test]
 fn quote_keeps_the_agent_reply_as_raw_markdown() {
     let (mut ui, room, agent) = fixture();
     let markdown = "**bold** and [docs](https://example.com) and `code`";
@@ -489,4 +572,41 @@ fn markdown_returning_to_a_room_after_a_resize_elsewhere_lays_out_at_the_new_wid
             .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 30),
         "rows fit the new width: {narrow:?}"
     );
+}
+
+#[test]
+fn quote_padding_in_a_scrolled_history_is_inert_while_neighbor_rows_still_select() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+
+    let (mut ui, room, agent) = fixture();
+    saved_history(&mut ui, room, agent, 30);
+    ui.history_follow_tail = false;
+    ui.compute_view(100, 40);
+    let target = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.text.trim() == "prompt-10")
+        .unwrap();
+    ui.main_scroll = target - 5;
+    ui.compute_view(100, 40);
+    assert_eq!(ui.main_scroll, target - 5);
+    let text = ui.view.history_text;
+    let edge = text.right() - 1;
+    let mut quotes = 0;
+    for row in text.y..text.bottom() {
+        let line = ui.history.cached()[ui.main_scroll + usize::from(row - text.y)].clone();
+        let quote = matches!(line.action, Some(render::Action::Quote(_)));
+        quotes += usize::from(quote);
+        ui.history_selection = None;
+        assert_eq!(pointer(&mut ui, Down(Left), edge, row), None);
+        assert_eq!(
+            ui.history_selection.is_some(),
+            !quote && line.action.is_none(),
+            "row {row} ({:?}) padding press",
+            line.text
+        );
+        pointer(&mut ui, Up(Left), edge, row);
+    }
+    assert!(quotes > 1, "the scrolled screen shows several Quote rows");
 }
