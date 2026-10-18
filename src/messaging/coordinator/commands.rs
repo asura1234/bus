@@ -54,6 +54,9 @@ impl Worker {
             BusCommand::SetMaxCompactionsPerAgent(limit) => {
                 return self.set_max_compactions_per_agent(limit, events);
             }
+            BusCommand::SetDeveloperNotifications(on) => {
+                return self.set_developer_notifications(on, events);
+            }
             BusCommand::SetFreezeNotifications(on) => {
                 return self.set_freeze_notifications(on, events);
             }

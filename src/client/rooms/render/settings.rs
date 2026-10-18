@@ -70,6 +70,9 @@ impl BusUi {
         lines.push(SoundSettingsLine::Freeze {
             field: self.freeze_field(),
         });
+        lines.push(SoundSettingsLine::DeveloperNotifications {
+            field: self.developer_notifications_field(),
+        });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
@@ -225,6 +228,22 @@ impl BusUi {
                         }
                     ),
                     Some(Action::ToggleFreezeNotifications),
+                    self.settings_field == *field,
+                    false,
+                );
+            }
+            SoundSettingsLine::DeveloperNotifications { field } => {
+                view.row(
+                    rect,
+                    format!(
+                        "[{}] Developer message notifications",
+                        if self.settings.developer_notifications {
+                            "x"
+                        } else {
+                            " "
+                        }
+                    ),
+                    Some(Action::ToggleDeveloperNotifications),
                     self.settings_field == *field,
                     false,
                 );

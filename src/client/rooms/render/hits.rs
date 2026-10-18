@@ -91,6 +91,7 @@ impl BusUi {
             #[cfg(feature = "dev-tools")]
             Action::SimulateFreeze => "freeze-test".into(),
             Action::ToggleFreezeNotifications => "freeze-notifications".into(),
+            Action::ToggleDeveloperNotifications => "developer-notifications".into(),
             Action::ToggleFeishuNotifications => "feishu-notifications".into(),
             Action::ToggleSound(target) => format!("sound:{}", self.sound_target(target)),
             Action::CycleSound(target, next) => format!(

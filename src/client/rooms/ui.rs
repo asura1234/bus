@@ -144,6 +144,8 @@ pub(in crate::client) struct BusUi {
     /// System sound names, read from the OS when Settings first opens.
     pub(super) system_sounds: Option<Vec<String>>,
     pub(super) ringer: super::ring::Ringer,
+    pub(super) developer_notifications: super::developer_notifications::DeveloperNotifications,
+    pub(super) outer_focused: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -237,6 +239,8 @@ impl BusUi {
             sound_config: None,
             system_sounds: None,
             ringer: super::ring::Ringer::new(std::time::Instant::now()),
+            developer_notifications: Default::default(),
+            outer_focused: None,
         }
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
@@ -279,7 +283,8 @@ impl BusUi {
 
     /// The overlay row's Settings focus index, after the sidebar width.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings.then(|| self.freeze_field() + 1)
+        self.dev_settings
+            .then(|| self.developer_notifications_field() + 1)
     }
 
     pub(super) fn freeze_field(&self) -> usize {
@@ -345,8 +350,12 @@ impl BusUi {
         if pending(|command| matches!(command, BusCommand::SetFreezeNotifications(_))) {
             settings.freeze_notifications = self.settings.freeze_notifications;
         }
+        if pending(|command| matches!(command, BusCommand::SetDeveloperNotifications(_))) {
+            settings.developer_notifications = self.settings.developer_notifications;
+        }
         crate::utils::perf::recovery::set_enabled(settings.freeze_notifications);
         self.settings = settings;
+        self.configure_developer_notifications();
     }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
@@ -509,6 +518,12 @@ impl BusUi {
             }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        self.configure_developer_notifications();
+        self.developer_notifications.observe(
+            &previous.state,
+            &self.snapshot.state,
+            std::time::Instant::now(),
+        );
         if let Some(config) = &self.sound_config {
             if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
                 .filter(|_| self.ringer.allow(std::time::Instant::now()))

@@ -59,6 +59,7 @@ pub(super) enum Action {
     ToggleColorBlindMode,
     ToggleFeishuNotifications,
     ToggleFreezeNotifications,
+    ToggleDeveloperNotifications,
     #[cfg(feature = "dev-tools")]
     SimulateFreeze,
     /// Dev builds only: the live performance overlay.
@@ -155,6 +156,9 @@ pub(super) enum SoundSettingsLine {
     #[cfg(feature = "dev-tools")]
     FreezeTest,
     Freeze {
+        field: usize,
+    },
+    DeveloperNotifications {
         field: usize,
     },
     Feishu {
