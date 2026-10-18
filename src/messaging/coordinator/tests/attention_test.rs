@@ -900,3 +900,46 @@ fn feishu_settings_read_failure_is_visible_recovers_backlog_and_logs_private_out
         "private payload leaked: {log}"
     );
 }
+
+#[test]
+fn feishu_send_cancelled_by_unreadable_settings_is_reported_unknown_after_recovery() {
+    let mut fixture = Fixture::new();
+    assert!(
+        fixture
+            .call("settings.feishu_notifications", json!({"on":true}))
+            .ok
+    );
+    fixture.settle();
+    fixture.mode("send-delay");
+    fixture.post("[needs_developer_attention] Ambiguous during settings outage");
+    fixture.wait_sends(1);
+    let path = fixture.root.join("settings.json");
+    let saved = settings::load(&path).unwrap();
+    std::fs::write(&path, "{").unwrap();
+    fixture.pump();
+    assert!(!fixture.worker().attention.status.enabled);
+    settings::save(&path, &saved).unwrap();
+    fixture.mode("ready");
+    fixture.settle();
+    assert!(fixture.worker().attention.status.enabled);
+    assert!(
+        fixture
+            .worker()
+            .attention
+            .status
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("unknown")),
+        "status={:?}",
+        fixture.worker().attention.status
+    );
+    assert_eq!(
+        fixture
+            .calls()
+            .iter()
+            .filter(|call| call["args"][0] == "im")
+            .count(),
+        1,
+        "the ambiguous attempt is never replayed"
+    );
+}
