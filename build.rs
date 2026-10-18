@@ -154,8 +154,18 @@ fn build_vendored_lib(mut command: Command, zig: &str) {
 }
 
 fn record_build_identity() {
+    let manifest = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from);
     let git = |args: &[&str]| {
+        // A source archive inside another project must not claim its HEAD.
+        // Both ordinary checkouts and worktrees have their own .git entry.
+        let manifest = manifest
+            .as_ref()
+            .filter(|root| root.join(".git").exists())?;
         Command::new("git")
+            .current_dir(manifest)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
             .args(args)
             .output()
             .ok()
