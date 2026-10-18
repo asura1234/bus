@@ -227,7 +227,7 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     session.ok(&["wait", "--state", "rooms.*.name == review"]);
 
     // Focus the default room by clicking its sidebar entry.
-    let clicked = session.ok(&["click", "--text", "# bus", "--rows", "3-8"]);
+    let clicked = session.ok(&["click", "--hit", "room:bus"]);
     assert_eq!(clicked["at"][0], 5);
     session.ok(&["wait", "--state", "visible_room == 1"]);
 
