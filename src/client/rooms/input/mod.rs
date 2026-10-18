@@ -429,6 +429,7 @@ impl BusUi {
         self.history_follow_tail = true;
         self.recipient_scroll = 0;
         self.queue(BusCommand::SelectRoom(room), Effect::None);
+        self.configure_developer_notifications();
     }
     pub(super) fn is_master_room(&self, room: RoomId) -> bool {
         self.snapshot
@@ -589,6 +590,7 @@ impl BusUi {
             #[cfg(feature = "dev-tools")]
             Action::SimulateFreeze => std::thread::sleep(std::time::Duration::from_millis(3500)),
             Action::ToggleFreezeNotifications => self.toggle_freeze_notifications(),
+            Action::ToggleDeveloperNotifications => self.toggle_developer_notifications(),
             Action::ToggleFeishuNotifications => self.toggle_feishu_notifications(),
             Action::AdjustCompactionLimit(forward) => self.adjust_compaction_limit(forward),
             Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),

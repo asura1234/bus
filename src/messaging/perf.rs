@@ -32,6 +32,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::SetAllRoomsSoundName(_) => "set_all_rooms_sound_name",
         C::SetMaxCompactionsPerAgent(_) => "set_max_compactions_per_agent",
         C::SetFreezeNotifications(_) => "set_freeze_notifications",
+        C::SetDeveloperNotifications(_) => "set_developer_notifications",
         C::SetSidebarWidth(_) => "set_sidebar_width",
         C::SetFeishuNotifications(_) => "set_feishu_notifications",
         C::RenameAgent(..) => "rename_agent",

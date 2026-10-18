@@ -3,6 +3,7 @@ mod alert;
 mod chat_search;
 #[path = "dialogs/deletion.rs"]
 mod deletion;
+mod developer_notifications;
 mod drafts;
 #[path = "widgets/editor.rs"]
 mod editor;
@@ -134,7 +135,20 @@ impl crate::client::compositor::ClientShellState {
         }
     }
     pub(crate) fn tick_bus(&mut self, outcome: &mut super::compositor::ClientShellInput) -> bool {
-        let changed = self.bus.as_mut().is_some_and(BusUi::tick);
+        let focus = self.outer_focused;
+        let changed = self.bus.as_mut().is_some_and(|bus| {
+            bus.outer_focused = focus;
+            let changed = bus.tick();
+            bus.configure_developer_notifications();
+            if !crate::client::host_terminal::output::busy() {
+                if let Some(text) = bus.take_developer_notification(std::time::Instant::now()) {
+                    outcome.actions.push(
+                        super::compositor::ClientShellAction::DeveloperNotification(text),
+                    );
+                }
+            }
+            changed
+        });
         self.dispatch_bus_terminal_focus(outcome);
         changed
     }

@@ -14,13 +14,7 @@ impl Worker {
         let mut state = self.state.clone();
         let queued = matches!(command, BusCommand::SubmitQueued(_));
         let result = match command {
-            BusCommand::CreateRoom(name) => {
-                let id = state.create_room(&name).map_err(|e| e.to_string())?;
-                self.apply_new_room_sound(&mut state, id);
-                self.save(state)?;
-                let _ = events.send(BusEvent::RoomCreated(id));
-                return Ok(());
-            }
+            BusCommand::CreateRoom(name) => return self.persist_new_room(state, &name, events),
             BusCommand::RenameRoom(id, name) => state.rename_room(id, &name),
             BusCommand::RenameAgent(id, name) => state.rename_agent(id, &name),
             BusCommand::DeleteRoom(id) => return self.delete_room(id, events),
@@ -53,6 +47,9 @@ impl Worker {
             }
             BusCommand::SetMaxCompactionsPerAgent(limit) => {
                 return self.set_max_compactions_per_agent(limit, events);
+            }
+            BusCommand::SetDeveloperNotifications(on) => {
+                return self.set_developer_notifications(on, events);
             }
             BusCommand::SetFreezeNotifications(on) => {
                 return self.set_freeze_notifications(on, events);
@@ -110,6 +107,19 @@ impl Worker {
         };
         result.map_err(|e| e.to_string())?;
         self.save(state)
+    }
+
+    fn persist_new_room(
+        &mut self,
+        mut state: BusState,
+        name: &str,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let id = state.create_room(name).map_err(|e| e.to_string())?;
+        self.apply_new_room_sound(&mut state, id);
+        self.save(state)?;
+        let _ = events.send(BusEvent::RoomCreated(id));
+        Ok(())
     }
 
     fn persist_draft_submission(

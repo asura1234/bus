@@ -125,6 +125,7 @@ impl BusUi {
                 | super::super::render::SoundSettingsLine::SidebarWidth { field }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
                 | super::super::render::SoundSettingsLine::Freeze { field }
+                | super::super::render::SoundSettingsLine::DeveloperNotifications { field }
                 | super::super::render::SoundSettingsLine::Feishu { field }
                 if *field == self.settings_field)
         }) else {

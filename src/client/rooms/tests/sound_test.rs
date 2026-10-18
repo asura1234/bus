@@ -820,13 +820,13 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
         "{rows:#?}"
     );
     // Color blind, MASTER, All rooms, one room, compactions, sidebar width,
-    // Feishu, freeze notifications, then the overlay.
-    for _ in 0..8 {
+    // Feishu, freeze notifications, developer notifications, then the overlay.
+    for _ in 0..9 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    assert_eq!(ui.settings_field, 8);
+    assert_eq!(ui.settings_field, 9);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 8, "the overlay row is the last field");
+    assert_eq!(ui.settings_field, 9, "the overlay row is the last field");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(crate::client::perf::OVERLAY.is_on());
     let rows = settings_rows(&mut ui, 40);
@@ -863,4 +863,37 @@ fn freeze_notifications_default_on_and_toggle_without_changing_composer() {
     assert!(settings_rows(&mut ui, 40)
         .iter()
         .any(|row| row.contains("[ ] Freeze recovery notifications")));
+}
+
+#[test]
+fn developer_notifications_default_on_and_toggle_independently_with_pending_echo() {
+    let (mut ui, master, _) = sound_fixture(0);
+    ui.open_room(master);
+    ui.locals
+        .get_mut(&master)
+        .unwrap()
+        .text
+        .insert("KEEP DRAFT");
+    ui.action(render::Action::Settings);
+    assert!(settings_rows(&mut ui, 40)
+        .iter()
+        .any(|row| row.contains("[x] Developer message notifications")));
+    ui.settings_field = ui.developer_notifications_field();
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!ui.settings.developer_notifications);
+    assert!(ui.settings.freeze_notifications);
+    assert_eq!(ui.locals[&master].text.text, "KEEP DRAFT");
+    assert!(ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::SetDeveloperNotifications(false))));
+    // An earlier Settings echo must not undo the pending local choice.
+    ui.receive_event(BusEvent::SettingsChanged(Default::default()));
+    assert!(!ui.settings.developer_notifications);
+    assert!(settings_rows(&mut ui, 40)
+        .iter()
+        .any(|row| row.contains("[ ] Developer message notifications")));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.settings.developer_notifications);
+    assert!(ui.settings.freeze_notifications);
 }
