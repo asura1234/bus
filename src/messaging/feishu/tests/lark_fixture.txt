@@ -1,0 +1,35 @@
+#!/usr/bin/python3
+import json
+import sys
+import time
+from pathlib import Path
+
+root = Path(__file__).resolve().parent
+args = sys.argv[1:]
+mode_path = root / "mode"
+mode = mode_path.read_text().strip() if mode_path.exists() else "ready"
+self_id = "ou_self_b" if mode == "changed" else "ou_self_a"
+body = sys.stdin.read()
+with (root / "calls.jsonl").open("a") as output:
+    output.write(json.dumps({"args": args, "body": body, "self": self_id}) + "\n")
+if args == ["auth", "status", "--json", "--verify"]:
+    if mode == "auth-delay":
+        time.sleep(60)
+    print(json.dumps({"verified": True, "identities": {"user": {
+        "status": "ready", "available": mode != "missing", "verified": True,
+        "openId": self_id, "scope": "im:message.send_as_user im:message"
+    }}}))
+elif args[:2] == ["im", "+messages-send"]:
+    assert args.count("--user-id") == 1
+    assert args[args.index("--user-id") + 1] == self_id
+    assert args[args.index("--as") + 1] == "user"
+    assert "--chat-id" not in args
+    assert body.startswith("[Bus]")
+    if mode == "send-delay":
+        time.sleep(60)
+    if mode == "send-error":
+        print(json.dumps({"ok": False, "error": {"message": "DO_NOT_LEAK"}}))
+    else:
+        print(json.dumps({"ok": True, "data": {"message_id": "om_fake"}}))
+else:
+    raise SystemExit("unexpected lark-cli invocation")

@@ -64,6 +64,7 @@ impl Worker {
                 }
             }
             let status = polled_status(agent, info);
+            observe_attention_exit(self.transport.as_mut(), &mut state, agent, info)?;
             confirm_interactive_agent(&mut state, agent, info)?;
             state
                 .observe_status(agent.id, status, io::now_ms())
@@ -112,6 +113,60 @@ fn branch_for(cwd: &Path) -> Option<String> {
     }
     let branch = String::from_utf8(output.stdout).ok()?.trim().to_owned();
     (!branch.is_empty()).then_some(branch)
+}
+
+fn observe_attention_exit(
+    transport: &mut dyn super::Transport,
+    state: &mut BusState,
+    agent: &RoomAgent,
+    info: Option<&schema::AgentInfo>,
+) -> Result<(), String> {
+    if agent.deletion_pending {
+        return Ok(());
+    }
+    let evidence = match (
+        info,
+        agent.runtime_identity.pane_id.as_ref(),
+        agent.runtime_identity.terminal_id.as_ref(),
+    ) {
+        (Some(_), _, _) => Some(false),
+        (None, Some(pane), Some(terminal)) => {
+            match transport.request(Method::PaneGet(schema::PaneTarget {
+                pane_id: pane.clone(),
+            })) {
+                Ok(ResponseResult::PaneInfo { pane: evidence })
+                    if evidence.pane_id == *pane
+                        && evidence.terminal_id == *terminal
+                        && evidence.agent_process_exited =>
+                {
+                    Some(true)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let key = format!(
+        "exit:{}:{}",
+        agent.id.0,
+        agent
+            .runtime_identity
+            .launch_id
+            .as_deref()
+            .unwrap_or("unknown")
+    );
+    state
+        .attention_episode(
+            key,
+            evidence,
+            agent.id,
+            &format!(
+                "Agent process exited: {} (agent {}). Inspect the machine to resume it.",
+                agent.name, agent.id.0
+            ),
+            io::now_ms(),
+        )
+        .map_err(|error| error.to_string())
 }
 
 fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {

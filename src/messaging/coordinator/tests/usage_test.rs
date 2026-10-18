@@ -81,3 +81,60 @@ fn state_reports_missing_usage_as_unknown_never_as_unused() {
             "read_at_ms":9,"observed_by_agent":3})
     );
 }
+#[test]
+fn feishu_quota_requires_fresh_original_observation_and_future_reset() {
+    let now = 2_000_000;
+    let mut usage = Usage::default();
+    usage.codex = Some(UsageSnapshot {
+        windows: UsageWindows {
+            five_hour: Some(UsageWindow {
+                used_percent: 100.0,
+                resets_at: Some(now / 1000 + 300),
+                window_minutes: 300,
+            }),
+            weekly: None,
+        },
+        read_at_ms: now - 1,
+        observed_by_agent: AgentId(1),
+    });
+    assert!(usage
+        .exhausted(now)
+        .iter()
+        .any(|(_, _, active)| *active == Some(true)));
+    for observed in [0, now + 1, now - STALE_AFTER_MS] {
+        usage.codex.as_mut().unwrap().read_at_ms = observed;
+        assert!(usage
+            .exhausted(now)
+            .iter()
+            .all(|(_, _, active)| active.is_none()));
+    }
+    let snapshot = usage.codex.as_mut().unwrap();
+    snapshot.read_at_ms = now;
+    snapshot.windows.five_hour.as_mut().unwrap().resets_at = Some(now / 1000);
+    assert!(usage
+        .exhausted(now)
+        .iter()
+        .all(|(_, _, active)| active.is_none()));
+    usage
+        .codex
+        .as_mut()
+        .unwrap()
+        .windows
+        .five_hour
+        .as_mut()
+        .unwrap()
+        .resets_at = Some(now / 1000 + 300);
+    usage
+        .codex
+        .as_mut()
+        .unwrap()
+        .windows
+        .five_hour
+        .as_mut()
+        .unwrap()
+        .used_percent = 30.0;
+    assert!(usage
+        .exhausted(now)
+        .iter()
+        .any(|(_, _, active)| *active == Some(false)));
+}

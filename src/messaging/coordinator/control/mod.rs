@@ -234,6 +234,7 @@ impl Worker {
             | "settings.color_blind"
             | "settings"
             | "settings.room_sound"
+            | "settings.feishu_notifications"
             | "bus.quit"
             | "agent.read" => self.execute_inspect(method, p, events),
             "agent.details"
@@ -351,6 +352,13 @@ const fn spec(
 pub(crate) const METHODS: &[MethodSpec] = &[
     spec("state", "state", &[], false, Tier::Agent),
     spec("settings", "settings", &[], false, Tier::Agent),
+    spec(
+        "settings.feishu_notifications",
+        "settings feishu-notifications",
+        &["on"],
+        true,
+        Tier::Agent,
+    ),
     spec("room.create", "room create", &["name"], true, Tier::Agent),
     spec(
         "room.rename",

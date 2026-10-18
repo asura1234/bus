@@ -62,12 +62,16 @@ impl Worker {
 
     /// Codex writes rate limits into its rollout after each turn. Usage is
     /// advisory: a failed read keeps the previous snapshot and never errors.
-    pub(super) fn refresh_codex_usage(&mut self, id: AgentId, path: &Path) {
-        match crate::agents::providers::codex::usage::read_codex_rollout(path) {
-            Ok(Some(windows)) => {
+    pub(in crate::messaging::coordinator) fn refresh_codex_usage(
+        &mut self,
+        id: AgentId,
+        path: &Path,
+    ) {
+        match crate::agents::providers::codex::usage::read_codex_observation(path) {
+            Ok(Some(observation)) => {
                 self.usage.codex = Some(crate::messaging::coordinator::usage::UsageSnapshot {
-                    windows,
-                    read_at_ms: crate::messaging::storage::io::now_ms(),
+                    windows: observation.windows,
+                    read_at_ms: observation.observed_at_ms,
                     observed_by_agent: id,
                 });
             }

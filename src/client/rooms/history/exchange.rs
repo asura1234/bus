@@ -58,7 +58,15 @@ impl History {
         let mut active_markdown = BTreeSet::new();
         for exchange in exchanges.into_values() {
             let prompt = exchange.prompt;
-            self.push_prompt_lines(&mut lines, &mut active_markdown, state, prompt, width, now);
+            self.push_prompt_lines(
+                &mut lines,
+                &mut active_markdown,
+                state,
+                room.id,
+                prompt,
+                width,
+                now,
+            );
             push_prompt_files(&mut lines, prompt, width, thumbnails);
 
             self.push_reply_lines(
@@ -94,6 +102,7 @@ impl History {
         lines: &mut Vec<Line>,
         active_markdown: &mut BTreeSet<MarkdownSource>,
         state: &BusState,
+        room: RoomId,
         prompt: &Prompt,
         width: u16,
         now: u64,
@@ -128,6 +137,13 @@ impl History {
         if prompt.recipient_ids.is_empty() {
             header.push(("You".into(), Tone::You));
         }
+        let attention = state
+            .is_developer_attention_author(room, &prompt.author)
+            .then(|| crate::messaging::attention::text(&prompt.text))
+            .flatten();
+        if attention.is_some() {
+            header.push(("  [Needs developer]".into(), Tone::Text));
+        }
         header.push((
             format!("  {}", timestamp(prompt.submitted_at_ms, now)),
             Tone::Muted,
@@ -141,7 +157,7 @@ impl History {
         let prompt_source = MarkdownSource::Prompt(prompt.id);
         active_markdown.insert(prompt_source);
         let scope = link_scope(state, &prompt.author);
-        let block = self.markdown_block(prompt_source, &prompt.text);
+        let block = self.markdown_block(prompt_source, attention.unwrap_or(&prompt.text));
         let cold = !block.is_laid_out(width);
         lines.extend(super::wrapped_links::scoped_lines(
             block.lines(
@@ -214,10 +230,18 @@ impl History {
                 )));
             }
             replied = true;
-            let reply_header = vec![
+            let attention = state
+                .is_developer_attention_author(room.id, &Author::Agent(*agent_id))
+                .then(|| crate::messaging::attention::text(text))
+                .flatten();
+            let mut reply_header = vec![
                 (agent.name.clone(), Tone::Agent(agent.id)),
                 (format!("  {}", provider(agent.provider)), Tone::Muted),
             ];
+            if attention.is_some() {
+                reply_header.push(("  [Needs developer]".into(), Tone::Text));
+            }
+            let text = attention.unwrap_or(text);
             lines.extend(wrap_header(
                 reply_header,
                 width,

@@ -1,4 +1,5 @@
 //! Client commands for an already running Bus instance.
+mod feishu;
 mod interrupt;
 mod parse;
 mod wait;
@@ -110,6 +111,9 @@ fn run_with_pause(
     let response = match parse(args, &request_id) {
         Ok(command) if command.method == "agent.interrupt" => {
             interrupt::run(command, send, &mut pause)
+        }
+        Ok(command) if command.method == "settings.feishu_notifications" => {
+            feishu::run(command, send, &mut pause)
         }
         Ok(command) => {
             let follow = command.follow;

@@ -1,6 +1,6 @@
 # Feishu notifications for developer attention
 
-**状态**：review-plan-complete
+**状态**：plan-execution-complete
 **作者**：dylanliu8949
 **创建日期**：2026-10-18
 **基于提交**：a083dee0
@@ -253,7 +253,7 @@ A private authenticated-self type prevents any caller from providing a recipient
 
 ### 任务1：Deliver the self-only developer-attention notification path
 
-- [ ] **完成**
+- [x] **完成**
 - **目标**：The agreed notification behavior, runtime settings, mechanical sources and MASTER badge work together and are verified without touching live Bus or real Feishu.
 - **拥有文件**：`src/messaging/`, `src/client/rooms/`, `src/client/compositor/tests/compositor_test.rs`, `src/cli/`, `src/terminal/state/`, `src/server/api/`, `src/protocol/api/schema/`, `src/agents/providers/codex/`, `src/devtools/tui/`, `tests/`, `tools/acceptance/`, `orchestration/`, `Cargo.toml`, `Cargo.lock`, `README.md`, `docs/bus-architecture.md`, `docs/tui-driver.md`, `plans/2026-10-18-feishu-notify.md`
 - **blocked-by**：无
@@ -265,6 +265,15 @@ A private authenticated-self type prevents any caller from providing a recipient
 - **验收闸门**：[TASK_LOCAL] Every new feature test in every owner includes `feishu_` or `developer_attention_` in its name; the dev-tools raw-reply directive test specifically uses the feishu_ prefix. `cargo test --locked --bin bus feishu_` and `cargo test --locked --bin bus developer_attention_` plus `cargo test --locked --features dev-tools --bin bus feishu_` run those exact newly added cases and pass (record names/counts, not merely nonzero existing tests). Regenerate with `BUS_UPDATE_API_SCHEMA=1 cargo test --locked --bin bus generated_protocol_schema_artifact_is_current`, then verify with the same command without that environment variable. Build the dev driver with `./run tui list`, then `python3 tools/acceptance/feishu_notify_test.py --binary target/tui-driver/debug/bus --run-name e2e-1` passes all scratch cases. Each command sets explicit worktree-local CARGO_TARGET_DIR and CARGO_INCREMENTAL=0; the runner also invokes CLI toggles without --dev against its scratch target.
 
 Execution evidence and deviations will be appended here; source/test checks are sequential because they exercise one coupled state/delivery boundary.
+
+Execution notes (2026-10-18):
+- TDD evidence is retained under `temp/feishu-notify/`: real assertion REDs cover default settings/CLI/badge/durable state, auth parsing, subprocess lifecycle, self-only send, async runtime/delivery, mechanical latches/freshness/exit, original Codex timestamp, CLI auth waiting, the settings row, raw provider finals, retention, deleted quota observers, offline global enable generations, backlog visibility, quota-window recovery, toggle races and stall recovery. Corresponding focused GREEN logs name every case.
+- `cargo test --locked --bin bus feishu_` passed 38 cases; `developer_attention_` passed 5, and feature-enabled `feishu_` passed 39 (including the dev-tools raw-final case). The schema golden was regenerated and verified. Existing coordinator/settings compatibility regressions passed 190 cases. Final gate will revalidate the committed complete tree.
+- The runtime projection uses `BusEvent::FeishuStatusChanged` plus local UI state and the existing snapshot error, avoiding a new `BusSnapshot` constructor contract. It exposes effective/pending/error plus durable backlog/rate state.
+- A failing reopen test proved a shared boolean alone cannot distinguish ordinary restart from a global off/on cycle while a session was offline. The shared preference now carries an internal enable generation; successful explicit enable advances it and each session stores its baseline generation. Recipient identity remains private and never persisted/configurable. This closes the reviewed off-period baseline contract without expanding the product scope.
+- Fresh new quota reset windows retire the previous window's episode; positive Working observations re-arm later stall episodes. Unknown, missing and stale observations preserve latches. Retention prunes source guards with history and old agent/request episode keys.
+- Scratch harness setup failures and exploratory runs are retained; completed exploratory reports `e2e-harness-03/report.md` and `e2e-error-clear/report.md` are GREEN. Final acceptance is rerun on the complete candidate before gate/review and again on final PR head before merge. Real Feishu receipt/phone alerts remain unrun; no real messages were sent.
+- Complete-candidate scratch acceptance `temp/feishu-notify/e2e-1/report.md` passed all six steps; the checkbox, explicit-message/final/Bus badges were visually inspected, and the scratch session was stopped. The existing 15-second error toast is allowed to expire before screenshot capture. Gate/review/final-head acceptance remain the authorized delivery steps after this task-local completion.
 
 ## 测试计划
 

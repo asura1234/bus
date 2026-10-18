@@ -177,7 +177,19 @@ fn cold_resume_rejects_foreign_missing_and_ambiguous_ownership() {
             Some("terminal"),
             "{case}"
         );
-        assert_eq!(*calls.lock().unwrap(), vec!["agent.list"], "{case}");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["agent.list", "pane.get"],
+            "{case}"
+        );
+        assert_eq!(
+            worker
+                .state
+                .notices(worker.state.master_room().unwrap().id)
+                .count(),
+            0,
+            "unknown exit evidence must not notify: {case}"
+        );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }

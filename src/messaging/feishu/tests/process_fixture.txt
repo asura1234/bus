@@ -1,0 +1,29 @@
+#!/usr/bin/python3
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+root = Path(__file__).resolve().parent
+(root / "called").write_text("called")
+mode = sys.argv[1]
+(root / "stage").write_text("started " + mode)
+if mode == "grandchild":
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(root)])
+    (root / "grandchild.pid").write_text(str(child.pid))
+    time.sleep(60)
+elif mode == "oversize":
+    (root / "stage").write_text("before large stdout")
+    print("x" * 70000)
+elif mode == "error":
+    print("DO_NOT_LEAK_STDOUT")
+    print("DO_NOT_LEAK_STDERR", file=sys.stderr)
+    sys.exit(2)
+elif mode == "malformed":
+    print("DO_NOT_LEAK_MALFORMED")
+else:
+    (root / "stage").write_text("before stdin read")
+    data = sys.stdin.read()
+    (root / "stage").write_text("after stdin read")
+    print(json.dumps({"args": sys.argv[1:], "stdin": data}))

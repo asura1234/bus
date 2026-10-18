@@ -25,6 +25,18 @@ pub(crate) struct UsageSnapshot {
     pub(crate) observed_by_agent: AgentId,
 }
 
+impl UsageSnapshot {
+    fn fresh(&self, now_ms: u64) -> bool {
+        self.read_at_ms > 0
+            && self.read_at_ms <= now_ms
+            && now_ms - self.read_at_ms < STALE_AFTER_MS
+    }
+
+    fn current_window(&self, window: &UsageWindow, now_ms: u64) -> bool {
+        self.fresh(now_ms) && window.resets_at.is_some_and(|at| at > now_ms / 1000)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
@@ -45,6 +57,36 @@ impl Default for Usage {
 }
 
 impl Usage {
+    pub(crate) fn exhausted(&self, now_ms: u64) -> Vec<(String, AgentId, Option<bool>)> {
+        let mut result = Vec::new();
+        for (provider, snapshot) in [("codex", &self.codex), ("claude", &self.claude)] {
+            let Some(snapshot) = snapshot else {
+                continue;
+            };
+            for (name, window) in [
+                ("five_hour", &snapshot.windows.five_hour),
+                ("weekly", &snapshot.windows.weekly),
+            ] {
+                let active = window
+                    .as_ref()
+                    .filter(|window| snapshot.current_window(window, now_ms))
+                    .map(|window| window.used_percent >= 100.0);
+                result.push((
+                    format!(
+                        "quota:{provider}:{name}:{}",
+                        window
+                            .as_ref()
+                            .and_then(|window| window.resets_at)
+                            .unwrap_or(0)
+                    ),
+                    snapshot.observed_by_agent,
+                    active,
+                ));
+            }
+        }
+        result
+    }
+
     pub(crate) fn state_json(&self) -> Value {
         json!({
             "claude": self.claude_json(bus_io::now_ms()),
@@ -66,10 +108,10 @@ impl Usage {
         let Some(snapshot) = &self.claude else {
             return unknown("No Claude status line has reported rate limits since Bus started");
         };
-        if snapshot.read_at_ms > now_ms || now_ms - snapshot.read_at_ms >= STALE_AFTER_MS {
+        if !snapshot.fresh(now_ms) {
             return unknown("Claude allowance observation is stale");
         }
-        let current = |w: &&UsageWindow| w.resets_at.is_none_or(|at| at > now_ms / 1000);
+        let current = |w: &&UsageWindow| snapshot.current_window(w, now_ms);
         let five_hour = snapshot.windows.five_hour.as_ref().filter(current);
         let weekly = snapshot.windows.weekly.as_ref().filter(current);
         if five_hour.is_none() && weekly.is_none() {

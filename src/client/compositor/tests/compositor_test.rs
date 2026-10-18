@@ -105,6 +105,7 @@ pub(in crate::client) fn pane_scroll_result(
 ) -> crate::protocol::api::schema::ResponseResult {
     crate::protocol::api::schema::ResponseResult::PaneInfo {
         pane: crate::protocol::api::schema::PaneInfo {
+            agent_process_exited: false,
             pane_id: "pane_1".into(),
             terminal_id: "terminal_1".into(),
             workspace_id: "ws_1".into(),

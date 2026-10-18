@@ -71,6 +71,15 @@ impl Transport for FakeTransport {
                 agent: native_info(&target.target, &agent, &session),
             });
         }
+        // New exit probes cannot consume a queued reply for an unrelated method.
+        if matches!(method, Method::PaneGet(_))
+            && !matches!(
+                self.replies.front(),
+                Some(Ok(ResponseResult::PaneInfo { .. }))
+            )
+        {
+            return Ok(ResponseResult::Ok {});
+        }
         self.replies
             .pop_front()
             .unwrap_or(Ok(ResponseResult::Ok {}))

@@ -130,6 +130,7 @@ pub(in crate::client) struct BusUi {
     pub(super) pending_line_continue: bool,
     pub(super) last_esc: Option<std::time::Instant>,
     pub(super) settings: crate::messaging::prefs::settings::BusSettings,
+    pub(super) feishu_status: crate::messaging::coordinator::attention::Status,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
     /// Settings focus: color blind mode, sound rows, the compaction limit,
@@ -228,6 +229,7 @@ impl BusUi {
             pending_line_continue: false,
             last_esc: None,
             settings: crate::messaging::prefs::settings::BusSettings::default(),
+            feishu_status: Default::default(),
             settings_path: None,
             settings_field: 0,
             settings_scroll: 0,
@@ -277,7 +279,21 @@ impl BusUi {
 
     /// The overlay row's Settings focus index, after the sidebar width.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings.then(|| self.sidebar_width_field() + 1)
+        self.dev_settings.then(|| self.feishu_field() + 1)
+    }
+
+    pub(super) fn feishu_field(&self) -> usize {
+        self.sidebar_width_field() + 1
+    }
+
+    pub(super) fn toggle_feishu_notifications(&mut self) {
+        self.settings_field = self.feishu_field();
+        self.queue(
+            BusCommand::SetFeishuNotifications(
+                !self.feishu_status.enabled && !self.feishu_status.pending,
+            ),
+            Effect::None,
+        );
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -321,6 +337,7 @@ impl BusUi {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
             BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
+            BusEvent::FeishuStatusChanged(status) => self.feishu_status = status,
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {

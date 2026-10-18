@@ -140,6 +140,11 @@ fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<
         "{} (agent {}). {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
         agent.name, id.0, id.0
     );
+    if state.is_developer_attention_author(agent.room_id, &Author::Agent(id)) {
+        return state
+            .post_developer_attention(id, &text, crate::messaging::storage::io::now_ms())
+            .map_err(|error| error.to_string());
+    }
     post_dialog_notice(state, id, open_dialog, text)
 }
 

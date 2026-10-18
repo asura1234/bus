@@ -49,6 +49,12 @@ command chooser until Enter. After input, it shows an approval acknowledgement
 inside a 350ms synchronized redraw, so post-answer dialog reads must retry.
 It never runs the displayed command and needs no permission handler.
 
+`fake:raw-reply TEXT` returns TEXT verbatim as the fake's final instead of
+prepending `fake reply:`. This tests prefixes such as developer attention.
+For Feishu tests, put a recording `lark-cli` on a closed inherited PATH
+containing only that fixture directory and system tools; never allow fallback
+to a real installed CLI. The Settings hit name is `feishu-notifications`.
+
 `fake:dialog-null` uses the same inert chooser with a captured Codex permission
 layout whose long second option soft-wraps at 80 columns. It exercises dialog
 observation and answering when a wrapped command includes a `>` continuation.

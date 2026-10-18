@@ -1,7 +1,9 @@
 pub(crate) mod attachments;
+pub(crate) mod attention;
 pub(crate) mod control;
 pub(crate) mod coordinator;
 pub(crate) mod diagnostics;
+pub(crate) mod feishu;
 pub(crate) mod model;
 pub(crate) mod native;
 pub(crate) mod orchestration;

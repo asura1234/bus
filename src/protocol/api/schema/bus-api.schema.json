@@ -539,6 +539,11 @@
                 "null"
               ]
             },
+            "agent_process_exited": {
+              "default": false,
+              "description": "Explicit native process-exit evidence, excluding automatic self-update restarts.",
+              "type": "boolean"
+            },
             "agent_session": {
               "anyOf": [
                 {
@@ -5194,6 +5199,11 @@
                 "string",
                 "null"
               ]
+            },
+            "agent_process_exited": {
+              "default": false,
+              "description": "Explicit native process-exit evidence, excluding automatic self-update restarts.",
+              "type": "boolean"
             },
             "agent_session": {
               "anyOf": [

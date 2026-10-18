@@ -23,7 +23,18 @@ pub(crate) fn codex_rollout_path(value: &Value) -> Option<&Path> {
 /// The newest `token_count` rate limits in a Codex rollout. The format is
 /// undocumented: windows are classified by duration because Codex may put
 /// the weekly window in either slot. `Ok(None)` means none were found.
-pub(crate) fn read_codex_rollout(path: &Path) -> std::io::Result<Option<UsageWindows>> {
+#[derive(Debug, PartialEq)]
+pub(crate) struct CodexUsage {
+    pub(crate) windows: UsageWindows,
+    pub(crate) observed_at_ms: u64,
+}
+
+#[cfg(test)]
+fn read_codex_rollout(path: &Path) -> std::io::Result<Option<UsageWindows>> {
+    Ok(read_codex_observation(path)?.map(|observation| observation.windows))
+}
+
+pub(crate) fn read_codex_observation(path: &Path) -> std::io::Result<Option<CodexUsage>> {
     Ok(read_rollout_tail(path)?
         .lines()
         .rev()
@@ -62,7 +73,7 @@ pub(crate) fn read_codex_turn_error(path: &Path, turn_id: &str) -> std::io::Resu
     }))
 }
 
-fn codex_rate_limits(line: &str) -> Option<UsageWindows> {
+fn codex_rate_limits(line: &str) -> Option<CodexUsage> {
     let event: Value = serde_json::from_str(line).ok()?;
     if event["type"] != "event_msg" || event["payload"]["type"] != "token_count" {
         return None;
@@ -90,7 +101,17 @@ fn codex_rate_limits(line: &str) -> Option<UsageWindows> {
             _ => {}
         }
     }
-    Some(windows)
+    let observed_at_ms = event["timestamp"]
+        .as_str()
+        .and_then(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+        })
+        .and_then(|at| u64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok())
+        .unwrap_or(0);
+    Some(CodexUsage {
+        windows,
+        observed_at_ms,
+    })
 }
 
 #[cfg(test)]

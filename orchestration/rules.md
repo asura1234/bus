@@ -22,6 +22,17 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   output does not count. *Why:* the developer follows the work from MASTER, so
   progress, questions and blockers must reach it; routine details there bury
   them, and the work room keeps them.
+- **Tag developer attention only when work waits on the developer.** Start
+  the MASTER message with `[needs_developer_attention]` when the developer
+  must act or decide: answer a blocking question, choose a target, grant an
+  approval, or resolve a blocker you cannot handle. State the required action
+  and what is waiting. A final reply qualifies only when the developer's
+  MASTER message started the turn. Otherwise explicitly post
+  `bus send --room master --as YOUR_NAME --to human --text "[needs_developer_attention] ..."`.
+  Routine progress, completed milestones and approvals you can handle stay
+  untagged. Workers report through their orchestrator and never use this tag.
+  Bus renders it as a badge and, when enabled, forwards it to the developer's
+  own Feishu account.
 - **Write your chat messages in Markdown.** Every message you post, in MASTER
   or a room, uses Markdown formatting. *Why:* structure and links make a
   message faster for the developer to read and act on.

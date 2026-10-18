@@ -35,6 +35,39 @@ fn queued_sound(ui: &BusUi) -> Vec<(RoomId, bool)> {
 }
 
 #[test]
+fn feishu_settings_row_is_off_then_pending_then_effective_and_keyboard_toggles() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    assert!(settings_rows(&mut ui, 40)
+        .iter()
+        .any(|row| row.contains("[ ] Feishu notifications")));
+    ui.receive_event(BusEvent::FeishuStatusChanged(
+        crate::messaging::coordinator::attention::Status {
+            pending: true,
+            ..Default::default()
+        },
+    ));
+    assert!(settings_rows(&mut ui, 40)
+        .iter()
+        .any(|row| row.contains("checking authentication")));
+    ui.receive_event(BusEvent::FeishuStatusChanged(
+        crate::messaging::coordinator::attention::Status {
+            enabled: true,
+            ..Default::default()
+        },
+    ));
+    assert!(settings_rows(&mut ui, 40)
+        .iter()
+        .any(|row| row.contains("[x] Feishu notifications")));
+    ui.settings_field = ui.feishu_field();
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::SetFeishuNotifications(false))));
+}
+
+#[test]
 fn settings_lists_master_sound_above_every_work_room() {
     let (mut ui, _, _) = sound_fixture(2);
     ui.action(render::Action::Settings);
@@ -91,7 +124,7 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     assert_eq!(ui.settings_field, 6);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 6);
+    assert_eq!(ui.settings_field, 7);
     assert!(!ui.settings.color_blind_mode);
 }
 
@@ -788,12 +821,12 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
     );
     // Color blind, MASTER, All rooms, one room, compactions, sidebar width,
     // then the overlay.
-    for _ in 0..6 {
+    for _ in 0..7 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    assert_eq!(ui.settings_field, 6);
+    assert_eq!(ui.settings_field, 7);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 6, "the overlay row is the last field");
+    assert_eq!(ui.settings_field, 7, "the overlay row is the last field");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(crate::client::perf::OVERLAY.is_on());
     let rows = settings_rows(&mut ui, 40);

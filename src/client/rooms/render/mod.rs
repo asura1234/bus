@@ -57,6 +57,7 @@ pub(super) enum Action {
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
+    ToggleFeishuNotifications,
     /// Dev builds only: the live performance overlay.
     TogglePerfOverlay,
     ToggleSound(SoundTarget),
@@ -148,6 +149,9 @@ pub(super) enum SoundTarget {
 
 /// One row of the Settings form's sound-notification list.
 pub(super) enum SoundSettingsLine {
+    Feishu {
+        field: usize,
+    },
     Heading(&'static str),
     Empty(&'static str),
     /// `field` is the row's Settings focus index; color blind mode is field 0.

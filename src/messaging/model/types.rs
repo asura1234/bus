@@ -169,6 +169,8 @@ pub(crate) struct Prompt {
     /// Render a code-driven compaction notice as one plain chat line.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) compaction_limit_notice: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) attention_origin: Option<super::AttentionOrigin>,
 }
 
 fn developer_author() -> Author {
@@ -220,9 +222,8 @@ pub(crate) struct Room {
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
-    /// Agent messages to the developer (`post_to_developer`); they have no recipients.
-    /// Bus is not an agent and never posts here: notices older versions saved
-    /// as "Bus" are dropped on load.
+    /// Messages to the developer with no agent recipients, including typed
+    /// Bus attention notices. Untyped legacy Bus notices are dropped on load.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
@@ -714,7 +715,11 @@ where
     D: serde::Deserializer<'de>,
 {
     let mut notices = Vec::<Prompt>::deserialize(deserializer)?;
-    notices.retain(|notice| notice.author != Author::Bus);
+    notices.retain(|notice| {
+        notice.author != Author::Bus
+            || (notice.attention_origin.is_some()
+                && crate::messaging::attention::text(&notice.text).is_some())
+    });
     Ok(notices)
 }
 
