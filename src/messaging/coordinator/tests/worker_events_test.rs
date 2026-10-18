@@ -1154,3 +1154,6 @@ fn handled_old_idle_episodes_expire_only_after_new_work_supersedes_them() {
     assert_eq!(f.notices().len(), 1);
     assert_eq!(f.calls.lock().unwrap().len(), 1);
 }
+
+#[path = "worker_event_waiter_overlap_test.rs"]
+mod waiter_overlap;

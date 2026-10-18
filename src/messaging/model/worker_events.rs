@@ -225,6 +225,7 @@ impl BusState {
             let idle_since = request.turn_ended_at_ms.unwrap_or(agent.status_since_ms);
             let idle = self.reply_orchestrator(&request).is_some()
                 && !request.settled()
+                && !self.settling(&request)
                 && agent.shown_status() == RuntimeStatus::Idle
                 && !agent.dialog
                 && agent.status_revision > agent.busy_revision
