@@ -19,6 +19,16 @@ impl Worker {
         &mut self,
         mut can_deliver: impl FnMut() -> bool,
     ) -> Result<(), String> {
+        self.reply_waiters
+            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(3));
+        let waited = self.reply_waiters.keys().copied().collect();
+        let mut state = self.state.clone();
+        if state
+            .route_worker_replies(super::io::now_ms(), &waited)
+            .map_err(|e| e.to_string())?
+        {
+            self.save(state)?;
+        }
         self.expire_queued_now()?;
         self.delivery_waits
             .retain(|id, _| self.state.agent(*id).is_some());

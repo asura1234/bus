@@ -138,6 +138,7 @@ const SAMPLES: &[&[&str]] = &[
     &["agent", "delete", "a", "--confirm"],
     &["send", "--room", "r", "--to", "a", "--text", "t"],
     &["message", "status", "1"],
+    &["message", "seen", "1", "--as", "orch"],
     &["request", "recover", "1", "--confirm"],
     &["room", "focus", "r"],
     &["room", "seen", "r"],

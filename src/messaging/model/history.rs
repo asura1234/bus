@@ -140,7 +140,12 @@ impl super::BusState {
         let moved = self.archive_settled(now_ms.saturating_sub(ARCHIVE_AFTER_MS));
         let expired = self.drop_history_before(now_ms.saturating_sub(HISTORY_RETENTION_MS));
         let spent = self.drop_spent_ids(now_ms);
-        moved | expired | spent
+        let routes = self.reply_routes.len();
+        let retained: std::collections::BTreeSet<_> = self.requests().map(|r| r.id).collect();
+        self.reply_routes.retain(|id, notice| {
+            retained.contains(id) || notice.is_some_and(|notice| retained.contains(&notice))
+        });
+        moved | expired | spent | (routes != self.reply_routes.len())
     }
 
     /// Settled requests no agent, queue or open group refers to, and notices,
@@ -202,23 +207,33 @@ impl super::BusState {
     }
 
     fn drop_history_before(&mut self, cutoff: u64) -> bool {
-        self.drop_history_where(|_, _, settled_at_ms| settled_at_ms < cutoff)
+        // A queued wake still owns its original reply, including the full text
+        // behind a long-reply pointer. Ordinary history retention must not erase
+        // it while the orchestrator's terminal remains unavailable.
+        let pinned: std::collections::BTreeSet<_> = self
+            .requests()
+            .filter(|r| self.reply_delivery_pending(r))
+            .map(|r| r.id)
+            .collect();
+        self.drop_history_where(|_, _, at, id| {
+            at < cutoff && id.is_none_or(|id| !pinned.contains(&id))
+        })
     }
 
     /// Drops a deleted room's archived requests and notices.
     pub(super) fn drop_history_of_room(&mut self, room: RoomId) {
-        self.drop_history_where(|of, _, _| of == room);
+        self.drop_history_where(|of, _, _, _| of == room);
     }
 
     /// Drops a deleted agent's archived requests.
     pub(super) fn drop_history_of_agent(&mut self, agent: super::AgentId) {
-        self.drop_history_where(|_, of, _| of == Some(agent));
+        self.drop_history_where(|_, of, _, _| of == Some(agent));
     }
 
     /// Drops archived items for which `drop(room, request agent, settled at)` holds.
     fn drop_history_where(
         &mut self,
-        drop: impl Fn(RoomId, Option<super::AgentId>, u64) -> bool,
+        drop: impl Fn(RoomId, Option<super::AgentId>, u64, Option<RequestId>) -> bool,
     ) -> bool {
         let requests: Vec<RequestId> = self
             .history
@@ -229,6 +244,7 @@ impl super::BusState {
                     request.room_id,
                     Some(request.agent_id),
                     settled_at_ms(request),
+                    Some(request.id),
                 )
             })
             .map(|request| request.id)
@@ -240,7 +256,7 @@ impl super::BusState {
             .flat_map(|(room, notices)| {
                 notices
                     .values()
-                    .filter(|prompt| drop(*room, None, prompt.submitted_at_ms))
+                    .filter(|prompt| drop(*room, None, prompt.submitted_at_ms, None))
                     .map(|prompt| (*room, prompt.id))
             })
             .collect();

@@ -28,6 +28,9 @@ pub(super) struct Worker {
     /// Each agent's latest dialog wait and how many polls it has held.
     pub(super) dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     pub(super) delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    /// Author waiters renew these leases without acknowledging any reply.
+    /// A dead waiter cannot hold routing across restart or lease expiry.
+    pub(super) reply_waiters: BTreeMap<super::PromptId, std::time::Instant>,
     /// When each agent's provider last failed to show a pasted prompt, which
     /// the server then withdrew; the retry waits `PROMPT_NOT_SHOWN_RETRY`.
     pub(super) withdrawn_at: BTreeMap<AgentId, std::time::Instant>,
@@ -110,6 +113,7 @@ impl Worker {
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
+            reply_waiters: BTreeMap::new(),
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
             dev_enabled: false,

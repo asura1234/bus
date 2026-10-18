@@ -247,7 +247,7 @@ impl Worker {
             "agent.dialog.observe" | "agent.dialog.choose" | "agent.dialog.answer" => {
                 self.execute_dialogs(method, p, events)
             }
-            "message.send" | "message.status" | "request.recover" => {
+            "message.send" | "message.status" | "message.seen" | "request.recover" => {
                 self.execute_messages(method, p, events)
             }
             #[cfg(feature = "dev-tools")]
@@ -465,8 +465,15 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "message.status",
         "message status",
-        &["message"],
+        &["message", "as"],
         false,
+        Tier::Agent,
+    ),
+    spec(
+        "message.seen",
+        "message seen",
+        &["request", "as"],
+        true,
         Tier::Agent,
     ),
     spec(

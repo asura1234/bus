@@ -4,6 +4,9 @@ pub(crate) mod attention;
 mod delivery;
 mod expiry;
 mod poll;
+#[cfg(test)]
+#[path = "tests/reply_routing_test.rs"]
+mod reply_routing_tests;
 mod startup;
 mod storage;
 mod worker;

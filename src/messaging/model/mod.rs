@@ -6,6 +6,7 @@ mod compactions;
 mod history;
 mod interrupts;
 mod recovery;
+mod reply_routing;
 mod requests;
 mod rooms;
 mod settlement;
