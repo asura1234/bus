@@ -180,17 +180,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
             follow = send_follow;
             ("message.send", params)
         }
-        "message" => match args.subcommand() {
-            Some(("status", args)) => (
-                "message.status",
-                json!({"message": required(args, "message")?}),
-            ),
-            Some(("seen", args)) => (
-                "message.seen",
-                json!({"request":required(args,"request")?,"as":required(args,"as")?}),
-            ),
-            _ => return Err("unknown message command".into()),
-        },
+        "message" => parse_message(args)?,
         "request" => match args.subcommand() {
             Some(("recover", args)) => (
                 "request.recover",
@@ -231,6 +221,20 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         wait_for_message: name == "wait",
         follow,
     })
+}
+
+fn parse_message(args: &ArgMatches) -> Result<(&'static str, Value), String> {
+    match args.subcommand() {
+        Some(("status", args)) => Ok((
+            "message.status",
+            json!({"message": required(args, "message")?}),
+        )),
+        Some(("seen", args)) => Ok((
+            "message.seen",
+            json!({"request":required(args,"request")?,"as":required(args,"as")?}),
+        )),
+        _ => Err("unknown message command".into()),
+    }
 }
 
 fn room_cli() -> Command {
