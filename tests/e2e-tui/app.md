@@ -135,7 +135,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** fresh scratch session at 120×40, default sidebar width 28; R(`qa-header-界界界界界界界界界界界界界界界界界界界界`). No workers required.
 
 1. Click MASTER → agents header is exactly `# MASTER`, with one space; its hash and name foregrounds match the room rows and its `+` stays at the right edge. Click the long work room → header starts `# qa-header-`, truncates with `…` before a blank gap and the `+`, and stays on one row.
-2. Open Settings and click `Sidebar width (20–60)`; press Right three times → 31. Close Settings → divider and both `+` controls move three columns right, the long header has more room, and its single space/style/gap remain correct. Reopen Settings → 31 persists.
+2. Open Settings and move with Down to `Sidebar width (20–60)`; press Right three times → 31. Close Settings → divider and both `+` controls move three columns right, the long header has more room, and its single space/style/gap remain correct. Reopen Settings → 31 persists.
 3. Press Left eleven times → 20; close Settings → header still truncates before its blank gap and right-edge `+`; click that `+` → the Add agent form opens, then Esc closes it without creating an agent.
 4. Reopen Settings, select the width row and press Right forty times → 60. Resize to 180×40 and close Settings → width is 60, long header stays within the sidebar with its `+` at the right edge. Resize to 60×40 → width caps at 20; header, divider and `+` remain separated. Click the agents `+`, verify the form opens, then Esc.
 
