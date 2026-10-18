@@ -1,6 +1,7 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 mod exchange;
 mod markdown;
+mod wrapped_links;
 
 use super::render::Action;
 use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
@@ -53,6 +54,8 @@ pub(super) struct Line {
 #[derive(Clone)]
 pub(super) struct LinkScope {
     pub cwd: Option<Arc<std::path::Path>>,
+    /// Complete source tokens projected onto this row after wrapping.
+    pub wrapped: Vec<super::links::Candidate>,
 }
 
 #[derive(Clone)]

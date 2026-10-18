@@ -63,6 +63,216 @@ fn is_link(buffer: &ratatui::buffer::Buffer, (column, row): (u16, u16)) -> bool 
     cell.fg == LINK_FG && cell.modifier.contains(Modifier::UNDERLINED)
 }
 
+fn wrapped_url() -> String {
+    format!(
+        "https://example.feishu.cn/docx/SyntheticWrappedDocument?from=bus&login_token={}&view=full",
+        "synthetic0123456789".repeat(12)
+    )
+}
+
+/// Every displayed cell of a wrapped token, grouped by row. The following
+/// word deliberately shares its last row when there is room.
+fn wrapped_cells(ui: &BusUi, target: &str) -> Vec<Vec<(u16, u16)>> {
+    use unicode_width::UnicodeWidthStr;
+    let mut joined = String::new();
+    let mut cells = Vec::new();
+    for (index, line) in ui
+        .history
+        .cached()
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_reply(line))
+    {
+        let body = &line.text[line.copy_from..];
+        let fragment = body.split(" AFTER").next().unwrap();
+        if fragment == "AFTER" || fragment.is_empty() {
+            continue;
+        }
+        joined.push_str(fragment);
+        let x = ui.view.history_text.x + line.text[..line.copy_from].width() as u16;
+        let y = ui.view.history_text.y + (index - ui.main_scroll) as u16;
+        cells.push(
+            (0..fragment.width() as u16)
+                .map(|offset| (x + offset, y))
+                .collect(),
+        );
+    }
+    assert_eq!(
+        joined, target,
+        "the renderer split this token without changing it"
+    );
+    assert!(cells.len() >= 3, "fixture must span several rows");
+    cells
+}
+
+#[test]
+fn wrapped_url_styles_every_fragment_and_leaves_following_text_plain() {
+    let (mut ui, room, agent) = fixture();
+    let url = wrapped_url();
+    saved_exchange(&mut ui, room, agent, "go", &format!("{url} AFTER"));
+    let buffer = settled_screen(&mut ui);
+    for row in wrapped_cells(&ui, &url) {
+        for at in row {
+            assert!(
+                is_link(&buffer, at),
+                "wrapped URL cell {at:?} must be a link"
+            );
+        }
+    }
+    let after = locate(&ui, "AFTER");
+    assert!(!is_link(&buffer, after));
+    assert_eq!(opened(&click(&mut ui, after)), None);
+}
+
+#[test]
+fn wrapped_url_click_on_every_row_opens_the_whole_target() {
+    let (mut ui, room, agent) = fixture();
+    let url = wrapped_url();
+    saved_exchange(&mut ui, room, agent, "go", &format!("{url} AFTER"));
+    settled_screen(&mut ui);
+    for row in wrapped_cells(&ui, &url) {
+        assert_eq!(
+            opened(&click(&mut ui, row[row.len() / 2])),
+            Some(url.clone())
+        );
+    }
+}
+
+#[test]
+fn wrapped_existing_path_styles_and_opens_every_fragment() {
+    let dir = scratch("wrapped");
+    let doc = dir.join(format!("{}.md", "synthetic-document-".repeat(11)));
+    std::fs::write(&doc, "wrapped path").unwrap();
+    let target = doc.display().to_string();
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(&mut ui, room, agent, "go", &format!("`{target}` AFTER"));
+    let buffer = settled_screen(&mut ui);
+    for row in wrapped_cells(&ui, &target) {
+        for &at in &row {
+            assert!(
+                is_link(&buffer, at),
+                "wrapped path cell {at:?} must be a link"
+            );
+        }
+        assert_eq!(
+            opened(&click(&mut ui, row[row.len() / 2])),
+            Some(target.clone())
+        );
+    }
+    let after = locate(&ui, "AFTER");
+    assert!(!is_link(&buffer, after));
+    assert_eq!(opened(&click(&mut ui, after)), None);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn wrapped_links_keep_targets_in_prompts_code_lists_and_after_resize() {
+    let url = wrapped_url();
+    for body in [
+        format!("{url} AFTER"),
+        format!("**See** `{url}` AFTER"),
+        format!("```text\n{url} AFTER\n```"),
+        format!("- {url} AFTER"),
+    ] {
+        let (mut ui, room, agent) = fixture();
+        saved_exchange(&mut ui, room, agent, &body, &body);
+        for width in [120, 100] {
+            ui.compute_view(width, 40);
+            let mut buffer =
+                ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, width, 40));
+            ui.render(&mut buffer);
+            let hits = ui.view.history_links.clone();
+            assert!(hits.len() >= 6, "prompt and reply both wrap: {body}");
+            for (rect, target) in hits {
+                assert_eq!(target, links::Target::Url(url.clone()));
+                assert!(is_link(&buffer, (rect.x, rect.y)));
+                assert!(is_link(&buffer, (rect.right() - 1, rect.y)));
+                assert_eq!(opened(&click(&mut ui, (rect.x, rect.y))), Some(url.clone()));
+            }
+        }
+    }
+}
+
+#[test]
+fn wrapped_links_do_not_join_hard_lines_or_same_target_occurrences() {
+    let url = wrapped_url();
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "go",
+        &format!("https://example.test/short\n\nAFTER\n\n{url} AFTER {url} AFTER"),
+    );
+    let buffer = settled_screen(&mut ui);
+    let short = locate(&ui, "https://example.test/short");
+    assert_eq!(
+        opened(&click(&mut ui, short)),
+        Some("https://example.test/short".into())
+    );
+    for (index, line) in ui
+        .history
+        .cached()
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_reply(line))
+    {
+        for (offset, _) in line.text.match_indices("AFTER") {
+            use unicode_width::UnicodeWidthStr;
+            let at = (
+                ui.view.history_text.x + line.text[..offset].width() as u16,
+                ui.view.history_text.y + (index - ui.main_scroll) as u16,
+            );
+            assert!(!is_link(&buffer, at), "following text must stay plain");
+            assert!(ui
+                .view
+                .history_links
+                .iter()
+                .all(|(rect, _)| !rect.contains(at.into())));
+        }
+    }
+}
+
+#[test]
+fn wrapped_quoted_path_includes_spaces_and_keeps_the_author_base() {
+    let dir = scratch("quoted-wrap");
+    let name = format!("{}report with space.txt", "synthetic-folder-".repeat(10));
+    let path = dir.join(&name);
+    std::fs::write(&path, "quoted wrapped path").unwrap();
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let agent = snapshot
+        .state
+        .create_agent(room, "worker", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "go",
+        &format!("\"./{name}:12:3\" AFTER"),
+    );
+    let buffer = settled_screen(&mut ui);
+    let expected = dir.join(format!("./{name}"));
+    let hits = ui.view.history_links.clone();
+    assert!(hits.len() >= 3);
+    for (rect, target) in hits {
+        assert_eq!(target, links::Target::Path(expected.clone()));
+        for x in rect.x..rect.right() {
+            assert!(is_link(&buffer, (x, rect.y)));
+        }
+        assert_eq!(
+            opened(&click(&mut ui, (rect.x, rect.y))),
+            Some(expected.display().to_string())
+        );
+    }
+    let after = locate(&ui, "AFTER");
+    assert!(!is_link(&buffer, after));
+    assert_eq!(opened(&click(&mut ui, after)), None);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn attachments_read_as_links_without_brackets_and_open_on_click() {
     let dir = scratch("attachment");
@@ -311,4 +521,73 @@ fn dragging_within_a_picture_does_not_open_it() {
     ));
     std::fs::remove_dir_all(dir).unwrap();
     assert_eq!(opened(&all), None, "a thumbnail drag is not a click");
+}
+
+/// Every reply row that shows part of the wrapped URL has a hit, every hit
+/// opens the complete URL, and the following word stays plain.
+fn assert_wrapped_reply_url_links_on_every_row(body: &str) {
+    let (mut ui, room, agent) = fixture();
+    let url = wrapped_url();
+    saved_exchange(&mut ui, room, agent, "go", &body.replace("{url}", &url));
+    let buffer = settled_screen(&mut ui);
+    let hits = ui.view.history_links.clone();
+    let mut rows = 0;
+    for (index, line) in ui
+        .history
+        .cached()
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_reply(line))
+    {
+        if !(line.text.contains("https://example.feishu") || line.text.contains("synthetic")) {
+            continue;
+        }
+        rows += 1;
+        let y = ui.view.history_text.y + (index - ui.main_scroll) as u16;
+        assert!(
+            hits.iter().any(|(rect, _)| rect.y == y),
+            "{body}: row {:?} has no link",
+            line.text
+        );
+    }
+    assert!(rows >= 3, "{body}: fixture must wrap over several rows");
+    for (rect, target) in hits {
+        assert_eq!(target, links::Target::Url(url.clone()), "{body}");
+        assert!(is_link(&buffer, (rect.x, rect.y)), "{body}");
+        assert_eq!(opened(&click(&mut ui, (rect.x, rect.y))), Some(url.clone()));
+    }
+    let after = locate(&ui, "AFTER");
+    assert!(!is_link(&buffer, after), "{body}: following text is plain");
+}
+
+#[test]
+fn wrapped_url_after_cjk_text_and_fullwidth_colon_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("请打开飞书文档链接：{url} AFTER");
+}
+
+#[test]
+fn wrapped_url_in_a_block_quote_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("> {url} AFTER");
+}
+
+#[test]
+fn wrapped_url_in_a_numbered_list_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("1. 文档\n2. {url} AFTER");
+}
+
+#[test]
+fn wrapped_url_after_a_markdown_link_to_the_same_target_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("见[文档]({url})，原链接 {url} AFTER");
+}
+
+#[test]
+fn wrapped_url_in_a_stacked_table_cell_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row(
+        "| 名称 | 链接 |\n|---|---|\n| 文档 | {url} |\n\nAFTER",
+    );
+}
+
+#[test]
+fn wrapped_url_label_of_a_markdown_link_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("[{url}]({url}) AFTER");
 }

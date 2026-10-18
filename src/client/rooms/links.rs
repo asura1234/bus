@@ -366,7 +366,25 @@ pub(super) fn visible_links<'a>(
 ) -> Vec<Vec<Candidate>> {
     rows.map(|line| {
         line.links.as_ref().map_or_else(Vec::new, |scope| {
-            row_links(probe, &line.text, line.copy_from, scope.cwd.as_deref())
+            let mut links = row_links(probe, &line.text, line.copy_from, scope.cwd.as_deref());
+            // A partial token must never retain its truncated target, even
+            // while the complete path's existence check is still pending.
+            links.retain(|link| {
+                !scope.wrapped.iter().any(|full| {
+                    link.range.start < full.range.end && full.range.start < link.range.end
+                })
+            });
+            links.extend(
+                scope
+                    .wrapped
+                    .iter()
+                    .filter(|link| match &link.target {
+                        Target::Url(_) => true,
+                        Target::Path(path) => probe.exists(path) == Some(true),
+                    })
+                    .cloned(),
+            );
+            links
         })
     })
     .collect()
