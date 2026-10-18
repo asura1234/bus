@@ -1,4 +1,5 @@
 //! One host-output owner. Producers retain semantic frames, never encoded diffs.
+mod metrics;
 mod queue;
 mod routing;
 #[cfg(test)]
@@ -9,6 +10,7 @@ use crate::protocol::{
     ansi::{frame_with_drawn_cursor, BlitEncoder},
     wire::{CursorState, FrameData, PaneSurfacePatchRow},
 };
+use metrics::OutputMetrics;
 use queue::{Command, Frame, Handle, Patch, Shared};
 pub(in crate::client) use routing::{busy, stdout, suspend};
 use std::{
@@ -32,7 +34,14 @@ impl TerminalOutput {
     }
 
     fn with_writer(writer: impl Write + Send + 'static) -> io::Result<Self> {
-        let handle = Handle(Arc::new(Shared::default()));
+        Self::with_metrics(writer, &metrics::OUTPUT)
+    }
+
+    fn with_metrics(
+        writer: impl Write + Send + 'static,
+        metrics: &'static OutputMetrics,
+    ) -> io::Result<Self> {
+        let handle = Handle(Arc::new(Shared::new(metrics)));
         let owner = handle.clone();
         let worker = std::thread::Builder::new()
             .name("host-output".into())
@@ -159,7 +168,13 @@ fn run(mut writer: impl Write, handle: &Handle) {
     let mut sequence = 0;
     while let Some(command) = handle.next() {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            write_command(&mut writer, &mut encoder, &mut sequence, &command.command)
+            write_command(
+                &mut writer,
+                &mut encoder,
+                &mut sequence,
+                &command.command,
+                handle.0.metrics,
+            )
         }))
         .unwrap_or_else(|_| Err(io::Error::other("host output owner panicked")));
         handle.complete(command, result);
@@ -171,6 +186,7 @@ fn write_command(
     encoder: &mut BlitEncoder,
     sequence: &mut u64,
     command: &Command,
+    metrics: &'static OutputMetrics,
 ) -> io::Result<Option<bool>> {
     match command {
         Command::Frame(request) => {
@@ -180,12 +196,13 @@ fn write_command(
                     .as_ref()
                     .filter(|patch| patch.base == *sequence)
                 {
-                    if write_patch(writer, encoder, patch, request.drawn_cursor)? {
+                    if write_patch(writer, encoder, patch, request.drawn_cursor, metrics)? {
                         *sequence = request.sequence;
                         return Ok(Some(false));
                     }
                 }
             }
+            let encode = metrics.frame.encode.start();
             if request.invalidate {
                 encoder.invalidate();
             }
@@ -200,12 +217,24 @@ fn write_command(
             } else {
                 encoder.encode(&frame, request.repaint)
             };
-            super::frame_output::write_encoded_frame_with_graphics(
-                &mut *writer,
-                &encoded.bytes,
-                &frame.graphics,
-            )?;
-            writer.flush()?;
+            drop(encode);
+            metrics.frame.encoded_bytes.add(
+                encoded.bytes.len() as u64
+                    + frame.graphics.len() as u64
+                    + if frame.graphics.is_empty() { 0 } else { 4 },
+            );
+            {
+                let _write = metrics.frame.write.start();
+                super::frame_output::write_encoded_frame_with_graphics(
+                    &mut *writer,
+                    &encoded.bytes,
+                    &frame.graphics,
+                )?;
+            }
+            {
+                let _flush = metrics.frame.flush.start();
+                writer.flush()?;
+            }
             // The only baseline commit: all bytes and the flush succeeded.
             encoder.commit(frame, encoded);
             *sequence = request.sequence;
@@ -230,7 +259,9 @@ fn write_patch(
     encoder: &mut BlitEncoder,
     patch: &Patch,
     drawn_cursor: bool,
+    metrics: &'static OutputMetrics,
 ) -> io::Result<bool> {
+    let encode = metrics.patch.encode.start();
     let rows = if drawn_cursor {
         let Some(rows) = encoder.patch_rows_with_drawn_cursor(&patch.rows, patch.cursor.as_ref())
         else {
@@ -243,8 +274,16 @@ fn write_patch(
     let Some(encoded) = encoder.encode_patch(&rows, patch.cursor.clone(), drawn_cursor) else {
         return Ok(false);
     };
-    writer.write_all(&encoded.bytes)?;
-    writer.flush()?;
+    drop(encode);
+    metrics.patch.encoded_bytes.add(encoded.bytes.len() as u64);
+    {
+        let _write = metrics.patch.write.start();
+        writer.write_all(&encoded.bytes)?;
+    }
+    {
+        let _flush = metrics.patch.flush.start();
+        writer.flush()?;
+    }
     if !encoder.commit_patch(&rows, patch.cursor.clone(), encoded) {
         return Err(io::Error::other("host output patch baseline lost"));
     }
