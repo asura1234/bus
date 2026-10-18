@@ -522,3 +522,72 @@ fn dragging_within_a_picture_does_not_open_it() {
     std::fs::remove_dir_all(dir).unwrap();
     assert_eq!(opened(&all), None, "a thumbnail drag is not a click");
 }
+
+/// Every reply row that shows part of the wrapped URL has a hit, every hit
+/// opens the complete URL, and the following word stays plain.
+fn assert_wrapped_reply_url_links_on_every_row(body: &str) {
+    let (mut ui, room, agent) = fixture();
+    let url = wrapped_url();
+    saved_exchange(&mut ui, room, agent, "go", &body.replace("{url}", &url));
+    let buffer = settled_screen(&mut ui);
+    let hits = ui.view.history_links.clone();
+    let mut rows = 0;
+    for (index, line) in ui
+        .history
+        .cached()
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_reply(line))
+    {
+        if !(line.text.contains("https://example.feishu") || line.text.contains("synthetic")) {
+            continue;
+        }
+        rows += 1;
+        let y = ui.view.history_text.y + (index - ui.main_scroll) as u16;
+        assert!(
+            hits.iter().any(|(rect, _)| rect.y == y),
+            "{body}: row {:?} has no link",
+            line.text
+        );
+    }
+    assert!(rows >= 3, "{body}: fixture must wrap over several rows");
+    for (rect, target) in hits {
+        assert_eq!(target, links::Target::Url(url.clone()), "{body}");
+        assert!(is_link(&buffer, (rect.x, rect.y)), "{body}");
+        assert_eq!(opened(&click(&mut ui, (rect.x, rect.y))), Some(url.clone()));
+    }
+    let after = locate(&ui, "AFTER");
+    assert!(!is_link(&buffer, after), "{body}: following text is plain");
+}
+
+#[test]
+fn wrapped_url_after_cjk_text_and_fullwidth_colon_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("请打开飞书文档链接：{url} AFTER");
+}
+
+#[test]
+fn wrapped_url_in_a_block_quote_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("> {url} AFTER");
+}
+
+#[test]
+fn wrapped_url_in_a_numbered_list_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("1. 文档\n2. {url} AFTER");
+}
+
+#[test]
+fn wrapped_url_after_a_markdown_link_to_the_same_target_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("见[文档]({url})，原链接 {url} AFTER");
+}
+
+#[test]
+fn wrapped_url_in_a_stacked_table_cell_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row(
+        "| 名称 | 链接 |\n|---|---|\n| 文档 | {url} |\n\nAFTER",
+    );
+}
+
+#[test]
+fn wrapped_url_label_of_a_markdown_link_links_every_row() {
+    assert_wrapped_reply_url_links_on_every_row("[{url}]({url}) AFTER");
+}
