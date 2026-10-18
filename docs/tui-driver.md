@@ -95,12 +95,16 @@ image (`fixture clipboard-image`), never your clipboard. Sessions therefore run
 on macOS only: on Linux and Windows Bus uses other programs the recorder does
 not stand in for, so `start` refuses there.
 
-What notifies in Bus: the room UI never shows a desktop or terminal
-notification. A new agent reply (or agent notice) in a room whose sound is on
-plays that room's sound (`afplay`); MASTER's sound starts on, work rooms' off.
-Host focus does not matter: `focus out` neither causes nor suppresses it.
-Desktop notifications exist only for agent-pane toasts, which are off by
-default and not shown inside the Bus room UI.
+Messages addressed to the developer in MASTER emit a terminal notification
+by default when MASTER is not visible, or the terminal is known to be unfocused.
+The separate Developer message notifications setting disables them. A two-second
+window combines bursts; only the sender and a short first-line preview are shown.
+See [developer notifications](developer-notifications.md). Recovered freezes use
+the separate Freeze recovery notifications setting.
+
+A new agent reply (or agent notice) in a room whose sound is on still plays
+that room's sound (`afplay`); MASTER's sound starts on, work rooms' off.
+Host focus does not gate these sounds. Agent-pane toasts keep their own setting.
 
 Output: every verb prints one JSON line on stdout, except `journey` (one
 line per step, then the result), `bus` (Bus's own output) and
