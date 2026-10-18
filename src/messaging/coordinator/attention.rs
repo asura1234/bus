@@ -161,11 +161,7 @@ impl Runtime {
 
     fn deliver(&mut self, worker: &mut Worker, now: u64) -> Result<(), String> {
         let machine = crate::platform::hostname().unwrap_or_else(|| "unknown".into());
-        let session = worker
-            .data_dir
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
+        let session = worker.data_dir.to_string_lossy();
         let queued: BTreeSet<_> = self
             .queue
             .iter()

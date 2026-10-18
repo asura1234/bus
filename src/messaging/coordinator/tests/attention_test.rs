@@ -721,3 +721,35 @@ fn feishu_explicit_on_revalidates_when_global_off_arrives_before_local_poll() {
             .feishu_notifications
     );
 }
+
+#[test]
+fn feishu_distinct_sessions_with_the_same_directory_basename_have_distinct_delivery_keys() {
+    let mut delivered = Vec::new();
+    for index in 0..2 {
+        let mut fixture = Fixture::new();
+        assert!(
+            fixture
+                .call("settings.feishu_notifications", json!({"on":true}))
+                .ok
+        );
+        fixture.settle();
+        fixture.post(&format!(
+            "[needs_developer_attention] Session decision {index}"
+        ));
+        fixture.wait_sends(1);
+        let calls = fixture.calls();
+        let send = calls.iter().find(|call| call["args"][0] == "im").unwrap();
+        delivered.push((
+            send["args"][9].clone(),
+            send["body"].as_str().unwrap().to_owned(),
+            fixture.root.join("session"),
+        ));
+    }
+    assert_ne!(
+        delivered[0].0, delivered[1].0,
+        "independent sessions must not collide in Feishu idempotency"
+    );
+    for (_, body, session) in delivered {
+        assert!(body.contains(&format!("Session: {}", session.display())));
+    }
+}
