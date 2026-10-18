@@ -28,7 +28,9 @@ impl Fixture {
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-        Process::at(program, Duration::from_secs(1))
+        // Allow the wrapper to start under instrumented load; its child still
+        // sleeps far beyond this deadline so timeout must terminate both.
+        Process::at(program, Duration::from_secs(3))
     }
 }
 
@@ -105,7 +107,7 @@ fn feishu_process_timeout_terminates_wrapper_and_grandchild_holding_pipes() {
         .run(&[], "", &Cancellation::default())
         .unwrap_err();
     assert!(error.contains("timed out"), "{error}");
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(5));
     let pid: u32 = std::fs::read_to_string(fixture.0.join("grandchild.pid"))
         .unwrap()
         .parse()
