@@ -141,7 +141,9 @@ impl BusState {
     ) -> Result<(), super::ModelError> {
         match active {
             Some(true) if !self.attention_episodes.contains(&key) => {
-                self.post_developer_attention(agent, text, now_ms)?;
+                if !self.quota_episode_continues(&key, now_ms) {
+                    self.post_developer_attention(agent, text, now_ms)?;
+                }
                 self.clear_previous_quota_episode(&key);
                 self.attention_episodes.insert(key);
             }
@@ -154,7 +156,25 @@ impl BusState {
         Ok(())
     }
 
-    /// A fresh observation of a new reset window proves the old window ended.
+    /// Corrections to a still-future reset belong to the reported episode.
+    fn quota_episode_continues(&self, key: &str, now_ms: u64) -> bool {
+        if !key.starts_with("quota:") {
+            return false;
+        }
+        let Some((family, _)) = key.rsplit_once(':') else {
+            return false;
+        };
+        self.attention_episodes.iter().any(|old| {
+            old.rsplit_once(':').is_some_and(|(old_family, reset)| {
+                old_family == family
+                    && reset
+                        .parse::<u64>()
+                        .is_ok_and(|reset| reset > now_ms / 1000)
+            })
+        })
+    }
+
+    /// Keep one current reset record per provider/window, including corrections.
     fn clear_previous_quota_episode(&mut self, key: &str) {
         if key.starts_with("quota:") {
             if let Some((family, _)) = key.rsplit_once(':') {

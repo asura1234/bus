@@ -76,6 +76,24 @@ impl Fixture {
         self.worker.as_mut().unwrap()
     }
 
+    fn quota(&mut self, observed_at: u64, reset: u64) {
+        let agent = self.agent;
+        self.worker().usage.codex = Some(crate::messaging::coordinator::usage::UsageSnapshot {
+            windows: crate::agents::providers::usage::UsageWindows {
+                five_hour: Some(crate::agents::providers::usage::UsageWindow {
+                    used_percent: 100.0,
+                    resets_at: Some(reset),
+                    window_minutes: 300,
+                }),
+                weekly: None,
+            },
+            read_at_ms: observed_at,
+            observed_by_agent: agent,
+        });
+        let events = self.events.clone();
+        self.worker().pump_feishu(&events, observed_at).unwrap();
+    }
+
     fn restart(&mut self) {
         drop(self.worker.take());
         let mut worker = Worker::open(self.root.join("session"), Box::new(NoNative)).unwrap();
@@ -654,25 +672,26 @@ fn feishu_offline_session_skips_old_history_after_a_new_global_enable_generation
 fn feishu_new_exhausted_quota_window_rearms_without_a_sample_between_windows() {
     let mut fixture = Fixture::new();
     let now = crate::messaging::storage::io::now_ms();
-    let agent = fixture.agent;
-    for reset in [now / 1000 + 300, now / 1000 + 600] {
-        fixture.worker().usage.codex = Some(crate::messaging::coordinator::usage::UsageSnapshot {
-            windows: crate::agents::providers::usage::UsageWindows {
-                five_hour: Some(crate::agents::providers::usage::UsageWindow {
-                    used_percent: 100.0,
-                    resets_at: Some(reset),
-                    window_minutes: 300,
-                }),
-                weekly: None,
-            },
-            read_at_ms: now,
-            observed_by_agent: agent,
-        });
-        fixture.pump();
-        fixture.pump();
+    for (observed, reset) in [(now, now / 1000 + 300), (now + 301_000, now / 1000 + 600)] {
+        fixture.quota(observed, reset);
+        fixture.quota(observed, reset);
     }
     let master = fixture.worker().state.master_room().unwrap().id;
     assert_eq!(fixture.worker().state.notices(master).count(), 2);
+}
+
+#[test]
+fn feishu_quota_reset_correction_does_not_start_a_new_exhaustion_episode() {
+    let mut fixture = Fixture::new();
+    let now = crate::messaging::storage::io::now_ms();
+    fixture.quota(now, now / 1000 + 300);
+    fixture.quota(now, now / 1000 + 600);
+    let master = fixture.worker().state.master_room().unwrap().id;
+    assert_eq!(
+        fixture.worker().state.notices(master).count(),
+        1,
+        "a corrected future reset does not prove recovery"
+    );
 }
 
 #[test]
