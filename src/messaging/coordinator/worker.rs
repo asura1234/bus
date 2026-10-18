@@ -55,6 +55,9 @@ pub(super) struct Worker {
     /// request's turns, and its reply waits for them. In memory only: after a
     /// restart every running shell counts as older.
     pub(super) claude_settled_shells: BTreeMap<AgentId, BTreeSet<String>>,
+    /// Last observed shells and the request that observed them. A different
+    /// request inherits these shells instead of waiting for their replies.
+    pub(super) claude_shell_observations: BTreeMap<AgentId, (Option<RequestId>, BTreeSet<String>)>,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
@@ -126,6 +129,7 @@ impl Worker {
             usage: usage::Usage::default(),
             codex_rollouts: BTreeMap::new(),
             claude_settled_shells: BTreeMap::new(),
+            claude_shell_observations: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
             batch: None,

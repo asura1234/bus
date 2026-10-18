@@ -606,3 +606,131 @@ fn a_message_whose_paste_is_refused_on_every_retry_still_expires_as_queued_stall
     fixture.worker.expire_queued_requests(at).unwrap();
     assert_eq!(fixture.request(message).phase, RequestPhase::Abandoned);
 }
+
+fn claude_stop_holding(fixture: &Fixture, turn: &str, text: &str, shells: &[&str]) {
+    let tasks: Vec<_> = shells
+        .iter()
+        .map(|id| json!({"id":id,"type":"shell","status":"running","description":"Run","command":"sleep 45"}))
+        .collect();
+    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":tasks,"session_crons":[]}));
+}
+
+/// Cursor's later generation preserves an answer already captured for the
+/// first generation instead of replacing it with the follow-up's answer.
+#[test]
+fn a_cursor_follow_up_after_a_captured_answer_keeps_both_answers() {
+    let mut fixture = Fixture::new(Provider::Cursor);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    let correction = fixture.send("use the streaming API instead", false);
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser written");
+    fixture.consume();
+    fixture.started("turn-2", "use the streaming API instead");
+    fixture.stopped("turn-2", "parser written with the streaming API");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
+    assert_eq!(
+        fixture.reply(correction).as_deref(),
+        Some("parser written with the streaming API")
+    );
+    assert_eq!(fixture.request(correction).group, None);
+}
+
+/// Typed messages answered in separate turns keep their own turn's reply,
+/// while a message Claude folds into one of those turns shares it.
+#[test]
+fn typed_messages_keep_their_own_turn_reply_and_folded_ones_share_it() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    let second = fixture.send("also add tests", false);
+    let folded = fixture.send("and docs", false);
+    let fourth = fixture.send("then lint", false);
+    fixture.deliver();
+    fixture.deliver();
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser written");
+    fixture.started("turn-2", "also add tests");
+    fixture.started("turn-2", "and docs");
+    fixture.stopped("turn-2", "tests and docs written");
+    fixture.started("turn-3", "then lint");
+    fixture.stopped("turn-3", "lint clean");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
+    for id in [second, folded] {
+        assert_eq!(fixture.reply(id).as_deref(), Some("tests and docs written"));
+    }
+    assert_eq!(fixture.reply(fourth).as_deref(), Some("lint clean"));
+    assert_eq!(fixture.error(), None);
+}
+
+/// Two messages with the same text, each answered in its own turn, keep their
+/// own replies.
+#[test]
+fn identical_typed_messages_answered_in_separate_turns_keep_their_own_replies() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    let first = fixture.send("yes", false);
+    let second = fixture.send("yes", false);
+    fixture.deliver();
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser written");
+    fixture.started("turn-2", "yes");
+    fixture.stopped("turn-2", "first yes done");
+    fixture.started("turn-3", "yes");
+    fixture.stopped("turn-3", "second yes done");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
+    assert_eq!(fixture.reply(first).as_deref(), Some("first yes done"));
+    assert_eq!(fixture.reply(second).as_deref(), Some("second yes done"));
+}
+
+/// While shells hold the replies, a message folded into a later turn shares
+/// that turn's held reply and the next independent turn keeps its own.
+#[test]
+fn shell_held_turns_keep_their_replies_and_folded_messages_share_them() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    fixture.record(
+        json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
+    );
+    fixture.consume();
+    let lead = running(&mut fixture, "build it", "turn-1");
+    claude_stop_holding(&fixture, "turn-1", "Waiting on the build.", &["b1"]);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let second = fixture.send("is it ready?", false);
+    let folded = fixture.send("and the docs?", false);
+    fixture.deliver();
+    fixture.deliver();
+    fixture.started("turn-2", "is it ready?");
+    fixture.started("turn-2", "and the docs?");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    claude_stop_holding(&fixture, "turn-2", "Not yet; docs pending.", &["b1", "b2"]);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let third = fixture.send("ping", false);
+    fixture.deliver();
+    fixture.started("turn-3", "ping");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.stopped("turn-3", "pong");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    for id in [second, folded] {
+        assert_eq!(fixture.reply(id).as_deref(), Some("Not yet; docs pending."));
+    }
+    assert_eq!(fixture.reply(third).as_deref(), Some("pong"));
+    assert_eq!(fixture.error(), None);
+}

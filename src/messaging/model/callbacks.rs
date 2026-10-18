@@ -465,6 +465,45 @@ impl BusState {
         .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
     }
 
+    /// A notification for inherited work is foreign unless it is input Bus
+    /// actually submitted. Explicit developer text always wins that match.
+    pub(crate) fn mark_unowned_background_turn(&mut self, callback: &ProviderCallback) {
+        let Some(payload) = callback.prompt_payload.as_deref() else {
+            return;
+        };
+        let lead = self
+            .agents
+            .get(&callback.agent_id)
+            .and_then(|a| a.current_request);
+        if let Some(lead) = lead {
+            let owned = std::iter::once(lead)
+                .chain(self.group_members(lead))
+                .any(|id| {
+                    self.requests.get(&id).is_some_and(|request| {
+                        !request.settled() && request.matches_callback_payload(payload)
+                    })
+                });
+            if owned {
+                return;
+            }
+        }
+        self.unrelated_provider_turns.extend(provider_turn_key(
+            &callback.launch_id,
+            callback.provider_session_id.as_deref(),
+            callback.provider_turn_id.as_deref(),
+        ));
+    }
+
+    pub(crate) fn is_unrelated_provider_turn(
+        &self,
+        launch: &str,
+        session: &str,
+        turn: &str,
+    ) -> bool {
+        provider_turn_key(launch, Some(session), Some(turn))
+            .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
+    }
+
     /// Settles the agent's current request, and every request in its group,
     /// with its pending final reply. Returns whether it settled: a group with
     /// typed input whose submit hook has not arrived waits a few seconds, in
