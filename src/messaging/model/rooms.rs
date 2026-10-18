@@ -331,6 +331,64 @@ impl BusState {
         if agent.deletion_pending {
             return Err(ModelError::DeletionPending);
         }
+        self.record_developer_notice(room, author, text, files, now_ms)
+    }
+
+    /// A final cleanup notice from a deleting agent goes to its surviving
+    /// orchestrator, else room history. A deleting room reports in MASTER.
+    pub(crate) fn post_deletion_notice(
+        &mut self,
+        author: AgentId,
+        message: String,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get(&author)
+            .ok_or(ModelError::UnknownAgent(author))?;
+        if !agent.deletion_pending {
+            return Err(ModelError::InvalidTransition);
+        }
+        let text = format!("Deleted agent \"{}\". {message}", agent.name);
+        let room = if self
+            .rooms
+            .get(&agent.room_id)
+            .is_some_and(|room| room.deletion_pending)
+        {
+            MASTER_ROOM_ID
+        } else {
+            agent.room_id
+        };
+        if let Some(orchestrator) = self
+            .orchestrator_of(room)
+            .filter(|agent| agent.id != author && !agent.deletion_pending)
+            .map(|agent| agent.id)
+        {
+            self.submit_message_from(
+                room,
+                Draft {
+                    text,
+                    files: Vec::new(),
+                    recipient_ids: [orchestrator].into(),
+                },
+                Author::Agent(author),
+                now_ms,
+            )
+            .map(|_| ())
+        } else {
+            self.record_developer_notice(room, author, text, Vec::new(), now_ms)
+                .map(|_| ())
+        }
+    }
+
+    fn record_developer_notice(
+        &mut self,
+        room: RoomId,
+        author: AgentId,
+        text: String,
+        files: Vec<PathBuf>,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
         let id = PromptId(self.allocate_id());
         let visible = self.visible_room == Some(room);
         let room = self
