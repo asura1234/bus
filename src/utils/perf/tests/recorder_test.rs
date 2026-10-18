@@ -1488,7 +1488,7 @@ fn active_message_metadata_is_preserved_in_windows_and_stall_records() {
 }
 
 #[test]
-fn recovered_freeze_alert_is_wrapped_for_tmux_like_other_terminal_notifications() {
+fn recovered_freeze_alert_uses_the_injected_host_encoder() {
     crate::utils::perf::recovery::set_enabled(true);
     let ended = crate::utils::perf::StallEvent {
         kind: crate::utils::perf::StallKind::Ended,
@@ -1498,17 +1498,13 @@ fn recovered_freeze_alert_is_wrapped_for_tmux_like_other_terminal_notifications(
         stall_id: 1,
     };
     fn encode(text: &str) -> Vec<u8> {
-        use crate::client::host_terminal::notify::{
-            encode_notification, TerminalNotificationBackend,
-        };
-        encode_notification(TerminalNotificationBackend::Ghostty, text, None, true)
+        format!("host:{text}").into_bytes()
     }
     crate::utils::perf::recovery::observe(&ended, 9, 7, encode);
     let bytes = crate::utils::perf::recovery::take()
         .expect("a recovered client stall over three seconds yields one alert");
-    assert!(
-        bytes.starts_with(b"\x1bPtmux;"),
-        "inside tmux the alert must use passthrough: {:?}",
-        String::from_utf8_lossy(&bytes)
+    assert_eq!(
+        bytes,
+        b"host:Bus froze for 4.0 s at 09:07; details: bus perf"
     );
 }
