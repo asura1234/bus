@@ -29,6 +29,7 @@ pub(super) struct Patch {
 
 pub(super) enum Command {
     Frame(Frame),
+    EncodedFrame(Vec<u8>),
     Bytes(Vec<u8>),
     Graphics(Vec<u8>),
 }
@@ -47,7 +48,7 @@ impl Command {
                         .sum()
                 }))
             }
-            Self::Bytes(bytes) | Self::Graphics(bytes) => bytes.len(),
+            Self::EncodedFrame(bytes) | Self::Bytes(bytes) | Self::Graphics(bytes) => bytes.len(),
         }
         .saturating_add(std::mem::size_of::<Self>())
     }

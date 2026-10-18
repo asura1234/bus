@@ -139,7 +139,7 @@ impl TerminalOutput {
     /// An encoded legacy frame is a lossless barrier, including its cursor effects.
     pub(in crate::client) fn terminal_bytes(&mut self, bytes: Vec<u8>) -> io::Result<()> {
         self.invalidate();
-        self.handle.push(Command::Bytes(bytes))
+        self.handle.push(Command::EncodedFrame(bytes))
     }
 
     pub(in crate::client) fn feedback(&self) -> io::Result<Option<bool>> {
@@ -240,9 +240,18 @@ fn write_command(
             *sequence = request.sequence;
             Ok(Some(cleared))
         }
-        Command::Bytes(bytes) => {
+        Command::EncodedFrame(bytes) | Command::Bytes(bytes) => {
+            // Legacy frames arrive encoded; only their actual owner I/O is
+            // measured. Terminal effects share the FIFO without being frames.
+            let operation = matches!(command, Command::EncodedFrame(_)).then_some(&metrics.frame);
+            if let Some(operation) = operation {
+                operation.encoded_bytes.add(bytes.len() as u64);
+            }
             super::frame_output::record_received_kitty_graphics(bytes);
+            let write = operation.map(|operation| operation.write.start());
             writer.write_all(bytes)?;
+            drop(write);
+            let _flush = operation.map(|operation| operation.flush.start());
             writer.flush()?;
             Ok(None)
         }

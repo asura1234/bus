@@ -302,3 +302,82 @@ fn failed_write_records_the_write_but_never_claims_a_flush() {
     assert_eq!(output.handle.snapshot().2, 0);
     assert_eq!(METRICS.pending_age_ms.take().unwrap().last, 0);
 }
+
+#[test]
+fn preencoded_terminal_frames_have_output_metrics_without_inventing_encoding_time() {
+    static METRICS: OutputMetrics = OutputMetrics::new();
+    let state = Arc::new((
+        Mutex::new(Capture {
+            open: true,
+            ..Capture::default()
+        }),
+        Condvar::new(),
+    ));
+    let mut output = TerminalOutput::with_metrics(
+        SlowWriter {
+            state: state.clone(),
+            entered: None,
+            fail_flush: false,
+        },
+        &METRICS,
+    )
+    .unwrap();
+    let bytes = b"\x1b[31mprivate-terminal-frame\x1b[0m";
+    output.terminal_bytes(bytes.to_vec()).unwrap();
+    output.finish().unwrap();
+    assert_eq!(state.0.lock().unwrap().bytes, bytes);
+    assert_eq!(
+        METRICS
+            .frame
+            .write
+            .take()
+            .expect("legacy frame write measured")
+            .count,
+        1
+    );
+    assert_eq!(METRICS.frame.flush.take().unwrap().count, 1);
+    assert_eq!(METRICS.frame.encoded_bytes.take(), Some(bytes.len() as u64));
+    assert!(
+        METRICS.frame.encode.take().is_none(),
+        "owner receives this frame already encoded"
+    );
+}
+
+#[test]
+fn terminal_effects_and_standalone_graphics_do_not_pollute_frame_metrics() {
+    static METRICS: OutputMetrics = OutputMetrics::new();
+    let state = Arc::new((
+        Mutex::new(Capture {
+            open: true,
+            ..Capture::default()
+        }),
+        Condvar::new(),
+    ));
+    let mut output = TerminalOutput::with_metrics(
+        SlowWriter {
+            state: state.clone(),
+            entered: None,
+            fail_flush: false,
+        },
+        &METRICS,
+    )
+    .unwrap();
+    let effect = b"\x1b]0;private-terminal-title\x07";
+    {
+        let _route = output.route();
+        let mut writer = stdout();
+        writer.write_all(effect).unwrap();
+        writer.flush().unwrap();
+    }
+    let graphics = b"\x1b_Ga=d,d=A\x1b\\";
+    output.graphics(graphics).unwrap();
+    output.finish().unwrap();
+    assert_eq!(
+        state.0.lock().unwrap().bytes,
+        [effect.as_slice(), b"\x1b7", graphics, b"\x1b8"].concat()
+    );
+    assert!(METRICS.frame.encode.take().is_none());
+    assert!(METRICS.frame.write.take().is_none());
+    assert!(METRICS.frame.flush.take().is_none());
+    assert!(METRICS.frame.encoded_bytes.take().is_none());
+}
