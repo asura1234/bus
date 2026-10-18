@@ -7,7 +7,8 @@ use super::{
 /// How long a prompt the provider never showed waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
 /// queued stall closes ordinary requests after `QUEUED_STALL_MS`. Reply wakes
-/// remain queued, but pause retries until fresh status or a new session.
+/// remain queued, but pause retries until fresh status, a new session or a
+/// change to the queue.
 pub(super) const PROMPT_NOT_SHOWN_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub(super) struct ReplyDeliveryRetry {
@@ -15,12 +16,14 @@ pub(super) struct ReplyDeliveryRetry {
     status: RuntimeStatus,
     status_since_ms: u64,
     busy_revision: u64,
+    queue_tail: Option<RequestId>,
     paused: bool,
 }
 
 impl Worker {
     /// Retaining a wake must not keep pasting into a broken composer forever.
-    /// Repeated idle polls are not new evidence; a status/identity change is.
+    /// Status, identity or queue changes permit a fresh attempt; repeated
+    /// idle polls alone do not.
     pub(super) fn pause_stalled_reply_deliveries(&mut self, now_ms: u64) {
         self.reply_delivery_retries.retain(|id, retry| {
             let Some(request) = self.state.request(*id) else {
@@ -35,6 +38,7 @@ impl Worker {
                 || agent.shown_status() != retry.status
                 || agent.status_since_ms != retry.status_since_ms
                 || agent.busy_revision != retry.busy_revision
+                || self.state.queued_requests(agent.id).last().copied() != retry.queue_tail
             {
                 return false;
             }
@@ -230,12 +234,12 @@ impl Worker {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "Native submit result; uncertain outcomes are never retried"
         );
-        self.note_withdrawn(agent, request, &outcome);
         let mut state = self.state.clone();
         state
-            .record_submission(request, outcome)
+            .record_submission(request, outcome.clone())
             .map_err(|e| e.to_string())?;
         self.save(state)?;
+        self.note_withdrawn(agent, request, &outcome);
         Ok(())
     }
 
@@ -254,6 +258,7 @@ impl Worker {
                         status: agent.shown_status(),
                         status_since_ms: agent.status_since_ms,
                         busy_revision: agent.busy_revision,
+                        queue_tail: self.state.queued_requests(agent.id).last().copied(),
                         paused: false,
                     },
                 );
@@ -321,12 +326,13 @@ impl Worker {
         tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
             mode = "steer", outcome = ?outcome,
             elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
-        self.note_withdrawn(agent, request, &outcome);
         let mut state = self.state.clone();
         state
-            .record_steering(request, outcome)
+            .record_steering(request, outcome.clone())
             .map_err(|e| e.to_string())?;
-        self.save(state)
+        self.save(state)?;
+        self.note_withdrawn(agent, request, &outcome);
+        Ok(())
     }
 }
 

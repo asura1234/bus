@@ -754,3 +754,88 @@ fn reply_routing_ordinary_agent_message_stops_pasting_after_the_queued_stall_win
         RequestPhase::Abandoned
     );
 }
+
+#[test]
+fn reply_routing_paused_notice_does_not_hold_later_messages_to_the_orchestrator() {
+    let mut f = Fixture::new();
+    let pasted = Arc::new(Mutex::new(Vec::new()));
+    f.worker.transport = Box::new(NeverShown(pasted.clone()));
+    let source = f.send(Author::Agent(f.orch), "build this");
+    f.finish(source, "A reply the composer rejected");
+    f.worker.submit_ready().unwrap();
+    f.worker
+        .expire_queued_requests(io::now_ms() + 3 * 60_000)
+        .unwrap();
+    f.worker.withdrawn_at.clear();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(
+        pasted.lock().unwrap().len(),
+        1,
+        "the reply notice is paused"
+    );
+    // The composer accepts again without any status change, and a worker's
+    // Blocked notice arrives for the orchestrator.
+    f.worker.transport = Box::new(Accepting(f.calls.clone()));
+    let mut state = f.worker.state.clone();
+    let blocked = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "builder (agent 3). Blocked: approve a command".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms(),
+        )
+        .unwrap()[0];
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    f.worker.submit_ready().unwrap();
+    f.worker
+        .expire_queued_requests(io::now_ms() + 3 * 60_000)
+        .unwrap();
+    assert!(
+        !f.calls.lock().unwrap().is_empty(),
+        "a later message to the orchestrator was never attempted; it ended {:?}",
+        f.worker.state.request(blocked).unwrap().phase
+    );
+}
+
+#[test]
+fn reply_routing_coalesced_rejection_does_not_rearm_without_a_new_arrival() {
+    let mut f = Fixture::new();
+    let pasted = Arc::new(Mutex::new(Vec::new()));
+    f.worker.transport = Box::new(NeverShown(pasted.clone()));
+    for text in ["first reply", "second reply"] {
+        let source = f.send(Author::Agent(f.orch), text);
+        f.finish(source, text);
+    }
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.orch, RuntimeStatus::Unavailable, io::now_ms())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.notices().len(), 2);
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.orch, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(pasted.lock().unwrap().len(), 1);
+    for minutes in [3, 30, 300] {
+        f.worker
+            .expire_queued_requests(io::now_ms() + minutes * 60_000)
+            .unwrap();
+        f.worker.withdrawn_at.clear();
+        f.worker.submit_ready().unwrap();
+    }
+    assert_eq!(
+        pasted.lock().unwrap().len(),
+        1,
+        "restoring a rejected group is not a new arrival"
+    );
+    assert!(f.notices().iter().all(|r| r.phase == RequestPhase::Queued));
+}
