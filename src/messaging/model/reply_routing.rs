@@ -7,7 +7,40 @@ use std::collections::{BTreeMap, BTreeSet};
 const REPLY_GRACE_MS: u64 = 2_000;
 const INLINE_REPLY_CHARS: usize = 4_000;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReplyRoute {
+    Pending,
+    Routed(RequestId),
+    Seen,
+}
+
+impl ReplyRoute {
+    pub(super) fn notification(self) -> Option<RequestId> {
+        match self {
+            Self::Routed(id) => Some(id),
+            Self::Pending | Self::Seen => None,
+        }
+    }
+}
+
 impl BusState {
+    /// Capture responsibility before archive can discard an old recovered
+    /// callback. Only retained in-memory replies qualify; expired JSONL lines
+    /// without this marker must not become new work during the next load.
+    pub(super) fn retain_unrouted_worker_replies(&mut self) -> bool {
+        let pending: BTreeSet<_> = self
+            .requests()
+            .filter(|r| self.reply_needs_ack(r))
+            .map(reply_key)
+            .filter(|key| !self.reply_routes.contains_key(key))
+            .collect();
+        let changed = !pending.is_empty();
+        self.reply_routes
+            .extend(pending.into_iter().map(|key| (key, ReplyRoute::Pending)));
+        changed
+    }
+
     pub(crate) fn reply_orchestrator(&self, request: &Request) -> Option<AgentId> {
         let worker = self.agent(request.agent_id)?;
         let room = self.room(request.room_id)?;
@@ -25,27 +58,23 @@ impl BusState {
         request.phase == RequestPhase::Completed
             && request.pending_final.is_some()
             && self.reply_orchestrator(request).is_some()
-            && self.reply_routes.get(&reply_key(request)) != Some(&None)
+            && self.reply_routes.get(&reply_key(request)) != Some(&ReplyRoute::Seen)
     }
 
     pub(crate) fn is_reply_notification(&self, request: RequestId) -> bool {
         self.reply_routes
             .values()
-            .any(|notice| *notice == Some(request))
+            .any(|route| route.notification() == Some(request))
     }
 
     pub(crate) fn reply_delivery_pending(&self, request: &Request) -> bool {
-        // Absence is the durable "not yet routed/seen" state. A recovered
-        // callback may be older than retention before its first route pass.
-        if !self.reply_routes.contains_key(&reply_key(request)) {
-            return self.reply_needs_ack(request);
+        match self.reply_routes.get(&reply_key(request)) {
+            Some(ReplyRoute::Pending) => self.reply_needs_ack(request),
+            Some(ReplyRoute::Routed(id)) => {
+                self.request(*id).is_some_and(|notice| !notice.settled())
+            }
+            Some(ReplyRoute::Seen) | None => false,
         }
-        self.reply_routes
-            .get(&reply_key(request))
-            .copied()
-            .flatten()
-            .and_then(|id| self.request(id))
-            .is_some_and(|notice| !notice.settled())
     }
 
     /// A status read never marks a reply seen: only a waiter that already
@@ -66,7 +95,7 @@ impl BusState {
             return Err(ModelError::InvalidTransition);
         }
         let key = reply_key(source);
-        if let Some(notice) = self.reply_routes.get(&key).copied().flatten() {
+        if let Some(ReplyRoute::Routed(notice)) = self.reply_routes.get(&key).copied() {
             if self
                 .request(notice)
                 .is_some_and(|r| r.phase == RequestPhase::Queued)
@@ -74,7 +103,7 @@ impl BusState {
                 self.recover_idle_request(notice, now_ms)?;
             }
         }
-        self.reply_routes.insert(key, None);
+        self.reply_routes.insert(key, ReplyRoute::Seen);
         Ok(())
     }
 
@@ -89,7 +118,10 @@ impl BusState {
         let mut groups: BTreeMap<RequestId, Vec<Request>> = BTreeMap::new();
         for request in self.requests().filter(|r| self.reply_needs_ack(r)) {
             let key = reply_key(request);
-            if !self.reply_routes.contains_key(&key) {
+            if matches!(
+                self.reply_routes.get(&key),
+                None | Some(ReplyRoute::Pending)
+            ) {
                 groups.entry(key).or_default().push(request.clone());
             }
         }
@@ -146,7 +178,7 @@ impl BusState {
                 Author::Agent(source.agent_id),
                 now_ms,
             )?[0];
-            self.reply_routes.insert(key, Some(notice));
+            self.reply_routes.insert(key, ReplyRoute::Routed(notice));
             changed = true;
         }
         Ok(changed)

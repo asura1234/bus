@@ -137,15 +137,22 @@ impl super::BusState {
     /// Moves settled requests and old notices into the archive and drops what
     /// no longer needs keeping. True when anything changed.
     pub(crate) fn archive(&mut self, now_ms: u64) -> bool {
+        let pending = self.retain_unrouted_worker_replies();
         let moved = self.archive_settled(now_ms.saturating_sub(ARCHIVE_AFTER_MS));
         let expired = self.drop_history_before(now_ms.saturating_sub(HISTORY_RETENTION_MS));
         let spent = self.drop_spent_ids(now_ms);
         let routes = self.reply_routes.len();
-        let retained: std::collections::BTreeSet<_> = self.requests().map(|r| r.id).collect();
-        self.reply_routes.retain(|id, notice| {
-            retained.contains(id) || notice.is_some_and(|notice| retained.contains(&notice))
+        let retained: std::collections::BTreeSet<_> = self
+            .requests()
+            .flat_map(|r| [r.id, r.group.unwrap_or(r.id)])
+            .collect();
+        self.reply_routes.retain(|id, route| {
+            retained.contains(id)
+                || route
+                    .notification()
+                    .is_some_and(|notice| retained.contains(&notice))
         });
-        moved | expired | spent | (routes != self.reply_routes.len())
+        pending | moved | expired | spent | (routes != self.reply_routes.len())
     }
 
     /// Settled requests no agent, queue or open group refers to, and notices,

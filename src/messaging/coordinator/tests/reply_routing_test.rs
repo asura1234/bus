@@ -803,6 +803,119 @@ fn reply_routing_paused_notice_does_not_hold_later_messages_to_the_orchestrator(
 }
 
 #[test]
+fn reply_routing_old_recovered_reply_is_released_once_delivered() {
+    let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "build during downtime".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            io::now_ms() - 9 * 24 * 60 * 60_000,
+        )
+        .unwrap()[0];
+    state.finish_for_test(source, "Recovered", io::now_ms() - 8 * 24 * 60 * 60_000);
+    f.worker.save(state).unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    f.worker.submit_ready().unwrap();
+    let notice = f.notices()[0].id;
+    let mut state = f.worker.state.clone();
+    state.finish_for_test(notice, "Read it", io::now_ms());
+    f.worker.save(state).unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.worker.state.request(source).is_none(),
+        "a delivered reply follows ordinary retention again"
+    );
+    assert_eq!(f.calls.lock().unwrap().len(), 1, "no second wake");
+}
+
+#[test]
+fn reply_routing_expired_seen_reply_does_not_reappear_from_append_only_history() {
+    let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "build during downtime".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            io::now_ms() - 9 * 24 * 60 * 60_000,
+        )
+        .unwrap()[0];
+    state.finish_for_test(
+        source,
+        "Already printed",
+        io::now_ms() - 8 * 24 * 60 * 60_000,
+    );
+    f.worker.save(state).unwrap();
+    // First archive appends this source. Expiring it later removes the model
+    // entry, while disk compaction normally waits until the next Bus start.
+    f.worker.archive_history(io::now_ms()).unwrap();
+    assert!(
+        f.call(
+            "message.seen",
+            json!({"request":source.0.to_string(),"as":f.orch.0.to_string()})
+        )
+        .ok
+    );
+    f.worker.archive_history(io::now_ms()).unwrap();
+    assert!(f.worker.state.request(source).is_none());
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.calls.lock().unwrap().is_empty(),
+        "expired seen history must never become a pending reply again"
+    );
+    assert!(f.worker.state.request(source).is_none());
+}
+
+#[test]
+fn reply_routing_pending_group_survives_after_its_developer_lead_expires() {
+    let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let draft = Draft {
+        text: "shared old turn".into(),
+        files: vec![],
+        recipient_ids: [f.agent].into(),
+    };
+    let at = io::now_ms() - 9 * 24 * 60 * 60_000;
+    let lead = state
+        .submit_message_from(f.room, draft.clone(), Author::Developer, at)
+        .unwrap()[0];
+    let member = state
+        .submit_message_from(f.room, draft, Author::Agent(f.orch), at + 1)
+        .unwrap()[0];
+    state.coalesce_queue(lead).unwrap();
+    for id in [lead, member] {
+        state.finish_for_test(
+            id,
+            "Shared reply recovered",
+            io::now_ms() - 8 * 24 * 60 * 60_000,
+        );
+    }
+    f.worker.save(state).unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    assert!(f.worker.state.request(lead).is_none());
+    assert!(f.worker.state.request(member).is_some());
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(f.calls.lock().unwrap()[0].contains("Shared reply recovered"));
+    assert_eq!(f.notices().len(), 1);
+}
+
+#[test]
 fn reply_routing_coalesced_rejection_does_not_rearm_without_a_new_arrival() {
     let mut f = Fixture::new();
     let pasted = Arc::new(Mutex::new(Vec::new()));

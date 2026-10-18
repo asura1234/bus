@@ -17,11 +17,11 @@ pub(crate) struct BusState {
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     pub(super) requests: BTreeMap<RequestId, Request>,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
-    /// One terminal notification per shared reply, or None after its author
-    /// printed it. Kept outside the immutable request archive so acknowledgements
+    /// Pending, one terminal notification, or seen per shared reply.
+    /// Kept outside the immutable request archive so acknowledgements
     /// of older replies are durable without rewriting append-only history.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) reply_routes: BTreeMap<RequestId, Option<RequestId>>,
+    pub(super) reply_routes: BTreeMap<RequestId, super::reply_routing::ReplyRoute>,
     /// Applied provider callbacks by id, with the launch whose spool they
     /// came from; a re-spooled duplicate is refused while its id is kept.
     /// `None` marks ids carried over from a version 1 file, launch unknown.
