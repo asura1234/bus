@@ -321,8 +321,32 @@ the JSON error object.
 
 Orchestrators run it as a background tool call (Claude Code: Bash with
 `run_in_background`; Cursor: a background shell with timeout 0), so their CLI
-wakes them when it exits; then they read the reply in the room with
-`bus history --room ROOM`.
+wakes them when it exits and prints the captured replies. Independently, Bus
+routes a worker reply to a message authored by its room orchestrator into that
+orchestrator's terminal, using the same agent-message queue as a Blocked notice.
+It names the worker and original message, with the reply text or a short preview
+and `bus message status MESSAGE_ID` pointer for replies over 4,000 characters.
+No room monitoring or surviving waiter is required.
+
+An author's `send --async --as ORCH` renews a three-second waiter lease, so early
+replies in a multi-worker send wait for the combined output. `wait --message ID
+--as ORCH` opts into the same behavior; a plain `wait` or `message status` cannot
+suppress terminal delivery. After stdout flush succeeds, the waiter marks only
+the completed replies it printed as seen. One shared turn/group is one routed
+reply; seeing any qualifying member covers the group. A killed waiter stops
+renewing its lease, and Bus queues its unseen replies after the lease expires
+and a two-second settlement grace.
+
+The queue and seen/routed decision are saved together and recovered after Bus
+restarts, including callbacks spooled while Bus was down. An untyped reply
+notification does not expire while its orchestrator is unavailable. A late
+acknowledgement cancels a still-queued notification (shown as abandoned in
+history); once submission starts, normal uncertain-outcome safeguards apply.
+If output and submission race, both can be visible: delivery takes precedence
+over losing a reply. The first upgrade backfills retained qualifying replies
+once because older versions saved no seen record. Rolling back to an older
+binary that discards the routing state can repeat that recovery.
+Developer-authored messages and MASTER reporting keep their existing behavior.
 
 For non-blocking inspection, read the same state once:
 
