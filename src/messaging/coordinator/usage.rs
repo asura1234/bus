@@ -111,7 +111,7 @@ impl Usage {
         if !snapshot.fresh(now_ms) {
             return unknown("Claude allowance observation is stale");
         }
-        let current = |w: &&UsageWindow| snapshot.current_window(w, now_ms);
+        let current = |w: &&UsageWindow| w.resets_at.is_none_or(|at| at > now_ms / 1000);
         let five_hour = snapshot.windows.five_hour.as_ref().filter(current);
         let weekly = snapshot.windows.weekly.as_ref().filter(current);
         if five_hour.is_none() && weekly.is_none() {
