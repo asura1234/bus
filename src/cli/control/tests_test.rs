@@ -2573,3 +2573,38 @@ fn feishu_cli_waits_for_validation_and_reports_auth_refusal() {
     );
     assert_eq!(methods, ["settings.feishu_notifications", "settings"]);
 }
+
+#[test]
+fn feishu_enable_status_failure_preserves_caller_request_id() {
+    let mut output = Vec::new();
+    let result = run_with_pause(
+        &[
+            "settings".into(),
+            "feishu-notifications".into(),
+            "--on".into(),
+            "--request-id".into(),
+            "enable-notifications".into(),
+        ],
+        &mut output,
+        &mut |request: &Request, _| {
+            Ok(if request.method == "settings.feishu_notifications" {
+                Response::success(
+                    &request.id,
+                    json!({"feishu":{"enabled":false,"pending":true}}),
+                )
+            } else {
+                Response::failure(
+                    &request.id,
+                    "coordinator_busy",
+                    "validation status unavailable",
+                )
+            })
+        },
+        |_| {},
+    );
+
+    assert!(result.is_err());
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["error"]["code"], "coordinator_busy");
+    assert_eq!(response["id"], "enable-notifications");
+}

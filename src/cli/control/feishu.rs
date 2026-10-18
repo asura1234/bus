@@ -23,7 +23,10 @@ pub(super) fn run(
             None,
         ) {
             Ok(response) if response.ok => response,
-            Ok(response) => return response,
+            Ok(mut response) => {
+                response.id.clone_from(&sent.id);
+                return response;
+            }
             Err(error) => return Response::failure(&sent.id, "control_unavailable", error),
         };
         let status = &response.result["settings"]["feishu"];
