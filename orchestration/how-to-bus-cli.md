@@ -339,7 +339,10 @@ and a two-second settlement grace.
 
 The queue and seen/routed decision are saved together and recovered after Bus
 restarts, including callbacks spooled while Bus was down. An untyped reply
-notification does not expire while its orchestrator is unavailable. A late
+notification and its original reply do not expire before delivery. If native
+submission keeps rejecting the notification past the normal queued stall window,
+Bus keeps it queued and pauses retries until the orchestrator changes status or
+runtime identity, or Bus restarts. A late
 acknowledgement cancels a still-queued notification (shown as abandoned in
 history); once submission starts, normal uncertain-outcome safeguards apply.
 If output and submission race, both can be visible: delivery takes precedence
