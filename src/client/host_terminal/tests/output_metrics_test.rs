@@ -381,3 +381,117 @@ fn terminal_effects_and_standalone_graphics_do_not_pollute_frame_metrics() {
     assert!(METRICS.frame.flush.take().is_none());
     assert!(METRICS.frame.encoded_bytes.take().is_none());
 }
+
+#[test]
+fn a_frame_coalesced_behind_an_active_write_keeps_its_first_enqueue_age() {
+    static METRICS: OutputMetrics = OutputMetrics::new();
+    let handle = Handle(Arc::new(Shared::new(&METRICS)));
+    let mut output = TerminalOutput {
+        handle: handle.clone(),
+        worker: None,
+        latest: None,
+        sequence: 0,
+        invalidate: false,
+    };
+    output.frame(frame("A", 4), false, false).unwrap();
+    let active = handle.next().unwrap();
+    output.frame(frame("B", 4), false, false).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    output.frame(frame("C", 4), false, false).unwrap();
+    assert_eq!(METRICS.coalesced.take(), Some(1));
+    METRICS.pending_age_ms.take();
+    handle.complete(active, Ok(Some(false)));
+    assert!(
+        METRICS.pending_age_ms.take().unwrap().last >= 20,
+        "after the active write completes, the queue front keeps the replaced frame's enqueue time"
+    );
+    let queued = handle.next().unwrap();
+    handle.complete(queued, Ok(Some(false)));
+    assert_eq!(METRICS.pending_age_ms.take().unwrap().last, 0);
+}
+
+#[test]
+fn a_replacement_rejected_by_the_pending_limit_is_not_counted_as_coalesced() {
+    static METRICS: OutputMetrics = OutputMetrics::new();
+    let mut output = TerminalOutput {
+        handle: Handle(Arc::new(Shared::new(&METRICS))),
+        worker: None,
+        latest: None,
+        sequence: 0,
+        invalidate: false,
+    };
+    output
+        .handle
+        .push(Command::Bytes(vec![0; 60 * 1024 * 1024]))
+        .unwrap();
+    output.frame(frame("A", 4), false, false).unwrap();
+    assert_eq!(output.handle.snapshot().0, 2);
+    let mut large = frame("A", 4);
+    large.cells[0].symbol = "x".repeat(5 * 1024 * 1024);
+    assert!(output.frame(large, false, false).is_err());
+    assert!(METRICS.coalesced.take().is_none());
+}
+
+#[test]
+fn failed_patch_write_records_the_patch_write_but_never_claims_a_flush() {
+    static METRICS: OutputMetrics = OutputMetrics::new();
+    struct FailAfterFirstFrame {
+        fail: Arc<std::sync::atomic::AtomicBool>,
+        flushes_after_failure: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl Write for FailAfterFirstFrame {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(io::Error::other("numeric-metric-test-secret"));
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                self.flushes_after_failure
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(())
+        }
+    }
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flushes_after_failure = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut output = TerminalOutput::with_metrics(
+        FailAfterFirstFrame {
+            fail: fail.clone(),
+            flushes_after_failure: flushes_after_failure.clone(),
+        },
+        &METRICS,
+    )
+    .unwrap();
+    output.frame(frame("A", 4), false, false).unwrap();
+    output.handle.wait_idle();
+    let presented = output.handle.snapshot().2;
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(output
+        .patch(
+            &[PaneSurfacePatchRow {
+                y: 0,
+                x: 0,
+                cells: frame("D", 1).cells,
+            }],
+            None,
+            false,
+        )
+        .unwrap());
+    assert!(output.finish().is_err());
+    assert_eq!(METRICS.patch.encode.take().unwrap().count, 1);
+    assert_eq!(METRICS.patch.write.take().unwrap().count, 1);
+    assert!(METRICS.patch.flush.take().is_none());
+    assert!(METRICS.patch.encoded_bytes.take().unwrap() > 0);
+    assert_eq!(
+        flushes_after_failure.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert_eq!(
+        output.handle.snapshot().2,
+        presented,
+        "failed patch is not presented"
+    );
+    assert_eq!(METRICS.pending_age_ms.take().unwrap().last, 0);
+}
