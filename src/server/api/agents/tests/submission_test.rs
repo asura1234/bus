@@ -319,7 +319,16 @@ async fn an_unrecognised_paste_is_cleared_and_reported_as_not_submitted() {
     );
     // A rendering the observer cannot attribute to Bus: never press Enter on it.
     redraw(&app, AgentKind::Claude, "[Pasted text #3] from bus?");
-    std::thread::sleep(Duration::from_millis(2_200));
+    // Consume the cleanup as soon as it starts. A fixed sleep can overshoot
+    // under load and fill the mock channel with repeated editing keys.
+    let deadline = std::time::Instant::now() + Duration::from_secs(4);
+    while writes.is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "cleanup did not start"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x01"));
     assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x0b"));
     redraw(&app, AgentKind::Claude, "");
