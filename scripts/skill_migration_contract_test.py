@@ -120,6 +120,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/guides/consumer-fallout-format.md",
             "docs/guides/review-format.md",
             "docs/templates/plan-template.md",
+            "workflows/handover-template.md",
             "workflows/template.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
             "skills/delete-dead-code/references/duplicate-findings-format.md",
