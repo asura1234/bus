@@ -959,17 +959,15 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     fixture.now += HELD_REPLY_GRACE_MS + 1;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    for id in [joined] {
-        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
-        assert_eq!(
-            fixture.reply(id).as_deref(),
-            Some("#78 was tested with e2e-test; waiting on its review.")
-        );
-        assert_eq!(
-            fixture.request(id).failure_reason.as_deref(),
-            Some("background_shells_interim")
-        );
-    }
+    assert_eq!(fixture.request(joined).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(joined).as_deref(),
+        Some("#78 was tested with e2e-test; waiting on its review.")
+    );
+    assert_eq!(
+        fixture.request(joined).failure_reason.as_deref(),
+        Some("background_shells_interim")
+    );
     assert_eq!(fixture.error(), None);
     assert_eq!(
         fixture
