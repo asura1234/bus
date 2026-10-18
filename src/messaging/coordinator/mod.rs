@@ -3,6 +3,7 @@ pub(crate) mod agents;
 mod delivery;
 mod expiry;
 mod poll;
+mod startup;
 mod storage;
 mod worker;
 use storage::{CoordinatorLease, StoragePause};

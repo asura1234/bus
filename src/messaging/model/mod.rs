@@ -24,7 +24,7 @@ use types::payload_matches;
 pub(crate) use {
     crate::messaging::model::types::RoomAgent,
     types::{
-        AgentId, AgentRecipients, AgentRuntimeIdentity, Author, CallbackDisposition,
+        AgentId, AgentRecipients, AgentRuntimeIdentity, AgentStartup, Author, CallbackDisposition,
         CallbackEventKind, CallbackRejection, Compactions, Draft, ModelError, PendingFinal, Prompt,
         PromptId, Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, Room,
         RoomId, RoomKind, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, DELIVERED_STALL_MS,

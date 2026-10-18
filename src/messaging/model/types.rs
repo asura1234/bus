@@ -282,6 +282,14 @@ pub(crate) const DEVELOPER_RECIPIENT: &str = "human";
 pub(super) const MASTER_ROOM_ID: RoomId = RoomId(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct AgentStartup {
+    pub(crate) command: String,
+    pub(crate) started_at_ms: u64,
+    /// Saved with the notice before deletion to prevent duplicate reports.
+    pub(crate) reported: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename = "Agent")]
 pub(crate) struct RoomAgent {
     pub(crate) id: AgentId,
@@ -296,6 +304,10 @@ pub(crate) struct RoomAgent {
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,
+    /// Only a new launch is watched; successful providers are never cleaned
+    /// up merely because they later become unavailable. Survives restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) startup: Option<AgentStartup>,
     pub(crate) details_disclosed: bool,
     pub(crate) status: RuntimeStatus,
     pub(crate) status_revision: u64,

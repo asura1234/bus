@@ -387,6 +387,9 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         self.save(state)?;
         // This identity is durable before start. A missing response must not launch twice.
+        let mut argv = vec![launch::executable(input.provider).to_owned()];
+        argv.extend(prepared.args.iter().cloned());
+        self.watch_agent_startup(id, argv)?;
         let started = self
             .transport
             .request(Method::AgentStart(schema::AgentStartParams {
@@ -397,14 +400,15 @@ impl Worker {
                 timeout_ms: None,
             }));
         match started {
-            Ok(ResponseResult::AgentStarted { .. }) => {
+            Ok(ResponseResult::AgentStarted { argv, .. }) => {
+                self.watch_agent_startup(id, argv)?;
                 let _ = events.send(BusEvent::AgentAdded(id));
                 let Some(session) = identity.session_id else {
                     return Ok(());
                 };
                 self.report_adopted_session(id, input.provider, pane, session)
             }
-            other => self.agent_error(id,format!("Agent start outcome requires inspection of its owned terminal; no automatic retry or deletion. {other:?}")),
+            other => self.agent_error(id,format!("Agent start outcome requires inspection of its owned terminal; startup is watched and will not be retried. {other:?}")),
         }
     }
 
