@@ -30,6 +30,15 @@ impl Worker {
         self.save(state)?;
         let left_open: Vec<_> = self.stop_agent_terminal(id)?.into_iter().collect();
         let mut state = self.state.clone();
+        for terminal in &left_open {
+            state
+                .post_deletion_notice(
+                    id,
+                    format!("Terminal {}. {}", terminal.terminal_id, terminal.message),
+                    super::io::now_ms(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
         state.delete_agent(id).map_err(|e| e.to_string())?;
         self.save(state)?;
         self.branch_checks.remove(&id);
@@ -54,6 +63,15 @@ impl Worker {
             left_open.extend(self.stop_agent_terminal(*agent)?);
         }
         let mut state = self.state.clone();
+        for terminal in &left_open {
+            state
+                .post_deletion_notice(
+                    terminal.agent_id,
+                    format!("Terminal {}. {}", terminal.terminal_id, terminal.message),
+                    super::io::now_ms(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
         state.delete_room(id).map_err(|e| e.to_string())?;
         self.save(state)?;
         for agent in agents {
@@ -71,18 +89,14 @@ impl Worker {
         left_open: Vec<LeftOpenTerminal>,
         events: &mpsc::Sender<BusEvent>,
     ) {
-        self.error = (!left_open.is_empty()).then(|| {
-            left_open
-                .iter()
-                .map(|terminal| {
-                    format!(
-                        "Deleted agent \"{}\" ({}). {}",
-                        terminal.agent_name, terminal.terminal_id, terminal.message
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        });
+        self.error = None;
+        for terminal in &left_open {
+            tracing::warn!(event = "bus.deletion.terminal_left_open",
+                agent_id = terminal.agent_id.0, agent_name = %terminal.agent_name,
+                pane_id = %terminal.pane_id, terminal_id = %terminal.terminal_id,
+                reason = ?terminal.reason, message = %terminal.message,
+                "Deleted agent's terminal was left open");
+        }
         if !left_open.is_empty() {
             let _ = events.send(BusEvent::TerminalsLeftOpen(left_open));
         }

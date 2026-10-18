@@ -135,8 +135,8 @@ pub(crate) struct LeftOpenTerminal {
     pub(crate) pane_id: String,
     pub(crate) terminal_id: String,
     pub(crate) reason: LeftOpenReason,
-    /// Why Bus did not close it and what the caller may do, for CLI callers
-    /// that never see the TUI's error line.
+    /// Why Bus did not close it and what the caller may do, shared by the
+    /// CLI result, room notice and diagnostic log.
     pub(crate) message: String,
 }
 

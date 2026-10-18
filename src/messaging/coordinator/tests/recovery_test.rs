@@ -120,11 +120,10 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
             message.contains("exited") && message.contains("close pane pane yourself"),
             "{message}"
         );
-        let report = worker.snapshot().error.unwrap();
-        assert!(
-            report.contains("\"author\"") && report.contains(message),
-            "{report}"
-        );
+        assert_eq!(worker.snapshot().error, None);
+        let notice_room = if delete_room { RoomId(0) } else { room };
+        let notice = worker.state.notices(notice_room).last().unwrap();
+        assert!(notice.text.contains("author") && notice.text.contains(message));
         drop(worker);
         let recovered = JsonStore::new(dir.join("state.json"))
             .load()
@@ -132,6 +131,9 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
             .unwrap();
         assert!(recovered.agent(agent).is_none());
         assert!(recovered.request(request).is_none());
+        assert!(recovered
+            .notices(notice_room)
+            .any(|notice| notice.text.contains(message)));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -523,5 +525,61 @@ fn delete_keeps_an_agent_whose_restored_terminal_runs_its_own_session() {
         .is_err());
     assert!(worker.state.agent(agent).is_some());
     drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn left_open_deletion_notifies_orchestrator_once_without_a_composer_error() {
+    let (mut worker, agent, room, dir, _) = fixture(
+        Provider::Codex,
+        vec![identity_changed(), native_agents(None), identity_changed()],
+    );
+    let mut state = worker.state.clone();
+    let orchestrator = state
+        .create_agent(
+            RoomId(0),
+            "orchestrator",
+            Provider::ClaudeCode,
+            dir.clone(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(orchestrator, room).unwrap();
+    worker.save(state).unwrap();
+    let (events, _) = mpsc::channel();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        worker
+            .command(BusCommand::DeleteAgent(agent), &events)
+            .unwrap()
+    });
+    let logs = capture.text();
+    assert_eq!(logs.matches("bus.deletion.terminal_left_open").count(), 1);
+    assert!(
+        logs.contains("author") && logs.contains("terminal") && logs.contains("ProviderExited")
+    );
+    assert_eq!(worker.snapshot().error, None);
+    assert!(worker.state.agent(agent).is_none());
+    let notices: Vec<_> = worker
+        .state
+        .requests()
+        .filter(|r| r.prompt.text.contains("left the terminal open"))
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].agent_id, orchestrator);
+    assert_eq!(notices[0].prompt.author, Author::Agent(agent));
+    assert!(notices[0].prompt.text.contains("author") && notices[0].prompt.text.contains("pane"));
+    drop(worker);
+    let recovered = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        recovered
+            .requests()
+            .filter(|r| r.prompt.text.contains("left the terminal open"))
+            .count(),
+        1
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
