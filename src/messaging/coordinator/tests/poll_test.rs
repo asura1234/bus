@@ -70,51 +70,23 @@ fn feishu_exit_notification_requires_explicit_matching_native_evidence() {
 }
 
 #[test]
-fn feishu_automatic_update_relaunch_does_not_create_a_developer_exit_notice() {
-    let now = std::time::Instant::now();
-    let mut terminal =
-        crate::terminal::TerminalState::new(crate::utils::ids::TerminalId::alloc(), "/tmp".into());
-    terminal.set_detected_state(
-        Some(crate::agents::AgentKind::Codex),
-        crate::agents::AgentState::Idle,
-    );
-    terminal.set_detected_state_with_screen_signals_at(
-        Some(crate::agents::AgentKind::Codex),
-        crate::agents::AgentState::Unknown,
-        false,
-        true,
-        None,
-        now,
-    );
-    terminal.begin_managed_agent(
-        "bus-r1-a2".into(),
-        crate::agents::AgentKind::Codex,
-        now,
-        std::time::Duration::from_secs(3),
-        std::time::Duration::from_secs(30),
-    );
-    terminal.self_update = Some(crate::terminal::SelfUpdate {
-        name: "bus-r1-a2".into(),
-        kind: crate::agents::AgentKind::Codex,
-        args: Vec::new(),
-        session: None,
-        success: "updated".into(),
-        phase: crate::terminal::SelfUpdatePhase::Relaunched,
-    });
+fn feishu_pending_relaunch_without_exit_evidence_does_not_notify_developer() {
+    // Native exit retirement and replacement exits are covered in terminal's
+    // process_exit_test; messaging consumes only their public protocol facts.
     let info = serde_json::from_value(json!({
         "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1", "tab_id":"t1",
-        "focused":false, "agent":terminal.effective_agent_label(), "name":"bus-r1-a2",
+        "focused":false, "agent":null, "name":"updating-codex",
         "agent_status":"unknown", "revision":1,
-        "launch_pending":terminal.managed_agent_launch_pending(), "interactive_ready":false
+        "launch_pending":true, "interactive_ready":false
     }))
     .unwrap();
     let pane = serde_json::from_value(json!({
         "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1", "tab_id":"t1",
         "focused":false, "agent_status":"unknown", "revision":1,
-        "agent_process_exited":terminal.attention_process_exited()
+        "agent_process_exited":false
     }))
     .unwrap();
-    let (mut worker, _, _, dir, _) = fixture(
+    let (mut worker, _, _, dir, calls) = fixture(
         Provider::Codex,
         vec![
             Ok(ResponseResult::AgentList { agents: vec![info] }),
@@ -122,6 +94,10 @@ fn feishu_automatic_update_relaunch_does_not_create_a_developer_exit_notice() {
         ],
     );
     worker.poll().unwrap();
+    assert!(
+        calls.lock().unwrap().contains(&"pane.get"),
+        "the missing-agent probe must consume native exit evidence"
+    );
     let notices = worker
         .state
         .notices(worker.state.master_room().unwrap().id)
