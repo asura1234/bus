@@ -136,10 +136,14 @@ fn since_filter_and_rotated_files_are_read_in_time_order() {
     std::fs::write(perf.join("client.jsonl"), line(5)).unwrap();
 
     let all = read_records(&dir, None);
-    let times: Vec<_> = all.iter().map(|r| r["ts_ms"].as_u64().unwrap()).collect();
+    let times: Vec<_> = all
+        .records
+        .iter()
+        .map(|r| r["ts_ms"].as_u64().unwrap())
+        .collect();
     assert_eq!(times, vec![5_000, 7_000, 10_000, 20_000]);
     let recent = read_records(&dir, Some(8_000));
-    assert_eq!(recent.len(), 2);
+    assert_eq!(recent.records.len(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -180,7 +184,12 @@ fn perf_reader_subprocess() {
     if std::env::var_os("BUS_PERF_READER_PROBE").is_none() {
         return;
     }
-    crate::cli::run(&["perf".into(), "--all".into()]).unwrap();
+    let args = if std::env::var_os("BUS_PERF_READER_RECENT").is_some() {
+        vec!["perf".into(), "--since".into(), "30m".into()]
+    } else {
+        vec!["perf".into(), "--all".into()]
+    };
+    crate::cli::run(&args).unwrap();
 }
 
 #[test]
@@ -246,10 +255,175 @@ fn perf_reader_preserves_plain_archives_beside_finished_gzip_copies() {
     let records = read_records(&dir, None);
     let retained_plain = std::fs::read_to_string(&plain).ok();
     std::fs::remove_dir_all(dir).unwrap();
-    assert_eq!(records.len(), 1, "finished compression is read once");
+    assert_eq!(
+        records.records.len(),
+        1,
+        "finished compression is read once"
+    );
     assert_eq!(
         retained_plain.as_deref(),
         Some(contents.as_str()),
         "a files-only perf reader must leave archive maintenance to the writer"
     );
+}
+
+#[test]
+fn recent_query_does_not_open_many_expired_indexed_archives() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-index-scan");
+    let perf = dir.join("perf");
+    std::fs::create_dir_all(&perf).unwrap();
+    for n in 1..=64 {
+        let path = perf.join(format!("client.jsonl.{n}.gz"));
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut encoder, b"{\"ts_ms\":1000}\n").unwrap();
+        let gzip = encoder.finish().unwrap();
+        std::fs::write(&path, &gzip).unwrap();
+        std::fs::write(
+            perf.join(format!("client.jsonl.{n}.index.json")),
+            serde_json::to_vec(&json!({
+                "version": 1, "first_ts_ms": 1000, "last_ts_ms": 1000,
+                "records": 1, "invalid": 0, "plain_bytes": 15,
+                "gzip_bytes": gzip.len(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    std::fs::write(perf.join("client.jsonl"), b"{\"ts_ms\":2000}\n").unwrap();
+    let mut archive_opens = 0;
+    let records = reader::read_records_with(&dir, Some(2000), |path| {
+        if path.extension().is_some_and(|ext| ext == "gz") {
+            archive_opens += 1;
+        }
+        reader::open(path)
+    });
+    assert_eq!(records.records.len(), 1);
+    assert_eq!(records.stats.archives_skipped, 64);
+    assert_eq!(records.stats.files_read, 1);
+    assert_eq!(records.stats.records_skipped, 64);
+    assert_eq!(read_records(&dir, None).records.len(), 65);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        archive_opens, 0,
+        "expired archives must be skipped before decompression"
+    );
+}
+
+#[test]
+fn perf_scan_falls_back_for_legacy_or_bad_indexes_and_keeps_cutoff_boundary() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-scan-boundary");
+    let perf = dir.join("perf");
+    std::fs::create_dir_all(&perf).unwrap();
+    // These filenames and mtimes are old; neither is a timestamp bound.
+    for (n, ts) in [(1, 3000), (2, 2000), (3, 4000), (4, 5000)] {
+        let path = perf.join(format!("client.jsonl.{n}"));
+        std::fs::write(&path, format!("{{\"ts_ms\":{ts}}}\n")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))
+            .unwrap();
+        if n == 2 {
+            let source = std::fs::read(&path).unwrap();
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            std::io::Write::write_all(&mut encoder, &source).unwrap();
+            let gzip = encoder.finish().unwrap();
+            std::fs::write(perf.join("client.jsonl.2.gz"), &gzip).unwrap();
+            std::fs::write(perf.join("client.jsonl.2.index.json"), serde_json::to_vec(&json!({
+                "version": 1, "first_ts_ms": 2000, "last_ts_ms": 2000,
+                "records": 1, "invalid": 0, "plain_bytes": source.len(), "gzip_bytes": gzip.len(),
+            })).unwrap()).unwrap();
+            std::fs::remove_file(&path).unwrap();
+        } else if n == 3 {
+            std::fs::write(perf.join("client.jsonl.3.index.json"), b"broken").unwrap();
+        } else if n == 4 {
+            // A stale sidecar must not hide this longer archive.
+            std::fs::write(
+                perf.join("client.jsonl.4.index.json"),
+                serde_json::to_vec(&json!({
+                    "version": 1, "first_ts_ms": 1, "last_ts_ms": 1,
+                    "records": 1, "invalid": 0, "plain_bytes": 1, "gzip_bytes": 1,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+    }
+    let scan = read_records(&dir, Some(2000));
+    assert_eq!(
+        scan.records.iter().map(ts).collect::<Vec<_>>(),
+        [2000, 3000, 4000, 5000]
+    );
+    assert_eq!(scan.stats.files_read, 4);
+    assert_eq!(scan.stats.archives_skipped, 0);
+    assert_eq!(scan.stats.invalid, 0);
+    let all = read_records(&dir, None);
+    assert_eq!(all.records.len(), 4);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn perf_scan_streams_past_invalid_lines_and_counts_excluded_records() {
+    let dir = crate::utils::test_temp::unique_temp_path("perf-scan-invalid");
+    let perf = dir.join("perf");
+    std::fs::create_dir_all(&perf).unwrap();
+    std::fs::write(perf.join("client.jsonl"),
+        b"{\"ts_ms\":1,\"ignored\":{\"nested\":[1,2,3]}}\nnot json\n\xff\n{\"kind\":\"window\"}\n{\"ts_ms\":2000}\n{\"ts_ms\":3,\"broken\":}\n",
+    ).unwrap();
+    std::fs::write(perf.join("server.jsonl.1.gz"), b"broken gzip").unwrap();
+    let scan = read_records(&dir, Some(2000));
+    assert_eq!(scan.records, [json!({"ts_ms":2000})]);
+    assert_eq!(scan.stats.files_read, 2);
+    assert_eq!(scan.stats.records_read, 2);
+    assert_eq!(scan.stats.records_skipped, 1);
+    assert_eq!(scan.stats.invalid, 4);
+    assert_eq!(scan.stats.unreadable, 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn perf_prints_and_flushes_root_and_window_before_opening_a_blocked_archive() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+    let dir = crate::utils::test_temp::unique_temp_path("perf-immediate-header");
+    let perf = dir.join("herdr-config/sessions/bus/perf");
+    std::fs::create_dir_all(&perf).unwrap();
+    let fifo = perf.join("client.jsonl.1");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "cli::perf::tests::perf_reader_subprocess",
+            "--nocapture",
+        ])
+        .env("BUS_DATA_DIR", &dir)
+        .env("BUS_PERF_READER_PROBE", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.starts_with("perf:") {
+                let _ = send.send(line);
+                break;
+            }
+        }
+    });
+    let line = receive.recv_timeout(Duration::from_secs(5));
+    // The child remains blocked on this scratch FIFO. Always reap it.
+    child.kill().unwrap();
+    child.wait().unwrap();
+    reader.join().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let line = line.expect("selected path/window must be flushed before archive I/O");
+    assert!(line.contains(&perf.display().to_string()), "{line}");
+    assert!(line.contains("all records"), "{line}");
 }
