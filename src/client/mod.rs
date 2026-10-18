@@ -20,6 +20,7 @@ mod effects;
 pub(crate) mod errors;
 mod event_loop;
 mod events;
+mod freeze_alert;
 pub(crate) mod host_terminal;
 mod notifications;
 pub(crate) mod panes;
