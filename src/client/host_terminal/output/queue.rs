@@ -1,8 +1,10 @@
+use super::metrics::OutputMetrics;
 use crate::protocol::wire::{CellData, CursorState, FrameData, PaneSurfacePatchRow};
 use std::{
     collections::VecDeque,
     io,
     sync::{Arc, Condvar, Mutex, MutexGuard},
+    time::Instant,
 };
 
 // Includes the command currently being encoded/written. The semantic baseline
@@ -27,6 +29,7 @@ pub(super) struct Patch {
 
 pub(super) enum Command {
     Frame(Frame),
+    EncodedFrame(Vec<u8>),
     Bytes(Vec<u8>),
     Graphics(Vec<u8>),
 }
@@ -45,7 +48,7 @@ impl Command {
                         .sum()
                 }))
             }
-            Self::Bytes(bytes) | Self::Graphics(bytes) => bytes.len(),
+            Self::EncodedFrame(bytes) | Self::Bytes(bytes) | Self::Graphics(bytes) => bytes.len(),
         }
         .saturating_add(std::mem::size_of::<Self>())
     }
@@ -76,13 +79,14 @@ fn frame_cost(frame: &FrameData) -> usize {
 pub(super) struct Queued {
     pub(super) command: Command,
     cost: usize,
+    since: Instant,
 }
 
 #[derive(Default)]
 struct State {
     pending: VecDeque<Queued>,
     bytes: usize,
-    active: bool,
+    active: Option<Instant>,
     closed: bool,
     error: Option<(io::ErrorKind, String)>,
     write_failed: bool,
@@ -91,10 +95,20 @@ struct State {
     presented: u64,
 }
 
-#[derive(Default)]
 pub(super) struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    pub(super) metrics: &'static OutputMetrics,
+}
+
+impl Shared {
+    pub(super) fn new(metrics: &'static OutputMetrics) -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            wake: Condvar::new(),
+            metrics,
+        }
+    }
 }
 #[derive(Clone)]
 pub(super) struct Handle(pub(super) Arc<Shared>);
@@ -176,8 +190,17 @@ impl Handle {
             drop(retired);
             return error;
         }
+        let since = retired.as_ref().map_or_else(Instant::now, |old| old.since);
         state.bytes += cost;
-        state.pending.push_back(Queued { command, cost });
+        state.pending.push_back(Queued {
+            command,
+            cost,
+            since,
+        });
+        if replace {
+            self.0.metrics.coalesced.add(1);
+        }
+        self.observe_age(&state);
         self.0.wake.notify_all();
         drop(state);
         // Destruction of superseded frame allocations never holds the mailbox.
@@ -187,18 +210,20 @@ impl Handle {
 
     pub(super) fn busy(&self) -> bool {
         let state = self.lock();
-        state.active || !state.pending.is_empty()
+        self.observe_age(&state);
+        state.active.is_some() || !state.pending.is_empty()
     }
 
     pub(super) fn feedback(&self) -> io::Result<Option<bool>> {
         let mut state = self.lock();
+        self.observe_age(&state);
         check(&state)?;
         Ok(state.acknowledged.take())
     }
 
     pub(super) fn wait_idle(&self) {
         let mut state = self.lock();
-        while state.active || (!state.pending.is_empty() && !state.write_failed) {
+        while state.active.is_some() || (!state.pending.is_empty() && !state.write_failed) {
             state = self.0.wake.wait(state).unwrap_or_else(|p| p.into_inner());
         }
     }
@@ -221,7 +246,8 @@ impl Handle {
                 return None;
             }
             if let Some(command) = state.pending.pop_front() {
-                state.active = true;
+                state.active = Some(command.since);
+                self.observe_age(&state);
                 return Some(command);
             }
             if state.closed || state.error.is_some() {
@@ -233,7 +259,7 @@ impl Handle {
 
     pub(super) fn complete(&self, queued: Queued, result: io::Result<Option<bool>>) {
         let mut state = self.lock();
-        state.active = false;
+        state.active = None;
         state.bytes -= queued.cost;
         match result {
             Ok(Some(cleared)) => {
@@ -249,9 +275,29 @@ impl Handle {
                 state.error = Some((error.kind(), error.to_string()));
             }
         }
+        self.observe_age(&state);
         self.0.wake.notify_all();
         drop(state);
         drop(queued);
+    }
+
+    /// Includes the in-flight transaction until flush/ack. The active command
+    /// or queue front is oldest, so this never walks the pending queue. UI
+    /// feedback/ticks sample it even while the output worker is blocked.
+    fn observe_age(&self, state: &State) {
+        let since = (!state.write_failed)
+            .then(|| {
+                state
+                    .active
+                    .or_else(|| state.pending.front().map(|q| q.since))
+            })
+            .flatten();
+        self.0
+            .metrics
+            .pending_age_ms
+            .observe(since.map_or(0, |since| {
+                u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+            }));
     }
 }
 

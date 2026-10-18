@@ -5,6 +5,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "output_metrics_test.rs"]
+mod metrics;
+
 #[derive(Default)]
 struct Capture {
     open: bool,
