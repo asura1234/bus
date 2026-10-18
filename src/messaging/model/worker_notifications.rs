@@ -139,13 +139,12 @@ impl BusState {
             if !selected(event.route, notice) {
                 continue;
             }
-            let author_waits =
-                matches!(event.kind, WorkerEventKind::Outcome | WorkerEventKind::Idle)
-                    && self.requests().any(|r| {
-                        event.group == Some(reply_key(r))
-                            && self.reply_orchestrator(r).is_some()
-                            && waited.contains(&r.prompt.id)
-                    });
+            let author_waits = matches!(event.kind, WorkerEventKind::Outcome)
+                && self.requests().any(|r| {
+                    event.group == Some(reply_key(r))
+                        && self.reply_orchestrator(r).is_some()
+                        && waited.contains(&r.prompt.id)
+                });
             parts.push(Part {
                 key: Key::Event(key.clone()),
                 worker: event.agent,

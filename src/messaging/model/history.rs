@@ -152,7 +152,7 @@ impl super::BusState {
                     .notification()
                     .is_some_and(|notice| retained.contains(&notice))
         });
-        let events = self.prune_worker_events();
+        let events = self.prune_worker_events(now_ms);
         pending | moved | expired | spent | events | (routes != self.reply_routes.len())
     }
 

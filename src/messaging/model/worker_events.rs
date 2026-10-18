@@ -22,6 +22,8 @@ pub(super) struct WorkerEvent {
     pub(super) group: Option<RequestId>,
     pub(super) message: PromptId,
     pub(super) at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) episode: Option<u64>,
     pub(super) kind: WorkerEventKind,
     pub(super) text: String,
     pub(super) route: ReplyRoute,
@@ -132,6 +134,7 @@ impl BusState {
                 group,
                 message,
                 at_ms: callback.occurred_at_ms,
+                episode: None,
                 kind: WorkerEventKind::Final,
                 text: summary,
                 route: ReplyRoute::Pending,
@@ -222,20 +225,26 @@ impl BusState {
             let idle_since = request.turn_ended_at_ms.unwrap_or(agent.status_since_ms);
             let idle = self.reply_orchestrator(&request).is_some()
                 && !request.settled()
-                && matches!(
-                    request.phase,
-                    RequestPhase::Active | RequestPhase::Submitting
-                )
                 && agent.shown_status() == RuntimeStatus::Idle
-                && !request.held_for_shells()
-                && (request.awaiting_background || self.turn_ended(&request))
+                && !agent.dialog
+                && agent.status_revision > agent.busy_revision
+                && (request.awaiting_background
+                    || self.turn_ended(&request)
+                    || (agent.status_since_ms >= request.prompt.submitted_at_ms
+                        && agent.busy_revision > request.submission_status_revision))
                 && now_ms >= idle_since.saturating_add(TURN_SETTLE_MS);
             if idle {
                 self.record_request_event(
                     &request,
                     WorkerEventKind::Idle,
                     "idle",
-                    "Idle with open request (reply pending)",
+                    if request.held_for_shells() {
+                        "Idle with open request (background shells pending)"
+                    } else if request.awaiting_background {
+                        "Idle with open request (background work pending)"
+                    } else {
+                        "Idle with open request (reply pending)"
+                    },
                     idle_since,
                 );
             }
@@ -305,7 +314,15 @@ impl BusState {
         at_ms: u64,
     ) {
         let group = reply_key(request);
-        let key = format!("{class}:{}", group.0);
+        // A resumed background turn can go idle or stall again. Persist its
+        // busy revision so stable polls/restarts dedup, while new work has its
+        // own fact and cannot be hidden by an earlier printed status.
+        let episode = (kind == WorkerEventKind::Idle || class == "stalled")
+            .then(|| self.agent(request.agent_id).map_or(0, |a| a.busy_revision));
+        let key = match episode {
+            Some(episode) => format!("{class}:{}:{episode}", group.0),
+            None => format!("{class}:{}", group.0),
+        };
         self.worker_events
             .entry(key)
             .or_insert_with(|| WorkerEvent {
@@ -314,6 +331,7 @@ impl BusState {
                 group: Some(group),
                 message: request.prompt.id,
                 at_ms,
+                episode,
                 kind,
                 text: format!(
                     "{}; message {} (request {}).\nInspect: bus message status {}",
@@ -354,7 +372,7 @@ impl BusState {
         }
     }
 
-    pub(super) fn prune_worker_events(&mut self) -> bool {
+    pub(super) fn prune_worker_events(&mut self, now_ms: u64) -> bool {
         let groups: std::collections::BTreeSet<_> = self.requests().map(reply_key).collect();
         let messages: std::collections::BTreeSet<_> = self
             .rooms()
@@ -364,10 +382,16 @@ impl BusState {
             .worker_events
             .iter()
             .filter(|(_, e)| {
+                let superseded = e.episode.is_some_and(|episode| {
+                    self.agent(e.agent)
+                        .is_some_and(|a| a.busy_revision != episode)
+                        && now_ms.saturating_sub(e.at_ms) > super::history::HISTORY_RETENTION_MS
+                });
                 self.worker_orchestrator(e.agent).is_some()
                     && (self.event_pending(e)
-                        || e.group.is_some_and(|group| groups.contains(&group))
-                        || messages.contains(&e.message))
+                        || !superseded
+                            && (e.group.is_some_and(|group| groups.contains(&group))
+                                || messages.contains(&e.message)))
             })
             .map(|(key, _)| key.clone())
             .collect();

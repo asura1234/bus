@@ -1,6 +1,10 @@
 use super::*;
 
 fn ready_worker(f: &mut Fixture) {
+    ready_worker_at(f, io::now_ms() - 10_000);
+}
+
+fn ready_worker_at(f: &mut Fixture, at_ms: u64) {
     let mut state = f.worker.state.clone();
     state
         .set_agent_runtime_identity(
@@ -15,7 +19,7 @@ fn ready_worker(f: &mut Fixture) {
         .unwrap();
     state.confirm_hook_setup(f.agent).unwrap();
     state
-        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms() - 10_000)
+        .observe_status(f.agent, RuntimeStatus::Idle, at_ms)
         .unwrap();
     f.worker.save(state).unwrap();
 }
@@ -801,4 +805,352 @@ fn long_failure_reason_keeps_event_and_original_reference_in_the_short_notice() 
         .as_ref()
         .unwrap()
         .contains(&reason));
+}
+
+fn earlier_background_request(f: &mut Fixture, shell: bool) -> RequestId {
+    earlier_background_request_at(f, shell, io::now_ms())
+}
+
+fn earlier_background_request_at(f: &mut Fixture, shell: bool, now: u64) -> RequestId {
+    ready_worker_at(f, now - 30_000);
+    let mut state = f.worker.state.clone();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "background work".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            now - 20_000,
+        )
+        .unwrap()[0];
+    state.begin_submission(source, "worker", 0).unwrap();
+    state
+        .record_submission(
+            source,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("worker-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let mut start = callback(f, "held", 1, CallbackEventKind::PromptStarted);
+    start.occurred_at_ms = now - 12_000;
+    start.prompt_payload = Some("background work".into());
+    assert_eq!(
+        state.accept_callback(start),
+        CallbackDisposition::AcceptedBinding
+    );
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, now - 12_000)
+        .unwrap();
+    let mut pending = callback(f, "held", 2, CallbackEventKind::BackgroundPending);
+    pending.occurred_at_ms = now - 11_000;
+    state.accept_callback(pending);
+    if shell {
+        state.hold_reply_for_shells(
+            f.agent,
+            crate::messaging::model::PendingFinal {
+                callback_id: "held-interim".into(),
+                text: "Shell still running".into(),
+                received_at_ms: now - 11_000,
+                provider_session_id: Some("worker-session".into()),
+                provider_turn_id: Some("held".into()),
+            },
+        );
+    }
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    source
+}
+
+#[test]
+fn idle_open_work_wakes_even_while_its_author_waiter_is_alive() {
+    let mut f = Fixture::new();
+    let source = earlier_background_request(&mut f, false);
+    let message = f.worker.state.request(source).unwrap().prompt.id;
+    assert!(
+        f.call(
+            "message.status",
+            json!({"message":message.0.to_string(),"as":f.orch.0.to_string()})
+        )
+        .ok
+    );
+    assert!(f.worker.reply_waiters.contains_key(&message));
+    f.worker.submit_ready().unwrap();
+    assert_eq!(
+        f.calls.lock().unwrap().len(),
+        1,
+        "a waiting process that has printed nothing cannot replace idle awareness"
+    );
+    assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Active
+    );
+}
+
+#[test]
+fn known_background_shell_idle_is_reported_without_releasing_its_hold() {
+    let mut f = Fixture::new();
+    let source = earlier_background_request(&mut f, true);
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
+    assert!(f.calls.lock().unwrap()[0].contains("background shells"));
+    let request = f.worker.state.request(source).unwrap();
+    assert_eq!(request.phase, RequestPhase::Active);
+    assert!(request.awaiting_background && request.shell_hold.is_some());
+}
+
+#[test]
+fn genuine_idle_edge_reports_an_orchestrator_request_still_queued() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    ready_worker_at(&mut f, now - 30_000);
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, now - 25_000)
+        .unwrap();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "still queued".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            now - 20_000,
+        )
+        .unwrap()[0];
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
+        .unwrap();
+    state.route_worker_replies(now, &BTreeSet::new()).unwrap();
+    f.worker.save(state).unwrap();
+    assert_eq!(
+        f.notices().len(),
+        1,
+        "a queued request is still open when its worker goes idle"
+    );
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert!(f.notices()[0]
+        .prompt
+        .text
+        .contains("Idle with open request"));
+}
+
+#[test]
+fn idle_after_uncertain_submission_reports_without_claiming_the_turn_ended() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    ready_worker_at(&mut f, now - 30_000);
+    let mut state = f.worker.state.clone();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "unconfirmed work".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            now - 20_000,
+        )
+        .unwrap()[0];
+    state.begin_submission(source, "worker", 0).unwrap();
+    state
+        .record_submission(
+            source,
+            SubmissionOutcome::Uncertain {
+                message: "submit acknowledgement lost".into(),
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, now - 12_000)
+        .unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
+        .unwrap();
+    assert!(!state.turn_ended(state.request(source).unwrap()));
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
+    let request = f.worker.state.request(source).unwrap();
+    assert_eq!(request.phase, RequestPhase::Submitting);
+    assert!(request.uncertain_outcome && !request.trusted_start_bound);
+}
+
+#[test]
+fn an_initially_idle_worker_with_a_new_queued_request_does_not_warn() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    ready_worker_at(&mut f, now - 30_000);
+    let mut state = f.worker.state.clone();
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "new queued work".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            now - 20_000,
+        )
+        .unwrap();
+    state.route_worker_replies(now, &BTreeSet::new()).unwrap();
+    f.worker.save(state).unwrap();
+    assert!(f.notices().is_empty());
+}
+
+fn continue_background_work(f: &mut Fixture, at: u64) {
+    let mut state = f.worker.state.clone();
+    let mut start = callback(f, "held-next", 20, CallbackEventKind::PromptStarted);
+    start.occurred_at_ms = at;
+    start.prompt_payload = Some("background continuation".into());
+    assert_eq!(
+        state.accept_callback(start),
+        CallbackDisposition::AcceptedContinuation
+    );
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, at)
+        .unwrap();
+    let mut pending = callback(f, "held-next", 21, CallbackEventKind::BackgroundPending);
+    pending.occurred_at_ms = at + 1_000;
+    state.accept_callback(pending);
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, at + 2_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+}
+
+#[test]
+fn a_new_background_idle_episode_wakes_once_after_the_first_notice_was_handled() {
+    let mut f = Fixture::new();
+    earlier_background_request(&mut f, false);
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.notices().len(), 1);
+    let first = f.notices()[0].id;
+    f.finish(first, "acknowledged");
+    continue_background_work(&mut f, io::now_ms() - 8_000);
+    f.worker.submit_ready().unwrap();
+    assert_eq!(
+        f.notices().len(),
+        2,
+        "new work followed by idle is a new event"
+    );
+    let second = f.notices().into_iter().find(|r| r.id != first).unwrap().id;
+    f.finish(second, "acknowledged again");
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(
+        f.notices().len(),
+        2,
+        "stable idle must not replay on restart"
+    );
+    assert_eq!(f.calls.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn an_acknowledged_stall_does_not_hide_a_new_stall_after_work_resumes() {
+    let mut f = Fixture::new();
+    let source = earlier_background_request(&mut f, false);
+    let first_at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
+    let mut state = f.worker.state.clone();
+    state.retain_worker_outcomes(first_at);
+    let old: Vec<_> = state
+        .worker_outcomes_for(state.request(source).unwrap())
+        .into_iter()
+        .filter(|(_, text)| text.contains("No reply (stalled:"))
+        .map(|(key, _)| key)
+        .collect();
+    assert_eq!(old.len(), 1);
+    state
+        .see_worker_outcomes(source, f.orch, &old, first_at)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    continue_background_work(&mut f, first_at + 1_000);
+    let mut state = f.worker.state.clone();
+    let second_at = first_at + crate::messaging::model::DELIVERED_STALL_MS + 4_000;
+    state.retain_worker_outcomes(second_at);
+    state
+        .see_worker_outcomes(source, f.orch, &old, second_at)
+        .unwrap();
+    let current: Vec<_> = state
+        .worker_outcomes_for(state.request(source).unwrap())
+        .into_iter()
+        .filter(|(_, text)| text.contains("No reply (stalled:"))
+        .map(|(key, _)| key)
+        .collect();
+    assert_eq!(
+        current.len(),
+        1,
+        "a stale printed status must not hide a later stalled episode"
+    );
+    assert_ne!(old, current);
+    assert_eq!(state.request(source).unwrap().phase, RequestPhase::Active);
+}
+
+#[test]
+fn handled_old_idle_episodes_expire_only_after_new_work_supersedes_them() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    let old = now - crate::messaging::model::HISTORY_RETENTION_MS - 30_000;
+    let source = earlier_background_request_at(&mut f, false, old);
+    let mut state = f.worker.state.clone();
+    state.retain_worker_outcomes(old);
+    let keys: Vec<_> = state
+        .worker_outcomes_for(state.request(source).unwrap())
+        .into_iter()
+        .filter(|(_, text)| text.contains("Idle with open request"))
+        .map(|(key, _)| key)
+        .collect();
+    assert_eq!(keys.len(), 1);
+    state
+        .see_worker_outcomes(source, f.orch, &keys, old)
+        .unwrap();
+    state.archive(now);
+    assert!(
+        state
+            .worker_events_for(state.request(source).unwrap())
+            .iter()
+            .any(|(key, _)| keys.contains(key)),
+        "a current idle tombstone must prevent rediscovery even on a long-running request"
+    );
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, now - 8_000)
+        .unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 6_000)
+        .unwrap();
+    state.archive(now);
+    let current = state.worker_events_for(state.request(source).unwrap());
+    assert!(
+        !current.iter().any(|(key, _)| keys.contains(key)),
+        "handled superseded history is bounded"
+    );
+    assert_eq!(
+        current
+            .iter()
+            .filter(|(_, text)| text.contains("Idle with open request"))
+            .count(),
+        1
+    );
+    state.route_worker_replies(now, &BTreeSet::new()).unwrap();
+    f.worker.save(state).unwrap();
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.notices().len(), 1);
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
 }
