@@ -13,6 +13,8 @@ pub(crate) struct ProcessSample {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MachineSample {
     pub(crate) processes: Vec<ProcessSample>,
+    pub(crate) enumerated: usize,
+    pub(crate) unavailable: usize,
     pub(crate) load1: Option<f64>,
     pub(crate) memory_pressure: Option<u32>,
     pub(crate) page_ins: Option<u64>,
@@ -56,6 +58,7 @@ impl Sampler {
         Some(self.record(now, sample))
     }
     fn record(&mut self, now: Instant, sample: MachineSample) -> serde_json::Value {
+        let readable = sample.processes.len();
         let mut next = BTreeMap::new();
         let mut processes: Vec<_> = sample
             .processes
@@ -80,7 +83,9 @@ impl Sampler {
             "cpu_pct":(pct * 10.0).round() / 10.0,
         })).collect();
         serde_json::json!({"top_cpu":top,"load1":sample.load1,"memory_pressure":sample.memory_pressure,
-            "page_ins":sample.page_ins,"page_outs":sample.page_outs,"interval_s":5})
+            "page_ins":sample.page_ins,"page_outs":sample.page_outs,"interval_s":5,
+            "process_coverage":{"scope":"readable_processes","enumerated":sample.enumerated,
+                "readable":readable,"unavailable":sample.unavailable}})
     }
 }
 impl Drop for Sampler {
@@ -97,6 +102,8 @@ mod tests {
         let mut sampler = Sampler::spawn(|| None);
         let now = Instant::now();
         let sample = |cpu_ns, start_us| MachineSample {
+            enumerated: 15,
+            unavailable: 3,
             processes: (1..=12)
                 .map(|pid| ProcessSample {
                     pid,
@@ -118,6 +125,12 @@ mod tests {
         assert_eq!(record["top_cpu"].as_array().unwrap().len(), 8);
         assert_eq!(record["top_cpu"][0]["pid"], 12);
         assert_eq!(record["top_cpu"][0]["cpu_pct"], 240.0);
+        assert_eq!(
+            record["process_coverage"],
+            serde_json::json!({
+                "scope":"readable_processes", "enumerated":15, "readable":12, "unavailable":3,
+            })
+        );
         assert!(
             sampler.record(now + Duration::from_secs(10), sample(2_000_000_000, 2))["top_cpu"]
                 .as_array()

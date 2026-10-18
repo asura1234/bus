@@ -5,6 +5,7 @@ use crate::utils::perf::machine::ProcessSample;
 
 #[cfg(target_os = "macos")]
 pub(crate) fn sample() -> Option<MachineSample> {
+    let timebase = cpu_timebase()?;
     const MAX_PIDS: usize = 16384;
     let mut pids = vec![0_i32; MAX_PIDS];
     let bytes = unsafe {
@@ -19,11 +20,13 @@ pub(crate) fn sample() -> Option<MachineSample> {
         return None;
     }
     pids.truncate((bytes as usize / std::mem::size_of::<i32>()).min(MAX_PIDS));
-    let processes = pids
+    pids.retain(|pid| *pid > 0);
+    let enumerated = pids.len();
+    let processes: Vec<_> = pids
         .into_iter()
-        .filter(|pid| *pid > 0)
-        .filter_map(process)
+        .filter_map(|pid| process(pid, timebase))
         .collect();
+    let unavailable = enumerated - processes.len();
     let mut load = [0.0; 1];
     let load1 = (unsafe { libc::getloadavg(load.as_mut_ptr(), 1) } == 1).then_some(load[0]);
     let mut pressure = 0_u32;
@@ -40,6 +43,8 @@ pub(crate) fn sample() -> Option<MachineSample> {
     let pages = paging();
     Some(MachineSample {
         processes,
+        enumerated,
+        unavailable,
         load1,
         memory_pressure: pressure_ok.then_some(pressure),
         page_ins: pages.map(|p| p.0),
@@ -47,7 +52,14 @@ pub(crate) fn sample() -> Option<MachineSample> {
     })
 }
 #[cfg(target_os = "macos")]
-fn process(pid: i32) -> Option<ProcessSample> {
+#[allow(deprecated)] // Use the same native Mach ABI as the existing VM sampler.
+fn cpu_timebase() -> Option<(u32, u32)> {
+    let mut info = libc::mach_timebase_info { numer: 0, denom: 0 };
+    (unsafe { libc::mach_timebase_info(&mut info) } == libc::KERN_SUCCESS && info.denom != 0)
+        .then_some((info.numer, info.denom))
+}
+#[cfg(target_os = "macos")]
+fn process(pid: i32, timebase: (u32, u32)) -> Option<ProcessSample> {
     unsafe fn info<T>(pid: i32, flavor: i32) -> Option<T> {
         let mut result: T = std::mem::zeroed();
         let size = std::mem::size_of::<T>() as i32;
@@ -69,7 +81,10 @@ fn process(pid: i32) -> Option<ProcessSample> {
             .saturating_mul(1_000_000)
             .saturating_add(bsd.pbi_start_tvusec),
         basename: String::from_utf8_lossy(&basename).into_owned(),
-        cpu_ns: task.pti_total_user.saturating_add(task.pti_total_system),
+        cpu_ns: ((u128::from(task.pti_total_user.saturating_add(task.pti_total_system))
+            * u128::from(timebase.0))
+            / u128::from(timebase.1))
+        .min(u128::from(u64::MAX)) as u64,
     })
 }
 #[cfg(target_os = "macos")]
