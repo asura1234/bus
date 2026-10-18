@@ -40,6 +40,10 @@ impl TerminalState {
         settle_delay: Duration,
         timeout: Duration,
     ) {
+        // Retire the old exit together with its stale detected provider label.
+        if self.recent_agent_process_exit.take().is_some() {
+            self.detected_agent = None;
+        }
         self.set_agent_name(name);
         self.agent_name_owner = Some(AgentNameOwner {
             agent_label: crate::agents::agent_label(kind).to_string(),
