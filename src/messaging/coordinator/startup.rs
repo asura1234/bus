@@ -56,11 +56,15 @@ impl Worker {
                     && info.name.as_deref() == Some(&name)
             });
             // Codex defers SessionStart until its first prompt. Native
-            // interactive confirmation is the existing equivalent start signal.
+            // interactive confirmation, or a provider already waiting at its
+            // own startup dialog, proves it started. Preserve that help wait.
             if !startup.reported
                 && info.is_some_and(|info| {
-                    info.interactive_ready
-                        && info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                    info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                        && (info.interactive_ready
+                            || info.launch_pending
+                                && (info.agent_status == schema::AgentStatus::Blocked
+                                    || info.dialog_id.is_some()))
                 })
             {
                 let mut state = self.state.clone();

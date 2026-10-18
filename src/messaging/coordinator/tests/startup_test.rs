@@ -330,3 +330,62 @@ fn startup_failure_does_not_quote_a_replacement_terminal() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn provider_waiting_at_its_own_startup_dialog_is_not_deleted_as_a_failed_startup() {
+    // Native keeps a launch that reached the provider's own blocking dialog
+    // (trust directory, hooks review, update chooser) without a deadline and
+    // reports it to the room as needing help; that provider did start.
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let mut info = pending_info(&worker, agent);
+    info.agent_status = schema::AgentStatus::Blocked;
+    info.dialog_id = Some("trust_directory".into());
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 30_000)
+        .unwrap();
+    assert!(
+        worker.state.agent(agent).is_some(),
+        "a provider blocked at its startup dialog was deleted as a failed startup"
+    );
+    assert_eq!(worker.state.notices(room).count(), 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn blocked_shell_without_the_expected_provider_still_expires() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let mut info = pending_info(&worker, agent);
+    info.agent = None;
+    info.agent_status = schema::AgentStatus::Blocked;
+    info.dialog_id = Some("shell-startup-prompt".into());
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 30_000)
+        .unwrap();
+    assert!(worker.state.agent(agent).is_none());
+    assert!(worker
+        .state
+        .notices(room)
+        .last()
+        .unwrap()
+        .text
+        .contains("Startup failed"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
