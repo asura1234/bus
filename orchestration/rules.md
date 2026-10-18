@@ -127,7 +127,9 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Replace a worker on its compaction-limit notice.** Automatically follow
   [agent-handover](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md)
   when Bus sends `AGENT -> orchestrator: reached N compactions` at **Settings →
-  Max compactions per agent**. *Why:* each compaction loses detail, and quality
+  Max compactions per agent**. That workflow defines the `temp/` note contract,
+  the same provider and role requirements, and how to brief it from the note
+  and delete the old agent. *Why:* each compaction loses detail, and quality
   drops after several.
 - **Never clear or replace yourself.** The two rules above apply to workers
   only: the orchestrator never resets its own context and is never replaced

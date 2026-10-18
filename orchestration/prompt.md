@@ -95,6 +95,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 - On a worker's `reached N compactions` notice at **Settings → Max compactions
   per agent**, automatically follow
   [agent-handover](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md).
+  That workflow defines the `temp/` note contract, the same provider and role
+  requirements, and how to brief it from the note and delete the old agent.
   Run `bus agent clear` before giving a worker an unrelated task.
   This applies to workers only: never clear or replace yourself; you keep the
   context for the whole effort.
