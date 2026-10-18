@@ -1,5 +1,6 @@
 //! Messaging model facade; state operations are owned by their round-trip domain.
 mod agents;
+mod attention;
 mod callbacks;
 mod compactions;
 mod history;
@@ -14,6 +15,7 @@ mod types;
 #[cfg(test)]
 use requests::rejection_reason;
 
+pub(crate) use attention::{AttentionAttempt, AttentionDelivery, AttentionOrigin};
 #[cfg(test)]
 pub(crate) use history::ARCHIVE_AFTER_MS;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS, HISTORY_RETENTION_MS};

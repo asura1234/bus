@@ -134,6 +134,9 @@ pub struct ReportingProcess {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneInfo {
+    /// Explicit native process-exit evidence, excluding automatic self-update restarts.
+    #[serde(default)]
+    pub agent_process_exited: bool,
     pub pane_id: String,
     pub terminal_id: String,
     pub workspace_id: String,

@@ -12,6 +12,189 @@ fn master_agent(state: &mut BusState, name: &str) -> AgentId {
         .expect("master agent")
 }
 
+#[test]
+fn developer_attention_mechanical_episode_is_atomic_durable_and_rearms_only_on_recovery() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let agent = master_agent(&mut state, "orch");
+    state.bind_orchestrator(agent, work).unwrap();
+    let key = "exit:1:launch".to_string();
+    state
+        .attention_episode(key.clone(), Some(true), agent, "Process exited", 100)
+        .unwrap();
+    let notices: Vec<_> = state.notices(master).collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].author, Author::Bus);
+    assert_eq!(notices[0].attention_origin.as_ref().unwrap().room_id, work);
+    assert!(notices[0]
+        .text
+        .starts_with(crate::messaging::attention::TAG));
+    let mut state: BusState = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    for active in [Some(true), None, Some(true)] {
+        state
+            .attention_episode(key.clone(), active, agent, "Process exited", 101)
+            .unwrap();
+    }
+    assert_eq!(state.notices(master).count(), 1);
+    state
+        .attention_episode(key.clone(), Some(false), agent, "", 102)
+        .unwrap();
+    state
+        .attention_episode(key, Some(true), agent, "Process exited", 103)
+        .unwrap();
+    assert_eq!(state.notices(master).count(), 2);
+}
+
+#[test]
+fn feishu_prunes_delivery_guards_after_their_history_is_removed() {
+    let mut state = BusState::default();
+    state.attention_delivery.handled.insert("notice:999".into());
+    state
+        .attention_delivery
+        .interrupted
+        .insert("notice:999".into());
+    state
+        .attention_episodes
+        .insert("exit:999:old-launch".into());
+    state.attention_episodes.insert("stall:999".into());
+    assert!(state.prune_attention());
+    assert!(state.attention_delivery.handled.is_empty());
+    assert!(state.attention_delivery.interrupted.is_empty());
+    assert!(state.attention_episodes.is_empty());
+    assert!(!state.prune_attention());
+}
+
+#[test]
+fn developer_attention_stall_uses_existing_deadline_and_ignores_working_or_blocked() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    let request = submit_text(&mut state, room, agent, "queued");
+    let master = state.ensure_master_room();
+    state
+        .notify_stalled_attention(10 + QUEUED_STALL_MS - 1)
+        .unwrap();
+    assert_eq!(state.notices(master).count(), 0);
+    state
+        .notify_stalled_attention(10 + QUEUED_STALL_MS)
+        .unwrap();
+    state
+        .notify_stalled_attention(10 + QUEUED_STALL_MS + 1)
+        .unwrap();
+    assert_eq!(state.notices(master).count(), 1);
+    assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
+    let mut recovered = state.clone();
+    let recovery = 10 + QUEUED_STALL_MS + 10;
+    recovered
+        .observe_status(agent, RuntimeStatus::Working, recovery)
+        .unwrap();
+    recovered.notify_stalled_attention(recovery + 1).unwrap();
+    recovered
+        .observe_status(agent, RuntimeStatus::Idle, recovery + 2)
+        .unwrap();
+    recovered
+        .notify_stalled_attention(recovery + 2 + QUEUED_STALL_MS)
+        .unwrap();
+    assert_eq!(
+        recovered.notices(master).count(),
+        2,
+        "positive work re-arms a later stall episode"
+    );
+    for status in [RuntimeStatus::Working, RuntimeStatus::Blocked] {
+        let mut state = state.clone();
+        state.attention_episodes.clear();
+        state.rooms.get_mut(&master).unwrap().notices.clear();
+        state.observe_status(agent, status, 20).unwrap();
+        state.notify_stalled_attention(u64::MAX).unwrap();
+        assert_eq!(state.notices(master).count(), 0);
+    }
+}
+
+#[test]
+fn developer_attention_bus_notice_survives_roundtrip_and_legacy_bus_notice_does_not() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let agent = master_agent(&mut state, "orch");
+    state.bind_orchestrator(agent, work).unwrap();
+    for text in [
+        "[needs_developer_attention] Process exited",
+        "legacy Bus notice",
+    ] {
+        state
+            .post_to_developer(master, agent, text.into(), vec![], 10)
+            .unwrap();
+    }
+    let mut encoded = serde_json::to_value(&state).unwrap();
+    let notices = encoded["rooms"][master.0.to_string()]["notices"]
+        .as_array_mut()
+        .unwrap();
+    for notice in notices.iter_mut() {
+        notice["author"] = serde_json::to_value(Author::Bus).unwrap();
+    }
+    notices[0]["attention_origin"] = serde_json::json!({
+        "room_id": work.0, "room_name": "work", "agent_id": agent.0, "agent_name": "orch"
+    });
+    let reopened: BusState = serde_json::from_value(encoded).unwrap();
+    let notices: Vec<_> = reopened.notices(master).collect();
+    assert_eq!(
+        notices.len(),
+        1,
+        "the tagged Bus notice must remain durable"
+    );
+    assert!(notices[0].text.contains("Process exited"));
+    let saved = serde_json::to_value(&reopened).unwrap();
+    assert_eq!(
+        saved["rooms"][master.0.to_string()]["notices"][0]["attention_origin"]["agent_name"],
+        "orch"
+    );
+}
+
+#[test]
+fn developer_attention_episode_latches_survive_model_roundtrip() {
+    let mut encoded = serde_json::to_value(BusState::default()).unwrap();
+    encoded["attention_episodes"] = serde_json::json!(["exit:agent-1:launch-1"]);
+    let reopened: BusState = serde_json::from_value(encoded).unwrap();
+    let saved = serde_json::to_value(reopened).unwrap();
+    assert_eq!(
+        saved["attention_episodes"],
+        serde_json::json!(["exit:agent-1:launch-1"])
+    );
+}
+
+#[test]
+fn feishu_delivery_bookkeeping_survives_model_roundtrip() {
+    let mut encoded = serde_json::to_value(BusState::default()).unwrap();
+    encoded["attention_delivery"] = serde_json::json!({
+        "initialized": true, "handled": ["notice:1", "notice:2"], "interrupted": ["notice:2"],
+        "recent_attempts": [{"source":"notice:2", "signature":"abc", "at_ms":10}]
+    });
+    let reopened: BusState = serde_json::from_value(encoded).unwrap();
+    let saved = serde_json::to_value(reopened).unwrap();
+    assert_eq!(saved["attention_delivery"]["initialized"], true);
+    assert_eq!(
+        saved["attention_delivery"]["handled"],
+        serde_json::json!(["notice:1", "notice:2"])
+    );
+    assert_eq!(
+        saved["attention_delivery"]["interrupted"],
+        serde_json::json!(["notice:2"])
+    );
+}
+
+#[test]
+fn feishu_delivery_and_episode_changes_require_a_durable_save() {
+    let before = BusState::default();
+    let mut encoded = serde_json::to_value(&before).unwrap();
+    encoded["attention_delivery"] = serde_json::json!({"initialized":true,"handled":["notice:1"]});
+    let delivery: BusState = serde_json::from_value(encoded.clone()).unwrap();
+    assert!(delivery.durable_poll_change_from(&before));
+    encoded["attention_episodes"] = serde_json::json!(["exit:1"]);
+    let episode: BusState = serde_json::from_value(encoded).unwrap();
+    assert!(episode.durable_poll_change_from(&delivery));
+}
+
 fn serialized_agent_color(state: &BusState, id: AgentId) -> [u8; 3] {
     let document = serde_json::to_value(state).expect("serialize state");
     serde_json::from_value(document["agents"][id.0.to_string()]["color"].clone())
@@ -204,6 +387,7 @@ fn claude_image_placeholder_matches_when_text_before_the_image_ends_in_whitespac
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: 0,
             compaction_limit_notice: false,
+            attention_origin: None,
         };
         // Whether the hook keeps the trailing space or not, the lifted image
         // leaves the typed text line as the whole remaining prompt.

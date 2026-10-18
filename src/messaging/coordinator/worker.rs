@@ -12,6 +12,7 @@ use std::path::Path;
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 
 pub(super) struct Worker {
+    pub(super) attention: super::attention::Runtime,
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
@@ -95,6 +96,7 @@ impl Worker {
         }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
+            attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
             state,
             store,
@@ -130,7 +132,10 @@ impl Worker {
             state: self.state.clone(),
             revision: self.revision,
             last_command_id: self.last_command_id,
-            error: self.error.clone(),
+            error: self
+                .error
+                .clone()
+                .or_else(|| self.attention.status.error.clone()),
         }
     }
 
@@ -219,7 +224,9 @@ impl Worker {
     /// and spent ids, in one save when anything changed.
     pub(super) fn archive_history(&mut self, now_ms: u64) -> Result<(), String> {
         let mut state = self.state.clone();
-        if state.archive(now_ms) {
+        let mut changed = state.archive(now_ms);
+        changed |= state.prune_attention();
+        if changed {
             self.save(state)?;
         }
         Ok(())
@@ -368,6 +375,9 @@ impl Worker {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             self.retry_storage(std::time::Instant::now(), &events);
+            if let Err(error) = self.pump_feishu(&events, io::now_ms()) {
+                self.error = Some(error);
+            }
             // Apply already-confirmed user commands before delivering queued
             // work. In particular, Submit followed by Delete must not send in
             // the background between those two commands.

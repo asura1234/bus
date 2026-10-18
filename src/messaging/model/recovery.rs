@@ -7,6 +7,7 @@ impl BusState {
         &mut self,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
+        self.notify_stalled_attention(now_ms)?;
         let stalled: Vec<_> = self
             .requests
             .values()

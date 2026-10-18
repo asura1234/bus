@@ -189,7 +189,14 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
         .filter(|request| request.room_id == room)
         .map(|request| &request.prompt)
         .chain(worker.state.room(room).unwrap().notices.iter())
-        .filter(|prompt| prompt.author == Author::Agent(author))
+        .filter(|prompt| {
+            prompt.author == Author::Agent(author)
+                || (prompt.author == Author::Bus
+                    && prompt
+                        .attention_origin
+                        .as_ref()
+                        .is_some_and(|origin| origin.agent_id == author))
+        })
         .map(|prompt| {
             (
                 prompt.id,
@@ -212,12 +219,21 @@ fn expected_resolved(worker: &Worker, id: AgentId) -> String {
 }
 
 fn expected_blocked(worker: &Worker, id: AgentId) -> String {
-    format!(
+    let body = format!(
         "{} (agent {}). Blocked, needs help to continue.\nInspect: bus agent dialog {}",
         worker.state.agent(id).unwrap().name,
         id.0,
         id.0
-    )
+    );
+    let agent = worker.state.agent(id).unwrap();
+    if worker
+        .state
+        .is_developer_attention_author(agent.room_id, &Author::Agent(id))
+    {
+        format!("{} {body}", crate::messaging::attention::TAG)
+    } else {
+        body
+    }
 }
 
 /// Worker blocks stay in their work room, and Bus authors no messages.
@@ -393,10 +409,14 @@ fn a_blocked_orchestrator_tells_the_developer_once_in_master() {
         );
         let master_room = worker.state.room(master).unwrap();
         let notice = &master_room.notices[0];
-        assert_eq!(notice.author, Author::Agent(orchestrator));
+        assert_eq!(notice.author, Author::Bus);
+        assert_eq!(
+            notice.attention_origin.as_ref().unwrap().agent_id,
+            orchestrator
+        );
         assert!(notice.files.is_empty());
         assert_eq!(master_room.unread_count, 1);
-        // The agent-authored latest prompt uses the existing MASTER ring path.
+        // The Bus-authored latest prompt uses the existing MASTER ring path.
         assert_eq!(master_room.latest_prompt.as_ref().unwrap().id, notice.id);
         assert!(master_room.sound_enabled());
         assert!(worker.state.room(room).unwrap().notices.is_empty());

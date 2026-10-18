@@ -2,6 +2,42 @@ use super::super::*;
 use crate::messaging::native::TransportError;
 use serde_json::json;
 
+#[test]
+fn feishu_exhausted_quota_uses_newest_observation_across_codex_agents() {
+    let mut bus = fixture(Provider::Codex);
+    let now = crate::messaging::storage::io::now_ms();
+    for (agent, observed, used) in [
+        (bus.orchestrator, now - 1_000, 100.0),
+        (bus.builder, now + 86_400_000, 10.0),
+        (bus.builder, now - 60_000, 10.0),
+    ] {
+        let timestamp =
+            time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(observed) * 1_000_000)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+        let path = bus.dir.join(format!("quota-{}.jsonl", agent.0));
+        std::fs::write(
+            &path,
+            json!({"timestamp":timestamp,"type":"event_msg","payload":{
+                "type":"token_count","rate_limits":{"primary":{
+                    "used_percent":used,"window_minutes":300,"resets_at":now / 1000 + 300
+                }}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        bus.worker.refresh_codex_usage(agent, &path);
+    }
+    let (events, _receiver) = std::sync::mpsc::channel();
+    bus.worker.pump_feishu(&events, now).unwrap();
+    assert_eq!(
+        bus.worker.state.notices(bus.master).count(),
+        1,
+        "an older quota sample from another agent must not hide the newer exhausted window"
+    );
+}
+
 /// Accepts every native call, as a server that types prompts does.
 struct Accepting;
 impl Transport for Accepting {

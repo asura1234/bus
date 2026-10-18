@@ -1,5 +1,6 @@
 //! The single Bus coordinator. UI commands/snapshots contain data only.
 pub(crate) mod agents;
+pub(crate) mod attention;
 mod delivery;
 mod expiry;
 mod poll;
@@ -61,6 +62,7 @@ pub(crate) enum BusCommand {
     SetMaxCompactionsPerAgent(u32),
     /// The room sidebar's width in cells, clamped to the settings range.
     SetSidebarWidth(u16),
+    SetFeishuNotifications(bool),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),
@@ -102,6 +104,7 @@ pub(crate) enum BusEvent {
     DevQuitRequested,
     /// The coordinator saved these global settings; the UI applies them.
     SettingsChanged(settings::BusSettings),
+    FeishuStatusChanged(attention::Status),
     /// Outcome of this exact command, independent of later snapshot acknowledgements.
     CommandFinished {
         command_id: u64,

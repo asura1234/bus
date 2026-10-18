@@ -73,6 +73,7 @@ impl Transport for FreshLaunchNative {
                     agent: self.info.clone(),
                 })
             }
+            Method::PaneGet(params) if params.pane_id == "pane" => Ok(ResponseResult::Ok {}),
             other => panic!("unexpected fresh launch operation: {other:?}"),
         }
     }

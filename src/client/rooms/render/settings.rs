@@ -62,6 +62,11 @@ impl BusUi {
         lines.push(SoundSettingsLine::SidebarWidth {
             field: self.sidebar_width_field(),
         });
+        lines.push(SoundSettingsLine::Empty(""));
+        lines.push(SoundSettingsLine::Heading("NOTIFICATIONS"));
+        lines.push(SoundSettingsLine::Feishu {
+            field: self.feishu_field(),
+        });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
@@ -193,6 +198,9 @@ impl BusUi {
 
     fn sound_settings_row(&self, view: &mut View, rect: Rect, line: &SoundSettingsLine) {
         match line {
+            SoundSettingsLine::Feishu { field } => {
+                self.feishu_settings_row(view, rect, *field);
+            }
             SoundSettingsLine::Heading(text) => {
                 view.row(rect, *text, None, false, true);
             }
@@ -280,6 +288,35 @@ impl BusUi {
                 );
             }
         }
+    }
+
+    fn feishu_settings_row(&self, view: &mut View, rect: Rect, field: usize) {
+        let suffix = if self.feishu_status.pending {
+            " (checking authentication…)".into()
+        } else if self.feishu_status.queued > 0 {
+            format!(
+                " ({} waiting{})",
+                self.feishu_status.queued,
+                if self.feishu_status.rate_limited {
+                    "; rate limited"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            String::new()
+        };
+        view.row(
+            rect,
+            format!(
+                "[{}] Feishu notifications{}",
+                if self.feishu_status.enabled { "x" } else { " " },
+                suffix
+            ),
+            Some(Action::ToggleFeishuNotifications),
+            self.settings_field == field,
+            false,
+        );
     }
 
     /// A numeric Settings row: its label, then `‹ value ›` at the right edge

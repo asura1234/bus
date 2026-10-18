@@ -557,6 +557,7 @@ impl App {
                 .focused_pane_id()
                 .is_some_and(|focused| focused == pane_id);
         Some(crate::protocol::api::schema::PaneInfo {
+            agent_process_exited: terminal.attention_process_exited(),
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
             workspace_id: self.public_workspace_id(ws_idx),

@@ -44,6 +44,17 @@ impl Worker {
                 Ok(json!({"updated":true,"color_blind_mode":on}))
             }
             "settings" => Ok(json!({"settings": self.settings_json()})),
+            "settings.feishu_notifications" => {
+                let on = p
+                    .get("on")
+                    .and_then(Value::as_bool)
+                    .ok_or("Feishu notifications must be on or off")?;
+                self.set_feishu_notifications(
+                    on,
+                    events.ok_or("Bus UI event channel unavailable")?,
+                )?;
+                Ok(json!({"updated":true,"feishu":self.attention.status}))
+            }
             "settings.room_sound" => {
                 let on = p
                     .get("on")
@@ -77,7 +88,11 @@ impl Worker {
             .as_deref()
             .map(crate::messaging::prefs::settings::load)
         {
-            Some(Ok(settings)) => json!(settings),
+            Some(Ok(settings)) => {
+                let mut value = json!(settings);
+                value["feishu"] = json!(self.attention.status);
+                value
+            }
             Some(Err(error)) => json!({"error": error}),
             None => Value::Null,
         }

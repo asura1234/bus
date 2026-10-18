@@ -40,6 +40,7 @@ fn pane_info(
     agent_status: crate::protocol::api::schema::AgentStatus,
 ) -> crate::protocol::api::schema::PaneInfo {
     crate::protocol::api::schema::PaneInfo {
+        agent_process_exited: false,
         pane_id: pane_id.into(),
         terminal_id: "term_1".into(),
         workspace_id: "ws_1".into(),

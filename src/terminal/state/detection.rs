@@ -9,6 +9,18 @@ use super::{EffectivePresentation, RecentAgentProcessExit, TerminalState, Termin
 use crate::agents::{AgentKind, AgentState};
 
 impl TerminalState {
+    pub(crate) fn attention_process_exited(&self) -> bool {
+        self.recent_agent_process_exit.is_some()
+            && !self.self_update.as_ref().is_some_and(|update| {
+                matches!(
+                    update.phase,
+                    super::SelfUpdatePhase::Installing { .. }
+                        | super::SelfUpdatePhase::Relaunching { .. }
+                        | super::SelfUpdatePhase::Stuck(_)
+                )
+            })
+    }
+
     pub fn set_detected_agent_process_at(
         &mut self,
         agent: AgentKind,

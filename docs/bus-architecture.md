@@ -207,6 +207,18 @@ Files are split by ownership, not by helper.
     driver) is a separate, compile-time split: cargo feature `dev-tools`, on in the dev variant (`./run dev`, the dev
     cutover, the gate's dev-tools lane) and off in release builds (`./run prod`, `just build`, Nix, npm)
   - `prefs/`: `settings.rs` (`settings.json`), `colors.rs` (agent palette)
+  - `attention.rs`: the developer-attention prefix shared by model, display and delivery.
+    `model/attention.rs` owns durable Bus notices, mechanical episode latches and
+    delivery bookkeeping; `coordinator/attention.rs` observes runtime settings,
+    validates auth off the coordinator thread, scans durable MASTER history and
+    applies the bounded queue, dedupe and rate limit. Attempts become durable
+    before invocation; ambiguous outcomes are visible and never replayed.
+    The shared preference's internal enable generation makes a session offline
+    through off/on establish a new baseline instead of replaying old backlog.
+    `feishu/` owns verified self identity, fixed Bus message formatting and bounded
+    cancellable lark-cli subprocesses. No caller supplies a recipient. The native
+    `PaneInfo.agent_process_exited` reports explicit exits outside self-update;
+    missing agents and API failures do not establish a crash.
   - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER
     prompt placeholders; compiled-in copies are the only defaults in every build
 - `server/`: the `bus server` daemon

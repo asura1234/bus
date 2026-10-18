@@ -40,6 +40,7 @@ pub const AGENT_HELP: &str =
   wait --message MESSAGE_ID [--timeout SECONDS | --async]
   history --room ROOM
   settings
+  settings feishu-notifications (--on | --off)
 
 Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the

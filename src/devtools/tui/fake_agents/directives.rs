@@ -3,6 +3,14 @@
 use serde_json::{json, Value};
 use std::io::Write;
 
+/// A raw final lets acceptance tests exercise protocols that depend on a prefix.
+pub(super) fn reply(prompt: &str) -> String {
+    prompt.split_once("fake:raw-reply ").map_or_else(
+        || format!("fake reply: {prompt}"),
+        |(_, reply)| reply.to_owned(),
+    )
+}
+
 /// A prompt containing `fake:work N` keeps the fake busy for N seconds (at
 /// most 600), so a driver can see a Working agent and a live spinner.
 pub(super) fn work_seconds(prompt: &str) -> Option<u64> {
@@ -66,4 +74,16 @@ pub(super) fn api_error(provider: &str, prompt: &str) -> Option<Value> {
                 "API Error: Connection lost mid-response. The response above may be incomplete.",
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn feishu_raw_final_directive_preserves_attention_tag_at_start() {
+        assert_eq!(
+            super::reply("fake:raw-reply [needs_developer_attention] Choose target"),
+            "[needs_developer_attention] Choose target"
+        );
+        assert_eq!(super::reply("hello"), "fake reply: hello");
+    }
 }

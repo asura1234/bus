@@ -27,6 +27,9 @@ pub(crate) const MAX_SIDEBAR_WIDTH: u16 = 60;
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
+    pub(crate) feishu_notifications: bool,
+    /// Internal enable generation, so sessions offline during off/on skip old history.
+    pub(crate) feishu_notifications_generation: u64,
     /// MASTER's sound in every session; it rings by default.
     pub(crate) master_sound: SoundPref,
     /// The last All rooms choice: set on every work room at once, and what
@@ -49,6 +52,8 @@ impl Default for BusSettings {
     fn default() -> Self {
         Self {
             color_blind_mode: false,
+            feishu_notifications: false,
+            feishu_notifications_generation: 0,
             master_sound: SoundPref {
                 enabled: true,
                 name: None,
@@ -179,6 +184,15 @@ pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feishu_notifications_default_off_without_a_recipient_setting() {
+        let value = serde_json::to_value(BusSettings::default()).unwrap();
+        assert_eq!(value["feishu_notifications"], false);
+        assert!(value.get("feishu_recipient").is_none());
+        assert!(value.get("feishu_user_id").is_none());
+        assert!(value.get("feishu_chat_id").is_none());
+    }
 
     #[test]
     fn compaction_limit_defaults_to_five_and_validates_config_values() {

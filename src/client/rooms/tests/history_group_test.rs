@@ -2,6 +2,50 @@ use super::*;
 use crate::messaging::model::{Draft, Provider};
 
 #[test]
+fn developer_attention_master_notice_renders_badge_instead_of_raw_tag() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(
+            master,
+            "orch",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(agent, work).unwrap();
+    state
+        .post_to_developer(
+            master,
+            agent,
+            "[needs_developer_attention] Choose a target".into(),
+            vec![],
+            1_000,
+        )
+        .unwrap();
+    let mut history = History::default();
+    let mut thumbnails = Thumbnails::default();
+    let text = history
+        .lines(
+            &state,
+            state.room(master).unwrap(),
+            100,
+            1,
+            2_000,
+            &mut thumbnails,
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Needs developer"), "{text}");
+    assert!(text.contains("Choose a target"), "{text}");
+    assert!(!text.contains("[needs_developer_attention]"), "{text}");
+}
+
+#[test]
 fn a_cross_room_group_shows_its_reply_once_in_each_room() {
     let mut state = BusState::default();
     state.ensure_master_room();

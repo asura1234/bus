@@ -39,6 +39,10 @@ pub(crate) struct BusState {
     /// they were observed; each is single-use until it expires.
     #[serde(default)]
     pub(super) spent_dialog_answers: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) attention_episodes: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "super::AttentionDelivery::is_empty")]
+    pub(super) attention_delivery: super::AttentionDelivery,
     /// Settled requests and notices archived in `history.jsonl`, never in
     /// `state.json`; shared so cloning the state does not copy them.
     #[serde(skip)]
@@ -105,6 +109,8 @@ impl BusState {
             || self.unrelated_provider_turns != previous.unrelated_provider_turns
             || self.visible_room != previous.visible_room
             || self.spent_dialog_answers != previous.spent_dialog_answers
+            || self.attention_episodes != previous.attention_episodes
+            || self.attention_delivery != previous.attention_delivery
             || self.history != previous.history
             || self.agents.len() != previous.agents.len()
         {
@@ -141,6 +147,8 @@ impl BusState {
             unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
             spent_dialog_answers: BTreeMap::new(),
+            attention_episodes: BTreeSet::new(),
+            attention_delivery: super::AttentionDelivery::default(),
             history: Arc::default(),
         }
     }

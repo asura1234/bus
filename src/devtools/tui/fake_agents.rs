@@ -372,7 +372,7 @@ impl FakeAgent {
             self.draw_prompt();
             return None;
         }
-        let reply = format!("fake reply: {}", prompts.join("\n"));
+        let reply = directives::reply(&prompts.join("\n"));
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();

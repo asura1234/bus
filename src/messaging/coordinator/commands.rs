@@ -57,6 +57,9 @@ impl Worker {
             BusCommand::SetSidebarWidth(width) => {
                 return self.set_sidebar_width(width, events);
             }
+            BusCommand::SetFeishuNotifications(on) => {
+                return self.set_feishu_notifications(on, events);
+            }
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
             BusCommand::SetDraftText(id, text) => {
                 state.set_draft_text(id, &text).map_err(|e| e.to_string())?;

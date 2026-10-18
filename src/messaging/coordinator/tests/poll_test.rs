@@ -20,6 +20,96 @@ use std::{
 #[path = "support_test.rs"]
 mod support;
 use support::*;
+
+#[test]
+fn feishu_exit_notification_requires_explicit_matching_native_evidence() {
+    for (terminal, exited, expected) in [
+        ("terminal", true, 1),
+        ("foreign", true, 0),
+        ("terminal", false, 0),
+    ] {
+        let pane = serde_json::from_value(json!({"pane_id":"pane", "terminal_id":terminal, "workspace_id":"w1", "tab_id":"t1", "focused":false, "agent_status":"unknown", "revision":1, "agent_process_exited":exited})).unwrap();
+        let (mut worker, _, _, dir, _) = fixture(
+            Provider::ClaudeCode,
+            vec![
+                Ok(ResponseResult::AgentList { agents: vec![] }),
+                Ok(ResponseResult::PaneInfo { pane }),
+            ],
+        );
+        worker.poll().unwrap();
+        let master = worker.state.master_room().unwrap().id;
+        assert_eq!(worker.state.notices(master).count(), expected);
+        assert!(worker
+            .state
+            .notices(master)
+            .all(|notice| notice.author == Author::Bus
+                && notice.text.starts_with(crate::messaging::attention::TAG)));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    for listing in [
+        Ok(ResponseResult::AgentList { agents: vec![] }),
+        Err(TransportError {
+            message: "offline".into(),
+            code: None,
+            definitely_rejected: false,
+        }),
+    ] {
+        let (mut worker, _, _, dir, _) = fixture(Provider::ClaudeCode, vec![listing]);
+        let _ = worker.poll();
+        assert_eq!(
+            worker
+                .state
+                .notices(worker.state.master_room().unwrap().id)
+                .count(),
+            0
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn feishu_pending_relaunch_without_exit_evidence_does_not_notify_developer() {
+    // Native exit retirement and replacement exits are covered in terminal's
+    // process_exit_test; messaging consumes only their public protocol facts.
+    let info = serde_json::from_value(json!({
+        "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1", "tab_id":"t1",
+        "focused":false, "agent":null, "name":"updating-codex",
+        "agent_status":"unknown", "revision":1,
+        "launch_pending":true, "interactive_ready":false
+    }))
+    .unwrap();
+    let pane = serde_json::from_value(json!({
+        "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1", "tab_id":"t1",
+        "focused":false, "agent_status":"unknown", "revision":1,
+        "agent_process_exited":false
+    }))
+    .unwrap();
+    let (mut worker, _, _, dir, calls) = fixture(
+        Provider::Codex,
+        vec![
+            Ok(ResponseResult::AgentList { agents: vec![info] }),
+            Ok(ResponseResult::PaneInfo { pane }),
+        ],
+    );
+    worker.poll().unwrap();
+    assert!(
+        calls.lock().unwrap().contains(&"pane.get"),
+        "the missing-agent probe must consume native exit evidence"
+    );
+    let notices = worker
+        .state
+        .notices(worker.state.master_room().unwrap().id)
+        .count();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+
+    assert_eq!(
+        notices, 0,
+        "an automatic update is already relaunching this agent"
+    );
+}
 #[path = "callback_binding_test.rs"]
 mod callback_binding_tests;
 #[path = "delivery_test.rs"]

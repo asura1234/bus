@@ -42,6 +42,7 @@ fn cli() -> Command {
         .subcommand(subcommand("quit"))
         .subcommand(
             subcommand("settings")
+                .subcommand(toggle("feishu-notifications"))
                 .subcommand(toggle("color-blind"))
                 .subcommand(toggle("room-sound").arg(value_arg("sound").long("sound"))),
         )
@@ -142,6 +143,10 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         "quit" => ("bus.quit", json!({})),
         "settings" => match args.subcommand() {
             None => ("settings", json!({})),
+            Some(("feishu-notifications", args)) => (
+                "settings.feishu_notifications",
+                json!({"on": on_off(args, "settings feishu-notifications")?}),
+            ),
             Some(("color-blind", args)) => (
                 "settings.color_blind",
                 json!({"on": on_off(args, "settings color-blind")?}),

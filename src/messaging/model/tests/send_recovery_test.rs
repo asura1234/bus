@@ -304,3 +304,33 @@ fn typed_recovery_requires_idle_or_both_invalidated_and_unavailable() {
         }
     }
 }
+
+#[test]
+fn feishu_queued_request_that_stalled_while_bus_was_down_still_tells_the_developer() {
+    // Reopening a session first closes queued work whose deadline passed
+    // while Bus was down, then the first tick looks for stalled attention.
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    let request = submit_text(&mut state, room, agent, "queued before shutdown");
+    let reopened_at = 10 + QUEUED_STALL_MS + 60_000;
+    let expired = state.expire_stalled_queued_requests(reopened_at).unwrap();
+    assert_eq!(
+        expired,
+        vec![request],
+        "the stalled request is closed on reopen"
+    );
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, reopened_at)
+        .unwrap();
+    state.notify_stalled_attention(reopened_at + 500).unwrap();
+    let master = state.ensure_master_room();
+    let tagged = state
+        .notices(master)
+        .filter(|notice| crate::messaging::attention::text(&notice.text).is_some())
+        .count();
+    assert_eq!(
+        tagged, 1,
+        "a queued message Bus closed as stalled needs the developer to resend it"
+    );
+}

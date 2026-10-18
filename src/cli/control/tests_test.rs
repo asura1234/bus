@@ -9,6 +9,19 @@ fn command(args: &[&str]) -> Result<ParsedCommand, String> {
 }
 
 #[test]
+fn feishu_cli_toggle_accepts_only_on_off_and_no_destination() {
+    for (flag, on) in [("--on", true), ("--off", false)] {
+        let parsed = command(&["settings", "feishu-notifications", flag]).unwrap();
+        assert_eq!(parsed.method, "settings.feishu_notifications");
+        assert_eq!(parsed.params, json!({"on": on}));
+    }
+    for flag in ["--user-id", "--chat-id", "--recipient", "--group"] {
+        assert!(command(&["settings", "feishu-notifications", "--on", flag, "other"]).is_err());
+    }
+    assert!(command(&["settings", "feishu-notifications"]).is_err());
+}
+
+#[test]
 fn agent_add_reads_the_system_prompt_file() {
     let path = std::env::temp_dir().join(format!("bus-prompt-{}.md", std::process::id()));
     std::fs::write(&path, "You run {{ROOM_NAME}}.\n").unwrap();
@@ -132,6 +145,7 @@ const SAMPLES: &[&[&str]] = &[
     &["agent", "focus", "a"],
     &["agent", "details", "a", "--on"],
     &["settings", "color-blind", "--on"],
+    &["settings", "feishu-notifications", "--on"],
     &["settings", "room-sound", "--on"],
     &["sounds"],
     &["quit"],
@@ -2528,4 +2542,69 @@ fn interrupt_state_reads_are_bounded_by_the_stop_deadline() {
         |_| {},
     );
     assert!(outcome.is_ok());
+}
+#[test]
+fn feishu_cli_waits_for_validation_and_reports_auth_refusal() {
+    let mut output = Vec::new();
+    let mut methods = Vec::new();
+    let result = run_with_pause(
+        &[
+            "settings".into(),
+            "feishu-notifications".into(),
+            "--on".into(),
+        ],
+        &mut output,
+        &mut |request: &Request, _| {
+            methods.push(request.method.clone());
+            Ok(Response::success(
+                &request.id,
+                if request.method == "settings.feishu_notifications" {
+                    json!({"feishu":{"enabled":false,"pending":true}})
+                } else {
+                    json!({"settings":{"feishu":{"enabled":false,"pending":false,"error":"not authenticated"}}})
+                },
+            ))
+        },
+        |_| {},
+    );
+    assert!(
+        result.is_err(),
+        "CLI must wait for auth and report the refusal"
+    );
+    assert_eq!(methods, ["settings.feishu_notifications", "settings"]);
+}
+
+#[test]
+fn feishu_enable_status_failure_preserves_caller_request_id() {
+    let mut output = Vec::new();
+    let result = run_with_pause(
+        &[
+            "settings".into(),
+            "feishu-notifications".into(),
+            "--on".into(),
+            "--request-id".into(),
+            "enable-notifications".into(),
+        ],
+        &mut output,
+        &mut |request: &Request, _| {
+            Ok(if request.method == "settings.feishu_notifications" {
+                Response::success(
+                    &request.id,
+                    json!({"feishu":{"enabled":false,"pending":true}}),
+                )
+            } else {
+                Response::failure(
+                    &request.id,
+                    "coordinator_busy",
+                    "validation status unavailable",
+                )
+            })
+        },
+        |_| {},
+    );
+
+    assert!(result.is_err());
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["error"]["code"], "coordinator_busy");
+    assert_eq!(response["id"], "enable-notifications");
 }

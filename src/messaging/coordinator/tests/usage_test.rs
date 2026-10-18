@@ -81,3 +81,85 @@ fn state_reports_missing_usage_as_unknown_never_as_unused() {
             "read_at_ms":9,"observed_by_agent":3})
     );
 }
+#[test]
+fn feishu_quota_requires_fresh_original_observation_and_future_reset() {
+    let now = 2_000_000;
+    let mut usage = Usage {
+        codex: Some(UsageSnapshot {
+            windows: UsageWindows {
+                five_hour: Some(UsageWindow {
+                    used_percent: 100.0,
+                    resets_at: Some(now / 1000 + 300),
+                    window_minutes: 300,
+                }),
+                weekly: None,
+            },
+            read_at_ms: now - 1,
+            observed_by_agent: AgentId(1),
+        }),
+        ..Usage::default()
+    };
+    assert!(usage
+        .exhausted(now)
+        .iter()
+        .any(|(_, _, active)| *active == Some(true)));
+    for observed in [0, now + 1, now - STALE_AFTER_MS] {
+        usage.codex.as_mut().unwrap().read_at_ms = observed;
+        assert!(usage
+            .exhausted(now)
+            .iter()
+            .all(|(_, _, active)| active.is_none()));
+    }
+    let snapshot = usage.codex.as_mut().unwrap();
+    snapshot.read_at_ms = now;
+    snapshot.windows.five_hour.as_mut().unwrap().resets_at = Some(now / 1000);
+    assert!(usage
+        .exhausted(now)
+        .iter()
+        .all(|(_, _, active)| active.is_none()));
+    usage
+        .codex
+        .as_mut()
+        .unwrap()
+        .windows
+        .five_hour
+        .as_mut()
+        .unwrap()
+        .resets_at = Some(now / 1000 + 300);
+    usage
+        .codex
+        .as_mut()
+        .unwrap()
+        .windows
+        .five_hour
+        .as_mut()
+        .unwrap()
+        .used_percent = 30.0;
+    assert!(usage
+        .exhausted(now)
+        .iter()
+        .any(|(_, _, active)| *active == Some(false)));
+}
+
+#[test]
+fn feishu_fresh_claude_window_without_reset_time_is_still_reported_as_observed() {
+    let now = bus_io::now_ms();
+    let usage = Usage {
+        claude: Some(UsageSnapshot {
+            windows: UsageWindows {
+                five_hour: Some(UsageWindow {
+                    used_percent: 35.0,
+                    resets_at: None,
+                    window_minutes: FIVE_HOUR_MINUTES,
+                }),
+                weekly: None,
+            },
+            read_at_ms: now - 1000,
+            observed_by_agent: AgentId(4),
+        }),
+        ..Usage::default()
+    };
+    let value = usage.claude_json(now);
+    assert_eq!(value["status"], "observed", "{value}");
+    assert_eq!(value["five_hour"]["used_percent"], 35.0, "{value}");
+}

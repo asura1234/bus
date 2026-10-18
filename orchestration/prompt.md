@@ -62,6 +62,7 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
      destructive action);
    - anything that changes the plan.
 
+   When you need the developer to act or decide and work waits on them, start your report with [needs_developer_attention] and follow the rules to deliver it in MASTER.
    Keep in your work room: routine dialog approvals, worker hand-offs,
    step-by-step details, and "nothing is waiting on you" notes.
 
