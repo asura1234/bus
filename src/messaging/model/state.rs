@@ -17,6 +17,11 @@ pub(crate) struct BusState {
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     pub(super) requests: BTreeMap<RequestId, Request>,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
+    /// Pending, one terminal notification, or seen per shared reply.
+    /// Kept outside the immutable request archive so acknowledgements
+    /// of older replies are durable without rewriting append-only history.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) reply_routes: BTreeMap<RequestId, super::reply_routing::ReplyRoute>,
     /// Applied provider callbacks by id, with the launch whose spool they
     /// came from; a re-spooled duplicate is refused while its id is kept.
     /// `None` marks ids carried over from a version 1 file, launch unknown.
@@ -104,6 +109,7 @@ impl BusState {
             || self.rooms != previous.rooms
             || self.requests != previous.requests
             || self.queues != previous.queues
+            || self.reply_routes != previous.reply_routes
             || self.consumed_callbacks != previous.consumed_callbacks
             || self.consumed_provider_turns != previous.consumed_provider_turns
             || self.unrelated_provider_turns != previous.unrelated_provider_turns
@@ -140,6 +146,7 @@ impl BusState {
             agents: BTreeMap::new(),
             requests: BTreeMap::new(),
             queues: BTreeMap::new(),
+            reply_routes: BTreeMap::new(),
             consumed_callbacks: BTreeMap::new(),
             consumed_callback_ids: BTreeSet::new(),
             consumed_dialog_fingerprints: BTreeSet::new(),

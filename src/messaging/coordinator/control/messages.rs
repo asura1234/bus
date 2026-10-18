@@ -18,7 +18,37 @@ impl Worker {
                 let id = required(p, "message")?
                     .parse::<u64>()
                     .map_err(|_| "Message must be a numeric ID")?;
-                self.control_message(PromptId(id))
+                let message = PromptId(id);
+                let result = self.control_message(message)?;
+                if let Some(selector) = optional_text(p, "as")? {
+                    if let Some(source) = self.state.requests().find(|r| r.prompt.id == message) {
+                        let author = self.control_author(source.room_id, selector)?;
+                        if self.state.reply_orchestrator(source) == Some(author) {
+                            self.reply_waiters
+                                .insert(message, std::time::Instant::now());
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            "message.seen" => {
+                let request = RequestId(
+                    required(p, "request")?
+                        .parse::<u64>()
+                        .map_err(|_| "Request must be a numeric ID")?,
+                );
+                let room = self
+                    .state
+                    .request(request)
+                    .ok_or("Unknown request ID")?
+                    .room_id;
+                let author = self.control_author(room, required(p, "as")?)?;
+                let mut state = self.state.clone();
+                state
+                    .see_worker_reply(request, author, crate::messaging::storage::io::now_ms())
+                    .map_err(|e| e.to_string())?;
+                self.save(state)?;
+                Ok(json!({"request_id":request,"seen":true}))
             }
             "request.recover" => {
                 let id = required(p, "request")?
@@ -295,7 +325,7 @@ impl Worker {
                 .or_else(|| r.failure_reason.clone())
                 .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"reply_ack":self.state.reply_needs_ack(r),"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
         }).collect::<Vec<_>>()}),
         )
     }

@@ -3,6 +3,7 @@ use super::{diagnostics, io, Worker};
 
 impl Worker {
     pub(super) fn expire_queued_requests(&mut self, now_ms: u64) -> Result<(), String> {
+        self.pause_stalled_reply_deliveries(now_ms);
         let mut state = self.state.clone();
         let expired = state
             .expire_stalled_queued_requests(now_ms)

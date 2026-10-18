@@ -12,6 +12,7 @@ impl BusState {
             .requests
             .values()
             .filter(|request| request.phase == RequestPhase::Queued)
+            .filter(|request| !self.is_reply_notification(request.id))
             .filter_map(|request| {
                 self.stall_reason(request, now_ms)
                     .map(|reason| (request.id, reason))

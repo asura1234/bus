@@ -261,7 +261,8 @@ impl JsonStore {
                     })
                 }
             };
-            let kept = item.settled_at_ms() >= cutoff
+            let pinned_reply = matches!(&item, Archived::Request(request) if state.reply_delivery_pending(request));
+            let kept = (item.settled_at_ms() >= cutoff || pinned_reply)
                 && state.room(item.room()).is_some()
                 && match &item {
                     Archived::Request(request) => {

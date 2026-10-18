@@ -63,17 +63,22 @@ pub(super) fn follow_message(
 ) -> Response {
     // The send receipt carries the id as a number; message.status takes the
     // same selector text the CLI's `message status` passes.
-    let message = match message {
+    let author = message.get("as").cloned();
+    let message = match message.get("message").unwrap_or(message) {
         Value::String(text) => text.clone(),
         other => other.to_string(),
     };
     let mut busy_delay = BUSY_FIRST_DELAY;
     let mut transport_failures = 0;
     loop {
+        let mut params = json!({ "message": message });
+        if let Some(author) = &author {
+            params["as"] = author.clone();
+        }
         let request = Request {
             id: next_request_id(),
             method: "message.status".into(),
-            params: json!({ "message": message }),
+            params,
         };
         let response = match send(&request, None) {
             // The bounded control server can drop accepted connections at its

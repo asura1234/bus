@@ -6,10 +6,47 @@ use super::{
 
 /// How long a prompt the provider never showed waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
-/// queued stall closes the request after `QUEUED_STALL_MS` if none succeeds.
+/// queued stall closes ordinary requests after `QUEUED_STALL_MS`. Reply wakes
+/// remain queued, but pause retries until fresh status, a new session or a
+/// change to the queue.
 pub(super) const PROMPT_NOT_SHOWN_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
 
+pub(super) struct ReplyDeliveryRetry {
+    identity: crate::messaging::model::AgentRuntimeIdentity,
+    status: RuntimeStatus,
+    status_since_ms: u64,
+    busy_revision: u64,
+    queue_tail: Option<RequestId>,
+    paused: bool,
+}
+
 impl Worker {
+    /// Retaining a wake must not keep pasting into a broken composer forever.
+    /// Status, identity or queue changes permit a fresh attempt; repeated
+    /// idle polls alone do not.
+    pub(super) fn pause_stalled_reply_deliveries(&mut self, now_ms: u64) {
+        self.reply_delivery_retries.retain(|id, retry| {
+            let Some(request) = self.state.request(*id) else {
+                return false;
+            };
+            let Some(agent) = self.state.agent(request.agent_id) else {
+                return false;
+            };
+            if request.phase != super::RequestPhase::Queued
+                || !self.state.is_reply_notification(*id)
+                || agent.runtime_identity != retry.identity
+                || agent.shown_status() != retry.status
+                || agent.status_since_ms != retry.status_since_ms
+                || agent.busy_revision != retry.busy_revision
+                || self.state.queued_requests(agent.id).last().copied() != retry.queue_tail
+            {
+                return false;
+            }
+            retry.paused |= self.state.stall_reason(request, now_ms).is_some();
+            true
+        });
+    }
+
     #[cfg(test)]
     pub(super) fn submit_ready(&mut self) -> Result<(), String> {
         self.submit_ready_while(|| true)
@@ -19,6 +56,16 @@ impl Worker {
         &mut self,
         mut can_deliver: impl FnMut() -> bool,
     ) -> Result<(), String> {
+        self.reply_waiters
+            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(3));
+        let waited = self.reply_waiters.keys().copied().collect();
+        let mut state = self.state.clone();
+        if state
+            .route_worker_replies(super::io::now_ms(), &waited)
+            .map_err(|e| e.to_string())?
+        {
+            self.save(state)?;
+        }
         self.expire_queued_now()?;
         self.delivery_waits
             .retain(|id, _| self.state.agent(*id).is_some());
@@ -48,6 +95,18 @@ impl Worker {
                 self.delivery_waits.remove(&agent.id);
             }
             if self.withdrawn_at.contains_key(&agent.id) {
+                continue;
+            }
+            if self
+                .state
+                .queued_requests(agent.id)
+                .first()
+                .is_some_and(|id| {
+                    self.reply_delivery_retries
+                        .get(id)
+                        .is_some_and(|retry| retry.paused)
+                })
+            {
                 continue;
             }
             if let Some((request, lead)) = self.state.next_steering(agent.id) {
@@ -175,23 +234,38 @@ impl Worker {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "Native submit result; uncertain outcomes are never retried"
         );
-        self.note_withdrawn(agent.id, &outcome);
         let mut state = self.state.clone();
         state
-            .record_submission(request, outcome)
+            .record_submission(request, outcome.clone())
             .map_err(|e| e.to_string())?;
         self.save(state)?;
+        self.note_withdrawn(agent, request, &outcome);
         Ok(())
     }
 
     fn note_withdrawn(
         &mut self,
-        agent: crate::messaging::model::AgentId,
+        agent: &RoomAgent,
+        request: RequestId,
         outcome: &SubmissionOutcome,
     ) {
         if let SubmissionOutcome::DefinitelyRejected { message } = outcome {
+            if self.state.is_reply_notification(request) {
+                self.reply_delivery_retries.insert(
+                    request,
+                    ReplyDeliveryRetry {
+                        identity: agent.runtime_identity.clone(),
+                        status: agent.shown_status(),
+                        status_since_ms: agent.status_since_ms,
+                        busy_revision: agent.busy_revision,
+                        queue_tail: self.state.queued_requests(agent.id).last().copied(),
+                        paused: false,
+                    },
+                );
+            }
             if message.contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE) {
-                self.withdrawn_at.insert(agent, std::time::Instant::now());
+                self.withdrawn_at
+                    .insert(agent.id, std::time::Instant::now());
             }
         }
     }
@@ -252,12 +326,13 @@ impl Worker {
         tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
             mode = "steer", outcome = ?outcome,
             elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
-        self.note_withdrawn(agent.id, &outcome);
         let mut state = self.state.clone();
         state
-            .record_steering(request, outcome)
+            .record_steering(request, outcome.clone())
             .map_err(|e| e.to_string())?;
-        self.save(state)
+        self.save(state)?;
+        self.note_withdrawn(agent, request, &outcome);
+        Ok(())
     }
 }
 

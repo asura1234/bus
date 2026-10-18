@@ -22,6 +22,9 @@ use std::{
 #[cfg(test)]
 #[path = "tests/control_focus_test.rs"]
 mod focus_tests;
+#[cfg(test)]
+#[path = "control/tests/reply_seen_test.rs"]
+mod reply_seen_tests;
 
 /// The exit code of `wait` and `send --async` when a message stalled, so a
 /// caller can tell "stuck, look at it" from a failed command (1).
@@ -108,6 +111,7 @@ fn run_with_pause(
     mut pause: impl FnMut(Duration),
 ) -> io::Result<()> {
     let request_id = next_request_id();
+    let mut reply_author = None;
     let response = match parse(args, &request_id) {
         Ok(command) if command.method == "agent.interrupt" => {
             interrupt::run(command, send, &mut pause)
@@ -117,10 +121,18 @@ fn run_with_pause(
         }
         Ok(command) => {
             let follow = command.follow;
+            if follow || command.wait_for_message {
+                reply_author = command.params["as"].as_str().map(str::to_owned);
+            }
             let sent = execute(command, &mut *send);
             if follow && sent.ok {
-                let mut followed =
-                    follow_message(&sent.id, &sent.result["message_id"], send, &mut pause);
+                let selector = match &reply_author {
+                    Some(author) => {
+                        serde_json::json!({"message":sent.result["message_id"],"as":author})
+                    }
+                    None => sent.result["message_id"].clone(),
+                };
+                let mut followed = follow_message(&sent.id, &selector, send, &mut pause);
                 followed.id.clone_from(&sent.id);
                 if !followed.result.is_object() {
                     followed.result = serde_json::json!({});
@@ -136,6 +148,26 @@ fn run_with_pause(
         Err(message) => Response::failure(&request_id, "invalid_arguments", message),
     };
     write_response(output, &response)?;
+    if let (Some(author), Some(requests)) = (reply_author, response.result["requests"].as_array()) {
+        for request in requests
+            .iter()
+            .filter(|r| r["reply_ack"] == true && r["stage"] == "replied" && r["reply"].is_object())
+        {
+            let Some(id) = request["request_id"].as_u64() else {
+                continue;
+            };
+            // Output is already visible. A failed acknowledgement leaves the
+            // durable terminal fallback intact, and must not alter that output.
+            let _ = send(
+                &Request {
+                    id: next_request_id(),
+                    method: "message.seen".into(),
+                    params: serde_json::json!({"request":id.to_string(),"as":author}),
+                },
+                None,
+            );
+        }
+    }
     if response.ok {
         return Ok(());
     }

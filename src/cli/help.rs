@@ -36,8 +36,9 @@ pub const AGENT_HELP: &str =
   agent delete AGENT --confirm
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]
   message status MESSAGE_ID
+  message seen REQUEST_ID --as AGENT
   request recover REQUEST_ID --confirm
-  wait --message MESSAGE_ID [--timeout SECONDS | --async]
+  wait --message MESSAGE_ID [--timeout SECONDS | --async] [--as AGENT]
   history --room ROOM
   settings
   settings feishu-notifications (--on | --off)
@@ -92,6 +93,10 @@ wait also exits 3 on a stall. A Blocked agent never stalls; after 5 minutes its 
 reads blocked_unanswered. Orchestrators run it as a background tool call and read the reply
 with history when it exits.
 message status, wait and history keep raw Markdown and list attached files as absolute paths.
+Worker replies to their room orchestrator also wake its terminal. Author waiters
+(send --async --as, or wait --as) defer that wake while alive and mark flushed replies
+seen; message status and anonymous waits never suppress delivery. message seen is
+the post-output acknowledgement; do not use it before reading the reply.
 agent read also works while an agent is launching (e.g. to see a provider trust prompt);
 runtime.session_verified is false until its provider session starts.
 While an agent on the alternate screen (Codex) is busy, a recent read returns its visible screen

@@ -67,7 +67,12 @@ fn cli() -> Command {
         .subcommand(
             subcommand("message")
                 .subcommand_required(true)
-                .subcommand(subcommand("status").arg(value_arg("message").required(true))),
+                .subcommand(subcommand("status").arg(value_arg("message").required(true)))
+                .subcommand(
+                    subcommand("seen")
+                        .arg(value_arg("request").required(true))
+                        .arg(value_arg("as").long("as").required(true)),
+                ),
         )
         .subcommand(
             subcommand("request").subcommand_required(true).subcommand(
@@ -79,6 +84,7 @@ fn cli() -> Command {
         .subcommand(
             subcommand("wait")
                 .arg(option("message"))
+                .arg(value_arg("as").long("as"))
                 .arg(flag("async"))
                 .arg(
                     Arg::new("timeout")
@@ -174,13 +180,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
             follow = send_follow;
             ("message.send", params)
         }
-        "message" => match args.subcommand() {
-            Some(("status", args)) => (
-                "message.status",
-                json!({"message": required(args, "message")?}),
-            ),
-            _ => return Err("unknown message command".into()),
-        },
+        "message" => parse_message(args)?,
         "request" => match args.subcommand() {
             Some(("recover", args)) => (
                 "request.recover",
@@ -204,10 +204,11 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
                     })?;
                 wait_timeout = Some(Duration::from_secs(timeout));
             }
-            (
-                "message.status",
-                json!({"message": required(args, "message")?}),
-            )
+            let mut params = json!({"message": required(args, "message")?});
+            if let Some(author) = args.get_one::<String>("as") {
+                params["as"] = json!(author);
+            }
+            ("message.status", params)
         }
         "history" => ("room.history", json!({"room": required(args, "room")?})),
         _ => return Err("unknown command".into()),
@@ -220,6 +221,20 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         wait_for_message: name == "wait",
         follow,
     })
+}
+
+fn parse_message(args: &ArgMatches) -> Result<(&'static str, Value), String> {
+    match args.subcommand() {
+        Some(("status", args)) => Ok((
+            "message.status",
+            json!({"message": required(args, "message")?}),
+        )),
+        Some(("seen", args)) => Ok((
+            "message.seen",
+            json!({"request":required(args,"request")?,"as":required(args,"as")?}),
+        )),
+        _ => Err("unknown message command".into()),
+    }
 }
 
 fn room_cli() -> Command {
