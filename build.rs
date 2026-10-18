@@ -184,7 +184,18 @@ fn record_build_identity() {
     }
     if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
         if let Some(path) = git(&["rev-parse", "--git-path", &branch]) {
-            println!("cargo:rerun-if-changed={path}");
+            // Packed refs have no loose file. Watch its existing parent so the
+            // next commit creating that file still invalidates the build.
+            let mut watched = PathBuf::from(path);
+            while !watched.exists() && watched.pop() {}
+            if watched.exists() {
+                println!("cargo:rerun-if-changed={}", watched.display());
+            }
+        }
+        if let Some(path) = git(&["rev-parse", "--git-path", "packed-refs"]) {
+            if PathBuf::from(&path).exists() {
+                println!("cargo:rerun-if-changed={path}");
+            }
         }
     }
 }

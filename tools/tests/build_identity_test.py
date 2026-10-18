@@ -104,6 +104,67 @@ class BuildIdentityTests(unittest.TestCase):
                 self.assertIn("cargo:rustc-env=BUS_BUILD_PROFILE=fixture\n", output)
                 self.assertIn("cargo:rerun-if-changed=", output)
 
+    def test_packed_branch_ref_emits_only_existing_rerun_paths(self) -> None:
+        # `git gc` packs branch refs, deleting the loose ref file until the next commit.
+        self.git(self.repo, "pack-refs", "--all", "--prune")
+        output = self.record(self.repo)
+        self.assertIn(f"cargo:rustc-env=BUS_BUILD_SHA={self.sha}\n", output)
+        prefix = "cargo:rerun-if-changed="
+        watched = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+        self.assertTrue(watched)
+        missing = [path for path in watched if not (self.repo / path).exists()]
+        self.assertEqual(missing, [], output)
+
+    def test_cargo_caches_packed_refs_and_notices_the_next_loose_commit(self) -> None:
+        (self.repo / "Cargo.toml").write_text(
+            '[package]\nname="freeze_identity_fixture"\nversion="0.0.0"\nedition="2021"\n'
+        )
+        (self.repo / "src").mkdir()
+        (self.repo / "src/main.rs").write_text('fn main() { println!("{}", env!("BUS_BUILD_SHA")); }\n')
+        (self.repo / "build.rs").write_text(
+            "mod production {\n"
+            f"include!({json.dumps((ROOT / 'build.rs').as_posix())});\n"
+            "pub fn record() { record_build_identity(); }\n}\n"
+            "fn main() { production::record(); }\n"
+        )
+        base = Path(os.environ.get("CARGO_TARGET_DIR", str(ROOT / "target")))
+        target = (base if base.is_absolute() else ROOT / base) / "build-identity-fixtures" / self.directory.name
+        self.addCleanup(shutil.rmtree, target, True)
+        env = {**self.environment, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": "4"}
+        for key in ("LLVM_PROFILE_FILE", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
+            env.pop(key, None)
+        prefix = ["nice", "-n", "10"] if shutil.which("nice") else []
+
+        def cargo(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run([*prefix, "cargo", *args], cwd=self.repo, env=env,
+                                  capture_output=True, text=True, check=True)
+
+        cargo("generate-lockfile", "--offline")
+        binary = target / "debug" / ("freeze_identity_fixture.exe" if os.name == "nt" else "freeze_identity_fixture")
+
+        def build(expected_sha: str, cached: bool = False) -> None:
+            before = binary.stat().st_mtime_ns if binary.exists() else None
+            result = cargo("build", "--locked", "--offline", "-j", "4", "--message-format", "json")
+            self.assertEqual(subprocess.check_output([str(binary)], text=True).strip(), expected_sha)
+            if cached:
+                artifacts = [json.loads(line) for line in result.stdout.splitlines()]
+                binary_artifact = next(item for item in artifacts
+                                       if item.get("reason") == "compiler-artifact"
+                                       and item["target"]["kind"] == ["bin"])
+                self.assertTrue(binary_artifact["fresh"], result.stderr)
+                self.assertEqual(binary.stat().st_mtime_ns, before, "unchanged build recompiled the crate")
+
+        self.git(self.repo, "pack-refs", "--all", "--prune")
+        build(self.sha)
+        build(self.sha, cached=True)
+        self.git(self.repo, "commit", "--allow-empty", "-q", "-m", "next")
+        next_sha = self.git(self.repo, "rev-parse", "HEAD")
+        build(next_sha)
+        build(next_sha, cached=True)
+        self.git(self.repo, "pack-refs", "--all", "--prune")
+        build(next_sha)
+        build(next_sha, cached=True)
+
 
 if __name__ == "__main__":
     unittest.main()
