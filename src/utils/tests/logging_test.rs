@@ -847,3 +847,64 @@ fn archive_oversized_entry_rotates_once_and_is_kept_whole() {
     assert_eq!(live, "OVERSIZED-SECOND");
     assert_eq!(kept, ["OVERSIZED-FIRST"]);
 }
+
+#[test]
+fn perf_archive_index_tracks_timestamp_bounds_and_prunes_with_the_archive() {
+    let live = temp_log_path("perf-index").with_file_name("client.jsonl");
+    fs::create_dir_all(live.parent().unwrap()).unwrap();
+    let plain = live.with_file_name("client.jsonl.1");
+    let contents =
+        b"{\"ts_ms\":500}\n{\"ts_ms\":100}\nbroken\n{\"ts_ms\":400}\n{\"missing\":true}\n";
+    fs::write(&plain, contents).unwrap();
+    let gzip = compress_archive(&plain).unwrap();
+    let index = archive_index::read(&gzip).expect("compression publishes an index");
+    assert_eq!((index.first_ts_ms, index.last_ts_ms), (100, 500));
+    assert_eq!((index.records, index.invalid), (3, 2));
+    let mut decoded = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(File::open(&gzip).unwrap()),
+        &mut decoded,
+    )
+    .unwrap();
+    assert_eq!(decoded, contents);
+    let sidecar = live.with_file_name("client.jsonl.1.index.json");
+    assert!(sidecar.exists());
+    prune_archives(
+        list_archives(&live),
+        &ArchivePolicy {
+            max_age: Duration::ZERO,
+            max_total_bytes: 0,
+        },
+        SystemTime::now(),
+    );
+    assert!(!gzip.exists());
+    assert!(!sidecar.exists(), "retention must not leak index sidecars");
+    fs::remove_dir_all(live.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn perf_archive_index_requires_known_version_and_consistent_bounds() {
+    let live = temp_log_path("perf-index-invalid").with_file_name("client.jsonl");
+    fs::create_dir_all(live.parent().unwrap()).unwrap();
+    let plain = live.with_file_name("client.jsonl.1");
+    fs::write(&plain, b"{\"ts_ms\":5}\n").unwrap();
+    let gzip = compress_archive(&plain).unwrap();
+    let sidecar = live.with_file_name("client.jsonl.1.index.json");
+    let original: serde_json::Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    for change in [
+        serde_json::json!({"version":2}),
+        serde_json::json!({"first_ts_ms":9}),
+        serde_json::json!({"records":0}),
+    ] {
+        let mut index = original.clone();
+        for (key, value) in change.as_object().unwrap() {
+            index[key] = value.clone();
+        }
+        fs::write(&sidecar, serde_json::to_vec(&index).unwrap()).unwrap();
+        assert!(
+            archive_index::read(&gzip).is_none(),
+            "invalid index: {index}"
+        );
+    }
+    fs::remove_dir_all(live.parent().unwrap()).unwrap();
+}

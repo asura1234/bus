@@ -2,7 +2,11 @@
 //!
 //! It reads files only, so it works while Bus is hung or after it exited.
 use serde_json::Value;
+use std::io::Write as _;
 use std::path::Path;
+
+mod reader;
+use reader::read_records;
 
 /// A timer or a perf-thread wake-up this late marks a window as slow.
 const SLOW_MS: f64 = 100.0;
@@ -12,16 +16,25 @@ const DEFAULT_SINCE_MS: u64 = 30 * 60_000;
 pub(super) fn run(data_dir: &Path, args: &[String]) -> std::io::Result<()> {
     let since = parse_since(args).map_err(std::io::Error::other)?;
     let from_ms = since.map(|since| crate::utils::time::now_ms().saturating_sub(since));
-    let records = read_records(data_dir, from_ms);
     let span = since.map_or("all records".to_owned(), |ms| {
         format!("last {} min", ms / 60_000)
     });
-    super::help::write_stdout_line(format_args!(
-        "perf: {} ({span}, {} records)\n{}",
-        data_dir.join("perf").display(),
-        records.len(),
-        summarize(&records, local_clock)
-    ));
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "perf: {} ({span})", data_dir.join("perf").display())?;
+    stdout.flush()?;
+    let scan = read_records(data_dir, from_ms);
+    writeln!(
+        stdout,
+        "{} records\n{}",
+        scan.records.len(),
+        summarize(&scan.records, local_clock)
+    )?;
+    let stats = scan.stats;
+    writeln!(std::io::stderr().lock(),
+        "perf scan: read {} files, skipped {} archives; read {} records, skipped {} records, invalid {} records, unreadable {} files",
+        stats.files_read, stats.archives_skipped, stats.records_read,
+        stats.records_skipped, stats.invalid, stats.unreadable,
+    )?;
     Ok(())
 }
 
@@ -63,43 +76,6 @@ fn parse_since(args: &[String]) -> Result<Option<u64>, String> {
         }
         _ => Err(USAGE.into()),
     }
-}
-
-/// Every record of both roles, archives included, from `from_ms` on.
-fn read_records(data_dir: &Path, from_ms: Option<u64>) -> Vec<Value> {
-    let dir = data_dir.join("perf");
-    let mut records: Vec<Value> = ROLES
-        .iter()
-        .flat_map(|role| {
-            let live = dir.join(format!("{role}.jsonl"));
-            crate::utils::logging::archived_files(&live)
-                .into_iter()
-                .chain(std::iter::once(live))
-        })
-        .filter_map(|path| read_text(&path))
-        .flat_map(|text| {
-            text.lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .collect::<Vec<_>>()
-        })
-        .filter(|record| from_ms.is_none_or(|from| ts(record) >= from))
-        .collect();
-    records.sort_by_key(ts);
-    records
-}
-
-/// A live file, or an archive the log writer may already have gzipped.
-fn read_text(path: &Path) -> Option<String> {
-    use std::io::Read as _;
-    let bytes = std::fs::read(path).ok()?;
-    if path.extension().is_some_and(|ext| ext == "gz") {
-        let mut text = String::new();
-        flate2::read::GzDecoder::new(&bytes[..])
-            .read_to_string(&mut text)
-            .ok()?;
-        return Some(text);
-    }
-    String::from_utf8(bytes).ok()
 }
 
 fn ts(record: &Value) -> u64 {

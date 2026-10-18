@@ -1,3 +1,6 @@
+pub(crate) mod archive_index;
+use archive_index::compress_archive;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -744,50 +747,10 @@ fn prune_archives(mut archives: Vec<Archive>, policy: &ArchivePolicy, now: Syste
             .is_ok_and(|age| age > policy.max_age);
         let size = fs::metadata(&archive.path).map_or(0, |meta| meta.len());
         total = total.saturating_add(size);
-        if expired || total > policy.max_total_bytes {
-            let _ = fs::remove_file(&archive.path);
+        if (expired || total > policy.max_total_bytes) && fs::remove_file(&archive.path).is_ok() {
+            archive_index::remove(&archive.path);
         }
     }
-}
-
-/// Gzips `plain` into `<plain>.gz` through a staging file of its own: workers
-/// of several processes may compress the same archive at once, and a shared
-/// staging name let one truncate the other's finished output.
-fn compress_archive(plain: &Path) -> io::Result<PathBuf> {
-    static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mut compressed = plain.as_os_str().to_os_string();
-    compressed.push(ARCHIVE_GZ);
-    let compressed = PathBuf::from(compressed);
-    let mut staging = compressed.clone().into_os_string();
-    let sequence = STAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    staging.push(format!(".{}-{sequence}{ARCHIVE_TMP}", std::process::id()));
-    let staging = PathBuf::from(staging);
-    let source = File::open(plain)?;
-    let modified = source.metadata()?.modified()?;
-    let staged = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&staging)?;
-    let result = (|| {
-        let mut encoder = flate2::write::GzEncoder::new(staged, flate2::Compression::default());
-        io::copy(&mut &source, &mut encoder)?;
-        let finished = encoder.finish()?;
-        // Numbered archives derive their retention age from mtime. Gzip must
-        // not renew their lifetime each time a worker recovers a plain copy.
-        finished.set_times(fs::FileTimes::new().set_modified(modified))?;
-        finished.sync_all()?;
-        fs::rename(&staging, &compressed)
-    })();
-    if let Err(err) = result {
-        let _ = fs::remove_file(&staging);
-        return Err(err);
-    }
-    match fs::remove_file(plain) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err),
-    }
-    Ok(compressed)
 }
 
 #[cfg(test)]
