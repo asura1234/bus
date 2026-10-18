@@ -143,20 +143,15 @@ impl History {
         let scope = link_scope(state, &prompt.author);
         let block = self.markdown_block(prompt_source, &prompt.text);
         let cold = !block.is_laid_out(width);
-        lines.extend(
-            block
-                .lines(
-                    width,
-                    prompt_source,
-                    "",
-                    RowAnchor::new(prompt.id, None, RowKind::PromptBody),
-                )
-                .iter()
-                .map(|line| Line {
-                    links: Some(scope.clone()),
-                    ..line.clone()
-                }),
-        );
+        lines.extend(super::wrapped_links::scoped_lines(
+            block.lines(
+                width,
+                prompt_source,
+                "",
+                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+            ),
+            scope,
+        ));
         self.rendered += usize::from(cold);
     }
 
@@ -236,15 +231,10 @@ impl History {
                 let scope = link_scope(state, &Author::Agent(*agent_id));
                 let block = self.markdown_block(source, text);
                 let cold = !block.is_laid_out(width);
-                lines.extend(
-                    block
-                        .lines(width, source, "    ", reply_anchor)
-                        .iter()
-                        .map(|line| Line {
-                            links: Some(scope.clone()),
-                            ..line.clone()
-                        }),
-                );
+                lines.extend(super::wrapped_links::scoped_lines(
+                    block.lines(width, source, "    ", reply_anchor),
+                    scope,
+                ));
                 self.rendered += usize::from(cold);
                 lines.push(Line {
                     text: "    Quote".into(),
@@ -438,7 +428,10 @@ fn link_scope(state: &BusState, author: &Author) -> LinkScope {
         Author::Agent(id) => state.agent(*id).map(|agent| Arc::from(agent.cwd.as_path())),
         Author::Developer | Author::Bus => None,
     };
-    LinkScope { cwd }
+    LinkScope {
+        cwd,
+        wrapped: Vec::new(),
+    }
 }
 
 fn participant_tone(participant: &Author) -> Tone {
