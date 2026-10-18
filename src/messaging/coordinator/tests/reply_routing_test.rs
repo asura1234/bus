@@ -593,8 +593,19 @@ fn reply_routing_developer_lead_group_routes_its_orchestrator_member_once() {
 #[test]
 fn reply_routing_preserves_an_old_recovered_reply_before_first_routing() {
     let mut f = Fixture::new();
-    let source = f.send(Author::Agent(f.orch), "build during downtime");
     let mut state = f.worker.state.clone();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "build during downtime".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            io::now_ms() - 9 * 24 * 60 * 60_000,
+        )
+        .unwrap()[0];
     // Final callbacks carry their original event time. The tick archives
     // recovered callbacks before its delivery reconciliation runs.
     state.finish_for_test(
