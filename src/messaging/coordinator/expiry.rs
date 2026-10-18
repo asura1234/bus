@@ -8,6 +8,7 @@ impl Worker {
         let expired = state
             .expire_stalled_queued_requests(now_ms)
             .map_err(|e| e.to_string())?;
+        state.retain_worker_outcomes(now_ms);
         if state != self.state {
             self.save(state)?;
         }

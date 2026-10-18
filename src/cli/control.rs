@@ -149,25 +149,9 @@ fn run_with_pause(
     };
     write_response(output, &response)?;
     if let (Some(author), Some(requests)) = (reply_author, response.result["requests"].as_array()) {
-        for request in requests
-            .iter()
-            .filter(|r| r["reply_ack"] == true && r["stage"] == "replied" && r["reply"].is_object())
-        {
-            let Some(id) = request["request_id"].as_u64() else {
-                continue;
-            };
-            // Output is already visible. A failed acknowledgement leaves the
-            // durable terminal fallback intact, and must not alter that output.
-            let _ = send(
-                &Request {
-                    id: next_request_id(),
-                    method: "message.seen".into(),
-                    params: serde_json::json!({"request":id.to_string(),"as":author}),
-                },
-                None,
-            );
-        }
+        acknowledge_printed_components(requests, &author, send);
     }
+
     if response.ok {
         return Ok(());
     }
@@ -192,3 +176,43 @@ fn run_with_pause(
 #[cfg(test)]
 #[path = "control/tests_test.rs"]
 mod tests;
+
+/// The caller has already flushed this exact result. Current server state must
+/// not widen the set of components these bytes acknowledge.
+fn acknowledge_printed_components(
+    requests: &[serde_json::Value],
+    author: &str,
+    send: &mut impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+) {
+    for request in requests {
+        let reply = request["reply_ack"] == true
+            && request["stage"] == "replied"
+            && request["reply"].is_object();
+        let events = request["event_acks"]
+            .as_array()
+            .filter(|keys| !keys.is_empty());
+        if !reply && events.is_none() {
+            continue;
+        }
+        let Some(id) = request["request_id"].as_u64() else {
+            continue;
+        };
+        let mut params = serde_json::json!({"request":id.to_string(),"as":author});
+        if events.is_some() {
+            params["events"] = request["event_acks"].clone();
+            if reply {
+                params["reply"] = serde_json::Value::Bool(true);
+            }
+        }
+        // A failed acknowledgement must leave durable fallback possible and
+        // must not alter output that is already visible.
+        let _ = send(
+            &Request {
+                id: next_request_id(),
+                method: "message.seen".into(),
+                params,
+            },
+            None,
+        );
+    }
+}

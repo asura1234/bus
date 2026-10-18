@@ -321,38 +321,69 @@ the JSON error object.
 
 Orchestrators run it as a background tool call (Claude Code: Bash with
 `run_in_background`; Cursor: a background shell with timeout 0), so their CLI
-wakes them when it exits and prints the captured replies. Independently, Bus
-routes a worker reply to a message authored by its room orchestrator into that
-orchestrator's terminal, using the same agent-message queue as a Blocked notice.
-It names the worker and original message, with the reply text or a short preview
-and `bus message status MESSAGE_ID` pointer for replies over 4,000 characters.
-No room monitoring or surviving waiter is required.
+wakes them when it exits and prints the captured replies. Bus also maintains
+work-room situation awareness through the same agent-message queue as Blocked
+notices. It delivers these worker events to the room orchestrator's terminal:
 
-An author's `send --async --as ORCH` renews a three-second waiter lease, so early
-replies in a multi-worker send wait for the combined output. `wait --message ID
---as ORCH` opts into the same behavior; a plain `wait` or `message status` cannot
-suppress terminal delivery. After stdout flush succeeds, the waiter marks only
-the completed replies it printed as seen. One shared turn/group is one routed
-reply; seeing any qualifying member covers the group. A killed waiter stops
-renewing its lease, and Bus queues its unseen replies after the lease expires
-and a two-second settlement grace.
+- A captured reply to an orchestrator-authored message, including a late final
+  after that request closed without a reply.
+- A turn-final message from a turn the orchestrator did not start, including
+  another worker's request and a background job's wake turn. Autonomous full
+  text becomes a worker message in work-room history.
+- A request to a work-room worker that stalls or ends without a reply, with its
+  reason, including `abandoned`, `reply_not_captured` and provider errors.
+- Confirmed process exit with an open orchestrator request, or an idle worker
+  with an open orchestrator request after callback settlement.
+  Normal idle followed by a reply or no-reply settlement is folded into that
+  outcome. Background holds, including shells, stay open and report idle.
+  Queued or uncertain requests qualify on a genuine later idle edge; dialogs
+  and an initially idle queue do not. Resumed work can yield a new idle/stall
+  event, while unchanged polls or restarts never replay that event.
 
-The queue and seen/routed decision are saved together and recovered after Bus
-restarts, including callbacks spooled while Bus was down. An untyped reply
-notification and its original reply do not expire before delivery. If native
-submission keeps rejecting the notification past the normal queued stall window,
-Bus keeps it queued and pauses retries until a new message arrives for that
-orchestrator, its status or runtime identity changes, or Bus restarts. A new
-arrival allows a fresh attempt; idle polls alone do not resume pasting. Pending
-replies are retained before history cleanup, while seen/delivered replies follow
-ordinary retention and expired history is not backfilled again. A late
-acknowledgement cancels a still-queued notification (shown as abandoned in
-history); once submission starts, normal uncertain-outcome safeguards apply.
-If output and submission race, both can be visible: delivery takes precedence
-over losing a reply. The first upgrade backfills retained qualifying replies
-once because older versions saved no seen record. Rolling back to an older
-binary that discards the routing state can repeat that recovery.
-Developer-authored messages and MASTER reporting keep their existing behavior.
+Each notification names the worker, event and message/request reference. Bus
+collects same-worker events for two seconds and combines them in one short
+message; new events can join a still-queued batch during its collection window.
+Long text uses a preview and `bus message status MESSAGE_ID` or
+`bus history --room ROOM` pointer. Different workers keep their own identity.
+No room monitoring, self-timer or surviving waiter is required. Blocked,
+Resolved and failed-startup notices keep their existing behavior.
+
+An author's `send --async --as ORCH` renews a three-second waiter lease, so its
+reply and no-reply outcome components wait for the combined output.
+`wait --message ID --as ORCH` opts into the same behavior. A plain `wait` or
+`message status` cannot suppress delivery. After stdout flush succeeds, the
+waiter marks only printed completed replies and the exact printed outcome
+`event_acks` keys seen. Status `events` includes all retained group summaries,
+including finals, exits and already-seen events; only unseen own outcomes are
+acknowledgeable through `event_acks`.
+It cannot hide an event that appeared after its output, an autonomous result,
+idle, an exit, or another message's events. Seeing a shared reply covers its group.
+A killed waiter stops renewing its lease, so unseen components are routed.
+
+Event decisions and queued batches are saved together before native submission.
+Pending events, callbacks spooled while Bus was down and queued batches recover
+on restart without allocating another notification for the same event. Pending
+sources and full-text pointer targets do not expire before delivery. Repeated
+callbacks for the same provider turn, repeated idle/exit polls and restarts do
+not create duplicate events. A new outcome or a later turn is a distinct event.
+Definite native rejection retains the same queue id; after the queued stall
+window retries pause until a new message, status/identity change or restart.
+Idle polls alone do not resume pasting; uncertain submissions are not replayed.
+
+A post-flush acknowledgement removes its component from a still-queued mixed
+batch and preserves the others; an empty batch becomes abandoned in history.
+Once submission starts its payload is immutable. stdout and terminal injection
+have no shared transaction: a late waiter still prints a reply already sent as
+a wake, while ordinary live waiters avoid that overlap through lease and Seen.
+Bus submits each event notification once under the existing uncertain-outcome
+policy and favors recovery when an output acknowledgement fails.
+
+The first upgrade backfills retained eligible replies and no-reply outcomes
+once because older versions saved no seen record. This can include older
+retained outcomes, coalesced per worker. Seen/delivered sources follow ordinary
+retention; expired physical history is not resurrected. Rolling back to a
+binary that discards routing state can repeat recovery. Replies to
+developer-authored messages and MASTER reporting keep their existing behavior.
 
 For non-blocking inspection, read the same state once:
 
@@ -711,8 +742,10 @@ Bus also releases a request on its own when the agent never started it as a
 turn. This happens when Bus typed the message while the agent ran a turn of its
 own, and then the agent finished that turn and either started another turn or
 stayed idle for five seconds. The request becomes `abandoned` (as `wait` and
-`message status` report; nothing is posted in any room), and the next queued
-message is delivered. Any answer the agent gave is in its terminal.
+`message status` report), and the next queued message is delivered. For a
+work-room worker, its no-reply outcome also reaches the orchestrator terminal.
+A later captured final for an orchestrator request is routed with its original
+message reference; developer-authored replies keep their existing behavior.
 
 The control CLI always emits raw JSON. Prompt and reply text returned by
 `wait`, `message status`, and `history` remains raw Markdown. The interactive
@@ -868,7 +901,8 @@ Reliable callers should also follow these rules:
    human-readable terminal output.
 2. Capture room, agent, message, and request IDs and prefer IDs in later calls.
 3. Use `--to all` only when broadcasting is intentional.
-4. Use `wait` or poll `message status`; do not treat `send` as completion.
+4. Use `wait` when a program needs completion; do not treat `send` as completion.
+   Orchestrators receive terminal event notifications without periodic polling.
 5. Preserve the last status returned with a timeout. It identifies the request
    and stage that still need investigation.
 6. Sequence dependent tasks in the caller. Bus can fan a message out, but it

@@ -472,7 +472,7 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "message.seen",
         "message seen",
-        &["request", "as"],
+        &["request", "as", "events", "reply"],
         true,
         Tier::Agent,
     ),

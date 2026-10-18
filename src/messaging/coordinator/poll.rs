@@ -146,6 +146,9 @@ fn observe_attention_exit(
         }
         _ => None,
     };
+    if evidence == Some(true) {
+        state.record_worker_exit(agent.id, io::now_ms());
+    }
     let key = format!(
         "exit:{}:{}",
         agent.id.0,
