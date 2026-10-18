@@ -31,38 +31,7 @@ impl Worker {
                 }
                 Ok(result)
             }
-            "message.seen" => {
-                let request = RequestId(
-                    required(p, "request")?
-                        .parse::<u64>()
-                        .map_err(|_| "Request must be a numeric ID")?,
-                );
-                let room = self
-                    .state
-                    .request(request)
-                    .ok_or("Unknown request ID")?
-                    .room_id;
-                let author = self.control_author(room, required(p, "as")?)?;
-                let mut state = self.state.clone();
-                let now = crate::messaging::storage::io::now_ms();
-                let source = state.request(request).ok_or("Unknown request ID")?;
-                if source.phase == RequestPhase::Completed && source.pending_final.is_some()
-                    || p.get("events").is_none()
-                {
-                    state
-                        .see_worker_reply(request, author, now)
-                        .map_err(|e| e.to_string())?;
-                }
-                if let Some(events) = p.get("events") {
-                    let keys: Vec<String> = serde_json::from_value(events.clone())
-                        .map_err(|_| "events must be an array of event keys")?;
-                    state
-                        .see_worker_outcomes(request, author, &keys, now)
-                        .map_err(|e| e.to_string())?;
-                }
-                self.save(state)?;
-                Ok(json!({"request_id":request,"seen":true}))
-            }
+            "message.seen" => self.control_seen(p),
             "request.recover" => {
                 let id = required(p, "request")?
                     .parse::<u64>()
@@ -93,6 +62,51 @@ impl Worker {
             }
             _ => Err("Unknown method".into()),
         }
+    }
+
+    /// Spend only components present in the flushed result, never a final
+    /// that arrived between that output and its acknowledgement.
+    fn control_seen(&mut self, p: &Value) -> Result<Value, String> {
+        let request = RequestId(
+            required(p, "request")?
+                .parse::<u64>()
+                .map_err(|_| "Request must be a numeric ID")?,
+        );
+        let room = self
+            .state
+            .request(request)
+            .ok_or("Unknown request ID")?
+            .room_id;
+        let author = self.control_author(room, required(p, "as")?)?;
+        let reply = match p.get("reply") {
+            Some(Value::Bool(reply)) => *reply,
+            Some(_) => return Err("reply must be a boolean".into()),
+            None => p.get("events").is_none(),
+        };
+        let events = p
+            .get("events")
+            .map(|value| {
+                serde_json::from_value::<Vec<String>>(value.clone())
+                    .map_err(|_| "events must be an array of event keys")
+            })
+            .transpose()?;
+        if !reply && events.is_none() {
+            return Err("No printed reply or event selected".into());
+        }
+        let now = crate::messaging::storage::io::now_ms();
+        let mut state = self.state.clone();
+        if reply {
+            state
+                .see_worker_reply(request, author, now)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(keys) = events {
+            state
+                .see_worker_outcomes(request, author, &keys, now)
+                .map_err(|e| e.to_string())?;
+        }
+        self.save(state)?;
+        Ok(json!({"request_id":request,"seen":true}))
     }
 
     pub(in crate::messaging::coordinator) fn control_send(

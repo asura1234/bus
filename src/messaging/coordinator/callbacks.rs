@@ -179,7 +179,7 @@ impl Worker {
             ) => {
                 self.own_turns.insert(id, std::time::Instant::now());
             }
-            (_, false) => {
+            (_, false) if !late_worker_final => {
                 self.own_turns.remove(&id);
             }
             _ => {}

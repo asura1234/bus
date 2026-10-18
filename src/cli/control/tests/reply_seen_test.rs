@@ -146,3 +146,21 @@ fn reply_seen_send_async_preserves_the_author_and_prints_the_reply() {
     );
     assert_eq!(response["result"]["send_receipt"]["message_id"], 19);
 }
+
+#[test]
+fn printed_reply_with_outcomes_explicitly_acknowledges_both() {
+    let mut output = Vec::new();
+    let mut ack = None;
+    let args = ["wait", "--message", "19", "--as", "orch"].map(str::to_owned);
+    run_with_pause(&args,&mut output,&mut |request,_| {
+        if request.method=="message.seen" {
+            ack=Some(request.params.clone());
+            return Ok(Response::success(&request.id,json!({"seen":true})));
+        }
+        Ok(Response::success(&request.id,json!({"message_id":19,"complete":true,"requests":[{"request_id":20,"stage":"replied","reply_ack":true,"reply":{"text":"final"},"event_acks":["idle:20"]}]})))
+    }, |_|panic!("no polling necessary")).unwrap();
+    assert_eq!(
+        ack,
+        Some(json!({"request":"20","as":"orch","events":["idle:20"],"reply":true}))
+    );
+}

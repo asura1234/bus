@@ -702,7 +702,14 @@ fn late_spooled_final_is_not_deferred_behind_a_new_unbound_request() {
     )
     .unwrap();
     callbacks::append(&spool, "worker", Provider::ClaudeCode, json!({"hook_event_name":"Stop","session_id":"worker-session","prompt_id":"owned","last_assistant_message":"Late while next request unbound."}), &[], false).unwrap();
+    f.worker
+        .own_turns
+        .insert(f.agent, std::time::Instant::now());
     f.worker.consume_callbacks(f.agent, &spool).unwrap();
+    assert!(
+        f.worker.own_turns.contains_key(&f.agent),
+        "an old final cannot end the new autonomous turn guard"
+    );
     assert!(f
         .worker
         .state
@@ -713,4 +720,85 @@ fn late_spooled_final_is_not_deferred_behind_a_new_unbound_request() {
         Some(next)
     );
     assert!(!f.worker.state.request(next).unwrap().trusted_start_bound);
+}
+
+#[test]
+fn outcome_ack_does_not_mark_a_reply_arriving_after_print_seen() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let cb = callback(&f, "owned", 2, CallbackEventKind::BackgroundPending);
+    let mut state = f.worker.state.clone();
+    state.accept_callback(cb);
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms() - 8_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let message = f.worker.state.request(source).unwrap().prompt.id;
+    let printed = f.call("message.status", json!({"message":message.0.to_string()}));
+    let row = &printed.result["requests"][0];
+    assert_eq!(row["reply_ack"], false);
+    assert_eq!(row["event_acks"].as_array().unwrap().len(), 1);
+    let cb = callback(
+        &f,
+        "owned",
+        3,
+        CallbackEventKind::Final {
+            text: "New reply after the output.".into(),
+        },
+    );
+    let mut state = f.worker.state.clone();
+    assert_eq!(
+        state.accept_callback(cb),
+        CallbackDisposition::AcceptedCompleted
+    );
+    f.worker.save(state).unwrap();
+    assert!(f.call("message.seen", json!({"request":source.0.to_string(),"as":orch.0.to_string(),"events":row["event_acks"]})).ok);
+    f.reopen();
+    collect(&mut f);
+    assert_eq!(
+        f.notices().len(),
+        1,
+        "an old outcome acknowledgement cannot consume a new reply"
+    );
+    let calls = f.calls.lock().unwrap();
+    assert!(calls[0].contains("New reply after the output."));
+    assert!(!calls[0].contains("Idle with open request"));
+}
+
+#[test]
+fn long_failure_reason_keeps_event_and_original_reference_in_the_short_notice() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let message = f.worker.state.request(source).unwrap().prompt.id;
+    let reason = "unavailable detail ".repeat(400);
+    let cb = callback(
+        &f,
+        "owned",
+        2,
+        CallbackEventKind::Error {
+            message: "provider failed".into(),
+            provider_error: Some(reason.clone()),
+        },
+    );
+    let mut state = f.worker.state.clone();
+    state.accept_callback(cb);
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].contains("No reply"));
+    assert!(calls[0].contains(&format!("message {}", message.0)));
+    assert!(calls[0].contains("bus message status"));
+    assert!(calls[0].chars().count() < 1_000);
+    assert!(f
+        .worker
+        .state
+        .request(source)
+        .unwrap()
+        .failure_reason
+        .as_ref()
+        .unwrap()
+        .contains(&reason));
 }

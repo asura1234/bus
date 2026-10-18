@@ -316,8 +316,11 @@ impl BusState {
                 at_ms,
                 kind,
                 text: format!(
-                    "{text}; message {} (request {}).\nInspect: bus message status {}",
-                    request.prompt.id.0, request.id.0, request.prompt.id.0
+                    "{}; message {} (request {}).\nInspect: bus message status {}",
+                    preview(text, &format!("bus message status {}", request.prompt.id.0)),
+                    request.prompt.id.0,
+                    request.id.0,
+                    request.prompt.id.0
                 ),
                 route: ReplyRoute::Pending,
             });
