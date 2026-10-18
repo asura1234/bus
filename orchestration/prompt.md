@@ -91,13 +91,13 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   shared branch with file boundaries per agent and "ask me before writing file
   X" for shared files; a separate worktree only when it is a must.
 - Use different models for review. Keep a provider for review only once its
-  weekly allowance is below about 25% (`bus state` shows usage). Bus sends a
-  worker's `reached N compactions` notice once at the configured **Max
-  compactions per agent** (default 5). On that notice, ask the agent to write a
-  handover note in `temp/`, add a fresh agent with the same provider and role,
-  brief it from the note, then delete the old agent with
-  `bus agent delete AGENT --confirm` and log the replacement. Run
-  `bus agent clear` before giving a worker an unrelated task.
+  weekly allowance is below about 25% (`bus state` shows usage).
+- On a worker's `reached N compactions` notice at **Settings → Max compactions
+  per agent**, automatically follow
+  [agent-handover](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md).
+  That workflow defines the `temp/` note contract, the same provider and role
+  requirements, and how to brief it from the note and delete the old agent.
+  Run `bus agent clear` before giving a worker an unrelated task.
   This applies to workers only: never clear or replace yourself; you keep the
   context for the whole effort.
 - Ask the developer before: merging, pushing to shared branches, publishing,

@@ -24,6 +24,11 @@ Find out, asking the developer only for what you cannot discover:
 Start from the closest pattern and adapt it. Worked examples live in
 `DOCS/workflows/`.
 
+For worker compaction-limit notices, automatically follow the
+[agent-handover workflow](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md)
+and its handover template; it is a replacement procedure within the running
+room workflow and does not require drafting a new room workflow or kickoff.
+
 | Pattern | Use when | Shape |
 |---|---|---|
 | Sequential | Each step needs the previous result | A → B → C |

@@ -158,13 +158,11 @@ check space again before lifting the hold. Bus builds use a separate
 - **Move work when a provider runs out.** If an agent hits a usage limit, add an
   agent on another provider (`bus agent add`) and hand the work over.
 - **Watch context health.** `bus state` shows how many times each agent's
-  context has been compacted. Bus posts a `reached N compactions` notice at the
-  configured **Max compactions per agent** (Settings, default 5). On that
-  notice, ask the worker to write a handover note in `temp/`, add a fresh agent
-  with the same provider and role, brief it from the note, then delete the old
-  agent and log the replacement. Clear a worker before an unrelated task. This
-  limit is for workers only: the orchestrator never clears itself and is never
-  replaced for compactions, because it carries the context of the whole effort.
+  context has been compacted. On Bus's `reached N compactions` notice at
+  **Settings → Max compactions per agent**, automatically follow
+  [agent-handover](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md).
+  Clear a worker before an unrelated task. The orchestrator never clears or
+  replaces itself, because it carries the context of the whole effort.
 
 ## The review loop
 
