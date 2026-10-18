@@ -1,10 +1,25 @@
 //! Recovered alerts share the host output owner's ordered effect lane.
+use super::host_terminal::notify::{self, TerminalNotificationBackend};
 use super::host_terminal::output;
 use crate::utils::perf::recovery;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static AWAITING_ACK: AtomicBool = AtomicBool::new(false);
+
+/// The recorder formats and encodes; the UI only enqueues the completed bytes.
+pub(super) fn encode(text: &str) -> Vec<u8> {
+    notify::encode_notification(
+        notify::detect_backend().unwrap_or(TerminalNotificationBackend::Ghostty),
+        text,
+        None,
+        std::env::var_os("TMUX").is_some(),
+    )
+}
+
+#[cfg(test)]
+#[path = "tests/freeze_alert_test.rs"]
+mod tests;
 
 pub(super) fn flush_pending() -> io::Result<()> {
     if !AWAITING_ACK.load(Ordering::Acquire) && !recovery::has_pending() {

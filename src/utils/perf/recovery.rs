@@ -39,14 +39,14 @@ pub(crate) fn acknowledged() -> bool {
 }
 /// The recorder only supplies completed UI stalls. A blocked output owner keeps
 /// one latest candidate; it never accumulates a burst of deferred notifications.
-pub(super) fn observe(event: &StallEvent, hour: u8, minute: u8) {
+pub(super) fn observe(event: &StallEvent, hour: u8, minute: u8, encode: fn(&str) -> Vec<u8>) {
     if !is_recovery(event) || !ENABLED.load(Ordering::Acquire) {
         return;
     }
     let generation = GENERATION.load(Ordering::Acquire);
     let candidate = Pending {
         event: *event,
-        bytes: encode(event.busy_ms, hour, minute),
+        bytes: encode(&message(event.busy_ms, hour, minute)),
     };
     if let Ok(mut delivery) = DELIVERY.lock() {
         if ENABLED.load(Ordering::Acquire) && GENERATION.load(Ordering::Acquire) == generation {
@@ -107,12 +107,11 @@ impl RecoveryPolicy {
         true
     }
 }
-fn encode(busy_ms: u64, hour: u8, minute: u8) -> Vec<u8> {
+fn message(busy_ms: u64, hour: u8, minute: u8) -> String {
     format!(
-        "\x1b]9;Bus froze for {:.1} s at {hour:02}:{minute:02}; details: bus perf\x1b\\",
+        "Bus froze for {:.1} s at {hour:02}:{minute:02}; details: bus perf",
         busy_ms as f64 / 1000.0
     )
-    .into_bytes()
 }
 
 #[cfg(test)]
@@ -156,8 +155,8 @@ mod tests {
     #[test]
     fn formats_the_exact_terminal_notification_without_composer_text() {
         assert_eq!(
-            super::encode(3560, 9, 7),
-            b"\x1b]9;Bus froze for 3.6 s at 09:07; details: bus perf\x1b\\"
+            super::message(3560, 9, 7),
+            "Bus froze for 3.6 s at 09:07; details: bus perf"
         );
     }
     #[test]
@@ -165,18 +164,18 @@ mod tests {
         let mut queue = RecoveryQueue::new();
         queue.pending = Some(Pending {
             event: event(StallKind::Ended, 4000),
-            bytes: encode(4000, 9, 7),
+            bytes: b"first".to_vec(),
         });
         assert!(queue.take(10, true).is_some());
         queue.acknowledged(100_000_000);
         queue.pending = Some(Pending {
             event: event(StallKind::Ended, 5000),
-            bytes: encode(5000, 9, 8),
+            bytes: b"second".to_vec(),
         });
         assert!(queue.take(120_000_000, true).is_none());
         queue.pending = Some(Pending {
             event: event(StallKind::Ended, 6000),
-            bytes: encode(6000, 9, 9),
+            bytes: b"third".to_vec(),
         });
         assert!(queue.take(160_000_000, true).is_some());
     }

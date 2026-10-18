@@ -14,6 +14,7 @@ pub(crate) fn perf_hooks() -> PerfHooks {
         sample: self_usage,
         machine: super::machine_usage::sample,
         local_hm,
+        notification: None,
         capture_stacks,
     }
 }

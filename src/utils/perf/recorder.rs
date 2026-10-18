@@ -114,6 +114,8 @@ pub(crate) struct PerfHooks {
     pub(crate) sample: fn() -> Option<ProcessUsage>,
     pub(crate) machine: super::machine::MachineHook,
     pub(crate) local_hm: fn(i64) -> (u8, u8),
+    /// The client supplies its host notification encoder. Called only here.
+    pub(crate) notification: Option<fn(&str) -> Vec<u8>>,
     /// Writes the stacks of process `pid` to the path, blocking until done; false
     /// when unsupported or when no stacks were written. Runs off the watchdog.
     pub(crate) capture_stacks: fn(u32, &Path) -> bool,
@@ -309,7 +311,9 @@ impl Recorder {
                 let age_us = super::now_us().saturating_sub(event.stall_id);
                 let began_at = super::recovery::stall_started_second(wall_ms, age_us);
                 let (hour, minute) = (self.hooks.local_hm)(began_at);
-                super::recovery::observe(&event, hour, minute);
+                if let Some(encode) = self.hooks.notification {
+                    super::recovery::observe(&event, hour, minute, encode);
+                }
                 let record = self.stall_record(&event);
                 self.append(&record);
             }
