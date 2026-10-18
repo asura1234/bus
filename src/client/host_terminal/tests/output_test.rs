@@ -387,3 +387,35 @@ fn full_screen_frame_for_a_large_host_window_is_presented() {
     output.finish().unwrap();
     assert_eq!(state.0.lock().unwrap().bytes, expected);
 }
+
+#[test]
+fn output_worker_panic_is_reported_to_the_ui_loop() {
+    struct PanickingWriter;
+    impl Write for PanickingWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            panic!("probe writer panic");
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut output = TerminalOutput::with_writer(PanickingWriter).unwrap();
+    output.frame(frame("A", 4), false, false).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut reported = false;
+    while std::time::Instant::now() < deadline {
+        if output.feedback().is_err() {
+            reported = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        reported,
+        "a dead output owner must surface an error instead of staying busy"
+    );
+    assert!(!output.handle.busy());
+    assert_eq!(output.handle.snapshot().2, 0);
+    assert!(output.frame(frame("B", 4), false, false).is_err());
+    assert!(output.finish().is_err());
+}

@@ -13,6 +13,7 @@ use queue::{Command, Frame, Handle, Patch, Shared};
 pub(in crate::client) use routing::{busy, stdout, suspend};
 use std::{
     io::{self, Write},
+    panic::{catch_unwind, AssertUnwindSafe},
     sync::Arc,
     thread::JoinHandle,
 };
@@ -157,7 +158,10 @@ fn run(mut writer: impl Write, handle: &Handle) {
     let mut encoder = BlitEncoder::new();
     let mut sequence = 0;
     while let Some(command) = handle.next() {
-        let result = write_command(&mut writer, &mut encoder, &mut sequence, &command.command);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            write_command(&mut writer, &mut encoder, &mut sequence, &command.command)
+        }))
+        .unwrap_or_else(|_| Err(io::Error::other("host output owner panicked")));
         handle.complete(command, result);
     }
 }
