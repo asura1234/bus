@@ -535,7 +535,7 @@ fn sidebar_has_uppercase_headings_and_a_matching_divider_after_room_names() {
         assert!(row_text(1).starts_with("ROOMS"));
         // The agents header names the open room in the ROOMS `#` style.
         assert!(
-            row_text(4 + count).starts_with("#room"),
+            row_text(4 + count).starts_with("# room"),
             "{}",
             row_text(4 + count)
         );
@@ -729,10 +729,10 @@ fn room_renders_without_native_snapshot_and_only_approved_chrome_and_collapsed_m
     let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
     assert_eq!(
         text.matches("# room").count(),
-        2,
-        "sidebar and room heading"
+        3,
+        "room row, agents header and room heading"
     );
-    for required in ["ROOMS", "#room", "# room", "author", "Codex", "Quote"] {
+    for required in ["ROOMS", "# room", "author", "Codex", "Quote"] {
         if required != "Quote" {
             assert!(text.contains(required), "missing {required}");
         }

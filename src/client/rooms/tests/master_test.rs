@@ -88,10 +88,10 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
     assert_eq!(rows[5], "# pr-123           Idle ×", "{rows:?}");
     assert_eq!(rows[6], "# pr-456           Idle", "{rows:?}");
     assert!(rows[7].starts_with('─'), "{rows:?}");
-    // The agents header names the open room, `#pr-123`, in place of a
+    // The agents header names the open room, `# pr-123`, in place of a
     // generic AGENTS heading plus a separate room-name row.
     assert!(
-        rows[8].starts_with("#pr-123") && rows[8].ends_with('+'),
+        rows[8].starts_with("# pr-123") && rows[8].ends_with('+'),
         "{rows:?}"
     );
     assert_eq!(rows[9], "", "{rows:?}");
@@ -136,7 +136,7 @@ fn master_sidebar_lists_master_then_rooms_then_its_agents() {
     assert_eq!(rows[6], "# pr-456           Idle", "{rows:?}");
     assert!(rows[7].starts_with('─'), "{rows:?}");
     assert!(
-        rows[8].starts_with("#MASTER") && rows[8].ends_with('+'),
+        rows[8].starts_with("# MASTER") && rows[8].ends_with('+'),
         "{rows:?}"
     );
     assert_eq!(rows[9], "", "{rows:?}");
@@ -165,7 +165,7 @@ fn master_sidebar_lists_master_then_rooms_then_its_agents() {
     assert_eq!(ui.room, Some(pr));
     let rows = sidebar_rows(&mut ui);
     assert!(rows[3].starts_with("ROOMS"), "{rows:?}");
-    assert!(rows[8].starts_with("#pr-123"), "{rows:?}");
+    assert!(rows[8].starts_with("# pr-123"), "{rows:?}");
     assert!(rows[10].starts_with("worker"), "{rows:?}");
     assert!(
         !rows.iter().any(|row| row.starts_with("claude-orch")),
@@ -806,12 +806,12 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
 }
 
 #[test]
-fn agents_header_names_the_selected_room_in_one_dim_truncated_row() {
+fn agents_header_names_the_selected_room_in_one_spaced_room_styled_truncated_row() {
     let (mut ui, master, pr, _, _) = master_fixture();
-    for (room, name) in [(master, "#MASTER"), (pr, "#pr-123")] {
+    for (room, name) in [(master, "# MASTER"), (pr, "# pr-123")] {
         ui.open_room(room);
         let rows = sidebar_rows(&mut ui);
-        // One header row: `#room` at the left, `+` at the right edge, a gap
+        // One header row: `# room` at the left, `+` at the right edge, a gap
         // below, and no separate AGENTS or room-name row.
         assert!(
             rows[8].starts_with(name) && rows[8].ends_with('+'),
@@ -825,9 +825,9 @@ fn agents_header_names_the_selected_room_in_one_dim_truncated_row() {
         );
         let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
         ui.render(&mut buffer);
-        // The `#` keeps the ROOMS accent; the name stays dim like a heading.
+        // The `#` and name use the same foreground as the ROOMS rows.
         assert_eq!(buffer[(1, 8)].fg, ratatui::style::Color::Rgb(102, 255, 102));
-        assert_eq!(buffer[(2, 8)].fg, ratatui::style::Color::Rgb(145, 148, 159));
+        assert_eq!(buffer[(3, 8)].fg, buffer[(3, 5)].fg);
         // Only the `+` is clickable on the header row.
         let header_hits: Vec<_> = ui.view.hits.iter().filter(|hit| hit.rect.y == 8).collect();
         assert_eq!(header_hits.len(), 1, "{header_hits:?}");
@@ -845,9 +845,50 @@ fn agents_header_names_the_selected_room_in_one_dim_truncated_row() {
     let rows = sidebar_rows(&mut ui);
     // The name truncates short of the `+` so the two never collide.
     assert!(
-        rows[8].starts_with("#a-very-long-room-name…") && rows[8].ends_with(" +"),
+        rows[8].starts_with("# a-very-long-room-nam…") && rows[8].ends_with(" +"),
         "{rows:?}"
     );
+}
+
+#[test]
+fn agents_header_respects_configured_and_terminal_capped_sidebar_widths() {
+    let (mut ui, _, pr, _, _) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut value = serde_json::to_value(&snapshot.state).unwrap();
+    value["rooms"][pr.0.to_string()]["name"] = serde_json::json!("界".repeat(40));
+    snapshot.state = serde_json::from_value(value).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(pr);
+    for (configured, cols, width) in [(20, 120, 20), (28, 120, 28), (60, 180, 60), (60, 60, 20)] {
+        ui.settings.sidebar_width = configured;
+        ui.compute_view(cols, 30);
+        assert_eq!(ui.view.sidebar.width, width);
+        let plus = ui
+            .view
+            .hits
+            .iter()
+            .find(|hit| hit.action == render::Action::NewAgent)
+            .unwrap();
+        assert_eq!(plus.rect, ratatui::layout::Rect::new(width - 3, 8, 1, 1));
+        assert_eq!(
+            ui.view.hit_at(width - 3, 8),
+            Some(&render::Action::NewAgent)
+        );
+        assert!(ui.view.hit_at(width - 4, 8).is_none());
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, 30));
+        ui.render(&mut buffer);
+        let header = (1..width - 3)
+            .map(|x| buffer[(x, 8)].symbol())
+            .collect::<String>();
+        assert!(header.starts_with("# 界"), "{header}");
+        assert!(header.trim_end().ends_with('…'), "{header}");
+        assert_eq!(buffer[(3, 8)].fg, buffer[(3, 5)].fg);
+
+        assert_eq!(buffer[(width - 3, 8)].symbol(), "+");
+        assert_eq!(buffer[(width - 4, 8)].symbol(), " ");
+        assert_eq!(buffer[(width - 1, 8)].symbol(), "│");
+    }
 }
 
 #[test]
@@ -855,7 +896,7 @@ fn scrolled_master_sidebar_reaches_its_last_orchestrator_below_the_room_name() {
     let (mut ui, master, pr, _, orchestrator) = master_fixture();
     ui.open_room(master);
     ui.compute_view(100, 12);
-    // MASTER, gap, ROOMS, gap, two rooms, divider, `#MASTER` header, gap,
+    // MASTER, gap, ROOMS, gap, two rooms, divider, `# MASTER` header, gap,
     // then a four-row orchestrator card below the leading blank row.
     assert_eq!(ui.view.sidebar_max_scroll, 14 - 10);
     ui.sidebar_scroll = usize::MAX;
