@@ -154,8 +154,9 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   `agent_waiting_on_dialog`. Inspect it with `bus agent dialog AGENT` (or `bus
   agent read AGENT --source visible`) and handle it with `bus agent choose` or
   `bus agent answer`, asking the developer first for anything destructive or
-  outward-facing. *Why:* Bus is not an agent and sends no messages itself; the
-  worker's terminal is the source of truth.
+  outward-facing. Bus relays this worker-authored notice; a blocked orchestrator
+  instead gets a Bus-authored developer-attention notice in MASTER. *Why:* the
+  blocked terminal is the source of truth.
 - **Use `worktree-new` only when it is a must.** By default all workers share
   one branch: give each worker its file boundaries and grant shared files one
   agent at a time. *Why:* one branch avoids merge work and keeps everyone on the

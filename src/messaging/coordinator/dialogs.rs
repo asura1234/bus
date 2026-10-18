@@ -1,6 +1,7 @@
 //! Reports a steady dialog wait to the room and resolves earlier help when it
 //! settles. A readable native screen suppresses stale blocked metadata. The
-//! blocked agent itself sends each notice, once per episode.
+//! worker sends its notice once per episode; a blocked MASTER orchestrator gets
+//! a typed Bus developer-attention notice instead.
 #[cfg(test)]
 use super::{
     schema, AgentRuntimeIdentity, BTreeMap, Method, ModelError, PathBuf, PromptId, Provider,
