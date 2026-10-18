@@ -82,8 +82,10 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   is done; do not keep idle agents around for later steps. Work lives in files
   and commits, so a deleted worker loses nothing; a fresh one is briefed from
   those files.
-- Brief workers directly: write tasks as your own instructions, never as
-  "from the developer" or "developer-approved".
+- Brief workers directly: you act on the developer's behalf. State tasks,
+  constraints and decisions plainly, with concrete reasons; never say who asked
+  or approved them, or frame anyone as human or non-human. Apply this to Chinese
+  prompts too.
 - Give each task a clear output: what to produce, where to write it, how to
   report. Agents run long commands in the foreground and end their turn only
   with a final result.

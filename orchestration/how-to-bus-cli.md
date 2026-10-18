@@ -109,7 +109,7 @@ The `--confirm` flag is deliberately required for setup approval and deletion.
 
 Every session has exactly one MASTER room. It holds orchestrator agents: each
 is bound to exactly one work room for its whole life, and a work room has at
-most one orchestrator. The human
+most one orchestrator. The developer
 chats with all orchestrators in MASTER. MASTER cannot be renamed or deleted, and
 no work room can take its name. Old sessions gain MASTER when they are opened.
 
@@ -205,9 +205,9 @@ The generic form is `agent add --room master ... --orchestrates ROOM
 orchestrate, and every MASTER agent must. Adding a second orchestrator for a
 room that already has one fails.
 
-### Report to the human in MASTER
+### Report to the developer in MASTER
 
-An orchestrator's final reply to a human message lands in MASTER by itself.
+An orchestrator's final reply to a developer message lands in MASTER by itself.
 When a worker's message or a background command starts its turn instead, the
 turn's final message shows in the work room the orchestrator runs, never in
 MASTER: as the reply under the worker's message, or, for a turn no message
@@ -267,11 +267,11 @@ be answered. Each transport request still has its normal finite timeout;
 `send --async`. Bounded waits still report transport failures immediately.
 To obtain a message ID before waiting, use plain `send`, then `wait --async`.
 
-To record the message as written by a room agent instead of the human, add
+To record the message as written by a room agent instead of the developer, add
 `--as AGENT`. The author must be an agent in the same room, or the room's MASTER
 orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is
 `send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]`. A MASTER
-agent reports to the human with `--to human` (see Report to the human in
+agent reports to the developer with `--to human` (see Report to the developer in
 MASTER).
 
 `send` confirms that the message was durably queued. It does not mean the agent
@@ -587,7 +587,7 @@ bus state | jq '.result.build'
 
 Bus can ding when a new message lands in a room, like a group chat. A room rings
 for an agent's final reply or a message an agent sent with `send --as`, never
-for the human's own sends. Nothing rings for the first two seconds after start
+for the developer's own sends. Nothing rings for the first two seconds after start
 or resume, and one ding covers a burst of messages.
 
 MASTER starts with sound on; work rooms start off. Toggle a room from Settings
@@ -625,7 +625,7 @@ bus history --room "$room_id"
 
 Each entry has the message (`prompt`: author, text, files, recipients and
 `submitted_at_ms`) and its `delivery` status. Messages delivered to nobody,
-such as a MASTER agent's report to the human or an interrupt record, have
+such as a MASTER agent's report to the developer or an interrupt record, have
 `delivery: null`.
 
 Read the complete current terminal viewport for one managed agent:
@@ -654,11 +654,11 @@ it from becoming ready. Its provider session has not started yet, so Bus checks
 everything except the session and reports `runtime.session_verified: false`.
 Answer such a prompt as described in
 [Answer an agent's dialog](#answer-an-agents-dialog). Use terminal output as
-evidence for human or model judgment, never as a substitute for message
+evidence for developer or model judgment, never as a substitute for message
 settlement or an automatic workflow signal.
 
 If current facts prove an idle agent still owns a historically wedged request,
-the Human or an orchestrating agent can invoke the same queue-preserving typed
+the developer or an orchestrating agent can invoke the same queue-preserving typed
 recovery after checking its identity and revision facts:
 
 ```sh
@@ -887,7 +887,7 @@ wait for it to settle, and then ask the reviewer to verify the current state.
 The same send/wait pattern also works for writing, research, debugging, release
 checks, and other workflows; code review is not a special Bus mode.
 
-### Resume human work
+### Resume developer work
 
 Use `bus sessions` to identify a saved session, then resume its UI with its
 exact ID. After resuming, control commands target it as the last opened
@@ -1013,7 +1013,7 @@ the run's directories. `--keep` leaves the data directory for debugging.
 | `multi` | One message to every selected provider. |
 | `background` | Claude ends a turn with a background shell running; the reply is recorded and the next message still delivers. |
 | `dialog` | The agent raises a dialog mid-turn; it is answered through Bus and the reply lands. |
-| `orchestrator` | A MASTER orchestrator of its own work room, with the default prompt, settles human messages: plain, with an attached image, steered mid-turn, after a background shell (Claude), and once more after. |
+| `orchestrator` | A MASTER orchestrator of its own work room, with the default prompt, settles developer messages: plain, with an attached image, steered mid-turn, after a background shell (Claude), and once more after. |
 | `adoption` | The orchestrator is deleted and re-added with `--resume` of its session; the same round trips settle in that same session. Needs `orchestrator`. |
 | `resume` | Bus quits and restarts on the same data directory; each agent relaunches into its session and a new round trip works. |
 

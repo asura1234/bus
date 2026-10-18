@@ -16,10 +16,10 @@ room do the work. The orchestrator runs it.
   builds, or review diffs itself. It sends that work to the room's agents and
   reads their replies. This keeps its own context free for the whole job, while
   each worker starts with fresh context.
-- **It stays available.** The human can ask it a question or change direction at
+- **It stays available.** The developer can ask it a question or change direction at
   any time, and it passes that steering to the agents doing the work.
 - **It lives in MASTER.** Orchestrators are agents in the MASTER room, each
-  bound to one room for its whole life. The human chats with all orchestrators in MASTER and
+  bound to one room for its whole life. The developer chats with all orchestrators in MASTER and
   can still step into any room, act as its orchestrator directly, or read any
   agent's terminal.
 
@@ -28,7 +28,7 @@ given, this guide, and the room's workflow file.
 
 ## Getting started
 
-The human adds you to MASTER together with your room, from the TUI (add an
+The developer adds you to MASTER together with your room, from the TUI (add an
 agent while MASTER is open) or the CLI:
 
 ```sh
@@ -40,14 +40,14 @@ Bus launches you with an orchestrator system prompt (editable in the TUI form,
 or `--system-prompt`/`--system-prompt-file`) that names your room and points to
 the Bus docs in `<BUS_DATA_DIR>/docs/`. Bus writes nothing into your PWD. A new
 PWD may show the provider's "trust this folder" prompt on first launch; the
-human answers it in your terminal. Your room is fixed for your whole life:
+developer answers it in your terminal. Your room is fixed for your whole life:
 there is no reassignment, and deleting the room deletes you with it.
 
 On your first turn:
 
 1. Run `bus state` and find your room, its agents, and your own agent ID.
 2. Read the room's notes and history: `bus history --room "$room_id"`.
-3. Agree on the workflow with the human before kicking off (next section).
+3. Agree on the workflow with the developer before kicking off (next section).
 
 Send every message to the room's agents as yourself, so the history shows who
 asked:
@@ -59,7 +59,7 @@ bus send --room "$room_id" --as claude-orch --to claude-dev --text "..."
 ### Move an existing session into MASTER
 
 A conversation that already runs as Claude Code, Codex or Cursor can become an
-orchestrator without losing its context. The human quits it, then adds it to
+orchestrator without losing its context. The developer quits it, then adds it to
 MASTER with its session ID in the launch args (`--resume SESSION_ID`, or
 `resume SESSION_ID` for Codex) and its original PWD. Bus resumes that session,
 binds it to the new agent and still delivers the orchestrator prompt; see
@@ -74,36 +74,36 @@ Each room has a workflow file, a living plan the orchestrator keeps. Follow
 non-goals, a mermaid graph of the steps, participants, gates, coordination
 rules, decision rules, and a log.
 
-- **Draft it with the human** before work starts. The graph is a reference, not
+- **Draft it with the developer** before work starts. The graph is a reference, not
   a script.
-- **Keep it where the human can open it.** Put its path on the first line of the
+- **Keep it where the developer can open it.** Put its path on the first line of the
   room notes.
 - **Rewrite it whenever it stops matching reality.** The usual reasons are a
   failure that needs a different route (every spike misses a hard benchmark
-  gate, so go back to research or change technology), and the human changing
+  gate, so go back to research or change technology), and the developer changing
   the requirements mid-work. Pass the change to the agents it affects.
 - **Log every change** with one line and the reason, newest first.
-- **Mark the current node** with `:::current` so the human can see where the
+- **Mark the current node** with `:::current` so the developer can see where the
   room is.
 
 ## Keep the room readable at a glance
 
-The room notes are the human's status board. They watch many rooms and must
+The room notes are the developer's status board. They watch many rooms and must
 never need to ask an orchestrator for a status update, so keeping the notes
 current is a standing duty, not something done on request. Rewrite them on
 every state change:
 
 - a task assigned, finished or failed,
 - an agent waiting at a dialog (permission, trust, question),
-- a decision made, by you or the human.
+- a decision made, by you or the developer.
 
-Make anything waiting on the human easy to spot. The notes are free text and Bus
+Make anything waiting on the developer easy to spot. The notes are free text and Bus
 checks no structure; shape them however reads best for the room. One layout
 that works, with short lines:
 
 1. `Workflow: <path>`, the room's workflow file.
 2. `WAITING ON YOU:` with one item per decision, keypress or approval the
-   human must give, at the top; left out when nothing waits on the human.
+   developer must give, at the top; left out when nothing waits on the developer.
 3. `Now:` what is running, and which agent runs it.
 4. `DONE / OPEN:` a checklist of the workflow's steps, `[x]` done, `[ ]` open.
 
@@ -118,8 +118,8 @@ DONE / OPEN:
 [x] Implement gallery (claude-dev)
 [x] CI green
 [ ] Review until all ready (round 2 of 4)
-[ ] Human regression test
-[ ] Merge (human)"
+[ ] Developer regression test
+[ ] Merge (developer)"
 ```
 
 `room notes` replaces the whole field, so always send the full board. Update it
@@ -176,14 +176,14 @@ A typical PR review loop, run by the orchestrator:
    `best-of-n` skill. A clear winner (`universal` or `clear`) is applied by the
    author, and the round continues unblocked. With no clear winner, defer a
    nonblocking issue: record it in the workflow's deferred list, with its
-   recommendations and why it does not block, and ask the human later in
-   MASTER at the next human checkpoint. The round continues unblocked. For a
-   blocking issue without a clear winner, halt progress and ask the human in
+   recommendations and why it does not block, and ask the developer later in
+   MASTER at the next developer checkpoint. The round continues unblocked. For a
+   blocking issue without a clear winner, halt progress and ask the developer in
    MASTER; resume only after their decision.
 4. Repeat until every reviewer says ready.
 5. If the branch touches delivery, callbacks or launch, have an agent run
    `just e2e` (live round trips with every provider) and report its table.
-6. Ask the human in MASTER about any deferred issues, then tell them the branch
+6. Ask the developer in MASTER about any deferred issues, then tell them the branch
    is ready for their regression test before merge. If a deferred decision
    requires a fix, send it to the author and repeat the review loop first.
 
@@ -225,14 +225,14 @@ its context.
   `bus agent answer AGENT --text "..." --fingerprint F` (`--skip` instead of
   `--text`). Decide, answer, and check the reported `outcome`; nothing follows
   when the dialog closes.
-  Ask the human before approving anything destructive or outward-facing.
+  Ask the developer before approving anything destructive or outward-facing.
 - **Stuck requests:** check `bus message status` (each request's `stage` and
   `reason`), the agent's `wait_reason` in `bus state`, and `bus agent read`
   before `bus request recover`.
 - **Delivery is not completion.** Wait for `complete: true` from `bus wait` or
   `bus message status`.
 
-## When to ask the human
+## When to ask the developer
 
 Ask before anything outside the room's goal or the workflow's decision rules:
 
@@ -242,8 +242,8 @@ Ask before anything outside the room's goal or the workflow's decision rules:
 - Changing the goal or dropping a requirement.
 - A blocking review issue with no clear winner after the author runs
   `best-of-n`. Nonblocking issues without a clear winner stay in the workflow's
-  deferred list for the next human checkpoint and do not halt the round.
+  deferred list for the next developer checkpoint and do not halt the round.
 - A hard gate that no option can meet.
 
-If the human gave you full control for a decision, decide, record it in the
-workflow log, and tell the human in MASTER what you decided.
+If the developer gave you full control for a decision, decide, record it in the
+workflow log, and tell the developer in MASTER what you decided.
