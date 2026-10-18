@@ -32,6 +32,8 @@ mod resume_tests;
 
 #[path = "binding_test.rs"]
 mod binding_tests;
+#[path = "left_open_notice_routing_test.rs"]
+mod left_open_notice_routing_tests;
 #[path = "persistence_test.rs"]
 mod persistence_tests;
 #[path = "recovery_test.rs"]
