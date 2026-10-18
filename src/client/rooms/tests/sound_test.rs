@@ -838,3 +838,22 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
     ui.action(render::Action::TogglePerfOverlay);
     assert!(!crate::client::perf::OVERLAY.is_on());
 }
+
+#[test]
+fn freeze_notifications_default_on_and_toggle_without_changing_composer() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    assert!(settings_rows(&mut ui, 40)
+        .iter()
+        .any(|row| row.contains("[x] Freeze recovery notifications")));
+    ui.settings_field = ui.freeze_field();
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!ui.settings.freeze_notifications);
+    assert!(ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::SetFreezeNotifications(false))));
+    assert!(settings_rows(&mut ui, 40)
+        .iter()
+        .any(|row| row.contains("[ ] Freeze recovery notifications")));
+}

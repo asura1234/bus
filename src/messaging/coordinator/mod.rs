@@ -65,6 +65,7 @@ pub(crate) enum BusCommand {
     SetMaxCompactionsPerAgent(u32),
     /// The room sidebar's width in cells, clamped to the settings range.
     SetSidebarWidth(u16),
+    SetFreezeNotifications(bool),
     SetFeishuNotifications(bool),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),

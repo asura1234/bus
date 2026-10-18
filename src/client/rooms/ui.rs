@@ -279,7 +279,18 @@ impl BusUi {
 
     /// The overlay row's Settings focus index, after the sidebar width.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings.then(|| self.feishu_field() + 1)
+        self.dev_settings.then(|| self.freeze_field() + 1)
+    }
+
+    pub(super) fn freeze_field(&self) -> usize {
+        self.feishu_field() + 1
+    }
+    pub(super) fn toggle_freeze_notifications(&mut self) {
+        self.settings_field = self.freeze_field();
+        let on = !self.settings.freeze_notifications;
+        self.settings.freeze_notifications = on;
+        crate::utils::perf::recovery::set_enabled(on);
+        self.queue(BusCommand::SetFreezeNotifications(on), Effect::None);
     }
 
     pub(super) fn feishu_field(&self) -> usize {
@@ -331,6 +342,10 @@ impl BusUi {
         if pending(|command| matches!(command, BusCommand::SetSidebarWidth(_))) {
             settings.sidebar_width = self.settings.sidebar_width;
         }
+        if pending(|command| matches!(command, BusCommand::SetFreezeNotifications(_))) {
+            settings.freeze_notifications = self.settings.freeze_notifications;
+        }
+        crate::utils::perf::recovery::set_enabled(settings.freeze_notifications);
         self.settings = settings;
     }
     pub fn receive_event(&mut self, event: BusEvent) {

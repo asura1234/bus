@@ -124,6 +124,7 @@ impl BusUi {
                 | super::super::render::SoundSettingsLine::Compactions { field }
                 | super::super::render::SoundSettingsLine::SidebarWidth { field }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
+                | super::super::render::SoundSettingsLine::Freeze { field }
                 | super::super::render::SoundSettingsLine::Feishu { field }
                 if *field == self.settings_field)
         }) else {
@@ -132,6 +133,8 @@ impl BusUi {
         };
         // Bring a group heading into view along with its first row.
         let line = match line.checked_sub(1).map(|above| &lines[above]) {
+            #[cfg(feature = "dev-tools")]
+            Some(super::super::render::SoundSettingsLine::FreezeTest) => line.saturating_sub(1),
             Some(super::super::render::SoundSettingsLine::Heading(_)) => line - 1,
             _ => line,
         };

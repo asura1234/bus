@@ -163,3 +163,30 @@ pub(super) fn overlay_label(context: Option<ContextSample>, fps: Option<f64>) ->
 #[cfg(test)]
 #[path = "tests/perf_test.rs"]
 mod tests;
+
+/// Stable message tags for perf JSONL; no payload inspection is needed.
+pub(super) fn message_tag(message: &crate::protocol::wire::ServerMessage) -> (u8, u8) {
+    use crate::protocol::wire::ServerMessage as M;
+    match message {
+        M::Welcome { .. } => (20, 2),
+        M::Terminal(_) => (1, 1),
+        M::Graphics { .. } => (2, 1),
+        M::ServerShutdown { .. } => (3, 2),
+        M::Notify { .. } => (4, 3),
+        M::Clipboard { .. } => (5, 3),
+        M::WindowTitle { .. } => (6, 3),
+        M::ReloadSoundConfig => (7, 2),
+        M::MouseCapture { .. } => (8, 3),
+        M::TerminalBell { .. } => (9, 3),
+        M::GraphicsFile { .. } => (10, 1),
+        M::GraphicsTransmissionRetired { .. } => (11, 1),
+        M::ClientShellSnapshot(_) => (12, 2),
+        M::PaneSurface(_) => (13, 4),
+        M::SemanticNotification(_) => (14, 3),
+        M::ClientShellError { .. } => (15, 2),
+        M::ClientShellKeyboardReportAll { .. } => (16, 3),
+        M::ClientShellEndpointResponseChunk { .. } => (17, 5),
+        M::PaneSurfacePatch(_) => (18, 6),
+        M::EndpointControl { .. } => (19, 5),
+    }
+}

@@ -60,6 +60,20 @@ impl Worker {
         Ok(())
     }
 
+    pub(super) fn set_freeze_notifications(
+        &mut self,
+        on: bool,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.freeze_notifications = on)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        Ok(())
+    }
+
     /// At launch, MASTER takes the global sound.
     pub(super) fn apply_global_settings(&mut self) -> Result<(), String> {
         let Some(path) = self.settings_path.clone() else {

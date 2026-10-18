@@ -8,6 +8,9 @@
 //! window) or `{"kind":"stall",...}` (a loop blocked past the threshold, a move
 //! to another stage while still blocked, its end, or a finished stack capture).
 
+#[path = "capture.rs"]
+mod capture;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,8 +46,8 @@ pub(crate) struct PerfOptions {
     pub(crate) max_bytes: u64,
     /// Rotated perf files are kept within this age and total size.
     pub(crate) archive: ArchivePolicy,
-    /// Stack capture files kept per role, the newest first.
-    pub(crate) retained_captures: usize,
+    /// Completed stack dumps are retained by age and total bytes per role.
+    pub(crate) capture_retention: ArchivePolicy,
 }
 
 impl PerfOptions {
@@ -76,7 +79,10 @@ impl PerfOptions {
                 max_age: Duration::from_secs(72 * 60 * 60),
                 max_total_bytes: 64 * 1024 * 1024,
             },
-            retained_captures: 5,
+            capture_retention: ArchivePolicy {
+                max_age: Duration::from_secs(72 * 3600),
+                max_total_bytes: 64 * 1024 * 1024,
+            },
         }
     }
 }
@@ -106,6 +112,8 @@ pub(crate) struct ThreadUsage {
 #[derive(Clone, Copy)]
 pub(crate) struct PerfHooks {
     pub(crate) sample: fn() -> Option<ProcessUsage>,
+    pub(crate) machine: super::machine::MachineHook,
+    pub(crate) local_hm: fn(i64) -> (u8, u8),
     /// Writes the stacks of process `pid` to the path, blocking until done; false
     /// when unsupported or when no stacks were written. Runs off the watchdog.
     pub(crate) capture_stacks: fn(u32, &Path) -> bool,
@@ -203,20 +211,15 @@ pub(super) struct Recorder {
     last_capture: BTreeMap<&'static str, Instant>,
     capture_sequence: u64,
     captures: (
-        mpsc::Sender<FinishedCapture>,
-        mpsc::Receiver<FinishedCapture>,
+        mpsc::Sender<capture::FinishedCapture>,
+        mpsc::Receiver<capture::FinishedCapture>,
     ),
     pending_captures: BTreeSet<String>,
     wake_lag_max: Option<Duration>,
-}
-
-/// A stack capture that ran on its own thread, reported back to the recorder.
-struct FinishedCapture {
-    loop_name: &'static str,
-    stage: &'static str,
-    busy_ms: u64,
-    file: String,
-    ok: bool,
+    recovery: super::recovery::RecoveryPolicy,
+    machine: super::machine::Sampler,
+    capture_levels: BTreeMap<&'static str, (u64, u64)>,
+    capture_suppressed: BTreeMap<&'static str, (u64, &'static str)>,
 }
 
 impl Recorder {
@@ -250,12 +253,24 @@ impl Recorder {
             captures: mpsc::channel(),
             pending_captures: BTreeSet::new(),
             wake_lag_max: None,
+            recovery: super::recovery::RecoveryPolicy::default(),
+            machine: super::machine::Sampler::spawn(hooks.machine),
+            capture_levels: BTreeMap::new(),
+            capture_suppressed: BTreeMap::new(),
         })
     }
 
     /// Watches and samples until `stop` brings the drain deadline, then drains
     /// the writer until it.
     fn run(mut self, registry: &Registry, stop: &mpsc::Receiver<Instant>) {
+        self.prune_captures();
+        let mut record = self.base("run_start");
+        record.insert("build_sha".into(), json!(env!("BUS_BUILD_SHA")));
+        record.insert("profile".into(), json!(env!("BUS_BUILD_PROFILE")));
+        record.insert("version".into(), json!(env!("CARGO_PKG_VERSION")));
+        record.insert("dev_tools".into(), json!(cfg!(feature = "dev-tools")));
+        record.insert("monotonic_us".into(), json!(now_us()));
+        self.append(&Value::Object(record));
         let mut next_window = Instant::now() + self.options.window;
         loop {
             match stop.try_recv() {
@@ -292,150 +307,16 @@ impl Recorder {
         for watch in registry.watches() {
             if let Some(event) = watch.check(now_us, self.options.stall_after) {
                 log_stall(&event);
+                let began_at = time::OffsetDateTime::now_utc()
+                    .unix_timestamp()
+                    .saturating_sub((event.busy_ms / 1000) as i64);
+                let (hour, minute) = (self.hooks.local_hm)(began_at);
+                self.recovery.observe(&event, now_us, hour, minute);
                 let record = self.stall_record(&event);
                 self.append(&record);
             }
-            let Some(ongoing_ms) = watch.ongoing_stall_ms(now_us) else {
-                continue;
-            };
-            let due = self
-                .options
-                .capture_after
-                .is_some_and(|after| u128::from(ongoing_ms) >= after.as_millis());
-            let cooled = self
-                .last_capture
-                .get(watch.name)
-                .is_none_or(|last| now.duration_since(*last) >= self.options.capture_cooldown);
-            if due && cooled {
-                self.last_capture.insert(watch.name, now);
-                self.capture(watch.name, watch.stage(), ongoing_ms);
-            }
+            self.consider_capture(now, now_us, watch);
         }
-    }
-
-    /// Starts a stack capture on its own thread: `sample` runs for seconds,
-    /// and the watchdog must keep writing windows meanwhile.
-    pub(super) fn capture(&mut self, loop_name: &'static str, stage: &'static str, busy_ms: u64) {
-        self.capture_sequence += 1;
-        let file = format!(
-            "stall-{}-{}-{:016}-{}.txt",
-            compact_timestamp(),
-            self.pid,
-            self.capture_sequence,
-            self.role
-        );
-        self.pending_captures.insert(file.clone());
-        self.prune_captures();
-        let (pid, path, hook) = (self.pid, self.dir.join(&file), self.hooks.capture_stacks);
-        let done = self.captures.0.clone();
-        let mut finished = FinishedCapture {
-            loop_name,
-            stage,
-            busy_ms,
-            file: file.clone(),
-            ok: false,
-        };
-        let spawned = std::thread::Builder::new()
-            .name("bus-perf-capture".into())
-            .spawn(move || {
-                finished.ok = hook(pid, &path);
-                let _ = done.send(finished);
-            });
-        match spawned {
-            Ok(_) => {}
-            Err(_) => self.finish_capture(FinishedCapture {
-                loop_name,
-                stage,
-                busy_ms,
-                file,
-                ok: false,
-            }),
-        }
-    }
-
-    /// Records captures that already finished, waiting for those still running.
-    #[cfg(test)]
-    pub(super) fn wait_for_captures(&mut self) {
-        while !self.pending_captures.is_empty() {
-            match self.captures.1.recv() {
-                Ok(finished) => self.finish_capture(finished),
-                Err(_) => return,
-            }
-        }
-    }
-
-    fn finish_capture(&mut self, finished: FinishedCapture) {
-        self.pending_captures.remove(&finished.file);
-        self.prune_captures();
-        let FinishedCapture {
-            loop_name,
-            stage,
-            busy_ms,
-            file,
-            ok,
-        } = finished;
-        tracing::warn!(
-            event = "perf.stall.capture",
-            loop_name,
-            stage,
-            busy_ms,
-            ok,
-            file = %file,
-            "stack capture finished"
-        );
-        let mut record = self.base("stall");
-        record.insert("state".into(), json!("capture"));
-        record.insert("loop".into(), json!(loop_name));
-        record.insert("stage".into(), json!(stage));
-        record.insert("busy_ms".into(), json!(busy_ms));
-        record.insert("file".into(), json!(file));
-        record.insert("ok".into(), json!(ok));
-        self.append(&Value::Object(record));
-    }
-
-    /// Reserves slots for this recorder's active outputs and bounds completed
-    /// files. Active outputs are never deleted, even if they temporarily exceed
-    /// the cap; completion enforces the bound as soon as those slots are free.
-    fn prune_captures(&self) {
-        let suffix = format!("-{}.txt", self.role);
-        let Ok(entries) = std::fs::read_dir(&self.dir) else {
-            return;
-        };
-        let mut captures: Vec<PathBuf> = entries
-            .flatten()
-            .filter(|entry| {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                name.starts_with("stall-")
-                    && name.ends_with(&suffix)
-                    && !self.pending_captures.contains(name.as_ref())
-            })
-            .map(|entry| entry.path())
-            .collect();
-        // The UTC stamp in the name sorts oldest first.
-        captures.sort();
-        let keep = self
-            .options
-            .retained_captures
-            .saturating_sub(self.pending_captures.len());
-        let excess = captures.len().saturating_sub(keep);
-        for old in &captures[..excess] {
-            let _ = std::fs::remove_file(old);
-        }
-    }
-
-    fn stall_record(&self, event: &StallEvent) -> Value {
-        let mut record = self.base("stall");
-        let state = match event.kind {
-            StallKind::Began => "began",
-            StallKind::Moved => "moved",
-            StallKind::Ended => "ended",
-        };
-        record.insert("state".into(), json!(state));
-        record.insert("loop".into(), json!(event.loop_name));
-        record.insert("stage".into(), json!(event.stage));
-        record.insert("busy_ms".into(), json!(event.busy_ms));
-        Value::Object(record)
     }
 
     pub(super) fn write_window(
@@ -455,6 +336,16 @@ impl Recorder {
         registry: &Registry,
     ) -> Value {
         let mut record = self.base("window");
+        if let Some(message) = super::operation::snapshot() {
+            record.insert("active_message".into(), message);
+        }
+        let queues = super::queue::snapshots();
+        if !queues.is_empty() {
+            record.insert("event_queues".into(), json!(queues));
+        }
+        if let Some(machine) = self.machine.take() {
+            record.insert("machine".into(), machine);
+        }
         if let Some(usage) = usage {
             self.insert_usage(&mut record, now, usage);
         } else {

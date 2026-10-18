@@ -88,6 +88,9 @@ impl BusUi {
             Action::Settings => "settings".into(),
             Action::ToggleColorBlindMode => "color-blind".into(),
             Action::TogglePerfOverlay => "perf-overlay".into(),
+            #[cfg(feature = "dev-tools")]
+            Action::SimulateFreeze => "freeze-test".into(),
+            Action::ToggleFreezeNotifications => "freeze-notifications".into(),
             Action::ToggleFeishuNotifications => "feishu-notifications".into(),
             Action::ToggleSound(target) => format!("sound:{}", self.sound_target(target)),
             Action::CycleSound(target, next) => format!(

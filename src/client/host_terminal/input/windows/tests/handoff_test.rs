@@ -31,7 +31,7 @@ fn windows_input_handoff_keeps_input_while_the_client_queue_is_full() {
     let shortcut_release = shortcut(ClientKeyKind::Release);
     let text = ClientInputEvent::TextCommit("5;37;15M".into());
 
-    let (event_tx, mut event_rx) = mpsc::channel(1);
+    let (event_tx, mut event_rx) = crate::utils::perf::queue::channel(1);
     event_tx.try_send(ClientLoopEvent::Timer).unwrap();
     let mut handoff = WindowsInputHandoff::default();
     for event in [

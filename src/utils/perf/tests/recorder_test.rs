@@ -16,7 +16,10 @@ fn options() -> PerfOptions {
             max_age: Duration::from_secs(3600),
             max_total_bytes: 1024 * 1024,
         },
-        retained_captures: 2,
+        capture_retention: ArchivePolicy {
+            max_age: Duration::from_secs(3600),
+            max_total_bytes: 32,
+        },
     }
 }
 
@@ -50,9 +53,9 @@ fn no_capture(_pid: u32, _path: &Path) -> bool {
 }
 
 static CAPTURES: AtomicUsize = AtomicUsize::new(0);
-fn counting_capture(_pid: u32, _path: &Path) -> bool {
+fn counting_capture(_pid: u32, path: &Path) -> bool {
     CAPTURES.fetch_add(1, Ordering::SeqCst);
-    true
+    std::fs::write(path, "stacks").is_ok()
 }
 
 fn recorder(name: &str, hooks: PerfHooks) -> (Recorder, std::path::PathBuf) {
@@ -127,6 +130,8 @@ fn windows_report_each_threads_cpu_delta_and_reset_missing_threads() {
         "perf-thread-deltas",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -190,6 +195,8 @@ fn window_record_has_process_sample_and_only_active_metrics() {
         "perf-window",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -247,6 +254,8 @@ fn records_are_appended_as_jsonl_under_the_session_perf_dir() {
         "perf-jsonl",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -270,6 +279,8 @@ fn watchdog_writes_stall_records_and_captures_stacks_once_per_cooldown() {
         "perf-stall",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: counting_capture,
         },
     );
@@ -310,22 +321,37 @@ fn watchdog_writes_stall_records_and_captures_stacks_once_per_cooldown() {
 
     let records = lines(&perf_dir(&dir).join("client.jsonl"));
     let stalls: Vec<_> = records.iter().filter(|r| r["kind"] == "stall").collect();
-    assert_eq!(stalls.len(), 5, "{records:?}");
+    assert_eq!(
+        stalls
+            .iter()
+            .map(|r| r["state"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "began",
+            "capture_requested",
+            "capture",
+            "ended",
+            "began",
+            "capture_suppressed",
+            "ended"
+        ],
+        "{records:?}"
+    );
     assert_eq!(stalls[0]["state"], "began");
     assert_eq!(stalls[0]["loop"], "test.rec.loop");
     assert_eq!(stalls[0]["stage"], "present");
     assert!(stalls[0]["busy_ms"].as_u64().unwrap() >= 300);
-    assert_eq!(stalls[1]["state"], "capture");
-    assert_eq!(stalls[1]["stage"], "present");
-    assert_eq!(stalls[1]["ok"], true);
-    let capture = stalls[1]["file"].as_str().unwrap();
+    assert_eq!(stalls[2]["state"], "capture");
+    assert_eq!(stalls[2]["stage"], "present");
+    assert_eq!(stalls[2]["ok"], true);
+    let capture = stalls[2]["file"].as_str().unwrap();
     assert!(
         capture.starts_with("stall-") && capture.ends_with("-client.txt"),
         "{capture}"
     );
-    assert_eq!(stalls[2]["state"], "ended");
-    assert_eq!(stalls[3]["state"], "began");
-    assert_eq!(stalls[4]["state"], "ended");
+    assert_eq!(stalls[3]["state"], "ended");
+    assert_eq!(stalls[4]["state"], "began");
+    assert_eq!(stalls[6]["state"], "ended");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -335,6 +361,8 @@ fn watchdog_lag_is_recorded_when_the_perf_thread_wakes_late() {
         "perf-lag",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -358,6 +386,8 @@ fn coordinator_capture_does_not_suppress_later_ui_capture() {
         "perf-independent-captures",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -409,6 +439,8 @@ fn start_is_a_no_op_when_disabled() {
         &disabled,
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture
         }
     )
@@ -418,48 +450,29 @@ fn start_is_a_no_op_when_disabled() {
 
 #[test]
 fn concurrent_loop_captures_keep_retention_bounded() {
-    static RELEASE: std::sync::OnceLock<std::sync::Barrier> = std::sync::OnceLock::new();
-    static COORDINATOR: LoopWatch = LoopWatch::new("test.retention.coordinator");
-    static UI: LoopWatch = LoopWatch::new("test.retention.ui");
+    static READY: std::sync::Barrier = std::sync::Barrier::new(2);
+    static RELEASE: std::sync::Barrier = std::sync::Barrier::new(2);
     fn delayed_capture(_pid: u32, path: &Path) -> bool {
-        RELEASE.get().unwrap().wait();
+        READY.wait();
+        RELEASE.wait();
         std::fs::write(path, "stacks").is_ok()
     }
-    RELEASE.get_or_init(|| std::sync::Barrier::new(3));
-    let registry = Registry::new();
-    registry.add_watch(&COORDINATOR);
-    registry.add_watch(&UI);
     let (mut recorder, dir) = recorder(
-        "perf-concurrent-retention",
+        "perf-one-capture-per-pid",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: delayed_capture,
         },
     );
-    for stamp in ["20000101-000000", "20000101-000001"] {
-        std::fs::write(
-            perf_dir(&dir).join(format!("stall-{stamp}-client.txt")),
-            "old",
-        )
-        .unwrap();
-    }
-    let coordinator = COORDINATOR.enter("save");
-    let ui = UI.enter("compose");
-    recorder.watch(Instant::now(), now_us() + 2_100_000, &registry);
-    RELEASE.get().unwrap().wait();
+    recorder.capture("coordinator", "save", 2000);
+    READY.wait();
+    recorder.capture("client.ui_loop", "compose", 2000);
+    assert_eq!(recorder.pending_captures.len(), 1);
+    RELEASE.wait();
     recorder.wait_for_captures();
-    drop((coordinator, ui));
-    let files = std::fs::read_dir(perf_dir(&dir))
-        .unwrap()
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().ends_with("-client.txt"))
-        .count();
-    let retained = recorder.options.retained_captures;
-    let _ = std::fs::remove_dir_all(dir);
-    assert!(
-        files <= retained,
-        "{files} capture files exceed retention limit {retained}"
-    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -480,17 +493,19 @@ fn pruning_does_not_delete_an_active_capture_output() {
         "perf-active-output",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: capture,
         },
     );
-    recorder.options.retained_captures = 1;
+    recorder.options.capture_retention.max_total_bytes = 6;
     recorder.capture("coordinator", "save", 2000);
     READY.wait();
     let active = std::fs::read_dir(perf_dir(&dir))
         .unwrap()
         .flatten()
         .map(|entry| entry.path())
-        .find(|path| path.extension().is_some_and(|ext| ext == "txt"))
+        .find(|path| path.extension().is_some_and(|ext| ext == "part"))
         .unwrap();
     recorder.capture("ui", "compose", 2000);
     let preserved = active.is_file();
@@ -512,6 +527,8 @@ fn stall_warnings_carry_the_latest_process_and_system_sample() {
         "perf-warn",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -553,6 +570,8 @@ fn high_machine_load_warns_at_most_once_a_minute() {
         "perf-load",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -586,6 +605,8 @@ fn high_machine_load_warns_at_most_once_a_minute() {
         "perf-calm",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -611,6 +632,8 @@ fn stack_captures_prune_old_files_to_a_bounded_retention() {
         "perf-capture-retention",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: write_capture,
         },
     );
@@ -628,7 +651,7 @@ fn stack_captures_prune_old_files_to_a_bounded_retention() {
         .filter_map(Result::ok)
         .filter(|entry| entry.file_name().to_string_lossy().starts_with("stall-"))
         .count();
-    let retained = recorder.options.retained_captures;
+    let retained = (recorder.options.capture_retention.max_total_bytes / 6) as usize;
     let _ = std::fs::remove_dir_all(dir);
     assert!(
         captures <= retained,
@@ -645,6 +668,8 @@ fn two_client_processes_sharing_the_role_file_keep_each_others_latest_records() 
     };
     let hooks = PerfHooks {
         sample: no_sample,
+        machine: || None,
+        local_hm: |_| (12, 34),
         capture_stacks: no_capture,
     };
     let mut first = Recorder::open(&dir, "client", &small, hooks).expect("first client");
@@ -679,6 +704,8 @@ fn a_stall_that_moves_on_and_stays_blocked_in_a_later_stage_names_that_stage() {
         "perf-stall-moved",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -836,6 +863,8 @@ fn perf_window_does_not_block_the_watchdog_behind_another_writer() {
         "perf-contended-writer",
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     );
@@ -877,6 +906,8 @@ fn normal_process_exit_preserves_records_queued_behind_a_busy_writer() {
             &options(),
             PerfHooks {
                 sample: no_sample,
+                machine: || None,
+                local_hm: |_| (12, 34),
                 capture_stacks: no_capture,
             },
         )
@@ -1066,6 +1097,8 @@ fn dropping_the_running_recorder_stops_it_promptly() {
         &options(),
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     )
@@ -1166,6 +1199,8 @@ fn dropping_recorder_keeps_exit_deadline_when_watchdog_is_logging_a_stall() {
         &options(),
         PerfHooks {
             sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
             capture_stacks: no_capture,
         },
     )
@@ -1230,6 +1265,8 @@ fn client_error_process_exit_preserves_queued_recorder_windows() {
             &tuned,
             PerfHooks {
                 sample: counted_sample,
+                machine: || None,
+                local_hm: |_| (12, 34),
                 capture_stacks: no_capture,
             },
         )
@@ -1282,4 +1319,142 @@ fn client_error_process_exit_preserves_queued_recorder_windows() {
         !records.is_empty(),
         "ordinary client error exit must preserve queued windows"
     );
+}
+
+#[test]
+fn severe_stall_escalates_at_five_fifteen_thirty_seconds_with_one_identity() {
+    static WATCH: LoopWatch = LoopWatch::new("test.freeze.escalation");
+    let registry = Registry::new();
+    registry.add_watch(&WATCH);
+    let (mut recorder, dir) = recorder(
+        "freeze-escalation",
+        PerfHooks {
+            sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
+            capture_stacks: no_capture,
+        },
+    );
+    let guard = WATCH.enter("dispatch");
+    let started = WATCH.busy_since.load(Ordering::Acquire);
+    let now = Instant::now();
+    for seconds in [2, 5, 15, 30] {
+        recorder.watch(
+            now + Duration::from_secs(seconds),
+            started + seconds * 1_000_000,
+            &registry,
+        );
+        recorder.wait_for_captures();
+    }
+    drop(guard);
+    recorder.watch(now + Duration::from_secs(31), now_us(), &registry);
+    recorder.flush();
+    let records = lines(&perf_dir(&dir).join("client.jsonl"));
+    let captures: Vec<_> = records.iter().filter(|r| r["state"] == "capture").collect();
+    assert_eq!(
+        captures
+            .iter()
+            .map(|r| r["threshold_ms"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [2000, 5000, 15000, 30000]
+    );
+    assert!(captures.iter().all(|r| r["stall_id"] == started
+        && r["started_us"].as_u64() <= r["ended_us"].as_u64()
+        && r["started_at"].as_str().is_some()
+        && r["ended_at"].as_str().is_some()));
+    let stalls: Vec<_> = records
+        .iter()
+        .filter(|r| r["state"] == "began" || r["state"] == "ended")
+        .collect();
+    assert_eq!(stalls.len(), 2);
+    assert_eq!(stalls[0]["stall_id"], stalls[1]["stall_id"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dump_evictions_have_a_byte_count_and_reason_record() {
+    let (mut recorder, dir) = recorder(
+        "freeze-eviction-record",
+        PerfHooks {
+            sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
+            capture_stacks: no_capture,
+        },
+    );
+    std::fs::write(perf_dir(&dir).join("stall-old-client.txt"), [0; 64]).unwrap();
+    recorder.capture("test.eviction", "save", 2000);
+    recorder.wait_for_captures();
+    recorder.flush();
+    let records = lines(&perf_dir(&dir).join("client.jsonl"));
+    assert!(records
+        .iter()
+        .any(|r| r["kind"] == "capture_evicted" && r["bytes"] == 64 && r["reason"] == "bytes"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn run_start_record_identifies_the_compiled_binary() {
+    if isolated_lifecycle_test("run_start_record_identifies_the_compiled_binary") {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("freeze-run-start");
+    let running = start(
+        &dir,
+        "client",
+        &options(),
+        PerfHooks {
+            sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
+            capture_stacks: no_capture,
+        },
+    )
+    .unwrap();
+    drop(running);
+    let records = lines(&perf_dir(&dir).join("client.jsonl"));
+    let starts: Vec<_> = records
+        .iter()
+        .filter(|r| r["kind"] == "run_start")
+        .collect();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(starts[0]["build_sha"], env!("BUS_BUILD_SHA"));
+    assert_eq!(starts[0]["profile"], env!("BUS_BUILD_PROFILE"));
+    assert_eq!(starts[0]["pid"], std::process::id());
+    assert_eq!(starts[0]["build_sha"].as_str().unwrap().len(), 40);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn active_message_metadata_is_preserved_in_windows_and_stall_records() {
+    let _serial = crate::utils::perf::operation::TEST_LOCK.lock().unwrap();
+    let (mut recorder, dir) = recorder(
+        "freeze-active-message",
+        PerfHooks {
+            sample: no_sample,
+            machine: || None,
+            local_hm: |_| (12, 34),
+            capture_stacks: no_capture,
+        },
+    );
+    let active = crate::utils::perf::operation::message_enter(19, 5, 65536);
+    let expected = json!({"variant":"EndpointControl", "phase":"endpoint", "payload_bytes":65536});
+    assert_eq!(
+        recorder.window_record(Instant::now(), None, &Registry::new())["active_message"],
+        expected
+    );
+    let event = StallEvent {
+        kind: StallKind::Began,
+        loop_name: "client.ui_loop",
+        stage: "endpoint",
+        busy_ms: 4000,
+        stall_id: 5,
+    };
+    assert_eq!(recorder.stall_record(&event)["active_message"], expected);
+    drop(active);
+    assert!(recorder
+        .window_record(Instant::now(), None, &Registry::new())
+        .get("active_message")
+        .is_none());
+    std::fs::remove_dir_all(dir).unwrap();
 }

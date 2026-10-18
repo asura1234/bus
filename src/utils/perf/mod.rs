@@ -9,7 +9,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+pub(crate) mod machine;
+pub(crate) mod operation;
+pub(crate) mod queue;
 mod recorder;
+pub(crate) mod recovery;
+mod retention;
 mod writer;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -133,6 +138,17 @@ impl Timer {
         TimerGuard {
             timer: self,
             started: Instant::now(),
+            warn: true,
+        }
+    }
+
+    /// Numeric-only instrumentation; formatting stays on the recorder.
+    pub(crate) fn start_quiet(&'static self) -> TimerGuard {
+        self.register();
+        TimerGuard {
+            timer: self,
+            started: Instant::now(),
+            warn: false,
         }
     }
 
@@ -151,13 +167,18 @@ impl Timer {
 }
 
 pub(crate) struct TimerGuard {
+    warn: bool,
     timer: &'static Timer,
     started: Instant,
 }
 
 impl Drop for TimerGuard {
     fn drop(&mut self) {
-        self.timer.record(self.started.elapsed());
+        if self.warn {
+            self.timer.record(self.started.elapsed());
+        } else {
+            self.timer.record_unregistered(self.started.elapsed());
+        }
     }
 }
 
@@ -274,6 +295,7 @@ pub(crate) struct StallEvent {
     pub(crate) loop_name: &'static str,
     pub(crate) stage: &'static str,
     pub(crate) busy_ms: u64,
+    pub(crate) stall_id: u64,
 }
 
 impl LoopWatch {
@@ -340,7 +362,7 @@ impl LoopWatch {
                 busy_us => busy_us,
             };
             let stage = self.reported_stage.lock().map_or("", |stage| *stage);
-            return Some(self.event(StallKind::Ended, stage, busy_us));
+            return Some(self.event(StallKind::Ended, stage, busy_us, reported));
         }
         if busy_since == 0 {
             return None;
@@ -352,7 +374,12 @@ impl LoopWatch {
                 return None;
             }
             *latest = stage;
-            return Some(self.event(StallKind::Moved, stage, now.saturating_sub(reported)));
+            return Some(self.event(
+                StallKind::Moved,
+                stage,
+                now.saturating_sub(reported),
+                reported,
+            ));
         }
         let busy_us = now.saturating_sub(busy_since);
         if busy_us < u64::try_from(threshold.as_micros()).unwrap_or(u64::MAX) {
@@ -365,7 +392,7 @@ impl LoopWatch {
             }
         }
         self.reported.store(busy_since, Ordering::Release);
-        Some(self.event(StallKind::Began, stage, busy_us))
+        Some(self.event(StallKind::Began, stage, busy_us, busy_since))
     }
 
     /// How long the reported stall has lasted, while it is still blocking.
@@ -375,12 +402,19 @@ impl LoopWatch {
             .then(|| now.saturating_sub(reported) / 1_000)
     }
 
-    fn event(&self, kind: StallKind, stage: &'static str, busy_us: u64) -> StallEvent {
+    fn event(
+        &self,
+        kind: StallKind,
+        stage: &'static str,
+        busy_us: u64,
+        stall_id: u64,
+    ) -> StallEvent {
         StallEvent {
             kind,
             loop_name: self.name,
             stage,
             busy_ms: busy_us / 1_000,
+            stall_id,
         }
     }
 }

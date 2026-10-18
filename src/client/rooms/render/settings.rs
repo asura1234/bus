@@ -67,10 +67,15 @@ impl BusUi {
         lines.push(SoundSettingsLine::Feishu {
             field: self.feishu_field(),
         });
+        lines.push(SoundSettingsLine::Freeze {
+            field: self.freeze_field(),
+        });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
             lines.push(SoundSettingsLine::PerfOverlay { field });
+            #[cfg(feature = "dev-tools")]
+            lines.push(SoundSettingsLine::FreezeTest);
         }
         lines
     }
@@ -198,6 +203,32 @@ impl BusUi {
 
     fn sound_settings_row(&self, view: &mut View, rect: Rect, line: &SoundSettingsLine) {
         match line {
+            #[cfg(feature = "dev-tools")]
+            SoundSettingsLine::FreezeTest => {
+                view.row(
+                    rect,
+                    "Test freeze recovery notification (3.5 s)",
+                    Some(Action::SimulateFreeze),
+                    false,
+                    false,
+                );
+            }
+            SoundSettingsLine::Freeze { field } => {
+                view.row(
+                    rect,
+                    format!(
+                        "[{}] Freeze recovery notifications",
+                        if self.settings.freeze_notifications {
+                            "x"
+                        } else {
+                            " "
+                        }
+                    ),
+                    Some(Action::ToggleFreezeNotifications),
+                    self.settings_field == *field,
+                    false,
+                );
+            }
             SoundSettingsLine::Feishu { field } => {
                 self.feishu_settings_row(view, rect, *field);
             }

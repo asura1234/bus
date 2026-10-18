@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 #[cfg(windows)]
 pub(in crate::client::host_terminal::input) fn raw_console_reader_loop(
     handle: windows_sys::Win32::Foundation::HANDLE,
-    event_tx: mpsc::Sender<ClientLoopEvent>,
+    event_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
 ) {
     let mut mapper = WindowsInputMapper::default();
@@ -101,7 +101,10 @@ impl WindowsInputHandoff {
         }
     }
 
-    pub(super) fn try_flush(&mut self, event_tx: &mpsc::Sender<ClientLoopEvent>) -> bool {
+    pub(super) fn try_flush(
+        &mut self,
+        event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
+    ) -> bool {
         // Keep draining the console while the client loop is busy. Blocking here
         // lets the OpenSSH/ConPTY input path lose pieces of raw VT reports.
         loop {

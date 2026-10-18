@@ -31,6 +31,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::SetAllRoomsSound(_) => "set_all_rooms_sound",
         C::SetAllRoomsSoundName(_) => "set_all_rooms_sound_name",
         C::SetMaxCompactionsPerAgent(_) => "set_max_compactions_per_agent",
+        C::SetFreezeNotifications(_) => "set_freeze_notifications",
         C::SetSidebarWidth(_) => "set_sidebar_width",
         C::SetFeishuNotifications(_) => "set_feishu_notifications",
         C::RenameAgent(..) => "rename_agent",
@@ -62,3 +63,11 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
 pub(crate) fn control_method_label(method: &str) -> &'static str {
     super::coordinator::method_spec(method).map_or("unknown_method", |spec| spec.method)
 }
+
+pub(crate) static STORE_SERIALIZE: Timer = Timer::new("coordinator.store.serialize");
+pub(crate) static STORE_WRITE: Timer = Timer::new("coordinator.store.write");
+pub(crate) static STORE_FSYNC: Timer = Timer::new("coordinator.store.fsync");
+pub(crate) static STORE_RENAME: Timer = Timer::new("coordinator.store.rename");
+pub(crate) static STORE_DIR_SYNC: Timer = Timer::new("coordinator.store.dir_sync");
+pub(crate) static STORE_BYTES: crate::utils::perf::Counter =
+    crate::utils::perf::Counter::new("coordinator.store.bytes");
