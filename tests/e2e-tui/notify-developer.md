@@ -37,3 +37,5 @@ Precondition: fresh scratch session and fixture above; bus room visible.
 1. Post `waiting on you: Lowercase action` with --to human; wait for exactly one terminal notification and raw OSC with target `libtv-app master is waiting on you: Lowercase action`.
 2. Post `StIlL WaItInG On YoU: Mixed case action` with --to human; wait for exactly one additional terminal notification and raw OSC with target `libtv-app master is waiting on you: Mixed case action`.
 3. Post `awaiting on you: partial word` and `waiting on yourself: partial word` with --to human. Wait through a quiet window and assert notification counts remain exactly two while unread counts increase and KEEP DRAFT remains unchanged.
+
+4. Post `**Waiting on you:**\n- Approve access` with --to human; wait for one additional terminal notification and complete raw OSC with target `libtv-app master is waiting on you: - Approve access`. Then post `**[waiting-on-you]**\n- Confirm target`, wait for one additional notification and raw OSC with target `libtv-app master is waiting on you: - Confirm target`. Assert exactly four notifications in total and KEEP DRAFT unchanged.

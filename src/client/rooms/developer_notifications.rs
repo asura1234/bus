@@ -173,7 +173,11 @@ fn waiting_action(text: &str) -> Option<&str> {
         .then_some(end)
     });
     let end = [tag_end, phrase_end].into_iter().flatten().min()?;
-    Some(text[end..].trim_start_matches(|ch: char| ch.is_whitespace() || ch == ':'))
+    // Close Markdown wrapped around the marker, preserving action text after a space.
+    let action = text[end..]
+        .trim_start_matches(':')
+        .trim_start_matches(['*', '_', '`']);
+    Some(action.trim_start_matches(|ch: char| ch.is_whitespace() || ch == ':'))
 }
 
 /// Literal text only: never include another line, terminal controls, or the

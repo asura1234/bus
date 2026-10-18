@@ -535,3 +535,39 @@ fn developer_notification_untagged_final_is_quiet() {
     policy.observe(&before, &next, now);
     assert!(policy.take(now + Duration::from_secs(3)).is_none());
 }
+
+#[test]
+fn developer_notification_markdown_bold_phrase_heading_previews_the_next_bullet() {
+    let (before, master, _, agent) = fixture();
+    let mut next = before.clone();
+    next.post_to_developer(
+        master,
+        agent,
+        "Gate passed.\n\n**Waiting on you:**\n- Approve claude-dev's push of feat/gallery".into(),
+        vec![],
+        1,
+    )
+    .unwrap();
+    let mut policy = enabled();
+    let now = Instant::now();
+    policy.observe(&before, &next, now);
+    let text = policy.take(now + Duration::from_secs(2)).unwrap();
+    assert!(
+        text.contains("Approve claude-dev's push of feat/gallery"),
+        "{text}"
+    );
+}
+
+#[test]
+fn developer_notification_markdown_markers_preserve_the_action() {
+    for (message, expected) in [
+        ("**[waiting-on-you]**\n- Approve", "- Approve"),
+        ("`[WAITING-ON-YOU]`: Approve", "Approve"),
+        ("**waiting on you**: Approve", "Approve"),
+        ("__[waiting-on-you]__\n- Approve", "- Approve"),
+        ("[waiting-on-you] _identifier", "_identifier"),
+        ("[waiting-on-you] * Approve", "* Approve"),
+    ] {
+        assert_eq!(waiting_action(message), Some(expected), "{message}");
+    }
+}
