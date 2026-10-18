@@ -1,30 +1,90 @@
-//! Recovery-only alert policy. Called by the recorder, never by a blocked UI.
-use super::{StallEvent, StallKind};
+//! Recovery-only alerts, formatted by the recorder and emitted at an idle boundary.
+use super::{now_us, StallEvent, StallKind};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
-static PENDING: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+static HAS_PENDING: AtomicBool = AtomicBool::new(false);
+static DELIVERY: Mutex<RecoveryQueue> = Mutex::new(RecoveryQueue::new());
+
 pub(crate) fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Release);
+    GENERATION.fetch_add(1, Ordering::AcqRel);
     if !enabled {
-        if let Ok(mut pending) = PENDING.lock() {
-            *pending = None;
+        if let Ok(mut delivery) = DELIVERY.lock() {
+            delivery.pending = None;
+            HAS_PENDING.store(false, Ordering::Release);
         }
     }
 }
+pub(crate) fn has_pending() -> bool {
+    HAS_PENDING.load(Ordering::Acquire)
+}
 pub(crate) fn take() -> Option<Vec<u8>> {
-    let mut pending = PENDING.lock().ok()?;
-    if ENABLED.load(Ordering::Acquire) {
-        pending.take()
-    } else {
-        *pending = None;
-        None
+    let mut delivery = DELIVERY.try_lock().ok()?;
+    let bytes = delivery.take(now_us(), ENABLED.load(Ordering::Acquire));
+    HAS_PENDING.store(false, Ordering::Release);
+    bytes
+}
+/// Called after the output owner has drained the notification and earlier bytes.
+pub(crate) fn acknowledged() -> bool {
+    let Ok(mut delivery) = DELIVERY.try_lock() else {
+        return false;
+    };
+    delivery.acknowledged(now_us());
+    true
+}
+/// The recorder only supplies completed UI stalls. A blocked output owner keeps
+/// one latest candidate; it never accumulates a burst of deferred notifications.
+pub(super) fn observe(event: &StallEvent, hour: u8, minute: u8) {
+    if !is_recovery(event) || !ENABLED.load(Ordering::Acquire) {
+        return;
+    }
+    let generation = GENERATION.load(Ordering::Acquire);
+    let candidate = Pending {
+        event: *event,
+        bytes: encode(event.busy_ms, hour, minute),
+    };
+    if let Ok(mut delivery) = DELIVERY.lock() {
+        if ENABLED.load(Ordering::Acquire) && GENERATION.load(Ordering::Acquire) == generation {
+            let previous = delivery.pending.replace(candidate);
+            HAS_PENDING.store(true, Ordering::Release);
+            drop(delivery);
+            drop(previous);
+        }
     }
 }
-
+fn is_recovery(event: &StallEvent) -> bool {
+    event.kind == StallKind::Ended && event.loop_name == "client.ui_loop" && event.busy_ms > 3000
+}
+struct Pending {
+    event: StallEvent,
+    bytes: Vec<u8>,
+}
+struct RecoveryQueue {
+    pending: Option<Pending>,
+    policy: RecoveryPolicy,
+}
+impl RecoveryQueue {
+    const fn new() -> Self {
+        Self {
+            pending: None,
+            policy: RecoveryPolicy { last_sent: None },
+        }
+    }
+    fn take(&mut self, now_us: u64, enabled: bool) -> Option<Vec<u8>> {
+        let pending = self.pending.take()?;
+        self.policy
+            .accept(&pending.event, now_us, enabled)
+            .then_some(pending.bytes)
+    }
+    fn acknowledged(&mut self, now_us: u64) {
+        self.policy.last_sent = Some(now_us);
+    }
+}
 #[derive(Default)]
 pub(super) struct RecoveryPolicy {
     last_sent: Option<u64>,
@@ -32,9 +92,7 @@ pub(super) struct RecoveryPolicy {
 impl RecoveryPolicy {
     pub(super) fn accept(&mut self, event: &StallEvent, now_us: u64, enabled: bool) -> bool {
         if !enabled
-            || event.kind != StallKind::Ended
-            || event.loop_name != "client.ui_loop"
-            || event.busy_ms <= 3000
+            || !is_recovery(event)
             || self
                 .last_sent
                 .is_some_and(|last| now_us.saturating_sub(last) < 60_000_000)
@@ -44,17 +102,7 @@ impl RecoveryPolicy {
         self.last_sent = Some(now_us);
         true
     }
-    /// Called only on the recorder. The UI consumes the single pending alert
-    /// at an idle boundary and submits it through the terminal output owner.
-    pub(super) fn observe(&mut self, event: &StallEvent, now_us: u64, hour: u8, minute: u8) {
-        if self.accept(event, now_us, ENABLED.load(Ordering::Acquire)) {
-            if let Ok(mut pending) = PENDING.lock() {
-                *pending = Some(encode(event.busy_ms, hour, minute));
-            }
-        }
-    }
 }
-
 fn encode(busy_ms: u64, hour: u8, minute: u8) -> Vec<u8> {
     format!(
         "\x1b]9;Bus froze for {:.1} s at {hour:02}:{minute:02}; details: bus perf\x1b\\",
@@ -100,5 +148,25 @@ mod tests {
             super::encode(3560, 9, 7),
             b"\x1b]9;Bus froze for 3.6 s at 09:07; details: bus perf\x1b\\"
         );
+    }
+    #[test]
+    fn output_acknowledgement_starts_the_cooldown_after_a_delayed_write() {
+        let mut queue = RecoveryQueue::new();
+        queue.pending = Some(Pending {
+            event: event(StallKind::Ended, 4000),
+            bytes: encode(4000, 9, 7),
+        });
+        assert!(queue.take(10, true).is_some());
+        queue.acknowledged(100_000_000);
+        queue.pending = Some(Pending {
+            event: event(StallKind::Ended, 5000),
+            bytes: encode(5000, 9, 8),
+        });
+        assert!(queue.take(120_000_000, true).is_none());
+        queue.pending = Some(Pending {
+            event: event(StallKind::Ended, 6000),
+            bytes: encode(6000, 9, 9),
+        });
+        assert!(queue.take(160_000_000, true).is_some());
     }
 }

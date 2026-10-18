@@ -216,7 +216,6 @@ pub(super) struct Recorder {
     ),
     pending_captures: BTreeSet<String>,
     wake_lag_max: Option<Duration>,
-    recovery: super::recovery::RecoveryPolicy,
     machine: super::machine::Sampler,
     capture_levels: BTreeMap<&'static str, (u64, u64)>,
     capture_suppressed: BTreeMap<&'static str, (u64, &'static str)>,
@@ -253,7 +252,6 @@ impl Recorder {
             captures: mpsc::channel(),
             pending_captures: BTreeSet::new(),
             wake_lag_max: None,
-            recovery: super::recovery::RecoveryPolicy::default(),
             machine: super::machine::Sampler::spawn(hooks.machine),
             capture_levels: BTreeMap::new(),
             capture_suppressed: BTreeMap::new(),
@@ -311,7 +309,7 @@ impl Recorder {
                     .unix_timestamp()
                     .saturating_sub((event.busy_ms / 1000) as i64);
                 let (hour, minute) = (self.hooks.local_hm)(began_at);
-                self.recovery.observe(&event, now_us, hour, minute);
+                super::recovery::observe(&event, hour, minute);
                 let record = self.stall_record(&event);
                 self.append(&record);
             }
