@@ -114,23 +114,27 @@ impl<T> Permit<'_, T> {
 impl<T> Receiver<T> {
     #[cfg(test)]
     pub(crate) fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let value = self.rx.try_recv()?;
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .times
-            .pop_front();
+        state.times.pop_front();
         Ok(value)
     }
 
     pub(crate) async fn recv(&mut self) -> Option<T> {
-        let value = self.rx.recv().await?;
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .times
-            .pop_front();
-        Some(value)
+        // Poll and remove the timestamp under the producer's bookkeeping lock.
+        // Releasing a Tokio slot first could let the next producer count both
+        // the new event and an already-consumed event against the capacity.
+        std::future::poll_fn(|cx| {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            match self.rx.poll_recv(cx) {
+                std::task::Poll::Ready(Some(value)) => {
+                    state.times.pop_front();
+                    std::task::Poll::Ready(Some(value))
+                }
+                pending => pending,
+            }
+        })
+        .await
     }
     pub(crate) fn len(&self) -> usize {
         self.rx.len()
