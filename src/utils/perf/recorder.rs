@@ -305,9 +305,9 @@ impl Recorder {
         for watch in registry.watches() {
             if let Some(event) = watch.check(now_us, self.options.stall_after) {
                 log_stall(&event);
-                let began_at = time::OffsetDateTime::now_utc()
-                    .unix_timestamp()
-                    .saturating_sub((event.busy_ms / 1000) as i64);
+                let wall_ms = crate::utils::time::now_ms();
+                let age_us = super::now_us().saturating_sub(event.stall_id);
+                let began_at = super::recovery::stall_started_second(wall_ms, age_us);
                 let (hour, minute) = (self.hooks.local_hm)(began_at);
                 super::recovery::observe(&event, hour, minute);
                 let record = self.stall_record(&event);

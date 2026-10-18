@@ -57,6 +57,10 @@ pub(super) fn observe(event: &StallEvent, hour: u8, minute: u8) {
         }
     }
 }
+/// Reconstruct the stall's wall-clock start using its monotonic identity.
+pub(super) fn stall_started_second(wall_ms: u64, age_us: u64) -> i64 {
+    ((i128::from(wall_ms) * 1000 - i128::from(age_us)).div_euclid(1_000_000)) as i64
+}
 fn is_recovery(event: &StallEvent) -> bool {
     event.kind == StallKind::Ended && event.loop_name == "client.ui_loop" && event.busy_ms > 3000
 }
@@ -141,6 +145,13 @@ mod tests {
         assert!(policy.accept(&event(StallKind::Ended, 3100), 10, true));
         assert!(!policy.accept(&event(StallKind::Ended, 8000), 60_000_009, true));
         assert!(policy.accept(&event(StallKind::Ended, 8000), 60_000_010, true));
+    }
+    #[test]
+    fn stall_start_clock_stays_in_the_correct_minute_after_delayed_observation() {
+        assert_eq!(stall_started_second(63_400, 3_500_000), 59);
+        // Another 100 ms of watchdog/logging delay preserves the same origin.
+        assert_eq!(stall_started_second(63_500, 3_600_000), 59);
+        assert_eq!(stall_started_second(64_000, 4_000_000), 60);
     }
     #[test]
     fn formats_the_exact_terminal_notification_without_composer_text() {
