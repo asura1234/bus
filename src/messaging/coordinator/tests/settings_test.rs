@@ -222,6 +222,9 @@ fn dev_settings_show_and_set_the_global_sounds() {
         shown.result["settings"],
         json!({
             "color_blind_mode": false,
+            "feishu_notifications": false,
+            "feishu_notifications_generation": 0,
+            "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
             "background_shell_hold_minutes": 15,
             "sidebar_width": 28,

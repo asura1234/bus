@@ -84,19 +84,21 @@ fn state_reports_missing_usage_as_unknown_never_as_unused() {
 #[test]
 fn feishu_quota_requires_fresh_original_observation_and_future_reset() {
     let now = 2_000_000;
-    let mut usage = Usage::default();
-    usage.codex = Some(UsageSnapshot {
-        windows: UsageWindows {
-            five_hour: Some(UsageWindow {
-                used_percent: 100.0,
-                resets_at: Some(now / 1000 + 300),
-                window_minutes: 300,
-            }),
-            weekly: None,
-        },
-        read_at_ms: now - 1,
-        observed_by_agent: AgentId(1),
-    });
+    let mut usage = Usage {
+        codex: Some(UsageSnapshot {
+            windows: UsageWindows {
+                five_hour: Some(UsageWindow {
+                    used_percent: 100.0,
+                    resets_at: Some(now / 1000 + 300),
+                    window_minutes: 300,
+                }),
+                weekly: None,
+            },
+            read_at_ms: now - 1,
+            observed_by_agent: AgentId(1),
+        }),
+        ..Usage::default()
+    };
     assert!(usage
         .exhausted(now)
         .iter()

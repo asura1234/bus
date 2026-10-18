@@ -145,6 +145,7 @@ const SAMPLES: &[&[&str]] = &[
     &["agent", "focus", "a"],
     &["agent", "details", "a", "--on"],
     &["settings", "color-blind", "--on"],
+    &["settings", "feishu-notifications", "--on"],
     &["settings", "room-sound", "--on"],
     &["sounds"],
     &["quit"],
