@@ -376,9 +376,10 @@ impl Worker {
                 if self.storage_pause.is_none() {
                     busy.stage("tick");
                     let _tick = perf::TICK.start();
-                    if let Err(error) = self.tick_with_delivery_check(|| {
-                        collect_delivery_commands(&commands, &mut pending_commands)
-                    }) {
+                    if let Err(error) = self.tick_with_delivery_check(
+                        || collect_delivery_commands(&commands, &mut pending_commands),
+                        &events,
+                    ) {
                         if self.storage_pause.is_none() {
                             self.error = Some(error);
                         }
@@ -401,15 +402,16 @@ impl Worker {
 
     #[cfg(test)]
     pub(super) fn tick(&mut self) -> Result<(), String> {
-        self.tick_with_delivery_check(|| true)
+        self.tick_with_delivery_check(|| true, &mpsc::channel().0)
     }
 
     pub(super) fn tick_with_delivery_check(
         &mut self,
         can_deliver: impl FnMut() -> bool,
+        events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         self.expire_queued_now()?;
-        self.poll().inspect_err(|_| {
+        let infos = self.poll().inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",
                 stage = "poll",
@@ -423,6 +425,7 @@ impl Worker {
             .and_then(|()| self.archive_when_due());
         let finished = self.finish_batch();
         consumed.and(finished)?;
+        self.cleanup_failed_startups(&infos, events, io::now_ms())?;
         self.settle_requests()?;
         self.refresh_compaction_notices()?;
         self.submit_ready_while(can_deliver).inspect_err(|_| {

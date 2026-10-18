@@ -57,6 +57,9 @@ mod history_append_recovery_tests;
 #[path = "history_readers_test.rs"]
 mod history_readers_tests;
 
+#[path = "startup_test.rs"]
+mod startup_tests;
+
 #[test]
 fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_state() {
     for mismatch in [

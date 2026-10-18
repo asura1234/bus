@@ -6,7 +6,7 @@ use super::{
 };
 
 impl Worker {
-    pub(super) fn poll(&mut self) -> Result<(), String> {
+    pub(super) fn poll(&mut self) -> Result<Vec<schema::AgentInfo>, String> {
         let result = self
             .transport
             .request(Method::AgentList(schema::EmptyParams {}));
@@ -95,7 +95,8 @@ impl Worker {
                 previous_terminal_id = ?previous, terminal_id = current,
                 "Reconnected the saved provider conversation; request ownership preserved");
         }
-        self.notify_dialogs(waits)
+        self.notify_dialogs(waits)?;
+        Ok(infos)
     }
 }
 

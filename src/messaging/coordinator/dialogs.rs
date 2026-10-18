@@ -144,7 +144,7 @@ fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<
 }
 
 /// Blocked and resolved notices share the existing room/recipient policy.
-fn post_dialog_notice(
+pub(super) fn post_dialog_notice(
     state: &mut BusState,
     id: AgentId,
     open_dialog: bool,

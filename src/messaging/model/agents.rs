@@ -46,6 +46,7 @@ impl BusState {
                 cwd,
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
+                startup: None,
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
@@ -163,6 +164,18 @@ impl BusState {
             return Err(ModelError::InvalidTransition);
         }
         agent.hook_setup_confirmed = true;
+        Ok(())
+    }
+
+    pub(crate) fn set_agent_startup(
+        &mut self,
+        id: AgentId,
+        startup: Option<super::AgentStartup>,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .startup = startup;
         Ok(())
     }
 
