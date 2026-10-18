@@ -1,0 +1,81 @@
+# Agent handover: <agent> → <replacement>
+
+Date: <YYYY-MM-DD>
+Room / task: <room and task goal>
+Provider / role: <provider and current role>
+PWD: <absolute working directory to use for the fresh agent>
+Compaction notice: <AGENT -> orchestrator: reached N compactions>
+
+<!--
+Write this note to temp/handover/<agent>-<date>.md in your PWD and report its
+absolute path. Replace every placeholder; write "none" explicitly where empty.
+The orchestrator already has broad-stroke context of what's been done and
+what's next, so keep those sections to bullets with one sentence per point.
+What's ongoing now must preserve the details that only you know.
+-->
+
+## What's been done previously
+
+- <One sentence glossing over a completed result, with an evidence link if useful.>
+
+## What's ongoing now
+
+<!-- Be very detailed: a fresh agent must be able to resume without guessing. -->
+
+**Exact current step and ownership:** <Where you stopped in the workflow,
+the immediate objective, acceptance criteria, scope boundaries, and who owns
+any shared files or related work.>
+
+**Running or half-done work:** <Describe unfinished edits, partial results,
+background processes, and why each is incomplete; distinguish completed
+commands from commands still in flight. Say whether you are at a safe
+checkpoint and what must finish before another agent can act.>
+
+**Files touched:** <For every touched file, give the worktree, path, purpose,
+what changed, and remaining edits; identify staged, unstaged and untracked
+files and cross-reference their classification in Repository state.>
+
+**Commands in flight:** <Exact commands and their working directories,
+process/session IDs, status, output or log paths, how to inspect or wait for
+them, and any cleanup or side effects; write "none" if nothing is running.>
+
+**Evidence and current results:** <Relevant PRs, review lanes and verdicts,
+test reports and the commit they prove, failures with exact errors, and
+reproducible commands; distinguish verified facts from hypotheses.>
+
+**Open questions and blockers:** <What is unclear, what you tried, the
+decision needed, who can answer, and which work is waiting for an answer.>
+
+**Gotchas and decisions:** <Constraints, rejected approaches and why,
+environment details needed to resume, dependencies on other agents, and
+anything that would be easy to repeat incorrectly or accidentally overwrite.>
+
+## What's next
+
+- <One sentence glossing over the next action, in execution order.>
+
+## Repository state
+
+Record every worktree and branch involved in the task, even if clean; include
+branches not currently checked out as additional rows and mark that fact.
+Capture current full commit hashes, not just remote tips or shortened hashes.
+
+| Worktree (absolute path) | Branch (or detached HEAD; mark branches not checked out) | Current full commit hash |
+|---|---|---|
+| <path> | <branch> | <40-character SHA> |
+
+Verify this snapshot with `git worktree list`, `git -C <worktree> branch -v`,
+`git -C <worktree> rev-parse <branch-or-HEAD>`, and
+`git -C <worktree> status --short --untracked-files=all` for each worktree.
+Record every staged, unstaged and untracked change below, including ownership;
+split a file into separate entries if its changes have different purposes.
+For a clean worktree, explicitly write "none" in the change column.
+
+| Worktree | Uncommitted change (path / hunk and status, or none) | Owner and purpose | Classification |
+|---|---|---|---|
+| <path> | <change> | <owner; why it exists> | <choose exactly one of the two labels below; n/a only for none> |
+
+Use exactly **part of the task: commit-and-push when done** or
+**exploratory: safe to stash** for each actual change. Do not stash changes as
+part of writing this note; preserve them for the replacement and do not claim
+another worker's changes are safe to stash without checking with their owner.
