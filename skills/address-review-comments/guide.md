@@ -67,7 +67,7 @@ through as a clean re-review, even though it is the only place carrying that com
 The body carries a verdict line. Three were observed: `🟢 Approval recommended`,
 `🟡 Changes recommended`, `🔵 Needs a closer look`. **Only 🟢 / `Approval recommended` counts as
 clean**; the other two both mean "this tree still has something to say": 🟡 points at concrete
-comments, and 🔵 is the reviewer explicitly declining to approve and asking a developer to take another
+comments, and 🔵 is the reviewer explicitly declining to approve and asking a human to take another
 look. Merging those as ready treats the reviewer's spoken reservations as silence.
 
 **The verdict line is not necessarily the first heading.** Observed: a body in the
@@ -157,7 +157,7 @@ Conversely, posting a separate PR comment (the ledger) does not work: that is an
 on any review thread, and the reviewer does not read it; observed: the ledger received no reactions
 at all. `@`-mentioning it does not help either: `@copilot` reaches the coding agent (the docs say
 it pushes commits to the PR branch), not the code reviewer. The ledger is still posted, but that is
-for developers and for the audit trail.
+for humans and for the audit trail.
 
 ## The completion marker is written in the last step
 

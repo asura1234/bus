@@ -196,7 +196,7 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     assert!(rules.contains("bus send --room master --as YOUR_NAME --to human"));
     let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
     for phrase in [
-        "An orchestrator's final reply to a human message lands in MASTER by itself.",
+        "An orchestrator's final reply to a developer message lands in MASTER by itself.",
         "shows in the work room the orchestrator runs, never in MASTER",
         "MASTER carries progress, questions and blockers; work details stay in the work room.",
         "a progress report when a step or milestone finishes or fails (a PR merged, a task done, a gate failed);",

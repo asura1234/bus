@@ -89,7 +89,7 @@ So once the author rejects even one, the PR can never merge — the premise of p
 Measured corroboration too: on libtv-desktop PR #899, after all 18 findings were handled and Copilot itself marked them all resolved,
 the overview showed `Findings: None` and not even an `Open` section existed, **yet the verdict was still `🔵 Needs a closer look`**
 (the summary line still carried a no-longer-true "unresolved findings remain"). `🔵` expresses "this tree is too complex or
-risky, I won't auto-approve, a developer must give final confirmation", which is a different thing from "there is still unresolved feedback". With 🟢 as the release condition,
+risky, I won't auto-approve, a human must give final confirmation", which is a different thing from "there is still unresolved feedback". With 🟢 as the release condition,
 complex PRs would never merge, even with not a single finding left.
 
 Second, **it cannot block the merge anyway**. Copilot gives a `COMMENT` review, not `Request changes`, and not a
@@ -110,11 +110,11 @@ the same class of claim was raised again and again in exactly this shape.
 So after every `address-review-comments` run, post `triage.md` back to the PR **verbatim** (`gh pr comment
 --body-file`). It answers "why this is not changed", and that answer must live in the same place as the code.
 
-The reader is a **developer** (and the next agent), not machine review — it cannot read comments. Since 2026-09-18 its overview
+The reader is a **human** (and the next agent), not machine review — it cannot read comments. Since 2026-09-18 its overview
 keeps progress across rounds (`Open` / `Resolved since last review` / `Previously missed`), so the old claim "it has no memory"
 is no longer accurate; the accurate claim is **it does not read our replies**, and only settles findings itself based on subsequent commits.
 
-- Post verbatim. The ledger is already structured for developers; summarizing it again only creates a second version, and the two will slowly drift.
+- Post verbatim. The ledger is already structured for humans; summarizing it again only creates a second version, and the two will slowly drift.
 - Post APPLY too. Posting only REJECT turns the ledger into advocacy; only the full four classes show how the round was adjudicated.
 - Before posting, scan for credentials and local absolute paths — the ledger is a local artifact, the PR is public.
 - If it exceeds GitHub's single-comment limit, split it, do not truncate: what gets cut is always the REJECT/FLAG at the end.

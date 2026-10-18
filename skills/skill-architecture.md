@@ -60,7 +60,7 @@ Scripts must:
 - Provide automated tests for the normal path, boundary paths, and fail-closed paths.
 - Use the same fields and enums as the format SOT, and not maintain a second implicit schema.
 
-Python can prove structure and state transitions; it cannot prove that the model really completed the semantic review. The latter relies on reviewer re-verification, cross-model dogfooding, and final developer judgment.
+Python can prove structure and state transitions; it cannot prove that the model really completed the semantic review. The latter relies on reviewer re-verification, cross-model dogfooding, and final human judgment.
 
 ## 4. `*-format.md`: strict artifact formats
 

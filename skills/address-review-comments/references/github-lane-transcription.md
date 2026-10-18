@@ -40,11 +40,11 @@ The "review body" section in `source.md` also produces findings, with the origin
   inline comments, just posted somewhere else; missing them means this round was effectively never
   addressed: none of those comments appear among the inline comments.
 - When the body has only a verdict line and no concrete comments (for example `🔵 Needs a closer
-  look` saying "too complex or risky, needs a developer to confirm"), it still produces **one** finding
+  look` saying "too complex or risky, needs a human to confirm"), it still produces **one** finding
   whose observation quotes the verdict line and reason verbatim. Whether it needs a developer
   decision is adjudicated in PASS 3; the transcription stage does not prejudge it. Its only job
   here is to get that sentence into the set of items to address instead of silently swallowing it.
-- When a review has **only a state, with no body and no inline comments** (a developer only clicked
+- When a review has **only a state, with no body and no inline comments** (a human only clicked
   Request changes), it likewise produces **one** finding: the location is that review's
   `state: CHANGES_REQUESTED`, and the observation is "the review requested changes but left no
   body". Without it, `review.md` would have 0 claims while PASS 1 still marks the round as
