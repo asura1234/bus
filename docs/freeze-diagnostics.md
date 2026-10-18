@@ -3,7 +3,8 @@
 Bus records UI stalls in its session's `perf/client.jsonl`. After a UI
 iteration lasting more than 3 seconds returns, Bus sends a terminal
 notification: `Bus froze for N.N s at HH:MM; details: bus perf`. The time is
-the local start time of the stall. Alerts default on and can be disabled in
+the local start time of the stall on macOS/Unix; non-Unix targets currently
+use UTC. Alerts default on and can be disabled in
 Settings → Freeze recovery notifications. They never enter room history or
 the composer, and are limited to one per minute. Terminal notification
 presentation depends on the host terminal's notification support and settings.
@@ -30,11 +31,15 @@ The recorder adds these bounded diagnostics:
   timers and `.bytes`: durable state-save phases, without weakening file or
   directory synchronization.
 - `machine`: a separate worker samples macOS every 5 seconds. It reports the
-  top 8 CPU processes using PID plus process start time, executable basename
+  top 8 readable CPU processes using PID plus process start time, executable basename
   and CPU delta, alongside load, memory pressure level and cumulative page-in
   and page-out counts. It reads no command lines, environments or terminal
   contents. The first sample establishes CPU baselines; unreadable OS fields
-  remain null. Other platforms currently omit this macOS machine sample.
+  remain null. `process_coverage` reports enumerated, readable and unavailable
+  process counts and the `readable_processes` scope. Normal macOS permissions
+  can exclude other users' processes, including system services; unavailable
+  also includes processes that exit during sampling. Load, memory pressure and
+  paging remain machine-wide. Other platforms omit this macOS machine sample.
 
 `BUS_PERF_CAPTURE_MS=0` disables stack sampling. Existing perf recording
 configuration still applies. New record kinds and fields are additive JSONL.
