@@ -417,10 +417,21 @@ impl BusState {
         ) {
             let steered = self.group_members(request_id).into_iter().find(|member| {
                 self.requests.get(member).is_some_and(|m| {
-                    m.steered && !m.settled() && m.matches_callback_payload(payload)
+                    m.steered
+                        && !m.trusted_start_bound
+                        && !m.settled()
+                        && m.matches_callback_payload(payload)
                 })
             });
             if let Some(member) = steered {
+                if callback.provider_turn_id.is_some()
+                    && callback.provider_turn_id != request.provider_turn_id
+                    && self
+                        .split_answered_turn(request_id, member, callback)
+                        .unwrap_or(false)
+                {
+                    return true;
+                }
                 if let Some(member) = self.requests.get_mut(&member) {
                     member.trusted_start_bound = true;
                     member.uncertain_outcome = false;

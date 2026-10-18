@@ -672,7 +672,10 @@ fn messages_to_an_agent_holding_its_reply_for_shells_are_typed_into_that_turn() 
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
     // ...and the build finishing wakes the turn that carries the reply.
     fixture.started(
         "turn-3",
@@ -684,7 +687,7 @@ fn messages_to_an_agent_holding_its_reply_for_shells_are_typed_into_that_turn() 
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    for id in [lead, question, blocker] {
+    for id in [question, blocker] {
         assert_eq!(
             fixture.reply(id).as_deref(),
             Some("Build green; pr 1 is ready.")
@@ -781,10 +784,10 @@ fn a_queued_message_behind_an_uncapped_cron_hold_is_still_reported_stalled() {
     assert_eq!(fixture.request(next).phase, RequestPhase::Abandoned);
 }
 
-/// A message typed into a turn held for shells shares the reply the shell cap
-/// delivers: the newest interim text, which answered it.
+/// A new message answered in its own turn must preserve the held answer of
+/// the preceding turn instead of replacing it at the shell cap.
 #[test]
-fn a_message_typed_into_a_held_turn_shares_the_reply_the_shell_cap_delivers() {
+fn a_message_answered_in_a_new_turn_keeps_the_preceding_held_reply() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = held_on_a_started_shell(&mut fixture);
     let question = fixture.send("is the first pr ready to merge?", false);
@@ -796,21 +799,30 @@ fn a_message_typed_into_a_held_turn_shares_the_reply_the_shell_cap_delivers() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(fixture.request(question).group, None);
     fixture.now += SHELL_HOLD_MS;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    for id in [lead, question] {
-        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
-        assert_eq!(
-            fixture.reply(id).as_deref(),
-            Some("Not yet; the build runs.")
-        );
-        assert_eq!(
-            fixture.request(id).failure_reason.as_deref(),
-            Some("background_shells_timeout")
-        );
-    }
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("Not yet; the build runs.")
+    );
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("background_shells_new_turn")
+    );
+    assert_eq!(
+        fixture.request(question).failure_reason.as_deref(),
+        Some("background_shells_timeout")
+    );
 }
 
 /// A message typed into a held turn whose start Claude never reported still
@@ -930,7 +942,7 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert!(fixture.request(lead).awaiting_background);
+    assert!(fixture.request(joined).awaiting_background);
     // Shell b1 finishes: the wake turn starts, which ends the hold...
     fixture.started(
         "turn-3",
@@ -938,16 +950,16 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     );
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
-    assert!(!fixture.request(lead).awaiting_background);
+    assert!(!fixture.request(joined).awaiting_background);
     // ...and the agent is Idle 2 s later with no Stop hook.
     fixture.now += 2_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert!(fixture.request(lead).turn_ended_at_ms.is_some());
+    assert!(fixture.request(joined).turn_ended_at_ms.is_some());
     fixture.now += HELD_REPLY_GRACE_MS + 1;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    for id in [lead, joined] {
+    for id in [joined] {
         assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
         assert_eq!(
             fixture.reply(id).as_deref(),
@@ -979,8 +991,12 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.error(), None);
     assert_eq!(
-        fixture.reply(lead).as_deref(),
+        fixture.reply(joined).as_deref(),
         Some("#78 was tested with e2e-test; waiting on its review.")
+    );
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
     );
 }
 
@@ -1090,7 +1106,12 @@ fn a_late_stop_within_the_held_reply_window_is_still_the_turn_reply() {
     let lead = held_on_a_started_shell(&mut fixture);
     let joined = fixture.send("is it ready?", false);
     fixture.deliver();
-    fixture.started("turn-2", "is it ready?");
+    fixture.started("turn-1", "is it ready?");
+    fixture.consume();
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
     fixture.status(RuntimeStatus::Idle);
@@ -1164,4 +1185,48 @@ fn a_second_wake_turn_inside_the_held_reply_window_carries_the_reply() {
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert_eq!(fixture.reply(lead).as_deref(), Some("Both builds passed."));
+}
+
+/// Live MASTER regression: five messages were answered by five distinct
+/// Claude turns while the same background shell kept every Stop held.
+#[test]
+fn five_shell_held_message_turns_keep_their_own_replies() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let first = held_on_a_started_shell(&mut fixture);
+    let mut messages = vec![(first, "Waiting on the build.".to_owned())];
+    for n in 2..=5 {
+        let prompt = format!("question {n}");
+        let answer = format!("answer {n}");
+        let request = fixture.send(&prompt, false);
+        fixture.deliver();
+        fixture.started(&format!("turn-{n}"), &prompt);
+        fixture.consume();
+        fixture.status(RuntimeStatus::Working);
+        fixture.record(claude_stop(&format!("turn-{n}"), &answer, &["b1"]));
+        fixture.consume();
+        fixture.status(RuntimeStatus::Idle);
+        fixture.consume();
+        messages.push((request, answer));
+    }
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for (index, (id, answer)) in messages.iter().enumerate() {
+        assert_eq!(fixture.request(*id).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(*id).as_deref(),
+            Some(answer.as_str()),
+            "message {} lost its own turn reply",
+            index + 1
+        );
+        assert_eq!(fixture.request(*id).group, None);
+        let status = fixture
+            .worker
+            .control_message_at(fixture.request(*id).prompt.id, fixture.now)
+            .unwrap();
+        assert_eq!(
+            status["requests"][0]["reply"]["provider_turn_id"],
+            format!("turn-{}", index + 1)
+        );
+    }
 }

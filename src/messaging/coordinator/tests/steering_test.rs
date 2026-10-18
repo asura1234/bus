@@ -302,7 +302,7 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
 }
 
 #[test]
-fn typed_input_the_provider_runs_as_its_own_turn_still_answers_the_group() {
+fn typed_input_answered_in_its_own_turn_keeps_both_answers() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "write the parser", "turn-1");
     let correction = fixture.send("also add tests", false);
@@ -317,14 +317,12 @@ fn typed_input_the_provider_runs_as_its_own_turn_still_answers_the_group() {
     fixture.stopped("turn-2", "parser and tests written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(
-        fixture.reply(lead).as_deref(),
-        Some("parser and tests written")
-    );
+    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
     assert_eq!(
         fixture.reply(correction).as_deref(),
         Some("parser and tests written")
     );
+    assert_eq!(fixture.request(correction).group, None);
     assert_eq!(fixture.error(), None);
 }
 
