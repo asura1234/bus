@@ -1,7 +1,7 @@
 //! Close finished turns after giving their completion callbacks time to arrive.
 use super::{
     types::ShellHold, AgentId, BusState, ModelError, PendingFinal, Request, RequestId,
-    RuntimeStatus, HELD_REPLY_SETTLE_MS, TURN_SETTLE_MS,
+    RequestPhase, RuntimeStatus, HELD_REPLY_SETTLE_MS, TURN_SETTLE_MS,
 };
 
 impl BusState {
@@ -106,6 +106,70 @@ impl BusState {
             "Held reply delivered"
         );
         Some(id)
+    }
+
+    /// A typed message that starts a different turn must not replace an
+    /// answer already captured for the previous turn. Move unbound steering
+    /// along with the new lead, leaving genuinely folded messages behind.
+    pub(super) fn split_answered_turn(
+        &mut self,
+        lead: RequestId,
+        next: RequestId,
+        callback: &super::ProviderCallback,
+    ) -> Result<bool, ModelError> {
+        let previous = self
+            .requests
+            .get(&lead)
+            .ok_or(ModelError::UnknownRequest(lead))?;
+        let held = previous.pending_final.is_none();
+        let Some(answer) = previous
+            .pending_final
+            .clone()
+            .or_else(|| Self::held_interim(previous))
+        else {
+            // A running generation can be replaced before it answers (Cursor
+            // does this for follow-ups). Its messages still await one answer.
+            return Ok(false);
+        };
+        let boundary = previous.submission_boundary;
+        for id in self.group_members(lead) {
+            if let Some(member) = self.requests.get_mut(&id).filter(|member| {
+                !member.settled()
+                    && (member.id == next || (member.steered && !member.trusted_start_bound))
+            }) {
+                member.group = (id != next).then_some(next);
+                member.submission_boundary = boundary;
+            }
+        }
+        if held {
+            self.deliver_held_interim(
+                callback.agent_id,
+                lead,
+                answer,
+                callback.occurred_at_ms,
+                "background_shells_new_turn",
+            );
+        } else {
+            self.complete_pending_final(callback.agent_id, callback.occurred_at_ms)?;
+        }
+        let member = self
+            .requests
+            .get_mut(&next)
+            .ok_or(ModelError::UnknownRequest(next))?;
+        member.phase = RequestPhase::Active;
+        member.provider_session_id = callback.provider_session_id.clone();
+        member.provider_turn_id = callback.provider_turn_id.clone();
+        member.provider_prompt_id = callback.provider_prompt_id.clone();
+        member.trusted_start_bound = true;
+        member.uncertain_outcome = false;
+        member.progress_at_ms = Some(callback.occurred_at_ms);
+        let agent = self
+            .agents
+            .get_mut(&callback.agent_id)
+            .ok_or(ModelError::UnknownAgent(callback.agent_id))?;
+        member.submission_status_revision = agent.status_revision;
+        agent.current_request = Some(next);
+        Ok(true)
     }
 
     /// The interim text a `Stop` gave while this request held for its shells,

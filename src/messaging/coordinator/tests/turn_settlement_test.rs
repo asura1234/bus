@@ -633,8 +633,8 @@ fn the_shell_cap_is_the_background_shell_hold_minutes_setting() {
 /// blocker notice both went to an orchestrator whose reply was held for shells
 /// its turn started. The agent sat Idle, nothing was typed, and both messages
 /// were abandoned as `queued_stalled` two minutes later. The agent takes
-/// input while it waits, so each message is typed into the held turn and
-/// shares the reply that turn eventually gives.
+/// input while it waits. Messages folded into one turn share its reply;
+/// messages answered in a later turn keep that turn's own answer.
 #[test]
 fn messages_to_an_agent_holding_its_reply_for_shells_are_typed_into_that_turn() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
@@ -672,7 +672,10 @@ fn messages_to_an_agent_holding_its_reply_for_shells_are_typed_into_that_turn() 
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
     // ...and the build finishing wakes the turn that carries the reply.
     fixture.started(
         "turn-3",
@@ -684,10 +687,10 @@ fn messages_to_an_agent_holding_its_reply_for_shells_are_typed_into_that_turn() 
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    for id in [lead, question, blocker] {
+    for id in [question, blocker] {
         assert_eq!(
             fixture.reply(id).as_deref(),
-            Some("Build green; pr 1 is ready.")
+            Some("Not yet; the build runs.")
         );
     }
 }
@@ -781,10 +784,10 @@ fn a_queued_message_behind_an_uncapped_cron_hold_is_still_reported_stalled() {
     assert_eq!(fixture.request(next).phase, RequestPhase::Abandoned);
 }
 
-/// A message typed into a turn held for shells shares the reply the shell cap
-/// delivers: the newest interim text, which answered it.
+/// A new message answered in its own turn must preserve the held answer of
+/// the preceding turn instead of replacing it at the shell cap.
 #[test]
-fn a_message_typed_into_a_held_turn_shares_the_reply_the_shell_cap_delivers() {
+fn a_message_answered_in_a_new_turn_keeps_the_preceding_held_reply() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = held_on_a_started_shell(&mut fixture);
     let question = fixture.send("is the first pr ready to merge?", false);
@@ -792,25 +795,38 @@ fn a_message_typed_into_a_held_turn_shares_the_reply_the_shell_cap_delivers() {
     fixture.started("turn-2", "is the first pr ready to merge?");
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
-    fixture.record(claude_stop("turn-2", "Not yet; the build runs.", &["b1"]));
+    fixture.record(claude_stop(
+        "turn-2",
+        "Not yet; the build runs.",
+        &["b1", "b2"],
+    ));
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(fixture.request(question).group, None);
     fixture.now += SHELL_HOLD_MS;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    for id in [lead, question] {
-        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
-        assert_eq!(
-            fixture.reply(id).as_deref(),
-            Some("Not yet; the build runs.")
-        );
-        assert_eq!(
-            fixture.request(id).failure_reason.as_deref(),
-            Some("background_shells_timeout")
-        );
-    }
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("Not yet; the build runs.")
+    );
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("background_shells_new_turn")
+    );
+    assert_eq!(
+        fixture.request(question).failure_reason.as_deref(),
+        Some("background_shells_timeout")
+    );
 }
 
 /// A message typed into a held turn whose start Claude never reported still
@@ -930,34 +946,32 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert!(fixture.request(lead).awaiting_background);
-    // Shell b1 finishes: the wake turn starts, which ends the hold...
+    assert!(fixture.request(joined).awaiting_background);
+    // This request's shell b2 finishes: its wake turn ends the hold...
     fixture.started(
         "turn-3",
-        "<task-notification>b1 completed</task-notification>",
+        "<task-notification>b2 completed</task-notification>",
     );
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
-    assert!(!fixture.request(lead).awaiting_background);
+    assert!(!fixture.request(joined).awaiting_background);
     // ...and the agent is Idle 2 s later with no Stop hook.
     fixture.now += 2_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert!(fixture.request(lead).turn_ended_at_ms.is_some());
+    assert!(fixture.request(joined).turn_ended_at_ms.is_some());
     fixture.now += HELD_REPLY_GRACE_MS + 1;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    for id in [lead, joined] {
-        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
-        assert_eq!(
-            fixture.reply(id).as_deref(),
-            Some("#78 was tested with e2e-test; waiting on its review.")
-        );
-        assert_eq!(
-            fixture.request(id).failure_reason.as_deref(),
-            Some("background_shells_interim")
-        );
-    }
+    assert_eq!(fixture.request(joined).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(joined).as_deref(),
+        Some("#78 was tested with e2e-test; waiting on its review.")
+    );
+    assert_eq!(
+        fixture.request(joined).failure_reason.as_deref(),
+        Some("background_shells_interim")
+    );
     assert_eq!(fixture.error(), None);
     assert_eq!(
         fixture
@@ -979,8 +993,12 @@ fn a_wake_turn_ending_without_stop_delivers_the_shell_held_reply() {
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.error(), None);
     assert_eq!(
-        fixture.reply(lead).as_deref(),
+        fixture.reply(joined).as_deref(),
         Some("#78 was tested with e2e-test; waiting on its review.")
+    );
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
     );
 }
 
@@ -1090,7 +1108,12 @@ fn a_late_stop_within_the_held_reply_window_is_still_the_turn_reply() {
     let lead = held_on_a_started_shell(&mut fixture);
     let joined = fixture.send("is it ready?", false);
     fixture.deliver();
-    fixture.started("turn-2", "is it ready?");
+    fixture.started("turn-1", "is it ready?");
+    fixture.consume();
+    fixture.started(
+        "turn-2",
+        "<task-notification>b1 completed</task-notification>",
+    );
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
     fixture.status(RuntimeStatus::Idle);
@@ -1164,4 +1187,196 @@ fn a_second_wake_turn_inside_the_held_reply_window_carries_the_reply() {
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert_eq!(fixture.reply(lead).as_deref(), Some("Both builds passed."));
+}
+
+/// Live MASTER regression: five messages were answered by five distinct
+/// Claude turns while the same background shell kept every Stop held.
+#[test]
+fn five_shell_held_message_turns_keep_their_own_replies() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let first = held_on_a_started_shell(&mut fixture);
+    let mut messages = vec![(first, "Waiting on the build.".to_owned())];
+    for n in 2..=5 {
+        let prompt = format!("question {n}");
+        let answer = format!("answer {n}");
+        let request = fixture.send(&prompt, false);
+        fixture.deliver();
+        fixture.started(&format!("turn-{n}"), &prompt);
+        fixture.consume();
+        fixture.status(RuntimeStatus::Working);
+        fixture.record(claude_stop(&format!("turn-{n}"), &answer, &["b1"]));
+        fixture.consume();
+        fixture.status(RuntimeStatus::Idle);
+        fixture.consume();
+        messages.push((request, answer));
+    }
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for (index, (id, answer)) in messages.iter().enumerate() {
+        assert_eq!(fixture.request(*id).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(*id).as_deref(),
+            Some(answer.as_str()),
+            "message {} lost its own turn reply",
+            index + 1
+        );
+        assert_eq!(fixture.request(*id).group, None);
+        let status = fixture
+            .worker
+            .control_message_at(fixture.request(*id).prompt.id, fixture.now)
+            .unwrap();
+        assert_eq!(
+            status["requests"][0]["reply"]["provider_turn_id"],
+            format!("turn-{}", index + 1)
+        );
+    }
+}
+
+/// A message answered in its own turn while an earlier request's shell still
+/// runs keeps that answer when the shell later wakes a turn of its own: the
+/// wake turn reports on the earlier request's work, not this message.
+#[test]
+fn a_message_answered_in_its_own_turn_keeps_its_reply_when_an_earlier_shell_wakes() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let question = fixture.send("did the docs pr merge?", false);
+    fixture.deliver();
+    fixture.started("turn-2", "did the docs pr merge?");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop("turn-2", "Yes, the docs pr merged.", &["b1"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.started(
+        "turn-3",
+        "<task-notification>b1 completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop("turn-3", "Build green; pr 1 is ready.", &[]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("Yes, the docs pr merged.")
+    );
+}
+
+/// Two messages typed into a shell-held turn, where Claude starts a turn for
+/// the first and folds the second into it without a prompt of its own: the
+/// new turn answers both, and the held request keeps its own interim.
+#[test]
+fn messages_folded_into_a_new_turn_after_a_held_reply_share_that_turns_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let first = fixture.send("check the docs pr", false);
+    let folded = fixture.send("and the changelog", false);
+    fixture.deliver();
+    fixture.deliver();
+    fixture.started("turn-2", "check the docs pr");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop(
+        "turn-2",
+        "Docs pr and changelog are fine.",
+        &[],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    for id in [first, folded] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("Docs pr and changelog are fine.")
+        );
+    }
+}
+
+/// An older request's shell can wake while the new request still owns a
+/// different running shell. Its report must not replace the new held answer.
+#[test]
+fn an_inherited_shell_wake_cannot_replace_the_current_requests_held_answer() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let question = fixture.send("review the docs", false);
+    fixture.deliver();
+    fixture.started("turn-2", "review the docs");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop(
+        "turn-2",
+        "Docs reviewed; tests still run.",
+        &["b1", "b2"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.started(
+        "turn-3",
+        "<task-notification><task-id>b1</task-id>completed</task-notification>",
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop("turn-3", "Earlier build completed.", &["b2"]));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("Docs reviewed; tests still run.")
+    );
+}
+
+/// An actual Bus message can contain the same text as a task notification.
+/// Its matching submit callback still owns the new turn and its reply.
+#[test]
+fn a_bus_message_matching_an_inherited_task_notification_keeps_its_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = held_on_a_started_shell(&mut fixture);
+    let prompt = "<task-notification><task-id>b1</task-id>completed</task-notification>";
+    let question = fixture.send(prompt, false);
+    fixture.deliver();
+    fixture.started("turn-2", prompt);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.record(claude_stop(
+        "turn-2",
+        "That is a task notification.",
+        &["b1"],
+    ));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += HELD_REPLY_GRACE_MS + 1;
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("That is a task notification.")
+    );
 }

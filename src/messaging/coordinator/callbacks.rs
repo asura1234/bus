@@ -152,6 +152,9 @@ impl Worker {
             return Ok(false);
         }
         let started = matches!(callback.kind, CallbackEventKind::PromptStarted);
+        if started && self.is_inherited_shell_wake(id, &callback) {
+            state.mark_unowned_background_turn(&callback);
+        }
         let report = reports::pending_report(state, &callback);
         let disposition = state.accept_callback(callback);
         if let Some(report) = report {

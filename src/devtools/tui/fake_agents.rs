@@ -142,7 +142,7 @@ struct FakeAgent {
     /// Background shells `fake:shell` started, listed on every Claude `Stop`.
     shells: Vec<String>,
     /// When the newest shell ends and wakes a turn (`fake:wake N`).
-    wake: Option<(Instant, String)>,
+    wake: Option<(Instant, String, bool)>,
 }
 
 /// What a keystroke ended in, besides editing the draft.
@@ -509,7 +509,7 @@ impl FakeAgent {
                 let Some(input) = self.input.as_ref() else {
                     return 0;
                 };
-                let received = Self::receive_or_wake(input, self.wake.as_ref().map(|(at, _)| *at));
+                let received = Self::receive_or_wake(input, self.wake.as_ref().map(|(at, ..)| *at));
                 match received {
                     Ok(bytes) => self.pending.extend_from_slice(&bytes),
                     Err(mpsc::RecvTimeoutError::Timeout) => self.wake(),

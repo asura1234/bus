@@ -417,10 +417,21 @@ impl BusState {
         ) {
             let steered = self.group_members(request_id).into_iter().find(|member| {
                 self.requests.get(member).is_some_and(|m| {
-                    m.steered && !m.settled() && m.matches_callback_payload(payload)
+                    m.steered
+                        && !m.trusted_start_bound
+                        && !m.settled()
+                        && m.matches_callback_payload(payload)
                 })
             });
             if let Some(member) = steered {
+                if callback.provider_turn_id.is_some()
+                    && callback.provider_turn_id != request.provider_turn_id
+                    && self
+                        .split_answered_turn(request_id, member, callback)
+                        .unwrap_or(false)
+                {
+                    return true;
+                }
                 if let Some(member) = self.requests.get_mut(&member) {
                     member.trusted_start_bound = true;
                     member.uncertain_outcome = false;
@@ -452,6 +463,45 @@ impl BusState {
             callback.provider_turn_id.as_deref(),
         )
         .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
+    }
+
+    /// A notification for inherited work is foreign unless it is input Bus
+    /// actually submitted. Explicit developer text always wins that match.
+    pub(crate) fn mark_unowned_background_turn(&mut self, callback: &ProviderCallback) {
+        let Some(payload) = callback.prompt_payload.as_deref() else {
+            return;
+        };
+        let lead = self
+            .agents
+            .get(&callback.agent_id)
+            .and_then(|a| a.current_request);
+        if let Some(lead) = lead {
+            let owned = std::iter::once(lead)
+                .chain(self.group_members(lead))
+                .any(|id| {
+                    self.requests.get(&id).is_some_and(|request| {
+                        !request.settled() && request.matches_callback_payload(payload)
+                    })
+                });
+            if owned {
+                return;
+            }
+        }
+        self.unrelated_provider_turns.extend(provider_turn_key(
+            &callback.launch_id,
+            callback.provider_session_id.as_deref(),
+            callback.provider_turn_id.as_deref(),
+        ));
+    }
+
+    pub(crate) fn is_unrelated_provider_turn(
+        &self,
+        launch: &str,
+        session: &str,
+        turn: &str,
+    ) -> bool {
+        provider_turn_key(launch, Some(session), Some(turn))
+            .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
     }
 
     /// Settles the agent's current request, and every request in its group,
