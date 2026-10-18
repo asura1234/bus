@@ -129,10 +129,13 @@ impl Worker {
         callback: ProviderCallback,
     ) -> Result<bool, String> {
         let _binding = binding::span(state, &callback).entered();
+        let late_worker_final = matches!(callback.kind, CallbackEventKind::Final { .. })
+            && state.late_worker_request(&callback).is_some();
         if matches!(
             callback.kind,
             CallbackEventKind::Final { .. } | CallbackEventKind::BackgroundPending
-        ) && !state.is_unrelated_turn(&callback)
+        ) && !late_worker_final
+            && !state.is_unrelated_turn(&callback)
             && state
                 .agent(id)
                 .and_then(|a| a.current_request)
@@ -189,12 +192,14 @@ impl Worker {
                 "Agent activity outside the Bus request"
             );
         }
-        if matches!(
-            disposition,
-            CallbackDisposition::Rejected(
-                CallbackRejection::UnboundFinal | CallbackRejection::WrongPrompt
+        if !late_worker_final
+            && matches!(
+                disposition,
+                CallbackDisposition::Rejected(
+                    CallbackRejection::UnboundFinal | CallbackRejection::WrongPrompt
+                )
             )
-        ) {
+        {
             state.set_agent_error(id,Some("Unbound provider callback: verify trusted submit/stop hooks. The active request will not be retried.".into())).map_err(|e|e.to_string())?;
         }
         Ok(true)

@@ -2,6 +2,9 @@ use super::*;
 use crate::messaging::{control::Request as ControlRequest, native::TransportError};
 use serde_json::json;
 
+#[path = "worker_events_test.rs"]
+mod worker_events;
+
 static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct Accepting(Arc<Mutex<Vec<String>>>);
@@ -920,16 +923,23 @@ fn reply_routing_coalesced_rejection_does_not_rearm_without_a_new_arrival() {
     let mut f = Fixture::new();
     let pasted = Arc::new(Mutex::new(Vec::new()));
     f.worker.transport = Box::new(NeverShown(pasted.clone()));
-    for text in ["first reply", "second reply"] {
-        let source = f.send(Author::Agent(f.orch), text);
-        f.finish(source, text);
-    }
+    let source = f.send(Author::Agent(f.orch), "first reply");
+    f.finish(source, "first reply");
     let mut state = f.worker.state.clone();
     state
         .observe_status(f.orch, RuntimeStatus::Unavailable, io::now_ms())
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
+    // Two collection windows still exercise native queue coalescing; a
+    // same-window pair now intentionally becomes one worker-event batch.
+    let source = f.send(Author::Agent(f.orch), "second reply");
+    f.finish(source, "second reply");
+    let mut state = f.worker.state.clone();
+    state
+        .route_worker_replies(io::now_ms() + 3_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
     assert_eq!(f.notices().len(), 2);
     let mut state = f.worker.state.clone();
     state

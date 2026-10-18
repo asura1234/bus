@@ -238,6 +238,7 @@ impl JsonStore {
             Err(source) => return Err(StoreError::Io { path, source }),
         };
         let cutoff = super::io::now_ms().saturating_sub(HISTORY_RETENTION_MS);
+        let (event_groups, event_messages) = state.worker_pending_sources();
         let mut history = History::default();
         let mut stale = false;
         let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
@@ -262,7 +263,11 @@ impl JsonStore {
                 }
             };
             let pinned_reply = matches!(&item, Archived::Request(request) if state.reply_delivery_pending(request));
-            let kept = (item.settled_at_ms() >= cutoff || pinned_reply)
+            let pinned_event = match &item {
+                Archived::Request(r) => event_groups.contains(&r.group.unwrap_or(r.id)),
+                Archived::Notice { prompt, .. } => event_messages.contains(&prompt.id),
+            };
+            let kept = (item.settled_at_ms() >= cutoff || pinned_reply || pinned_event)
                 && state.room(item.room()).is_some()
                 && match &item {
                     Archived::Request(request) => {

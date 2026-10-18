@@ -14,7 +14,12 @@ impl BusState {
         let agent = callback.agent_id;
         let occurred_at_ms = callback.occurred_at_ms;
         let current = self.agents.get(&agent).and_then(|a| a.current_request);
+        let final_event =
+            matches!(callback.kind, CallbackEventKind::Final { .. }).then(|| callback.clone());
         let disposition = self.accept_callback_unrecorded(callback);
+        if let Some(callback) = final_event {
+            self.record_worker_final(&callback, &disposition);
+        }
         if !matches!(disposition, CallbackDisposition::Rejected(_)) {
             if let Some(request) = current.and_then(|id| self.requests.get_mut(&id)) {
                 let progress = request.progress_at_ms.get_or_insert(occurred_at_ms);
@@ -608,7 +613,7 @@ impl BusState {
     }
 }
 
-fn provider_turn_key(
+pub(super) fn provider_turn_key(
     launch_id: &str,
     session_id: Option<&str>,
     turn_id: Option<&str>,

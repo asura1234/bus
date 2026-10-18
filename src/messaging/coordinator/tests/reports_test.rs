@@ -360,7 +360,9 @@ fn worker_turns_never_post_to_master() {
     assert!(master.notices.is_empty(), "{:?}", master.notices);
     assert!(master.latest_prompt.is_none());
     let room = bus.worker.state.room(bus.room).unwrap();
-    assert!(room.notices.is_empty(), "{:?}", room.notices);
+    assert_eq!(room.notices.len(), 1);
+    assert_eq!(room.notices[0].author, Author::Agent(builder));
+    assert_eq!(room.notices[0].text, "Background build finished.");
 }
 
 #[test]

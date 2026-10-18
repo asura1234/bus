@@ -149,20 +149,29 @@ fn run_with_pause(
     };
     write_response(output, &response)?;
     if let (Some(author), Some(requests)) = (reply_author, response.result["requests"].as_array()) {
-        for request in requests
-            .iter()
-            .filter(|r| r["reply_ack"] == true && r["stage"] == "replied" && r["reply"].is_object())
-        {
+        for request in requests.iter().filter(|r| {
+            (r["reply_ack"] == true && r["stage"] == "replied" && r["reply"].is_object())
+                || r["event_acks"]
+                    .as_array()
+                    .is_some_and(|keys| !keys.is_empty())
+        }) {
             let Some(id) = request["request_id"].as_u64() else {
                 continue;
             };
             // Output is already visible. A failed acknowledgement leaves the
             // durable terminal fallback intact, and must not alter that output.
+            let mut params = serde_json::json!({"request":id.to_string(),"as":author});
+            if request["event_acks"]
+                .as_array()
+                .is_some_and(|keys| !keys.is_empty())
+            {
+                params["events"] = request["event_acks"].clone();
+            }
             let _ = send(
                 &Request {
                     id: next_request_id(),
                     method: "message.seen".into(),
-                    params: serde_json::json!({"request":id.to_string(),"as":author}),
+                    params,
                 },
                 None,
             );

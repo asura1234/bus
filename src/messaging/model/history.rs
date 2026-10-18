@@ -137,7 +137,7 @@ impl super::BusState {
     /// Moves settled requests and old notices into the archive and drops what
     /// no longer needs keeping. True when anything changed.
     pub(crate) fn archive(&mut self, now_ms: u64) -> bool {
-        let pending = self.retain_unrouted_worker_replies();
+        let pending = self.retain_unrouted_worker_replies() | self.retain_worker_outcomes(now_ms);
         let moved = self.archive_settled(now_ms.saturating_sub(ARCHIVE_AFTER_MS));
         let expired = self.drop_history_before(now_ms.saturating_sub(HISTORY_RETENTION_MS));
         let spent = self.drop_spent_ids(now_ms);
@@ -152,7 +152,8 @@ impl super::BusState {
                     .notification()
                     .is_some_and(|notice| retained.contains(&notice))
         });
-        pending | moved | expired | spent | (routes != self.reply_routes.len())
+        let events = self.prune_worker_events();
+        pending | moved | expired | spent | events | (routes != self.reply_routes.len())
     }
 
     /// Settled requests no agent, queue or open group refers to, and notices,
@@ -217,30 +218,35 @@ impl super::BusState {
         // A pending or queued wake still owns its original reply, including the full text
         // behind a long-reply pointer. Ordinary history retention must not erase
         // it while the orchestrator's terminal remains unavailable.
+        let (event_groups, event_messages) = self.worker_pending_sources();
         let pinned: std::collections::BTreeSet<_> = self
             .requests()
-            .filter(|r| self.reply_delivery_pending(r))
+            .filter(|r| {
+                self.reply_delivery_pending(r) || event_groups.contains(&r.group.unwrap_or(r.id))
+            })
             .map(|r| r.id)
             .collect();
-        self.drop_history_where(|_, _, at, id| {
-            at < cutoff && id.is_none_or(|id| !pinned.contains(&id))
+        self.drop_history_where(|_, _, at, id, prompt| {
+            at < cutoff
+                && id.is_none_or(|id| !pinned.contains(&id))
+                && !event_messages.contains(&prompt)
         })
     }
 
     /// Drops a deleted room's archived requests and notices.
     pub(super) fn drop_history_of_room(&mut self, room: RoomId) {
-        self.drop_history_where(|of, _, _, _| of == room);
+        self.drop_history_where(|of, _, _, _, _| of == room);
     }
 
     /// Drops a deleted agent's archived requests.
     pub(super) fn drop_history_of_agent(&mut self, agent: super::AgentId) {
-        self.drop_history_where(|_, of, _, _| of == Some(agent));
+        self.drop_history_where(|_, of, _, _, _| of == Some(agent));
     }
 
     /// Drops archived items for which `drop(room, request agent, settled at)` holds.
     fn drop_history_where(
         &mut self,
-        drop: impl Fn(RoomId, Option<super::AgentId>, u64, Option<RequestId>) -> bool,
+        drop: impl Fn(RoomId, Option<super::AgentId>, u64, Option<RequestId>, PromptId) -> bool,
     ) -> bool {
         let requests: Vec<RequestId> = self
             .history
@@ -252,6 +258,7 @@ impl super::BusState {
                     Some(request.agent_id),
                     settled_at_ms(request),
                     Some(request.id),
+                    request.prompt.id,
                 )
             })
             .map(|request| request.id)
@@ -263,7 +270,7 @@ impl super::BusState {
             .flat_map(|(room, notices)| {
                 notices
                     .values()
-                    .filter(|prompt| drop(*room, None, prompt.submitted_at_ms, None))
+                    .filter(|prompt| drop(*room, None, prompt.submitted_at_ms, None, prompt.id))
                     .map(|prompt| (*room, prompt.id))
             })
             .collect();

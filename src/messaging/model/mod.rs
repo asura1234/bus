@@ -13,6 +13,8 @@ mod settlement;
 mod state;
 mod status;
 mod types;
+mod worker_events;
+mod worker_notifications;
 #[cfg(test)]
 use requests::rejection_reason;
 

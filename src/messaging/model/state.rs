@@ -22,6 +22,8 @@ pub(crate) struct BusState {
     /// of older replies are durable without rewriting append-only history.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) reply_routes: BTreeMap<RequestId, super::reply_routing::ReplyRoute>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) worker_events: BTreeMap<String, super::worker_events::WorkerEvent>,
     /// Applied provider callbacks by id, with the launch whose spool they
     /// came from; a re-spooled duplicate is refused while its id is kept.
     /// `None` marks ids carried over from a version 1 file, launch unknown.
@@ -110,6 +112,7 @@ impl BusState {
             || self.requests != previous.requests
             || self.queues != previous.queues
             || self.reply_routes != previous.reply_routes
+            || self.worker_events != previous.worker_events
             || self.consumed_callbacks != previous.consumed_callbacks
             || self.consumed_provider_turns != previous.consumed_provider_turns
             || self.unrelated_provider_turns != previous.unrelated_provider_turns
@@ -147,6 +150,7 @@ impl BusState {
             requests: BTreeMap::new(),
             queues: BTreeMap::new(),
             reply_routes: BTreeMap::new(),
+            worker_events: BTreeMap::new(),
             consumed_callbacks: BTreeMap::new(),
             consumed_callback_ids: BTreeSet::new(),
             consumed_dialog_fingerprints: BTreeSet::new(),

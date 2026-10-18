@@ -6,6 +6,44 @@ struct Output {
     flushed: Arc<AtomicBool>,
     fail: bool,
 }
+
+#[test]
+fn printed_outcome_acknowledges_only_the_event_keys_in_flushed_output() {
+    for fail in [false, true] {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let mut output = Output {
+            bytes: vec![],
+            flushed: flushed.clone(),
+            fail,
+        };
+        let mut seen = Vec::new();
+        let args = ["wait", "--message", "19", "--as", "orch"].map(str::to_owned);
+        let _ = run_with_pause(
+            &args,
+            &mut output,
+            &mut |request, _| {
+                if request.method == "message.seen" {
+                    assert!(flushed.load(Ordering::SeqCst));
+                    seen.push(request.params.clone());
+                    return Ok(Response::success(&request.id, json!({"seen":true})));
+                }
+                let mut response = Response::failure(&request.id, "message_abandoned", "abandoned");
+                response.result = json!({"message_id":19,"complete":true,"requests":[
+                    {"request_id":20,"stage":"abandoned","event_acks":["outcome:20"],"reply_ack":false}
+                ]});
+                Ok(response)
+            },
+            |_| panic!("no polling necessary"),
+        );
+        assert_eq!(seen.len(), usize::from(!fail));
+        if !fail {
+            assert_eq!(
+                seen[0],
+                json!({"request":"20","as":"orch","events":["outcome:20"]})
+            );
+        }
+    }
+}
 impl Write for Output {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.bytes.extend_from_slice(bytes);
