@@ -368,3 +368,22 @@ fn shutdown_and_terminal_restore_wait_for_the_whole_active_transaction() {
         encoded(&mut BlitEncoder::new(), frame("A", 4), false)
     );
 }
+
+#[test]
+fn full_screen_frame_for_a_large_host_window_is_presented() {
+    // A 400x170 host window (small font on a large display) is 68,000 plain
+    // ASCII cells; the frame must still reach the terminal.
+    let (mut output, state, entered) = slow(false);
+    let mut large = frame("A", 400);
+    large.height = 170;
+    large.cells = vec![large.cells[0].clone(); 400 * 170];
+    let expected = encoded(&mut BlitEncoder::new(), large.clone(), false);
+    assert!(
+        output.frame(large, false, false).is_ok(),
+        "a plain full-screen frame must be accepted"
+    );
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    release(&state);
+    output.finish().unwrap();
+    assert_eq!(state.0.lock().unwrap().bytes, expected);
+}

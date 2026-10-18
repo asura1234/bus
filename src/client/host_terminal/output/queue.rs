@@ -117,8 +117,10 @@ impl Handle {
     pub(super) fn check_frame(&self, frame: &FrameData) -> io::Result<()> {
         // Also bound worst-case ANSI expansion before the encoder allocates:
         // each cell can change style/cursor/link, and can emit its full URI.
+        // Maximal SGR is 58 bytes, CUP 14, and OSC 8 close/open framing 14.
+        // Keep headroom without rejecting ordinary large host windows.
         let ansi_bound = frame.cells.iter().fold(256usize, |size, cell| {
-            size.saturating_add(512)
+            size.saturating_add(96)
                 .saturating_add(cell.symbol.len())
                 .saturating_add(
                     cell.hyperlink
