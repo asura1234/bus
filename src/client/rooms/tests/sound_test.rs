@@ -820,13 +820,13 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
         "{rows:#?}"
     );
     // Color blind, MASTER, All rooms, one room, compactions, sidebar width,
-    // then the overlay.
-    for _ in 0..7 {
+    // Feishu, freeze notifications, then the overlay.
+    for _ in 0..8 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    assert_eq!(ui.settings_field, 7);
+    assert_eq!(ui.settings_field, 8);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 7, "the overlay row is the last field");
+    assert_eq!(ui.settings_field, 8, "the overlay row is the last field");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(crate::client::perf::OVERLAY.is_on());
     let rows = settings_rows(&mut ui, 40);
@@ -841,7 +841,13 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
 
 #[test]
 fn freeze_notifications_default_on_and_toggle_without_changing_composer() {
-    let (mut ui, _, _) = sound_fixture(0);
+    let (mut ui, master, _) = sound_fixture(0);
+    ui.open_room(master);
+    ui.locals
+        .get_mut(&master)
+        .unwrap()
+        .text
+        .insert("keep draft");
     ui.action(render::Action::Settings);
     assert!(settings_rows(&mut ui, 40)
         .iter()
@@ -849,6 +855,7 @@ fn freeze_notifications_default_on_and_toggle_without_changing_composer() {
     ui.settings_field = ui.freeze_field();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(!ui.settings.freeze_notifications);
+    assert_eq!(ui.locals[&master].text.text, "keep draft");
     assert!(ui
         .pending
         .iter()

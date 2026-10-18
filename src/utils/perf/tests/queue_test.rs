@@ -5,11 +5,12 @@ async fn backlog_is_visible_while_consumer_does_nothing() {
     tx.try_send(10).unwrap();
     tx.try_reserve().unwrap().send(20);
     std::thread::sleep(std::time::Duration::from_millis(5));
-    let state = tx.state.lock().unwrap();
-    assert_eq!(state.times.len(), 2);
-    assert!(now_us() - state.times[0] >= 5000);
-    assert_eq!(state.high_water, 2);
-    drop(state);
+    {
+        let state = tx.state.lock().unwrap();
+        assert_eq!(state.times.len(), 2);
+        assert!(now_us() - state.times[0] >= 5000);
+        assert_eq!(state.high_water, 2);
+    }
     assert_eq!(rx.recv().await, Some(10));
     assert_eq!(rx.recv().await, Some(20));
     assert!(tx.state.lock().unwrap().times.is_empty());

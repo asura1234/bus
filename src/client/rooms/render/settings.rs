@@ -272,53 +272,57 @@ impl BusUi {
                 );
             }
             SoundSettingsLine::Sound { target, field } => {
-                let Some((label, enabled, sound)) = self.sound_row(*target) else {
-                    return;
-                };
-                let selected = self.settings_field == *field;
-                // The row's sound sits right of its checkbox:
-                // ‹ previous · name · next ›.
-                let name = display(&sound);
-                let name_width = (unicode_width::UnicodeWidthStr::width(name.as_str()) as u16)
-                    .min(rect.width.saturating_sub(16));
-                let choice_width = name_width + 4;
-                let choice_x = rect.x + rect.width.saturating_sub(choice_width);
-                view.row(
-                    Rect::new(
-                        rect.x,
-                        rect.y,
-                        rect.width.saturating_sub(choice_width + 1),
-                        1,
-                    ),
-                    format!(
-                        "[{}] {label}",
-                        match enabled {
-                            Some(true) => "x",
-                            Some(false) => " ",
-                            // All rooms while the rooms differ.
-                            None => "-",
-                        }
-                    ),
-                    Some(Action::ToggleSound(*target)),
-                    selected,
-                    false,
-                );
-                view.row(
-                    Rect::new(choice_x, rect.y, 2, 1),
-                    "‹",
-                    Some(Action::CycleSound(*target, false)),
-                    selected,
-                    true,
-                );
-                view.row(
-                    Rect::new(choice_x + 2, rect.y, name_width + 2, 1),
-                    format!("{name} ›"),
-                    Some(Action::CycleSound(*target, true)),
-                    selected,
-                    false,
-                );
+                self.sound_pref_row(view, rect, *field, *target)
             }
         }
+    }
+
+    fn sound_pref_row(&self, view: &mut View, rect: Rect, field: usize, target: SoundTarget) {
+        let Some((label, enabled, sound)) = self.sound_row(target) else {
+            return;
+        };
+        let selected = self.settings_field == field;
+        // The row's sound sits right of its checkbox:
+        // ‹ previous · name · next ›.
+        let name = display(&sound);
+        let name_width = (unicode_width::UnicodeWidthStr::width(name.as_str()) as u16)
+            .min(rect.width.saturating_sub(16));
+        let choice_width = name_width + 4;
+        let choice_x = rect.x + rect.width.saturating_sub(choice_width);
+        view.row(
+            Rect::new(
+                rect.x,
+                rect.y,
+                rect.width.saturating_sub(choice_width + 1),
+                1,
+            ),
+            format!(
+                "[{}] {label}",
+                match enabled {
+                    Some(true) => "x",
+                    Some(false) => " ",
+                    // All rooms while the rooms differ.
+                    None => "-",
+                }
+            ),
+            Some(Action::ToggleSound(target)),
+            selected,
+            false,
+        );
+        view.row(
+            Rect::new(choice_x, rect.y, 2, 1),
+            "‹",
+            Some(Action::CycleSound(target, false)),
+            selected,
+            true,
+        );
+        view.row(
+            Rect::new(choice_x + 2, rect.y, name_width + 2, 1),
+            format!("{name} ›"),
+            Some(Action::CycleSound(target, true)),
+            selected,
+            false,
+        );
     }
 
     fn feishu_settings_row(&self, view: &mut View, rect: Rect, field: usize) {
