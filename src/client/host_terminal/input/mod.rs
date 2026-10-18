@@ -19,7 +19,6 @@ use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::time::Duration;
-use tokio::sync::mpsc;
 
 use crate::client::events::ClientLoopEvent;
 
@@ -37,7 +36,7 @@ mod windows_vti;
 /// The main loop receives the raw bytes and forwards them as
 /// `ClientMessage::Input` to the server.
 pub fn stdin_reader_loop(
-    event_tx: mpsc::Sender<ClientLoopEvent>,
+    event_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
     host_cell_size_query_sent: bool,
@@ -74,7 +73,7 @@ pub fn stdin_reader_loop(
 
 #[cfg(unix)]
 fn unix_stdin_reader_loop(
-    event_tx: mpsc::Sender<ClientLoopEvent>,
+    event_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
     host_cell_size_query_sent: bool,
@@ -156,7 +155,7 @@ fn unix_stdin_reader_loop(
 fn flush_unix_idle_input(
     framer: &mut crate::protocol::keys::host::RawInputByteFramer,
     reader: &impl AsRawFd,
-    event_tx: &mpsc::Sender<ClientLoopEvent>,
+    event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
     pending_palette: &mut Vec<Vec<u8>>,
     host_palette_query_pending: &AtomicBool,
     host_palette_query_progress: &AtomicU16,
@@ -219,7 +218,7 @@ fn flush_unix_idle_input(
 #[cfg(unix)]
 fn send_unix_input_chunks(
     chunks: Vec<Vec<u8>>,
-    event_tx: &mpsc::Sender<ClientLoopEvent>,
+    event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
     pending_palette: &mut Vec<Vec<u8>>,
     host_palette_query_pending: &AtomicBool,
     host_palette_query_progress: &AtomicU16,
@@ -287,7 +286,7 @@ fn classify_unix_input(
 
 #[cfg(unix)]
 fn flush_unix_palette_input(
-    event_tx: &mpsc::Sender<ClientLoopEvent>,
+    event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
     pending_palette: &mut Vec<Vec<u8>>,
     host_palette_query_pending: &AtomicBool,
 ) -> bool {
@@ -317,7 +316,7 @@ fn idle_flush_timeout_ms(
 
 #[cfg(windows)]
 fn windows_stdin_reader_loop(
-    event_tx: mpsc::Sender<ClientLoopEvent>,
+    event_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
 ) {
     if !super::setup::windows_vti_input_backend_enabled() {
@@ -334,7 +333,7 @@ fn windows_stdin_reader_loop(
 
 #[cfg(windows)]
 fn windows_crossterm_reader_loop(
-    event_tx: mpsc::Sender<ClientLoopEvent>,
+    event_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
 ) {
     let mut framer = crate::protocol::keys::host::RawInputFramer::for_host_input();
@@ -479,7 +478,7 @@ fn windows_key_raw_bytes(
 #[cfg(windows)]
 fn send_windows_raw_events(
     events: Vec<crate::protocol::keys::host::RawInputEvent>,
-    event_tx: &mpsc::Sender<ClientLoopEvent>,
+    event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
 ) -> bool {
     let raw_event_count = events.len();
     let events = events
@@ -648,7 +647,7 @@ mod tests {
 
     #[test]
     fn palette_replies_are_forwarded_as_one_input_batch() {
-        let (tx, mut rx) = mpsc::channel(4);
+        let (tx, mut rx) = crate::utils::perf::queue::channel(4);
         let mut pending = Vec::new();
         let palette_query_pending = AtomicBool::new(true);
         let palette_query_progress = AtomicU16::new(0);
@@ -687,7 +686,7 @@ mod tests {
 
     #[test]
     fn final_palette_reply_releases_shutdown_drain() {
-        let (tx, _rx) = mpsc::channel(4);
+        let (tx, _rx) = crate::utils::perf::queue::channel(4);
         let mut pending = Vec::new();
         let palette_query_pending = AtomicBool::new(true);
         let palette_query_progress = AtomicU16::new(0);
@@ -708,7 +707,7 @@ mod tests {
 
     #[test]
     fn shutdown_palette_drain_survives_a_closed_event_receiver_until_final_reply() {
-        let (tx, rx) = mpsc::channel(4);
+        let (tx, rx) = crate::utils::perf::queue::channel(4);
         drop(rx);
         let mut pending = Vec::new();
         let palette_query_pending = AtomicBool::new(true);

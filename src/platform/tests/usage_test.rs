@@ -156,3 +156,48 @@ fn process_sampling_releases_host_port_send_rights() {
         "sampling must balance each mach_host_self send right"
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_machine_sample_reports_process_cpu_in_nanoseconds() {
+    fn own_cpu_ns() -> u64 {
+        let pid = std::process::id();
+        super::super::machine_usage::sample()
+            .unwrap()
+            .processes
+            .into_iter()
+            .find(|process| process.pid == pid)
+            .unwrap()
+            .cpu_ns
+    }
+    let (machine_before, usage_before) = (own_cpu_ns(), self_usage().unwrap().cpu_time);
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    let mut spin = 0_u64;
+    while std::time::Instant::now() < deadline {
+        spin = std::hint::black_box(spin.wrapping_add(1));
+    }
+    let machine_ns = own_cpu_ns() - machine_before;
+    let usage_ns = (self_usage().unwrap().cpu_time - usage_before).as_nanos() as u64;
+    assert!(
+        machine_ns >= usage_ns / 2 && machine_ns <= usage_ns.saturating_mul(2),
+        "machine sample cpu_ns grew {machine_ns} while this process used {usage_ns} ns of CPU"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_machine_sample_accounts_for_unreadable_processes() {
+    let sample = super::super::machine_usage::sample().unwrap();
+    assert!(sample.enumerated >= sample.processes.len());
+    assert_eq!(
+        sample.enumerated,
+        sample.processes.len() + sample.unavailable
+    );
+    assert!(
+        sample
+            .processes
+            .iter()
+            .any(|process| process.pid == std::process::id()),
+        "the readable-process scope must include this process"
+    );
+}

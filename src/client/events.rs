@@ -13,6 +13,7 @@ pub(super) enum ClientLoopEvent {
     TerminalUnavailable(io::Error),
     ServerMessage {
         message: Box<ServerMessage>,
+        payload_bytes: u32,
     },
     ServerDisconnected,
     Timer,

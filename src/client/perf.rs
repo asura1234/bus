@@ -163,3 +163,40 @@ pub(super) fn overlay_label(context: Option<ContextSample>, fps: Option<f64>) ->
 #[cfg(test)]
 #[path = "tests/perf_test.rs"]
 mod tests;
+
+/// Stable message tags for perf JSONL; no payload inspection is needed.
+pub(super) fn message_tag(
+    message: &crate::protocol::wire::ServerMessage,
+) -> (
+    crate::utils::perf::operation::Variant,
+    crate::utils::perf::operation::Phase,
+) {
+    use crate::protocol::wire::ServerMessage as M;
+    use crate::utils::perf::operation::{Phase as P, Variant as V};
+    match message {
+        M::Welcome { .. } => (V::Welcome, P::Control),
+        M::Terminal(_) => (V::Terminal, P::TerminalOutput),
+        M::Graphics { .. } => (V::Graphics, P::TerminalOutput),
+        M::ServerShutdown { .. } => (V::ServerShutdown, P::Control),
+        M::Notify { .. } => (V::Notify, P::Effect),
+        M::Clipboard { .. } => (V::Clipboard, P::Effect),
+        M::WindowTitle { .. } => (V::WindowTitle, P::Effect),
+        M::ReloadSoundConfig => (V::ReloadSoundConfig, P::Control),
+        M::MouseCapture { .. } => (V::MouseCapture, P::Effect),
+        M::TerminalBell { .. } => (V::TerminalBell, P::Effect),
+        M::GraphicsFile { .. } => (V::GraphicsFile, P::TerminalOutput),
+        M::GraphicsTransmissionRetired { .. } => {
+            (V::GraphicsTransmissionRetired, P::TerminalOutput)
+        }
+        M::ClientShellSnapshot(_) => (V::ClientShellSnapshot, P::Control),
+        M::PaneSurface(_) => (V::PaneSurface, P::Surface),
+        M::SemanticNotification(_) => (V::SemanticNotification, P::Effect),
+        M::ClientShellError { .. } => (V::ClientShellError, P::Control),
+        M::ClientShellKeyboardReportAll { .. } => (V::ClientShellKeyboardReportAll, P::Effect),
+        M::ClientShellEndpointResponseChunk { .. } => {
+            (V::ClientShellEndpointResponseChunk, P::Endpoint)
+        }
+        M::PaneSurfacePatch(_) => (V::PaneSurfacePatch, P::SurfacePatch),
+        M::EndpointControl { .. } => (V::EndpointControl, P::Endpoint),
+    }
+}

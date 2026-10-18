@@ -36,23 +36,31 @@ pub fn show_notification(title: &str, body: Option<&str>) -> io::Result<bool> {
         return Ok(false);
     };
 
+    let sequence = encode_notification(backend, title, body, std::env::var_os("TMUX").is_some());
+    let mut stdout = crate::client::host_terminal::output::stdout();
+    stdout.write_all(&sequence)?;
+    stdout.flush()?;
+    Ok(true)
+}
+
+/// Encode without writing, so background producers can use the same protocol owner.
+pub(crate) fn encode_notification(
+    backend: TerminalNotificationBackend,
+    title: &str,
+    body: Option<&str>,
+    tmux: bool,
+) -> Vec<u8> {
     let sequence = match backend {
         TerminalNotificationBackend::Ghostty
         | TerminalNotificationBackend::Iterm2
         | TerminalNotificationBackend::WezTerm => build_osc9_notification(title, body),
         TerminalNotificationBackend::Kitty => build_osc99_notification(title, body),
     };
-
-    let sequence = if std::env::var_os("TMUX").is_some() {
+    if tmux {
         wrap_tmux_passthrough(&sequence)
     } else {
         sequence
-    };
-
-    let mut stdout = crate::client::host_terminal::output::stdout();
-    stdout.write_all(&sequence)?;
-    stdout.flush()?;
-    Ok(true)
+    }
 }
 
 #[cfg(test)]

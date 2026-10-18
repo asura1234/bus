@@ -54,6 +54,7 @@ fn paused_terminal_keeps_processing_events() {
             driver
                 .handle_event(
                     ClientLoopEvent::ServerMessage {
+                        payload_bytes: 0, // Synthetic event: no wire frame was read.
                         message: Box::new(ServerMessage::ClientShellError {
                             message: "probe".into(),
                         }),

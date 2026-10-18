@@ -494,6 +494,13 @@ impl BusUi {
         }
     }
 
+    fn cycle_orchestrates_setting(&mut self) {
+        if let Some(Form::Agent { field, .. }) = &mut self.form {
+            *field = ORCHESTRATES_FIELD;
+        }
+        self.cycle_orchestrates(true);
+    }
+
     pub(super) fn action(&mut self, action: Action) {
         match action {
             Action::Delete(target) => self.start_delete(target),
@@ -512,12 +519,7 @@ impl BusUi {
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
             Action::NewAgent => self.open_agent_form(),
-            Action::Orchestrates => {
-                if let Some(Form::Agent { field, .. }) = &mut self.form {
-                    *field = ORCHESTRATES_FIELD;
-                }
-                self.cycle_orchestrates(true);
-            }
+            Action::Orchestrates => self.cycle_orchestrates_setting(),
             Action::Notes => {
                 if self.room_has_notes() {
                     if !self.notes_focus {
@@ -584,6 +586,9 @@ impl BusUi {
             }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::TogglePerfOverlay => self.toggle_perf_overlay(),
+            #[cfg(feature = "dev-tools")]
+            Action::SimulateFreeze => std::thread::sleep(std::time::Duration::from_millis(3500)),
+            Action::ToggleFreezeNotifications => self.toggle_freeze_notifications(),
             Action::ToggleFeishuNotifications => self.toggle_feishu_notifications(),
             Action::AdjustCompactionLimit(forward) => self.adjust_compaction_limit(forward),
             Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),

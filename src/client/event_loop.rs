@@ -71,9 +71,9 @@ pub(super) async fn run_client_loop(
         pixel_geometry_exact: initial_pixel_geometry_exact,
     };
     // Windows console draining remains independent of server-frame backpressure.
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+    let (event_tx, mut event_rx) = crate::utils::perf::queue::channel::<ClientLoopEvent>(256);
     #[cfg(windows)]
-    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+    let (stdin_tx, mut stdin_rx) = crate::utils::perf::queue::channel::<ClientLoopEvent>(256);
     #[cfg(unix)]
     let stdin_tx = event_tx.clone();
     let mut driver = start_client_loop(
@@ -121,6 +121,7 @@ pub(super) async fn run_client_loop(
             }
         };
 
+        super::freeze_alert::flush_pending().map_err(ClientError::HostOutput)?;
         let now = std::time::Instant::now();
         if matches!(event, ClientLoopEvent::Timer) {
             perf::TIMER_LAG.record(now.saturating_duration_since(timer_deadline));
@@ -165,8 +166,8 @@ fn start_client_loop(
     should_quit: &Arc<AtomicBool>,
     input_lifecycle: ClientInputLifecycle,
     config: ClientLoopConfig,
-    event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
-    stdin_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
+    event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
+    stdin_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
 ) -> Result<ClientLoopDriver, ClientError> {
     let pixel_geometry_fallback = config.pixel_geometry_fallback;
     let (state, stdin_quit) = initial_client_state(config, input_lifecycle, geometry)?;
@@ -263,8 +264,8 @@ fn start_host_readers(
     should_quit: &Arc<AtomicBool>,
     stdin_quit: Arc<AtomicBool>,
     pixel_geometry_fallback: bool,
-    event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
-    stdin_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
+    event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
+    stdin_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     host_mouse_capture_active: &Arc<AtomicBool>,
     reported_cell_size: &Arc<AtomicU64>,
     host_sgr_pixels_active: &Arc<AtomicBool>,
@@ -384,7 +385,13 @@ impl ClientLoopDriver {
                     pixel_geometry_exact,
                 )?;
             }
-            ClientLoopEvent::ServerMessage { message } => {
+            ClientLoopEvent::ServerMessage {
+                message,
+                payload_bytes,
+            } => {
+                let (variant, phase) = perf::message_tag(&message);
+                let _message =
+                    crate::utils::perf::operation::message_enter(variant, phase, payload_bytes);
                 if self.write_stream.is_connected() {
                     return server_messages::handle_server_message(
                         message,

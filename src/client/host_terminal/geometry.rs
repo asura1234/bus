@@ -129,7 +129,7 @@ pub(in crate::client) fn resize_report_required(
 /// swallow the first change.
 #[allow(clippy::too_many_arguments)] // The arguments are one immutable launch snapshot, not shared state.
 pub(in crate::client) fn resize_poll_loop(
-    resize_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
+    resize_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     initial_cols: u16,
     initial_rows: u16,
     initial_cell_width: u32,

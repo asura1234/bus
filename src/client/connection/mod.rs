@@ -21,7 +21,7 @@ use crate::protocol::wire::{self, ClientMessage};
 pub(in crate::client) fn start_endpoint_transport(
     stream: LocalStream,
     lifetime: impl Send + 'static,
-    event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
+    event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
     max_frame_size: usize,
 ) -> Result<bootstrap::NativeEndpointTransport, ClientError> {
     let reader = stream.try_clone().map_err(ClientError::ConnectionFailed)?;
@@ -41,7 +41,7 @@ pub(in crate::client) fn start_endpoint_transport(
 /// Reads complete frames while retaining partial-read progress across nonblocking polls.
 pub(in crate::client) fn server_reader_thread(
     mut stream: LocalStream,
-    event_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
+    event_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     max_frame_size: usize,
 ) {
@@ -53,17 +53,20 @@ pub(in crate::client) fn server_reader_thread(
     let mut stream = EndpointReader {
         stream: &mut stream,
         stopped: should_quit,
+        bytes_read: 0,
     };
     loop {
         if should_quit.load(Ordering::Acquire) {
             break;
         }
 
+        stream.bytes_read = 0;
         match wire::read_message(&mut stream, max_frame_size) {
             Ok(msg) => {
                 if event_tx
                     .blocking_send(ClientLoopEvent::ServerMessage {
                         message: Box::new(msg),
+                        payload_bytes: stream.bytes_read.saturating_sub(4),
                     })
                     .is_err()
                 {
@@ -89,6 +92,7 @@ pub(in crate::client) fn server_reader_thread(
 struct EndpointReader<'a> {
     stream: &'a mut LocalStream,
     stopped: &'a AtomicBool,
+    bytes_read: u32,
 }
 
 impl io::Read for EndpointReader<'_> {
@@ -98,7 +102,10 @@ impl io::Read for EndpointReader<'_> {
                 return Ok(0);
             }
             match crate::platform::ipc::poll_local_stream_read_count(self.stream, buffer)? {
-                crate::platform::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
+                crate::platform::ipc::LocalStreamReadCount::Data(count) => {
+                    self.bytes_read = self.bytes_read.saturating_add(count as u32);
+                    return Ok(count);
+                }
                 crate::platform::ipc::LocalStreamReadCount::Closed => return Ok(0),
                 crate::platform::ipc::LocalStreamReadCount::Pending => {
                     crate::platform::wait_client_stream_readable(self.stream)?;

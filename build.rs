@@ -73,6 +73,7 @@ fn env_bool(name: &str) -> Option<bool> {
 }
 
 fn main() {
+    record_build_identity();
     println!("cargo:rerun-if-changed=build.rs");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     println!("cargo:rerun-if-changed=vendor/libghostty-vt.vendor.json");
@@ -150,4 +151,51 @@ fn build_vendored_lib(mut command: Command, zig: &str) {
         status.success(),
         "zig build for vendored libghostty-vt failed: {status}"
     );
+}
+
+fn record_build_identity() {
+    let manifest = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from);
+    let git = |args: &[&str]| {
+        // A source archive inside another project must not claim its HEAD.
+        // Both ordinary checkouts and worktrees have their own .git entry.
+        let manifest = manifest
+            .as_ref()
+            .filter(|root| root.join(".git").exists())?;
+        Command::new("git")
+            .current_dir(manifest)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| String::from_utf8(out.stdout).ok())
+            .map(|s| s.trim().to_string())
+    };
+    let sha = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=BUS_BUILD_SHA={sha}");
+    println!(
+        "cargo:rustc-env=BUS_BUILD_PROFILE={}",
+        env::var("PROFILE").unwrap_or_else(|_| "unknown".into())
+    );
+    if let Some(path) = git(&["rev-parse", "--git-path", "HEAD"]) {
+        println!("cargo:rerun-if-changed={path}");
+    }
+    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        if let Some(path) = git(&["rev-parse", "--git-path", &branch]) {
+            // Packed refs have no loose file. Watch its existing parent so the
+            // next commit creating that file still invalidates the build.
+            let mut watched = PathBuf::from(path);
+            while !watched.exists() && watched.pop() {}
+            if watched.exists() {
+                println!("cargo:rerun-if-changed={}", watched.display());
+            }
+        }
+        if let Some(path) = git(&["rev-parse", "--git-path", "packed-refs"]) {
+            if PathBuf::from(&path).exists() {
+                println!("cargo:rerun-if-changed={path}");
+            }
+        }
+    }
 }

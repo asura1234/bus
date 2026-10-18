@@ -622,3 +622,23 @@ fn version_one_consumed_callback_remains_rejected_after_upgrade() {
     );
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn save_publishes_each_durable_phase_and_serialized_bytes() {
+    use crate::messaging::perf;
+    let dir = temp_dir("save-phase-metrics");
+    let path = dir.join("state.json");
+    let store = JsonStore::new(path.clone());
+    store.save(&BusState::new()).unwrap();
+    for timer in [
+        &perf::STORE_SERIALIZE,
+        &perf::STORE_WRITE,
+        &perf::STORE_FSYNC,
+        &perf::STORE_RENAME,
+        &perf::STORE_DIR_SYNC,
+    ] {
+        assert!(timer.take().is_some_and(|window| window.count > 0));
+    }
+    assert!(perf::STORE_BYTES.take().unwrap() >= fs::metadata(path).unwrap().len());
+    fs::remove_dir_all(dir).unwrap();
+}

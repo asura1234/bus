@@ -68,7 +68,8 @@ fn settings_compaction_limit_is_visible_and_editable_with_arrow_keys() {
     for _ in 0..10 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    // The compaction limit precedes sidebar width and Feishu notifications.
+    // The compaction limit precedes sidebar width, Feishu and freeze notifications.
+    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
@@ -116,10 +117,11 @@ fn settings_sidebar_width_is_visible_and_editable_with_arrow_keys() {
     assert!(screen.contains("SIDEBAR"), "{screen}");
     assert!(screen.contains("Sidebar width (20–60)"), "{screen}");
     assert!(screen.contains("‹ 28 ›"), "{screen}");
-    // Down stops on Feishu; the sidebar width precedes it.
+    // Down stops on freeze notifications; Feishu and sidebar width precede it.
     for _ in 0..10 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
+    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(ui.settings.sidebar_width, 29);
@@ -143,6 +145,7 @@ fn quick_stepper_presses_survive_the_echo_of_an_earlier_press() {
     for _ in 0..10 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
+    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     // Three presses before the coordinator answers the first.
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);

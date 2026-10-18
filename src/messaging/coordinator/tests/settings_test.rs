@@ -223,6 +223,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
         json!({
             "color_blind_mode": false,
             "feishu_notifications": false,
+            "freeze_notifications": true,
             "feishu_notifications_generation": 0,
             "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
@@ -270,4 +271,28 @@ fn sidebar_width_is_saved_clamped_and_announced_to_the_ui() {
         assert!(loaded.master_sound.enabled);
     }
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn freeze_notifications_are_saved_and_announced_to_the_ui() {
+    let root = root("freeze-notifications");
+    let mut worker = session(&root, "freeze-notifications");
+    let (events, receiver) = mpsc::channel();
+    assert!(
+        settings::load(&root.join("settings.json"))
+            .unwrap()
+            .freeze_notifications
+    );
+    for on in [false, true] {
+        worker
+            .command(BusCommand::SetFreezeNotifications(on), &events)
+            .unwrap();
+        assert!(
+            matches!(receiver.recv().unwrap(), BusEvent::SettingsChanged(settings) if settings.freeze_notifications == on)
+        );
+        let saved = settings::load(&root.join("settings.json")).unwrap();
+        assert_eq!(saved.freeze_notifications, on);
+        assert!(saved.master_sound.enabled);
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }

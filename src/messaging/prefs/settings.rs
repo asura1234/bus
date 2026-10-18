@@ -28,6 +28,7 @@ pub(crate) const MAX_SIDEBAR_WIDTH: u16 = 60;
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
     pub(crate) feishu_notifications: bool,
+    pub(crate) freeze_notifications: bool,
     /// Internal enable generation, so sessions offline during off/on skip old history.
     pub(crate) feishu_notifications_generation: u64,
     /// MASTER's sound in every session; it rings by default.
@@ -53,6 +54,7 @@ impl Default for BusSettings {
         Self {
             color_blind_mode: false,
             feishu_notifications: false,
+            freeze_notifications: true,
             feishu_notifications_generation: 0,
             master_sound: SoundPref {
                 enabled: true,

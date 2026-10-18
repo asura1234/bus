@@ -529,6 +529,7 @@ impl JsonStore {
         let journal_seq = self.journal_state().seq;
         // Compact: the file is rewritten whole on every save, and every
         // reader parses it with serde, which ignores whitespace.
+        let serialize = crate::messaging::perf::STORE_SERIALIZE.start_quiet();
         let bytes = serde_json::to_vec(&StoredDocumentRef {
             version: STORE_VERSION,
             state,
@@ -538,10 +539,27 @@ impl JsonStore {
             path: self.path.clone(),
             source,
         })?;
-        crate::platform::fs::atomic_write_detailed_with_checkpoint(&self.path, &bytes, |stage| {
-            self.injected_failure(stage)
-        })
-        .map_err(|error| StoreError::SaveIo {
+        drop(serialize);
+        crate::messaging::perf::STORE_BYTES.add(bytes.len() as u64);
+        let mut phase_timer = None;
+        let result = crate::platform::fs::atomic_write_detailed_with_checkpoint(
+            &self.path,
+            &bytes,
+            |stage| {
+                use crate::messaging::perf;
+                use crate::platform::fs::AtomicWriteStage as S;
+                phase_timer = match stage {
+                    S::TempWrite => Some(perf::STORE_WRITE.start_quiet()),
+                    S::TempSync => Some(perf::STORE_FSYNC.start_quiet()),
+                    S::Replace => Some(perf::STORE_RENAME.start_quiet()),
+                    S::ParentSync => Some(perf::STORE_DIR_SYNC.start_quiet()),
+                    _ => None,
+                };
+                self.injected_failure(stage)
+            },
+        );
+        drop(phase_timer);
+        result.map_err(|error| StoreError::SaveIo {
             path: error.path,
             stage: error.stage,
             bytes: bytes.len(),

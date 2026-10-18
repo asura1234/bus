@@ -233,6 +233,7 @@ pub(crate) use fs::{
 };
 
 pub(crate) mod ipc;
+pub(crate) mod machine_usage;
 pub(crate) mod sound;
 pub(crate) mod usage;
 
