@@ -353,7 +353,9 @@ reply and no-reply outcome components wait for the combined output.
 `wait --message ID --as ORCH` opts into the same behavior. A plain `wait` or
 `message status` cannot suppress delivery. After stdout flush succeeds, the
 waiter marks only printed completed replies and the exact printed outcome
-`event_acks` keys seen. Status also includes those outcomes' text in `events`.
+`event_acks` keys seen. Status `events` includes all retained group summaries,
+including finals, exits and already-seen events; only unseen own outcomes are
+acknowledgeable through `event_acks`.
 It cannot hide an event that appeared after its output, an autonomous result,
 idle, an exit, or another message's events. Seeing a shared reply covers its group.
 A killed waiter stops renewing its lease, so unseen components are routed.
