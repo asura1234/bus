@@ -37,8 +37,8 @@ struct Message<'a> {
 }
 
 impl DeveloperNotifications {
-    pub(super) fn configure(&mut self, enabled: bool, master_visible: bool, focus: Option<bool>) {
-        self.allowed = enabled && !(master_visible && focus != Some(false));
+    pub(super) fn configure(&mut self, enabled: bool) {
+        self.allowed = enabled;
         if !self.allowed {
             self.pending = None;
         }
@@ -56,13 +56,16 @@ impl DeveloperNotifications {
             .collect();
         added.sort_by_key(|(key, message)| (message.at_ms, *key));
         for (_, message) in added {
+            let Some(action) = waiting_action(message.text) else {
+                continue;
+            };
             if let Some(burst) = self.pending.as_mut() {
                 burst.count = burst.count.saturating_add(1);
             } else {
                 self.pending = Some(Burst {
                     deadline: now + BURST_WINDOW,
                     sender: plain_preview(message.sender, usize::MAX),
-                    preview: plain_preview(message.text, 100),
+                    preview: plain_preview(action, 100),
                     count: 1,
                 });
             }
@@ -78,10 +81,11 @@ impl DeveloperNotifications {
             return None;
         }
         let burst = self.pending.take()?;
+        let text = format!("{} is waiting on you: {}", burst.sender, burst.preview);
         Some(if burst.count == 1 {
-            format!("{}: {}", burst.sender, burst.preview)
+            text
         } else {
-            format!("{} and {} more", burst.sender, burst.count - 1)
+            format!("{} and {} more", text, burst.count - 1)
         })
     }
 }
@@ -154,6 +158,24 @@ fn visible_text<'a>(state: &BusState, room: RoomId, author: &Author, text: &'a s
     }
 }
 
+/// ASCII case folding preserves byte offsets into the original Unicode text.
+/// The phrase also covers "still waiting on you", but not partial words.
+fn waiting_action(text: &str) -> Option<&str> {
+    const TAG: &str = "[waiting-on-you]";
+    const PHRASE: &str = "waiting on you";
+    let folded = text.to_ascii_lowercase();
+    let tag_end = folded.find(TAG).map(|start| start + TAG.len());
+    let phrase_end = folded.match_indices(PHRASE).find_map(|(start, _)| {
+        let end = start + PHRASE.len();
+        let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
+        (!text[..start].chars().next_back().is_some_and(is_word)
+            && !text[end..].chars().next().is_some_and(is_word))
+        .then_some(end)
+    });
+    let end = [tag_end, phrase_end].into_iter().flatten().min()?;
+    Some(text[end..].trim_start_matches(|ch: char| ch.is_whitespace() || ch == ':'))
+}
+
 /// Literal text only: never include another line, terminal controls, or the
 /// rest of a long message. Character limits are Unicode-safe.
 fn plain_preview(text: &str, limit: usize) -> String {
@@ -190,20 +212,8 @@ impl BusUi {
     }
 
     pub(super) fn configure_developer_notifications(&mut self) {
-        let master_visible = self
-            .snapshot
-            .state
-            .master_room()
-            .is_some_and(|master| self.room == Some(master.id))
-            && self.terminal.is_none()
-            && self.form.is_none()
-            && self.deletion.is_none()
-            && self.alert.is_none();
-        self.developer_notifications.configure(
-            self.settings.developer_notifications,
-            master_visible,
-            self.outer_focused,
-        );
+        self.developer_notifications
+            .configure(self.settings.developer_notifications);
     }
 
     pub(super) fn take_developer_notification(&mut self, now: Instant) -> Option<String> {

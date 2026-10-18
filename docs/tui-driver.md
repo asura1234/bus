@@ -96,9 +96,12 @@ on macOS only: on Linux and Windows Bus uses other programs the recorder does
 not stand in for, so `start` refuses there.
 
 Messages addressed to the developer in MASTER emit a terminal notification
-by default when MASTER is not visible, or the terminal is known to be unfocused.
+only for `[waiting-on-you]` or its case-insensitive whole-phrase equivalents
+`waiting on you` / `still waiting on you`, regardless of visible room, agent
+terminal or focus.
 The separate Developer message notifications setting disables them. A two-second
-window combines bursts; only the sender and a short first-line preview are shown.
+window combines bursts; the sender and the action following the tag are shown as
+`name is waiting on you: action`.
 See [developer notifications](developer-notifications.md). Recovered freezes use
 the separate Freeze recovery notifications setting.
 

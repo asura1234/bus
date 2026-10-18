@@ -33,6 +33,13 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   untagged. Workers report through their orchestrator and never use this tag.
   Bus renders it as a badge and, when enabled, forwards it to the developer's
   own Feishu account.
+- **Mark requests for the developer with `[waiting-on-you]`.** When you need
+  something from the developer, put `[waiting-on-you]` before it in your MASTER
+  message; Bus notifies the developer only for these. State the action on the
+  same line or the next line or bullet. This notifies regardless of the room or
+  agent terminal open, or terminal focus, when Developer message notifications
+  is enabled. Routine progress stays untagged. *Why:* an explicit request makes
+  it clear when the developer needs to act.
 - **Write your chat messages in Markdown.** Every message you post, in MASTER
   or a room, uses Markdown formatting. *Why:* structure and links make a
   message faster for the developer to read and act on.
