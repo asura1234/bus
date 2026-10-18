@@ -129,3 +129,27 @@ fn feishu_send_failure_invokes_once_and_does_not_expose_cli_payload() {
     assert_eq!(sends.len(), 1);
     assert_eq!(sends[0]["args"][5], sends[0]["self"]);
 }
+
+#[test]
+fn feishu_send_timeout_invokes_once_and_preserves_self_only_bus_attribution() {
+    let fixture = Fixture::new();
+    let client = Client::at(fixture.root.join("lark-cli"), Duration::from_secs(1));
+    let user = client.authenticate(Cancellation::default()).unwrap();
+    fixture.mode("send-delay");
+    let started = std::time::Instant::now();
+    let error = user.send(&message()).unwrap_err();
+    assert!(error.message.contains("timed out"), "{error:?}");
+    assert!(
+        !error.disable,
+        "a send timeout does not invalidate the verified identity"
+    );
+    assert!(started.elapsed() < Duration::from_secs(4));
+    let calls = fixture.calls();
+    let sends: Vec<_> = calls
+        .iter()
+        .filter(|call| call["args"][0] == "im")
+        .collect();
+    assert_eq!(sends.len(), 1, "a timed-out invocation is never retried");
+    assert_eq!(sends[0]["args"][5], sends[0]["self"]);
+    assert!(sends[0]["body"].as_str().unwrap().starts_with("[Bus]"));
+}

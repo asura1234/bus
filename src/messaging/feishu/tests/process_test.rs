@@ -123,3 +123,33 @@ fn feishu_process_cancel_before_start_never_invokes_the_cli() {
     assert!(error.contains("disabled"), "{error}");
     assert!(!fixture.0.join("called").exists());
 }
+
+#[test]
+fn feishu_process_cancellation_terminates_running_wrapper_and_grandchild() {
+    let fixture = Fixture::new();
+    let mut process = fixture.hanging_wrapper();
+    process.timeout = Duration::from_secs(10);
+    let cancel = Cancellation::default();
+    let job_cancel = cancel.clone();
+    let job = std::thread::spawn(move || process.run(&[], "", &job_cancel));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !fixture.0.join("grandchild.pid").exists() {
+        assert!(Instant::now() < deadline, "wrapper did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let started = Instant::now();
+    cancel.cancel();
+    let error = job.join().unwrap().unwrap_err();
+    assert!(error.contains("disabled"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let pid = std::fs::read_to_string(fixture.0.join("grandchild.pid")).unwrap();
+    let output = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", pid.trim()])
+        .output()
+        .unwrap();
+    let state = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        state.trim().is_empty() || state.trim().starts_with('Z'),
+        "grandchild still running after cancellation: {state}"
+    );
+}
