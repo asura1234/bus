@@ -5,4 +5,5 @@ pub(super) mod input;
 pub(crate) mod kitty;
 pub(crate) mod modes;
 pub(crate) mod notify;
+pub(super) mod output;
 pub(super) mod setup;

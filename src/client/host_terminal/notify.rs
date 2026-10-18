@@ -49,7 +49,7 @@ pub fn show_notification(title: &str, body: Option<&str>) -> io::Result<bool> {
         sequence
     };
 
-    let mut stdout = io::stdout();
+    let mut stdout = crate::client::host_terminal::output::stdout();
     stdout.write_all(&sequence)?;
     stdout.flush()?;
     Ok(true)

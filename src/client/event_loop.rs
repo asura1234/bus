@@ -10,10 +10,7 @@ use crate::client::host_terminal::geometry::{
 };
 use crate::{
     platform::ipc::LocalStream,
-    protocol::{
-        ansi as render_ansi,
-        wire::{ClientMessage, MAX_GRAPHICS_FRAME_SIZE},
-    },
+    protocol::wire::{ClientMessage, MAX_GRAPHICS_FRAME_SIZE},
 };
 use std::{
     io::{self, Write as _},
@@ -88,6 +85,7 @@ pub(super) async fn run_client_loop(
         &event_tx,
         stdin_tx,
     )?;
+    let _output_route = driver.state.output.route();
     let mut client_timer = timer::ClientLoopTimer::new();
     #[cfg(windows)]
     let mut stdin_open = true;
@@ -135,7 +133,7 @@ pub(super) async fn run_client_loop(
     }
     // Clean exit (Ctrl+Q). Send Detach before closing.
     let _ = write_to_server(&mut driver.write_stream, &ClientMessage::Detach);
-    let _ = io::stdout().flush();
+    let _ = crate::client::host_terminal::output::stdout().flush();
     Ok(())
 }
 
@@ -227,7 +225,8 @@ fn initial_client_state(
     let _ = config.mouse_scroll_lines;
     let draw_host_cursor = should_draw_host_cursor(config.host_cursor);
     let mut state = ClientState {
-        blit_encoder: render_ansi::BlitEncoder::new(),
+        output: crate::client::host_terminal::output::TerminalOutput::start()
+            .map_err(ClientError::ConnectionFailed)?,
         mouse_capture_active: config.mouse_capture_active,
         endpoint_mouse_capture_requested: false,
         endpoint_sgr_pixels_requested: false,
@@ -345,6 +344,9 @@ impl ClientLoopDriver {
         now: std::time::Instant,
         client_timer: &mut timer::ClientLoopTimer,
     ) -> Result<bool, ClientError> {
+        self.state
+            .check_output()
+            .map_err(ClientError::ConnectionFailed)?;
         match event {
             #[cfg(unix)]
             ClientLoopEvent::StdinInput(data) => {
@@ -464,7 +466,7 @@ impl ClientLoopDriver {
         // Resizing invalidates both the host-side blit baseline and pane hit geometry.
         // The next frame clears the screen even at an unchanged size: the host
         // may show cells from the resize that no frame drew.
-        state.blit_encoder.invalidate();
+        state.output.invalidate();
         state.request_repaint();
         if let Some(shell) = state.shell.as_mut() {
             shell.set_graphics_cell_size(cell_width_px, cell_height_px);
@@ -521,6 +523,11 @@ impl ClientLoopDriver {
         let expired = self.endpoint_commands.expire(now);
         self.apply_shell_input(|shell| {
             let mut outcome = shell.tick_selection_autoscroll(now);
+            outcome.repaint |= shell.compose_deferred;
+            if shell.editor_pending && !crate::client::host_terminal::output::busy() {
+                shell.editor_pending = false;
+                outcome.actions.push(shell::ClientShellAction::EditComposer);
+            }
             outcome.repaint |= shell.tick_bus(&mut outcome);
             outcome.detach |= shell.bus_exit_ready();
             if let Some(expired) = expired {

@@ -1,7 +1,6 @@
-use crate::client::host_terminal::frame_output::write_encoded_frame_with_graphics;
 use crate::protocol::wire::FrameData;
 use std::{
-    io::{self, Write as _},
+    io,
     sync::{
         atomic::{AtomicBool, AtomicU16},
         Arc,
@@ -11,8 +10,7 @@ use tracing::warn;
 
 /// State tracking for the thin client.
 pub(super) struct ClientState {
-    /// Stateful semantic-frame encoder used when the server sends FrameData.
-    pub(super) blit_encoder: crate::protocol::ansi::BlitEncoder,
+    pub(super) output: super::host_terminal::output::TerminalOutput,
     pub(super) mouse_capture_active: bool,
     pub(super) endpoint_mouse_capture_requested: bool,
     pub(super) endpoint_sgr_pixels_requested: bool,
@@ -41,59 +39,40 @@ impl ClientState {
         self.repaint_pending = true;
     }
 
-    pub(super) fn present_graphics(&mut self, graphics: &[u8]) {
-        if graphics.is_empty() || !self.kitty_graphics_enabled {
-            return;
+    pub(super) fn check_output(&mut self) -> io::Result<()> {
+        match self.output.feedback() {
+            Ok(Some(cleared)) => {
+                if let Some(shell) = self.shell.as_mut() {
+                    shell.bus_frame_presented(cleared);
+                }
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => {
+                self.request_repaint();
+                Err(error)
+            }
         }
-        let mut stdout = io::stdout();
-        let _ = write_encoded_frame_with_graphics(&mut stdout, &[], graphics);
-        let _ = stdout.flush();
+    }
+
+    pub(super) fn present_graphics(&mut self, graphics: &[u8]) {
+        if !graphics.is_empty() && self.kitty_graphics_enabled {
+            let _ = self.output.graphics(graphics);
+        }
     }
 
     pub(super) fn present_surface_patch(
         &mut self,
         patch: crate::client::compositor::ClientComposedSurfacePatch,
     ) -> io::Result<bool> {
-        if self.repaint_pending {
-            crate::utils::render::prof::event("client_surface_patch.fallback.repaint");
+        if self.repaint_pending || super::host_terminal::output::busy() {
             return Ok(false);
         }
-        let rows = if self.draw_host_cursor {
-            let Some(rows) = self
-                .blit_encoder
-                .patch_rows_with_drawn_cursor(&patch.rows, patch.cursor.as_ref())
-            else {
-                crate::utils::render::prof::event("client_surface_patch.fallback.drawn_cursor");
-                return Ok(false);
-            };
-            rows
-        } else {
-            patch.rows
-        };
-        let encode_started = crate::utils::render::prof::timer();
-        let Some(encoded) =
-            self.blit_encoder
-                .encode_patch(&rows, patch.cursor.clone(), self.draw_host_cursor)
-        else {
-            crate::utils::render::prof::event("client_surface_patch.fallback.encode");
-            return Ok(false);
-        };
-        crate::utils::render::prof::duration_since("client_surface_patch.encode", encode_started);
-        let write_started = crate::utils::render::prof::timer();
-        let mut stdout = io::stdout();
-        stdout.write_all(&encoded.bytes)?;
-        stdout.flush()?;
-        crate::utils::render::prof::duration_since("client_surface_patch.write", write_started);
-        let committed = self.blit_encoder.commit_patch(&rows, patch.cursor, encoded);
-        crate::utils::render::prof::event(if committed {
-            "client_surface_patch.success"
-        } else {
-            "client_surface_patch.fallback.commit"
-        });
-        Ok(committed)
+        self.output
+            .patch(&patch.rows, patch.cursor, self.draw_host_cursor)
     }
 
-    pub(super) fn present_frame(&mut self, frame_data: FrameData) {
+    pub(super) fn present_frame(&mut self, mut frame_data: FrameData) {
         super::perf::UI_LOOP.relabel("present");
         let _present = super::perf::PRESENT.start();
         super::perf::OVERLAY.note_frame();
@@ -104,42 +83,22 @@ impl ClientState {
         {
             self.request_repaint();
         }
-        let frame_data = if self.draw_host_cursor {
-            crate::protocol::ansi::frame_with_drawn_cursor(frame_data)
-        } else {
-            frame_data
-        };
-        let cleared = self.blit_encoder.clears_before(&frame_data);
-        let encoded = if self.draw_host_cursor {
-            self.blit_encoder
-                .encode_with_suppressed_visible_cursor(&frame_data, self.repaint_pending)
-        } else {
-            self.blit_encoder.encode(&frame_data, self.repaint_pending)
-        };
-        let mut stdout = io::stdout();
-        let graphics = if self.kitty_graphics_enabled {
-            frame_data.graphics.as_slice()
-        } else {
-            &[]
-        };
-        if self.repaint_pending && graphics.is_empty() {
+        if !self.kitty_graphics_enabled {
+            frame_data.graphics.clear();
+        }
+        if self.repaint_pending && frame_data.graphics.is_empty() {
             if let Some(shell) = self.shell.as_mut() {
                 shell.bus_graphics_erased();
             }
         }
-        let written = write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics)
-            .and_then(|()| stdout.flush());
-        if let Err(error) = written {
-            // The host never accepted this frame, so it must not become the diff
-            // baseline; keep the full repaint for the next frame.
-            warn!(%error, "failed to present frame");
+        if let Err(error) =
+            self.output
+                .frame(frame_data, self.repaint_pending, self.draw_host_cursor)
+        {
+            warn!(%error, "failed to queue frame");
             self.request_repaint();
-            return;
+        } else {
+            self.repaint_pending = false;
         }
-        if let Some(shell) = self.shell.as_mut() {
-            shell.bus_frame_presented(cleared);
-        }
-        self.blit_encoder.commit(frame_data, encoded);
-        self.repaint_pending = false;
     }
 }

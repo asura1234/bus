@@ -179,7 +179,7 @@ pub(in crate::client) fn resize_poll_loop(
 
 #[cfg(not(windows))]
 pub(in crate::client) fn query_host_terminal_appearance() {
-    let _ = write_host_terminal_appearance_query(io::stdout());
+    let _ = write_host_terminal_appearance_query(crate::client::host_terminal::output::stdout());
 }
 
 #[cfg(any(not(windows), test))]
@@ -195,7 +195,7 @@ pub(in crate::client) fn query_host_terminal_theme(
     host_palette_query_progress: &AtomicU16,
 ) {
     let _ = write_host_terminal_theme_query(
-        io::stdout(),
+        crate::client::host_terminal::output::stdout(),
         host_palette_query_pending,
         host_palette_query_progress,
     );
@@ -221,7 +221,7 @@ pub(in crate::client) fn write_host_terminal_theme_query(
 const HOST_CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
 
 pub(in crate::client) fn query_host_cell_size() {
-    let _ = write_host_cell_size_query(io::stdout());
+    let _ = write_host_cell_size_query(crate::client::host_terminal::output::stdout());
 }
 
 pub(in crate::client) fn should_query_host_cell_size() -> bool {

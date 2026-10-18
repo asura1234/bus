@@ -31,6 +31,13 @@ impl ClientShellState {
     }
 
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
+        if crate::client::host_terminal::output::busy() {
+            // Do not manufacture incremental graphics transactions while the
+            // terminal is blocked. The next idle tick composes the newest model.
+            self.compose_deferred = true;
+            return None;
+        }
+        self.compose_deferred = false;
         let mut frame = self.compose_frame(cols, rows)?;
         crate::client::perf::OVERLAY.stamp(&mut frame);
         Some(frame)
