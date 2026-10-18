@@ -333,10 +333,12 @@ notices. It delivers these worker events to the room orchestrator's terminal:
 - A request to a work-room worker that stalls or ends without a reply, with its
   reason, including `abandoned`, `reply_not_captured` and provider errors.
 - Confirmed process exit with an open orchestrator request, or an idle worker
-  whose submitted orchestrator request remains open after callback settlement.
+  with an open orchestrator request after callback settlement.
   Normal idle followed by a reply or no-reply settlement is folded into that
-  outcome. Dialogs, initial queued idle and known shell holds do not emit idle
-  warnings; a non-shell background hold can report idle once.
+  outcome. Background holds, including shells, stay open and report idle.
+  Queued or uncertain requests qualify on a genuine later idle edge; dialogs
+  and an initially idle queue do not. Resumed work can yield a new idle/stall
+  event, while unchanged polls or restarts never replay that event.
 
 Each notification names the worker, event and message/request reference. Bus
 collects same-worker events for two seconds and combines them in one short
@@ -347,13 +349,13 @@ No room monitoring, self-timer or surviving waiter is required. Blocked,
 Resolved and failed-startup notices keep their existing behavior.
 
 An author's `send --async --as ORCH` renews a three-second waiter lease, so its
-reply and idle/no-reply outcome components wait for the combined output.
+reply and no-reply outcome components wait for the combined output.
 `wait --message ID --as ORCH` opts into the same behavior. A plain `wait` or
 `message status` cannot suppress delivery. After stdout flush succeeds, the
 waiter marks only printed completed replies and the exact printed outcome
 `event_acks` keys seen. Status also includes those outcomes' text in `events`.
 It cannot hide an event that appeared after its output, an autonomous result,
-an exit, or another message's events. Seeing a shared reply covers its group.
+idle, an exit, or another message's events. Seeing a shared reply covers its group.
 A killed waiter stops renewing its lease, so unseen components are routed.
 
 Event decisions and queued batches are saved together before native submission.

@@ -55,8 +55,9 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   Resolved and failed-startup notices are unchanged.
   A live author waiter defers its own reply/outcome components and marks only
   flushed replies and exact printed event keys seen; use `wait --message ID
-  --as YOUR_NAME` to resume that behavior. Other-message, exit and autonomous
-  events remain independent. Seeing one part of a queued batch preserves its
+  --as YOUR_NAME` to resume that behavior. Idle (including background shells), other-message, exit and autonomous
+  events remain independent. New work followed by idle/stall is a new event;
+  unchanged polls and restarts never replay it. Seeing one part of a queued batch preserves its
   other events. Shared-turn replies route once per group. A late stdout/native
   submission race can expose both outputs; submitted events are never replayed.
   The first upgrade recovers retained older replies/outcomes once.
