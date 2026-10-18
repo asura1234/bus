@@ -157,7 +157,7 @@ fn startup_timeout_is_bounded_for_every_provider_even_with_a_live_pending_termin
             .started_at_ms;
         let (events, _) = mpsc::channel();
         worker
-            .cleanup_failed_startups(&[info.clone()], &events, start + 29_999)
+            .cleanup_failed_startups(std::slice::from_ref(&info), &events, start + 29_999)
             .unwrap();
         assert!(worker.state.agent(agent).is_some());
         worker

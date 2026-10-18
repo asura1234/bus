@@ -400,8 +400,7 @@ impl Worker {
                 timeout_ms: None,
             }));
         match started {
-            Ok(ResponseResult::AgentStarted { argv, .. }) => {
-                self.watch_agent_startup(id, argv)?;
+            Ok(ResponseResult::AgentStarted { .. }) => {
                 let _ = events.send(BusEvent::AgentAdded(id));
                 let Some(session) = identity.session_id else {
                     return Ok(());
