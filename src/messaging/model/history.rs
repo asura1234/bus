@@ -207,7 +207,7 @@ impl super::BusState {
     }
 
     fn drop_history_before(&mut self, cutoff: u64) -> bool {
-        // A queued wake still owns its original reply, including the full text
+        // A pending or queued wake still owns its original reply, including the full text
         // behind a long-reply pointer. Ordinary history retention must not erase
         // it while the orchestrator's terminal remains unavailable.
         let pinned: std::collections::BTreeSet<_> = self

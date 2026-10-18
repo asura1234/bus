@@ -31,6 +31,7 @@ pub(super) struct Worker {
     /// Author waiters renew these leases without acknowledging any reply.
     /// A dead waiter cannot hold routing across restart or lease expiry.
     pub(super) reply_waiters: BTreeMap<super::PromptId, std::time::Instant>,
+    pub(super) reply_delivery_retries: BTreeMap<RequestId, super::delivery::ReplyDeliveryRetry>,
     /// When each agent's provider last failed to show a pasted prompt, which
     /// the server then withdrew; the retry waits `PROMPT_NOT_SHOWN_RETRY`.
     pub(super) withdrawn_at: BTreeMap<AgentId, std::time::Instant>,
@@ -114,6 +115,7 @@ impl Worker {
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
             reply_waiters: BTreeMap::new(),
+            reply_delivery_retries: BTreeMap::new(),
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
             dev_enabled: false,

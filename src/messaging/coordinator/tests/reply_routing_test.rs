@@ -531,3 +531,215 @@ fn reply_routing_archived_replies_and_unicode_pointers_are_recovered_once() {
     assert!(text.contains("bus message status"));
     assert!(text.chars().count() < 4_500);
 }
+
+#[test]
+fn reply_routing_seen_reply_is_not_rerouted_after_archive_and_restart() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "build this");
+    f.finish(source, "Printed and acknowledged");
+    assert!(
+        f.call(
+            "message.seen",
+            json!({"request":source.0.to_string(),"as":f.orch.0.to_string()})
+        )
+        .ok
+    );
+    f.worker
+        .archive_history(io::now_ms() + crate::messaging::model::ARCHIVE_AFTER_MS)
+        .unwrap();
+    f.reopen();
+    assert!(
+        f.worker.state.request(source).is_some(),
+        "the archived source must still be retained"
+    );
+    f.worker.submit_ready().unwrap();
+    assert!(f.notices().is_empty());
+    assert!(f.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reply_routing_developer_lead_group_routes_its_orchestrator_member_once() {
+    for acknowledge in [false, true] {
+        let mut f = Fixture::new();
+        let lead = f.send(Author::Developer, "developer asks");
+        let member = f.send(Author::Agent(f.orch), "orchestrator asks");
+        let mut state = f.worker.state.clone();
+        state.coalesce_queue(lead).unwrap();
+        f.worker.save(state).unwrap();
+        f.finish(lead, "One shared reply");
+        f.finish(member, "One shared reply");
+        if acknowledge {
+            assert!(
+                f.call(
+                    "message.seen",
+                    json!({"request":member.0.to_string(),"as":f.orch.0.to_string()})
+                )
+                .ok
+            );
+        }
+        f.worker.submit_ready().unwrap();
+        f.worker.submit_ready().unwrap();
+        assert_eq!(f.notices().len(), usize::from(!acknowledge));
+        if !acknowledge {
+            let message = f.worker.state.request(member).unwrap().prompt.id;
+            assert!(f.notices()[0]
+                .prompt
+                .text
+                .contains(&format!("Reply to message {} ", message.0)));
+        }
+    }
+}
+
+#[test]
+fn reply_routing_preserves_an_old_recovered_reply_before_first_routing() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "build during downtime");
+    let mut state = f.worker.state.clone();
+    // Final callbacks carry their original event time. The tick archives
+    // recovered callbacks before its delivery reconciliation runs.
+    state.finish_for_test(
+        source,
+        "Recovered from the spool",
+        io::now_ms() - 8 * 24 * 60 * 60_000,
+    );
+    f.worker.save(state).unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(
+        f.notices().len(),
+        1,
+        "an old spooled reply still owes a wake"
+    );
+    assert!(f.calls.lock().unwrap()[0].contains("Recovered from the spool"));
+    assert!(f.worker.state.request(source).is_some());
+}
+
+struct NeverShown(Arc<Mutex<Vec<String>>>);
+impl Transport for NeverShown {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentPromptIfIdle(p) => self.0.lock().unwrap().push(p.text),
+            other => panic!("unexpected native call: {other:?}"),
+        }
+        Err(TransportError {
+            code: Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN.into()),
+            message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
+            definitely_rejected: true,
+        })
+    }
+}
+
+#[test]
+fn reply_routing_notice_stops_pasting_after_the_queued_stall_window() {
+    let mut f = Fixture::new();
+    let pasted = Arc::new(Mutex::new(Vec::new()));
+    f.worker.transport = Box::new(NeverShown(pasted.clone()));
+    let source = f.send(Author::Agent(f.orch), "build this");
+    f.finish(source, "Reply the composer never shows");
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.notices().len(), 1);
+    assert_eq!(pasted.lock().unwrap().len(), 1, "first paste attempt");
+    // Every later tick past the queued stall window, after each 20-second
+    // prompt-not-shown pause, would paste and clear the composer again.
+    for minutes in [3, 30, 300] {
+        f.worker
+            .expire_queued_requests(io::now_ms() + minutes * 60_000)
+            .unwrap();
+        f.worker.withdrawn_at.clear();
+        f.worker.submit_ready().unwrap();
+    }
+    assert_eq!(
+        pasted.lock().unwrap().len(),
+        1,
+        "an ordinary queued request closes after QUEUED_STALL_MS; the exempt notice keeps pasting into and clearing the orchestrator composer"
+    );
+    assert_eq!(f.notices()[0].phase, RequestPhase::Queued);
+}
+
+#[test]
+fn reply_routing_stalled_delivery_resumes_on_fresh_evidence_or_restart() {
+    for recovery in ["status", "dialog", "session", "restart"] {
+        let mut f = Fixture::new();
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+        f.worker.transport = Box::new(NeverShown(pasted.clone()));
+        let source = f.send(Author::Agent(f.orch), "build this");
+        f.finish(source, "A retained reply");
+        f.worker.submit_ready().unwrap();
+        let notice = f.notices()[0].id;
+        f.worker
+            .expire_queued_requests(io::now_ms() + 3 * 60_000)
+            .unwrap();
+        f.worker.withdrawn_at.clear();
+        f.worker.submit_ready().unwrap();
+        assert_eq!(pasted.lock().unwrap().len(), 1, "paused: {recovery}");
+        if recovery == "restart" {
+            f.reopen();
+        } else {
+            let mut state = f.worker.state.clone();
+            if recovery == "status" {
+                state
+                    .observe_status(f.orch, RuntimeStatus::Working, io::now_ms())
+                    .unwrap();
+            } else if recovery == "dialog" {
+                state.observe_dialog(f.orch, true).unwrap();
+            } else {
+                let mut identity = state.agent(f.orch).unwrap().runtime_identity.clone();
+                identity.session_id = Some("new-session".into());
+                state.set_agent_runtime_identity(f.orch, identity).unwrap();
+            }
+            f.worker.save(state).unwrap();
+            f.worker.expire_queued_now().unwrap();
+            let mut state = f.worker.state.clone();
+            state
+                .observe_status(f.orch, RuntimeStatus::Idle, io::now_ms())
+                .unwrap();
+            state.observe_dialog(f.orch, false).unwrap();
+            f.worker.save(state).unwrap();
+        }
+        f.worker.transport = Box::new(Accepting(f.calls.clone()));
+        f.worker.submit_ready().unwrap();
+        f.worker.submit_ready().unwrap();
+        assert_eq!(f.calls.lock().unwrap().len(), 1, "resumed: {recovery}");
+        assert_eq!(f.notices().len(), 1);
+        assert_eq!(
+            f.worker.state.request(notice).unwrap().phase,
+            RequestPhase::Active
+        );
+    }
+}
+
+#[test]
+fn reply_routing_ordinary_agent_message_stops_pasting_after_the_queued_stall_window() {
+    let mut f = Fixture::new();
+    let pasted = Arc::new(Mutex::new(Vec::new()));
+    f.worker.transport = Box::new(NeverShown(pasted.clone()));
+    let mut state = f.worker.state.clone();
+    let id = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "builder (agent 3). Blocked-style message".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms(),
+        )
+        .unwrap()[0];
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(pasted.lock().unwrap().len(), 1, "first paste attempt");
+    for minutes in [3, 30, 300] {
+        f.worker
+            .expire_queued_requests(io::now_ms() + minutes * 60_000)
+            .unwrap();
+        f.worker.withdrawn_at.clear();
+        f.worker.submit_ready().unwrap();
+    }
+    assert_eq!(pasted.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.worker.state.request(id).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+}

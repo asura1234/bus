@@ -35,6 +35,11 @@ impl BusState {
     }
 
     pub(crate) fn reply_delivery_pending(&self, request: &Request) -> bool {
+        // Absence is the durable "not yet routed/seen" state. A recovered
+        // callback may be older than retention before its first route pass.
+        if !self.reply_routes.contains_key(&reply_key(request)) {
+            return self.reply_needs_ack(request);
+        }
         self.reply_routes
             .get(&reply_key(request))
             .copied()
