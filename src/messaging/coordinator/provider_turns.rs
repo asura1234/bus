@@ -69,6 +69,15 @@ impl Worker {
     ) {
         match crate::agents::providers::codex::usage::read_codex_observation(path) {
             Ok(Some(observation)) => {
+                if observation.observed_at_ms > crate::utils::time::now_ms()
+                    || self
+                        .usage
+                        .codex
+                        .as_ref()
+                        .is_some_and(|old| old.read_at_ms >= observation.observed_at_ms)
+                {
+                    return;
+                }
                 self.usage.codex = Some(crate::messaging::coordinator::usage::UsageSnapshot {
                     windows: observation.windows,
                     read_at_ms: observation.observed_at_ms,
