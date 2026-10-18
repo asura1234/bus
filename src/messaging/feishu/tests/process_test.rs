@@ -47,6 +47,13 @@ impl Drop for Fixture {
     }
 }
 
+fn has_exited(state: &str) -> bool {
+    let state = state.trim();
+    // Darwin can show a killed, unreaped child as `?E` (exiting) before Z
+    // or disappearance. It no longer executes the fixture's sleep command.
+    state.is_empty() || state.starts_with('Z') || (cfg!(target_os = "macos") && state.contains('E'))
+}
+
 #[test]
 fn feishu_process_preserves_argv_and_literal_stdin_without_a_shell() {
     let fixture = Fixture::new();
@@ -108,10 +115,7 @@ fn feishu_process_timeout_terminates_wrapper_and_grandchild_holding_pipes() {
         .output()
         .unwrap();
     let state = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        state.trim().is_empty() || state.trim().starts_with('Z'),
-        "grandchild still running: {state}"
-    );
+    assert!(has_exited(&state), "grandchild still running: {state}");
 }
 
 #[test]
@@ -149,7 +153,7 @@ fn feishu_process_cancellation_terminates_running_wrapper_and_grandchild() {
         .unwrap();
     let state = String::from_utf8_lossy(&output.stdout);
     assert!(
-        state.trim().is_empty() || state.trim().starts_with('Z'),
+        has_exited(&state),
         "grandchild still running after cancellation: {state}"
     );
 }
