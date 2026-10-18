@@ -30,8 +30,20 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../workflows/template.md"),
     ),
     (
+        "templates/investigation-report.md",
+        include_str!("../../workflows/investigation-report-template.md"),
+    ),
+    (
+        "templates/bug-triage-table.md",
+        include_str!("../../workflows/bug-triage-table-template.md"),
+    ),
+    (
         "workflows/auto-merge-pr.md",
         include_str!("../../workflows/auto-merge-pr.md"),
+    ),
+    (
+        "workflows/bug-fix.md",
+        include_str!("../../workflows/bug-fix.md"),
     ),
     (
         "workflows/cross-repo-feature.md",
