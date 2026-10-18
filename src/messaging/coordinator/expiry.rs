@@ -1,29 +1,15 @@
 //! Close untyped, stalled work before any delivery attempt or status response.
-use super::{diagnostics, io, RequestPhase, Worker};
+use super::{diagnostics, io, Worker};
 
 impl Worker {
     pub(super) fn expire_queued_requests(&mut self, now_ms: u64) -> Result<(), String> {
-        let mut attention = self.state.clone();
-        attention
-            .notify_stalled_attention(now_ms)
-            .map_err(|error| error.to_string())?;
-        if attention != self.state {
-            self.save(attention)?;
-        }
-        if !self.state.requests().any(|request| {
-            request.phase == RequestPhase::Queued
-                && self.state.stall_reason(request, now_ms).is_some()
-        }) {
-            return Ok(());
-        }
         let mut state = self.state.clone();
         let expired = state
             .expire_stalled_queued_requests(now_ms)
             .map_err(|e| e.to_string())?;
-        if expired.is_empty() {
-            return Ok(());
+        if state != self.state {
+            self.save(state)?;
         }
-        self.save(state)?;
         for id in expired {
             diagnostics::request(&self.state, id, "bus.message.failed", "queued_stalled");
         }
