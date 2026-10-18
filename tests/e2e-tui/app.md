@@ -72,7 +72,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 **Preconditions/setup:** pristine scratch data/settings; no pre-created workers.
 
-1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and agents list (headed `#bus`, with `+` at the right) have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
+1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and agents list (headed `# bus`, with `+` at the right) have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
 2. Inspect room notes → seeded text includes `Goal: stay in the room to coordinate selected agents.` and `Non-goals: automatic handoffs or permission approval.`
 3. Press Enter on the empty composer → no message, error or agent is created.
 4. Type `/help`, press Enter, scroll with PageDown, then Esc → local `Keyboard shortcuts` guide opens and closes; `/help` is not sent or retained as a message.
@@ -122,13 +122,26 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 **Preconditions/setup:** R(`qa-left`), A with `left-agent`; R(`qa-right`), A with `right-agent`; distinct identifiable fake terminal screens.
 
-1. Click `# qa-left` → header/history/composer belong to qa-left; the agents header reads `#qa-left` and lists left-agent. Click left-agent → its fake terminal replaces the main chat area.
+1. Click `# qa-left` → header/history/composer belong to qa-left; the agents header reads `# qa-left` with one space, uses the ROOMS rows' accent-green `#` and ordinary room-name foreground, keeps `+` at the right edge, and lists left-agent. Click left-agent → its fake terminal replaces the main chat area.
 2. Press F6 → qa-left chat returns. Click qa-right and right-agent → qa-right's worker terminal appears; press F6 → qa-right chat.
 3. Click `>` beside right-agent's provider → PWD details expand; click `v` → collapse. Agent/room selection remains usable.
 
 **Evidence:** labels and selection cell backgrounds, terminal screenshots, state IDs/PWD.
 
 **Pass criteria:** each click selects its named target; details reveal the correct directory.
+
+### HEADER-01 — Room header spacing at configured sidebar widths
+
+**Preconditions/setup:** fresh scratch session at 120×40, default sidebar width 28; R(`qa-header-界界界界界界界界界界界界界界界界界界界界`). No workers required.
+
+1. Click MASTER → agents header is exactly `# MASTER`, with one space; its hash and name foregrounds match the room rows and its `+` stays at the right edge. Click the long work room → header starts `# qa-header-`, truncates with `…` before a blank gap and the `+`, and stays on one row.
+2. Open Settings and move with Down to `Sidebar width (20–60)`; press Right three times → 31. Close Settings → divider and both `+` controls move three columns right, the long header has more room, and its single space/style/gap remain correct. Reopen Settings → 31 persists.
+3. Press Left eleven times → 20; close Settings → header still truncates before its blank gap and right-edge `+`; click that `+` → the Add agent form opens, then Esc closes it without creating an agent.
+4. Reopen Settings, select the width row and press Right forty times → 60. Resize to 180×40 and close Settings → width is 60, long header stays within the sidebar with its `+` at the right edge. Resize to 60×40 → width caps at 20; header, divider and `+` remain separated. Click the agents `+`, verify the form opens, then Esc.
+
+**Evidence:** snapshots, header hash/name `cells` compared with room-row foregrounds, divider/`+` columns and `hits`, saved `sidebar_width`, and cell screenshots opened and judged at widths 28, 31, 20, 60 and the narrow terminal cap. No desktop automation or real screenshot is needed.
+
+**Pass criteria:** the agents header consistently uses `# <room name>` and room-row styling, truncates within the current width, and preserves the right-edge `+` and its hit target.
 
 ### APP-06 — Recipient picker and room-local selection
 

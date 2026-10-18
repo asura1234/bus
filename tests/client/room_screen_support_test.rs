@@ -214,10 +214,10 @@ impl RoomClient {
 
     pub(super) fn observe_room(&mut self, name: &str) {
         let needle = format!("# {name}");
-        // Each unique room has one sidebar label. Its second occurrence is
-        // the active pane header; the sidebar alone cannot attest a switch.
+        // The selected room appears in its room row, agents header and pane
+        // header; the two sidebar labels alone cannot attest a pane switch.
         self.observe_matching(&needle, |screen| {
-            screen.text().matches(&needle).count() == 2
+            screen.text().matches(&needle).count() == 3
         });
     }
 

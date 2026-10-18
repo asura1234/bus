@@ -850,6 +850,20 @@ fn feishu_settings_read_failure_is_visible_recovers_backlog_and_logs_private_out
         fixture.settle();
         fixture.post("[needs_developer_attention] Private decision one");
         fixture.wait_sends(1);
+        // The CLI records invocation before the worker receives its completion.
+        // Observe delivery before unreadable settings cancel the active job.
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while !fixture
+            .worker()
+            .state
+            .attention_delivery()
+            .interrupted
+            .is_empty()
+        {
+            fixture.pump();
+            assert!(Instant::now() < deadline, "delivery did not settle");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         let path = fixture.root.join("settings.json");
         let saved = settings::load(&path).unwrap();
         std::fs::write(&path, "{").unwrap();

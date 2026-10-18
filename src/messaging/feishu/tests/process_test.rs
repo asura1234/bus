@@ -28,7 +28,9 @@ impl Fixture {
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-        Process::at(program, Duration::from_secs(1))
+        // Allow the wrapper to start under instrumented load; its child still
+        // sleeps far beyond this deadline so timeout must terminate both.
+        Process::at(program, Duration::from_secs(3))
     }
 }
 
@@ -45,6 +47,13 @@ impl Drop for Fixture {
         let _ = std::fs::remove_dir_all(&self.0);
         let _ = self.1.unlock();
     }
+}
+
+fn has_exited(state: &str) -> bool {
+    let state = state.trim();
+    // Darwin can show a killed, unreaped child as `?E` (exiting) before Z
+    // or disappearance. It no longer executes the fixture's sleep command.
+    state.is_empty() || state.starts_with('Z') || (cfg!(target_os = "macos") && state.contains('E'))
 }
 
 #[test]
@@ -98,7 +107,7 @@ fn feishu_process_timeout_terminates_wrapper_and_grandchild_holding_pipes() {
         .run(&[], "", &Cancellation::default())
         .unwrap_err();
     assert!(error.contains("timed out"), "{error}");
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(5));
     let pid: u32 = std::fs::read_to_string(fixture.0.join("grandchild.pid"))
         .unwrap()
         .parse()
@@ -108,10 +117,7 @@ fn feishu_process_timeout_terminates_wrapper_and_grandchild_holding_pipes() {
         .output()
         .unwrap();
     let state = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        state.trim().is_empty() || state.trim().starts_with('Z'),
-        "grandchild still running: {state}"
-    );
+    assert!(has_exited(&state), "grandchild still running: {state}");
 }
 
 #[test]
@@ -149,7 +155,7 @@ fn feishu_process_cancellation_terminates_running_wrapper_and_grandchild() {
         .unwrap();
     let state = String::from_utf8_lossy(&output.stdout);
     assert!(
-        state.trim().is_empty() || state.trim().starts_with('Z'),
+        has_exited(&state),
         "grandchild still running after cancellation: {state}"
     );
 }

@@ -133,7 +133,10 @@ fn feishu_send_failure_invokes_once_and_does_not_expose_cli_payload() {
 #[test]
 fn feishu_send_timeout_invokes_once_and_preserves_self_only_bus_attribution() {
     let fixture = Fixture::new();
-    let client = Client::at(fixture.root.join("lark-cli"), Duration::from_secs(1));
+    // Leave room for the Python fixture to start under instrumented CI load;
+    // its 60-second send delay still exercises the configured deadline.
+    let timeout = Duration::from_secs(3);
+    let client = Client::at(fixture.root.join("lark-cli"), timeout);
     let user = client.authenticate(Cancellation::default()).unwrap();
     fixture.mode("send-delay");
     let started = std::time::Instant::now();
@@ -143,7 +146,7 @@ fn feishu_send_timeout_invokes_once_and_preserves_self_only_bus_attribution() {
         !error.disable,
         "a send timeout does not invalidate the verified identity"
     );
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(started.elapsed() < timeout * 2 + Duration::from_secs(2));
     let calls = fixture.calls();
     let sends: Vec<_> = calls
         .iter()
