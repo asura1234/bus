@@ -167,7 +167,7 @@ FOR EACH technical dispute:
      Judging clear without a mechanism is passing confidence off as evidence; refusing to rank when
      you cannot separate them leaves the work stalled.
      **What to do next is not yours to decide** — running a spike, choosing by another constraint, or
-     asking a human is decided by the orchestrator based on `toss_up_reason`.
+     asking a developer is decided by the orchestrator based on `toss_up_reason`.
 
 Adjudication belongs only to main. Delegated evidence gathering answers local facts only, with no ranking and no decision.
 

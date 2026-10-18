@@ -204,11 +204,11 @@ IF mode == pr AND the github lane was used in this run:
   -- This is the channel that lets the reviewer receive the decision (it does not read the ledger itself); reasoning and observations in [guide.md](guide.md)
   --   "Replying to its thread lets it receive the decision".
 
-  Then post the adjudication ledger verbatim back to the PR (for humans, leaving an audit trail):
+  Then post the adjudication ledger verbatim back to the PR (for developers, leaving an audit trail):
     python3 skills/address-review-comments/scripts/github_review_lane.py post-triage \
       --pr <pr> --triage <run-root>/triage.md --round-dir <roundDir>
   -- The machine reviewer can re-raise a rejected comment at any time: it has no memory and only sees that the code did not change. With the ledger
-  --   on the PR, "why this is not changed" lives in the same place as the code, so the next round (human or machine) can see that reason.
+  --   on the PR, "why this is not changed" lives in the same place as the code, so the next round (developer or machine) can see that reason.
   -- The script first scans for credentials and local absolute paths and blocks oversized ledgers; on a hit it STOPs and the developer decides how to redact;
   --   content is not rewritten automatically here, because rewriting would make what is posted differ from the ledger.
   -- `--round-dir` makes the script write `triaged.json` **after a successful post**: the only evidence a round truly finished.

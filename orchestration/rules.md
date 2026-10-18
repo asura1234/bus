@@ -92,11 +92,13 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   *Why:* a PR grew from three bug fixes to 130 files because its goal was
   written after the work grew; every review check passed against that wrong
   goal, and nothing compared it with the request or the size.
-- **Brief workers directly.** Write tasks, constraints and decisions as your own
-  instructions; never label them as coming from the developer or as
-  developer-approved. *Why:* a worker cannot verify who is behind a message, so
-  the label adds no authority, only noise; brief workers the way you would brief
-  your own subagents.
+- **Brief workers directly.** You act on the developer's behalf: state the task,
+  constraints and decisions plainly, with concrete reasons. Never say who asked
+  or approved it ("the human/developer wants", 人类, 开发者要求), or frame anyone
+  as human or non-human. Say "the iPhone is reserved for manual testing", not
+  "the human is waiting". This applies to Chinese prompts too. *Why:*
+  attribution adds noise and makes workers guess at priority, treating it as
+  more or less important.
 - **Require a root-cause analysis in every bug-fix brief.** When dispatching a
   bug fix, ask the worker to establish the root cause from evidence (logs, a
   reproduction, a failing test) before changing behavior. If the root cause is
