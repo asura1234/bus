@@ -51,7 +51,11 @@ pub(super) fn handle_server_message(
         ServerMessage::GraphicsFile { .. } | ServerMessage::GraphicsTransmissionRetired { .. } => {}
         ServerMessage::TerminalBell { count } => {
             let bus_shell = state.shell.as_ref().is_some_and(|shell| shell.has_bus());
-            if let Err(err) = forward_terminal_bells(&mut io::stdout(), count, bus_shell) {
+            if let Err(err) = forward_terminal_bells(
+                &mut crate::client::host_terminal::output::stdout(),
+                count,
+                bus_shell,
+            ) {
                 warn!(err = %err, "failed to emit terminal bell");
             }
         }
@@ -90,7 +94,7 @@ pub(super) fn handle_server_message(
         ServerMessage::Clipboard { data } => apply_clipboard(&data, state),
         ServerMessage::WindowTitle { title } => {
             let _ = crate::client::host_terminal::effects::write_window_title(
-                &mut io::stdout(),
+                &mut crate::client::host_terminal::output::stdout(),
                 title.as_deref(),
             );
         }
@@ -238,7 +242,7 @@ fn apply_mouse_capture(
         if enabled && windows_vti_input_backend_enabled() && is_ssh_session() {
             let _ = enable_windows_virtual_terminal_input();
         }
-        set_mouse_capture(enabled, next_sgr_pixels).map_err(ClientError::ConnectionFailed)?;
+        set_mouse_capture(enabled, next_sgr_pixels).map_err(ClientError::HostOutput)?;
         #[cfg(windows)]
         if enabled && windows_vti_input_backend_enabled() && !is_ssh_session() {
             let _ = enable_windows_virtual_terminal_input();
@@ -284,19 +288,17 @@ fn apply_surface(surface: crate::protocol::wire::PaneSurfaceFrame, state: &mut C
     }
 }
 
-fn forward_terminal_frame(frame: crate::protocol::wire::TerminalFrame, state: &ClientState) {
+fn forward_terminal_frame(frame: crate::protocol::wire::TerminalFrame, state: &mut ClientState) {
     if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
         record_received_kitty_graphics(&frame.bytes);
     }
-    let mut stdout = io::stdout();
-    let _ = stdout.write_all(&frame.bytes);
-    let _ = stdout.flush();
+    let _ = state.output.terminal_bytes(frame.bytes);
 }
 
 fn forward_graphics(bytes: &[u8], state: &ClientState) {
     if state.kitty_graphics_enabled {
         record_received_kitty_graphics(bytes);
-        let mut stdout = io::stdout();
+        let mut stdout = crate::client::host_terminal::output::stdout();
         let _ = stdout.write_all(bytes);
         let _ = stdout.flush();
     }
@@ -315,5 +317,5 @@ fn apply_clipboard(data: &str, state: &mut ClientState) {
             state.present_frame(frame);
         }
     }
-    let _ = io::stdout().flush();
+    let _ = crate::client::host_terminal::output::stdout().flush();
 }

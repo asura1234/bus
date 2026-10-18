@@ -718,7 +718,7 @@ fn live_sound_reload_updates_bus_room_playback() {
     shell.bus.as_mut().unwrap().handle.take();
 
     let mut state = ClientState {
-        blit_encoder: crate::protocol::ansi::BlitEncoder::new(),
+        output: crate::client::host_terminal::output::TerminalOutput::start().unwrap(),
         mouse_capture_active: false,
         endpoint_mouse_capture_requested: false,
         endpoint_sgr_pixels_requested: false,

@@ -29,7 +29,7 @@ fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
     })));
     let sent = Arc::new(Mutex::new(Vec::new()));
     let state = ClientState {
-        blit_encoder: render_ansi::BlitEncoder::new(),
+        output: crate::client::host_terminal::output::TerminalOutput::start().unwrap(),
         mouse_capture_active: false,
         endpoint_mouse_capture_requested: false,
         endpoint_sgr_pixels_requested: false,
@@ -119,3 +119,7 @@ fn sidebar_width_change_clamped_to_the_same_geometry_sends_no_resize() {
         "both widths render at 26 columns"
     );
 }
+
+#[cfg(unix)]
+#[path = "slow_terminal_test.rs"]
+mod slow_terminal;

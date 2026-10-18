@@ -288,6 +288,9 @@ pub(in crate::client) struct ClientSelectionAutoscroll {
 }
 
 pub(crate) struct ClientShellState {
+    /// Model changes accumulate while a host-output transaction is in flight.
+    pub(in crate::client) compose_deferred: bool,
+    pub(in crate::client) editor_pending: bool,
     pub(in crate::client) bus: Option<crate::client::rooms::BusUi>,
     pub(in crate::client) config: ClientShellConfig,
     pub(in crate::client) snapshot: Option<Box<ClientShellSnapshot>>,
@@ -337,6 +340,8 @@ impl ClientShellState {
     pub(crate) fn new(mut config: ClientShellConfig) -> Self {
         let local_config_diagnostic = config.startup_config_diagnostic.take();
         Self {
+            compose_deferred: false,
+            editor_pending: false,
             bus: None,
             config,
             snapshot: None,

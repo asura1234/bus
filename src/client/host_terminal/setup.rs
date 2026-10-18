@@ -29,7 +29,9 @@ use super::geometry::should_query_host_terminal_theme;
 /// Returns a guard that restores the terminal when dropped.
 pub(in crate::client) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
     ratatui::init();
-    crate::client::host_terminal::modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    crate::client::host_terminal::modes::clear_host_mouse_reporting(
+        &mut crate::client::host_terminal::output::stdout(),
+    )?;
     let host_color_scheme_reports = should_enable_host_color_scheme_reports();
 
     #[cfg(windows)]
@@ -43,9 +45,16 @@ pub(in crate::client) fn setup_terminal(mouse_capture: bool) -> io::Result<Termi
         };
 
     set_mouse_capture(mouse_capture, false)?;
-    execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
+    execute!(
+        crate::client::host_terminal::output::stdout(),
+        EnableBracketedPaste,
+        EnableFocusChange
+    )?;
     if host_color_scheme_reports {
-        write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
+        write_host_color_scheme_report_mode(
+            &mut crate::client::host_terminal::output::stdout(),
+            true,
+        )?;
     }
     push_keyboard_enhancement_flags()?;
 
@@ -59,7 +68,9 @@ pub(in crate::client) fn setup_terminal(mouse_capture: bool) -> io::Result<Termi
         && windows_virtual_terminal_input.active
         && windows_win32_input_mode_enabled()
     {
-        if let Err(err) = enable_windows_win32_input_mode(&mut io::stdout()) {
+        if let Err(err) =
+            enable_windows_win32_input_mode(&mut crate::client::host_terminal::output::stdout())
+        {
             if let Some(mode) = windows_virtual_terminal_input.restore_mode {
                 restore_windows_input_mode_value(mode);
             }
@@ -69,11 +80,14 @@ pub(in crate::client) fn setup_terminal(mouse_capture: bool) -> io::Result<Termi
 
     let modify_other_keys_mode = crate::protocol::keys::host_modify_other_keys_mode();
     if let Some(mode) = modify_other_keys_mode {
-        io::stdout().write_all(mode.set_sequence())?;
-        io::stdout().flush()?;
+        crate::client::host_terminal::output::stdout().write_all(mode.set_sequence())?;
+        crate::client::host_terminal::output::stdout().flush()?;
     }
 
-    execute!(io::stdout(), DisableLineWrap)?;
+    execute!(
+        crate::client::host_terminal::output::stdout(),
+        DisableLineWrap
+    )?;
 
     Ok(TerminalGuard {
         reset_keyboard_enhancements: true,
@@ -288,24 +302,32 @@ pub(in crate::client) fn effective_sgr_pixel_mouse(
 }
 
 pub(in crate::client) fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<()> {
-    crate::client::host_terminal::modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    crate::client::host_terminal::modes::clear_host_mouse_reporting(
+        &mut crate::client::host_terminal::output::stdout(),
+    )?;
     #[cfg(windows)]
     if is_ssh_session() && windows_vti_input_backend_enabled() {
         return crate::client::host_terminal::modes::set_windows_ssh_mouse_reporting(
-            &mut io::stdout(),
+            &mut crate::client::host_terminal::output::stdout(),
             enabled,
             sgr_pixels,
         );
     }
     if enabled {
-        execute!(io::stdout(), EnableMouseCapture)?;
+        execute!(
+            crate::client::host_terminal::output::stdout(),
+            EnableMouseCapture
+        )?;
         if sgr_pixels {
-            io::stdout().write_all(b"\x1b[?1016h")?;
-            io::stdout().flush()?;
+            crate::client::host_terminal::output::stdout().write_all(b"\x1b[?1016h")?;
+            crate::client::host_terminal::output::stdout().flush()?;
         }
         Ok(())
     } else {
-        match execute!(io::stdout(), DisableMouseCapture) {
+        match execute!(
+            crate::client::host_terminal::output::stdout(),
+            DisableMouseCapture
+        ) {
             Ok(()) => Ok(()),
             #[cfg(windows)]
             Err(err) if err.to_string() == "Initial console modes not set" => Ok(()),
@@ -339,12 +361,13 @@ fn restore_terminal_state(
     reset_host_color_scheme_reports: bool,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
 ) -> io::Result<()> {
-    let _ = clear_received_kitty_graphics(&mut io::stdout());
+    let _output_route = crate::client::host_terminal::output::suspend();
+    let _ = clear_received_kitty_graphics(&mut crate::client::host_terminal::output::stdout());
 
     // Reset modifyOtherKeys if we enabled it.
     if reset_modify_other_keys {
-        let _ = io::stdout().write_all(b"\x1b[>4;0m");
-        let _ = io::stdout().flush();
+        let _ = crate::client::host_terminal::output::stdout().write_all(b"\x1b[>4;0m");
+        let _ = crate::client::host_terminal::output::stdout().flush();
     }
 
     if reset_keyboard_enhancements {
@@ -352,7 +375,7 @@ fn restore_terminal_state(
     }
 
     let _ = execute!(
-        io::stdout(),
+        crate::client::host_terminal::output::stdout(),
         EnableLineWrap,
         DisableFocusChange,
         DisableBracketedPaste
@@ -364,12 +387,15 @@ fn restore_terminal_state(
     }
 
     let restore_result = ratatui::try_restore();
-    let postlude_result =
-        write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
+    let postlude_result = write_terminal_restore_postlude(
+        &mut crate::client::host_terminal::output::stdout(),
+        reset_host_color_scheme_reports,
+    );
 
     #[cfg(windows)]
     if windows_vti_input_backend_enabled() && windows_win32_input_mode_enabled() {
-        let _ = disable_windows_win32_input_mode(&mut io::stdout());
+        let _ =
+            disable_windows_win32_input_mode(&mut crate::client::host_terminal::output::stdout());
     }
 
     restore_result.and(postlude_result)
@@ -378,7 +404,7 @@ fn restore_terminal_state(
 #[cfg(not(windows))]
 fn push_keyboard_enhancement_flags() -> io::Result<()> {
     execute!(
-        io::stdout(),
+        crate::client::host_terminal::output::stdout(),
         PushKeyboardEnhancementFlags(
             crate::protocol::keys::ime_compatible_keyboard_enhancement_flags()
         )
@@ -392,7 +418,10 @@ fn push_keyboard_enhancement_flags() -> io::Result<()> {
 
 #[cfg(not(windows))]
 fn pop_keyboard_enhancement_flags() -> io::Result<()> {
-    execute!(io::stdout(), PopKeyboardEnhancementFlags)
+    execute!(
+        crate::client::host_terminal::output::stdout(),
+        PopKeyboardEnhancementFlags
+    )
 }
 
 #[cfg(windows)]

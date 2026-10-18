@@ -253,8 +253,11 @@ fn finish_client_run(
                 reason: Some(reason)
             } if reason == "detached"
         );
-        let connection_lost_during_terminal_hangup =
-            terminal_restore_failed && matches!(&err, ClientError::ConnectionLost(_));
+        let connection_lost_during_terminal_hangup = terminal_restore_failed
+            && matches!(
+                &err,
+                ClientError::ConnectionLost(_) | ClientError::HostOutput(_)
+            );
         if detached || connection_lost_during_terminal_hangup {
             return Ok(());
         }

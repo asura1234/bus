@@ -7,9 +7,8 @@ use crate::client::{
     host_terminal::geometry::query_host_terminal_theme,
     state::ClientState,
 };
-#[cfg(test)]
-use crate::protocol::ansi as render_ansi;
 use crate::protocol::wire::{ClientMessage, FrameData};
+#[cfg(test)]
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
@@ -50,6 +49,10 @@ pub(super) fn dispatch_client_shell_actions(
             }
             shell::ClientShellAction::EditComposer => {
                 if let Some(shell) = shell.as_deref_mut() {
+                    if crate::client::host_terminal::output::busy() {
+                        shell.editor_pending = true;
+                        continue;
+                    }
                     if let Err(error) = shell.edit_bus_composer() {
                         tracing::warn!(error = %error, "bus composer editor failed");
                     }
@@ -120,10 +123,10 @@ pub(super) fn sync_client_shell_keyboard_report_all(
         return Ok(());
     }
     crate::client::host_terminal::modes::set_host_kitty_keyboard_report_all(
-        &mut io::stdout(),
+        &mut crate::client::host_terminal::output::stdout(),
         desired,
     )
-    .map_err(ClientError::ConnectionFailed)?;
+    .map_err(ClientError::HostOutput)?;
     state.keyboard_report_all_active = desired;
     Ok(())
 }
@@ -173,6 +176,8 @@ pub(super) fn finish_client_shell_input(
         &mut state.detached_process_children,
     )?;
     let frame = if dispatch_repaint {
+        state.output.invalidate();
+        state.request_repaint();
         state
             .shell
             .as_mut()
@@ -216,7 +221,7 @@ mod tests {
 
     fn client_state() -> ClientState {
         ClientState {
-            blit_encoder: render_ansi::BlitEncoder::new(),
+            output: crate::client::host_terminal::output::TerminalOutput::start().unwrap(),
             mouse_capture_active: false,
             endpoint_mouse_capture_requested: false,
             endpoint_sgr_pixels_requested: false,

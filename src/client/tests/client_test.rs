@@ -647,7 +647,7 @@ fn failed_frame_write_keeps_full_repaint_pending() {
     }
 
     let mut state = super::state::ClientState {
-        blit_encoder: crate::protocol::ansi::BlitEncoder::new(),
+        output: crate::client::host_terminal::output::TerminalOutput::start().unwrap(),
         mouse_capture_active: false,
         endpoint_mouse_capture_requested: false,
         endpoint_sgr_pixels_requested: false,
@@ -687,8 +687,7 @@ fn failed_frame_write_keeps_full_repaint_pending() {
     // Isolate the process-wide descriptor change from all other test cases.
     let (broken_output, reader) = UnixStream::pair().unwrap();
     drop(reader);
-    let mut stdout = io::stdout().lock();
-    stdout.flush().unwrap();
+    io::stdout().flush().unwrap();
     let saved_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
     assert!(saved_fd >= 0);
     let restore = RestoreStdout(unsafe { OwnedFd::from_raw_fd(saved_fd) });
@@ -699,19 +698,16 @@ fn failed_frame_write_keeps_full_repaint_pending() {
     let failed_write = unsafe { libc::write(libc::STDOUT_FILENO, b"X".as_ptr().cast(), 1) };
     let output_error = io::Error::last_os_error();
     state.present_frame(frame.clone());
-    let presentation_after_failure = (
-        state.repaint_pending,
-        state.blit_encoder.clears_before(&frame),
-    );
+    assert!(state.output.finish().is_err());
+    assert!(state.check_output().is_err());
+    let presentation_after_failure = state.repaint_pending;
     drop(restore);
-    stdout.flush().unwrap();
-    drop(stdout);
+    io::stdout().flush().unwrap();
 
     assert_eq!(failed_write, -1);
     assert_eq!(output_error.kind(), io::ErrorKind::BrokenPipe);
-    assert_eq!(
+    assert!(
         presentation_after_failure,
-        (true, true),
         "failed stdout writes must keep the repaint pending and the blit baseline uncommitted"
     );
 }

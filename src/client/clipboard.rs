@@ -85,8 +85,8 @@ pub fn write_osc52_bytes(bytes: &[u8]) {
     }
 
     let sequence = osc52_sequence(bytes);
-    let _ = std::io::stdout().write_all(sequence.as_bytes());
-    let _ = std::io::stdout().flush();
+    let _ = crate::client::host_terminal::output::stdout().write_all(sequence.as_bytes());
+    let _ = crate::client::host_terminal::output::stdout().flush();
 }
 
 #[cfg(test)]
