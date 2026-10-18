@@ -65,13 +65,10 @@ fn settings_compaction_limit_is_visible_and_editable_with_arrow_keys() {
     let screen = room_screen(&mut ui, 120, 40);
     assert!(screen.contains("Max compactions per agent"), "{screen}");
     assert!(screen.contains("‹ 5 ›"), "{screen}");
-    for _ in 0..10 {
+    for _ in 0..ui.compaction_field() {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    // The compaction limit precedes sidebar width, Feishu and freeze notifications.
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, ui.compaction_field());
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(
         serde_json::to_value(&ui.settings).unwrap()["max_compactions_per_agent"],
@@ -117,12 +114,10 @@ fn settings_sidebar_width_is_visible_and_editable_with_arrow_keys() {
     assert!(screen.contains("SIDEBAR"), "{screen}");
     assert!(screen.contains("Sidebar width (20–60)"), "{screen}");
     assert!(screen.contains("‹ 28 ›"), "{screen}");
-    // Down stops on freeze notifications; Feishu and sidebar width precede it.
-    for _ in 0..10 {
+    for _ in 0..ui.sidebar_width_field() {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, ui.sidebar_width_field());
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(ui.settings.sidebar_width, 29);
     assert!(ui
@@ -142,11 +137,10 @@ fn quick_stepper_presses_survive_the_echo_of_an_earlier_press() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::Settings);
     room_screen(&mut ui, 120, 40);
-    for _ in 0..10 {
+    for _ in 0..ui.sidebar_width_field() {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, ui.sidebar_width_field());
     // Three presses before the coordinator answers the first.
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
