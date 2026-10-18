@@ -281,7 +281,7 @@ impl BusUi {
         self.compaction_field() + 1
     }
 
-    /// The overlay row's Settings focus index, after the sidebar width.
+    /// The overlay row's Settings focus index, after developer notifications.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
         self.dev_settings
             .then(|| self.developer_notifications_field() + 1)

@@ -60,9 +60,13 @@ you saw. You do not decide what the product should do, and you never change the 
 - Fixtures: `fixture image --pattern quadrants|red-diagonal|blue-circle --file F`,
   `fixture file --file F [--text T]`; files land in the session's work dir
   (`/tmp/bus-tui/<name>/work`), which is also the scratch workspace for agents' PWD.
-- Notifications: Bus rooms never show desktop notifications. A new agent reply or post in a
-  room whose sound is on plays its sound, recorded as a `sound` effect (`target` is the played
-  file: a system sound path, or a temp file for the default ding). Focus does not gate it.
+- Notifications: developer-addressed messages in MASTER emit `terminal_notification` effects
+  by default when its chat is not visible or the terminal is known to be unfocused. When focus
+  is unknown, visible MASTER suppresses them. A two-second window combines bursts; the separate
+  Developer message notifications toggle disables them. Recovered freezes use their own toggle.
+  A new agent reply or post in a room whose sound is on still plays its sound, recorded as a
+  `sound` effect (`target` is the played file: a system sound path, or a temp file for the default
+  ding). Focus does not gate sounds.
 - Fake agents answer each delivered prompt a moment later with `fake reply: <prompt>`. The
   echo adds find matches and pushes history, so let deliveries settle (`bus history` shows
   every request `replied`) before judging counts, positions or drags.
