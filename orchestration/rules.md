@@ -43,16 +43,27 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   `bus send --room ROOM --as YOUR_NAME --to AGENT --async --text "..."` as a
   background tool call (Claude Code: Bash with `run_in_background`; Cursor: a
   background shell with timeout 0). When it exits, your CLI wakes you and prints
-  the replies. Bus also routes unseen worker replies directly into your terminal
-  as agent messages, like Blocked notices, even after a waiter or Bus restart.
-  You do not need to watch the room or keep a waiter alive. A live author waiter
-  defers routing and marks printed replies seen after flushing output; use
-  `wait --message ID --as YOUR_NAME` to resume that behavior. Shared-turn replies
-  route once per group. A late output/submission race can show both copies; Bus
-  favors delivery. Never sit idle waiting for a worker. *Why:* `--async` has no time limit for a healthy Bus and returns
-  after every recipient worked and went idle, or exits early on an error such as
-  `bus_down` after four consecutive transport failures, so you stay free for the
-  developer meanwhile. Live-server overload is retried.
+  the replies. Bus also delivers worker replies, autonomous turn-final results,
+  stalled/abandoned/no-reply outcomes with reasons, and idle/confirmed-exit
+  events with open orchestrator work directly to your terminal as agent
+  messages, like Blocked notices. Same-worker bursts are collected for two
+  seconds into one short message with event and message references or pointers.
+  Pending events survive waiter and Bus restarts, and each event routes once.
+  You can rely on these notifications without room polling or self-timers.
+  Normal idle waits for callback settlement, so a late Stop produces one reply
+  wake; persistent idle open work and confirmed exit remain visible. Blocked,
+  Resolved and failed-startup notices are unchanged.
+  A live author waiter defers its own reply/outcome components and marks only
+  flushed replies and exact printed event keys seen; use `wait --message ID
+  --as YOUR_NAME` to resume that behavior. Other-message, exit and autonomous
+  events remain independent. Seeing one part of a queued batch preserves its
+  other events. Shared-turn replies route once per group. A late stdout/native
+  submission race can expose both outputs; submitted events are never replayed.
+  The first upgrade recovers retained older replies/outcomes once.
+  Never sit idle waiting for a worker. *Why:* `--async` has no time limit for a
+  healthy Bus and returns after every recipient worked and went idle, or exits
+  early on an error such as `bus_down` after four consecutive transport failures,
+  so you stay free for the developer meanwhile. Live-server overload is retried.
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the developer.
