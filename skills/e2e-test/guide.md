@@ -61,9 +61,10 @@ you saw. You do not decide what the product should do, and you never change the 
   `fixture file --file F [--text T]`; files land in the session's work dir
   (`/tmp/bus-tui/<name>/work`), which is also the scratch workspace for agents' PWD.
 - Notifications: developer-addressed messages in MASTER emit `terminal_notification` effects
-  by default when its chat is not visible or the terminal is known to be unfocused. When focus
-  is unknown, visible MASTER suppresses them. A two-second window combines bursts; the separate
-  Developer message notifications toggle disables them. Recovered freezes use their own toggle.
+  only when they contain `[waiting-on-you]` or its case-insensitive whole-phrase equivalents
+  `waiting on you` / `still waiting on you`. They notify with any room or agent terminal open,
+  regardless of focus. A two-second window combines tagged bursts; the separate Developer
+  message notifications toggle disables them. Recovered freezes use their own toggle.
   A new agent reply or post in a room whose sound is on still plays its sound, recorded as a
   `sound` effect (`target` is the played file: a system sound path, or a temp file for the default
   ding). Focus does not gate sounds.
