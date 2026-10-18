@@ -31,6 +31,12 @@ impl Runtime {
                         self.stop();
                     }
                     self.status.error = Some(error.message);
+                } else {
+                    tracing::info!(
+                        event = "bus.feishu.sent",
+                        source,
+                        "Feishu notification delivered"
+                    );
                 }
                 worker.save(state)?;
             }
@@ -66,6 +72,7 @@ impl Runtime {
         worker.save(state)?;
         self.authenticated = Some(authenticated);
         self.status.enabled = true;
+        tracing::info!(event = "bus.feishu.enabled", "Feishu notifications enabled");
         self.status
             .error
             .clone_from(&worker.state.attention_delivery().last_error);
@@ -83,11 +90,11 @@ impl Runtime {
             .as_ref()
             .ok_or("Bus settings location unavailable")?;
         let saved = settings::update(path, |settings| {
-            settings.feishu_notifications = on;
-            if on {
+            if on && !settings.feishu_notifications {
                 settings.feishu_notifications_generation =
                     settings.feishu_notifications_generation.wrapping_add(1);
             }
+            settings.feishu_notifications = on;
         })?;
         self.observed = Some((on, saved.feishu_notifications_generation));
         let _ = events.send(BusEvent::SettingsChanged(saved));

@@ -753,3 +753,150 @@ fn feishu_distinct_sessions_with_the_same_directory_basename_have_distinct_deliv
         assert!(body.contains(&format!("Session: {}", session.display())));
     }
 }
+
+#[test]
+fn feishu_enabled_session_keeps_its_rate_limited_backlog_when_another_session_enables() {
+    let mut fixture = Fixture::new();
+    assert!(
+        fixture
+            .call("settings.feishu_notifications", json!({"on":true}))
+            .ok
+    );
+    fixture.settle();
+    for index in 0..8 {
+        fixture.post(&format!(
+            "[needs_developer_attention] Live decision {index}"
+        ));
+    }
+    fixture.wait_sends(6);
+    // Another Bus session sharing the global settings file enables explicitly
+    // (for example after its own validation failed); this session stayed on.
+    let mut other = Worker::open(fixture.root.join("other-session"), Box::new(NoNative)).unwrap();
+    other.settings_path = Some(fixture.root.join("settings.json"));
+    other.attention.client = fixture.worker().attention.client.clone();
+    other
+        .set_feishu_notifications(true, &fixture.events)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while other.attention.status.pending {
+        other
+            .pump_feishu(&fixture.events, crate::messaging::storage::io::now_ms())
+            .unwrap();
+        assert!(Instant::now() < deadline, "second session did not validate");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(other.attention.status.enabled);
+    fixture.settle();
+    assert!(fixture.worker().attention.status.enabled);
+    let events = fixture.events.clone();
+    let later = crate::messaging::storage::io::now_ms() + 61_000;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        fixture.worker().pump_feishu(&events, later).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let sends = fixture
+        .calls()
+        .iter()
+        .filter(|call| call["args"][0] == "im")
+        .count();
+    assert_eq!(
+        sends, 8,
+        "distinct live tagged messages queued while this session was on must not be dropped"
+    );
+}
+
+#[test]
+fn feishu_same_exhausted_quota_window_after_restart_posts_no_second_notice() {
+    let mut fixture = Fixture::new();
+    let now = crate::messaging::storage::io::now_ms();
+    fixture.quota(now, now / 1000 + 300);
+    fixture.restart();
+    fixture.quota(now + 1_000, now / 1000 + 300);
+    let master = fixture.worker().state.master_room().unwrap().id;
+    assert_eq!(fixture.worker().state.notices(master).count(), 1);
+}
+
+#[test]
+fn feishu_settings_read_failure_is_visible_recovers_backlog_and_logs_private_outcomes() {
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    // Acquire the fixture lease before registering the thread-local subscriber.
+    let mut fixture = Fixture::new();
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let writer = Capture(bytes.clone());
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(
+            fixture
+                .call("settings.feishu_notifications", json!({"on":true}))
+                .ok
+        );
+        fixture.settle();
+        fixture.post("[needs_developer_attention] Private decision one");
+        fixture.wait_sends(1);
+        let path = fixture.root.join("settings.json");
+        let saved = settings::load(&path).unwrap();
+        std::fs::write(&path, "{").unwrap();
+        fixture.post("[needs_developer_attention] Private decision two");
+        fixture.pump();
+        assert!(!fixture.worker().attention.status.enabled);
+        assert!(fixture
+            .worker()
+            .attention
+            .status
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("settings") && error.contains("unreadable")));
+        fixture.pump();
+        assert_eq!(
+            fixture
+                .calls()
+                .iter()
+                .filter(|call| call["args"][0] == "im")
+                .count(),
+            1
+        );
+        settings::save(&path, &saved).unwrap();
+        fixture.settle();
+        fixture.wait_sends(2);
+        assert!(
+            fixture
+                .call("settings.feishu_notifications", json!({"on":false}))
+                .ok
+        );
+    });
+    let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    for event in [
+        "bus.feishu.enabled",
+        "bus.feishu.disabled",
+        "bus.feishu.sent",
+        "bus.feishu.settings_failed",
+    ] {
+        assert!(log.contains(event), "missing {event}: {log}");
+    }
+    assert_eq!(
+        log.matches("bus.feishu.settings_failed").count(),
+        1,
+        "{log}"
+    );
+    assert!(
+        !log.contains("Private decision") && !log.contains("ou_self") && !log.contains("openId"),
+        "private payload leaked: {log}"
+    );
+}

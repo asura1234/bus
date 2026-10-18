@@ -59,6 +59,12 @@ impl Drop for Runtime {
 
 impl Runtime {
     fn stop(&mut self) {
+        if self.status.enabled {
+            tracing::info!(
+                event = "bus.feishu.disabled",
+                "Feishu notifications disabled"
+            );
+        }
         self.cancel.cancel();
         if let Some(job) = self.job.take() {
             self.retired.push(job);
@@ -105,12 +111,27 @@ impl Runtime {
         if state != worker.state {
             worker.save(state)?;
         }
-        let desired = worker
+        let desired = match worker
             .settings_path
             .as_deref()
-            .and_then(|path| settings::load(path).ok())
-            .map(|s| (s.feishu_notifications, s.feishu_notifications_generation))
-            .unwrap_or((false, 0));
+            .map(settings::load)
+            .transpose()
+        {
+            Ok(saved) => saved
+                .map(|s| (s.feishu_notifications, s.feishu_notifications_generation))
+                .unwrap_or_default(),
+            Err(error) => {
+                let changed = self.status.error.as_deref() != Some(&error);
+                self.stop();
+                self.observed = None;
+                if changed {
+                    tracing::warn!(event = "bus.feishu.settings_failed", %error, "Feishu notifications paused: settings unreadable");
+                }
+                self.status.error = Some(error);
+                self.publish(events);
+                return Ok(());
+            }
+        };
         if self.observed != Some(desired) {
             self.rebaseline = self.observed.is_some()
                 || worker.state.attention_delivery().generation != desired.1;
