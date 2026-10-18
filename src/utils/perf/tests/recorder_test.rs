@@ -1437,7 +1437,11 @@ fn active_message_metadata_is_preserved_in_windows_and_stall_records() {
             capture_stacks: no_capture,
         },
     );
-    let active = crate::utils::perf::operation::message_enter(19, 5, 65536);
+    let active = crate::utils::perf::operation::message_enter(
+        crate::utils::perf::operation::Variant::EndpointControl,
+        crate::utils::perf::operation::Phase::Endpoint,
+        65536,
+    );
     let expected = json!({"variant":"EndpointControl", "phase":"endpoint", "payload_bytes":65536});
     assert_eq!(
         recorder.window_record(Instant::now(), None, &Registry::new())["active_message"],

@@ -165,28 +165,38 @@ pub(super) fn overlay_label(context: Option<ContextSample>, fps: Option<f64>) ->
 mod tests;
 
 /// Stable message tags for perf JSONL; no payload inspection is needed.
-pub(super) fn message_tag(message: &crate::protocol::wire::ServerMessage) -> (u8, u8) {
+pub(super) fn message_tag(
+    message: &crate::protocol::wire::ServerMessage,
+) -> (
+    crate::utils::perf::operation::Variant,
+    crate::utils::perf::operation::Phase,
+) {
     use crate::protocol::wire::ServerMessage as M;
+    use crate::utils::perf::operation::{Phase as P, Variant as V};
     match message {
-        M::Welcome { .. } => (20, 2),
-        M::Terminal(_) => (1, 1),
-        M::Graphics { .. } => (2, 1),
-        M::ServerShutdown { .. } => (3, 2),
-        M::Notify { .. } => (4, 3),
-        M::Clipboard { .. } => (5, 3),
-        M::WindowTitle { .. } => (6, 3),
-        M::ReloadSoundConfig => (7, 2),
-        M::MouseCapture { .. } => (8, 3),
-        M::TerminalBell { .. } => (9, 3),
-        M::GraphicsFile { .. } => (10, 1),
-        M::GraphicsTransmissionRetired { .. } => (11, 1),
-        M::ClientShellSnapshot(_) => (12, 2),
-        M::PaneSurface(_) => (13, 4),
-        M::SemanticNotification(_) => (14, 3),
-        M::ClientShellError { .. } => (15, 2),
-        M::ClientShellKeyboardReportAll { .. } => (16, 3),
-        M::ClientShellEndpointResponseChunk { .. } => (17, 5),
-        M::PaneSurfacePatch(_) => (18, 6),
-        M::EndpointControl { .. } => (19, 5),
+        M::Welcome { .. } => (V::Welcome, P::Control),
+        M::Terminal(_) => (V::Terminal, P::TerminalOutput),
+        M::Graphics { .. } => (V::Graphics, P::TerminalOutput),
+        M::ServerShutdown { .. } => (V::ServerShutdown, P::Control),
+        M::Notify { .. } => (V::Notify, P::Effect),
+        M::Clipboard { .. } => (V::Clipboard, P::Effect),
+        M::WindowTitle { .. } => (V::WindowTitle, P::Effect),
+        M::ReloadSoundConfig => (V::ReloadSoundConfig, P::Control),
+        M::MouseCapture { .. } => (V::MouseCapture, P::Effect),
+        M::TerminalBell { .. } => (V::TerminalBell, P::Effect),
+        M::GraphicsFile { .. } => (V::GraphicsFile, P::TerminalOutput),
+        M::GraphicsTransmissionRetired { .. } => {
+            (V::GraphicsTransmissionRetired, P::TerminalOutput)
+        }
+        M::ClientShellSnapshot(_) => (V::ClientShellSnapshot, P::Control),
+        M::PaneSurface(_) => (V::PaneSurface, P::Surface),
+        M::SemanticNotification(_) => (V::SemanticNotification, P::Effect),
+        M::ClientShellError { .. } => (V::ClientShellError, P::Control),
+        M::ClientShellKeyboardReportAll { .. } => (V::ClientShellKeyboardReportAll, P::Effect),
+        M::ClientShellEndpointResponseChunk { .. } => {
+            (V::ClientShellEndpointResponseChunk, P::Endpoint)
+        }
+        M::PaneSurfacePatch(_) => (V::PaneSurfacePatch, P::SurfacePatch),
+        M::EndpointControl { .. } => (V::EndpointControl, P::Endpoint),
     }
 }
