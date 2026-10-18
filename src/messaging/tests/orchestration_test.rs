@@ -45,7 +45,16 @@ fn embedded_docs_match_the_repository_copies() {
         ("orchestrator-guide.md", "orchestration/guide.md"),
         ("orchestrator-rules.md", "orchestration/rules.md"),
         ("templates/workflow-template.md", "workflows/template.md"),
+        (
+            "templates/investigation-report.md",
+            "workflows/investigation-report-template.md",
+        ),
+        (
+            "templates/bug-triage-table.md",
+            "workflows/bug-triage-table-template.md",
+        ),
         ("workflows/auto-merge-pr.md", "workflows/auto-merge-pr.md"),
+        ("workflows/bug-fix.md", "workflows/bug-fix.md"),
         (
             "workflows/cross-repo-feature.md",
             "workflows/cross-repo-feature.md",
@@ -60,6 +69,33 @@ fn embedded_docs_match_the_repository_copies() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn bug_fix_workflow_and_templates_are_written_at_documented_paths() {
+    let data = temp_root("bug-fix-docs");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let docs = write_docs(&data).unwrap();
+    for (destination, source) in [
+        ("workflows/bug-fix.md", "workflows/bug-fix.md"),
+        (
+            "templates/investigation-report.md",
+            "workflows/investigation-report-template.md",
+        ),
+        (
+            "templates/bug-triage-table.md",
+            "workflows/bug-triage-table-template.md",
+        ),
+    ] {
+        let written = std::fs::read(docs.join(destination))
+            .unwrap_or_else(|error| panic!("missing bundled doc {destination}: {error}"));
+        assert_eq!(
+            written,
+            std::fs::read(repo.join(source)).unwrap(),
+            "{destination}"
+        );
+    }
+    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[test]
@@ -384,6 +420,18 @@ fn fill_never_completes_a_placeholder_from_inserted_text() {
         ("{{ROOM_NAME}}ID}}", "ID}}{{ROOM_ID}}"),
     ] {
         assert_eq!(fill(template, &values), expected, "{template}");
+    }
+}
+
+#[test]
+fn agent_doc_tier_check_distinguishes_diagnostic_prose_from_commands() {
+    let mentions = crate::messaging::coordinator::dev_tier_mentions;
+    assert!(mentions("Open a diagnostics PR to add diagnostic logging.").is_empty());
+    for command in ["bus diagnostics", "`diagnostics`", "\n  diagnostics"] {
+        assert!(
+            !mentions(command).is_empty(),
+            "missed dev command: {command}"
+        );
     }
 }
 

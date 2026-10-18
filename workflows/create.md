@@ -38,6 +38,7 @@ room workflow and does not require drafting a new room workflow or kickoff.
 | Best-of-N | A judgment call | N agents propose independently → compare → pick or ask the developer |
 | Review loop | Code must converge | reviewers on different models → author fixes → repeat until all ready, capped |
 | Cross-repo | Same feature on several platforms | one agent per repo in parallel, shared spec, joint review |
+| Bug-fix (`DOCS/workflows/bug-fix.md`) | A list of bugs needs investigation and triage | parallel investigators → triage → fix or add diagnostics → verify → PR up |
 
 Always add:
 

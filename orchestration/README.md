@@ -24,7 +24,10 @@ content, not another editable source layer.
 | `orchestration/rules.md` | `<BUS_DATA_DIR>/docs/orchestrator-rules.md` |
 | `workflows/create.md` | `<BUS_DATA_DIR>/docs/workflow-create.md` |
 | `workflows/template.md` | `<BUS_DATA_DIR>/docs/templates/workflow-template.md` |
+| `workflows/investigation-report-template.md` | `<BUS_DATA_DIR>/docs/templates/investigation-report.md` |
+| `workflows/bug-triage-table-template.md` | `<BUS_DATA_DIR>/docs/templates/bug-triage-table.md` |
 | `workflows/auto-merge-pr.md` | `<BUS_DATA_DIR>/docs/workflows/auto-merge-pr.md` |
+| `workflows/bug-fix.md` | `<BUS_DATA_DIR>/docs/workflows/bug-fix.md` |
 | `workflows/cross-repo-feature.md` | `<BUS_DATA_DIR>/docs/workflows/cross-repo-feature.md` |
 
 Links and `DOCS` paths in the guides address the generated docs folder. The
@@ -39,14 +42,14 @@ embeds that pointer. This README documents the contract and is not embedded.
 
 ## Build input closure
 
-There are exactly eight embedded inputs in the table above. Cargo source
+There are exactly eleven embedded inputs in the table above. Cargo source
 archives must include `orchestration/` and `workflows/`; the Nix build fileset
 includes the same directories. These are build inputs. Missing source files
 fail compilation through `include_str!`, and an unknown or unfinished
 `{{...}}` placeholder in the compiled default prompt fails its constant
 assertion. The documentation's literal placeholder examples are left intact.
 
-The orchestration tests enumerate all eight repository copies, check rendered
+The orchestration tests enumerate all eleven repository copies, check rendered
 placeholders and compare emitted bytes at unrelated output locations. The
 default content comes from the binary regardless of the process's working
 directory or where the executable is installed. Explicit custom prompts keep

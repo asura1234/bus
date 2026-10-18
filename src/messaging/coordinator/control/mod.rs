@@ -509,11 +509,11 @@ pub(crate) const METHODS: &[MethodSpec] = &[
 ];
 
 /// Every place `text` names a dev-tier command the way docs and help do
-/// (`bus room focus`, `` `room focus` ``, or a help line), plus any
-/// `diagnostics` at all, since that command is dev tier as a whole.
+/// (`bus room focus`, `` `room focus` ``, or a help line). Ordinary prose
+/// about diagnostics does not name the dev-tier command.
 #[cfg(test)]
 pub(crate) fn dev_tier_mentions(text: &str) -> Vec<String> {
-    let mut found: Vec<String> = METHODS
+    METHODS
         .iter()
         .filter(|spec| spec.tier == Tier::Dev)
         .flat_map(|spec| {
@@ -524,11 +524,7 @@ pub(crate) fn dev_tier_mentions(text: &str) -> Vec<String> {
             ]
         })
         .filter(|pattern| text.contains(pattern.as_str()))
-        .collect();
-    if text.contains("diagnostics") {
-        found.push("diagnostics".into());
-    }
-    found
+        .collect()
 }
 
 pub(crate) fn method_spec(method: &str) -> Option<&'static MethodSpec> {
