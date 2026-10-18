@@ -11,8 +11,11 @@ struct Capture {
     bytes: Vec<u8>,
     flushes: usize,
 }
+type SharedCapture = Arc<(Mutex<Capture>, Condvar)>;
+type SlowHarness = (TerminalOutput, SharedCapture, mpsc::Receiver<()>);
+
 struct SlowWriter {
-    state: Arc<(Mutex<Capture>, Condvar)>,
+    state: SharedCapture,
     entered: Option<mpsc::Sender<()>>,
     fail_flush: bool,
 }
@@ -59,13 +62,7 @@ fn frame(symbol: &str, width: u16) -> FrameData {
         graphics: vec![],
     }
 }
-fn slow(
-    fail_flush: bool,
-) -> (
-    TerminalOutput,
-    Arc<(Mutex<Capture>, Condvar)>,
-    mpsc::Receiver<()>,
-) {
+fn slow(fail_flush: bool) -> SlowHarness {
     let state = Arc::new((Mutex::new(Capture::default()), Condvar::new()));
     let (tx, rx) = mpsc::channel();
     let output = TerminalOutput::with_writer(SlowWriter {
@@ -76,7 +73,7 @@ fn slow(
     .unwrap();
     (output, state, rx)
 }
-fn release(state: &Arc<(Mutex<Capture>, Condvar)>) {
+fn release(state: &SharedCapture) {
     state.0.lock().unwrap().open = true;
     state.1.notify_all();
 }
@@ -166,7 +163,8 @@ fn graphics_and_effect_barriers_preserve_order_and_complete_partial_sequences() 
     {
         let _route = output.route();
         let mut title = stdout();
-        write!(title, "\x1b]0;{}", "queued").unwrap();
+        let label = String::from("queued");
+        write!(title, "\x1b]0;{label}\x07").unwrap();
         title.flush().unwrap();
     }
     output.graphics(b"\x1b_Ga=d,i=17;\x1b\\").unwrap();

@@ -126,7 +126,7 @@ pub(super) fn sync_client_shell_keyboard_report_all(
         &mut crate::client::host_terminal::output::stdout(),
         desired,
     )
-    .map_err(ClientError::ConnectionFailed)?;
+    .map_err(ClientError::HostOutput)?;
     state.keyboard_report_all_active = desired;
     Ok(())
 }

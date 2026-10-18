@@ -226,7 +226,7 @@ fn initial_client_state(
     let draw_host_cursor = should_draw_host_cursor(config.host_cursor);
     let mut state = ClientState {
         output: crate::client::host_terminal::output::TerminalOutput::start()
-            .map_err(ClientError::ConnectionFailed)?,
+            .map_err(ClientError::HostOutput)?,
         mouse_capture_active: config.mouse_capture_active,
         endpoint_mouse_capture_requested: false,
         endpoint_sgr_pixels_requested: false,
@@ -344,9 +344,7 @@ impl ClientLoopDriver {
         now: std::time::Instant,
         client_timer: &mut timer::ClientLoopTimer,
     ) -> Result<bool, ClientError> {
-        self.state
-            .check_output()
-            .map_err(ClientError::ConnectionFailed)?;
+        self.state.check_output().map_err(ClientError::HostOutput)?;
         match event {
             #[cfg(unix)]
             ClientLoopEvent::StdinInput(data) => {
@@ -457,7 +455,7 @@ impl ClientLoopDriver {
         let write_stream = &mut self.write_stream;
         if !pixel_geometry_exact && host_sgr_pixels_active.load(Ordering::Acquire) {
             set_mouse_capture(state.mouse_capture_active, false)
-                .map_err(ClientError::ConnectionFailed)?;
+                .map_err(ClientError::HostOutput)?;
             host_sgr_pixels_active.store(false, Ordering::Release);
         }
         state.reported_size = (new_cols, new_rows);

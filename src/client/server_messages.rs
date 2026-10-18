@@ -242,7 +242,7 @@ fn apply_mouse_capture(
         if enabled && windows_vti_input_backend_enabled() && is_ssh_session() {
             let _ = enable_windows_virtual_terminal_input();
         }
-        set_mouse_capture(enabled, next_sgr_pixels).map_err(ClientError::ConnectionFailed)?;
+        set_mouse_capture(enabled, next_sgr_pixels).map_err(ClientError::HostOutput)?;
         #[cfg(windows)]
         if enabled && windows_vti_input_backend_enabled() && !is_ssh_session() {
             let _ = enable_windows_virtual_terminal_input();
