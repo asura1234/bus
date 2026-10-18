@@ -2,7 +2,7 @@
 use super::{BusUi, Effect};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{Author, BusState, PromptId, RequestId, RequestPhase},
+    model::{Author, BusState, PromptId, RequestId, RequestPhase, RoomId},
 };
 use std::{
     collections::BTreeMap,
@@ -112,7 +112,7 @@ fn messages(state: &BusState) -> BTreeMap<MessageKey, Message<'_>> {
             MessageKey::Notice(notice.id),
             Message {
                 sender,
-                text: &notice.text,
+                text: visible_text(state, master.id, &notice.author, &notice.text),
                 at_ms: notice.submitted_at_ms,
             },
         );
@@ -131,13 +131,27 @@ fn messages(state: &BusState) -> BTreeMap<MessageKey, Message<'_>> {
                 MessageKey::Final(request.group.unwrap_or(request.id)),
                 Message {
                     sender,
-                    text: &reply.text,
+                    text: visible_text(
+                        state,
+                        master.id,
+                        &Author::Agent(request.agent_id),
+                        &reply.text,
+                    ),
                     at_ms: request.completed_at_ms.unwrap_or(reply.received_at_ms),
                 },
             );
         }
     }
     result
+}
+
+/// Match MASTER's content projection before applying the preview budget.
+fn visible_text<'a>(state: &BusState, room: RoomId, author: &Author, text: &'a str) -> &'a str {
+    if state.is_developer_attention_author(room, author) {
+        crate::messaging::attention::text(text).unwrap_or(text)
+    } else {
+        text
+    }
 }
 
 /// Literal text only: never include another line, terminal controls, or the

@@ -304,3 +304,100 @@ fn developer_notification_typed_bus_attention_uses_identified_sender() {
     assert!(text.starts_with("libtv-app master: "));
     assert!(text.contains("Process exited"));
 }
+
+#[test]
+fn developer_notification_attention_preview_omits_internal_tag() {
+    let (before, master, _, agent) = fixture();
+    let mut bus_notice = before.clone();
+    bus_notice
+        .post_developer_attention(agent, "Process exited", 1)
+        .unwrap();
+    let mut tagged_post = before.clone();
+    tagged_post
+        .post_to_developer(
+            master,
+            agent,
+            format!("{} Need Figma access", crate::messaging::attention::TAG),
+            vec![],
+            1,
+        )
+        .unwrap();
+    let now = Instant::now();
+    for (next, expected) in [
+        (bus_notice, "libtv-app master: Process exited"),
+        (tagged_post, "libtv-app master: Need Figma access"),
+    ] {
+        let mut policy = enabled();
+        policy.observe(&before, &next, now);
+        assert_eq!(
+            policy.take(now + Duration::from_secs(3)).as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn developer_notification_tagged_final_uses_the_visible_first_line() {
+    let (mut before, master, _, agent) = fixture();
+    before.set_draft_text(master, "status").unwrap();
+    before.set_draft_recipients(master, [agent]).unwrap();
+    let request = before.submit_draft(master, 1).unwrap()[0];
+    let mut value = serde_json::to_value(&before).unwrap();
+    let item = &mut value["requests"][request.0.to_string()];
+    item["phase"] = serde_json::json!("completed");
+    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":format!("{}\nNeed Figma access\nPRIVATE", crate::messaging::attention::TAG), "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_at_ms"] = serde_json::json!(2);
+    let next: BusState = serde_json::from_value(value).unwrap();
+    let now = Instant::now();
+    let mut policy = enabled();
+    policy.observe(&before, &next, now);
+    assert_eq!(
+        policy.take(now + Duration::from_secs(3)).as_deref(),
+        Some("libtv-app master: Need Figma access")
+    );
+}
+
+#[test]
+fn developer_notification_attention_marker_does_not_consume_the_preview_budget() {
+    let (before, _, _, agent) = fixture();
+    let mut next = before.clone();
+    next.post_developer_attention(agent, &"界".repeat(130), 1)
+        .unwrap();
+    let now = Instant::now();
+    let mut policy = enabled();
+    policy.observe(&before, &next, now);
+    assert_eq!(
+        policy.take(now + Duration::from_secs(3)),
+        Some(format!("libtv-app master: {}…", "界".repeat(100)))
+    );
+}
+
+#[test]
+fn developer_notification_literal_marker_from_non_attention_author_is_preserved() {
+    let (mut before, master, _, _) = fixture();
+    let ordinary = before
+        .create_agent(
+            master,
+            "plain sender",
+            Provider::ClaudeCode,
+            "/tmp".into(),
+            None,
+        )
+        .unwrap();
+    let mut next = before.clone();
+    next.post_to_developer(
+        master,
+        ordinary,
+        format!("{} quoted literally", crate::messaging::attention::TAG),
+        vec![],
+        1,
+    )
+    .unwrap();
+    let now = Instant::now();
+    let mut policy = enabled();
+    policy.observe(&before, &next, now);
+    assert_eq!(
+        policy.take(now + Duration::from_secs(3)).as_deref(),
+        Some("plain sender: [needs_developer_attention] quoted literally")
+    );
+}

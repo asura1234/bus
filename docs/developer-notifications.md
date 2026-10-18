@@ -20,7 +20,8 @@ Startup history and archive moves do not create notifications.
 
 A fixed two-second window starts with the first eligible message. A single
 message shows `orchestrator name: first line`, with the preview limited to 100
-Unicode characters plus an ellipsis if truncated. No additional body is sent.
+Unicode characters plus an ellipsis if truncated. Recognized attention routing
+markers are removed first, matching MASTER chat. No additional body is sent.
 Line endings and terminal controls are filtered. Multiple messages show
 `orchestrator name and N more`, where N counts the remaining messages in the
 burst. The window is not extended by later arrivals. If output is busy, the
