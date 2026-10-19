@@ -211,6 +211,54 @@ fn waiting_tags_in_lists_quotes_and_cjk_text_color_only_the_tag() {
 }
 
 #[test]
+fn visible_waiting_tag_stays_colored_beside_link_whose_label_and_target_hide_tags() {
+    use ratatui::style::Color;
+    const YOU: Option<Color> = Some(Color::Rgb(102, 255, 102));
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot.state.set_draft_text(room, "ping").unwrap();
+    let request = snapshot.state.submit_draft(room, 1).unwrap()[0];
+    snapshot.state.finish_for_test(
+        request,
+        "[waiting-on-you](https://example.com/[waiting-on-you]) then [Waiting_On_You] done",
+        2,
+    );
+    for width in [12, 20, 80] {
+        let lines = ui.history.lines(
+            &snapshot.state,
+            snapshot.state.room(room).unwrap(),
+            width,
+            1,
+            3,
+            &mut Default::default(),
+        );
+        let body: Vec<_> = lines
+            .iter()
+            .filter(|line| {
+                line.raw_markdown
+                    .as_ref()
+                    .is_some_and(|(key, _)| *key == history::MarkdownSource::Reply(request))
+            })
+            .collect();
+        let mut highlighted = String::new();
+        for line in &body {
+            for (text, style) in &line.styles {
+                if style.fg == YOU {
+                    highlighted.push_str(text);
+                }
+            }
+        }
+        let rows: Vec<_> = body.iter().map(|line| &line.text).collect();
+        assert_eq!(
+            highlighted.split_whitespace().collect::<String>(),
+            "[Waiting_On_You]",
+            "width {width}: {rows:?}"
+        );
+    }
+}
+
+#[test]
 fn room_layout_registers_separate_compute_view_and_history_timers() {
     let (mut ui, _, _) = fixture();
     ui.compute_view(100, 40);
