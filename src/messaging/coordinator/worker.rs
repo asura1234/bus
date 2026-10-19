@@ -23,6 +23,7 @@ pub(super) struct Worker {
     pub(super) revision: u64,
     pub(super) last_command_id: u64,
     pub(super) error: Option<String>,
+    pub(super) poll_failures: u32,
     pub(super) storage_pause: Option<StoragePause>,
     pub(super) branch_checks: BTreeMap<AgentId, std::time::Instant>,
     /// Each agent's latest dialog wait and how many polls it has held.
@@ -113,6 +114,7 @@ impl Worker {
             revision: 0,
             last_command_id: 0,
             error: None,
+            poll_failures: 0,
             storage_pause: None,
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
@@ -309,7 +311,6 @@ impl Worker {
         snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
         self.compact_history();
-        let interval = Duration::from_millis(500);
         let mut next_poll = std::time::Instant::now();
         let mut pending_commands = std::collections::VecDeque::new();
         loop {
@@ -405,7 +406,7 @@ impl Worker {
                         }
                     }
                 }
-                next_poll = std::time::Instant::now() + interval;
+                next_poll = std::time::Instant::now() + self.poll_interval();
             }
             busy.stage("snapshot");
             let snapshot = self.timed_snapshot();
@@ -431,13 +432,16 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         self.expire_queued_now()?;
-        let infos = self.poll().inspect_err(|_| {
+        let Some(infos) = self.poll().inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",
                 stage = "poll",
                 "Delivery paused for this tick"
             );
-        })?;
+        })?
+        else {
+            return Ok(());
+        };
         // Every callback this tick applies is persisted by one write.
         self.begin_batch();
         let consumed = self

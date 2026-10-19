@@ -46,18 +46,36 @@ impl ApiClient {
         request: &Request,
         timeout: Duration,
     ) -> Result<serde_json::Value, ApiClientError> {
-        let mut stream = self.connect()?;
-        set_timeout_best_effort(&stream, TimeoutKind::Send, timeout)?;
-        set_timeout_best_effort(&stream, TimeoutKind::Recv, timeout)?;
-        write_request(&mut stream, request)?;
+        let mut stream = self
+            .connect()
+            .inspect_err(|error| log_io_error("connect", error, timeout))?;
+        set_timeout_best_effort(&stream, TimeoutKind::Send, timeout)
+            .inspect_err(|error| log_io_error("send_timeout", error, timeout))?;
+        set_timeout_best_effort(&stream, TimeoutKind::Recv, timeout)
+            .inspect_err(|error| log_io_error("recv_timeout", error, timeout))?;
+        write_request(&mut stream, request).inspect_err(|error| {
+            if let ApiClientError::Io(error) = error {
+                log_io_error("write_request", error, timeout);
+            }
+        })?;
 
         let mut reader = BufReader::new(stream);
-        read_json_line(&mut reader)
+        read_json_line(&mut reader).inspect_err(|error| {
+            if let ApiClientError::Io(error) = error {
+                log_io_error("read_response", error, timeout);
+            }
+        })
     }
 
     fn connect(&self) -> io::Result<LocalStream> {
         crate::platform::ipc::connect_local_stream(&self.socket_path())
     }
+}
+
+fn log_io_error(stage: &'static str, error: &io::Error, timeout: Duration) {
+    tracing::debug!(event = "bus.api.io_error", stage, error_kind = ?error.kind(),
+        raw_os_error = ?error.raw_os_error(), timeout_ms = timeout.as_millis() as u64,
+        error = %error, "Native API I/O failed");
 }
 
 enum TimeoutKind {
@@ -166,3 +184,7 @@ mod tests {
         assert_eq!(client.socket_path(), path);
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "client_timeout_test.rs"]
+mod timeout_tests;
