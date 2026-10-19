@@ -33,7 +33,7 @@ pub(crate) struct BusSettings {
     pub(crate) freeze_notifications: bool,
     pub(crate) feishu_recipient: String,
     pub(crate) feishu_cli_path: Option<String>,
-    /// Internal enable generation, so sessions offline during off/on skip old history.
+    /// Legacy serialized preference retained for settings compatibility.
     pub(crate) feishu_notifications_generation: u64,
     /// MASTER's sound in every session; it rings by default.
     pub(crate) master_sound: SoundPref,

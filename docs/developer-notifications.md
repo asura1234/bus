@@ -16,10 +16,10 @@ use `--as bot`, never the user identity. The equivalent toggle command is
 
 A fixed two-second window combines a burst into one DM. Its plain text is
 `orchestrator name is waiting on you: action`, taking the first line or bullet after
-the tag or phrase (on the same or following nonempty line), limited to 100 Unicode
-characters plus an ellipsis. Markdown closing markers are skipped. No additional
-body or attachment paths are added. A burst appends `and N more` for its other tagged
-messages. Untagged messages do not join it. Recognized attention routing markers are
+the tag or phrase (on the same or following nonempty line), preserving the full
+action line. Markdown closing markers are skipped. No additional body or attachment
+paths are added. Each tagged message in a burst contributes its own formatted line,
+joined by newlines in one DM. Untagged messages do not join it. Recognized attention routing markers are
 removed first; line endings and terminal controls are filtered.
 
 The coordinator detects messages regardless of the visible room, terminal or focus.

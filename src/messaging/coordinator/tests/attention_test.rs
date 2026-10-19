@@ -150,6 +150,19 @@ fn feishu_waiting_variants_invoke_bot_dm_once_with_exact_action_and_argv() {
 }
 
 #[test]
+fn feishu_full_unicode_action_reaches_cli_without_truncation() {
+    let mut f = Fixture::new();
+    let action = "界 full action ".repeat(100);
+    f.post(&format!("[waiting_on_you] {action}\nPRIVATE"));
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(
+        f.calls()[0][7],
+        format!("orch is waiting on you: {}", action.trim())
+    );
+}
+
+#[test]
 fn feishu_untagged_and_disabled_messages_never_send_or_replay() {
     let mut f = Fixture::new();
     f.post("[needs_developer_attention] Approve access");
@@ -174,7 +187,10 @@ fn feishu_bursts_coalesce_and_toggle_cancels_pending() {
     f.pump();
     f.flush();
     assert_eq!(f.calls().len(), 1);
-    assert_eq!(f.calls()[0][7], "orch is waiting on you: first and 1 more");
+    assert_eq!(
+        f.calls()[0][7],
+        "orch is waiting on you: first\norch is waiting on you: second"
+    );
     f.post("[waiting_on_you] cancelled");
     f.worker.set_feishu_notifications(false, &f.events).unwrap();
     f.flush();

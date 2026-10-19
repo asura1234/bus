@@ -13,9 +13,7 @@ pub(crate) struct WaitingNotifications {
 #[derive(Debug)]
 struct Burst {
     deadline: u64,
-    sender: String,
-    preview: String,
-    count: usize,
+    lines: Vec<String>,
 }
 
 #[derive(Eq, Ord, PartialEq, PartialOrd)]
@@ -53,14 +51,17 @@ impl WaitingNotifications {
             let Some(action) = waiting_action(message.text) else {
                 continue;
             };
+            let line = format!(
+                "{} is waiting on you: {}",
+                plain_line(message.sender),
+                plain_line(action)
+            );
             if let Some(burst) = self.pending.as_mut() {
-                burst.count = burst.count.saturating_add(1);
+                burst.lines.push(line);
             } else {
                 self.pending = Some(Burst {
                     deadline: now + BURST_WINDOW,
-                    sender: plain_preview(message.sender, usize::MAX),
-                    preview: plain_preview(action, 100),
-                    count: 1,
+                    lines: vec![line],
                 });
             }
         }
@@ -75,12 +76,7 @@ impl WaitingNotifications {
             return None;
         }
         let burst = self.pending.take()?;
-        let text = format!("{} is waiting on you: {}", burst.sender, burst.preview);
-        Some(if burst.count == 1 {
-            text
-        } else {
-            format!("{} and {} more", text, burst.count - 1)
-        })
+        Some(burst.lines.join("\n"))
     }
 }
 
@@ -143,7 +139,7 @@ fn messages(state: &BusState) -> BTreeMap<MessageKey, Message<'_>> {
     result
 }
 
-/// Match MASTER's content projection before applying the preview budget.
+/// Match MASTER's content projection before selecting the action line.
 fn visible_text<'a>(state: &BusState, room: RoomId, author: &Author, text: &'a str) -> &'a str {
     if state.is_developer_attention_author(room, author) {
         crate::messaging::attention::text(text).unwrap_or(text)
@@ -177,11 +173,10 @@ fn waiting_action(text: &str) -> Option<&str> {
     Some(action.trim_start_matches(|ch: char| ch.is_whitespace() || ch == ':'))
 }
 
-/// Literal text only: never include another line, terminal controls, or the
-/// rest of a long message. Character limits are Unicode-safe.
-fn plain_preview(text: &str, limit: usize) -> String {
-    let mut chars = text
-        .split(['\n', '\r', '\u{2028}', '\u{2029}'])
+/// Preserve the full action line, filtering terminal controls without including
+/// another line or any additional message context.
+fn plain_line(text: &str) -> String {
+    text.split(['\n', '\r', '\u{2028}', '\u{2029}'])
         .next()
         .unwrap_or("")
         .chars()
@@ -191,12 +186,10 @@ fn plain_preview(text: &str, limit: usize) -> String {
             } else {
                 (!ch.is_control()).then_some(ch)
             }
-        });
-    let mut preview: String = chars.by_ref().take(limit).collect();
-    if chars.next().is_some() {
-        preview.push('…');
-    }
-    preview.trim().to_owned()
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 #[cfg(test)]

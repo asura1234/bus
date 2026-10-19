@@ -89,7 +89,9 @@ fn developer_notification_coalesces_messages_without_extending_window() {
     policy.observe(&first, &second, now + 1900);
     assert_eq!(
         policy.take(now + 2000).as_deref(),
-        Some("libtv-app master is waiting on you: first and 1 more")
+        Some(
+            "libtv-app master is waiting on you: first\nlibtv-app master is waiting on you: second"
+        )
     );
     assert!(policy.take(now + 5000).is_none());
 }
@@ -137,7 +139,7 @@ fn developer_notification_excludes_work_rooms_and_agent_directed_prompts() {
 }
 
 #[test]
-fn developer_notification_preview_is_bounded_unicode_and_control_free() {
+fn developer_notification_full_action_is_unicode_and_control_free() {
     let (before, master, _, agent) = fixture();
     let mut next = before.clone();
     next.post_to_developer(
@@ -152,15 +154,14 @@ fn developer_notification_preview_is_bounded_unicode_and_control_free() {
     let mut policy = enabled();
     policy.observe(&before, &next, now);
     let text = policy.take(now + 2000).unwrap();
-    assert_eq!(text.split_once(": ").unwrap().1.chars().count(), 101);
-    assert!(text.ends_with('…'));
+    assert_eq!(text.split_once(": ").unwrap().1, "界".repeat(130));
     assert!(!text.chars().any(char::is_control));
     assert!(!text.contains("PRIVATE"));
 }
 
 #[test]
 fn developer_notification_carriage_return_ends_the_preview() {
-    assert_eq!(plain_preview("first\rPRIVATE", 100), "first");
+    assert_eq!(plain_line("first\rPRIVATE"), "first");
 }
 
 #[test]
@@ -280,7 +281,7 @@ fn developer_notification_tagged_final_uses_the_visible_first_line() {
 }
 
 #[test]
-fn developer_notification_attention_marker_does_not_consume_the_preview_budget() {
+fn developer_notification_attention_marker_preserves_full_action() {
     let (before, _, _, agent) = fixture();
     let mut next = before.clone();
     next.post_developer_attention(agent, &format!("[waiting-on-you] {}", "界".repeat(130)), 1)
@@ -291,8 +292,8 @@ fn developer_notification_attention_marker_does_not_consume_the_preview_budget()
     assert_eq!(
         policy.take(now + 3000),
         Some(format!(
-            "libtv-app master is waiting on you: {}…",
-            "界".repeat(100)
+            "libtv-app master is waiting on you: {}",
+            "界".repeat(130)
         ))
     );
 }

@@ -152,15 +152,16 @@ class Run:
         self.command("wait", "--text", "KEEP DRAFT")
         self.step(2, "Untagged and attention-only posts sent nothing; underscore --to human produced one exact BOT action-line DM, no private body/attachment/popup; draft preserved")
 
-        self.post("[waiting-on-you] First update")
+        long_action = "Full action 界 " * 100
+        self.post("[waiting-on-you] " + long_action)
         self.post("Routine progress")
         self.post("WAITING ON YOU: Second update")
         self.until(lambda: len(self.sends()) == 2, "one coalesced burst")
-        assert self.sends()[-1][7] == "notify-orch is waiting on you: First update and 1 more", self.sends()
+        assert self.sends()[-1][7] == f"notify-orch is waiting on you: {long_action.strip()}\nnotify-orch is waiting on you: Second update", self.sends()
         self.quiet()
         assert len(self.sends()) == 2
         self.assert_bot()
-        self.step(3, "Hyphen and uppercase whole phrase coalesced into one second DM with and 1 more; no duplicate or untagged member; all argv explicitly BOT/user-id/plain-text")
+        self.step(3, "Full long Unicode action and uppercase whole phrase coalesced into one second DM, each formatted line preserved; no duplicate or untagged member; all argv explicitly BOT/user-id/plain-text")
 
         self.command("click", "--hit", "settings")
         self.command("click", "--hit", "feishu-notifications")
