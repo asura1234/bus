@@ -234,7 +234,7 @@ fn claude_turn_awaits_background(value: &Value) -> bool {
 
 /// The ids of the background shells a Claude `Stop` lists as running. Each one
 /// that finishes wakes a turn of its own, whose `Stop` no longer lists it.
-/// Bus's own waits (`bus send`, `bus wait`) are not work the reply depends on:
+/// Bus's own control commands are not work the reply depends on:
 /// an orchestrator's reply is final while its waits on workers run for
 /// minutes or hours, so they are left out.
 pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet<String> {
@@ -246,27 +246,40 @@ pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet
         .filter(|task| {
             task.get("type").and_then(Value::as_str) == Some("shell")
                 && task.get("status").and_then(Value::as_str) == Some("running")
-                && !task
-                    .get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(is_bus_wait)
+        })
+        .filter(|task| {
+            let reason = match task.get("command").and_then(Value::as_str) {
+                Some(command) if is_bus_control(command) => "bus_control",
+                Some(_) => "work_or_opaque_command",
+                None => "missing_command",
+            };
+            let shell_id = task.get("id").and_then(Value::as_str);
+            tracing::debug!(
+                event = "bus.callback.shell_classified",
+                shell_id,
+                reason,
+                held = reason != "bus_control",
+                "Background shell classification"
+            );
+            reason != "bus_control"
         })
         .filter_map(|task| task.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect()
 }
 
-/// Exclude only shells made up of Bus waits and setup. A build that reports
+/// Exclude only shells made up of Bus controls and setup. A build that reports
 /// through Bus is still real background work. Quotes and escapes keep message
 /// text from being mistaken for command separators; unfamiliar shell constructs
 /// conservatively keep the hold.
-pub(crate) fn is_bus_wait(command: &str) -> bool {
-    let Some(segments) = bus_wait_segments(command) else {
+pub(crate) fn is_bus_control(command: &str) -> bool {
+    let Some(segments) = bus_control_segments(command) else {
         return false;
     };
     let mut saw_bus = false;
     for segment in segments {
-        let mut words = segment.split_whitespace().peekable();
-        while words.peek().is_some_and(|word| word.contains('=')) {
+        let words = shell_words(segment);
+        let mut words = words.iter().map(String::as_str).peekable();
+        while words.peek().is_some_and(|word| shell_assignment(word)) {
             words.next();
         }
         let Some(program) = words.next() else {
@@ -279,10 +292,29 @@ pub(crate) fn is_bus_wait(command: &str) -> bool {
         if name != "bus" && name != "bus.exe" {
             return false;
         }
-        while words.peek().is_some_and(|next| next.starts_with("--")) {
+        while words
+            .peek()
+            .is_some_and(|next| matches!(*next, "--dev" | "--yolo"))
+        {
             words.next();
         }
-        if !matches!(words.next(), Some("send" | "wait")) {
+        if !matches!(
+            words.next(),
+            Some(
+                "send"
+                    | "wait"
+                    | "history"
+                    | "state"
+                    | "agent"
+                    | "room"
+                    | "message"
+                    | "request"
+                    | "settings"
+                    | "diagnostics"
+                    | "sounds"
+                    | "quit"
+            )
+        ) {
             return false;
         }
         saw_bus = true;
@@ -290,8 +322,53 @@ pub(crate) fn is_bus_wait(command: &str) -> bool {
     saw_bus
 }
 
+fn shell_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && name.chars().enumerate().all(|(index, ch)| {
+                ch == '_' || ch.is_ascii_alphabetic() || (index > 0 && ch.is_ascii_digit())
+            })
+    })
+}
+
+// Segmentation already validated quoting and rejected command substitution.
+// Decode shell words so quoted executable paths and setup paths remain direct.
+fn shell_words(segment: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in segment.chars() {
+        if escaped {
+            if quote == Some('"') && !matches!(ch, '$' | '`' | '"' | '\\' | '\n') {
+                word.push('\\');
+            }
+            if ch != '\n' {
+                word.push(ch);
+            }
+            escaped = false;
+        } else if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if quote.is_none() && ch.is_whitespace() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else {
+            word.push(ch);
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
 // Keep unsupported compound shell syntax held instead of guessing its work.
-fn bus_wait_segments(command: &str) -> Option<Vec<&str>> {
+fn bus_control_segments(command: &str) -> Option<Vec<&str>> {
     let mut quote = None;
     let mut escaped = false;
     let mut start = 0;

@@ -167,7 +167,7 @@ fn workflow_paths_use_source_detection_only_for_dev_launches() {
 /// stays in the work room, as the prompt and rules word it.
 const MASTER_REPORT_PHRASES: [&str; 7] = [
     "Report progress, questions and blockers in MASTER; keep details in your room.",
-    "Bus shows it in your work room, never in MASTER.",
+    "A turn no message started posts in your work room.",
     "a progress report when a step or milestone finishes or fails (a PR merged, a task done, a gate failed);",
     "every question or decision for the developer;",
     "every blocker that waits on the developer (a dialog they must approve, a destructive action);",
@@ -279,9 +279,9 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("/data/docs/how-to-bus-cli.md"));
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
-    // A turn's final shows in the work room unless the developer's MASTER
-    // message started the turn. Progress, questions, blockers and plan changes
-    // go to MASTER with `send --to human`; details stay in the work room.
+    // Replies appear in the request's room for developer and agent senders.
+    // Autonomous finals appear in the work room. Progress, questions, blockers
+    // and plan changes go to MASTER with `send --to human`.
     for phrase in MASTER_REPORT_PHRASES {
         assert!(flat(&text).contains(phrase), "missing {phrase}: {text}");
     }
@@ -376,6 +376,9 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     }
     let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
     assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
+    assert!(flat(&rules).contains("`./run dev-control` is for foreground controls."));
+    assert!(flat(&rules)
+        .contains("For background dispatches, call the existing Bus executable directly;"));
     assert!(flat(&rules).contains(
         "**Report progress, questions and blockers in MASTER; keep details in your room.**"
     ));
@@ -388,9 +391,10 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     );
     assert!(rules.contains("bus send --room master --as YOUR_NAME --to human"));
     let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
+    assert!(cli.contains("With dev logging or `BUS_LOG=bus=debug`"));
     for phrase in [
-        "An orchestrator's final reply to a developer message lands in MASTER by itself.",
-        "shows in the work room the orchestrator runs, never in MASTER",
+        "A reply lands in the message's room, equally for developer and agent senders.",
+        "A turn no message started posts in the orchestrator's work room.",
         "MASTER carries progress, questions and blockers; work details stay in the work room.",
         "a progress report when a step or milestone finishes or fails (a PR merged, a task done, a gate failed);",
         "every question or decision for you;",

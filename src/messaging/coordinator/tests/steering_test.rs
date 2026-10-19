@@ -18,6 +18,9 @@ mod interrupt_tests;
 #[path = "delivery_batch_test.rs"]
 mod delivery_batch_tests;
 
+#[path = "dispatch_shell_hold_test.rs"]
+mod dispatch_shell_hold_tests;
+
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Records every native method; prompt writes succeed.
@@ -61,6 +64,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(provider: Provider) -> Self {
+        Self::in_room(provider, false)
+    }
+
+    fn in_room(provider: Provider, master: bool) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "bus-steering-{}-{}-{}",
             std::process::id(),
@@ -70,7 +77,11 @@ impl Fixture {
         let native = Arc::new(Mutex::new(Vec::new()));
         let mut worker = Worker::open(dir.clone(), Box::new(Native(native.clone()))).unwrap();
         let mut state = worker.state.clone();
-        let room = state.create_room("room").unwrap();
+        let room = if master {
+            state.master_room().unwrap().id
+        } else {
+            state.create_room("room").unwrap()
+        };
         let agent = state
             .create_agent(room, "builder", provider, dir.clone(), None)
             .unwrap();
