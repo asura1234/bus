@@ -1,5 +1,59 @@
 use super::*;
 
+#[test]
+fn rejected_shell_final_preserves_the_answer_for_the_whole_joined_group() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
+    f.consume();
+    let lead = running(&mut f, "question", "turn-1");
+    let mut group = vec![lead];
+    for text in ["authorization", "retraction"] {
+        let joined = f.send(text, false);
+        f.deliver();
+        f.started("turn-1", text);
+        f.consume();
+        assert_eq!(f.request(joined).group, Some(lead));
+        group.push(joined);
+    }
+    claude_stop_holding(&f, "turn-1", "first answer", &["b1"]);
+    f.consume();
+    assert!(f.request(lead).has_held_background_reply());
+
+    // No new submit hook: this Stop is rejected as WrongTurn, just as in
+    // the incident, but still carries captured text and the running shell.
+    claude_stop_holding(&f, "turn-2", "retraction acknowledged", &["b1"]);
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.now += crate::messaging::model::DELIVERED_STALL_MS;
+    for &id in &group {
+        let message = f.request(id).prompt.id;
+        let status = f.worker.control_message_at(message, f.now).unwrap();
+        assert_ne!(status["requests"][0]["stage"], "stalled", "{status}");
+        assert!(status["requests"][0]["reason"].is_null(), "{status}");
+    }
+    let hold = f.request(lead).shell_hold.as_ref().unwrap();
+    assert_eq!(hold.interim.text, "first answer");
+    assert_eq!(hold.interim.provider_turn_id.as_deref(), Some("turn-1"));
+
+    // A valid hold can still release the captured answer at its cap.
+    f.now += 15 * 60 * 1000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    for id in group {
+        assert_eq!(f.request(id).phase, RequestPhase::Completed);
+        assert_eq!(f.reply(id).as_deref(), Some("first answer"));
+        assert_eq!(
+            f.request(id).failure_reason.as_deref(),
+            Some("background_shells_timeout")
+        );
+    }
+    let persisted = f.worker.store.load().unwrap().unwrap();
+    assert_eq!(
+        persisted.request(lead).unwrap().phase,
+        RequestPhase::Completed
+    );
+}
+
 fn master_reply(author_is_agent: bool, command: &str, held: bool) {
     let mut f = Fixture::in_room(Provider::ClaudeCode, true);
     let mut state = f.worker.state.clone();
