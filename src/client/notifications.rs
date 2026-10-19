@@ -4,15 +4,6 @@ use tracing::{debug, warn};
 
 use crate::protocol::wire::NotifyKind;
 
-/// Use the same encoder and ordered output owner as recovered-freeze alerts.
-pub(super) fn show_developer_notification(text: &str) -> io::Result<()> {
-    use io::Write as _;
-    let bytes = super::freeze_alert::encode(text);
-    let mut writer = super::host_terminal::output::stdout();
-    writer.write_all(&bytes)?;
-    writer.flush()
-}
-
 pub(super) fn handle_notify(kind: NotifyKind, message: &str, body: Option<&str>) {
     handle_notify_with_notifiers(
         kind,

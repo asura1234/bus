@@ -1,21 +1,12 @@
-//! Self-only delivery. History is the durable backlog; only 128 bodies are queued.
-mod completion;
+//! Waiting-on-you DMs run in one cancellable background worker; UI and coordinator never wait.
 use super::{mpsc, BusEvent, Worker};
 use crate::messaging::{
-    feishu::{Authenticated, Cancellation, Client, Message, SendFailure},
-    model::AttentionAttempt,
-    prefs::settings,
+    feishu::{waiting::WaitingNotifications, Cancellation, Client},
+    model::BusState,
+    prefs::settings::{self, BusSettings},
 };
 use serde::Serialize;
-use std::{
-    collections::{BTreeSet, VecDeque},
-    thread::JoinHandle,
-};
-
-const DEDUPE_MS: u64 = 10 * 60_000;
-const RATE_MS: u64 = 60_000;
-const RATE_LIMIT: usize = 6;
-const QUEUE_LIMIT: usize = 128;
+use std::thread::JoinHandle;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub(crate) struct Status {
@@ -26,31 +17,22 @@ pub(crate) struct Status {
     pub(crate) error: Option<String>,
 }
 
-enum Completion {
-    Auth(Result<Authenticated, String>, bool),
-    Send(String, Result<(), SendFailure>),
-}
-
 #[derive(Default)]
 pub(super) struct Runtime {
     pub(super) status: Status,
     pub(super) client: Client,
-    observed: Option<(bool, u64)>,
-    rebaseline: bool,
-    authenticated: Option<Authenticated>,
+    config: Option<(bool, String, Option<String>)>,
+    previous: Option<(u64, BusState)>,
+    waiting: WaitingNotifications,
     cancel: Cancellation,
-    job: Option<JoinHandle<Completion>>,
-    retired: Vec<JoinHandle<Completion>>,
-    queue: VecDeque<Message>,
+    job: Option<JoinHandle<Result<(), String>>>,
+    retired: Vec<JoinHandle<Result<(), String>>>,
     published: Status,
 }
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        self.cancel.cancel();
-        if let Some(job) = self.job.take() {
-            self.retired.push(job);
-        }
+        self.stop();
         for job in self.retired.drain(..) {
             let _ = job.join();
         }
@@ -59,30 +41,13 @@ impl Drop for Runtime {
 
 impl Runtime {
     fn stop(&mut self) {
-        if self.status.enabled {
-            tracing::info!(
-                event = "bus.feishu.disabled",
-                "Feishu notifications disabled"
-            );
-        }
         self.cancel.cancel();
         if let Some(job) = self.job.take() {
             self.retired.push(job);
         }
         self.cancel = Cancellation::default();
-        self.authenticated = None;
-        self.queue.clear();
+        self.waiting.configure(false);
         self.status = Status::default();
-    }
-
-    fn start(&mut self, explicit: bool) {
-        self.stop();
-        let client = self.client.clone();
-        let cancel = self.cancel.clone();
-        self.job = Some(std::thread::spawn(move || {
-            Completion::Auth(client.authenticate(cancel), explicit)
-        }));
-        self.status.pending = true;
     }
 
     fn publish(&mut self, events: &mpsc::Sender<BusEvent>) {
@@ -92,166 +57,116 @@ impl Runtime {
         }
     }
 
+    fn collect_completion(&mut self) {
+        if self.job.as_ref().is_some_and(|job| job.is_finished()) {
+            if let Some(job) = self.job.take() {
+                match job
+                    .join()
+                    .unwrap_or_else(|_| Err("Feishu notification worker panicked".into()))
+                {
+                    Ok(()) => {
+                        self.status.error = None;
+                        tracing::info!(event = "bus.feishu.sent", "Feishu notification delivered");
+                    }
+                    Err(error) => {
+                        tracing::warn!(event = "bus.feishu.failed", %error, "Feishu notification failed; no automatic retry");
+                        self.status.error = Some(error);
+                    }
+                }
+            }
+            self.status.pending = false;
+        }
+    }
+
     fn pump(
         &mut self,
         worker: &mut Worker,
         events: &mpsc::Sender<BusEvent>,
         now: u64,
     ) -> Result<(), String> {
+        // Keep quota attention inside Bus even though only explicit waiting tags send DMs.
         let mut state = worker.state.clone();
         for (key, agent, active) in worker.usage.exhausted(now) {
-            if state
-                .agent(agent)
-                .is_none_or(|agent| agent.deletion_pending)
-            {
+            if state.agent(agent).is_none_or(|a| a.deletion_pending) {
                 continue;
             }
-            state.attention_episode(key.clone(), active, agent, &format!("Provider usage limit reached ({key}). Wait for reset or choose an available provider."), now).map_err(|error| error.to_string())?;
+            state.attention_episode(key.clone(), active, agent, &format!("Provider usage limit reached ({key}). Wait for reset or choose an available provider."), now).map_err(|e| e.to_string())?;
         }
         if state != worker.state {
             worker.save(state)?;
         }
-        let desired = match worker
+        let saved = match worker
             .settings_path
             .as_deref()
             .map(settings::load)
             .transpose()
         {
-            Ok(saved) => saved
-                .map(|s| (s.feishu_notifications, s.feishu_notifications_generation))
-                .unwrap_or_default(),
+            Ok(saved) => saved.unwrap_or_else(|| BusSettings {
+                feishu_notifications: false,
+                ..Default::default()
+            }),
             Err(error) => {
-                let changed = self.status.error.as_deref() != Some(&error);
-                self.stop();
-                self.observed = None;
-                if changed {
-                    tracing::warn!(event = "bus.feishu.settings_failed", %error, "Feishu notifications paused: settings unreadable");
+                if self.status.error.as_deref() != Some(&error) {
+                    tracing::warn!(event = "bus.feishu.settings_failed", %error, "Feishu notifications paused");
                 }
+                self.stop();
+                self.config = None;
+                self.previous = Some((worker.revision, worker.state.clone()));
                 self.status.error = Some(error);
                 self.publish(events);
                 return Ok(());
             }
         };
-        if self.observed != Some(desired) {
-            self.rebaseline = self.observed.is_some()
-                || worker.state.attention_delivery().generation != desired.1;
-            self.observed = Some(desired);
-            if desired.0 {
-                self.start(false);
-            } else {
-                self.stop();
+        let desired = (
+            saved.feishu_notifications,
+            saved.feishu_recipient.clone(),
+            saved.feishu_cli_path.clone(),
+        );
+        if self.config.as_ref() != Some(&desired) {
+            self.stop();
+            self.status.enabled = desired.0;
+            self.waiting.configure(desired.0);
+            self.config = Some(desired);
+            // Startup and changes to enabled/destination skip history rather than replaying it.
+            self.previous = Some((worker.revision, worker.state.clone()));
+        }
+        self.retired.retain(|job| !job.is_finished());
+        self.collect_completion();
+        if let Some((revision, previous)) = self.previous.as_ref() {
+            if *revision != worker.revision {
+                self.waiting.observe(previous, &worker.state, now);
+                self.previous = Some((worker.revision, worker.state.clone()));
             }
         }
-        let mut index = 0;
-        while index < self.retired.len() {
-            if self.retired[index].is_finished() {
-                let _ = self.retired.swap_remove(index).join();
-            } else {
-                index += 1;
+        if self.job.is_none() && worker.storage_pause.is_none() {
+            if let Some(text) = self.waiting.take(now) {
+                let client = self.client.clone();
+                let cancel = self.cancel.clone();
+                let recipient = saved.feishu_recipient;
+                let program = saved.feishu_cli_path;
+                let key = format!(
+                    "bus-{}-{}",
+                    std::process::id(),
+                    crate::messaging::storage::io::now_ns()
+                );
+                match std::thread::Builder::new()
+                    .name("bus-feishu".into())
+                    .spawn(move || {
+                        client.send(&recipient, program.as_deref(), &text, &key, &cancel)
+                    }) {
+                    Ok(job) => {
+                        self.job = Some(job);
+                        self.status.pending = true;
+                    }
+                    Err(error) => {
+                        tracing::warn!(event = "bus.feishu.failed", %error, "Could not start Feishu notification worker");
+                        self.status.error = Some(error.to_string());
+                    }
+                }
             }
-        }
-        if self.job.as_ref().is_some_and(|job| job.is_finished()) {
-            let job = self.job.take().ok_or("Feishu worker missing")?;
-            self.complete(
-                job.join().map_err(|_| "Feishu worker failed")?,
-                worker,
-                events,
-            )?;
-        }
-        if self.status.enabled && worker.storage_pause.is_none() {
-            self.deliver(worker, now)?;
-        }
-        if self.status.enabled {
-            let delivery = worker.state.attention_delivery();
-            self.status.queued = worker
-                .state
-                .attention_sources()
-                .filter(|(source, _, _)| !delivery.handled.contains(source))
-                .count();
-            self.status.rate_limited = self.status.queued > 0
-                && delivery
-                    .recent_attempts
-                    .iter()
-                    .filter(|attempt| now.saturating_sub(attempt.at_ms) < RATE_MS)
-                    .count()
-                    >= RATE_LIMIT;
         }
         self.publish(events);
         Ok(())
-    }
-
-    fn deliver(&mut self, worker: &mut Worker, now: u64) -> Result<(), String> {
-        let machine = crate::platform::hostname().unwrap_or_else(|| "unknown".into());
-        let session = worker.data_dir.to_string_lossy();
-        let queued: BTreeSet<_> = self
-            .queue
-            .iter()
-            .map(|message| message.source.clone())
-            .collect();
-        let available = QUEUE_LIMIT.saturating_sub(self.queue.len());
-        self.queue.extend(
-            worker
-                .state
-                .attention_sources()
-                .filter(|(source, _, _)| {
-                    !worker.state.attention_delivery().handled.contains(source)
-                        && !queued.contains(source)
-                })
-                .take(available)
-                .map(|(source, origin, text)| {
-                    Message::new(&machine, &session, source, &origin, text)
-                }),
-        );
-        if self.job.is_some() {
-            return Ok(());
-        }
-        let mut state = worker.state.clone();
-        state
-            .attention_delivery_mut()
-            .recent_attempts
-            .retain(|attempt| now.saturating_sub(attempt.at_ms) < DEDUPE_MS);
-        while let Some(message) = self.queue.front() {
-            let delivery = state.attention_delivery();
-            let duplicate = delivery
-                .recent_attempts
-                .iter()
-                .any(|attempt| attempt.signature == message.signature);
-            if !duplicate
-                && delivery
-                    .recent_attempts
-                    .iter()
-                    .filter(|attempt| now.saturating_sub(attempt.at_ms) < RATE_MS)
-                    .count()
-                    >= RATE_LIMIT
-            {
-                break;
-            }
-            let Some(message) = self.queue.pop_front() else {
-                break;
-            };
-            let delivery = state.attention_delivery_mut();
-            delivery.handled.insert(message.source.clone());
-            if duplicate {
-                continue;
-            }
-            delivery.interrupted.insert(message.source.clone());
-            delivery.recent_attempts.push(AttentionAttempt {
-                source: message.source.clone(),
-                signature: message.signature.clone(),
-                at_ms: now,
-            });
-            worker.save(state)?;
-            let authenticated = self
-                .authenticated
-                .as_ref()
-                .ok_or("Feishu self identity unavailable")?
-                .clone();
-            self.job = Some(std::thread::spawn(move || {
-                Completion::Send(message.source.clone(), authenticated.send(&message))
-            }));
-            return Ok(());
-        }
-        worker.save(state)
     }
 }
 
@@ -263,38 +178,12 @@ impl Worker {
     ) -> Result<(), String> {
         let path = self
             .settings_path
-            .clone()
+            .as_ref()
             .ok_or("Bus settings location unavailable")?;
-        let saved = settings::load(&path)?;
-        let desired = (
-            saved.feishu_notifications,
-            saved.feishu_notifications_generation,
-        );
-        if on
-            && (self.attention.status.enabled || self.attention.status.pending)
-            && self.attention.observed == Some(desired)
-        {
-            return Ok(());
-        }
-        let mut runtime = std::mem::take(&mut self.attention);
-        let result = (|| {
-            if on {
-                runtime.observed = Some(desired);
-                runtime.start(true);
-            } else {
-                runtime.stop();
-                let saved =
-                    settings::update(&path, |settings| settings.feishu_notifications = false)?;
-                runtime.observed = Some((false, saved.feishu_notifications_generation));
-                let _ = events.send(BusEvent::SettingsChanged(saved));
-            }
-            Ok(())
-        })();
-        runtime.publish(events);
-        self.attention = runtime;
-        result
+        let saved = settings::update(path, |s| s.feishu_notifications = on)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        self.pump_feishu(events, crate::messaging::storage::io::now_ms())
     }
-
     pub(super) fn pump_feishu(
         &mut self,
         events: &mpsc::Sender<BusEvent>,

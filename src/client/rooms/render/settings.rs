@@ -67,11 +67,14 @@ impl BusUi {
         lines.push(SoundSettingsLine::Feishu {
             field: self.feishu_field(),
         });
+        lines.push(SoundSettingsLine::FeishuRecipient {
+            field: self.feishu_field() + 1,
+        });
+        lines.push(SoundSettingsLine::FeishuCli {
+            field: self.feishu_field() + 2,
+        });
         lines.push(SoundSettingsLine::Freeze {
             field: self.freeze_field(),
-        });
-        lines.push(SoundSettingsLine::DeveloperNotifications {
-            field: self.developer_notifications_field(),
         });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
@@ -232,18 +235,26 @@ impl BusUi {
                     false,
                 );
             }
-            SoundSettingsLine::DeveloperNotifications { field } => {
+            SoundSettingsLine::FeishuRecipient { field } => {
                 view.row(
                     rect,
                     format!(
-                        "[{}] Developer message notifications",
-                        if self.settings.developer_notifications {
-                            "x"
-                        } else {
-                            " "
-                        }
+                        "Recipient open_id: {}",
+                        display(&self.settings.feishu_recipient)
                     ),
-                    Some(Action::ToggleDeveloperNotifications),
+                    Some(Action::EditFeishuRecipient),
+                    self.settings_field == *field,
+                    false,
+                );
+            }
+            SoundSettingsLine::FeishuCli { field } => {
+                view.row(
+                    rect,
+                    format!(
+                        "lark-cli path: {}",
+                        display(self.settings.feishu_cli_path.as_deref().unwrap_or("PATH"))
+                    ),
+                    Some(Action::EditFeishuCli),
                     self.settings_field == *field,
                     false,
                 );
@@ -346,7 +357,7 @@ impl BusUi {
 
     fn feishu_settings_row(&self, view: &mut View, rect: Rect, field: usize) {
         let suffix = if self.feishu_status.pending {
-            " (checking authentication…)".into()
+            " (sending…)".into()
         } else if self.feishu_status.queued > 0 {
             format!(
                 " ({} waiting{})",
@@ -364,7 +375,11 @@ impl BusUi {
             rect,
             format!(
                 "[{}] Feishu notifications{}",
-                if self.feishu_status.enabled { "x" } else { " " },
+                if self.settings.feishu_notifications {
+                    "x"
+                } else {
+                    " "
+                },
                 suffix
             ),
             Some(Action::ToggleFeishuNotifications),

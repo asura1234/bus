@@ -66,13 +66,12 @@ the wrapper remains held.
   `bus send --room master --as YOUR_NAME --to human --text "[needs_developer_attention] ..."`.
   Routine progress, completed milestones and approvals you can handle stay
   untagged. Workers report through their orchestrator and never use this tag.
-  Bus renders it as a badge and, when enabled, forwards it to the developer's
-  own Feishu account.
-- **Mark requests for the developer with `[waiting-on-you]`.** When you need
-  something from the developer, put `[waiting-on-you]` before it in your MASTER
-  message; Bus notifies the developer only for these. State the action on the
+  Bus renders it as a badge. Add the waiting tag below when a Feishu DM is needed.
+- **Mark requests for the developer with `[waiting_on_you]` (or `[waiting-on-you]`).** When you need
+  something from the developer, put `[waiting_on_you]` or `[waiting-on-you]` before it in your MASTER
+  message; Bus notifies the developer on Feishu only for these requests. State the action on the
   same line or the next line or bullet. This notifies regardless of the room or
-  agent terminal open, or terminal focus, when Developer message notifications
+  agent terminal open, or terminal focus, when Feishu notifications
   is enabled. Routine progress stays untagged. *Why:* an explicit request makes
   it clear when the developer needs to act.
 - **Write your chat messages in Markdown.** Every message you post, in MASTER

@@ -23,18 +23,32 @@ impl Cancellation {
 pub(super) struct Process {
     program: OsString,
     timeout: Duration,
+    #[cfg(test)]
+    pub(super) path: Option<OsString>,
 }
 
 impl Default for Process {
     fn default() -> Self {
         Self {
-            program: "lark-cli".into(),
+            // Unit tests must never fall through to the installed real CLI.
+            program: if cfg!(test) {
+                "bus-test-no-real-lark-cli"
+            } else {
+                "lark-cli"
+            }
+            .into(),
             timeout: Duration::from_secs(10),
+            #[cfg(test)]
+            path: None,
         }
     }
 }
 
 impl Process {
+    pub(super) fn set_program(&mut self, program: &str) {
+        self.program = program.into();
+    }
+
     pub(super) fn run(
         &self,
         args: &[&str],
@@ -64,6 +78,10 @@ impl Process {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        #[cfg(test)]
+        if let Some(path) = &self.path {
+            command.env("PATH", path);
+        }
         let mut command = tokio::process::Command::from(command);
         command.kill_on_drop(true);
         #[cfg(unix)]
@@ -106,7 +124,7 @@ impl Process {
                 () = wait_cancelled(cancel) => Err("Feishu notifications were disabled".to_owned()),
             }
         };
-        let (stdout, _stderr, (), status) = match finished {
+        let (stdout, stderr, (), status) = match finished {
             Ok(output) => output,
             Err(error) => {
                 terminate_tree(&mut child, process_id).await;
@@ -114,7 +132,19 @@ impl Process {
             }
         };
         if !status.success() {
-            return Err(format!("lark-cli failed (exit code {:?})", status.code()));
+            let category = serde_json::from_slice::<Value>(&stderr)
+                .ok()
+                .and_then(|value| match value["error"]["type"].as_str() {
+                    Some("network") => Some("network"),
+                    Some("authorization") => Some("authorization"),
+                    Some("api") => Some("api"),
+                    _ => None,
+                })
+                .unwrap_or("command error");
+            return Err(format!(
+                "lark-cli failed (exit code {:?}): {category}",
+                status.code()
+            ));
         }
         serde_json::from_slice(&stdout).map_err(|_| "lark-cli returned invalid JSON".into())
     }
@@ -124,6 +154,7 @@ impl Process {
         Self {
             program: program.into(),
             timeout,
+            path: None,
         }
     }
 }

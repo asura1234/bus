@@ -48,8 +48,11 @@ impl Worker {
             BusCommand::SetMaxCompactionsPerAgent(limit) => {
                 return self.set_max_compactions_per_agent(limit, events);
             }
-            BusCommand::SetDeveloperNotifications(on) => {
-                return self.set_developer_notifications(on, events);
+            BusCommand::SetFeishuRecipient(recipient) => {
+                return self.set_feishu_recipient(recipient, events);
+            }
+            BusCommand::SetFeishuCliPath(path) => {
+                return self.set_feishu_cli_path(path, events);
             }
             BusCommand::SetFreezeNotifications(on) => {
                 return self.set_freeze_notifications(on, events);

@@ -222,10 +222,10 @@ fn dev_settings_show_and_set_the_global_sounds() {
         shown.result["settings"],
         json!({
             "color_blind_mode": false,
-            "feishu_notifications": false,
+            "feishu_waiting_notifications": true,
             "freeze_notifications": true,
-            "developer_notifications": true,
-            "feishu_notifications_generation": 0,
+            "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",
+            "feishu_cli_path": null,
             "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
             "background_shell_hold_minutes": 15,
@@ -299,24 +299,30 @@ fn freeze_notifications_are_saved_and_announced_to_the_ui() {
 }
 
 #[test]
-fn developer_notifications_are_saved_without_changing_freeze_or_sound() {
+fn feishu_notifications_are_saved_without_changing_freeze_or_sound() {
     let root = root("developer-notifications");
     let mut worker = session(&root, "developer-notifications");
     let (events, receiver) = mpsc::channel();
     assert!(
         settings::load(&root.join("settings.json"))
             .unwrap()
-            .developer_notifications
+            .feishu_notifications
     );
     for on in [false, true] {
         worker
-            .command(BusCommand::SetDeveloperNotifications(on), &events)
+            .command(BusCommand::SetFeishuNotifications(on), &events)
             .unwrap();
-        assert!(
-            matches!(receiver.recv().unwrap(), BusEvent::SettingsChanged(settings) if settings.developer_notifications == on)
-        );
+        let echoes: Vec<_> = receiver
+            .try_iter()
+            .filter_map(|event| match event {
+                BusEvent::SettingsChanged(settings) => Some(settings),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(echoes.len(), 1);
+        assert_eq!(echoes[0].feishu_notifications, on);
         let saved = settings::load(&root.join("settings.json")).unwrap();
-        assert_eq!(saved.developer_notifications, on);
+        assert_eq!(saved.feishu_notifications, on);
         assert!(saved.freeze_notifications);
         assert!(saved.master_sound.enabled);
     }

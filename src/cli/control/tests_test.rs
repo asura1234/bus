@@ -2545,7 +2545,7 @@ fn interrupt_state_reads_are_bounded_by_the_stop_deadline() {
     assert!(outcome.is_ok());
 }
 #[test]
-fn feishu_cli_waits_for_validation_and_reports_auth_refusal() {
+fn feishu_cli_observes_pending_status_and_reports_notifications_off() {
     let mut output = Vec::new();
     let mut methods = Vec::new();
     let result = run_with_pause(
@@ -2562,7 +2562,7 @@ fn feishu_cli_waits_for_validation_and_reports_auth_refusal() {
                 if request.method == "settings.feishu_notifications" {
                     json!({"feishu":{"enabled":false,"pending":true}})
                 } else {
-                    json!({"settings":{"feishu":{"enabled":false,"pending":false,"error":"not authenticated"}}})
+                    json!({"settings":{"feishu":{"enabled":false,"pending":false,"error":"notifications remain off"}}})
                 },
             ))
         },
@@ -2570,7 +2570,7 @@ fn feishu_cli_waits_for_validation_and_reports_auth_refusal() {
     );
     assert!(
         result.is_err(),
-        "CLI must wait for auth and report the refusal"
+        "CLI must report that notifications remain off"
     );
     assert_eq!(methods, ["settings.feishu_notifications", "settings"]);
 }
@@ -2597,7 +2597,7 @@ fn feishu_enable_status_failure_preserves_caller_request_id() {
                 Response::failure(
                     &request.id,
                     "coordinator_busy",
-                    "validation status unavailable",
+                    "notification status unavailable",
                 )
             })
         },

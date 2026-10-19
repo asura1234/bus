@@ -3,6 +3,18 @@ use super::super::{forms::Form, render::SoundTarget, BusUi, Effect};
 use crate::messaging::coordinator::BusCommand;
 
 impl BusUi {
+    pub(super) fn open_feishu_setting(&mut self, cli: bool) {
+        let text = if cli {
+            self.settings.feishu_cli_path.clone().unwrap_or_default()
+        } else {
+            self.settings.feishu_recipient.clone()
+        };
+        self.open_form(Form::FeishuSetting {
+            cli,
+            editor: super::super::editor::Editor::new(text),
+        });
+    }
+
     pub(super) fn adjust_compaction_limit(&mut self, forward: bool) {
         use crate::messaging::prefs::settings::{
             MAX_COMPACTIONS_PER_AGENT, MIN_COMPACTIONS_PER_AGENT,
@@ -125,7 +137,8 @@ impl BusUi {
                 | super::super::render::SoundSettingsLine::SidebarWidth { field }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
                 | super::super::render::SoundSettingsLine::Freeze { field }
-                | super::super::render::SoundSettingsLine::DeveloperNotifications { field }
+                | super::super::render::SoundSettingsLine::FeishuRecipient { field }
+                | super::super::render::SoundSettingsLine::FeishuCli { field }
                 | super::super::render::SoundSettingsLine::Feishu { field }
                 if *field == self.settings_field)
         }) else {

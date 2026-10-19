@@ -109,6 +109,21 @@ impl BusUi {
                 self.settings_view(view, main);
                 return;
             }
+            Form::FeishuSetting { cli, editor } => {
+                view.row(
+                    Rect::new(x, y, width, 1),
+                    if *cli {
+                        "lark-cli path (empty uses PATH)"
+                    } else {
+                        "Feishu recipient open_id"
+                    },
+                    None,
+                    false,
+                    true,
+                );
+                view.editor(Rect::new(x, y + 1, width, 1), editor, None, true);
+                y += 4;
+            }
             Form::Room(editor) => {
                 view.row(Rect::new(x, y, width, 1), "Room name", None, false, true);
                 view.editor(Rect::new(x, y + 1, width, 1), editor, None, true);
@@ -313,7 +328,11 @@ impl BusUi {
         );
         view.row(
             Rect::new(x + 16, y, 24.min(width.saturating_sub(16)), 1),
-            "Add (Enter)",
+            if matches!(form, Form::FeishuSetting { .. }) {
+                "Save (Enter)"
+            } else {
+                "Add (Enter)"
+            },
             Some(Action::Add),
             false,
             false,

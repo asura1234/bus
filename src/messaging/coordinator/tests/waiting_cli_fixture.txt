@@ -1,0 +1,12 @@
+#!/usr/bin/python3
+import json, pathlib, sys, time
+root = pathlib.Path(__file__).parent
+with (root / 'calls.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\n')
+mode = (root / 'mode').read_text() if (root / 'mode').exists() else ''
+if mode == 'hang':
+    time.sleep(60)
+if mode == 'fail':
+    print('{"ok":false,"error":{"type":"network","message":"network unavailable"}}', file=sys.stderr)
+    sys.exit(7)
+print('{"ok":true,"identity":"bot","data":{"message_id":"om_fake"}}')

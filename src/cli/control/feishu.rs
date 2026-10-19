@@ -1,4 +1,4 @@
-//! Wait for asynchronous validation without blocking the coordinator.
+//! Observe pending Feishu delivery without blocking the coordinator.
 use super::{next_request_id, wait::execute, ParsedCommand, Request, Response};
 use std::time::{Duration, Instant};
 
@@ -47,7 +47,7 @@ pub(super) fn run(
             return Response::failure(
                 &sent.id,
                 "feishu_timeout",
-                "Feishu authentication is still pending; inspect bus settings",
+                "Feishu delivery is still pending; inspect bus settings",
             );
         }
         pause(Duration::from_millis(100));

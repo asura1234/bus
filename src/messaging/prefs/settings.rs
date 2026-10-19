@@ -23,15 +23,18 @@ pub(crate) const MIN_SIDEBAR_WIDTH: u16 = 20;
 /// the sidebar at a third of the terminal, so the chat keeps two thirds.
 pub(crate) const MAX_SIDEBAR_WIDTH: u16 = 60;
 
+pub(crate) const DEFAULT_FEISHU_RECIPIENT: &str = "ou_ca1b530d792419a044e281f998ce68dc";
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
+    // The old forwarding toggle is a different preference; do not inherit its off default.
+    #[serde(rename = "feishu_waiting_notifications")]
     pub(crate) feishu_notifications: bool,
     pub(crate) freeze_notifications: bool,
-    pub(crate) developer_notifications: bool,
-    /// Internal enable generation, so sessions offline during off/on skip old history.
-    pub(crate) feishu_notifications_generation: u64,
+    pub(crate) feishu_recipient: String,
+    pub(crate) feishu_cli_path: Option<String>,
     /// MASTER's sound in every session; it rings by default.
     pub(crate) master_sound: SoundPref,
     /// The last All rooms choice: set on every work room at once, and what
@@ -54,10 +57,10 @@ impl Default for BusSettings {
     fn default() -> Self {
         Self {
             color_blind_mode: false,
-            feishu_notifications: false,
+            feishu_notifications: true,
             freeze_notifications: true,
-            developer_notifications: true,
-            feishu_notifications_generation: 0,
+            feishu_recipient: DEFAULT_FEISHU_RECIPIENT.into(),
+            feishu_cli_path: None,
             master_sound: SoundPref {
                 enabled: true,
                 name: None,
@@ -190,10 +193,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn feishu_notifications_default_off_without_a_recipient_setting() {
+    fn feishu_notifications_default_on_with_recipient_setting() {
         let value = serde_json::to_value(BusSettings::default()).unwrap();
-        assert_eq!(value["feishu_notifications"], false);
-        assert!(value.get("feishu_recipient").is_none());
+        assert_eq!(value["feishu_waiting_notifications"], true);
+        assert_eq!(
+            value["feishu_recipient"],
+            "ou_ca1b530d792419a044e281f998ce68dc"
+        );
         assert!(value.get("feishu_user_id").is_none());
         assert!(value.get("feishu_chat_id").is_none());
     }

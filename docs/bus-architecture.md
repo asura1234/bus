@@ -208,15 +208,13 @@ Files are split by ownership, not by helper.
     cutover, the gate's dev-tools lane) and off in release builds (`./run prod`, `just build`, Nix, npm)
   - `prefs/`: `settings.rs` (`settings.json`), `colors.rs` (agent palette)
   - `attention.rs`: the developer-attention prefix shared by model, display and delivery.
-    `model/attention.rs` owns durable Bus notices, mechanical episode latches and
-    delivery bookkeeping; `coordinator/attention.rs` observes runtime settings,
-    validates auth off the coordinator thread, scans durable MASTER history and
-    applies the bounded queue, dedupe and rate limit. Attempts become durable
-    before invocation; ambiguous outcomes are visible and never replayed.
-    The shared preference's internal enable generation makes a session offline
-    through off/on establish a new baseline instead of replaying old backlog.
-    `feishu/` owns verified self identity, fixed Bus message formatting and bounded
-    cancellable lark-cli subprocesses. No caller supplies a recipient. The native
+    `model/attention.rs` owns durable Bus notices and mechanical episode latches;
+    legacy delivery state remains readable. `coordinator/attention.rs` observes shared
+    notification settings and new developer-addressed MASTER messages, skipping startup
+    history. `feishu/` detects waiting tags and combines full action lines in a fixed
+    two-second burst. A cancellable background worker sends one bot DM through a bounded
+    lark-cli subprocess to the configured recipient; errors are logged without retries.
+    Internal attention notices and badges remain independent of outbound delivery. The native
     `PaneInfo.agent_process_exited` reports explicit exits outside self-update;
     missing agents and API failures do not establish a crash.
   - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER

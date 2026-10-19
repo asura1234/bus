@@ -18,7 +18,7 @@ mod worker_notifications;
 #[cfg(test)]
 use requests::rejection_reason;
 
-pub(crate) use attention::{AttentionAttempt, AttentionDelivery, AttentionOrigin};
+pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 #[cfg(test)]
 pub(crate) use history::ARCHIVE_AFTER_MS;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS, HISTORY_RETENTION_MS};
