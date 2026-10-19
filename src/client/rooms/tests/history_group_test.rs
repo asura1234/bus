@@ -2,6 +2,44 @@ use super::*;
 use crate::messaging::model::{Draft, Provider};
 
 #[test]
+fn hidden_waiting_tag_does_not_color_visible_plain_text() {
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    state
+        .set_draft_text(
+            room,
+            "[label](https://example.com/[waiting-on-you])\nwaiting-on-you",
+        )
+        .unwrap();
+    state.submit_draft(room, 1).unwrap();
+    let mut history = History::default();
+    let lines = history.lines(
+        &state,
+        state.room(room).unwrap(),
+        80,
+        1,
+        2,
+        &mut Default::default(),
+    );
+    let plain = lines
+        .iter()
+        .find(|line| line.text == "waiting-on-you")
+        .expect("visible plain text");
+    assert!(
+        plain
+            .styles
+            .iter()
+            .all(|(_, style)| style.fg != Some(super::super::super::render::ACCENT)),
+        "a hidden link target must not turn plain text into a tag: {:?}",
+        plain.styles
+    );
+}
+
+#[test]
 fn developer_attention_master_notice_renders_badge_instead_of_raw_tag() {
     let mut state = BusState::default();
     let master = state.ensure_master_room();

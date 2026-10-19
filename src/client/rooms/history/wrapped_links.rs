@@ -2,6 +2,9 @@
 use super::{Line, LinkScope};
 use crate::client::rooms::links::{candidates, Candidate};
 use ratatui::style::Modifier;
+use std::ops::Range;
+
+type Fragments = Vec<(usize, Range<usize>)>;
 
 /// Source correspondence is built with the cached history, never by scanning
 /// off-screen messages on every frame. The existing detector and path probe
@@ -13,66 +16,16 @@ pub(super) fn scoped_lines(lines: &[Line], scope: LinkScope) -> Vec<Line> {
     };
     let home = std::env::home_dir();
     let tokens = candidates(source, scope.cwd.as_deref(), home.as_deref());
-    let mut fragments = vec![Vec::new(); tokens.len()];
-    let mut covered = vec![0; tokens.len()];
-    let mut cursor = 0;
-    for (row, line) in rows.iter().enumerate() {
-        let mut offset = 0;
-        let runs: Vec<_> = if line.styles.is_empty() {
-            vec![(line.text.as_str(), false)]
-        } else {
-            line.styles
-                .iter()
-                .map(|(text, style)| (text.as_str(), style.add_modifier.contains(Modifier::DIM)))
-                .collect()
-        };
-        for (text, layout) in runs {
-            // DIM runs are Markdown's generated bullets, quote/code borders
-            // and fence labels. They have no source-text correspondence.
-            if !layout {
-                for (start, word) in words(text) {
-                    let start = offset + start;
-                    if start < line.copy_from {
-                        continue;
-                    }
-                    let Some(found) = source[cursor..].find(word) else {
-                        continue;
-                    };
-                    let from = cursor + found;
-                    let to = from + word.len();
-                    for (index, token) in tokens.iter().enumerate() {
-                        let left = from.max(token.range.start);
-                        let right = to.min(token.range.end);
-                        if left < right {
-                            fragments[index].push((row, start + left - from..start + right - from));
-                            covered[index] += source[left..right]
-                                .chars()
-                                .filter(|c| !c.is_whitespace())
-                                .count();
-                        }
-                    }
-                    cursor = to;
-                }
-            }
-            offset += text.len();
-        }
-    }
+    let ranges: Vec<_> = tokens.iter().map(|token| token.range.clone()).collect();
+    let fragments = source_fragments(lines, source, &ranges);
     for line in &mut rows {
         line.links = Some(scope.clone());
     }
-    for ((token, fragments), covered) in tokens.into_iter().zip(fragments).zip(covered) {
+    for (token, fragments) in tokens.into_iter().zip(fragments) {
         let Some((first, _)) = fragments.first() else {
             continue;
         };
         if fragments.last().is_none_or(|(last, _)| last == first) {
-            continue;
-        }
-        if covered
-            != source[token.range.clone()]
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .count()
-        {
             continue;
         }
         let mut previous_row = None;
@@ -100,7 +53,71 @@ pub(super) fn scoped_lines(lines: &[Line], scope: LinkScope) -> Vec<Line> {
     rows
 }
 
-pub(super) fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
+/// Map complete source tokens onto styled rows. Hidden or partly represented
+/// tokens must not attach links or foregrounds to unrelated visible words.
+pub(super) fn source_fragments(
+    lines: &[Line],
+    source: &str,
+    ranges: &[Range<usize>],
+) -> Vec<Fragments> {
+    let mut fragments = vec![Vec::new(); ranges.len()];
+    let mut covered = vec![0; ranges.len()];
+    let mut cursor = 0;
+    for (row, line) in lines.iter().enumerate() {
+        let mut offset = 0;
+        let runs: Vec<_> = if line.styles.is_empty() {
+            vec![(line.text.as_str(), false)]
+        } else {
+            line.styles
+                .iter()
+                .map(|(text, style)| (text.as_str(), style.add_modifier.contains(Modifier::DIM)))
+                .collect()
+        };
+        for (text, layout) in runs {
+            // DIM runs are Markdown's generated bullets, quote/code borders
+            // and fence labels. They have no source-text correspondence.
+            if !layout {
+                for (start, word) in words(text) {
+                    let start = offset + start;
+                    if start < line.copy_from {
+                        continue;
+                    }
+                    let Some(found) = source[cursor..].find(word) else {
+                        continue;
+                    };
+                    let from = cursor + found;
+                    let to = from + word.len();
+                    for (index, range) in ranges.iter().enumerate() {
+                        let left = from.max(range.start);
+                        let right = to.min(range.end);
+                        if left < right {
+                            fragments[index].push((row, start + left - from..start + right - from));
+                            covered[index] += source[left..right]
+                                .chars()
+                                .filter(|c| !c.is_whitespace())
+                                .count();
+                        }
+                    }
+                    cursor = to;
+                }
+            }
+            offset += text.len();
+        }
+    }
+    for ((fragments, range), covered) in fragments.iter_mut().zip(ranges).zip(covered) {
+        if covered
+            != source[range.clone()]
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .count()
+        {
+            fragments.clear();
+        }
+    }
+    fragments
+}
+
+fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut offset = 0;
     text.split_inclusive(char::is_whitespace)
         .filter_map(move |part| {

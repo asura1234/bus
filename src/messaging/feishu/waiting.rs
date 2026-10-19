@@ -151,10 +151,9 @@ fn visible_text<'a>(state: &BusState, room: RoomId, author: &Author, text: &'a s
 /// ASCII case folding preserves byte offsets into the original Unicode text.
 /// The phrase also covers "still waiting on you", but not partial words.
 fn waiting_action(text: &str) -> Option<&str> {
-    const TAGS: [&str; 2] = ["[waiting-on-you]", "[waiting_on_you]"];
     const PHRASE: &str = "waiting on you";
     let folded = text.to_ascii_lowercase();
-    let tag_end = TAGS
+    let tag_end = crate::messaging::attention::WAITING_TAGS
         .iter()
         .filter_map(|tag| folded.find(tag).map(|start| start + tag.len()))
         .min();

@@ -99,7 +99,7 @@ impl MarkdownBlock {
 /// Map source tags through Markdown styling and wrapping, once per cached layout.
 fn highlight_waiting_tags(lines: &mut [Line], source: &str) {
     let folded = source.to_ascii_lowercase();
-    let tags: Vec<_> = ["[waiting-on-you]", "[waiting_on_you]"]
+    let tags: Vec<_> = crate::messaging::attention::WAITING_TAGS
         .into_iter()
         .flat_map(|tag| {
             folded
@@ -110,40 +110,9 @@ fn highlight_waiting_tags(lines: &mut [Line], source: &str) {
     if tags.is_empty() {
         return;
     }
-    let mut cursor = 0;
-    for line in lines {
-        if line.styles.is_empty() {
-            line.styles.push((line.text.clone(), Style::default()));
-        }
-        let mut ranges = Vec::new();
-        let mut offset = 0;
-        for (text, style) in &line.styles {
-            // Generated Markdown bullets, borders and fence labels have no
-            // source correspondence, just as in wrapped_links::scoped_lines.
-            if !style.add_modifier.contains(Modifier::DIM) {
-                for (start, word) in super::wrapped_links::words(text) {
-                    if offset + start < line.copy_from {
-                        continue;
-                    }
-                    let Some(found) = source[cursor..].find(word) else {
-                        continue;
-                    };
-                    let from = cursor + found;
-                    let to = from + word.len();
-                    for tag in &tags {
-                        let left = from.max(tag.start);
-                        let right = to.min(tag.end);
-                        if left < right {
-                            ranges
-                                .push(offset + start + left - from..offset + start + right - from);
-                        }
-                    }
-                    cursor = to;
-                }
-            }
-            offset += text.len();
-        }
-        highlight_ranges(line, &ranges);
+    let fragments = super::wrapped_links::source_fragments(lines, source, &tags);
+    for (row, range) in fragments.into_iter().flatten() {
+        highlight_ranges(&mut lines[row], &[range]);
     }
 }
 
@@ -152,7 +121,11 @@ fn highlight_ranges(line: &mut Line, ranges: &[std::ops::Range<usize>]) {
     if ranges.is_empty() {
         return;
     }
-    let runs = std::mem::take(&mut line.styles);
+    let runs = if line.styles.is_empty() {
+        vec![(line.text.clone(), Style::default())]
+    } else {
+        std::mem::take(&mut line.styles)
+    };
     let mut offset = 0;
     for (text, style) in runs {
         for (index, ch) in text.char_indices() {
