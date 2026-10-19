@@ -22,13 +22,7 @@ impl Worker {
                 // this read-only observation on later ticks, without feeding
                 // a transport diagnostic into the composer's sticky error.
                 if self.poll_failures >= 3 {
-                    let mut state = self.state.clone();
-                    for id in self.state.agents().map(|a| a.id) {
-                        state
-                            .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
-                            .map_err(|e| e.to_string())?;
-                    }
-                    self.apply_poll(state)?;
+                    self.observe_native_unavailable()?;
                 }
                 return Ok(None);
             }
@@ -120,6 +114,16 @@ impl Worker {
         // Do not sleep inside the transport or replay any mutating request.
         // The coordinator can still accept commands between failed polls.
         Duration::from_millis(500 << self.poll_failures.saturating_sub(1).min(2))
+    }
+
+    fn observe_native_unavailable(&mut self) -> Result<(), String> {
+        let mut state = self.state.clone();
+        for id in self.state.agents().map(|a| a.id) {
+            state
+                .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
+                .map_err(|e| e.to_string())?;
+        }
+        self.apply_poll(state)
     }
 }
 
