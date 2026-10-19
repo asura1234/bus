@@ -28,6 +28,39 @@ async fn captured_reply_reaches_its_source_room_once_for_both_providers_and_auth
 }
 
 #[tokio::test]
+async fn cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final() {
+    for omitted_suffix in ["", "\n\n[REDACTED]"] {
+        let mut f = Delivery::new(&[Provider::Cursor], false);
+        let agent = f.agents[0];
+        let request = f.send(agent, f.work, "review", false, None);
+        f.tick();
+        f.start(agent, "review-turn", "review");
+        for row in [
+            json!({"role":"assistant","message":{"content":[{"type":"text","text":format!("Checking.{omitted_suffix}")},{"type":"tool_use","name":"Read"}]}}),
+            json!({"role":"user","message":{"content":[{"type":"text","text":"<available_subagent_types>...</available_subagent_types>"}]}}),
+            json!({"role":"user","message":{"content":[{"type":"text","text":"review"}]}}),
+            json!({"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}),
+            json!({"role":"assistant","message":{"content":[{"type":"text","text":"Ready"}]}}),
+            json!({"role":"user","message":{"content":[{"type":"text","text":"newer request"}]}}),
+            json!({"role":"assistant","message":{"content":[{"type":"text","text":"Newer answer"}]}}),
+            json!({"type":"turn_ended","status":"success"}),
+        ] {
+            f.append_transcript(agent, row);
+        }
+        f.record(agent, json!({"hook_event_name":"afterAgentResponse","generation_id":"review-turn","text":"Checking.Ready"}));
+        f.record(
+            agent,
+            json!({"hook_event_name":"stop","generation_id":"review-turn","status":"completed"}),
+        );
+        f.status(agent, AgentState::Idle);
+        f.tick();
+        f.reopen();
+        f.assert_reply(request, "Ready");
+        assert_eq!(f.state().room(f.work).unwrap().unread_count, 1);
+    }
+}
+
+#[tokio::test]
 async fn independently_answered_turns_keep_five_distinct_replies_while_shells_live() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
     let agent = f.agents[0];
@@ -124,27 +157,52 @@ async fn held_interim_survives_no_stop_wake_restart_and_releases_queued_request(
 }
 
 #[tokio::test]
-#[ignore = "stall-cx: https://github.com/asura1234/bus/pull/107; captured Stop discarded with cron plus live shell"]
-async fn long_lived_shell_and_cron_cannot_discard_captured_reply_or_block_queue() {
-    let mut f = Delivery::new(&[Provider::ClaudeCode], true);
-    let agent = f.agents[0];
-    let first = f.send(agent, f.master, "status", false, None);
-    f.tick();
-    f.start(agent, "one", "status");
-    f.stop(
-        agent,
-        "one",
-        "captured status",
-        json!([{"id":"shell","type":"shell","status":"running","command":"sleep 600"}]),
-        json!([{"id":"cron","schedule":"* * * * *"}]),
-    );
-    let next = f.send(agent, f.master, "queued", true, None);
-    f.tick();
-    f.elapse(3_600_000);
-    f.assert_reply(first, "captured status");
-    f.start(agent, "two", "queued");
-    f.stop(agent, "two", "next answer", json!([]), json!([]));
-    f.assert_reply(next, "next answer");
+#[ignore = "stall-cx: https://github.com/asura1234/bus/pull/107; captured Stop discarded with cron or non-shell background tasks"]
+async fn background_pending_cannot_discard_captured_reply_or_block_queue() {
+    for master in [false, true] {
+        for (label, tasks, crons) in [
+            (
+                "cron",
+                json!([]),
+                json!([{"id":"cron","schedule":"* * * * *"}]),
+            ),
+            (
+                "non-shell",
+                json!([{"id":"agent","type":"local_agent","status":"running"}]),
+                json!([]),
+            ),
+            (
+                "shell-and-cron",
+                json!([{"id":"shell","type":"shell","status":"running","command":"sleep 600"}]),
+                json!([{"id":"cron","schedule":"* * * * *"}]),
+            ),
+            (
+                "shell-and-agent",
+                json!([{"id":"shell","type":"shell","status":"running","command":"sleep 600"},{"id":"agent","type":"local_agent","status":"running"}]),
+                json!([]),
+            ),
+        ] {
+            let mut f = Delivery::new(&[Provider::ClaudeCode], master);
+            let agent = f.agents[0];
+            let room = if master { f.master } else { f.work };
+            let first = f.send(agent, room, "status", false, None);
+            f.tick();
+            f.start(agent, "one", "status");
+            f.stop(agent, "one", "captured status", tasks, crons);
+            let next = f.send(agent, room, "queued", true, None);
+            f.tick();
+            f.elapse(3_600_000);
+            f.assert_reply(first, "captured status");
+            f.start(agent, "two", "queued");
+            f.stop(agent, "two", "next answer", json!([]), json!([]));
+            f.assert_reply(next, "next answer");
+            f.reopen();
+            f.assert_reply(first, "captured status");
+            f.assert_reply(next, "next answer");
+            f.assert_no_stalls();
+            eprintln!("background_pending: {label}, master={master}: both requests replied once after reopen");
+        }
+    }
 }
 
 #[tokio::test]
@@ -525,15 +583,39 @@ async fn soak_many_agents_concurrent_messages_and_background_shells() {
     let mut round = 0;
     let mut completed = 0;
     while Instant::now() < deadline {
-        let mut expected = Vec::new();
-        // All agents have outstanding work together; each also has queued work
-        // behind it while Claude reports a persistent background shell.
-        for (n, &agent) in agents.iter().enumerate() {
-            let prompt = format!("soak-{round}-{n}");
-            let first = f.send(agent, f.work, &prompt, false, None);
-            let next = f.send(agent, f.work, &format!("queued-{round}-{n}"), true, None);
-            expected.push((agent, first, next, prompt));
-        }
+        // Concurrent producers enter the real serialized coordinator control
+        // boundary. Receipts, rather than producer order, identify each reply.
+        let room = f.work;
+        let shared = std::sync::Mutex::new(&mut f);
+        let expected = std::thread::scope(|scope| {
+            let handles: Vec<_> = agents
+                .iter()
+                .enumerate()
+                .map(|(n, &agent)| {
+                    let shared = &shared;
+                    scope.spawn(move || {
+                        let prompt = format!("soak-{round}-{n}");
+                        let first = shared
+                            .lock()
+                            .unwrap()
+                            .send(agent, room, &prompt, false, None);
+                        let next = shared.lock().unwrap().send(
+                            agent,
+                            room,
+                            &format!("queued-{round}-{n}"),
+                            true,
+                            None,
+                        );
+                        (agent, first, next, prompt)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        drop(shared);
         f.tick();
         for (n, &(agent, _, _, ref prompt)) in expected.iter().enumerate() {
             let turn = format!("turn-{round}-{n}");
@@ -556,6 +638,10 @@ async fn soak_many_agents_concurrent_messages_and_background_shells() {
     }
     assert!(completed >= 24);
     assert_eq!(f.state().requests().count(), completed);
+    assert_eq!(
+        f.state().room(f.work).unwrap().unread_count as usize,
+        completed
+    );
     assert!(f
         .state()
         .requests()
