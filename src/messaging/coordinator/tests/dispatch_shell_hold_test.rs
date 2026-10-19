@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn same_turn_shell_hold_refresh_delivers_the_newest_answer_at_the_original_cap() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
+    f.consume();
+    let lead = running(&mut f, "build it", "turn-1");
+    claude_stop_holding(&f, "turn-1", "build pending", &["b1"]);
+    f.consume();
+    let since_ms = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+
+    f.now += 5 * 60 * 1000;
+    f.status(RuntimeStatus::Working);
+    claude_stop_holding(&f, "turn-1", "build passed; server pending", &["b1"]);
+    f.consume();
+    assert!(f.request(lead).has_held_background_reply());
+    let hold = f.request(lead).shell_hold.as_ref().unwrap();
+    assert_eq!(hold.since_ms, since_ms);
+    assert_eq!(hold.interim.text, "build passed; server pending");
+
+    let cap_ms = 15 * 60 * 1000;
+    f.now = since_ms + cap_ms - 2;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.request(lead).phase, RequestPhase::Active);
+    assert!(f.reply(lead).is_none());
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        f.reply(lead).as_deref(),
+        Some("build passed; server pending")
+    );
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("background_shells_timeout")
+    );
+}
+
+#[test]
 fn rejected_shell_final_preserves_the_answer_for_the_whole_joined_group() {
     let mut f = Fixture::new(Provider::ClaudeCode);
     f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
