@@ -78,3 +78,73 @@ fn persistent_poll_failure_uses_agent_status_and_recovery_keeps_unrelated_error(
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn recovered_poll_resets_failure_budget_so_one_later_timeout_keeps_agent_status() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::ClaudeCode,
+        vec![timeout(), timeout(), timeout(), recovered(), timeout()],
+    );
+    for _ in 0..3 {
+        worker.tick().unwrap();
+    }
+    assert_eq!(
+        worker.state.agent(agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    worker.poll().unwrap();
+    assert_eq!(worker.poll_interval(), Duration::from_millis(500));
+    worker.tick().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().status,
+        RuntimeStatus::Idle,
+        "a single timeout after recovery starts a fresh failure budget"
+    );
+    assert_eq!(worker.poll_interval(), Duration::from_millis(500));
+    assert!(worker.snapshot().error.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unexpected_agent_list_response_retries_without_composer_error() {
+    let (mut worker, agent, _, dir, _) =
+        fixture(Provider::ClaudeCode, vec![Ok(ResponseResult::Ok {})]);
+    assert!(worker.poll().unwrap().is_none());
+    assert_eq!(worker.poll_interval(), Duration::from_millis(500));
+    assert_eq!(
+        worker.state.agent(agent).unwrap().status,
+        RuntimeStatus::Idle
+    );
+    assert!(worker.snapshot().error.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn long_poll_outage_caps_backoff_and_never_delivers_or_sets_composer_error() {
+    let replies = (0..12).map(|_| timeout()).collect();
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::ClaudeCode, replies);
+    let request = queue(&mut worker, room, agent, "held across outage");
+    for _ in 0..12 {
+        worker.tick().unwrap();
+        assert!(worker.poll_interval() <= Duration::from_secs(2));
+        assert!(worker.snapshot().error.is_none());
+    }
+    assert_eq!(worker.poll_interval(), Duration::from_secs(2));
+    assert_eq!(
+        worker.state.agent(agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert!(calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|call| *call == "agent.list"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -2,7 +2,7 @@ use super::*;
 use interprocess::local_socket::traits::Listener as _;
 
 #[test]
-fn delayed_blocking_response_returns_receive_timeout_without_replaying_request() {
+fn delayed_blocking_response_returns_receive_timeout() {
     let dir = crate::utils::test_temp::unique_temp_path("poll-timeout");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("api.sock");
