@@ -98,8 +98,21 @@ fn developer_attention_stall_uses_existing_deadline_and_ignores_working_or_block
         .unwrap();
     assert_eq!(
         recovered.notices(master).count(),
+        1,
+        "working then idle must not re-arm the same stalled request"
+    );
+    let serialized = serde_json::to_vec(&recovered).unwrap();
+    let mut recovered: BusState = serde_json::from_slice(&serialized).unwrap();
+    recovered.prune_attention();
+    recovered.notify_stalled_attention(u64::MAX).unwrap();
+    assert_eq!(recovered.notices(master).count(), 1);
+    let another = submit_text(&mut recovered, room, agent, "another request");
+    assert_ne!(request, another);
+    recovered.notify_stalled_attention(u64::MAX).unwrap();
+    assert_eq!(
+        recovered.notices(master).count(),
         2,
-        "positive work re-arms a later stall episode"
+        "a distinct stalled request still alerts"
     );
     for status in [RuntimeStatus::Working, RuntimeStatus::Blocked] {
         let mut state = state.clone();

@@ -200,22 +200,14 @@ impl BusState {
                     request.prompt.id,
                     request.agent_id,
                     self.stall_reason(request, now_ms),
-                    self.agent(request.agent_id)
-                        .is_some_and(|agent| agent.shown_status() == super::RuntimeStatus::Working),
                 )
             })
             .collect();
-        for (request, prompt, agent, reason, working) in observed {
+        // A request keeps its alert marker through Working/Idle flaps.
+        // prune_attention removes it only after the request leaves history.
+        for (request, prompt, agent, reason) in observed {
             if let Some(reason) = reason {
                 self.attention_episode(format!("stall:{}", request.0), Some(true), agent, &format!("Agent stalled past its timeout on message {} ({reason}). Inspect: bus message status {}", prompt.0, prompt.0), now_ms)?;
-            } else if working {
-                self.attention_episode(
-                    format!("stall:{}", request.0),
-                    Some(false),
-                    agent,
-                    "",
-                    now_ms,
-                )?;
             }
         }
         Ok(())
