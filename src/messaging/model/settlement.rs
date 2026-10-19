@@ -36,11 +36,11 @@ impl BusState {
         else {
             return;
         };
-        let Some(request) = self
-            .requests
-            .get_mut(&id)
-            .filter(|request| request.awaiting_background)
-        else {
+        let Some(request) = self.requests.get_mut(&id).filter(|request| {
+            request.awaiting_background
+                && request.provider_session_id == interim.provider_session_id
+                && request.provider_turn_id == interim.provider_turn_id
+        }) else {
             return;
         };
         let since_ms = request

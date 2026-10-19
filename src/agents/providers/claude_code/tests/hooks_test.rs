@@ -435,3 +435,36 @@ fn line_continuations_do_not_hide_real_work_around_bus_controls() {
         assert!(!is_bus_control(command), "must hold work: {command:?}");
     }
 }
+
+#[test]
+fn scheduled_prompt_identity_requires_matching_provider_metadata_in_a_bounded_tail() {
+    let root = crate::utils::test_temp::unique_temp_path("claude-scheduled");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("transcript.jsonl");
+    let hook = json!({"session_id":"s","prompt_id":"p","transcript_path":path});
+    let row = json!({"type":"user","sessionId":"s","promptId":"p","isMeta":true,
+        "promptSource":"system","turnOrigin":"scheduled","scheduledTaskId":"cron-1"});
+    std::fs::write(&path, format!("{row}\n")).unwrap();
+    assert!(super::is_scheduled_prompt(&hook));
+    for (key, value) in [
+        ("sessionId", json!("other-session")),
+        ("promptId", json!("other-turn")),
+        ("isMeta", json!(false)),
+        ("promptSource", json!("user")),
+        ("turnOrigin", json!("user")),
+        ("scheduledTaskId", json!("")),
+    ] {
+        let mut changed = row.clone();
+        changed[key] = value;
+        std::fs::write(&path, format!("{changed}\n")).unwrap();
+        assert!(!super::is_scheduled_prompt(&hook), "{key}");
+    }
+    let mut large = vec![b'x'; 2 * 1024 * 1024 + 10];
+    large.extend_from_slice(format!("\n{row}\n{{partial").as_bytes());
+    std::fs::write(&path, large).unwrap();
+    assert!(super::is_scheduled_prompt(&hook));
+    std::fs::remove_file(&path).unwrap();
+    assert!(!super::is_scheduled_prompt(&hook));
+    assert!(!super::is_scheduled_prompt(&json!({})));
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -3,6 +3,20 @@
 use super::{callbacks, AgentId, BTreeSet, Parsed, Path, Provider, ProviderCallback, Worker};
 
 impl Worker {
+    pub(super) fn mark_scheduled_turn(
+        state: &mut super::BusState,
+        callback: &ProviderCallback,
+        record: &callbacks::Record,
+    ) {
+        if record.manifest.provider == Provider::ClaudeCode
+            && matches!(callback.kind, super::CallbackEventKind::PromptStarted)
+            && crate::agents::providers::claude_code::hooks::is_scheduled_prompt(&record.value)
+        {
+            // Explicit input Bus submitted still wins inside this model guard.
+            state.mark_unowned_background_turn(callback);
+        }
+    }
+
     /// A Claude reply waits while shells started by its request still run:
     /// each wakes a turn when it ends, and the last such turn carries the real
     /// reply. Shells inherited from an earlier request (say a hung

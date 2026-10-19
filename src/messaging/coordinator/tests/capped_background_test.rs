@@ -115,3 +115,85 @@ fn background_stop_diagnostics_describe_the_hold_without_reply_or_task_payloads(
         assert!(!log.contains(private), "{log}");
     }
 }
+
+fn scheduled_start(f: &Fixture, turn: &str, prompt: &str) {
+    let transcript = f.dir.join("scheduled.jsonl");
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({
+                "type":"user", "sessionId":"session", "promptId":turn,
+                "isMeta":true, "promptSource":"system", "turnOrigin":"scheduled",
+                "scheduledTaskId":"cron-1", "message":{"role":"user","content":prompt}
+            })
+        ),
+    )
+    .unwrap();
+    f.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "prompt_id":turn,"prompt":prompt,"transcript_path":transcript}),
+    );
+}
+
+fn cron_stop(turn: &str, text: &str) -> Value {
+    let mut stop = claude_stop(turn, text, &["long-shell"]);
+    stop["session_crons"] = json!([{"id":"cron-1","recurring":true}]);
+    stop
+}
+
+#[test]
+fn scheduled_cron_turn_cannot_replace_the_answer_to_a_held_bus_request() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "report progress", "turn-1");
+    f.record(cron_stop("turn-1", "Requested answer"));
+    f.consume();
+    let since = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+    scheduled_start(&f, "cron-turn", "Scheduled self reminder");
+    f.consume();
+    assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("turn-1"));
+    f.record(cron_stop("cron-turn", "CRON_TICK"));
+    f.consume();
+    assert_eq!(
+        f.request(lead).shell_hold.as_ref().unwrap().interim.text,
+        "Requested answer"
+    );
+    f.now = since + 15 * 60_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("Requested answer"));
+}
+
+#[test]
+fn rejected_background_stop_cannot_poison_the_retained_reply_or_its_deadline() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "report progress", "turn-1");
+    f.record(cron_stop("turn-1", "Requested answer"));
+    f.consume();
+    let held = f.request(lead).shell_hold.clone();
+    f.record(cron_stop("foreign-turn", "UNRELATED"));
+    f.consume();
+    assert_eq!(f.request(lead).shell_hold, held);
+}
+
+#[test]
+fn scheduled_transcript_metadata_does_not_discard_input_bus_actually_submitted() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "report progress", "turn-1");
+    f.record(cron_stop("turn-1", "First answer"));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    let next = f.send("Scheduled self reminder", false);
+    f.deliver();
+    scheduled_start(&f, "turn-2", "Scheduled self reminder");
+    f.consume();
+    f.stopped("turn-2", "Explicitly requested answer");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("First answer"));
+    assert_eq!(
+        f.reply(next).as_deref(),
+        Some("Explicitly requested answer")
+    );
+}

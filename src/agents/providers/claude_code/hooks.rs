@@ -419,6 +419,56 @@ fn is_redirect_operator(command: &str, index: usize, ch: char) -> bool {
     }
 }
 
+/// Claude's recurring self reminders are independent turns, not continuations
+/// answering Bus input. The transcript records their origin; prompt wording
+/// alone is insufficient. Missing evidence leaves normal correlation intact.
+pub(crate) fn is_scheduled_prompt(value: &Value) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some((session, turn, path)) = value
+        .get("session_id")
+        .and_then(Value::as_str)
+        .zip(value.get("prompt_id").and_then(Value::as_str))
+        .zip(value.get("transcript_path").and_then(Value::as_str))
+        .map(|((session, turn), path)| (session, turn, path))
+    else {
+        return false;
+    };
+    let read = || -> std::io::Result<bool> {
+        if !std::fs::metadata(path)?.is_file() {
+            return Ok(false);
+        }
+        let mut file = std::fs::File::open(path)?;
+        const MAX_TAIL: u64 = 2 * 1024 * 1024;
+        let offset = file.metadata()?.len().saturating_sub(MAX_TAIL);
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::new();
+        file.take(MAX_TAIL).read_to_end(&mut bytes)?;
+        let start = if offset == 0 {
+            0
+        } else {
+            bytes
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(bytes.len(), |index| index + 1)
+        };
+        for line in bytes[start..].split(|byte| *byte == b'\n').rev() {
+            let Ok(row) = serde_json::from_slice::<Value>(line) else {
+                continue;
+            };
+            if row["type"] == "user" && row["sessionId"] == session && row["promptId"] == turn {
+                return Ok(row["isMeta"] == true
+                    && row["promptSource"] == "system"
+                    && row["turnOrigin"] == "scheduled"
+                    && row["scheduledTaskId"]
+                        .as_str()
+                        .is_some_and(|id| !id.is_empty()));
+            }
+        }
+        Ok(false)
+    };
+    read().unwrap_or(false)
+}
+
 #[cfg(test)]
 #[path = "tests/hooks_test.rs"]
 mod tests;
