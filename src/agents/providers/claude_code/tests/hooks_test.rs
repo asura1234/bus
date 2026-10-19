@@ -445,7 +445,7 @@ fn scheduled_prompt_identity_requires_matching_provider_metadata_in_a_bounded_ta
     let row = json!({"type":"user","sessionId":"s","promptId":"p","isMeta":true,
         "promptSource":"system","turnOrigin":"scheduled","scheduledTaskId":"cron-1"});
     std::fs::write(&path, format!("{row}\n")).unwrap();
-    assert!(super::is_scheduled_prompt(&hook));
+    assert_eq!(super::scheduled_prompt(&hook), Some(true));
     for (key, value) in [
         ("sessionId", json!("other-session")),
         ("promptId", json!("other-turn")),
@@ -457,14 +457,24 @@ fn scheduled_prompt_identity_requires_matching_provider_metadata_in_a_bounded_ta
         let mut changed = row.clone();
         changed[key] = value;
         std::fs::write(&path, format!("{changed}\n")).unwrap();
-        assert!(!super::is_scheduled_prompt(&hook), "{key}");
+        let expected = if matches!(key, "sessionId" | "promptId") {
+            None
+        } else {
+            Some(false)
+        };
+        assert_eq!(super::scheduled_prompt(&hook), expected, "{key}");
     }
+    // Later tool-result rows share the turn id but carry no prompt origin.
+    let tool_result = json!({"type":"user","sessionId":"s","promptId":"p",
+        "message":{"role":"user","content":[{"type":"tool_result","content":"done"}]}});
+    std::fs::write(&path, format!("{row}\n{tool_result}\n")).unwrap();
+    assert_eq!(super::scheduled_prompt(&hook), Some(true));
     let mut large = vec![b'x'; 2 * 1024 * 1024 + 10];
     large.extend_from_slice(format!("\n{row}\n{{partial").as_bytes());
     std::fs::write(&path, large).unwrap();
-    assert!(super::is_scheduled_prompt(&hook));
+    assert_eq!(super::scheduled_prompt(&hook), Some(true));
     std::fs::remove_file(&path).unwrap();
-    assert!(!super::is_scheduled_prompt(&hook));
-    assert!(!super::is_scheduled_prompt(&json!({})));
+    assert_eq!(super::scheduled_prompt(&hook), None);
+    assert_eq!(super::scheduled_prompt(&json!({})), None);
     std::fs::remove_dir_all(root).unwrap();
 }

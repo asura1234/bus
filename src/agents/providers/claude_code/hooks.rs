@@ -421,21 +421,18 @@ fn is_redirect_operator(command: &str, index: usize, ch: char) -> bool {
 
 /// Claude's recurring self reminders are independent turns, not continuations
 /// answering Bus input. The transcript records their origin; prompt wording
-/// alone is insufficient. Missing evidence leaves normal correlation intact.
-pub(crate) fn is_scheduled_prompt(value: &Value) -> bool {
+/// alone is insufficient. None means the matching row is not available yet:
+/// Claude may publish it only after UserPromptSubmit hooks have run.
+pub(crate) fn scheduled_prompt(value: &Value) -> Option<bool> {
     use std::io::{Read, Seek, SeekFrom};
-    let Some((session, turn, path)) = value
+    let ((session, turn), path) = value
         .get("session_id")
         .and_then(Value::as_str)
         .zip(value.get("prompt_id").and_then(Value::as_str))
-        .zip(value.get("transcript_path").and_then(Value::as_str))
-        .map(|((session, turn), path)| (session, turn, path))
-    else {
-        return false;
-    };
-    let read = || -> std::io::Result<bool> {
+        .zip(value.get("transcript_path").and_then(Value::as_str))?;
+    let read = || -> std::io::Result<Option<bool>> {
         if !std::fs::metadata(path)?.is_file() {
-            return Ok(false);
+            return Ok(None);
         }
         let mut file = std::fs::File::open(path)?;
         const MAX_TAIL: u64 = 2 * 1024 * 1024;
@@ -455,18 +452,27 @@ pub(crate) fn is_scheduled_prompt(value: &Value) -> bool {
             let Ok(row) = serde_json::from_slice::<Value>(line) else {
                 continue;
             };
-            if row["type"] == "user" && row["sessionId"] == session && row["promptId"] == turn {
-                return Ok(row["isMeta"] == true
-                    && row["promptSource"] == "system"
-                    && row["turnOrigin"] == "scheduled"
-                    && row["scheduledTaskId"]
-                        .as_str()
-                        .is_some_and(|id| !id.is_empty()));
+            if row["type"] == "user"
+                && row["sessionId"] == session
+                && row["promptId"] == turn
+                // Tool-result rows share the prompt id but do not describe
+                // the input's origin. Keep looking for the submitted row.
+                && row["promptSource"].is_string()
+                && row["turnOrigin"].is_string()
+            {
+                return Ok(Some(
+                    row["isMeta"] == true
+                        && row["promptSource"] == "system"
+                        && row["turnOrigin"] == "scheduled"
+                        && row["scheduledTaskId"]
+                            .as_str()
+                            .is_some_and(|id| !id.is_empty()),
+                ));
             }
         }
-        Ok(false)
+        Ok(None)
     };
-    read().unwrap_or(false)
+    read().ok().flatten()
 }
 
 #[cfg(test)]

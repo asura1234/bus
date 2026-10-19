@@ -7,14 +7,40 @@ impl Worker {
         state: &mut super::BusState,
         callback: &ProviderCallback,
         record: &callbacks::Record,
-    ) {
-        if record.manifest.provider == Provider::ClaudeCode
-            && matches!(callback.kind, super::CallbackEventKind::PromptStarted)
-            && crate::agents::providers::claude_code::hooks::is_scheduled_prompt(&record.value)
+    ) -> bool {
+        if record.manifest.provider != Provider::ClaudeCode
+            || !matches!(callback.kind, super::CallbackEventKind::PromptStarted)
         {
-            // Explicit input Bus submitted still wins inside this model guard.
-            state.mark_unowned_background_turn(callback);
+            return true;
         }
+        match crate::agents::providers::claude_code::hooks::scheduled_prompt(&record.value) {
+            Some(true) => {
+                // Explicit input Bus submitted still wins inside this model guard.
+                state.mark_unowned_background_turn(callback);
+            }
+            None if record
+                .value
+                .get("transcript_path")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+                && state
+                    .agent(callback.agent_id)
+                    .and_then(|agent| agent.current_request)
+                    .and_then(|id| state.request(id))
+                    .is_some_and(|request| request.awaiting_background) =>
+            {
+                // Keep the hook spooled: an unpublished row is not evidence of
+                // an owned continuation. The existing hold cap still runs.
+                tracing::debug!(
+                    event = "bus.callback.deferred",
+                    reason = "claude_prompt_origin_pending",
+                    "Awaiting Claude prompt origin before continuing a background hold"
+                );
+                return false;
+            }
+            _ => {}
+        }
+        true
     }
 
     /// A Claude reply waits while shells started by its request still run:

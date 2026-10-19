@@ -691,7 +691,9 @@ impl Worker {
                 ControlFlow::Break(()) => return Ok(CallbackFlow::Next),
             };
         if let Some(callback) = callback {
-            Self::mark_scheduled_turn(&mut state, &callback, record);
+            if !Self::mark_scheduled_turn(&mut state, &callback, record) {
+                return Ok(CallbackFlow::Stop);
+            }
             let interim = interim.map(|text| PendingFinal {
                 callback_id: callback.callback_id.clone(),
                 text,

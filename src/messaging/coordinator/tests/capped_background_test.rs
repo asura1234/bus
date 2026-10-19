@@ -277,3 +277,51 @@ fn a_scheduled_turn_that_finishes_without_background_work_does_not_answer_the_he
     f.consume();
     assert_eq!(f.reply(lead).as_deref(), Some("Requested answer"));
 }
+
+#[test]
+fn scheduled_prompt_waits_for_its_late_transcript_row_before_rebinding_a_hold() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "report progress", "turn-1");
+    f.record(cron_stop("turn-1", "Requested answer"));
+    f.consume();
+    let since = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+    let transcript = f.dir.join("scheduled.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    f.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "prompt_id":"cron-turn","prompt":"Scheduled self reminder", "transcript_path":transcript}),
+    );
+    f.consume();
+    assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("turn-1"));
+    // Claude writes this after its submit hooks run; the same spooled hook must retry.
+    scheduled_start(&f, "cron-turn", "Scheduled self reminder");
+    f.consume();
+    f.record(cron_stop("cron-turn", "CRON_TICK"));
+    f.consume();
+    f.now = since + 15 * 60_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("Requested answer"));
+}
+
+#[test]
+fn missing_prompt_origin_cannot_extend_the_captured_reply_cap() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "report progress", "turn-1");
+    f.record(cron_stop("turn-1", "Requested answer"));
+    f.consume();
+    let since = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+    f.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "prompt_id":"unknown-turn","prompt":"Unclassified wake",
+        "transcript_path":f.dir.join("missing-transcript.jsonl")}),
+    );
+    f.consume();
+    f.now = since + 15 * 60_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("Requested answer"));
+    let next = f.send("next request", true);
+    f.deliver();
+    assert_eq!(f.request(next).phase, RequestPhase::Active);
+}
