@@ -52,10 +52,10 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 6. **Stay available.** Answer the developer promptly and pass their steering to the
    agents it affects. Keep your replies short; put details in files.
 7. **Report progress, questions and blockers in MASTER; keep details in your
-   room.** Your turn's final message is your status. When the developer's
-   MASTER message woke you, Bus shows it in MASTER as your reply. When a worker
-   or a background command woke you instead,
-   Bus shows it in your work room, never in MASTER. Whatever woke you, send
+   room.** Your turn's final message is your status. Bus shows your reply in
+   the message's room for both developer and agent senders, including MASTER.
+   A turn no message started posts in your work room. Follow the reply and
+   dispatch-shell rules in orchestrator-rules.md. Whatever woke you, send
    MASTER these yourself, briefly, with
    `bus send --room master --as {{AGENT_NAME}} --to human --text "..."`:
    - a progress report when a step or milestone finishes or fails (a PR

@@ -1,4 +1,4 @@
-use super::{claude_image_placeholders, claude_running_shells, is_bus_wait, parse};
+use super::{claude_image_placeholders, claude_running_shells, is_bus_control, parse};
 use crate::agents::providers::{hook_json::HookContract, spool::Parsed, ProviderKind};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -286,11 +286,43 @@ fn claude_running_shells_leave_out_bus_send_and_wait_commands() {
             .collect::<Vec<_>>(),
         ["b5", "b6", "b7"]
     );
-    assert!(is_bus_wait("bus send --to a --text b"));
-    assert!(is_bus_wait("BUS_DATA_DIR=/x ./bus --dev --yolo wait 3"));
-    assert!(!is_bus_wait("bus state"));
-    assert!(!is_bus_wait("busybox send"));
-    assert!(!is_bus_wait("echo bus"));
+    assert!(is_bus_control("bus send --to a --text b"));
+    assert!(is_bus_control("BUS_DATA_DIR=/x ./bus --dev --yolo wait 3"));
+    assert!(is_bus_control("bus state"));
+    assert!(!is_bus_control("busybox send"));
+    assert!(!is_bus_control("echo bus"));
+}
+
+#[test]
+fn direct_bus_control_shells_do_not_hold_replies() {
+    for command in [
+        "bus history --room 0",
+        "bus agent read worker --source recent --lines 20",
+        "bus message status 19",
+        "bus room notes 1 --text ready",
+        "bus request recover 19 --confirm",
+        "bus settings",
+        "bus diagnostics",
+        "bus sounds",
+        "cd '/tmp/a b' && '/tmp/a b/bus' --dev send --async --to worker --text go",
+    ] {
+        assert!(is_bus_control(command), "Bus control only: {command}");
+    }
+    for command in [
+        "bus agent read worker | python3 report.py",
+        "bus history --room 0 && cargo test",
+        "./rev_send.sh worker brief.md",
+        "until bus state; do sleep 3; done; bus send --to worker --text go",
+        "bus e2e",
+        "bus tui start",
+        "bus resume --last",
+        "bus --unknown-option wait 19",
+    ] {
+        assert!(
+            !is_bus_control(command),
+            "Work or opaque command: {command}"
+        );
+    }
 }
 
 /// A background shell that runs real work and only then reports over Bus
@@ -320,7 +352,7 @@ fn bus_wait_shells_preserve_work_on_either_side_and_quoted_message_text() {
         "(bus wait 7)",
         "cd /tmp",
     ] {
-        assert!(!is_bus_wait(command), "must hold work: {command}");
+        assert!(!is_bus_control(command), "must hold work: {command}");
     }
     for command in [
         "cd /tmp && BUS_DATA_DIR=/scratch bus --dev wait 7",
@@ -328,7 +360,7 @@ fn bus_wait_shells_preserve_work_on_either_side_and_quoted_message_text() {
         "bus send --to qa --text 'literal $(cargo build)'",
         "bus send --to qa --text ready\\;checked",
     ] {
-        assert!(is_bus_wait(command), "only Bus waits: {command}");
+        assert!(is_bus_control(command), "only Bus waits: {command}");
     }
 }
 
@@ -343,7 +375,7 @@ fn bus_wait_shells_with_stream_redirections_are_still_bus_waits() {
         "bus wait 7 &>/tmp/bus-wait.log",
         "bus wait 7 >|/tmp/bus-wait.log",
     ] {
-        assert!(is_bus_wait(command), "only Bus waits: {command}");
+        assert!(is_bus_control(command), "only Bus waits: {command}");
     }
 }
 
@@ -360,6 +392,6 @@ fn bus_wait_shells_keep_work_after_a_stream_redirection() {
         "bus wait 7 >|/tmp/log || cargo build",
         "bus wait 7 &&>/tmp/log cargo build",
     ] {
-        assert!(!is_bus_wait(command), "must hold work: {command}");
+        assert!(!is_bus_control(command), "must hold work: {command}");
     }
 }

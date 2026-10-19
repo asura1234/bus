@@ -59,9 +59,20 @@ impl Worker {
             None => Vec::new(),
         };
         if has_request && !started.is_empty() {
+            let held_request = request.and_then(|request| self.state.request(request));
             tracing::info!(
                 event = "bus.callback.background_shells",
                 agent_id = id.0,
+                request_id = request.map(|request| request.0),
+                prompt_id = held_request.map(|request| request.prompt.id.0),
+                author = held_request.map(|request| match request.prompt.author {
+                    crate::messaging::model::Author::Developer => "developer",
+                    crate::messaging::model::Author::Agent(_) => "agent",
+                    crate::messaging::model::Author::Bus => "bus",
+                }),
+                captured_reply_bytes = text.len(),
+                inherited_shell_count = running.len().saturating_sub(started.len()),
+                started_shell_count = started.len(),
                 shells = ?started,
                 "Reply waits for shells this request started"
             );

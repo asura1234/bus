@@ -37,11 +37,11 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   skips required gates, including auto-merge-pr's split check.
 
 - **Report progress, questions and blockers in MASTER; keep details in your
-  room.** Your turn's final message is your status. When the developer's MASTER
-  message started the turn, Bus shows it in MASTER as your reply. When a
-  worker's message or a background command started it, Bus shows it in your
-  work room, never in MASTER. Whatever started the turn, send MASTER these
-  yourself, briefly, with
+  room.** Your turn's final message is your status. A reply appears in the
+  message's room, with the same delivery, capture and display for developer
+  and agent senders. An agent's MASTER message gets its reply in MASTER too.
+  A turn no message started posts in your work room. Whatever started the turn,
+  send MASTER these yourself, briefly, with
   `bus send --room master --as YOUR_NAME --to human --text "..."`:
   - a progress report when a step or milestone finishes or fails (a PR merged,
     a task done, a gate failed);
@@ -82,8 +82,12 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Dispatch every task with `bus send --async` in the background.** Run
   `bus send --room ROOM --as YOUR_NAME --to AGENT --async --text "..."` as a
   background tool call (Claude Code: Bash with `run_in_background`; Cursor: a
-  background shell with timeout 0). When it exits, your CLI wakes you and prints
-  the replies. Bus also delivers worker replies, autonomous turn-final results,
+  background shell with timeout 0). Use a direct Bus command: direct control
+  commands do not hold your final reply. Real background work and opaque
+  scripts (including dispatch wrappers, setup loops and result watchers) still
+  hold it; keep those out of a dispatch-only shell. When it exits, your CLI
+  wakes you and prints the replies. Bus also delivers worker replies,
+  autonomous turn-final results,
   stalled/abandoned/no-reply outcomes with reasons, and idle/confirmed-exit
   events with open orchestrator work directly to your terminal as agent
   messages, like Blocked notices. Same-worker bursts are collected for two

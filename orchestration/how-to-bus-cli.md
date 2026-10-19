@@ -209,11 +209,22 @@ room that already has one fails.
 
 ### Report to the developer in MASTER
 
-An orchestrator's final reply to a developer message lands in MASTER by itself.
-When a worker's message or a background command starts its turn instead, the
-turn's final message shows in the work room the orchestrator runs, never in
-MASTER: as the reply under the worker's message, or, for a turn no message
-started, as the orchestrator's message to you.
+A reply lands in the message's room, equally for developer and agent senders.
+An agent-authored message sent in MASTER gets its reply in MASTER, just like
+one from the developer. A worker message in the work room gets its reply there.
+A turn no message started posts in the orchestrator's work room.
+
+Direct Bus control commands (`send`, `wait`, `history`, `agent`, `room`,
+`message`, `request`, `state`, `settings`, and other control commands) do
+not hold Claude's turn-final reply while running in a background shell. A
+quoted Bus executable path and a leading `cd` or environment assignment are
+supported. Real work before or after a Bus command, pipes to other programs,
+setup loops, unknown syntax and opaque script wrappers still hold the reply.
+For dispatches use the direct Bus executable; do setup and result processing
+separately. `bus.callback.shell_classified` records each running shell's id,
+content-free reason and hold decision. `bus.callback.background_shells` adds
+the request, sender kind and captured-reply size to explain a held final;
+these events never log commands or message text.
 
 MASTER carries progress, questions and blockers; work details stay in the work
 room. Whatever started its turn, an orchestrator sends MASTER these itself,
