@@ -100,7 +100,7 @@ pub(super) fn scoped_lines(lines: &[Line], scope: LinkScope) -> Vec<Line> {
     rows
 }
 
-fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
+pub(super) fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut offset = 0;
     text.split_inclusive(char::is_whitespace)
         .filter_map(move |part| {

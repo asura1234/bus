@@ -1,5 +1,5 @@
 //! Markdown message preparation, style preservation and copyable row layout.
-use super::super::render::{display, wrap_ranges};
+use super::super::render::{display, wrap_ranges, ACCENT};
 use super::{History, Line, MarkdownSource, RowAnchor, Tone};
 use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
 use ratatui::buffer::{Buffer, CellWidth};
@@ -90,8 +90,84 @@ impl MarkdownBlock {
             .unwrap_or_else(|| {
                 literal_reply_lines(&self.source, content_width, request, indent, anchor)
             });
+        highlight_waiting_tags(&mut self.lines, &self.source);
         self.width = Some(width);
         &self.lines
+    }
+}
+
+/// Map source tags through Markdown styling and wrapping, once per cached layout.
+fn highlight_waiting_tags(lines: &mut [Line], source: &str) {
+    let folded = source.to_ascii_lowercase();
+    let tags: Vec<_> = ["[waiting-on-you]", "[waiting_on_you]"]
+        .into_iter()
+        .flat_map(|tag| {
+            folded
+                .match_indices(tag)
+                .map(|(start, tag)| start..start + tag.len())
+        })
+        .collect();
+    if tags.is_empty() {
+        return;
+    }
+    let mut cursor = 0;
+    for line in lines {
+        if line.styles.is_empty() {
+            line.styles.push((line.text.clone(), Style::default()));
+        }
+        let mut ranges = Vec::new();
+        let mut offset = 0;
+        for (text, style) in &line.styles {
+            // Generated Markdown bullets, borders and fence labels have no
+            // source correspondence, just as in wrapped_links::scoped_lines.
+            if !style.add_modifier.contains(Modifier::DIM) {
+                for (start, word) in super::wrapped_links::words(text) {
+                    if offset + start < line.copy_from {
+                        continue;
+                    }
+                    let Some(found) = source[cursor..].find(word) else {
+                        continue;
+                    };
+                    let from = cursor + found;
+                    let to = from + word.len();
+                    for tag in &tags {
+                        let left = from.max(tag.start);
+                        let right = to.min(tag.end);
+                        if left < right {
+                            ranges
+                                .push(offset + start + left - from..offset + start + right - from);
+                        }
+                    }
+                    cursor = to;
+                }
+            }
+            offset += text.len();
+        }
+        highlight_ranges(line, &ranges);
+    }
+}
+
+/// Patch only tag foregrounds, retaining Markdown attributes and all other runs.
+fn highlight_ranges(line: &mut Line, ranges: &[std::ops::Range<usize>]) {
+    if ranges.is_empty() {
+        return;
+    }
+    let runs = std::mem::take(&mut line.styles);
+    let mut offset = 0;
+    for (text, style) in runs {
+        for (index, ch) in text.char_indices() {
+            let style = if ranges.iter().any(|range| range.contains(&(offset + index))) {
+                style.fg(ACCENT)
+            } else {
+                style
+            };
+            if let Some((run, _)) = line.styles.last_mut().filter(|(_, last)| *last == style) {
+                run.push(ch);
+            } else {
+                line.styles.push((ch.to_string(), style));
+            }
+        }
+        offset += text.len();
     }
 }
 

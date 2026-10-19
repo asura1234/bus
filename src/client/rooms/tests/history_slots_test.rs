@@ -2,6 +2,168 @@ use super::*;
 use crossterm::event::MouseEventKind::ScrollDown;
 
 #[test]
+fn waiting_tags_use_you_color_without_restyling_the_message_or_attention_badge() {
+    use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+
+    let (mut ui, work, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let master = snapshot.state.ensure_master_room();
+    let agent = snapshot
+        .state
+        .create_agent(master, "orch", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    snapshot.state.bind_orchestrator(agent, work).unwrap();
+    snapshot
+        .state
+        .set_draft_recipients(master, [agent])
+        .unwrap();
+    snapshot
+        .state
+        .set_draft_text(master, "Reference author")
+        .unwrap();
+    snapshot.state.submit_draft(master, 1).unwrap();
+    snapshot.state.post_to_developer(
+        master, agent,
+        "[needs_developer_attention] Before [waiting-on-you] after [other]\nBefore **[WAITING_ON_YOU]** after".into(),
+        vec![], 2,
+    ).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.room = Some(master);
+
+    for accessible in [false, true] {
+        ui.settings.color_blind_mode = accessible;
+        for selected in [false, true] {
+            for terminal_background in [Color::White, Color::Black] {
+                ui.compute_view(140, 40);
+                let lines = ui.history.cached();
+                let first = lines
+                    .iter()
+                    .position(|line| line.text.starts_with("Before "))
+                    .unwrap();
+                let last = lines
+                    .iter()
+                    .rposition(|line| line.text.starts_with("Before "))
+                    .unwrap();
+                ui.history_selection = selected.then_some((
+                    selection::Point {
+                        line: first,
+                        offset: 0,
+                    },
+                    selection::Point {
+                        line: last,
+                        offset: lines[last].text.len(),
+                    },
+                ));
+                ui.compute_view(140, 40);
+                let mut buffer = Buffer::empty(Rect::new(0, 0, 140, 40));
+                buffer.set_style(
+                    buffer.area,
+                    ratatui::style::Style::new().bg(terminal_background),
+                );
+                ui.render(&mut buffer);
+                let text = ui.view.history_text;
+                let find = |needle: &str| {
+                    (text.y..text.bottom())
+                        .find_map(|y| {
+                            let row = (text.x..text.right())
+                                .map(|x| buffer[(x, y)].symbol())
+                                .collect::<String>();
+                            row.find(needle).map(|offset| (text.x + offset as u16, y))
+                        })
+                        .unwrap_or_else(|| panic!("missing {needle}"))
+                };
+                let you = buffer[find("You")].fg;
+                let normal = buffer[find("Before")].fg;
+                assert_ne!(you, normal);
+                for tag in ["[waiting-on-you]", "[WAITING_ON_YOU]"] {
+                    let (x, y) = find(tag);
+                    for offset in 0..tag.len() as u16 {
+                        let cell = &buffer[(x + offset, y)];
+                        assert_eq!(cell.fg, you, "{tag}: waiting tag must use the You color");
+                        assert_eq!(cell.bg, buffer[find("Before")].bg);
+                    }
+                }
+                for unchanged in ["after", "[other]"] {
+                    assert_eq!(buffer[find(unchanged)].fg, normal, "{unchanged}");
+                }
+                assert_eq!(
+                    buffer[find("[Needs developer]")].fg,
+                    Color::Rgb(145, 148, 159)
+                );
+                assert_eq!(
+                    buffer[find("Before")].bg,
+                    if selected {
+                        Color::Rgb(44, 88, 56)
+                    } else {
+                        Color::Rgb(24, 24, 28)
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn waiting_tag_color_survives_wrapping_in_prompts_and_replies() {
+    use ratatui::style::Color;
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot
+        .state
+        .set_draft_text(room, "[waiting-on-you]")
+        .unwrap();
+    let request = snapshot.state.submit_draft(room, 1).unwrap()[0];
+    snapshot
+        .state
+        .finish_for_test(request, "**[WAITING_ON_YOU]**", 2);
+    for width in [8, 15, 24] {
+        let lines = ui.history.lines(
+            &snapshot.state,
+            snapshot.state.room(room).unwrap(),
+            width,
+            1,
+            3,
+            &mut Default::default(),
+        );
+        for source in [
+            history::MarkdownSource::Prompt(snapshot.state.request(request).unwrap().prompt.id),
+            history::MarkdownSource::Reply(request),
+        ] {
+            let body: Vec<_> = lines
+                .iter()
+                .filter(|line| {
+                    line.raw_markdown
+                        .as_ref()
+                        .is_some_and(|(key, _)| *key == source)
+                })
+                .collect();
+            let text: String = body
+                .iter()
+                .flat_map(|line| line.text.chars())
+                .filter(|ch| !ch.is_whitespace())
+                .collect();
+            assert!(
+                matches!(text.as_str(), "[waiting-on-you]" | "[WAITING_ON_YOU]"),
+                "{text}"
+            );
+            for line in body {
+                for (text, style) in &line.styles {
+                    if !text.trim().is_empty() {
+                        assert_eq!(
+                            style.fg,
+                            Some(Color::Rgb(102, 255, 102)),
+                            "{text} at width {width}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn room_layout_registers_separate_compute_view_and_history_timers() {
     let (mut ui, _, _) = fixture();
     ui.compute_view(100, 40);

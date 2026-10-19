@@ -25,7 +25,7 @@ use ratatui::style::{Color, Style};
 
 /// Background of mouse-selected text.
 const SELECTION: Color = Color::Rgb(44, 88, 56);
-const ACCENT: Color = {
+pub(super) const ACCENT: Color = {
     let [r, g, b] = crate::messaging::prefs::colors::YOU_COLOR;
     Color::Rgb(r, g, b)
 };
