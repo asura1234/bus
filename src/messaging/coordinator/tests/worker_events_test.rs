@@ -901,7 +901,7 @@ fn known_background_shell_idle_is_reported_without_releasing_its_hold() {
     f.worker.submit_ready().unwrap();
     assert_eq!(f.calls.lock().unwrap().len(), 1);
     assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
-    assert!(f.calls.lock().unwrap()[0].contains("background shells"));
+    assert!(f.calls.lock().unwrap()[0].contains("background work"));
     let request = f.worker.state.request(source).unwrap();
     assert_eq!(request.phase, RequestPhase::Active);
     assert!(request.awaiting_background && request.shell_hold.is_some());
