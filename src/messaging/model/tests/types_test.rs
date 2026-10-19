@@ -5,6 +5,9 @@ use super::*;
 #[path = "send_recovery_test.rs"]
 mod send_recovery_tests;
 
+#[path = "shell_hold_test.rs"]
+mod shell_hold_tests;
+
 fn master_agent(state: &mut BusState, name: &str) -> AgentId {
     let master = state.ensure_master_room();
     state
