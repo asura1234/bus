@@ -7,8 +7,9 @@ impl Worker {
     /// each wakes a turn when it ends, and the last such turn carries the real
     /// reply. Shells inherited from an earlier request (say a hung
     /// `find /`) are listed by every later `Stop` and never hold a reply.
-    /// A held `Stop` also returns its interim text, which the hold cap delivers.
-    pub(super) fn hold_for_started_shells(
+    /// Every held `Stop`, including cron/non-shell waits, returns its interim
+    /// text for bounded delivery. Missing text remains an observation only.
+    pub(super) fn hold_background_reply(
         &mut self,
         id: AgentId,
         record: &callbacks::Record,
@@ -23,6 +24,13 @@ impl Worker {
             self.claude_shell_observations.remove(&id);
         }
         self.inherit_shells_for_current_request(id);
+        // The parser reports cron/non-shell waits before shell classification.
+        // Keep that Stop's text too, otherwise it bypasses the persisted hold
+        // and its deadline forever, even when shells are also running.
+        if matches!(&parsed, Parsed::BackgroundPending { .. }) {
+            let interim = background_stop_reply(id, record);
+            return (parsed, interim);
+        }
         let Parsed::Final {
             session,
             turn,
@@ -160,4 +168,33 @@ impl Worker {
             ),
         }
     }
+}
+
+fn background_stop_reply(id: AgentId, record: &callbacks::Record) -> Option<String> {
+    let interim = record
+        .value
+        .get("last_assistant_message")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned);
+    let tasks = record
+        .value
+        .get("background_tasks")
+        .and_then(serde_json::Value::as_array);
+    let crons = record
+        .value
+        .get("session_crons")
+        .and_then(serde_json::Value::as_array);
+    tracing::info!(
+        event = "bus.callback.background_pending",
+        agent_id = id.0,
+        captured_reply_bytes = interim.as_ref().map_or(0, String::len),
+        session_cron_count = crons.map_or(0, Vec::len),
+        non_shell_task_count = tasks.map_or(0, |tasks| tasks
+            .iter()
+            .filter(|task| task.get("type").and_then(serde_json::Value::as_str) != Some("shell"))
+            .count()),
+        "Background Stop reply capture observed"
+    );
+    interim
 }

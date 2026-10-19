@@ -850,7 +850,7 @@ fn earlier_background_request_at(f: &mut Fixture, shell: bool, now: u64) -> Requ
     pending.occurred_at_ms = now - 11_000;
     state.accept_callback(pending);
     if shell {
-        state.hold_reply_for_shells(
+        state.hold_background_reply(
             f.agent,
             crate::messaging::model::PendingFinal {
                 callback_id: "held-interim".into(),

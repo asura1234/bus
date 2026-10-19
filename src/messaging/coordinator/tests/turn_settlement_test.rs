@@ -329,7 +329,7 @@ fn a_turn_closed_without_a_reply_or_provider_error_says_so_in_its_reason() {
     );
 }
 
-fn claude_stop(turn: &str, text: &str, shells: &[&str]) -> Value {
+pub(super) fn claude_stop(turn: &str, text: &str, shells: &[&str]) -> Value {
     // Shape measured from Claude Code 2.1.296: each running background shell
     // is listed, and each one that finishes wakes a turn whose Stop drops it.
     let tasks: Vec<_> = shells
@@ -339,7 +339,7 @@ fn claude_stop(turn: &str, text: &str, shells: &[&str]) -> Value {
     json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":tasks,"session_crons":[]})
 }
 
-fn claude_startup() -> Value {
+pub(super) fn claude_startup() -> Value {
     json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"})
 }
 
@@ -755,7 +755,7 @@ fn a_queued_message_survives_the_wake_up_turn_that_ends_a_shell_hold() {
 }
 
 /// Holds `fixture`'s request on a recurring session cron, as Claude reports
-/// it: Stop lists the cron, so the reply waits with no shell hold and no cap.
+/// it: Stop lists the cron and retains the reply until the background cap.
 fn held_on_a_session_cron(fixture: &mut Fixture) -> RequestId {
     fixture.record(claude_startup());
     fixture.consume();
@@ -768,20 +768,25 @@ fn held_on_a_session_cron(fixture: &mut Fixture) -> RequestId {
     lead
 }
 
-/// A `--queue` message behind a reply held for a session cron, which has no
-/// cap, is still reported stalled once the queue has made no progress.
+/// A queued message waits on a captured cron reply's bounded hold.
 #[test]
-fn a_queued_message_behind_an_uncapped_cron_hold_is_still_reported_stalled() {
+fn a_queued_message_behind_a_captured_cron_reply_survives_until_its_cap() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = held_on_a_session_cron(&mut fixture);
     let next = fixture.send("review the next change", true);
     fixture.deliver();
-    fixture.now += 24 * 60 * 60 * 1000;
+    fixture.now += QUEUED_STALL_MS + 1000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
     fixture.worker.expire_queued_requests(fixture.now).unwrap();
-    assert_eq!(fixture.request(next).phase, RequestPhase::Abandoned);
+    assert_eq!(fixture.request(next).phase, RequestPhase::Queued);
+    fixture.now += SHELL_HOLD_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    fixture.worker.expire_queued_requests(fixture.now).unwrap();
+    fixture.deliver();
+    assert_eq!(fixture.request(next).phase, RequestPhase::Active);
 }
 
 /// A new message answered in its own turn must preserve the held answer of
@@ -877,9 +882,8 @@ fn a_shell_held_reply_does_not_stall_its_sender_or_block_later_messages() {
     assert_eq!(fixture.request(later).phase, RequestPhase::Active);
 }
 
-/// A shell hold ends when the shell's wake-up turn starts. If that turn then
-/// waits on a session cron (no cap), the request is reported like any other
-/// cron hold, not as still held for shells.
+/// Shell-to-cron transitions retain the same bounded reply semantics as a
+/// request that first held on a cron.
 #[test]
 fn a_cron_hold_after_an_ended_shell_hold_is_reported_like_a_cron_hold() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);

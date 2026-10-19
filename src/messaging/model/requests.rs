@@ -340,13 +340,12 @@ impl BusState {
             RequestPhase::Completed | RequestPhase::Abandoned => None,
             // A reply held for shells its turn started is known work with a
             // cap of its own; the queue behind it waits, it has not stalled.
-            // Session crons and background agents hold without a cap, so the
-            // queue behind them still stalls.
+            // Background waits with no captured text still report stalls.
             RequestPhase::Queued
                 if agent
                     .current_request
                     .and_then(|id| self.requests.get(&id))
-                    .is_some_and(Request::held_for_shells) =>
+                    .is_some_and(Request::has_held_background_reply) =>
             {
                 None
             }
@@ -371,7 +370,7 @@ impl BusState {
                 // The captured interim reply waits on known work, bounded by
                 // its shell cap. It has not failed transcript capture. Keep
                 // unavailable/session-invalidated requests recoverable.
-                if agent.status == RuntimeStatus::Idle && lead.held_for_shells() {
+                if agent.status == RuntimeStatus::Idle && lead.has_held_background_reply() {
                     return None;
                 }
                 if (agent.status != RuntimeStatus::Idle && !invalidated)
@@ -734,10 +733,10 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
 }
 
 impl Request {
-    /// A captured interim belongs to the current shell hold, not a later
-    /// cron-only turn. Keeping old shell metadata preserves the first cap
-    /// across genuine re-holds without treating every later hold as shells.
-    pub(crate) fn held_for_shells(&self) -> bool {
+    /// The latest Stop's captured text belongs to this background hold. Old
+    /// text remains available to settlement across a wake without a Stop,
+    /// but must not stand in for a new turn's uncaptured background reply.
+    pub(crate) fn has_held_background_reply(&self) -> bool {
         self.awaiting_background
             && self.provider_turn_id.is_some()
             && self.shell_hold.as_ref().is_some_and(|hold| {

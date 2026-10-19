@@ -669,7 +669,7 @@ impl Worker {
             ControlFlow::Continue(parsed) => parsed,
             ControlFlow::Break(flow) => return Ok(flow),
         };
-        let (parsed, interim) = self.hold_for_started_shells(id, record, parsed);
+        let (parsed, interim) = self.hold_background_reply(id, record, parsed);
         let state = self.state.clone();
         let state = match self.check_callback_session(id, dir, path, record, &parsed, state)? {
             ControlFlow::Continue(state) => state,
@@ -702,7 +702,7 @@ impl Worker {
                 return Ok(CallbackFlow::Next);
             }
             if let Some(interim) = interim {
-                state.hold_reply_for_shells(id, interim);
+                state.hold_background_reply(id, interim);
             }
         }
         self.save(state)?;

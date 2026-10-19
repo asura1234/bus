@@ -239,7 +239,7 @@ impl BusState {
                     &request,
                     WorkerEventKind::Idle,
                     "idle",
-                    if request.held_for_shells() {
+                    if request.has_held_background_reply() {
                         "Idle with open request (background shells pending)"
                     } else if request.awaiting_background {
                         "Idle with open request (background work pending)"
