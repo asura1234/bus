@@ -222,11 +222,10 @@ fn dev_settings_show_and_set_the_global_sounds() {
         shown.result["settings"],
         json!({
             "color_blind_mode": false,
-            "feishu_notifications": true,
+            "feishu_waiting_notifications": true,
             "freeze_notifications": true,
             "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",
             "feishu_cli_path": null,
-            "feishu_notifications_generation": 0,
             "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
             "background_shell_hold_minutes": 15,

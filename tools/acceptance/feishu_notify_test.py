@@ -166,7 +166,7 @@ class Run:
         self.command("click", "--hit", "settings")
         self.command("click", "--hit", "feishu-notifications")
         self.command("wait", "--text", "[ ] Feishu notifications")
-        assert self.state()["settings"]["feishu_notifications"] is False
+        assert self.state()["settings"]["feishu_waiting_notifications"] is False
         assert self.state()["settings"]["freeze_notifications"] is True
         self.capture("settings-off")
         self.post(TAG + " Disabled history")

@@ -298,3 +298,39 @@ fn feishu_startup_history_and_destination_changes_do_not_replay() {
     assert_eq!(f.calls().len(), 1);
     assert_eq!(f.calls()[0][5], "ou_new");
 }
+
+#[test]
+fn feishu_upgrade_starts_waiting_dms_and_preserves_new_off_choice() {
+    // Every settings.json written before waiting DMs serialized the old
+    // default-off `feishu_notifications` and the removed popup toggle.
+    let mut f = Fixture::new();
+    std::fs::write(
+        f.worker.settings_path.as_ref().unwrap(),
+        r#"{
+  "color_blind_mode": false,
+  "feishu_notifications": false,
+  "freeze_notifications": true,
+  "developer_notifications": true,
+  "feishu_notifications_generation": 0,
+  "master_sound": { "enabled": true, "name": null },
+  "room_sound": { "enabled": false, "name": null },
+  "max_compactions_per_agent": 5,
+  "background_shell_hold_minutes": 15,
+  "sidebar_width": 28
+}"#,
+    )
+    .unwrap();
+    f.pump();
+    f.post("[waiting_on_you] Approve access");
+    f.flush();
+    assert_eq!(
+        f.calls().len(),
+        1,
+        "waiting DM stayed off after upgrade; enabled={}",
+        f.worker.attention.status.enabled
+    );
+    f.settings(|s| s.feishu_notifications = false);
+    f.post("[waiting_on_you] Disabled after upgrade");
+    f.flush();
+    assert_eq!(f.calls().len(), 1, "new off choice must survive reloads");
+}

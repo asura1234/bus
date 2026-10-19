@@ -29,12 +29,12 @@ pub(crate) const DEFAULT_FEISHU_RECIPIENT: &str = "ou_ca1b530d792419a044e281f998
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
+    // The old forwarding toggle is a different preference; do not inherit its off default.
+    #[serde(rename = "feishu_waiting_notifications")]
     pub(crate) feishu_notifications: bool,
     pub(crate) freeze_notifications: bool,
     pub(crate) feishu_recipient: String,
     pub(crate) feishu_cli_path: Option<String>,
-    /// Legacy serialized preference retained for settings compatibility.
-    pub(crate) feishu_notifications_generation: u64,
     /// MASTER's sound in every session; it rings by default.
     pub(crate) master_sound: SoundPref,
     /// The last All rooms choice: set on every work room at once, and what
@@ -61,7 +61,6 @@ impl Default for BusSettings {
             freeze_notifications: true,
             feishu_recipient: DEFAULT_FEISHU_RECIPIENT.into(),
             feishu_cli_path: None,
-            feishu_notifications_generation: 0,
             master_sound: SoundPref {
                 enabled: true,
                 name: None,
@@ -196,7 +195,7 @@ mod tests {
     #[test]
     fn feishu_notifications_default_on_with_recipient_setting() {
         let value = serde_json::to_value(BusSettings::default()).unwrap();
-        assert_eq!(value["feishu_notifications"], true);
+        assert_eq!(value["feishu_waiting_notifications"], true);
         assert_eq!(
             value["feishu_recipient"],
             "ou_ca1b530d792419a044e281f998ce68dc"

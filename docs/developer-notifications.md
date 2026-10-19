@@ -10,7 +10,10 @@ without a waiting marker stay quiet. `[needs_developer_attention]` retains its B
 notifications**. The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
 Click **Recipient open_id** to edit it. Click **lark-cli path** to override the executable;
 an empty field uses `lark-cli` from PATH. Changes persist with other shared settings.
-Bus stores no credentials. Configure bot authentication in lark-cli itself; sends explicitly
+The new waiting-DM preference is stored as `feishu_waiting_notifications`. The old
+forwarding toggle does not disable it on upgrade; turning the new toggle off persists
+that choice across restarts. Bus stores no credentials. Configure bot authentication
+in lark-cli itself; sends explicitly
 use `--as bot`, never the user identity. The equivalent toggle command is
 `bus settings feishu-notifications --on` / `--off`.
 
