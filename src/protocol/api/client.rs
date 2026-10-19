@@ -185,6 +185,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "client_timeout_test.rs"]
 mod timeout_tests;
