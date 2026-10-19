@@ -35,12 +35,12 @@ fn queued_sound(ui: &BusUi) -> Vec<(RoomId, bool)> {
 }
 
 #[test]
-fn feishu_settings_row_is_off_then_pending_then_effective_and_keyboard_toggles() {
+fn feishu_settings_row_is_default_on_then_pending_and_keyboard_toggles() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.action(render::Action::Settings);
     assert!(settings_rows(&mut ui, 40)
         .iter()
-        .any(|row| row.contains("[ ] Feishu notifications")));
+        .any(|row| row.contains("[x] Feishu notifications")));
     ui.receive_event(BusEvent::FeishuStatusChanged(
         crate::messaging::coordinator::attention::Status {
             pending: true,
@@ -49,7 +49,7 @@ fn feishu_settings_row_is_off_then_pending_then_effective_and_keyboard_toggles()
     ));
     assert!(settings_rows(&mut ui, 40)
         .iter()
-        .any(|row| row.contains("checking authentication")));
+        .any(|row| row.contains("sending")));
     ui.receive_event(BusEvent::FeishuStatusChanged(
         crate::messaging::coordinator::attention::Status {
             enabled: true,
@@ -866,7 +866,7 @@ fn freeze_notifications_default_on_and_toggle_without_changing_composer() {
 }
 
 #[test]
-fn developer_notifications_default_on_and_toggle_independently_with_pending_echo() {
+fn feishu_notifications_default_on_and_toggle_independently_with_pending_echo() {
     let (mut ui, master, _) = sound_fixture(0);
     ui.open_room(master);
     ui.locals
@@ -877,23 +877,23 @@ fn developer_notifications_default_on_and_toggle_independently_with_pending_echo
     ui.action(render::Action::Settings);
     assert!(settings_rows(&mut ui, 40)
         .iter()
-        .any(|row| row.contains("[x] Developer message notifications")));
-    ui.settings_field = ui.developer_notifications_field();
+        .any(|row| row.contains("[x] Feishu notifications")));
+    ui.settings_field = ui.feishu_field();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(!ui.settings.developer_notifications);
+    assert!(!ui.settings.feishu_notifications);
     assert!(ui.settings.freeze_notifications);
     assert_eq!(ui.locals[&master].text.text, "KEEP DRAFT");
     assert!(ui
         .pending
         .iter()
-        .any(|p| matches!(p.command, BusCommand::SetDeveloperNotifications(false))));
+        .any(|p| matches!(p.command, BusCommand::SetFeishuNotifications(false))));
     // An earlier Settings echo must not undo the pending local choice.
     ui.receive_event(BusEvent::SettingsChanged(Default::default()));
-    assert!(!ui.settings.developer_notifications);
+    assert!(!ui.settings.feishu_notifications);
     assert!(settings_rows(&mut ui, 40)
         .iter()
-        .any(|row| row.contains("[ ] Developer message notifications")));
+        .any(|row| row.contains("[ ] Feishu notifications")));
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(ui.settings.developer_notifications);
+    assert!(ui.settings.feishu_notifications);
     assert!(ui.settings.freeze_notifications);
 }

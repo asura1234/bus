@@ -186,7 +186,6 @@ pub(crate) enum ClientShellAction {
         request: Box<crate::protocol::api::schema::Request>,
     },
     ClipboardWrite(Vec<u8>),
-    DeveloperNotification(String),
     EditComposer,
     OpenSafeWebUrl(String),
     /// A local file or directory, opened in its default app.

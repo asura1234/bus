@@ -14,6 +14,10 @@ pub(super) enum Form {
         scroll: usize,
     },
     Settings,
+    FeishuSetting {
+        cli: bool,
+        editor: Editor,
+    },
     Room(Editor),
     Agent {
         name: Editor,
@@ -38,7 +42,7 @@ pub(super) enum Form {
 impl Form {
     pub fn editor_mut(&mut self) -> Option<&mut Editor> {
         match self {
-            Self::Room(e) | Self::Files(e) => Some(e),
+            Self::Room(e) | Self::Files(e) | Self::FeishuSetting { editor: e, .. } => Some(e),
             Self::Agent {
                 name,
                 cwd,

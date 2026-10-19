@@ -144,7 +144,6 @@ pub(in crate::client) struct BusUi {
     /// System sound names, read from the OS when Settings first opens.
     pub(super) system_sounds: Option<Vec<String>>,
     pub(super) ringer: super::ring::Ringer,
-    pub(super) developer_notifications: super::developer_notifications::DeveloperNotifications,
     pub(super) outer_focused: Option<bool>,
 }
 
@@ -239,7 +238,6 @@ impl BusUi {
             sound_config: None,
             system_sounds: None,
             ringer: super::ring::Ringer::new(std::time::Instant::now()),
-            developer_notifications: Default::default(),
             outer_focused: None,
         }
     }
@@ -283,12 +281,11 @@ impl BusUi {
 
     /// The overlay row's Settings focus index, after developer notifications.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings
-            .then(|| self.developer_notifications_field() + 1)
+        self.dev_settings.then(|| self.freeze_field() + 1)
     }
 
     pub(super) fn freeze_field(&self) -> usize {
-        self.feishu_field() + 1
+        self.feishu_field() + 3
     }
     pub(super) fn toggle_freeze_notifications(&mut self) {
         self.settings_field = self.freeze_field();
@@ -304,12 +301,9 @@ impl BusUi {
 
     pub(super) fn toggle_feishu_notifications(&mut self) {
         self.settings_field = self.feishu_field();
-        self.queue(
-            BusCommand::SetFeishuNotifications(
-                !self.feishu_status.enabled && !self.feishu_status.pending,
-            ),
-            Effect::None,
-        );
+        let on = !self.settings.feishu_notifications;
+        self.settings.feishu_notifications = on;
+        self.queue(BusCommand::SetFeishuNotifications(on), Effect::None);
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -350,12 +344,11 @@ impl BusUi {
         if pending(|command| matches!(command, BusCommand::SetFreezeNotifications(_))) {
             settings.freeze_notifications = self.settings.freeze_notifications;
         }
-        if pending(|command| matches!(command, BusCommand::SetDeveloperNotifications(_))) {
-            settings.developer_notifications = self.settings.developer_notifications;
+        if pending(|command| matches!(command, BusCommand::SetFeishuNotifications(_))) {
+            settings.feishu_notifications = self.settings.feishu_notifications;
         }
         crate::utils::perf::recovery::set_enabled(settings.freeze_notifications);
         self.settings = settings;
-        self.configure_developer_notifications();
     }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
@@ -518,12 +511,6 @@ impl BusUi {
             }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
-        self.configure_developer_notifications();
-        self.developer_notifications.observe(
-            &previous.state,
-            &self.snapshot.state,
-            std::time::Instant::now(),
-        );
         if let Some(config) = &self.sound_config {
             if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
                 .filter(|_| self.ringer.allow(std::time::Instant::now()))

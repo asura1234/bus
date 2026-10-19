@@ -221,13 +221,6 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn attention_delivery(&self) -> &AttentionDelivery {
-        &self.attention_delivery
-    }
-    pub(crate) fn attention_delivery_mut(&mut self) -> &mut AttentionDelivery {
-        &mut self.attention_delivery
-    }
-
     pub(crate) fn attention_origin(&self, id: AgentId) -> Option<AttentionOrigin> {
         let agent = self.agent(id)?;
         let room = self.room(agent.orchestrates.unwrap_or(agent.room_id))?;

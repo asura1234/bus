@@ -11,22 +11,18 @@ normal permissions. For this run, bypass overrides Codex's conflicting approval
 options; the original `--args` remain saved for later normal runs.
 See [agent launch arguments](docs/launch-args.md) for provider flags and details.
 
-Feishu notifications start off. Install `lark-cli`, authorize its user identity
-with `lark-cli auth login --scope 'im:message.send_as_user im:message'`, then
-turn on **Settings → Feishu notifications** or run
-`bus settings feishu-notifications --on`. Bus verifies authentication and
-resolves the authenticated user's self ID before enabling; failure leaves it
-off and shows the reason. Turn it off with the checkbox or
-`bus settings feishu-notifications --off`. Toggles take effect without restart.
+Feishu notifications are on by default. Install `lark-cli` on PATH and configure
+its bot identity. In **Settings → Feishu notifications**, choose the recipient
+user open_id and optionally override the CLI path. No credentials are stored by
+Bus. Use the checkbox or `bus settings feishu-notifications --off` to disable.
 
-An orchestrator starts a MASTER report with `[needs_developer_attention]`
-when work waits on the developer. Bus displays a **Needs developer** badge
-and forwards eligible reports and detected mechanical blockers to that user's
-own Feishu only. Every message starts `[Bus]` and names the machine, session,
-room and agent. There is no destination setting or Feishu reply channel.
-Repeats are deduplicated for ten minutes and delivery is limited to six
-attempts per minute. Enabling skips old history; ordinary restart resumes
-unattempted notifications, while uncertain or failed sends are never retried.
+An orchestrator puts `[waiting_on_you]` or `[waiting-on-you]` before the action
+it needs from the developer in a MASTER message. Bus sends a bot DM containing
+`name is waiting on you: action`, combining arrivals within two seconds. The
+existing case-insensitive whole phrases `waiting on you` and `still waiting on you`
+also qualify. `[needs_developer_attention]` still renders the internal badge;
+by itself it does not send a DM. Failed sends warn without blocking Bus or
+retrying. See [Feishu notification settings and behavior](docs/developer-notifications.md).
 
 Bus is a fork of [Herdr](https://github.com/herdrdev/herdr) and inherits its
 [Apache License 2.0](LICENSE).

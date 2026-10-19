@@ -215,7 +215,7 @@ Files are split by ownership, not by helper.
     before invocation; ambiguous outcomes are visible and never replayed.
     The shared preference's internal enable generation makes a session offline
     through off/on establish a new baseline instead of replaying old backlog.
-    `feishu/` owns verified self identity, fixed Bus message formatting and bounded
+    `feishu/` owns waiting-tag detection, bot DM formatting and bounded
     cancellable lark-cli subprocesses. No caller supplies a recipient. The native
     `PaneInfo.agent_process_exited` reports explicit exits outside self-update;
     missing agents and API failures do not establish a crash.

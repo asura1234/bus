@@ -47,10 +47,6 @@ pub(super) fn dispatch_client_shell_actions(
             shell::ClientShellAction::ClipboardWrite(bytes) => {
                 crate::client::clipboard::write_osc52_bytes(&bytes);
             }
-            shell::ClientShellAction::DeveloperNotification(text) => {
-                super::notifications::show_developer_notification(&text)
-                    .map_err(ClientError::HostOutput)?;
-            }
             shell::ClientShellAction::EditComposer => {
                 if let Some(shell) = shell.as_deref_mut() {
                     if crate::client::host_terminal::output::busy() {

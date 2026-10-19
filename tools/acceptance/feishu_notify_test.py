@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -15,7 +14,7 @@ import traceback
 ROOT = Path(__file__).resolve().parents[2]
 DOC = "tests/e2e-tui/feishu-notify.md"
 REPORT_TOOL = ROOT / "skills/e2e-test/scripts/e2e_report.py"
-TAG = "[needs_developer_attention]"
+TAG = "[waiting_on_you]"
 
 
 class Run:
@@ -33,7 +32,7 @@ class Run:
         self.bin = self.root / "fake-bin"
         self.bin.mkdir()
         self.cli = self.bin / "lark-cli"
-        shutil.copyfile(ROOT / "src/messaging/feishu/tests/lark_fixture.txt", self.cli)
+        shutil.copyfile(ROOT / "src/messaging/coordinator/tests/waiting_cli_fixture.txt", self.cli)
         self.cli.chmod(0o700)
         self.env["PATH"] = str(self.bin) + ":/usr/bin:/bin:/usr/sbin:/sbin"
         assert shutil.which("lark-cli", path=self.env["PATH"]) == str(self.cli)
@@ -79,17 +78,11 @@ class Run:
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def sends(self):
-        return [call for call in self.calls() if call["args"][0] == "im"]
-
-    def consumed(self, minimum):
-        path = Path(self.session["data_dir"]) / "state.json"
-        state = json.loads(path.read_text())
-        state = state.get("state", state)
-        return len(state.get("attention_delivery", {}).get("handled", [])) >= minimum
+        return self.calls()
 
     def capture(self, name):
         self.command("snapshot")
-        self.command("cells", "1", "1", "160", "55")
+        self.command("cells", "0", "0", "160", "55")
         self.command("screenshot", "--out", self.root / f"{name}.png")
 
     def step(self, number, evidence):
@@ -105,14 +98,25 @@ class Run:
     def post(self, text):
         return self.bus("send", "--room", "master", "--as", "notify-orch", "--to", "human", "--text", text)
 
-    def assert_self_only(self):
-        for call in self.sends():
-            args, body = call["args"], call["body"]
-            assert args.count("--user-id") == 1
-            assert args[args.index("--user-id") + 1] == call["self"] == "ou_self_a"
-            assert args[args.index("--as") + 1] == "user" and "--chat-id" not in args
-            assert body.startswith("[Bus]")
-            assert all(field in body for field in ["Machine: ", "Session: ", "Room: ", "Agent: ", "notify-orch"])
+    def assert_bot(self):
+        for args in self.sends():
+            assert args[:4] == ["im", "+messages-send", "--as", "bot"], args
+            assert args.count("--user-id") == 1 and args.count("--text") == 1
+            assert "--chat-id" not in args and "--file" not in args and "--attachment" not in args
+            assert args[8] == "--idempotency-key" and args[10:] == ["--format", "json"]
+
+    def quiet(self):
+        self.command("wait", "--stable", "3s", "--rows", "0-0", "--timeout", "8s")
+
+    def no_popup(self):
+        value = self.command("effects", "--kind", "terminal_notification")
+        assert not value.get("effects"), value
+
+    def edit_setting(self, hit, text):
+        self.command("click", "--hit", hit)
+        self.command("press", "ctrl+a", "ctrl+k")
+        self.command("type", text)
+        self.command("press", "enter")
 
     def exercise(self):
         self.session = self.command("start", "--size", "160x55", "--graphics", "none", "--run-dir", self.root / "sessions")
@@ -120,87 +124,87 @@ class Run:
         self.bus("room", "create", "notify-work")
         work = Path(self.session["data_dir"]).parent / "work"
         self.bus("agent", "add", "--room", "master", "--name", "notify-orch", "--provider", "claude", "--pwd", work, "--orchestrates", "notify-work", "--consent-hooks")
+        self.command("wait", "--state", "agents.*.status == idle", "--timeout", "20s")
         self.command("press", "f6")
         self.command("click", "--hit", "settings")
-        self.command("wait", "--text", "[ ] Feishu notifications")
-        (self.bin / "mode").write_text("missing")
-        self.command("click", "--hit", "feishu-notifications")
-        self.command("wait", "--text", "no authenticated user")
-        assert not self.state()["settings"]["feishu_notifications"]
-        self.cli.rename(self.bin / "lark-disabled")
-        refused = self.bus("settings", "feishu-notifications", "--on", ok=False)
-        assert not refused["ok"] and "not installed" in refused["error"]["message"]
-        self.cli = self.bin / "lark-cli"
-        (self.bin / "lark-disabled").rename(self.cli)
-        self.capture("auth-refusal")
-        self.step(1, "Default checkbox off; missing auth visible and persisted off; missing binary enable refused on closed PATH")
+        self.command("wait", "--text", "[x] Feishu notifications")
+        self.command("find", "[x] Freeze recovery notifications")
+        screen = str(self.command("snapshot"))
+        assert "ou_ca1b530d792419a044e281f998ce68dc" in screen and "lark-cli path: PATH" in screen
+        assert "Developer message notifications" not in screen
+        self.capture("settings-default")
+        self.command("press", "esc")
+        self.command("click", "--hit", "room:notify-work")
+        self.command("type", "KEEP DRAFT")
+        self.step(1, "Default Feishu/freeze checked, recipient/PATH visible, old toggle absent; settings-default.png captured for visual inspection")
 
-        (self.bin / "mode").write_text("ready")
+        self.post("Routine progress")
+        self.post("[needs_developer_attention] Internal notice only")
+        self.quiet()
+        assert not self.calls(), self.calls()
+        self.post(TAG + "\nApprove access\nPRIVATE attachment /tmp/secret")
+        self.until(lambda: len(self.sends()) == 1, "one underscore-tag BOT DM")
+        args = self.sends()[0]
+        assert args[5] == "ou_ca1b530d792419a044e281f998ce68dc" and args[7] == "notify-orch is waiting on you: Approve access", args
+        self.quiet()
+        assert len(self.sends()) == 1
+        self.no_popup()
+        self.command("find", "KEEP DRAFT")
+        self.step(2, "Untagged and attention-only posts sent nothing; underscore --to human produced one exact BOT action-line DM, no private body/attachment/popup; draft preserved")
+
+        self.post("[waiting-on-you] First update")
+        self.post("Routine progress")
+        self.post("WAITING ON YOU: Second update")
+        self.until(lambda: len(self.sends()) == 2, "one coalesced burst")
+        assert self.sends()[-1][7] == "notify-orch is waiting on you: First update and 1 more", self.sends()
+        self.quiet()
+        assert len(self.sends()) == 2
+        self.assert_bot()
+        self.step(3, "Hyphen and uppercase whole phrase coalesced into one second DM with and 1 more; no duplicate or untagged member; all argv explicitly BOT/user-id/plain-text")
+
+        self.command("click", "--hit", "settings")
+        self.command("click", "--hit", "feishu-notifications")
+        self.command("wait", "--text", "[ ] Feishu notifications")
+        assert self.state()["settings"]["feishu_notifications"] is False
+        assert self.state()["settings"]["freeze_notifications"] is True
+        self.capture("settings-off")
+        self.post(TAG + " Disabled history")
+        self.quiet()
+        assert len(self.sends()) == 2
         self.command("click", "--hit", "feishu-notifications")
         self.command("wait", "--text", "[x] Feishu notifications")
-        self.capture("settings-on")
-        self.bus("settings", "feishu-notifications", "--off")
-        # Public CLI without --dev, against only this scratch directory.
-        env = dict(self.env, BUS_DATA_DIR=self.session["data_dir"])
-        enabled = subprocess.run([str(self.binary), "settings", "feishu-notifications", "--on"], env=env, capture_output=True, text=True, timeout=20)
-        (self.root / "public-enable.json").write_text(enabled.stdout)
-        assert enabled.returncode == 0 and json.loads(enabled.stdout)["ok"]
-        self.bus("diagnostics")
-        self.command("wait", "--text", "not installed", "--gone")
-        for field in ["recipient", "user_id", "chat_id", "group", "feishu_recipient"]:
-            with socket.socket(socket.AF_UNIX) as connection:
-                connection.connect(str(Path(self.session["data_dir"]) / "control.sock"))
-                connection.sendall((json.dumps({"id": "destination-" + field, "method": "settings.feishu_notifications", "params": {"on": True, field: "ou_other"}}) + "\n").encode())
-                response = json.loads(connection.makefile().readline())
-            assert not response["ok"] and response["error"]["code"] == "invalid_params"
-        assert not self.sends()
-        self.step(2, "UI enable and public CLI off/on in one process succeeded; every destination input rejected before CLI; settings-on.png")
+        self.quiet()
+        assert len(self.sends()) == 2
+        self.step(4, "UI off persisted false while freeze stayed true; disabled tag and re-enable produced no DM; settings-off.png captured for inspection")
 
-        self.command("press", "esc")
-        self.command("click", "--hit", "room:MASTER")
-        # Existing error toasts last fifteen seconds even after the status clears.
-        self.command("wait", "--text", "not installed", "--gone", "--timeout", "20s")
-        self.post("Routine progress without developer action")
-        self.post(TAG + " Choose deployment target")
-        self.until(lambda: len(self.sends()) == 1, "tagged send")
-        self.command("wait", "--text", "[Needs developer]")
-        screen = "\n".join(self.command("snapshot")["rows"])
-        assert TAG not in screen
-        self.assert_self_only()
-        self.capture("master-badge")
-        self.step(3, "Only tagged orchestrator message forwarded with all Bus context and self recipient; MASTER badge replaces raw tag; master-badge.png")
+        self.edit_setting("feishu-recipient", "ou_fake_recipient")
+        self.command("wait", "--text", "Recipient open_id: ou_fake_recipient")
+        self.edit_setting("feishu-cli-path", str(self.cli))
+        self.command("wait", "--text", "lark-cli path:")
+        saved = self.state()["settings"]
+        assert saved["feishu_recipient"] == "ou_fake_recipient" and saved["feishu_cli_path"] == str(self.cli), saved
+        self.capture("settings-edited")
+        self.post("still waiting on you: Configured action")
+        self.until(lambda: len(self.sends()) == 3, "configured destination")
+        assert self.sends()[-1][5] == "ou_fake_recipient" and self.sends()[-1][7] == "notify-orch is waiting on you: Configured action"
+        self.step(5, "UI recipient/CLI override persisted, configured phrase sent to ou_fake_recipient; settings-edited.png captured for inspection")
 
-        self.post(TAG + " Choose deployment target")
-        self.until(lambda: self.consumed(2), "duplicate consumed")
-        assert len(self.sends()) == 1
-        self.bus("settings", "feishu-notifications", "--off")
-        self.post(TAG + " Disabled history")
-        self.bus("settings", "feishu-notifications", "--on")
-        assert len(self.sends()) == 1
-        self.step(4, "Repeated content consumed without send; off suppressed messages; re-enable skipped disabled history")
-
-        self.bus("send", "--room", "master", "--to", "notify-orch", "--text", "fake:raw-reply " + TAG + " Final decision")
-        self.until(lambda: len(self.sends()) == 2, "tagged final")
-        self.bus("send", "--room", "master", "--to", "notify-orch", "--text", "fake:dialog 20")
-        self.until(lambda: len(self.sends()) == 3, "mechanical blocked notice")
-        self.command("wait", "--state", "agents.*.dialog == true")
-        assert "Blocked, needs help" in self.sends()[-1]["body"]
-        self.command("wait", "--stable", "1500ms", "--rows", "1-2")
-        assert len(self.sends()) == 3
-        self.assert_self_only()
-        assert self.command("status")["bus_pid"] == self.session["bus_pid"]
-        self.capture("mechanical")
+        (self.bin / "mode").write_text("fail")
+        self.post(TAG + " Failure action")
+        self.until(lambda: len(self.sends()) == 4, "failed send invocation")
+        self.until(lambda: self.state()["settings"]["feishu"]["error"] is not None, "failure status")
+        error = self.state()["settings"]["feishu"]["error"]
+        assert "exit code Some(7)" in error, error
+        self.quiet()
+        assert len(self.sends()) == 4 and self.command("status")["bus_pid"] == self.session["bus_pid"]
+        self.no_popup()
+        self.assert_bot()
+        log_root = Path(self.session["data_dir"]) / "herdr-config"
+        logs = "\n".join(p.read_text(errors="replace") for p in log_root.rglob("*.log"))
+        assert "bus.feishu.failed" in logs and "exit code Some(7)" in logs, str(log_root)
         (self.root / "calls.json").write_text(json.dumps(self.calls(), indent=2))
-        self.step(5, "Tagged provider final and one mechanical Bus dialog notice forwarded; stabilized duplicate sent nothing; all three sends self-only and attributed to Bus; PID unchanged")
-
-        for index in range(5):
-            self.post(TAG + f" Rate-limit decision {index}")
-        self.until(lambda: len(self.sends()) == 6, "six attempts allowed")
-        self.command("wait", "--stable", "1500ms", "--rows", "1-2")
-        assert len(self.sends()) == 6
-        self.assert_self_only()
-        (self.root / "calls.json").write_text(json.dumps(self.calls(), indent=2))
-        self.step(6, "Burst capped at six total sends in the rolling minute; additional tagged sources remain in durable MASTER history; every attempt used self")
+        (self.root / "failure-warning.txt").write_text("\n".join(line for line in logs.splitlines() if "bus.feishu.failed" in line))
+        self.step(6, "Exit-7 failure logged bus.feishu.failed with error; one attempt, responsive unchanged PID, no retry or terminal popup; failure-warning.txt and calls.json retained")
 
     def finish(self):
         self.command("stop", ok=False)

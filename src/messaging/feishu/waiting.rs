@@ -1,24 +1,18 @@
-//! Desktop notification policy for messages addressed to the developer in MASTER.
-use super::{BusUi, Effect};
-use crate::messaging::{
-    coordinator::BusCommand,
-    model::{Author, BusState, PromptId, RequestId, RequestPhase, RoomId},
-};
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+//! Waiting-on-you detection and fixed two-second burst policy for MASTER.
+use crate::messaging::model::{Author, BusState, PromptId, RequestId, RequestPhase, RoomId};
+use std::collections::BTreeMap;
 
-const BURST_WINDOW: Duration = Duration::from_secs(2);
+const BURST_WINDOW: u64 = 2_000;
 
-#[derive(Default)]
-pub(super) struct DeveloperNotifications {
+#[derive(Debug, Default)]
+pub(crate) struct WaitingNotifications {
     allowed: bool,
     pending: Option<Burst>,
 }
 
+#[derive(Debug)]
 struct Burst {
-    deadline: Instant,
+    deadline: u64,
     sender: String,
     preview: String,
     count: usize,
@@ -36,15 +30,15 @@ struct Message<'a> {
     at_ms: u64,
 }
 
-impl DeveloperNotifications {
-    pub(super) fn configure(&mut self, enabled: bool) {
+impl WaitingNotifications {
+    pub(crate) fn configure(&mut self, enabled: bool) {
         self.allowed = enabled;
         if !self.allowed {
             self.pending = None;
         }
     }
 
-    pub(super) fn observe(&mut self, previous: &BusState, next: &BusState, now: Instant) {
+    pub(crate) fn observe(&mut self, previous: &BusState, next: &BusState, now: u64) {
         if !self.allowed {
             return;
         }
@@ -72,7 +66,7 @@ impl DeveloperNotifications {
         }
     }
 
-    pub(super) fn take(&mut self, now: Instant) -> Option<String> {
+    pub(crate) fn take(&mut self, now: u64) -> Option<String> {
         if self
             .pending
             .as_ref()
@@ -161,10 +155,13 @@ fn visible_text<'a>(state: &BusState, room: RoomId, author: &Author, text: &'a s
 /// ASCII case folding preserves byte offsets into the original Unicode text.
 /// The phrase also covers "still waiting on you", but not partial words.
 fn waiting_action(text: &str) -> Option<&str> {
-    const TAG: &str = "[waiting-on-you]";
+    const TAGS: [&str; 2] = ["[waiting-on-you]", "[waiting_on_you]"];
     const PHRASE: &str = "waiting on you";
     let folded = text.to_ascii_lowercase();
-    let tag_end = folded.find(TAG).map(|start| start + TAG.len());
+    let tag_end = TAGS
+        .iter()
+        .filter_map(|tag| folded.find(tag).map(|start| start + tag.len()))
+        .min();
     let phrase_end = folded.match_indices(PHRASE).find_map(|(start, _)| {
         let end = start + PHRASE.len();
         let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
@@ -202,30 +199,6 @@ fn plain_preview(text: &str, limit: usize) -> String {
     preview.trim().to_owned()
 }
 
-impl BusUi {
-    pub(super) fn developer_notifications_field(&self) -> usize {
-        self.freeze_field() + 1
-    }
-
-    pub(super) fn toggle_developer_notifications(&mut self) {
-        self.settings_field = self.developer_notifications_field();
-        let on = !self.settings.developer_notifications;
-        self.settings.developer_notifications = on;
-        self.configure_developer_notifications();
-        self.queue(BusCommand::SetDeveloperNotifications(on), Effect::None);
-    }
-
-    pub(super) fn configure_developer_notifications(&mut self) {
-        self.developer_notifications
-            .configure(self.settings.developer_notifications);
-    }
-
-    pub(super) fn take_developer_notification(&mut self, now: Instant) -> Option<String> {
-        self.configure_developer_notifications();
-        self.developer_notifications.take(now)
-    }
-}
-
 #[cfg(test)]
-#[path = "tests/developer_notifications_test.rs"]
+#[path = "tests/waiting_test.rs"]
 mod tests;

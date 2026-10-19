@@ -60,18 +60,33 @@ impl Worker {
         Ok(())
     }
 
-    pub(super) fn set_developer_notifications(
+    pub(super) fn set_feishu_recipient(
         &mut self,
-        on: bool,
+        recipient: String,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        crate::messaging::feishu::validate_recipient(&recipient)?;
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.feishu_recipient = recipient)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        self.pump_feishu(events, crate::messaging::storage::io::now_ms())
+    }
+
+    pub(super) fn set_feishu_cli_path(
+        &mut self,
+        program: Option<String>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let path = self
             .settings_path
             .as_deref()
             .ok_or("Bus settings location unavailable")?;
-        let saved = settings::update(path, |settings| settings.developer_notifications = on)?;
+        let saved = settings::update(path, |settings| settings.feishu_cli_path = program)?;
         let _ = events.send(BusEvent::SettingsChanged(saved));
-        Ok(())
+        self.pump_feishu(events, crate::messaging::storage::io::now_ms())
     }
 
     pub(super) fn set_freeze_notifications(

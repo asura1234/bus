@@ -190,16 +190,15 @@ impl BusUi {
             KeyCode::Down => {
                 let last = self
                     .perf_overlay_field()
-                    .unwrap_or_else(|| self.developer_notifications_field());
+                    .unwrap_or_else(|| self.freeze_field());
                 self.settings_field = (self.settings_field + 1).min(last);
             }
             // Enter alone toggles (Space is deliberately inert in Settings).
             KeyCode::Enter => match self.settings_field {
                 0 => self.toggle_color_blind_mode(),
                 field if field == self.freeze_field() => self.toggle_freeze_notifications(),
-                field if field == self.developer_notifications_field() => {
-                    self.toggle_developer_notifications()
-                }
+                field if field == self.feishu_field() + 1 => self.open_feishu_setting(false),
+                field if field == self.feishu_field() + 2 => self.open_feishu_setting(true),
                 field if field == self.feishu_field() => self.toggle_feishu_notifications(),
                 field if Some(field) == self.perf_overlay_field() => self.toggle_perf_overlay(),
                 field => {
@@ -454,6 +453,17 @@ impl BusUi {
         };
         match form {
             Form::Help { .. } | Form::Settings => {}
+            Form::FeishuSetting { cli, editor } => {
+                let command = if cli {
+                    BusCommand::SetFeishuCliPath(
+                        (!editor.text.trim().is_empty()).then(|| editor.text.trim().to_owned()),
+                    )
+                } else {
+                    BusCommand::SetFeishuRecipient(editor.text.trim().to_owned())
+                };
+                self.queue(command, Effect::None);
+                self.form = Some(Form::Settings);
+            }
             Form::Room(editor) => {
                 self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
             }
