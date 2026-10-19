@@ -279,7 +279,7 @@ impl BusUi {
         self.compaction_field() + 1
     }
 
-    /// The overlay row's Settings focus index, after developer notifications.
+    /// The overlay row's Settings focus index, after notification settings.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
         self.dev_settings.then(|| self.freeze_field() + 1)
     }

@@ -128,7 +128,7 @@ class Run:
         self.command("press", "f6")
         self.command("click", "--hit", "settings")
         self.command("wait", "--text", "[x] Feishu notifications")
-        self.command("find", "[x] Freeze recovery notifications")
+        self.command("wait", "--text", "[x] Freeze recovery notifications")
         screen = str(self.command("snapshot"))
         assert "ou_ca1b530d792419a044e281f998ce68dc" in screen and "lark-cli path: PATH" in screen
         assert "Developer message notifications" not in screen
@@ -149,7 +149,7 @@ class Run:
         self.quiet()
         assert len(self.sends()) == 1
         self.no_popup()
-        self.command("find", "KEEP DRAFT")
+        self.command("wait", "--text", "KEEP DRAFT")
         self.step(2, "Untagged and attention-only posts sent nothing; underscore --to human produced one exact BOT action-line DM, no private body/attachment/popup; draft preserved")
 
         self.post("[waiting-on-you] First update")

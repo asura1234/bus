@@ -137,8 +137,7 @@ impl crate::client::compositor::ClientShellState {
         let focus = self.outer_focused;
         let changed = self.bus.as_mut().is_some_and(|bus| {
             bus.outer_focused = focus;
-            let changed = bus.tick();
-            changed
+            bus.tick()
         });
         self.dispatch_bus_terminal_focus(outcome);
         changed
