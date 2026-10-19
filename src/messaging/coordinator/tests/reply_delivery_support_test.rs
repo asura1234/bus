@@ -381,46 +381,28 @@ impl Delivery {
             .unwrap()
             .id
     }
-    pub(crate) fn submit_ui(&mut self, agent: AgentId, room: RoomId, text: &str) -> RequestId {
-        let previous: BTreeSet<_> = self.state().requests().map(|r| r.id).collect();
-        let (events, _receiver) = mpsc::channel();
-        for command in [
-            BusCommand::SetDraftText(room, text.into()),
-            BusCommand::SetRecipients(room, [agent].into()),
-            BusCommand::Submit(room),
-        ] {
-            self.worker_mut().command(command, &events).unwrap();
-        }
-        self.state()
-            .requests()
-            .find(|r| !previous.contains(&r.id))
-            .unwrap()
-            .id
-    }
-    pub(crate) fn add_orchestrator(&mut self) -> AgentId {
+    fn add_owned(
+        &mut self,
+        room: RoomId,
+        provider: Provider,
+        name: &str,
+        orchestrates: bool,
+    ) -> AgentId {
         let mut state = self.state().clone();
         let id = state
-            .create_agent(
-                self.master,
-                "orch",
-                Provider::ClaudeCode,
-                self.dir.clone(),
-                None,
-            )
+            .create_agent(room, name, provider, self.dir.clone(), None)
             .unwrap();
-        state.bind_orchestrator(id, self.work).unwrap();
-        let identity = self
-            .native
-            .lock()
-            .unwrap()
-            .add(id, self.master, Provider::ClaudeCode);
+        if orchestrates {
+            state.bind_orchestrator(id, self.work).unwrap();
+        }
+        let identity = self.native.lock().unwrap().add(id, room, provider);
         state.set_agent_runtime_identity(id, identity).unwrap();
         state.confirm_hook_setup(id).unwrap();
         callbacks::initialize(
             &self.dir.join(format!("callbacks/launch-{}", id.0)),
             &callbacks::Manifest {
                 routing_key: callbacks::RoutingKey(id.0),
-                provider: Provider::ClaudeCode,
+                provider,
                 launch_id: format!("launch-{}", id.0),
             },
         )
@@ -432,6 +414,25 @@ impl Delivery {
         );
         self.tick();
         id
+    }
+    pub(crate) fn add_orchestrator(&mut self) -> AgentId {
+        self.add_owned(self.master, Provider::ClaudeCode, "orch", true)
+    }
+    pub(crate) fn blocked_worker_notice(&mut self, orchestrator: AgentId) -> RequestId {
+        let worker = self.add_owned(self.work, Provider::Codex, "blocked-worker", false);
+        self.draw(
+            worker,
+            Some(include_str!(
+                "../../../../tests/fixtures/codex-update/chooser-0.162.ansi"
+            )),
+        );
+        self.tick();
+        self.tick();
+        self.state()
+            .requests()
+            .find(|r| r.agent_id == orchestrator && r.room_id == self.work)
+            .expect("real dialog poll must route a work-room request to its orchestrator")
+            .id
     }
     pub(crate) fn draw(&mut self, agent: AgentId, text: Option<&str>) {
         let server = self.native.lock().unwrap();
@@ -640,6 +641,14 @@ impl Delivery {
     pub(crate) fn elapse(&mut self, millis: u64) {
         let mut document = serde_json::to_value(self.state()).unwrap();
         for request in document["requests"].as_object_mut().unwrap().values_mut() {
+            if let Some(pending) = request
+                .get_mut("pending_final")
+                .and_then(Value::as_object_mut)
+            {
+                if let Some(at) = pending.get("received_at_ms").and_then(Value::as_u64) {
+                    pending.insert("received_at_ms".into(), json!(at.saturating_sub(millis)));
+                }
+            }
             for path in [["shell_hold", "since_ms"], ["turn_ended_at_ms", ""]] {
                 let at = if path[1].is_empty() {
                     &mut request[path[0]]

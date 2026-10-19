@@ -67,9 +67,14 @@ async fn followup_to_held_master_turn_reaches_work_room_and_master_once() {
         f.state().request(first).unwrap().phase,
         RequestPhase::Active
     );
-    let follow = f.submit_ui(agent, f.work, "include tests");
+    let follow = f.blocked_worker_notice(agent);
     f.tick();
-    assert_eq!(f.typed(agent).last().unwrap(), "include tests");
+    assert!(f
+        .typed(agent)
+        .last()
+        .unwrap()
+        .contains("Blocked, needs help to continue"));
+    let before_work = f.state().room(f.work).unwrap().unread_count;
     // This provider folds the follow-up into the original generation and emits
     // no additional submit hook, a distinct path from separate answered turns.
     f.stop(
@@ -83,7 +88,10 @@ async fn followup_to_held_master_turn_reaches_work_room_and_master_once() {
     f.assert_reply(first, "work and tests complete");
     f.assert_reply(follow, "work and tests complete");
     assert_eq!(f.state().room(f.master).unwrap().unread_count, 1);
-    assert_eq!(f.state().room(f.work).unwrap().unread_count, 1);
+    assert_eq!(
+        f.state().room(f.work).unwrap().unread_count,
+        before_work + 1
+    );
     f.assert_no_stalls();
 }
 
