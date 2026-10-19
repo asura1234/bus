@@ -24,11 +24,11 @@ impl BusState {
         }
     }
 
-    /// Record why the agent's current request is held: background shells its
-    /// own turn started. The cap counts from the first hold, on the status
+    /// Retain the agent's current reply while background work remains.
+    /// The cap counts from the first hold, on the status
     /// clock that `release_shell_hold` reads; the newest interim text is what
     /// the cap delivers.
-    pub(crate) fn hold_reply_for_shells(&mut self, agent: AgentId, interim: PendingFinal) {
+    pub(crate) fn hold_background_reply(&mut self, agent: AgentId, interim: PendingFinal) {
         let Some((id, observed_at_ms)) = self
             .agents
             .get(&agent)
@@ -36,11 +36,11 @@ impl BusState {
         else {
             return;
         };
-        let Some(request) = self
-            .requests
-            .get_mut(&id)
-            .filter(|request| request.awaiting_background)
-        else {
+        let Some(request) = self.requests.get_mut(&id).filter(|request| {
+            request.awaiting_background
+                && request.provider_session_id == interim.provider_session_id
+                && request.provider_turn_id == interim.provider_turn_id
+        }) else {
             return;
         };
         let since_ms = request
@@ -52,7 +52,8 @@ impl BusState {
 
     /// Past `cap_ms` of holding for its shells, the request takes its newest
     /// interim text as the reply, with reason `background_shells_timeout`, so
-    /// a shell that never exits cannot hold it and the agent's queue forever.
+    /// background work that never exits cannot hold it or its queue forever.
+    /// The historical reason and setting names remain compatible.
     pub(crate) fn release_shell_hold(
         &mut self,
         agent: AgentId,
@@ -62,7 +63,7 @@ impl BusState {
         let id = self.agents.get(&agent)?.current_request?;
         let request = self.requests.get(&id)?;
         let hold = request.shell_hold.as_ref()?;
-        if !request.held_for_shells()
+        if !request.has_held_background_reply()
             || request.settled()
             || now_ms < hold.since_ms.saturating_add(cap_ms)
         {

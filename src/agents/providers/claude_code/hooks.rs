@@ -419,6 +419,62 @@ fn is_redirect_operator(command: &str, index: usize, ch: char) -> bool {
     }
 }
 
+/// Claude's recurring self reminders are independent turns, not continuations
+/// answering Bus input. The transcript records their origin; prompt wording
+/// alone is insufficient. None means the matching row is not available yet:
+/// Claude may publish it only after UserPromptSubmit hooks have run.
+pub(crate) fn scheduled_prompt(value: &Value) -> Option<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    let ((session, turn), path) = value
+        .get("session_id")
+        .and_then(Value::as_str)
+        .zip(value.get("prompt_id").and_then(Value::as_str))
+        .zip(value.get("transcript_path").and_then(Value::as_str))?;
+    let read = || -> std::io::Result<Option<bool>> {
+        if !std::fs::metadata(path)?.is_file() {
+            return Ok(None);
+        }
+        let mut file = std::fs::File::open(path)?;
+        const MAX_TAIL: u64 = 2 * 1024 * 1024;
+        let offset = file.metadata()?.len().saturating_sub(MAX_TAIL);
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::new();
+        file.take(MAX_TAIL).read_to_end(&mut bytes)?;
+        let start = if offset == 0 {
+            0
+        } else {
+            bytes
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(bytes.len(), |index| index + 1)
+        };
+        for line in bytes[start..].split(|byte| *byte == b'\n').rev() {
+            let Ok(row) = serde_json::from_slice::<Value>(line) else {
+                continue;
+            };
+            if row["type"] == "user"
+                && row["sessionId"] == session
+                && row["promptId"] == turn
+                // Tool-result rows share the prompt id but do not describe
+                // the input's origin. Keep looking for the submitted row.
+                && row["promptSource"].is_string()
+                && row["turnOrigin"].is_string()
+            {
+                return Ok(Some(
+                    row["isMeta"] == true
+                        && row["promptSource"] == "system"
+                        && row["turnOrigin"] == "scheduled"
+                        && row["scheduledTaskId"]
+                            .as_str()
+                            .is_some_and(|id| !id.is_empty()),
+                ));
+            }
+        }
+        Ok(None)
+    };
+    read().ok().flatten()
+}
+
 #[cfg(test)]
 #[path = "tests/hooks_test.rs"]
 mod tests;

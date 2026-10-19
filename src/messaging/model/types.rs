@@ -451,8 +451,8 @@ pub(crate) struct Request {
     /// A provider explicitly paused this turn for background work that will resume it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) awaiting_background: bool,
-    /// Held for background shells its own turn started, which may never exit;
-    /// past the hold cap its newest interim text becomes the reply.
+    /// Captured background Stop reply, delivered at the hold cap. The legacy
+    /// `shell_hold` storage name also covers cron and background-agent waits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) shell_hold: Option<ShellHold>,
 }
