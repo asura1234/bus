@@ -138,7 +138,7 @@ pub(crate) fn docs_dir(data_dir: &Path) -> PathBuf {
 }
 
 /// One resolver for the launch prompt, form preview and binding rules.
-pub(crate) fn workflows_dir(docs: &Path) -> PathBuf {
+fn workflows_dir(docs: &Path) -> PathBuf {
     workflows_dir_at(
         docs,
         cfg!(debug_assertions) || super::diagnostics::dev_enabled(),

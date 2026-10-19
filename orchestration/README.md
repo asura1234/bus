@@ -2,9 +2,11 @@
 
 `orchestration/` and `workflows/` hold the default instructions for MASTER
 agents. Rust embeds them with `include_str!`; debug, release and Nix builds
-all use those compiled-in copies. Editing a source file requires rebuilding
-Bus. Bus does not load defaults from the checkout, an installed `share/bus`
-directory or a user override directory at runtime.
+all carry those compiled-in copies. Updating embedded defaults requires rebuilding
+Bus. Bus does not load prompt or rule defaults from the checkout, an installed
+`share/bus` directory or a user override directory at runtime. A dev build or
+`--dev` run with a detected checkout points workflow lookup to its absolute
+`workflows/` directory; other launches point to the complete embedded session copy.
 
 Work-room agents receive their ordinary work messages. MASTER agents receive
 the orchestrator prompt for the work room they orchestrate, plus access to the
@@ -21,14 +23,12 @@ content, not another editable source layer.
 | `orchestration/prompt.md` | `<launch callback folder>/system-prompt.md`, after filling placeholders |
 | `orchestration/how-to-bus-cli.md` | `<BUS_DATA_DIR>/docs/how-to-bus-cli.md` |
 | `orchestration/guide.md` | `<BUS_DATA_DIR>/docs/orchestrator-guide.md` |
-| `orchestration/rules.md` | `<BUS_DATA_DIR>/docs/orchestrator-rules.md` |
+| `orchestration/rules.md` | `<BUS_DATA_DIR>/docs/orchestrator-rules.md`, with the workflow directory filled in |
 | `workflows/create.md` | `<BUS_DATA_DIR>/docs/workflow-create.md` |
 | `workflows/template.md` | `<BUS_DATA_DIR>/docs/templates/workflow-template.md` |
 | `workflows/investigation-report-template.md` | `<BUS_DATA_DIR>/docs/templates/investigation-report.md` |
 | `workflows/bug-triage-table-template.md` | `<BUS_DATA_DIR>/docs/templates/bug-triage-table.md` |
-| `workflows/auto-merge-pr.md` | `<BUS_DATA_DIR>/docs/workflows/auto-merge-pr.md` |
-| `workflows/bug-fix.md` | `<BUS_DATA_DIR>/docs/workflows/bug-fix.md` |
-| `workflows/cross-repo-feature.md` | `<BUS_DATA_DIR>/docs/workflows/cross-repo-feature.md` |
+| Every `workflows/*.md` (all nine files, including templates and handover docs) | `<BUS_DATA_DIR>/docs/workflows/<original filename>` |
 
 Links and `DOCS` paths in the guides address the generated docs folder. The
 repository layout is given by the first column above. Bus refreshes the docs
@@ -42,15 +42,15 @@ embeds that pointer. This README documents the contract and is not embedded.
 
 ## Build input closure
 
-There are exactly eleven embedded inputs in the table above. Cargo source
-archives must include `orchestration/` and `workflows/`; the Nix build fileset
-includes the same directories. These are build inputs. Missing source files
+Cargo source archives must include `orchestration/` and `workflows/`; the Nix
+build fileset includes the same directories. These are build inputs. Missing source files
 fail compilation through `include_str!`, and an unknown or unfinished
 `{{...}}` placeholder in the compiled default prompt fails its constant
 assertion. The documentation's literal placeholder examples are left intact.
 
-The orchestration tests enumerate all eleven repository copies, check rendered
-placeholders and compare emitted bytes at unrelated output locations. The
+The orchestration tests enumerate the repository's workflow directory so a new
+file missing from the bundle fails, check the docs and rendered placeholders,
+and compare emitted bytes at unrelated output locations and after refresh. The
 default content comes from the binary regardless of the process's working
 directory or where the executable is installed. Explicit custom prompts keep
 their existing per-launch filling behavior.
@@ -65,6 +65,7 @@ Bus replaces these placeholders in an orchestrator prompt:
 | `{{ROOM_ID}}` | The work room's numeric id |
 | `{{AGENT_NAME}}` | The orchestrator agent's name |
 | `{{DOCS}}` | The absolute path to that Bus session's generated docs folder |
+| `{{WORKFLOWS_DIR}}` | The detected checkout's absolute workflows path for a dev build or `--dev` run, otherwise `<BUS_DATA_DIR>/docs/workflows` |
 
 The add-agent preview can show an unassigned room; an actual MASTER agent
 requires a work room through `--orchestrates`. Explicit per-launch custom

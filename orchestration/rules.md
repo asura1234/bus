@@ -27,9 +27,9 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Read developer-named workflows before acting.** Workflows:
   `{{WORKFLOWS_DIR}}/`. When the developer names a workflow (for example
   `auto-merge-pr`), it is the file `<name>.md` there, not a skill:
-  read it fully before acting and follow its gates. Bus uses the repository's
-  `workflows/` directory for source runs and the complete session
-  `docs/workflows/` copy for installed runs.
+  read it fully before acting and follow its gates. A development run with a
+  detected source checkout uses that checkout's `workflows/` directory;
+  otherwise Bus uses the complete session `docs/workflows/` copy.
   Shipped names: `agent-handover`, `auto-merge-pr`, `bug-fix`,
   `cross-repo-feature`, `create`, `template`, `handover-template`,
   `investigation-report-template`, `bug-triage-table-template`.

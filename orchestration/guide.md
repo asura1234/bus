@@ -238,6 +238,9 @@ its context.
 
 ## When to ask the developer
 
+Apply [Never act on assumptions; ask the developer](orchestrator-rules.md#never-act-on-assumptions)
+first. The following decision boundaries also apply.
+
 Ask before anything outside the room's goal or the workflow's decision rules:
 
 - Publishing, merging, pushing to shared branches, or deleting work. Adding

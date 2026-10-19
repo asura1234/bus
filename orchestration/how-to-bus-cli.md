@@ -140,10 +140,12 @@ The PWD works as for any agent; Bus writes nothing into it. Every MASTER agent
 launches with an orchestrator system prompt, by default Bus's built-in one
 (`orchestration/prompt.md` in the Bus repository). Replace it with
 `--system-prompt TEXT` or `--system-prompt-file PATH`. Bus fills in
-`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}` and `{{DOCS}}`, the folder
-`<BUS_DATA_DIR>/docs/` where Bus writes the docs the prompt links to: this
-guide, the orchestrator guide, `workflow-create.md`, the workflow template and
-example workflows.
+`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}` (the session's
+`<BUS_DATA_DIR>/docs/` folder), and `{{WORKFLOWS_DIR}}` (the resolved workflow
+directory). The docs include this guide, the orchestrator guide,
+`workflow-create.md`, templates and every shipped workflow. See the
+[binding named-workflows rule](orchestrator-rules.md#named-workflows) for the
+directory and shipped names.
 
 Bus delivers the prompt with each provider's own launch option and passes it
 again on resume:
