@@ -217,8 +217,13 @@ pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
         .copied()
         .chain([("workflow-create.md", WORKFLOW_CREATE)]);
     for (name, text) in docs {
-        let text = text.replace("{{WORKFLOWS_DIR}}", &workflows.to_string_lossy());
-        write_doc(&root, name, &text)?;
+        if name == "orchestrator-rules.md" {
+            let rules = text.replace("{{WORKFLOWS_DIR}}", &workflows.to_string_lossy());
+            write_doc(&root, name, &rules)?;
+        } else {
+            // Placeholder examples in the CLI guide are documentation, not inputs.
+            write_doc(&root, name, text)?;
+        }
     }
     for (name, text) in WORKFLOWS {
         write_doc(&root.join("workflows"), name, text)?;

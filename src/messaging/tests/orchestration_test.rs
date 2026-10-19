@@ -49,6 +49,23 @@ fn flat(text: &str) -> String {
 }
 
 #[test]
+fn written_cli_guide_keeps_its_prompt_placeholder_examples_literal() {
+    let data = temp_root("placeholder-examples");
+    let docs = write_docs(&data).unwrap();
+    let guide = std::fs::read_to_string(docs.join("how-to-bus-cli.md")).unwrap();
+    for token in [
+        "{{ROOM_NAME}}",
+        "{{ROOM_ID}}",
+        "{{AGENT_NAME}}",
+        "{{DOCS}}",
+        "{{WORKFLOWS_DIR}}",
+    ] {
+        assert!(guide.contains(token), "missing literal example {token}");
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
 fn workflow_discovery_and_assumption_rules_are_binding() {
     let rules = include_str!("../../../orchestration/rules.md");
     assert!(rules[rules.find("- **").unwrap()..]
@@ -317,14 +334,19 @@ fn embedded_text_is_written_unchanged_at_arbitrary_output_locations() {
         data.join("installed/bin/session"),
     ] {
         let docs = write_docs(&destination).unwrap();
-        for (name, text) in &authored {
+        for (name, text) in authored
+            .iter()
+            .filter(|(name, _)| *name != "orchestrator-rules.md")
+        {
             assert_eq!(
                 std::fs::read(docs.join(name)).unwrap(),
-                text.replace("{{WORKFLOWS_DIR}}", &workflows_dir(&docs).to_string_lossy())
-                    .as_bytes(),
+                text.as_bytes(),
                 "{name}"
             );
         }
+        let rules = std::fs::read_to_string(docs.join("orchestrator-rules.md")).unwrap();
+        assert!(rules.contains(&format!("`{}/`", workflows_dir(&docs).display())));
+        assert!(!rules.contains("{{WORKFLOWS_DIR}}"));
         let prompt = fill(DEFAULT_PROMPT, &values(Some(("pr-123", 7)), &destination));
         assert!(!prompt.contains("{{"));
         let spool = destination.join("callbacks/launch");
@@ -342,10 +364,13 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     let data = temp_root("docs");
     let root = write_docs(&data).unwrap();
     assert_eq!(root, data.join("docs"));
-    for (name, text) in DOCS {
+    for (name, text) in DOCS
+        .iter()
+        .filter(|(name, _)| *name != "orchestrator-rules.md")
+    {
         assert_eq!(
             std::fs::read_to_string(root.join(name)).unwrap(),
-            text.replace("{{WORKFLOWS_DIR}}", &workflows_dir(&root).to_string_lossy()),
+            *text,
             "{name}"
         );
     }
