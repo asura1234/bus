@@ -60,13 +60,25 @@ def scenario(binary, root, provider, master):
     began = time.monotonic()
     try:
         bus.start()
-        room = "master" if master else "bus"
+        # Keep the default first work room as the observer across restart;
+        # neither reply source can be marked seen by the new TUI's startup view.
+        bus.cli("room", "create", "reply-work")
+        room = "master" if master else "reply-work"
         args = ["agent", "add", "--room", room, "--name", "restart-agent", "--provider", provider,
                 "--pwd", str(work), "--consent-hooks"]
         if master:
-            args += ["--orchestrates", "bus"]
+            args += ["--orchestrates", "reply-work"]
         bus.cli(*args)
         until(lambda: any(a["status"] == "idle" for a in bus.cli("state")["agents"]))
+        bus.cli("room", "focus", "bus")
+
+        def durable():
+            return json.loads((data / "state.json").read_text())["state"]
+
+        observer = next(r["id"] for r in durable()["rooms"].values() if r["name"] == "bus")
+        source = next(r["id"] for r in durable()["rooms"].values() if r["name"].lower() == room)
+        until(lambda: durable()["visible_room"] == observer)
+        before = {key: value["unread_count"] for key, value in durable()["rooms"].items()}
         sent = bus.cli("send", "--room", room, "--to", "restart-agent", "--text",
                        "fake:work 3 fake:raw-reply restart-proof")
         message = str(sent["message_id"])
@@ -100,6 +112,21 @@ def scenario(binary, root, provider, master):
         assert len(rows) == 1, history
         assert len(rows[0]["delivery"]["requests"]) == 1, history
         assert rows[0]["delivery"]["requests"][0]["reply"]["text"] == "restart-proof", history
+        # A history map cannot reveal duplicate publication. Unviewed room
+        # counters and standalone notices are independent visible side effects.
+        state = durable()
+        assert state["visible_room"] != source, state["visible_room"]
+        expected = dict(before)
+        expected[str(source)] += 1
+        assert {key: value["unread_count"] for key, value in state["rooms"].items()} == expected, state
+        for target in ["master", "reply-work"]:
+            other = bus.cli("history", "--room", target)
+            assert not [row for row in other["messages"]
+                        if row["prompt"]["text"] == "restart-proof" and row["delivery"] is None], other
+        for _ in range(3):
+            bus.cli("message", "status", message)
+            bus.cli("history", "--room", room)
+        assert {key: value["unread_count"] for key, value in durable()["rooms"].items()} == expected
         print(json.dumps({"provider": provider, "room": room, "message": message,
                           "seconds": round(time.monotonic() - began, 3), "result": "PASS"}))
     finally:

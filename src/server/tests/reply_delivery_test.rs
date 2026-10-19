@@ -284,7 +284,7 @@ async fn captured_reply_survives_unrelated_later_turn_and_duplicate_stop() {
 }
 
 #[tokio::test]
-async fn nested_provider_hooks_do_not_steal_active_request_identity() {
+async fn flagged_nested_provider_callbacks_do_not_steal_active_request_identity() {
     for provider in [Provider::ClaudeCode, Provider::Codex] {
         let mut f = Delivery::new(&[provider], false);
         let agent = f.agents[0];
@@ -303,9 +303,10 @@ async fn nested_provider_hooks_do_not_steal_active_request_identity() {
 async fn claude_image_chip_and_long_paste_bind_to_the_delivered_request() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let agent = f.agents[0];
+    f.captured_image_composer(agent);
     let image = f.dir.join("attachment.png");
     image::RgbImage::new(2, 2).save(&image).unwrap();
-    let sent = f.call("message.send", json!({"room":"master","to":[agent.0.to_string()],"text":"review this screenshot","files":[image]}));
+    let sent = f.call("message.send", json!({"room":"master","to":[agent.0.to_string()],"text":"please review this screenshot","files":[image]}));
     let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
     f.tick();
     assert_eq!(
@@ -313,7 +314,7 @@ async fn claude_image_chip_and_long_paste_bind_to_the_delivered_request() {
         1,
         "native image composer must receive Enter"
     );
-    f.start(agent, "image", "[Image #1]<pasted_content id=\"image\">\nreview this screenshot\n</pasted_content id=\"image\">");
+    f.start(agent, "image", "[Image #1]<pasted_content id=\"image\">\nplease review this screenshot\n</pasted_content id=\"image\">");
     f.stop(agent, "image", "screenshot reviewed", json!([]), json!([]));
     f.assert_reply(request, "screenshot reviewed");
 }
@@ -378,6 +379,10 @@ async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter()
         json!([]),
     );
     f.age_request_progress(3_000);
+    f.call(
+        "message.status",
+        json!({"message":message.0.to_string(),"as":orch.0.to_string()}),
+    );
     f.tick();
     let typed = f.typed(orch);
     assert_eq!(typed.len(), 1);
@@ -470,10 +475,34 @@ async fn failed_reply_persistence_replays_spool_after_restart_without_duplicatio
         };
         let mut stop = json!({"hook_event_name":"Stop","last_assistant_message":"saved after retry","background_tasks":[],"session_crons":[]});
         stop[key] = json!("durable");
-        f.record(agent, stop);
+        // Commit the status poll before the Stop exists: the injected fault
+        // must hit the callback batch's durable write and deferred ack.
         f.status(agent, AgentState::Idle);
+        f.tick();
+        f.record(agent, stop);
         f.fail_next_save();
-        f.failed_tick();
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| f.failed_tick());
+        let log = capture.text();
+        assert!(log.contains("bus.storage.failed"), "{log}");
+        assert!(
+            !log.contains("stage=\"poll\"") && !log.contains("stage=poll"),
+            "{log}"
+        );
+        assert_eq!(
+            f.state().request(request).unwrap().phase,
+            RequestPhase::Active
+        );
+        let stop_count = std::fs::read_dir(f.dir.join(format!("callbacks/launch-{}", agent.0)))
+            .unwrap()
+            .filter_map(|p| std::fs::read(p.unwrap().path()).ok())
+            .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .filter(|record| record["value"]["hook_event_name"] == "Stop")
+            .count();
+        assert_eq!(
+            stop_count, 1,
+            "failed callback save must not acknowledge its Stop"
+        );
         f.reopen();
         f.tick();
         f.assert_reply(request, "saved after retry");
@@ -523,6 +552,7 @@ async fn socket_eagain_during_active_reply_preserves_ownership_and_recovers_once
         assert!(began.elapsed() >= Duration::from_secs(3), "real kernel receive deadline must expire");
         assert_eq!(f.state().request(request).unwrap().phase, RequestPhase::Active);
         f.pause_server(false); f.tick(); f.tick(); f.assert_reply(request, "recovered reply");
+        assert_eq!(f.typed(agent).len(), 1, "timeout recovery must not retype the prompt");
     });
     let log = capture.text();
     assert!(
@@ -558,15 +588,33 @@ async fn transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart
     assert_eq!(f.stall_alerts(), 1);
 }
 
+// One cycle is also a normal integration guard: both rounds must really hold
+// Claude replies, consume batches and publish distinct response text once.
+#[tokio::test]
+async fn batched_reply_cycles_hold_fresh_shells_after_reopen() {
+    let mut f = soak_fixture();
+    for round in 0..2 {
+        delivery_cycle(&mut f, round);
+        f.reopen();
+        f.provider_startup();
+    }
+    assert_eq!(f.state().requests().count(), 48);
+    f.assert_no_stalls();
+}
+
 #[tokio::test]
 #[ignore = "separate soak target; default 1 minute, BUS_REPLY_SOAK_MINUTES=30 for long mode"]
 async fn soak_many_agents_concurrent_messages_and_background_shells() {
-    use std::time::{Duration, Instant};
-    let minutes: f64 = std::env::var("BUS_REPLY_SOAK_MINUTES")
-        .unwrap_or_else(|_| "1".into())
-        .parse()
-        .expect("positive number of minutes");
-    assert!(minutes.is_finite() && minutes > 0.0 && minutes <= 1440.0);
+    run_soak(false);
+}
+
+#[tokio::test]
+#[ignore = "stall-cx #107 https://github.com/asura1234/bus/pull/107; per-cycle aged request and repeated-alert regression"]
+async fn soak_many_agents_with_stall_flapping_and_restart() {
+    run_soak(true);
+}
+
+fn soak_fixture() -> Delivery {
     let providers: Vec<_> = (0..12)
         .map(|n| {
             if n % 2 == 0 {
@@ -576,75 +624,190 @@ async fn soak_many_agents_concurrent_messages_and_background_shells() {
             }
         })
         .collect();
-    let mut f = Delivery::new(&providers, false);
+    Delivery::new(&providers, false)
+}
+
+fn delivery_cycle(f: &mut Delivery, round: usize) {
     let agents = f.agents.clone();
+    let room = f.work;
+    let shared = std::sync::Mutex::new(&mut *f);
+    let expected = std::thread::scope(|scope| {
+        let handles: Vec<_> = agents
+            .iter()
+            .enumerate()
+            .map(|(n, &agent)| {
+                let shared = &shared;
+                scope.spawn(move || {
+                    let prompt = format!("soak-{round}-{n}");
+                    let first = shared
+                        .lock()
+                        .unwrap()
+                        .send(agent, room, &prompt, false, None);
+                    let next = shared.lock().unwrap().send(
+                        agent,
+                        room,
+                        &format!("queued-{round}-{n}"),
+                        true,
+                        None,
+                    );
+                    (n, agent, first, next)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    drop(shared);
+    f.tick();
+    for (phase, queued) in [("first", false), ("queued", true)] {
+        for &(n, agent, _, _) in &expected {
+            let prompt = if queued {
+                format!("queued-{round}-{n}")
+            } else {
+                format!("soak-{round}-{n}")
+            };
+            f.spool_start(agent, &format!("{phase}-turn-{round}-{n}"), &prompt);
+        }
+        f.tick(); // All agents' starts are consumed in this batch.
+        for &(n, agent, _, _) in &expected {
+            let reply = format!("reply-{phase}-{round}-{n}");
+            f.spool_stop(agent, &format!("{phase}-turn-{round}-{n}"), &reply,
+                json!([{"id":"persistent-shell","type":"shell","status":"running","command":"sleep 600"},
+                       {"id":format!("own-{phase}-{round}-{n}"),"type":"shell","status":"running","command":"sleep 600"}]), json!([]));
+        }
+        f.tick(); // All Stops are consumed together, not one tick per hook.
+        for &(_, agent, first, next) in &expected {
+            if f.state().agent(agent).unwrap().provider == Provider::ClaudeCode {
+                let request = if queued { next } else { first };
+                assert!(
+                    f.state().request(request).unwrap().shell_hold.is_some(),
+                    "round {round} {phase}: Claude reply must actually wait on its own shell"
+                );
+                assert_eq!(
+                    f.state().request(request).unwrap().phase,
+                    RequestPhase::Active
+                );
+            }
+        }
+        f.elapse(3_600_000);
+        for &(n, _, first, next) in &expected {
+            f.assert_reply(
+                if queued { next } else { first },
+                &format!("reply-{phase}-{round}-{n}"),
+            );
+        }
+    }
+}
+
+fn stall_cycle(f: &mut Delivery, round: usize) {
+    let agent = f.agents[0];
+    let prompt = format!("stall-probe-{round}");
+    let turn = format!("stall-turn-{round}");
+    let request = f.send(agent, f.work, &prompt, false, None);
+    f.tick();
+    f.start(agent, &turn, &prompt);
+    f.status(agent, AgentState::Idle);
+    f.tick();
+    f.age_request_progress(600_000);
+    f.tick();
+    assert_eq!(
+        f.stall_alerts_for(request),
+        1,
+        "the phase must really trigger an alert"
+    );
+    f.status(agent, AgentState::Working);
+    f.tick();
+    f.status(agent, AgentState::Idle);
+    f.tick();
+    f.age_request_progress(600_000);
+    f.reopen();
+    assert_eq!(
+        f.stall_alerts_for(request),
+        1,
+        "same request alerted twice after flapping/restart"
+    );
+    f.stop(
+        agent,
+        &turn,
+        &format!("late-reply-{round}"),
+        json!([]),
+        json!([]),
+    );
+    f.assert_reply(request, &format!("late-reply-{round}"));
+    assert_eq!(f.stall_alerts_for(request), 1);
+}
+
+fn run_soak(with_stalls: bool) {
+    use std::time::{Duration, Instant};
+    let minutes: f64 = std::env::var("BUS_REPLY_SOAK_MINUTES")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .expect("positive number of minutes");
+    assert!(minutes.is_finite() && minutes > 0.0 && minutes <= 1440.0);
+    let mut f = soak_fixture();
     let began = Instant::now();
     let deadline = began + Duration::from_secs_f64(minutes * 60.0);
     let mut round = 0;
-    let mut completed = 0;
     while Instant::now() < deadline {
-        // Concurrent producers enter the real serialized coordinator control
-        // boundary. Receipts, rather than producer order, identify each reply.
-        let room = f.work;
-        let shared = std::sync::Mutex::new(&mut f);
-        let expected = std::thread::scope(|scope| {
-            let handles: Vec<_> = agents
-                .iter()
-                .enumerate()
-                .map(|(n, &agent)| {
-                    let shared = &shared;
-                    scope.spawn(move || {
-                        let prompt = format!("soak-{round}-{n}");
-                        let first = shared
-                            .lock()
-                            .unwrap()
-                            .send(agent, room, &prompt, false, None);
-                        let next = shared.lock().unwrap().send(
-                            agent,
-                            room,
-                            &format!("queued-{round}-{n}"),
-                            true,
-                            None,
-                        );
-                        (agent, first, next, prompt)
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|h| h.join().unwrap())
-                .collect::<Vec<_>>()
-        });
-        drop(shared);
-        f.tick();
-        for (n, &(agent, _, _, ref prompt)) in expected.iter().enumerate() {
-            let turn = format!("turn-{round}-{n}");
-            f.start(agent, &turn, prompt);
-            f.stop(agent, &turn, prompt, json!([{"id":"persistent-shell","type":"shell","status":"running","command":"sleep 600"}]), json!([]));
-        }
-        f.elapse(3_600_000);
-        for (n, (agent, first, next, prompt)) in expected.into_iter().enumerate() {
-            f.assert_reply(first, &prompt);
-            let queued = format!("queued-{round}-{n}");
-            let turn = format!("queued-turn-{round}-{n}");
-            f.start(agent, &turn, &queued);
-            f.stop(agent, &turn, &queued, json!([{"id":"persistent-shell","type":"shell","status":"running","command":"sleep 600"}]), json!([]));
-            f.assert_reply(next, &queued);
-            completed += 2;
+        delivery_cycle(&mut f, round);
+        if with_stalls {
+            stall_cycle(&mut f, round);
+        } else {
+            f.assert_no_stalls();
         }
         f.reopen();
-        f.assert_no_stalls();
+        // Startup is explicit: an unknown shell after coordinator restart is
+        // deliberately treated as inherited by production. This profile needs
+        // fresh provider-owned shell holds on every subsequent cycle as well.
+        f.provider_startup();
         round += 1;
     }
+    let completed = round * if with_stalls { 25 } else { 24 };
     assert!(completed >= 24);
     assert_eq!(f.state().requests().count(), completed);
-    assert_eq!(
-        f.state().room(f.work).unwrap().unread_count as usize,
-        completed
-    );
     assert!(f
         .state()
         .requests()
         .all(|r| r.phase == RequestPhase::Completed));
-    eprintln!("reply soak: {completed} completed requests, {round} rounds, 12 agents, {:?}, zero stall alerts", began.elapsed());
+    assert_eq!(
+        f.state().room(f.work).unwrap().unread_count as usize,
+        completed
+    );
+    assert_eq!(f.stall_alerts(), if with_stalls { round } else { 0 });
+    f.assert_publications();
+    eprintln!("reply soak: {completed} completed requests, {round} rounds, 12 agents, {:?}, stall-profile={with_stalls}, {} alerts, no repeated alerts", began.elapsed(), f.stall_alerts());
+}
+
+/// Negative control: the contract must notice a second visible publication,
+/// even though room.history still contains just one request map entry.
+#[tokio::test]
+async fn reply_contract_rejects_second_visible_publication() {
+    let mut f = Delivery::new(&[Provider::ClaudeCode], true);
+    let agent = f.agents[0];
+    let request = f.send(agent, f.master, "oracle prompt", false, None);
+    f.tick();
+    f.start(agent, "original", "oracle prompt");
+    f.stop(agent, "original", "oracle reply", json!([]), json!([]));
+    f.assert_reply(request, "oracle reply");
+    f.start(
+        agent,
+        "separate-report",
+        "<task-notification>separate report</task-notification>",
+    );
+    let before = f.state().room(f.master).unwrap().unread_count;
+    f.call("message.send", json!({"room":f.master.0.to_string(),"as":agent.0.to_string(),"to":["human"],"text":"oracle reply"}));
+    assert_eq!(
+        f.state().room(f.master).unwrap().unread_count,
+        before + 1,
+        "negative control must actually publish"
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        f.assert_reply(request, "oracle reply")
+    }));
+    assert!(
+        result.is_err(),
+        "a second visible publication escaped the reply contract"
+    );
 }

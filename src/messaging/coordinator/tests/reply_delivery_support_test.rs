@@ -32,6 +32,7 @@ struct Terminal {
     input: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     draft: String,
     submitted: Vec<String>,
+    captured_image_screen: bool,
 }
 
 struct NativeServer {
@@ -105,6 +106,7 @@ impl NativeServer {
                 input,
                 draft: String::new(),
                 submitted: Vec::new(),
+                captured_image_screen: false,
             },
         );
         AgentRuntimeIdentity {
@@ -131,19 +133,17 @@ impl NativeServer {
                 } else {
                     assert_eq!(text, "\x01", "unexpected terminal input");
                 }
-                let display = if terminal.provider == Provider::ClaudeCode {
-                    let (images, body) =
-                        crate::agents::providers::claude_code::hooks::claude_lifted_images(
-                            &terminal.draft,
-                        );
+                // An independently captured Claude composer is the image oracle;
+                // never transform the draft with the observer's production rule.
+                let display = if terminal.captured_image_screen && !terminal.draft.is_empty() {
                     format!(
-                        "{}{body}",
-                        (1..=images)
-                            .map(|n| format!("[Image #{n}]"))
-                            .collect::<String>()
+                        "\x1b[2J\x1b[H{}",
+                        include_str!(
+                            "../../../server/api/agents/tests/fixtures/claude_image_paste.txt"
+                        )
                     )
                 } else {
-                    terminal.draft.clone()
+                    screen(terminal.provider, &terminal.draft)
                 };
                 self.app
                     .state
@@ -158,7 +158,7 @@ impl NativeServer {
                         terminal.pane,
                     )
                     .unwrap()
-                    .test_process_pty_bytes(screen(terminal.provider, &display).as_bytes());
+                    .test_process_pty_bytes(display.as_bytes());
             }
         }
     }
@@ -503,9 +503,10 @@ impl Delivery {
                 agent["status_since_ms"] = json!(at.saturating_sub(millis));
             }
         }
-        self.worker_mut()
-            .save(serde_json::from_value(document).unwrap())
-            .unwrap();
+        let state = serde_json::from_value::<BusState>(document)
+            .unwrap()
+            .with_history(Arc::clone(self.state().history()));
+        self.worker_mut().save(state).unwrap();
     }
     pub(crate) fn stall_alerts(&self) -> usize {
         self.state()
@@ -577,7 +578,29 @@ impl Delivery {
             .unwrap();
         writeln!(file, "{row}").unwrap();
     }
+    pub(crate) fn captured_image_composer(&mut self, agent: AgentId) {
+        self.native
+            .lock()
+            .unwrap()
+            .terminals
+            .get_mut(&agent)
+            .unwrap()
+            .captured_image_screen = true;
+    }
+    pub(crate) fn provider_startup(&mut self) {
+        for agent in self.agents.clone() {
+            self.record(
+                agent,
+                json!({"hook_event_name":"SessionStart","source":"startup"}),
+            );
+        }
+        self.tick();
+    }
     pub(crate) fn start(&mut self, agent: AgentId, turn: &str, text: &str) {
+        self.spool_start(agent, turn, text);
+        self.tick();
+    }
+    pub(crate) fn spool_start(&mut self, agent: AgentId, turn: &str, text: &str) {
         let provider = self.state().agent(agent).unwrap().provider;
         let key = match provider {
             Provider::Codex => "turn_id",
@@ -597,9 +620,19 @@ impl Delivery {
         self.append_transcript(agent, row);
         self.record(agent, value);
         self.status(agent, AgentState::Working);
-        self.tick();
     }
     pub(crate) fn stop(
+        &mut self,
+        agent: AgentId,
+        turn: &str,
+        reply: &str,
+        background: Value,
+        crons: Value,
+    ) {
+        self.spool_stop(agent, turn, reply, background, crons);
+        self.tick();
+    }
+    pub(crate) fn spool_stop(
         &mut self,
         agent: AgentId,
         turn: &str,
@@ -634,7 +667,6 @@ impl Delivery {
         }
         self.record(agent, value);
         self.status(agent, AgentState::Idle);
-        self.tick();
     }
     /// Move persisted deadline evidence, then run the real coordinator settlement;
     /// no sleeps or calls to matcher/model completion methods.
@@ -662,9 +694,10 @@ impl Delivery {
                 }
             }
         }
-        self.worker_mut()
-            .save(serde_json::from_value(document).unwrap())
-            .unwrap();
+        let state = serde_json::from_value::<BusState>(document)
+            .unwrap()
+            .with_history(Arc::clone(self.state().history()));
+        self.worker_mut().save(state).unwrap();
         self.tick();
     }
 
@@ -708,6 +741,49 @@ impl Delivery {
         self.worker = Some(worker);
         self.tick();
     }
+    pub(crate) fn stall_alerts_for(&self, request: RequestId) -> usize {
+        let message = self.state().request(request).unwrap().prompt.id.0;
+        let marker = format!("message {message} (");
+        self.state()
+            .notices(self.master)
+            .filter(|n| n.text.contains("Agent stalled") && n.text.contains(&marker))
+            .count()
+    }
+    /// A reply group contributes one publication per source room. The unread
+    /// counters are independent observable effects, unlike map-key uniqueness.
+    pub(crate) fn assert_publications(&self) {
+        use std::collections::BTreeSet;
+        for room in self.state().rooms() {
+            let replies: BTreeSet<_> = self
+                .state()
+                .requests()
+                .filter(|r| {
+                    r.room_id == room.id && r.phase == RequestPhase::Completed && !r.delivery_only()
+                })
+                .filter_map(|r| r.pending_final.as_ref().map(|p| p.callback_id.clone()))
+                .collect();
+            let sends: BTreeSet<_> = self
+                .state()
+                .requests()
+                .filter(|r| {
+                    r.room_id == room.id
+                        && matches!(r.prompt.author, Author::Agent(_))
+                        && !r.delivery_only()
+                })
+                .map(|r| r.prompt.id)
+                .collect();
+            let notices = self.state().notices(room.id).count();
+            assert_eq!(
+                room.unread_count as usize,
+                replies.len() + sends.len() + notices,
+                "publication count in room {}: {} reply groups, {} agent messages, {} notices",
+                room.name,
+                replies.len(),
+                sends.len(),
+                notices
+            );
+        }
+    }
     pub(crate) fn assert_reply(&mut self, request: RequestId, text: &str) {
         let r = self.state().request(request).unwrap().clone();
         assert_eq!(
@@ -716,7 +792,30 @@ impl Delivery {
             "request {request:?}: {r:?}"
         );
         assert_eq!(r.pending_final.as_ref().unwrap().text, text);
+        self.assert_publications();
+        for room in self.state().rooms() {
+            assert_eq!(
+                self.state()
+                    .notices(room.id)
+                    .filter(|n| n.author == Author::Agent(r.agent_id) && n.text == text)
+                    .count(),
+                0,
+                "reply mirrored as a notice in {}",
+                room.name
+            );
+        }
+        let before: Vec<_> = self
+            .state()
+            .rooms()
+            .map(|r| (r.id, r.unread_count))
+            .collect();
         let history = self.call("room.history", json!({"room":r.room_id.0.to_string()}));
+        let after: Vec<_> = self
+            .state()
+            .rooms()
+            .map(|r| (r.id, r.unread_count))
+            .collect();
+        assert_eq!(before, after, "reading delivery must not republish it");
         let rows = history["messages"].as_array().unwrap();
         let occurrences: Vec<_> = rows
             .iter()
