@@ -340,7 +340,12 @@ fn shell_words(segment: &str) -> Vec<String> {
     let mut escaped = false;
     for ch in segment.chars() {
         if escaped {
-            word.push(ch);
+            if quote == Some('"') && !matches!(ch, '$' | '`' | '"' | '\\' | '\n') {
+                word.push('\\');
+            }
+            if ch != '\n' {
+                word.push(ch);
+            }
             escaped = false;
         } else if ch == '\\' && quote != Some('\'') {
             escaped = true;

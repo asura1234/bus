@@ -395,3 +395,43 @@ fn bus_wait_shells_keep_work_after_a_stream_redirection() {
         assert!(!is_bus_control(command), "must hold work: {command}");
     }
 }
+
+/// The repository shim is a wrapper, retained for foreground controls.
+/// Background dispatches must name the Bus executable directly.
+#[test]
+fn repository_dev_control_dispatch_is_a_wrapper_and_stays_held() {
+    assert!(!is_bus_control(
+        "./run dev-control send --room work --as orch --to worker --async --text go"
+    ));
+}
+
+/// Inside double quotes a shell keeps a backslash that does not precede
+/// `$`, backtick, `"`, `\` or a newline, so a Windows path stays intact.
+#[test]
+fn double_quoted_windows_bus_path_is_a_direct_bus_control() {
+    assert!(is_bus_control(
+        r#""C:\Users\dev\bin\bus.exe" send --to worker --async --text go"#
+    ));
+}
+
+/// A backslash-newline is a line continuation that the shell removes.
+#[test]
+fn line_continued_bus_controls_are_direct() {
+    for command in [
+        "bus send --room work --as orch --to worker --async \\\n  --text go",
+        "'/tmp/a b/bus' --dev \\\n  send --to worker --async --text go",
+    ] {
+        assert!(is_bus_control(command), "Bus control only: {command:?}");
+    }
+}
+
+#[test]
+fn line_continuations_do_not_hide_real_work_around_bus_controls() {
+    for command in [
+        "cargo build \\\n && bus wait 7",
+        "bus wait 7 \\\n && cargo build",
+        "\"C:\\tools\\bus.exe\" wait 7 | cargo build",
+    ] {
+        assert!(!is_bus_control(command), "must hold work: {command:?}");
+    }
+}
