@@ -5,6 +5,9 @@ orchestrator of a Bus room. It builds on [How to use the Bus CLI](how-to-bus-cli
 read that first for the commands themselves. The binding rules are in
 [Orchestrator rules](orchestrator-rules.md).
 
+Start with [Never act on assumptions; ask the developer](orchestrator-rules.md#never-act-on-assumptions),
+the first binding rule, before kickoff or steering workers.
+
 Code explains itself; use short inline comments to explain why it was built that way where it is not obvious, and agents read the code for the rest.
 
 ## What an orchestrator is
@@ -67,12 +70,13 @@ binds it to the new agent and still delivers the orchestrator prompt; see
 
 ## The workflow file
 
-Each room has a workflow file, a living plan the orchestrator keeps. Follow
-[workflow-create](workflow-create.md) (in the Bus docs folder) and start from
-[the workflow template](templates/workflow-template.md) and the
-[example workflows](workflows/): goal,
+Each room has a workflow file, a living plan the orchestrator keeps: goal,
 non-goals, a mermaid graph of the steps, participants, gates, coordination
-rules, decision rules, and a log.
+rules, decision rules, and a log. Follow
+[workflow-create](workflow-create.md) (in the Bus docs folder) and start from
+[the workflow template](templates/workflow-template.md). For workflow lookup,
+the resolved directory and shipped names, follow the
+[binding named-workflows rule](orchestrator-rules.md#named-workflows).
 
 - **Draft it with the developer** before work starts. The graph is a reference, not
   a script.
@@ -233,6 +237,9 @@ its context.
   `bus message status`.
 
 ## When to ask the developer
+
+Apply [Never act on assumptions; ask the developer](orchestrator-rules.md#never-act-on-assumptions)
+first. The following decision boundaries also apply.
 
 Ask before anything outside the room's goal or the workflow's decision rules:
 

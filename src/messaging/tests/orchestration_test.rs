@@ -4,9 +4,163 @@ fn temp_root(label: &str) -> PathBuf {
     crate::utils::test_temp::unique_temp_path(&format!("bus-orch-{label}"))
 }
 
+#[test]
+fn every_repository_workflow_is_bundled_at_its_original_name() {
+    let data = temp_root("all-workflows");
+    let docs = write_docs(&data).unwrap();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("workflows");
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(&repo).unwrap() {
+        let path = entry.unwrap().path();
+        assert!(path.is_file(), "workflow bundle must cover {path:?}");
+        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(
+            std::fs::read(docs.join("workflows").join(&name))
+                .unwrap_or_else(|error| panic!("workflow {name} was not embedded: {error}")),
+            std::fs::read(&path).unwrap(),
+            "{name}"
+        );
+        names.push(name);
+    }
+    let mut bundled = std::fs::read_dir(docs.join("workflows"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    names.sort();
+    bundled.sort();
+    assert_eq!(names, bundled);
+    // First launch after an upgrade refreshes stale embedded bytes, too.
+    for name in &names {
+        std::fs::write(docs.join("workflows").join(name), "old installation").unwrap();
+    }
+    write_docs(&data).unwrap();
+    for name in &names {
+        assert_eq!(
+            std::fs::read(docs.join("workflows").join(name)).unwrap(),
+            std::fs::read(repo.join(name)).unwrap()
+        );
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
 /// `text` with every whitespace run as one space, so a pinned phrase may wrap.
 fn flat(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn written_cli_guide_keeps_its_prompt_placeholder_examples_literal() {
+    let data = temp_root("placeholder-examples");
+    let docs = write_docs(&data).unwrap();
+    let guide = std::fs::read_to_string(docs.join("how-to-bus-cli.md")).unwrap();
+    for token in [
+        "{{ROOM_NAME}}",
+        "{{ROOM_ID}}",
+        "{{AGENT_NAME}}",
+        "{{DOCS}}",
+        "{{WORKFLOWS_DIR}}",
+    ] {
+        assert!(guide.contains(token), "missing literal example {token}");
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn workflow_discovery_and_assumption_rules_are_binding() {
+    let rules = include_str!("../../../orchestration/rules.md");
+    assert!(rules[rules.find("- **").unwrap()..]
+        .starts_with("- **Never act on assumptions; ask the developer.**"));
+    let rules = flat(rules);
+    for phrase in [
+        "Acting on assumptions",
+        "unknown skill, workflow or tool name",
+        "unclear scope or goal",
+        "file, PR, branch or resource",
+        "conflicting instructions",
+        "guessed equivalent",
+        "irreversible or outward-facing",
+        "explicit consent",
+        "I assume",
+        "probably",
+        "likely means",
+        "not installed so I'll",
+        "I'll do X instead",
+        "[waiting-on-you]",
+        "quote the unclear part",
+        "offer the options",
+        "until the developer answers",
+        "workers to ask you instead of assuming",
+        "not a skill",
+        "read it fully before acting and follow its gates",
+    ] {
+        assert!(rules.contains(phrase), "missing {phrase}");
+    }
+    let top = DEFAULT_PROMPT.split("## Your job").next().unwrap();
+    assert!(top.contains("Never act on assumptions; ask the developer"));
+    let guide = include_str!("../../../orchestration/guide.md");
+    for text in [DEFAULT_PROMPT, guide] {
+        assert!(text.contains("orchestrator-rules.md#never-act-on-assumptions"));
+        assert!(text.contains("orchestrator-rules.md#named-workflows"));
+        assert!(!text.contains("Example workflows"));
+        assert!(!text.contains("example workflows"));
+    }
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for entry in std::fs::read_dir(repo.join("workflows")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_stem().unwrap().to_str().unwrap();
+        assert!(
+            rules.contains(&format!("`{name}`")),
+            "unlisted workflow: {name}"
+        );
+    }
+    let prompt = fill(
+        DEFAULT_PROMPT,
+        &values(Some(("test", 7)), Path::new("/data")),
+    );
+    assert!(
+        prompt.contains(&format!("Workflows: {}/", repo.join("workflows").display())),
+        "{prompt}"
+    );
+}
+
+#[test]
+fn workflow_paths_use_source_detection_only_for_dev_launches() {
+    let root = temp_root("workflow-paths");
+    let repo = root.join("checkout");
+    std::fs::create_dir_all(repo.join("src/devtools")).unwrap();
+    std::fs::create_dir_all(repo.join("workflows")).unwrap();
+    std::fs::write(repo.join("Cargo.toml"), "name = \"bus\"").unwrap();
+    let repo = repo.canonicalize().unwrap();
+    let docs = root.join("installed/session/docs");
+    let source = repo.join("workflows");
+    let bundled = docs.join("workflows");
+    let exe = repo.join("target/workflow-docs/debug/bus");
+    let external = root.join("installed/bin/bus");
+    for (dev, executable, cwd, expected) in [
+        (true, Some(exe.as_path()), None, &source),
+        (
+            true,
+            Some(external.as_path()),
+            Some(repo.as_path()),
+            &source,
+        ),
+        (false, Some(exe.as_path()), Some(repo.as_path()), &bundled),
+        (
+            true,
+            Some(external.as_path()),
+            Some(root.as_path()),
+            &bundled,
+        ),
+        (true, None, None, &bundled),
+    ] {
+        assert_eq!(workflows_dir_at(&docs, dev, executable, cwd), *expected);
+    }
+    std::fs::remove_dir_all(repo.join("workflows")).unwrap();
+    assert_eq!(
+        workflows_dir_at(&docs, true, Some(&exe), Some(&repo)),
+        bundled
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// What MASTER carries (progress, questions, blockers, plan changes) and what
@@ -52,12 +206,6 @@ fn embedded_docs_match_the_repository_copies() {
         (
             "templates/bug-triage-table.md",
             "workflows/bug-triage-table-template.md",
-        ),
-        ("workflows/auto-merge-pr.md", "workflows/auto-merge-pr.md"),
-        ("workflows/bug-fix.md", "workflows/bug-fix.md"),
-        (
-            "workflows/cross-repo-feature.md",
-            "workflows/cross-repo-feature.md",
         ),
     ];
     assert_eq!(DOCS.len(), sources.len());
@@ -159,7 +307,7 @@ fn compiled_default_rejects_unknown_or_unfinished_placeholders() {
     assert!(supported_prompt_placeholders(DEFAULT_PROMPT));
     assert!(supported_prompt_placeholders("Plain text with {braces}."));
     assert!(supported_prompt_placeholders(
-        "{{DOCS}}{{ROOM_ID}}{{AGENT_NAME}}{{ROOM_NAME}}"
+        "{{DOCS}}{{ROOM_ID}}{{AGENT_NAME}}{{ROOM_NAME}}{{WORKFLOWS_DIR}}"
     ));
     for invalid in [
         "{{UNKNOWN}}",
@@ -186,13 +334,19 @@ fn embedded_text_is_written_unchanged_at_arbitrary_output_locations() {
         data.join("installed/bin/session"),
     ] {
         let docs = write_docs(&destination).unwrap();
-        for (name, text) in &authored {
+        for (name, text) in authored
+            .iter()
+            .filter(|(name, _)| *name != "orchestrator-rules.md")
+        {
             assert_eq!(
                 std::fs::read(docs.join(name)).unwrap(),
                 text.as_bytes(),
                 "{name}"
             );
         }
+        let rules = std::fs::read_to_string(docs.join("orchestrator-rules.md")).unwrap();
+        assert!(rules.contains(&format!("`{}/`", workflows_dir(&docs).display())));
+        assert!(!rules.contains("{{WORKFLOWS_DIR}}"));
         let prompt = fill(DEFAULT_PROMPT, &values(Some(("pr-123", 7)), &destination));
         assert!(!prompt.contains("{{"));
         let spool = destination.join("callbacks/launch");
@@ -210,7 +364,10 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     let data = temp_root("docs");
     let root = write_docs(&data).unwrap();
     assert_eq!(root, data.join("docs"));
-    for (name, text) in DOCS {
+    for (name, text) in DOCS
+        .iter()
+        .filter(|(name, _)| *name != "orchestrator-rules.md")
+    {
         assert_eq!(
             std::fs::read_to_string(root.join(name)).unwrap(),
             *text,

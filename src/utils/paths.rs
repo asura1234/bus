@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod session_args;
@@ -9,6 +9,17 @@ pub const DEFAULT_SESSION_NAME: &str = "default";
 
 const MAX_SESSION_NAME_LEN: usize = 64;
 static EXPLICIT_SESSION_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Finds the source checkout shared by dev launches and the scratch TUI driver.
+pub(crate) fn find_bus_checkout(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|dir| {
+            dir.join("src").join("devtools").is_dir()
+                && std::fs::read_to_string(dir.join("Cargo.toml"))
+                    .is_ok_and(|text| text.contains("name = \"bus\""))
+        })
+        .and_then(|dir| dir.canonicalize().ok())
+}
 
 pub fn active_name() -> Option<String> {
     std::env::var(SESSION_ENV_VAR)

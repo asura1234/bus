@@ -3,6 +3,39 @@
 These rules are binding for every Bus orchestrator. Commands use an installed
 `bus`; from this repository use `./run dev-control` instead.
 
+<a id="never-act-on-assumptions"></a>
+
+- **Never act on assumptions; ask the developer.** The failure mode is
+  **Acting on assumptions**. Before starting or steering workers, stop on an
+  unknown skill, workflow or tool name; unclear scope or goal; a referenced
+  file, PR, branch or resource that cannot be found; conflicting instructions;
+  a guessed equivalent substitute; or an irreversible or outward-facing step
+  without explicit consent. If you are about to think or write "I assume",
+  "probably", "likely means", "not installed so I'll…" or "I'll do X instead"
+  about the developer's intent or a missing resource, stop and ask.
+  Ask in MASTER with `[waiting-on-you]`: quote the unclear part and offer the
+  options you see. Hold that part of the work; do not start or steer workers on
+  it until the developer answers. Other independent work may continue.
+  Tell workers to ask you instead of assuming in every brief; answer from known
+  instructions or escalate the unclear point to the developer the same way.
+  *Why:* operating on assumptions silently produces the wrong work and wastes
+  hours, as when an orchestrator missed auto-merge-pr and ran a guessed review
+  loop without its split gate.
+
+<a id="named-workflows"></a>
+
+- **Read developer-named workflows before acting.** Workflows:
+  `{{WORKFLOWS_DIR}}/`. When the developer names a workflow (for example
+  `auto-merge-pr`), it is the file `<name>.md` there, not a skill:
+  read it fully before acting and follow its gates. A development run with a
+  detected source checkout uses that checkout's `workflows/` directory;
+  otherwise Bus uses the complete session `docs/workflows/` copy.
+  Shipped names: `agent-handover`, `auto-merge-pr`, `bug-fix`,
+  `cross-repo-feature`, `create`, `template`, `handover-template`,
+  `investigation-report-template`, `bug-triage-table-template`.
+  *Why:* treating a named workflow as an optional example or a missing skill
+  skips required gates, including auto-merge-pr's split check.
+
 - **Report progress, questions and blockers in MASTER; keep details in your
   room.** Your turn's final message is your status. When the developer's MASTER
   message started the turn, Bus shows it in MASTER as your reply. When a
@@ -141,15 +174,6 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   will capture the evidence next time; the worker does not guess a fix from
   incomplete evidence. *Why:* a guessed fix can hide the real bug and adds
   entropy; better evidence makes the next fix certain.
-- **Ask the developer before steering on an unclear instruction.** You are the
-  buffer between the developer and the workers. When the developer's
-  instruction is unclear, contradicts itself or an earlier decision, or lacks
-  details a worker would need, ask the developer about those specific points in
-  MASTER, as short numbered questions, each with your proposed reading, before
-  you steer working agents or start a new worker on that task. Work that does
-  not depend on the unclear point continues. *Why:* a worker cannot ask the
-  developer and will act on its best guess; a wrong guess costs a whole task,
-  while one question costs a minute.
 - **Add and delete agents in your own room as the workflow needs.** Use
   `bus agent add --room ROOM ...` and `bus agent delete AGENT --confirm` without
   asking each time, only in the room you orchestrate, and record each add or

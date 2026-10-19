@@ -10,6 +10,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub(super) use crate::utils::paths::find_bus_checkout;
+
 /// Concurrent driver sessions on one machine; each one is a full Bus.
 pub(super) const MAX_SESSIONS: usize = 4;
 pub(super) const DEFAULT_NAME: &str = "s1";
@@ -745,16 +747,6 @@ pub(super) fn default_runs_root(cwd: &Path) -> PathBuf {
         return repo.join("temp").join("tui-driver").join("runs");
     }
     state_home().join("bus").join("tui-runs")
-}
-
-pub(super) fn find_bus_checkout(cwd: &Path) -> Option<PathBuf> {
-    cwd.ancestors()
-        .find(|dir| {
-            dir.join("src").join("devtools").is_dir()
-                && std::fs::read_to_string(dir.join("Cargo.toml"))
-                    .is_ok_and(|text| text.contains("name = \"bus\""))
-        })
-        .map(Path::to_path_buf)
 }
 
 fn state_home() -> PathBuf {
