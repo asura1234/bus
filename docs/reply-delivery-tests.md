@@ -1,0 +1,106 @@
+# Reply delivery regression inventory and integration suite
+
+Inventory baseline: `6f27346a` (master on 2026-10-19). Sources: every reachable Bus messaging fix since the verified messaging introduction `c6a1b245`, the complete 107-entry fork PR list, and the relevant diffs/added regression tests. GitHub issues are disabled for this fork (`gh issue list --state all`); there is no issue list to inventory. Inherited Herdr terminal/SSH/graphics bugs, presentation-only copy/spacing fixes, and external Feishu notification delivery are outside agent-reply delivery. PR #107 is tracked separately, not silently treated as a fixed regression.
+
+The table consolidates repeated fixes by failure scenario. The new suite is `server::tests::reply_delivery::`; short names below identify those tests. Retained guards name existing narrower tests, not claims of new end-to-end or historical-red proof. All of them remain in the full local gates. Historical file moves from `src/bus` to `src/messaging` were followed while inspecting the original diffs.
+
+| Historical source | Failure scenario | Guard |
+| --- | --- | --- |
+| [f12280d8 / d3008f80](https://github.com/asura1234/bus/commit/f12280d8) | Prompt correlation lost after whitespace trimming or a stale callback matched an identical prompt. | matrix, image/paste; retained queue late-identical-final guard |
+| [3fd44832](https://github.com/asura1234/bus/commit/3fd44832) | A newly interactive provider remained behind the manual setup gate; every message stayed queued. | retained resume interactive-ready + scheduling first-Codex guards |
+| [0dcc4bd2 / 44e94f38](https://github.com/asura1234/bus/commit/0dcc4bd2) | Cursor metadata and advanced transcript records prevented final recovery. | retained Cursor final-reply/transcript guards |
+| [3c96cbf8](https://github.com/asura1234/bus/commit/3c96cbf8) | A continued request lost ownership or could not be explicitly recovered. | held wake/restart; retained recovery guards |
+| [489529a9 / c5d7807e](https://github.com/asura1234/bus/commit/489529a9) | Claude atomic long-paste or lifted image placeholders no longer matched the submitted prompt. | image/paste, coalesced sends |
+| [a6e54461](https://github.com/asura1234/bus/commit/a6e54461) | A shell from an older turn, including a hung find, held every later reply indefinitely. | five held turns, soak; retained inherited/unknown-age guards |
+| [44d199a7](https://github.com/asura1234/bus/commit/44d199a7) | A later task-notification or separately typed turn cleared the captured reply; batched callback ordering applied starts before earlier Stops. | unrelated turn and duplicate Stop, five held turns |
+| [0ce17ba7](https://github.com/asura1234/bus/commit/0ce17ba7) | A prompt folded into an autonomous wake had no trusted submit hook, wedged MASTER, and broke queued delivery after restart. Resume hooks could still point at an older binary. | held wake/restart, process restart; retained cold-resume/rebind guards |
+| [bc8d6000](https://github.com/asura1234/bus/commit/bc8d6000) | Ended turns with no Stop never released their requests, including joined Codex messages. | Codex rollout failure; retained ended-turn settlement guards |
+| [6060e262](https://github.com/asura1234/bus/commit/6060e262) | Frequent read-only status polling starved message delivery, or stalled queued work ran later after the waiter had given up. | retained scheduling status-poll and durable queued-expiry guards |
+| [bd439df3](https://github.com/asura1234/bus/commit/bd439df3) | Busy/unbound Claude follow-ups waited for idle; coalesced atomic pastes with adjacent input did not complete every joined message. | coalesced sends, held MASTER follow-up; retained adjacent-paste guard |
+| [#7 / 11f72cb4; #11 / 4a64a33f](https://github.com/asura1234/bus/pull/7) | Transient state/history persistence failure lost delivery responsibility or acknowledged callbacks before durability. Review fixes additionally fenced callback identity, report routing and stalled queue recovery. | failed-persistence/replay; retained callback-batch/history-append/binding/recovery guards |
+| [#11 / 4a64a33f](https://github.com/asura1234/bus/pull/11) | Separate orchestrator turns with identical text were deduplicated against an earlier report, or a final already sent to the developer was posted twice. Turn boundaries needed to survive restart. | identical autonomous orchestrator reports; retained same-turn explicit-report dedupe and persisted turn-boundary guards |
+| [#11 / 4a64a33f](https://github.com/asura1234/bus/pull/11) | An idle Codex approval looked finished, letting the request or queue expire; a rejected steering write cleared the lead's turn-end evidence. | startup dialog; retained idle-approval and rejected-steering coordinator/model guards |
+| [#11 / 4a64a33f](https://github.com/asura1234/bus/pull/11) | A developer's literal Cursor task-notification text was mistaken for an autonomous notification, dropping its final; trailing whitespace beside a Claude image defeated matching. | image/paste and provider matrix; retained literal-Cursor-notice and whitespace-sensitive image callback guards |
+| [#15 / cae6359e](https://github.com/asura1234/bus/pull/15) | First Enter could be swallowed while slow full-state saves kept the send pending. | retained client send-first-enter guard; process round trip checks CLI acceptance, not the keyboard layer |
+| [#16 / 2b2729d2](https://github.com/asura1234/bus/pull/16) | Claude lifted a quoted image into a chip: the native composer observer never pressed Enter and all later work queued behind it. Refused pastes needed withdrawal before retry. | image/paste through real guarded native writer; retained prompt-not-shown withdrawal guard |
+| [#21 / 5453529d](https://github.com/asura1234/bus/pull/21) | Fresh Codex looked idle under its startup update chooser; the prompt Enter selected Update and the request became submission_unconfirmed. | startup dialog, retained self-update/relaunch guard |
+| [#23 / 612c15a1](https://github.com/asura1234/bus/pull/23) | An exited provider reported a late session and made the wrong conversation resumable. | retained native terminal session-admission tests; process restart exercises session restoration |
+| [#28 / c7e56569](https://github.com/asura1234/bus/pull/28) | A nested claude -p or codex exec inherited Bus hooks and replaced the outer session or marked it unavailable. | nested provider integration |
+| [#43 / 29debd16](https://github.com/asura1234/bus/pull/43) | Async wait stopped on transient transport errors; async send emitted two JSON documents or lost its receipt. | real socket EAGAIN; retained CLI async wait/output integration guards |
+| [#44 / 87c75706](https://github.com/asura1234/bus/pull/44) | Own-turn shells caused premature completion, while Codex capacity errors with no Stop became unexplained abandonment; joined messages lost the same reason. | five held turns, held follow-up, Codex rollout failure; retained joined-error guard |
+| [#45 / 28ecf40d; #67 / d95c6931; #70 / b2a41686](https://github.com/asura1234/bus/pull/45) | Dialog delivery/queued native questions were lost or stale blocked-help ownership prevented the eventual request reply. | startup dialog; retained Codex question-answer and settlement guards |
+| [#49 / a5a95935](https://github.com/asura1234/bus/pull/49) | Claude StopFailure API errors were reported without provider_error and could leave callers waiting without an actionable reason. | retained Claude provider-error settlement test |
+| [#50 / 7619acaa](https://github.com/asura1234/bus/pull/50) | Autonomous worker/background reports were routed into MASTER rather than their work room. | autonomous worker + waiter; retained work-room report routing guard |
+| [#52 / f1a0cbc8](https://github.com/asura1234/bus/pull/52) | An idle-looking orchestrator held for background shells never received a non-queued MASTER/work-room follow-up; queued work could expire across wake gaps. | held MASTER cross-room follow-up, held wake plus queue |
+| [#56 / 255fe33a](https://github.com/asura1234/bus/pull/56) | Archiving settled history could lose replies/unread delivery during load or race history reads. | reopen after exact history assertions; retained archive/readers/append recovery guards |
+| [#60 / b44cb047](https://github.com/asura1234/bus/pull/60) | Shell-held requests and their queues falsely became transcript_unmatched; unreported follow-ups did not settle at the bounded shell cap. | five held turns, held follow-up, soak; retained shell-cap/stall guards |
+| [#82 / c7338c43](https://github.com/asura1234/bus/pull/82) | A shell wake continuation cleared awaiting_background then ended without Stop: Bus abandoned its already captured interim as reply_not_captured, including joined messages and restart. Bus-only send/wait shells also held replies unnecessarily. | held no-Stop wake/restart + queue, direct controls |
+| [#92 / 79d95907](https://github.com/asura1234/bus/pull/92) | A worker reply stayed only in room history when its original orchestrator waiter exited; routing/restart/ack could duplicate or drop terminal delivery. | worker reply wakes orchestrator once, retained waiter/seen routing guards |
+| [#96 / ec1a73e7](https://github.com/asura1234/bus/pull/96) | Five separately answered turns shared the last answer; inherited shell wakes could overwrite a newer request answer. Folded turns still need one shared answer. | five held turns, coalesced sends, held cross-room follow-up; retained inherited-wake guard |
+| [#98 / dae6fa05](https://github.com/asura1234/bus/pull/98) | Autonomous finals, no-reply outcomes and idle/exit events never woke the orchestrator; a live waiter could suppress unrelated outcomes. | autonomous worker with live waiter, worker wake/reopen; retained event/outcome overlap guards |
+| [#103 / 6438f2ef](https://github.com/asura1234/bus/pull/103) | Quoted direct Bus executable paths and control verbs beyond send/wait were misclassified as work shells and held captured replies; developer and agent senders appeared different. | direct-control matrix for both authors in MASTER |
+| [#106 / 55b78b17](https://github.com/asura1234/bus/pull/106) | Slow server polling hit EAGAIN then left transport diagnostics in composer and stalled delivery. Requests must retain ownership while polling recovers. | real socket EAGAIN with active spooled final; retained poll retry/budget guards |
+| [#107 (stall-cx, open at inventory time)](https://github.com/asura1234/bus/pull/107) | A Stop with live shells plus cron/non-shell background work discarded captured reply text before the bounded hold; Working/Idle/restart repeatedly rearmed transcript_unmatched alerts for one request. | two explicitly ignored regression tests, both run RED on base |
+
+## Test boundary
+
+The harness opens a real coordinator on a unique private scratch directory, seeds owned native terminals, sends through `message.send`, and drives full `Worker::tick` calls. On Unix, every native delivery uses the production API client and socket connection handler against a real server `App` and terminal writer; other platforms retain the direct App boundary. Native guarded prompt APIs, composer observation and Enter submission execute unchanged. Hooks are durably spooled and parsed by the production Claude/Codex adapters; replies are checked through both request completion and `room.history`. No matcher, request-completion or reply-posting function is mocked. The cross-room orchestrator follow-up uses the real UI draft/submit command path, because CLI recipient selectors are intentionally scoped to agents physically in the selected room. Only provider terminal output, status and hooks are scripted.
+
+Claude uses `prompt_id`, lifted image chips, atomic paste frames and `background_tasks`/`session_crons`. Codex uses `turn_id`, an interactive `transcript_path`, and JSONL `event_msg/task_complete` provider errors. These are different contracts: Claude finals come from Stop hooks, not a standalone transcript reader. The fixture also records their JSONL shapes; recording a transcript is not evidence that Claude reads it.
+
+Deadline scenarios age persisted clock fields then run the real coordinator. This avoids sleeping for a 15-minute hold or 30-second grace; it does not replace the live socket deadline or soak wall clock. The EAGAIN test uses the production native API client, real local sockets, production socket connection handler and App dispatcher. It pauses server dispatch and waits for the real three-second receive timeout (WouldBlock/EAGAIN on macOS, TimedOut on other kernels), then recovers without resubmitting the prompt.
+
+`reply_delivery_survives_actual_server_restart_mid_request` runs in the dev-tools `tui-driver` integration target. It starts its own PTY Bus with fake providers, pauses only its coordinator after a trusted start, waits for a durable Stop, shuts down the actual native server, kills that scratch coordinator and starts a new server/coordinator on the same scratch data. It covers Claude in MASTER and Codex in a work room. No desktop automation or installed provider is used; fake provider/effect executables, HOME, project and data are private to that test.
+
+## Run
+
+Use an isolated build directory; none of these commands touches the running Bus or the main checkout's `target/debug`.
+
+```sh
+cd /Users/dylanliu/work/bus-test-reply-delivery
+export CARGO_TARGET_DIR=/private/tmp/bus-reply-target
+cargo test --locked --bin bus server::tests::reply_delivery
+cargo test --locked --features dev-tools --test tui-driver reply_delivery_survives_actual_server_restart_mid_request -- --exact --nocapture
+
+# Separate ignored soak: short default, one wall-clock minute.
+cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
+# Long mode: 30 wall-clock minutes (any positive value up to 1440).
+BUS_REPLY_SOAK_MINUTES=30 cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
+
+# Explicit expected failures while stall-cx #107 remains unlanded:
+cargo test --locked --bin bus server::tests::reply_delivery::long_lived_shell_and_cron_cannot_discard_captured_reply_or_block_queue -- --exact --ignored --nocapture
+cargo test --locked --bin bus server::tests::reply_delivery::transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart -- --exact --ignored --nocapture
+```
+
+The soak keeps twelve agents active with concurrent outstanding messages, queue-only messages and persistent Claude shell reports. Each cycle verifies every expected request completed with exactly its own reply in exactly one history row, reopens persisted coordinator state and rejects any stall notice. It stops admitting a new cycle after N minutes and drains the admitted cycle before finishing. It prints actual elapsed time and completed-request count. A nonzero exit, lost reply, wrong room/text, duplicate, non-completion or stall notice is a failure; ignored regressions are not soak passes. The no-cron load profile can pass independently of the #107 cron/non-shell failure; both ignored tests must be enabled after that owner lands and proves the fix.
+
+## Per-test contract
+
+All names below are under `server::tests::reply_delivery::` unless specified.
+
+| Test | Failure caught |
+| --- | --- |
+| `captured_reply_reaches_its_source_room_once_for_both_providers_and_authors` | Claude, Codex and Cursor; MASTER/work; identical developer/agent messages; completion plus exactly one history row after restart. |
+| `independently_answered_turns_keep_five_distinct_replies_while_shells_live` | Five answered turns with shells persisting across turns must keep five distinct answers (#96). |
+| `followup_to_held_master_turn_reaches_work_room_and_master_once` | An unreported follow-up reaches a held turn and shares its reply across two source rooms (#52/#60). |
+| `held_interim_survives_no_stop_wake_restart_and_releases_queued_request` | Captured text survives wake without Stop and coordinator restart; queue-only work then gets its own answer (#82). |
+| `coalesced_sends_share_one_answer_and_one_history_publication` | Three queued messages become one native paste and one shared reply; atomic Claude paste, Codex and unread dedupe. |
+| `direct_bus_control_shells_publish_equally_for_developer_and_agent` | Direct control verbs and quoted executable paths do not hold either sender's final (#103). |
+| `captured_reply_survives_unrelated_later_turn_and_duplicate_stop` | An autonomous later turn cannot replace a captured answer; replay cannot double-post. |
+| `nested_provider_hooks_do_not_steal_active_request_identity` | Nested provider callbacks cannot replace the outer interactive session (#28). |
+| `claude_image_chip_and_long_paste_bind_to_the_delivered_request` | The real guarded writer submits a lifted image chip, then the atomic pasted submit hook binds (#16 and early matching fixes). |
+| `codex_startup_dialog_keeps_requests_queued_until_composer_recovers` | No prompt or Enter reaches the update chooser; pending work replies after readiness (#21). |
+| `autonomous_worker_final_routes_even_while_original_reply_has_a_waiter` | A live waiter for one reply cannot suppress an unrelated worker outcome (#98). |
+| `identical_autonomous_orchestrator_reports_are_distinct_across_turns` | Identical text in distinct background turns publishes twice in the work room; replay of the same turn publishes once (#11/#50). |
+| `codex_rollout_provider_error_is_explicit_and_does_not_poison_next_reply` | A no-Stop Codex task_complete error is explicit abandonment, and the next queued request still replies (#44). |
+| `failed_reply_persistence_replays_spool_after_restart_without_duplication` | State write failure leaves callback ownership durable for replay; final appears once (#7/#11). |
+| `worker_reply_wakes_orchestrator_once_without_waiter_and_survives_reopen` | A dead/absent waiter does not lose the worker result; persisted routing does not re-submit it (#92). |
+| `socket_eagain_during_active_reply_preserves_ownership_and_recovers_once` | A real three-second kernel/API receive timeout leaves the active request and captured callback owned; recovery delivers once (#106). |
+| `long_lived_shell_and_cron_cannot_discard_captured_reply_or_block_queue` | Captured Stop plus long-lived shell and cron must eventually deliver and drain queue. Ignored for stall-cx #107. |
+| `transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart` | One unmatched request must generate one alert despite Working/Idle flapping and reload. Ignored for stall-cx #107. |
+| `soak_many_agents_concurrent_messages_and_background_shells` | Every admitted request completes with the right history reply; no duplicates, missing requests or stalls under 12-agent sustained load. Separate ignored target. |
+| `reply_delivery_survives_actual_server_restart_mid_request` (dev-tools `tui-driver`) | Actual OS server/coordinator restart with a durable unconsumed final, in both provider/source-room configurations. |
+
+## Evidence
+
+Exact tested heads, historical-red output, measured runtimes, gate artifacts and the Claude review are recorded in the PR validation report. Compilation errors and fixture setup errors are not counted as historical RED evidence. No delivery/matching production implementation is changed by this suite.
