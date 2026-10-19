@@ -279,9 +279,9 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("/data/docs/how-to-bus-cli.md"));
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
-    // A turn's final shows in the work room unless the developer's MASTER
-    // message started the turn. Progress, questions, blockers and plan changes
-    // go to MASTER with `send --to human`; details stay in the work room.
+    // Replies appear in the request's room for developer and agent senders.
+    // Autonomous finals appear in the work room. Progress, questions, blockers
+    // and plan changes go to MASTER with `send --to human`.
     for phrase in MASTER_REPORT_PHRASES {
         assert!(flat(&text).contains(phrase), "missing {phrase}: {text}");
     }
@@ -376,6 +376,9 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     }
     let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
     assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
+    assert!(flat(&rules).contains("`./run dev-control` is for foreground controls."));
+    assert!(flat(&rules)
+        .contains("For background dispatches, call the existing Bus executable directly;"));
     assert!(flat(&rules).contains(
         "**Report progress, questions and blockers in MASTER; keep details in your room.**"
     ));
@@ -388,6 +391,7 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     );
     assert!(rules.contains("bus send --room master --as YOUR_NAME --to human"));
     let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
+    assert!(cli.contains("With dev logging or `BUS_LOG=bus=debug`"));
     for phrase in [
         "A reply lands in the message's room, equally for developer and agent senders.",
         "A turn no message started posts in the orchestrator's work room.",

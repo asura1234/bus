@@ -1,7 +1,9 @@
 # Orchestrator rules
 
 These rules are binding for every Bus orchestrator. Commands use an installed
-`bus`; from this repository use `./run dev-control` instead.
+`bus`. In this repository, `./run dev-control` is for foreground controls.
+For background dispatches, call the existing Bus executable directly;
+the wrapper remains held.
 
 <a id="never-act-on-assumptions"></a>
 

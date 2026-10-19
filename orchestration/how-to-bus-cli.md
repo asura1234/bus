@@ -221,8 +221,10 @@ quoted Bus executable path and a leading `cd` or environment assignment are
 supported. Real work before or after a Bus command, pipes to other programs,
 setup loops, unknown syntax and opaque script wrappers still hold the reply.
 For dispatches use the direct Bus executable; do setup and result processing
-separately. `bus.callback.shell_classified` records each running shell's id,
-content-free reason and hold decision. `bus.callback.background_shells` adds
+separately. With dev logging or `BUS_LOG=bus=debug`,
+`bus.callback.shell_classified` records each running shell's id,
+content-free reason and hold decision. At info level,
+`bus.callback.background_shells` adds
 the request, sender kind and captured-reply size to explain a held final;
 these events never log commands or message text.
 
