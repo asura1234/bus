@@ -157,7 +157,6 @@ async fn held_interim_survives_no_stop_wake_restart_and_releases_queued_request(
 }
 
 #[tokio::test]
-#[ignore = "stall-cx: https://github.com/asura1234/bus/pull/107; captured Stop discarded with cron or non-shell background tasks"]
 async fn background_pending_cannot_discard_captured_reply_or_block_queue() {
     for master in [false, true] {
         for (label, tasks, crons) in [
@@ -566,7 +565,6 @@ async fn socket_eagain_during_active_reply_preserves_ownership_and_recovers_once
 }
 
 #[tokio::test]
-#[ignore = "stall-cx: https://github.com/asura1234/bus/pull/107; one alert per stalled request across Working/Idle/restart"]
 async fn transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
     let agent = f.agents[0];
@@ -595,23 +593,18 @@ async fn batched_reply_cycles_hold_fresh_shells_after_reopen() {
     let mut f = soak_fixture();
     for round in 0..2 {
         delivery_cycle(&mut f, round);
+        stall_cycle(&mut f, round);
         f.reopen();
         f.provider_startup();
     }
-    assert_eq!(f.state().requests().count(), 48);
-    f.assert_no_stalls();
+    assert_eq!(f.state().requests().count(), 50);
+    assert_eq!(f.stall_alerts(), 2);
 }
 
 #[tokio::test]
 #[ignore = "separate soak target; default 1 minute, BUS_REPLY_SOAK_MINUTES=30 for long mode"]
 async fn soak_many_agents_concurrent_messages_and_background_shells() {
-    run_soak(false);
-}
-
-#[tokio::test]
-#[ignore = "stall-cx #107 https://github.com/asura1234/bus/pull/107; per-cycle aged request and repeated-alert regression"]
-async fn soak_many_agents_with_stall_flapping_and_restart() {
-    run_soak(true);
+    run_soak();
 }
 
 fn soak_fixture() -> Delivery {
@@ -739,7 +732,7 @@ fn stall_cycle(f: &mut Delivery, round: usize) {
     assert_eq!(f.stall_alerts_for(request), 1);
 }
 
-fn run_soak(with_stalls: bool) {
+fn run_soak() {
     use std::time::{Duration, Instant};
     let minutes: f64 = std::env::var("BUS_REPLY_SOAK_MINUTES")
         .unwrap_or_else(|_| "1".into())
@@ -752,11 +745,12 @@ fn run_soak(with_stalls: bool) {
     let mut round = 0;
     while Instant::now() < deadline {
         delivery_cycle(&mut f, round);
-        if with_stalls {
-            stall_cycle(&mut f, round);
-        } else {
-            f.assert_no_stalls();
-        }
+        assert_eq!(
+            f.stall_alerts(),
+            round,
+            "delivery phase raised an unexpected alert"
+        );
+        stall_cycle(&mut f, round);
         f.reopen();
         // Startup is explicit: an unknown shell after coordinator restart is
         // deliberately treated as inherited by production. This profile needs
@@ -764,8 +758,8 @@ fn run_soak(with_stalls: bool) {
         f.provider_startup();
         round += 1;
     }
-    let completed = round * if with_stalls { 25 } else { 24 };
-    assert!(completed >= 24);
+    let completed = round * 25;
+    assert!(completed >= 25);
     assert_eq!(f.state().requests().count(), completed);
     assert!(f
         .state()
@@ -775,9 +769,9 @@ fn run_soak(with_stalls: bool) {
         f.state().room(f.work).unwrap().unread_count as usize,
         completed
     );
-    assert_eq!(f.stall_alerts(), if with_stalls { round } else { 0 });
+    assert_eq!(f.stall_alerts(), round);
     f.assert_publications();
-    eprintln!("reply soak: {completed} completed requests, {round} rounds, 12 agents, {:?}, stall-profile={with_stalls}, {} alerts, no repeated alerts", began.elapsed(), f.stall_alerts());
+    eprintln!("reply soak: {completed} completed requests, {round} rounds, 12 agents, {:?}, {} intentional alerts, no repeated alerts", began.elapsed(), f.stall_alerts());
 }
 
 /// Negative control: the contract must notice a second visible publication,
