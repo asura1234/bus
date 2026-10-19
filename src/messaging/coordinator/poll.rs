@@ -6,25 +6,41 @@ use super::{
 };
 
 impl Worker {
-    pub(super) fn poll(&mut self) -> Result<Vec<schema::AgentInfo>, String> {
+    pub(super) fn poll(&mut self) -> Result<Option<Vec<schema::AgentInfo>>, String> {
         let result = self
             .transport
             .request(Method::AgentList(schema::EmptyParams {}));
         let infos = match result {
             Ok(ResponseResult::AgentList { agents }) => agents,
             other => {
-                let mut state = self.state.clone();
-                for id in self.state.agents().map(|a| a.id) {
-                    state
-                        .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
-                        .map_err(|e| e.to_string())?;
+                self.poll_failures = self.poll_failures.saturating_add(1);
+                tracing::warn!(event = "bus.coordinator.poll_retry",
+                    failures = self.poll_failures,
+                    retry_ms = self.poll_interval().as_millis() as u64,
+                    error = ?other, "Native poll failed; delivery paused, queues and active requests retained");
+                // A blocking receive timeout is WouldBlock on macOS. Retry
+                // this read-only observation on later ticks, without feeding
+                // a transport diagnostic into the composer's sticky error.
+                if self.poll_failures >= 3 {
+                    let mut state = self.state.clone();
+                    for id in self.state.agents().map(|a| a.id) {
+                        state
+                            .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
+                            .map_err(|e| e.to_string())?;
+                    }
+                    self.apply_poll(state)?;
                 }
-                self.apply_poll(state)?;
-                return Err(format!(
-                    "Bus unavailable; queues and active requests retained: {other:?}"
-                ));
+                return Ok(None);
             }
         };
+        if self.poll_failures > 0 {
+            tracing::info!(
+                event = "bus.coordinator.poll_recovered",
+                failures = self.poll_failures,
+                "Native poll recovered"
+            );
+            self.poll_failures = 0;
+        }
         let mut state = self.state.clone();
         let mut rebound = Vec::new();
         let mut waits = Vec::new();
@@ -97,7 +113,13 @@ impl Worker {
                 "Reconnected the saved provider conversation; request ownership preserved");
         }
         self.notify_dialogs(waits)?;
-        Ok(infos)
+        Ok(Some(infos))
+    }
+
+    pub(super) fn poll_interval(&self) -> Duration {
+        // Do not sleep inside the transport or replay any mutating request.
+        // The coordinator can still accept commands between failed polls.
+        Duration::from_millis(500 << self.poll_failures.saturating_sub(1).min(2))
     }
 }
 

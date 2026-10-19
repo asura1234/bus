@@ -21,6 +21,9 @@ use std::{
 mod support;
 use support::*;
 
+#[path = "poll_recovery_test.rs"]
+mod poll_recovery;
+
 #[test]
 fn feishu_exit_notification_requires_explicit_matching_native_evidence() {
     for (terminal, exited, expected) in [

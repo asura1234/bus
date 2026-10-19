@@ -296,7 +296,10 @@ fn startup_watch_survives_restart_and_failed_poll_is_not_launch_failure() {
     let (worker, agent, room, dir) = pending(Provider::Codex);
     drop(worker);
     let mut worker = reopen_saved(&dir);
-    assert!(worker.tick().is_err(), "native list is unavailable");
+    assert!(
+        worker.tick().is_ok(),
+        "native list is retried on a later tick"
+    );
     assert!(worker.state.agent(agent).is_some());
     assert_eq!(worker.state.notices(room).count(), 0);
     worker.transport = Box::new(FailedLaunchNative {

@@ -52,7 +52,12 @@ pub(super) fn handle_connection_with_stop(
     server_stop: &Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     if let Err(err) = stream.set_send_timeout(Some(STREAM_WRITE_TIMEOUT)) {
-        debug!(target: "bus::server::api::socket", err = %err, "api connection write timeout unavailable");
+        // Darwin also returns EINVAL for an already disconnected socket.
+        // Keep reading: EOF retires an abandoned probe/request normally.
+        debug!(target: "bus::server::api::socket", err = %err,
+            error_kind = ?err.kind(), raw_os_error = ?err.raw_os_error(),
+            timeout_ms = STREAM_WRITE_TIMEOUT.as_millis() as u64,
+            "api connection write timeout unavailable");
     }
 
     let Some(line) = read_initial_request_line(&mut stream)? else {
