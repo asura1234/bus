@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn waiting_tags_keep_you_color_when_markdown_table_cells_wrap() {
+    use ratatui::style::Color;
+
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "prompt",
+        "| Status | Next |\n| --- | --- |\n| [waiting-on-you] | confirm |",
+    );
+    let snapshot = Arc::clone(&ui.snapshot);
+    for width in [12, 24, 32, 80] {
+        let lines = ui.history.lines(
+            &snapshot.state,
+            snapshot.state.room(room).unwrap(),
+            width,
+            snapshot.revision,
+            2_000,
+            &mut Default::default(),
+        );
+        let body: Vec<_> = lines.iter().filter(|line| is_reply(line)).collect();
+        let mut tag_characters = String::new();
+        let mut tag_rows = 0;
+        for line in body {
+            let mut has_tag = false;
+            for (text, style) in &line.styles {
+                if style.fg == Some(Color::Rgb(102, 255, 102)) {
+                    tag_characters.push_str(text);
+                    has_tag = true;
+                }
+            }
+            tag_rows += usize::from(has_tag);
+        }
+        assert_eq!(
+            tag_characters, "[waiting-on-you]",
+            "every tag fragment must retain the You foreground at width {width}"
+        );
+        if width == 12 {
+            assert!(tag_rows > 1, "the narrow table must actually wrap the tag");
+        }
+    }
+}
+
+#[test]
 fn prompt_and_agent_reply_markdown_are_rendered() {
     use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
 

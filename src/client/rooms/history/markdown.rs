@@ -1,5 +1,5 @@
 //! Markdown message preparation, style preservation and copyable row layout.
-use super::super::render::{display, wrap_ranges};
+use super::super::render::{display, wrap_ranges, ACCENT};
 use super::{History, Line, MarkdownSource, RowAnchor, Tone};
 use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
 use ratatui::buffer::{Buffer, CellWidth};
@@ -90,8 +90,57 @@ impl MarkdownBlock {
             .unwrap_or_else(|| {
                 literal_reply_lines(&self.source, content_width, request, indent, anchor)
             });
+        highlight_waiting_tags(&mut self.lines, &self.source);
         self.width = Some(width);
         &self.lines
+    }
+}
+
+/// Map source tags through Markdown styling and wrapping, once per cached layout.
+fn highlight_waiting_tags(lines: &mut [Line], source: &str) {
+    let folded = source.to_ascii_lowercase();
+    let tags: Vec<_> = crate::messaging::attention::WAITING_TAGS
+        .into_iter()
+        .flat_map(|tag| {
+            folded
+                .match_indices(tag)
+                .map(|(start, tag)| start..start + tag.len())
+        })
+        .collect();
+    if tags.is_empty() {
+        return;
+    }
+    let fragments = super::wrapped_links::source_fragments(lines, source, &tags);
+    for (row, range) in fragments.into_iter().flatten() {
+        highlight_ranges(&mut lines[row], &[range]);
+    }
+}
+
+/// Patch only tag foregrounds, retaining Markdown attributes and all other runs.
+fn highlight_ranges(line: &mut Line, ranges: &[std::ops::Range<usize>]) {
+    if ranges.is_empty() {
+        return;
+    }
+    let runs = if line.styles.is_empty() {
+        vec![(line.text.clone(), Style::default())]
+    } else {
+        std::mem::take(&mut line.styles)
+    };
+    let mut offset = 0;
+    for (text, style) in runs {
+        for (index, ch) in text.char_indices() {
+            let style = if ranges.iter().any(|range| range.contains(&(offset + index))) {
+                style.fg(ACCENT)
+            } else {
+                style
+            };
+            if let Some((run, _)) = line.styles.last_mut().filter(|(_, last)| *last == style) {
+                run.push(ch);
+            } else {
+                line.styles.push((ch.to_string(), style));
+            }
+        }
+        offset += text.len();
     }
 }
 
