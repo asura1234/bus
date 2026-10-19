@@ -10,7 +10,7 @@ orchestrator; read-only state, launch files and filesystem reads corroborate the
 prompt and its referenced files. Retain copies of the prompt and rules as evidence
 before stopping the scratch session. No SKIP allowances.
 
-For WF-DEV use the dev-tools debug binary built from this checkout. For WF-RELEASE
+For WF-01 use the dev-tools debug binary built from this checkout. For WF-02
 use a release-profile dev-tools binary copied outside every Bus checkout, run from
 a directory with no Bus sources. The dev-tools feature supplies only the scratch
 driver; workflow embedding and path resolution are shared with installed builds.
@@ -19,7 +19,7 @@ directory ancestors. Use the driver's fake providers; no live model is needed.
 
 ## Cases
 
-### WF-DEV — Source launch discovers repository workflows
+### WF-01 — Source launch discovers repository workflows
 
 **Setup:** start a fresh scratch session with the development binary. Record the
 checkout's absolute path and the driver's scratch workspace path.
@@ -42,7 +42,7 @@ checkout's absolute path and the driver's scratch workspace path.
    named-workflows rule uses the same directory as the prompt. Every repository
    workflow exists under its original name and byte content in the session copy.
 
-### WF-RELEASE — Relocated release launch discovers bundled workflows
+### WF-02 — Relocated release launch discovers bundled workflows
 
 **Setup:** start a fresh scratch session using the relocated release-profile
 binary and no source checkout in either launch anchor. Record the binary path,
@@ -61,7 +61,7 @@ working directory, and scratch data path.
    No source-checkout path or unresolved placeholder appears. auto-merge-pr.md
    exists there and matches the embedded source bytes.
 3. Read the referenced orchestrator-rules.md and session docs/workflows/. → The
-   first rule and named-workflows rule have the same contract as WF-DEV; the rule
+   first rule and named-workflows rule have the same contract as WF-01; the rule
    uses exactly the directory named by the prompt. Every repository workflow is
    present under its original name and byte content, including agent-handover.md,
    cross-repo-feature.md and handover-template.md.
