@@ -1,6 +1,6 @@
 # Reply delivery regression inventory and integration suite
 
-Inventory baseline: `6f27346a` (master on 2026-10-19). Sources: every reachable Bus messaging fix since the verified messaging introduction `c6a1b245`, the complete 107-entry fork PR list, and the relevant diffs/added regression tests. GitHub issues are disabled for this fork (`gh issue list --state all`); there is no issue list to inventory. Inherited Herdr terminal/SSH/graphics bugs, presentation-only copy/spacing fixes, and external Feishu notification delivery are outside agent-reply delivery. PR #107 is tracked separately, not silently treated as a fixed regression.
+Inventory baseline: `6f27346a` (master on 2026-10-19). Sources: every reachable Bus messaging fix since the verified messaging introduction `c6a1b245`, the complete 107-entry fork PR list, and the relevant diffs/added regression tests. GitHub issues are disabled for this fork (`gh issue list --state all`); there is no issue list to inventory. Inherited Herdr terminal/SSH/graphics bugs, presentation-only copy/spacing fixes, and external Feishu notification delivery are outside agent-reply delivery. The suite is rebased onto `a6e6a04d6904bf50f06315f9bc3d21a2893d6769`, where #107 is merged; its two regression cases now run in ordinary gates.
 
 The table consolidates repeated fixes by failure scenario. The new suite is `server::tests::reply_delivery::`; short names below identify those tests. Retained guards name existing narrower tests, not claims of new end-to-end or historical-red proof. All of them remain in the full local gates. Historical file moves from `src/bus` to `src/messaging` were followed while inspecting the original diffs.
 
@@ -40,7 +40,7 @@ The table consolidates repeated fixes by failure scenario. The new suite is `ser
 | [#98 / dae6fa05](https://github.com/asura1234/bus/pull/98) | Autonomous finals, no-reply outcomes and idle/exit events never woke the orchestrator; a live waiter could suppress unrelated outcomes. | autonomous worker with live waiter, worker wake/reopen; retained event/outcome overlap guards |
 | [#103 / 6438f2ef](https://github.com/asura1234/bus/pull/103) | Quoted direct Bus executable paths and control verbs beyond send/wait were misclassified as work shells and held captured replies; developer and agent senders appeared different. | direct-control matrix for both authors in MASTER |
 | [#106 / 55b78b17](https://github.com/asura1234/bus/pull/106) | Slow server polling hit EAGAIN then left transport diagnostics in composer and stalled delivery. Requests must retain ownership while polling recovers. | real socket EAGAIN with active spooled final; retained poll retry/budget guards |
-| [#107 (stall-cx, open at inventory time)](https://github.com/asura1234/bus/pull/107) | A Stop with cron/non-shell background work, including alongside live shells, discarded captured reply text before the bounded hold; Working/Idle/restart repeatedly rearmed transcript_unmatched alerts for one request. | two explicitly ignored regression tests plus the per-cycle stall soak profile; all run RED on base |
+| [#107 (stall-cx, open at inventory time)](https://github.com/asura1234/bus/pull/107) | A Stop with cron/non-shell background work, including alongside live shells, discarded captured reply text before the bounded hold; Working/Idle/restart repeatedly rearmed transcript_unmatched alerts for one request. | two enabled regression tests plus the per-cycle stall soak phase; all reproduced RED before #107 |
 
 ## Test boundary
 
@@ -67,20 +67,16 @@ cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_co
 # Long mode: 30 wall-clock minutes (any positive value up to 1440).
 BUS_REPLY_SOAK_MINUTES=30 cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
 
-# Expected failures on this unfixed-master branch (verify unignored on #107):
-cargo test --locked --bin bus server::tests::reply_delivery::background_pending_cannot_discard_captured_reply_or_block_queue -- --exact --ignored --nocapture
-cargo test --locked --bin bus server::tests::reply_delivery::transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart -- --exact --ignored --nocapture
-# Full load profile: each cycle also ages an unsettled request, flaps status,
-# restarts, expects exactly one alert for that message, then delivers its late reply.
-# RED on master until #107; after that fix, default 1 minute, long mode = 30.
-cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_with_stall_flapping_and_restart -- --exact --ignored --nocapture
+# #107 regressions are enabled by default; narrow reruns need no --ignored.
+cargo test --locked --bin bus server::tests::reply_delivery::background_pending_cannot_discard_captured_reply_or_block_queue -- --exact --nocapture
+cargo test --locked --bin bus server::tests::reply_delivery::transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart -- --exact --nocapture
 ```
 
 The soak uses twelve concurrent producer threads and keeps twelve agents active with first and queue-only messages. Each cycle spools all agents' starts, ticks once, spools all Stops, and ticks once. Reply text differs from the prompt. Every Claude first and queued turn must actually have a `shell_hold` before cap release. Fresh own-shell ids accompany a persistent shell report. After each coordinator reopen, explicit provider startup hooks establish known shell ownership again; unknown shells after restart are intentionally treated as inherited in production.
 
-The ordinary load profile rejects unexpected alerts. The separate `soak_many_agents_with_stall_flapping_and_restart` profile positively triggers an alert every cycle: it ages a new unsettled request, flaps Working/Idle and reopens, requires exactly one alert for that message, then delivers the late reply. Thus it can catch repeated-alert behavior rather than asserting only after every request has settled. This full profile is expected RED on the master base and is verified against pinned #107 production code with its ignore removed. It has 25 requests per cycle; the ordinary profile has 24.
+Every cycle also positively triggers an alert: it ages a new unsettled request, flaps Working/Idle and reopens, requires exactly one alert for that message, then delivers the late reply. The delivery phase rejects unexpected alerts. This catches repeated-alert behavior while an unsettled request exists. The stall phase reproduced RED on pre-#107 master and passed on pinned #107 production head `e9020a8e`; it now runs in the single official soak target against merged master.
 
-Both profiles stop admitting cycles after N wall-clock minutes, drain the admitted cycle, and verify every request completed with its distinct expected reply, exactly one publication per reply group/source room and no repeated alerts. The printed elapsed time includes the drained final cycle. Neither ignored expected-failure scenarios nor a passing ordinary profile waive the #107 regression. `batched_reply_cycles_hold_fresh_shells_after_reopen` runs two shared cycles in default gates, guarding the load shape even when the timed targets are not selected.
+The soak stops admitting cycles after N wall-clock minutes and drains the admitted cycle. Each cycle has 25 requests, all of which must complete with distinct expected replies, exactly one publication per reply group/source room, and one deliberate alert with no repeats. The printed elapsed time includes the drained final cycle. `batched_reply_cycles_hold_fresh_shells_after_reopen` runs two complete shared cycles (50 requests, two single alerts) in default gates, so every phase runs even when the timed target is not selected. Only the timed soak is ignored; the two #107 regression tests are enabled.
 
 ## Per-test contract
 
@@ -105,12 +101,11 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 | `failed_reply_persistence_replays_spool_after_restart_without_duplication` | Failure is injected after the Idle poll, into the callback batch save (explicitly not poll); the Stop remains unacknowledged for replay; final appears once (#7/#11). |
 | `worker_reply_wakes_orchestrator_once_without_waiter_and_survives_reopen` | A dead/absent waiter does not lose the worker result; persisted routing does not re-submit it (#92). |
 | `socket_eagain_during_active_reply_preserves_ownership_and_recovers_once` | A real three-second kernel/API receive timeout leaves the active request and captured callback owned; recovery delivers once and native `typed` count stays one (#106). |
-| `background_pending_cannot_discard_captured_reply_or_block_queue` | Captured Stop with cron or non-shell tasks, with/without a live shell, must deliver and drain queue in MASTER and work room. Ignored for stall-cx #107. |
-| `transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart` | One unmatched request must generate one alert despite Working/Idle flapping and reload. Ignored for stall-cx #107. |
-| `batched_reply_cycles_hold_fresh_shells_after_reopen` | Two shared load cycles batch hooks, require real shell holds after reopen, and compare distinct replies/publications. Runs in ordinary gates. |
+| `background_pending_cannot_discard_captured_reply_or_block_queue` | Captured Stop with cron or non-shell tasks, with/without a live shell, must deliver and drain queue in MASTER and work room. Enabled after merged stall-cx #107. |
+| `transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart` | One unmatched request must generate one alert despite Working/Idle flapping and reload. Enabled after merged stall-cx #107. |
+| `batched_reply_cycles_hold_fresh_shells_after_reopen` | Two shared load cycles batch hooks, require real shell holds after reopen, compare distinct replies/publications and trigger one stalled-request alert per cycle. Runs in ordinary gates. |
 | `reply_contract_rejects_second_visible_publication` | Negative control: a real additional MASTER publication must be rejected even when the request history map still has one row. RED with the old assertion helper; not a claim of a new product defect. |
-| `soak_many_agents_with_stall_flapping_and_restart` | Every load cycle triggers one aged-request alert, flaps/restarts, rejects a repeated alert, then completes the late reply. Expected RED on base; verified on #107. |
-| `soak_many_agents_concurrent_messages_and_background_shells` | Every admitted request completes with the right history reply; no duplicates, missing requests or stalls under 12-agent sustained load. Separate ignored target. |
+| `soak_many_agents_concurrent_messages_and_background_shells` | Every admitted request completes with the right reply under 12-agent sustained load; each cycle also ages a stalled request, flaps/restarts and requires one alert before late delivery. Separate ignored timed target. |
 | `reply_delivery_survives_actual_server_restart_mid_request` (dev-tools `tui-driver`) | Actual OS server/coordinator restart with a durable unconsumed final, in both provider/source-room configurations. |
 
 ## Evidence
