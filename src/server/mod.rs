@@ -21,6 +21,8 @@ pub(crate) mod terminals;
 pub(crate) mod workspaces;
 #[cfg(test)]
 mod tests {
+    #[path = "reply_delivery_test.rs"]
+    mod reply_delivery;
     use super::clients::input::apply_client_pane_input_events;
     use std::collections::{HashMap, HashSet};
     use std::fs;

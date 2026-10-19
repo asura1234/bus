@@ -58,6 +58,9 @@ use accept::{default_capabilities, restrict_socket_permissions, SOCKET_PERMISSIO
 use connection::api_response_outcome;
 #[cfg(test)]
 use connection::handle_connection;
+#[cfg(all(test, unix))]
+#[path = "tests/reply_delivery_socket_test.rs"]
+pub(crate) mod reply_delivery_socket;
 #[cfg(all(test, windows))]
 use connection::{read_initial_request_line_with_limits, read_initial_request_line_with_timeout};
 #[cfg(all(test, unix))]

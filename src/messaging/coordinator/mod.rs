@@ -5,6 +5,9 @@ mod delivery;
 mod expiry;
 mod poll;
 #[cfg(test)]
+#[path = "tests/reply_delivery_support_test.rs"]
+pub(crate) mod reply_delivery_support;
+#[cfg(test)]
 #[path = "tests/reply_routing_test.rs"]
 mod reply_routing_tests;
 mod startup;
