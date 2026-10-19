@@ -121,6 +121,23 @@ def test_main_and_render_scale_exception_are_narrow(tmp_path):
     assert [r.path.as_posix() for r in refs if r.forbidden] == list(names[2:])
 
 
+@pytest.mark.parametrize("name,owner,target", [
+    ("src/server/tests/reply_delivery_test.rs", "server", "messaging"),
+    ("src/messaging/coordinator/tests/reply_delivery_support_test.rs", "messaging", "server"),
+    ("src/messaging/coordinator/tests/reply_delivery_support_test.rs", "messaging", "terminal"),
+])
+def test_reply_integration_exceptions_do_not_admit_product_or_neighbor_edges(tmp_path, name, owner, target):
+    seed(tmp_path)
+    product = name.replace("/tests/", "/").replace("_test.rs", ".rs")
+    neighbor = name.replace("_test.rs", "_other_test.rs")
+    for path in (name, product, neighbor):
+        write_source(tmp_path, path, f"use crate::{target}::Item;")
+    _, refs = boundaries.scan(tmp_path)
+    assert {r.path.as_posix() for r in refs if r.forbidden} == {product, neighbor}
+    assert not boundaries.allowed(owner, target, Path(name), test_only=False)
+    assert not boundaries.allowed(owner, "client", Path(name), test_only=True)
+
+
 def test_legacy_edges_and_composition_shim(tmp_path):
     seed(tmp_path)
     # Main cannot launder a deleted root through a newly introduced alias.

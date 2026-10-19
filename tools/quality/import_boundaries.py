@@ -33,7 +33,14 @@ DEPENDENCIES = {
     "cli": frozenset({"client", "devtools", "messaging", "protocol", "platform"}),
     "devtools": frozenset({"terminal", "messaging", "agents", "protocol", "platform"}),
 }
-EXCEPTIONS = {"src/server/tests/render_scale_test.rs": frozenset({"client"})}
+# Cross-component integration fixtures are explicit, test-only exceptions. These
+# paths still undergo import resolution and unknown-target checks; production
+# code and every other test retain the component graph above.
+EXCEPTIONS = {
+    "src/server/tests/render_scale_test.rs": frozenset({"client"}),
+    "src/server/tests/reply_delivery_test.rs": frozenset({"messaging"}),
+    "src/messaging/coordinator/tests/reply_delivery_support_test.rs": frozenset({"server", "terminal"}),
+}
 IDENTIFIER = r"(?:r#)?[A-Za-z_]\w*"
 PATH = re.compile(rf"{IDENTIFIER}(?:\s*::\s*{IDENTIFIER})*")
 USE = re.compile(r"\buse\s+([^;]+);", re.S)
