@@ -197,3 +197,83 @@ fn scheduled_transcript_metadata_does_not_discard_input_bus_actually_submitted()
         Some("Explicitly requested answer")
     );
 }
+
+#[test]
+fn a_textless_background_wake_stop_still_releases_the_captured_reply_at_the_cap() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(claude_startup());
+    f.consume();
+    let lead = running(&mut f, "watch the deploy", "turn-1");
+    f.record(cron_stop("turn-1", "Captured answer"));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    let since = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+    f.started(
+        "turn-2",
+        "<task-notification>shell completed</task-notification>",
+    );
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    f.record(cron_stop("turn-2", ""));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.now = since + 60 * 60_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(
+        f.request(lead).phase,
+        RequestPhase::Completed,
+        "a held request must not wait forever after a textless wake Stop"
+    );
+    assert_eq!(f.reply(lead).as_deref(), Some("Captured answer"));
+}
+
+#[test]
+fn a_textless_shell_wake_stop_does_not_blank_the_captured_reply() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(claude_startup());
+    f.consume();
+    let lead = running(&mut f, "run the build", "turn-1");
+    f.record(claude_stop("turn-1", "Captured answer", &["long-shell"]));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    let since = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+    f.started(
+        "turn-2",
+        "<task-notification><task-id>other-shell</task-id></task-notification>",
+    );
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    f.record(claude_stop("turn-2", "", &["long-shell"]));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.now = since + 60 * 60_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(f.reply(lead).as_deref(), Some("Captured answer"));
+}
+
+#[test]
+fn a_scheduled_turn_that_finishes_without_background_work_does_not_answer_the_held_request() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(claude_startup());
+    f.consume();
+    let lead = running(&mut f, "report progress", "turn-1");
+    f.record(cron_stop("turn-1", "Requested answer"));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    let since = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+    scheduled_start(&f, "cron-turn", "Scheduled self reminder");
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    f.stopped("cron-turn", "CRON_TICK");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_ne!(f.reply(lead).as_deref(), Some("CRON_TICK"));
+    f.now = since + 60 * 60_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("Requested answer"));
+}

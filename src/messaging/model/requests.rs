@@ -338,7 +338,7 @@ impl BusState {
         }
         match lead.phase {
             RequestPhase::Completed | RequestPhase::Abandoned => None,
-            // A reply held for shells its turn started is known work with a
+            // A reply held for background work is known work with a
             // cap of its own; the queue behind it waits, it has not stalled.
             // Background waits with no captured text still report stalls.
             RequestPhase::Queued
@@ -733,15 +733,15 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
 }
 
 impl Request {
-    /// The latest Stop's captured text belongs to this background hold. Old
-    /// text remains available to settlement across a wake without a Stop,
-    /// but must not stand in for a new turn's uncaptured background reply.
+    /// A captured reply remains available at the cap across owned wake turns,
+    /// including a wake whose Stop has no new text. Its original turn identity
+    /// stays attached to the reply; a different session cannot inherit it.
     pub(crate) fn has_held_background_reply(&self) -> bool {
         self.awaiting_background
             && self.provider_turn_id.is_some()
-            && self.shell_hold.as_ref().is_some_and(|hold| {
-                hold.interim.provider_turn_id == self.provider_turn_id
-                    && hold.interim.provider_session_id == self.provider_session_id
-            })
+            && self
+                .shell_hold
+                .as_ref()
+                .is_some_and(|hold| hold.interim.provider_session_id == self.provider_session_id)
     }
 }
