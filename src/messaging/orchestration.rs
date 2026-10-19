@@ -37,16 +37,34 @@ const DOCS: &[(&str, &str)] = &[
         "templates/bug-triage-table.md",
         include_str!("../../workflows/bug-triage-table-template.md"),
     ),
+];
+/// Original filenames are the public lookup contract for developer-named workflows.
+const WORKFLOWS: &[(&str, &str)] = &[
+    ("create.md", WORKFLOW_CREATE),
+    ("template.md", include_str!("../../workflows/template.md")),
     (
-        "workflows/auto-merge-pr.md",
+        "investigation-report-template.md",
+        include_str!("../../workflows/investigation-report-template.md"),
+    ),
+    (
+        "bug-triage-table-template.md",
+        include_str!("../../workflows/bug-triage-table-template.md"),
+    ),
+    (
+        "agent-handover.md",
+        include_str!("../../workflows/agent-handover.md"),
+    ),
+    (
+        "handover-template.md",
+        include_str!("../../workflows/handover-template.md"),
+    ),
+    (
+        "auto-merge-pr.md",
         include_str!("../../workflows/auto-merge-pr.md"),
     ),
+    ("bug-fix.md", include_str!("../../workflows/bug-fix.md")),
     (
-        "workflows/bug-fix.md",
-        include_str!("../../workflows/bug-fix.md"),
-    ),
-    (
-        "workflows/cross-repo-feature.md",
+        "cross-repo-feature.md",
         include_str!("../../workflows/cross-repo-feature.md"),
     ),
 ];
@@ -57,7 +75,13 @@ const UNASSIGNED_ROOM_NAME: &str = "none yet (choose a work room)";
 const UNASSIGNED_ROOM_ID: &str = "ROOM";
 
 const fn supported_prompt_placeholders(template: &str) -> bool {
-    let placeholders = ["{{ROOM_NAME}}", "{{ROOM_ID}}", "{{AGENT_NAME}}", "{{DOCS}}"];
+    let placeholders = [
+        "{{ROOM_NAME}}",
+        "{{ROOM_ID}}",
+        "{{AGENT_NAME}}",
+        "{{DOCS}}",
+        "{{WORKFLOWS_DIR}}",
+    ];
     let bytes = template.as_bytes();
     let mut index = 0;
     while index + 1 < bytes.len() {
@@ -113,17 +137,52 @@ pub(crate) fn docs_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("docs")
 }
 
+/// One resolver for the launch prompt, form preview and binding rules.
+pub(crate) fn workflows_dir(docs: &Path) -> PathBuf {
+    workflows_dir_at(
+        docs,
+        cfg!(debug_assertions) || super::diagnostics::dev_enabled(),
+        std::env::current_exe().ok().as_deref(),
+        std::env::current_dir().ok().as_deref(),
+    )
+}
+
+fn workflows_dir_at(
+    docs: &Path,
+    dev: bool,
+    executable: Option<&Path>,
+    cwd: Option<&Path>,
+) -> PathBuf {
+    if dev {
+        for anchor in [executable.and_then(Path::parent), cwd]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(repo) = crate::utils::paths::find_bus_checkout(anchor) {
+                let workflows = repo.join("workflows");
+                if workflows.is_dir() {
+                    return workflows;
+                }
+            }
+        }
+    }
+    docs.join("workflows")
+}
+
 pub(crate) fn fill(template: &str, values: &PromptValues) -> String {
     let (room_name, room_id) = match &values.room {
         Some((name, id)) => (name.clone(), id.0.to_string()),
         None => (UNASSIGNED_ROOM_NAME.into(), UNASSIGNED_ROOM_ID.into()),
     };
     let docs = values.docs.to_string_lossy();
+    let workflows = workflows_dir(&values.docs);
+    let workflows = workflows.to_string_lossy();
     let tokens = [
         ("{{ROOM_NAME}}", room_name.as_str()),
         ("{{ROOM_ID}}", room_id.as_str()),
         ("{{AGENT_NAME}}", values.agent.as_str()),
         ("{{DOCS}}", &docs),
+        ("{{WORKFLOWS_DIR}}", &workflows),
     ];
     // One pass over the template: inserted values are never scanned again, so a
     // room or agent name containing placeholder text stays literal. On a `{`
@@ -152,16 +211,25 @@ pub(crate) fn fill(template: &str, values: &PromptValues) -> String {
 /// Writes the embedded Bus docs under `<data_dir>/docs/` and returns that folder.
 pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
     let root = docs_dir(data_dir);
+    let workflows = workflows_dir(&root);
     let docs = DOCS
         .iter()
         .copied()
         .chain([("workflow-create.md", WORKFLOW_CREATE)]);
     for (name, text) in docs {
-        let path = root.join(name);
-        private_dir(path.parent().expect("doc has a parent")).map_err(|e| e.to_string())?;
-        atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())?;
+        let text = text.replace("{{WORKFLOWS_DIR}}", &workflows.to_string_lossy());
+        write_doc(&root, name, &text)?;
+    }
+    for (name, text) in WORKFLOWS {
+        write_doc(&root.join("workflows"), name, text)?;
     }
     Ok(root)
+}
+
+fn write_doc(root: &Path, name: &str, text: &str) -> Result<(), String> {
+    let path = root.join(name);
+    private_dir(path.parent().expect("doc has a parent")).map_err(|e| e.to_string())?;
+    atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Writes the prompt into a launch's callback folder.
