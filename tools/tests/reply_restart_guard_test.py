@@ -1,4 +1,5 @@
 """The restart scenario may use a worktree build, but never the live binary."""
+import os
 import subprocess
 import sys
 
@@ -11,12 +12,13 @@ from tools.acceptance import reply_restart_test as restart
 def checkouts(tmp_path, monkeypatch):
     main = tmp_path / "main"
     worktree = tmp_path / "worktree"
-    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    subprocess.run(["git", "init", "-q", str(main)], check=True, env=env)
     subprocess.run(["git", "-C", str(main), "-c", "user.name=Test",
                     "-c", "user.email=test@example.invalid", "commit", "-qm", "init",
-                    "--allow-empty"], check=True)
+                    "--allow-empty"], check=True, env=env)
     subprocess.run(["git", "-C", str(main), "worktree", "add", "--detach",
-                    str(worktree)], check=True, capture_output=True)
+                    str(worktree)], check=True, capture_output=True, env=env)
     for checkout in (main, worktree):
         binary = checkout / "target/debug/bus"
         binary.parent.mkdir(parents=True)
