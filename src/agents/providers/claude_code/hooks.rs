@@ -267,6 +267,15 @@ pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet
         .collect()
 }
 
+/// Claude can submit a background notification inside an existing prompt turn.
+/// Keep recognition of its complete envelope shared by binding and shell wakes.
+pub(crate) fn task_notification_body(prompt: &str) -> Option<&str> {
+    prompt
+        .trim()
+        .strip_prefix("<task-notification>")?
+        .strip_suffix("</task-notification>")
+}
+
 /// Exclude only shells made up of Bus controls and setup. A build that reports
 /// through Bus is still real background work. Quotes and escapes keep message
 /// text from being mistaken for command separators; unfamiliar shell constructs
@@ -348,14 +357,16 @@ fn bus_control_file_arguments(command: &str) -> Option<String> {
             let rest = &command[index + 2..];
             let end = rest.find(')')?;
             let read = &rest[..end];
-            if read.contains(['$', '`', ';', '&', '|', '<', '>', '(', '{', '}', '\n']) {
+            if read.contains(['$', '`', ';', '&', '|', '<', '>', '(', '{', '}', '#', '\n']) {
                 return None;
             }
             bus_control_segments(read)?;
             let words = shell_words(read);
             if words.first().map(String::as_str) != Some("cat")
                 || words.len() < 2
-                || words[1..].iter().any(|word| word.starts_with('-'))
+                || words[1..]
+                    .iter()
+                    .any(|word| word.starts_with('-') || word.starts_with("/dev/"))
             {
                 return None;
             }

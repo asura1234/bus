@@ -1,6 +1,5 @@
 //! Reproductions for the MASTER-room reply bugs of 2026-10-20 (A, B, C).
-//! Mounted as a child of `steering_tests` by `run_reproduction.sh` in an
-//! isolated copy of the tree; it reuses that module's `Fixture`.
+//! Mounted as a child of `steering_tests`, reusing that module's `Fixture`.
 use super::*;
 
 // Exact background commands from the incident transcripts.
@@ -261,3 +260,62 @@ fn verify_backtick_work_after_dispatch_still_holds() {
 
 #[path = "master_reply_ownership_test.rs"]
 mod ownership;
+
+#[test]
+fn a_folded_task_notification_preserves_an_already_captured_final() {
+    let mut f = master();
+    f.consume();
+    let lead = running(&mut f, "report the result", "turn-1");
+    stop(&f, "turn-1", "The build passed.", &[]);
+    f.consume();
+    assert_eq!(f.request(lead).phase, RequestPhase::Active);
+    assert!(f.request(lead).pending_final.is_some());
+
+    f.started("turn-1", &notification("older-dispatch"));
+    f.consume();
+    assert_eq!(
+        f.request(lead)
+            .pending_final
+            .as_ref()
+            .map(|reply| reply.text.as_str()),
+        Some("The build passed.")
+    );
+    assert_eq!(f.error(), None);
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("The build passed."));
+}
+
+#[test]
+fn real_work_after_a_commented_parenthesis_in_a_file_substitution_keeps_the_reply_open() {
+    let command =
+        "bus send --to worker --async --text \"$(cat brief.md # 1) task context\ncargo test\n)\"";
+    let mut f = master();
+    f.consume();
+    let lead = running(&mut f, "run and report the tests", "turn-1");
+    stop(
+        &f,
+        "turn-1",
+        "Running the tests in the background.",
+        &[("tests-and-dispatch", command)],
+    );
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(
+        f.request(lead).phase,
+        RequestPhase::Active,
+        "real work inside the substitution must hold the reply until its result arrives"
+    );
+    assert!(f.reply(lead).is_none());
+
+    f.status(RuntimeStatus::Working);
+    f.started("turn-2", &notification("tests-and-dispatch"));
+    f.consume();
+    stop(&f, "turn-2", "All tests passed.", &[]);
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.now += crate::messaging::model::HELD_REPLY_SETTLE_MS + 1;
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("All tests passed."));
+}
