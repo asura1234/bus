@@ -67,6 +67,9 @@ the wrapper remains held.
   Routine progress, completed milestones and approvals you can handle stay
   untagged. Workers report through their orchestrator and never use this tag.
   Bus renders it as a badge. Add the waiting tag below when a Feishu DM is needed.
+
+<a id="waiting-on-you"></a>
+
 - **Mark requests for the developer with `[waiting_on_you]` (or `[waiting-on-you]`).** When you need
   something from the developer, put `[waiting_on_you]` or `[waiting-on-you]` before it in your MASTER
   message; Bus notifies the developer on Feishu only for these requests. State the action on the
@@ -74,12 +77,18 @@ the wrapper remains held.
   agent terminal open, or terminal focus, when Feishu notifications
   is enabled. Routine progress stays untagged. *Why:* an explicit request makes
   it clear when the developer needs to act.
+
+<a id="chat-markdown"></a>
+
 - **Write your chat messages in Markdown.** Every message you post, in MASTER
   or a room, uses Markdown formatting. *Why:* structure and links make a
   message faster for the developer to read and act on.
   - Link online reference material with a Markdown hyperlink.
-  - Give a pull request or merge request as a hyperlink plus its title, e.g.
+  - Give a pull request, merge request or issue as a hyperlink plus its title, e.g.
     [#24 split control commands into an agent tier and a dev tier](https://github.com/asura1234/bus/pull/24).
+    Never write a bare number such as "#24": the developer cannot tell what it is.
+    Look up the title and URL in the repository it belongs to, e.g.
+    `gh pr view N --repo OWNER/REPO --json title,url` or `gh issue view N ...`.
 - **Dispatch every task with `bus send --async` in the background.** Run
   `bus send --room ROOM --as YOUR_NAME --to AGENT --async --text "..."` as a
   background tool call (Claude Code: Bash with `run_in_background`; Cursor: a

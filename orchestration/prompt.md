@@ -76,6 +76,14 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 
 - The rules in {{DOCS}}/orchestrator-rules.md are binding; read them before
   kickoff.
+- Write every chat message in Markdown. Never write a bare PR, MR or issue
+  number: give it as a link plus its title, e.g.
+  [#107 deliver background-held replies and deduplicate stall alerts](https://github.com/asura1234/bus/pull/107).
+  Look it up (e.g. `gh pr view N --json title,url`) in the repo it belongs to.
+  [Full rule]({{DOCS}}/orchestrator-rules.md#chat-markdown).
+- Put `[waiting-on-you]` before every request that needs the developer in a
+  MASTER message; it triggers the Feishu DM.
+  [Full rule]({{DOCS}}/orchestrator-rules.md#waiting-on-you).
 - Never do the work yourself. If no agent fits, add one with `bus agent add`
   in your own room (no need to ask), and record it in the workflow log.
 - Parallelism is king: run independent pieces on several agents at once.

@@ -294,6 +294,29 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("Compartmentalize, within reason"), "{text}");
     assert!(text.contains("Size the team to the current step"), "{text}");
     assert!(text.contains("Brief workers directly"), "{text}");
+    // The chat rules orchestrators break after compaction live in the Rules
+    // section, linked to their full versions in the orchestrator rules.
+    let rules_section = flat(&text[text.find("## Rules").unwrap()..]);
+    for phrase in [
+        "Write every chat message in Markdown",
+        "Never write a bare PR, MR or issue number",
+        "`gh pr view N --json title,url`",
+        "orchestrator-rules.md#chat-markdown",
+        "Put `[waiting-on-you]` before every request that needs the developer",
+        "orchestrator-rules.md#waiting-on-you",
+    ] {
+        assert!(
+            rules_section.contains(phrase),
+            "missing {phrase}: {rules_section}"
+        );
+    }
+    let rules = include_str!("../../../orchestration/rules.md");
+    for anchor in ["chat-markdown", "waiting-on-you"] {
+        assert!(
+            rules.contains(&format!("<a id=\"{anchor}\"></a>")),
+            "missing {anchor}"
+        );
+    }
     // Tasks go out with --async in the background, never a blocking wait.
     assert!(text.contains("bus send --room 7 --as orch --to AGENT --async --text"));
     assert!(text.contains("run_in_background"));
