@@ -35,8 +35,10 @@ read-only `state`, `history --room stop-lab`, `message status` and `agent read w
    `T bus history --room stop-lab` lists that reply from the worker once. In `T bus state`
    that message's request is `completed`, has no `failure_reason`, and the worker has no
    `actionable_error` and is `idle`. Take and open a screenshot of the room.
-2. Click `composer`, paste `copy the evidence`, press `enter`. This turn runs no hooks at all,
-   so Bus never sees it start. Within 30s the room shows `fake reply: copy the evidence`.
+2. Click `composer`, paste `fake:work 3 copy the evidence`, press `enter`. This turn runs no
+   hooks at all, so Bus never sees it start; `fake:work 3` keeps it working for 3 seconds, as a
+   real turn takes, so Bus sees the agent Working and then Idle. Within 30s the room shows
+   `fake reply: fake:work 3 copy the evidence`.
    `T bus history --room stop-lab` lists each of the two replies exactly once. In `T bus state`
    the second request is `completed` with no `failure_reason`, and no request in the session
    has the reason `reply_not_captured`. Take and open a screenshot of the room. Stop the
