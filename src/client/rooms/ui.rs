@@ -57,6 +57,7 @@ pub(in crate::client) struct BusUi {
     pub handle: Option<BusHandle>,
     pub snapshot: Arc<BusSnapshot>,
     pub room: Option<RoomId>,
+    pub(super) clipboard_image_reader: fn(usize) -> Option<crate::platform::ClipboardImage>,
     pub(super) locals: BTreeMap<RoomId, LocalRoom>,
     pub(super) pending: VecDeque<Pending>,
     pub next_id: u64,
@@ -156,6 +157,13 @@ pub(super) struct HistorySearch {
 
 impl BusUi {
     pub fn new(snapshot: Arc<BusSnapshot>) -> Self {
+        Self::with_clipboard_reader(snapshot, crate::platform::read_clipboard_image)
+    }
+
+    pub(super) fn with_clipboard_reader(
+        snapshot: Arc<BusSnapshot>,
+        clipboard_image_reader: fn(usize) -> Option<crate::platform::ClipboardImage>,
+    ) -> Self {
         // Land in the first work room; MASTER is the fallback, not the default.
         let room = snapshot
             .state
@@ -171,6 +179,7 @@ impl BusUi {
         let seed_first_room = snapshot.state.is_pristine();
         Self {
             handle: None,
+            clipboard_image_reader,
             snapshot,
             room,
             locals,

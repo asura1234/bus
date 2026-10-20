@@ -88,16 +88,20 @@ pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
         path.display()
     );
 
-    let status = Command::new("osascript")
+    let mut child = Command::new("osascript")
         .arg("-e")
         .arg(script)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
+        .spawn()
         .ok()?;
-
-    if !status.success() {
+    let started = std::time::Instant::now();
+    if !wait_for_clipboard_read(
+        &mut child,
+        || started.elapsed(),
+        || std::thread::sleep(std::time::Duration::from_millis(10)),
+    ) {
         let _ = std::fs::remove_file(&path);
         return None;
     }
@@ -306,3 +310,44 @@ pub(in crate::platform) fn run_clipboard_command(command: &ClipboardCommand, byt
 
     child.wait().map(|status| status.success()).unwrap_or(false)
 }
+
+// A fake child and clock exercise the deadline without launching a native tool
+// or depending on the scheduler. The real adapter always kills and reaps on failure.
+trait ClipboardReadProcess {
+    fn poll(&mut self) -> std::io::Result<Option<bool>>;
+    fn terminate_and_reap(&mut self);
+}
+
+impl ClipboardReadProcess for std::process::Child {
+    fn poll(&mut self) -> std::io::Result<Option<bool>> {
+        self.try_wait()
+            .map(|status| status.map(|status| status.success()))
+    }
+
+    fn terminate_and_reap(&mut self) {
+        let _ = self.kill();
+        let _ = self.wait();
+    }
+}
+
+const CLIPBOARD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn wait_for_clipboard_read(
+    child: &mut impl ClipboardReadProcess,
+    mut elapsed: impl FnMut() -> std::time::Duration,
+    mut pause: impl FnMut(),
+) -> bool {
+    while elapsed() < CLIPBOARD_READ_TIMEOUT {
+        match child.poll() {
+            Ok(Some(success)) => return success,
+            Ok(None) => pause(),
+            Err(_) => break,
+        }
+    }
+    child.terminate_and_reap();
+    false
+}
+
+#[cfg(test)]
+#[path = "../tests/clipboard_macos_test.rs"]
+mod clipboard_tests;
