@@ -110,11 +110,11 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** R(`qa-master-target`), no orchestrator; fake Claude ready.
 
 1. Click `# MASTER`, press Ctrl+N → form includes `Orchestrates room` and a populated system prompt. Tab to Agent field → menu offers Claude Code and Cursor.
-2. Fill name `qa-master`, select Claude Code, set scratch PWD using A's completion recipe: Enter completes the highlighted directory without adding, then Tab focuses optional args. Leave args empty; one more Tab focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then click Add → fake terminal opens.
+2. Fill name `qa-master`, select Claude Code, set scratch PWD using A's completion recipe at 120×40. Before pressing Enter, capture and inspect the visible directory suggestion list and its highlighted path; Tab/Shift+Tab must move the visible highlight while leaving PWD unchanged. Enter completes exactly that visible highlighted directory without adding, closes the list and keeps PWD focused; then Tab focuses optional args. An invisible list or a completion inferred only from the changed PWD is a FAIL. Leave args empty; one more Tab focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then click Add → fake terminal opens.
 3. Press F6 → MASTER chat; click `# qa-master-target` beneath that agent → target room opens. Click MASTER, then agent name → its terminal opens, not target chat.
 4. Press F6, press F2 on MASTER → a fixed-room error; name stays MASTER and no delete × is offered for it.
 
-**Evidence:** form/options, navigation screenshots/text, state relationship and IDs.
+**Evidence:** form/options, suggestion-list screenshot opened and judged before Enter, highlight cells and exact PWD before/after completion, no agent before Add, navigation screenshots/text, state relationship and IDs.
 
 **Pass criteria:** orchestrator belongs to MASTER, targets the chosen room, and routes correctly.
 
