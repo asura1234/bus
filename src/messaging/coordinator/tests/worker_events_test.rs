@@ -207,6 +207,12 @@ impl Transport for ExitProbe {
             Method::PaneGet(p) => Ok(ResponseResult::PaneInfo { pane: serde_json::from_value(json!({
                 "pane_id":p.pane_id,"terminal_id":"worker-terminal","workspace_id":"w","tab_id":"t","focused":false,"agent_status":"unknown","revision":1,"agent_process_exited":self.exited
             })).unwrap() }),
+            // An unreadable pane still reports the exit, without a snapshot.
+            Method::PaneRead(_) => Err(TransportError {
+                code: Some("pane_not_found".into()),
+                message: "pane not found".into(),
+                definitely_rejected: true,
+            }),
             other => Accepting(self.calls.clone()).request(other),
         }
     }
@@ -226,7 +232,9 @@ fn confirmed_worker_exit_with_open_request_wakes_but_unavailability_does_not() {
         collect(&mut f);
         assert_eq!(f.notices().len(), usize::from(exited));
         if exited {
-            assert!(f.calls.lock().unwrap()[0].contains("Exited with open request"));
+            let notice = &f.calls.lock().unwrap()[0];
+            assert!(notice.contains("Exited with open request"), "{notice}");
+            assert!(notice.contains("Exit snapshot unavailable"), "{notice}");
         }
     }
 }

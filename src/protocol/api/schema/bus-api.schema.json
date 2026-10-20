@@ -1789,6 +1789,10 @@
         },
         "PaneCloseIfIdentityParams": {
           "properties": {
+            "allow_busy_shell": {
+              "description": "With `close_exited_shell`, close that shell even while it runs a\ncommand, given the server's own evidence that the provider exited.",
+              "type": "boolean"
+            },
             "close_exited_shell": {
               "description": "Close instead the idle shell left in this exact terminal after its\nprovider exited and the managed name was released. Old servers ignore it.",
               "type": "boolean"

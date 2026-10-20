@@ -419,6 +419,34 @@ The per-agent `stage` explains how far delivery progressed:
 | `abandoned` | The request is closed and will not run later; `reason` explains a queued delivery failure. |
 | `stalled` | The message made no progress for a grace period; `reason` says why and `stalled_from` names the stage it stalled in. |
 
+### Provider exits
+
+When an agent's provider exits without Bus asking (not on delete, and not
+during startup, which reports its own screen), Bus first saves the pane's
+visible screen and its last 200 lines of scrollback to
+`<data dir>/exit-snapshots/a<agent id>-<unix ms>.txt`, one file per exit. Then
+it closes the terminal it created for that agent, even if the shell left
+behind is running something (an updater prompt, a command). The exit notices
+carry the snapshot path and the last 20 non-blank lines:
+
+```text
+Exited with open request (process_exited); message 41 (request 42).
+Inspect: bus message status 41
+Exit snapshot: <data dir>/exit-snapshots/a7-1792482896455.txt (Bus closed its terminal).
+Last lines:
+> codex: fatal: stream disconnected
+> [oh-my-zsh] Would you like to update? [Y/n]
+```
+
+The MASTER room gets `Agent process exited: <name> (agent <id>).` with the same
+snapshot lines, also when the worker had no open request. If the pane could not
+be read, the notice says `Exit snapshot unavailable: <reason>` and the terminal
+stays open for you to inspect. `bus state` shows the agent's `exit_snapshot`
+(`path`, `tail`, `at_ms`, `terminal_closed`, `launch_id`, `terminal_id`, or
+`error`), and each request in `bus message status` carries its agent's
+`exit_snapshot`. `bus agent read` cannot read an exited agent; read the snapshot
+file instead.
+
 ### Stalled messages
 
 A message stalls when it stops moving while its agent is not working or
@@ -1038,11 +1066,12 @@ with Ctrl+Q instead, which saves first and then stops the server itself.
 A destructive command without `--confirm` fails and names the missing flag.
 
 Deletion closes an agent's terminal only while the running server still
-attributes it to that agent. If the server has already released it, for
-example after the provider exited and its pane respawned a shell, Bus still
-deletes the agent and its messages, leaves that terminal open, and lists it
-under `terminals_left_open` in the result. Close it yourself if it is no longer
-needed.
+attributes it to that agent. After its provider exited, Bus has usually closed
+that terminal already (see Provider exits); otherwise deletion closes the shell
+the provider left, even if it is running a command. Only when another agent or
+managed name has taken that terminal does Bus still delete the agent and its
+messages, leave the terminal open, and list it under `terminals_left_open` in
+the result. Close it yourself if it is no longer needed.
 
 ## Upgrading to the always-on control socket
 

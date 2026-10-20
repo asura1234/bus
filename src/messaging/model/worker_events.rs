@@ -295,13 +295,19 @@ impl BusState {
             })
             .cloned()
             .collect();
+        // The saved screen follows the short notice whole, never previewed away.
+        let snapshot = self
+            .agent(worker)
+            .and_then(|a| a.exit_snapshot.as_ref())
+            .map(super::ExitSnapshot::notice);
         for request in requests {
-            self.record_request_event(
+            self.record_request_event_with(
                 &request,
                 WorkerEventKind::Exited,
                 "exit",
                 "Exited with open request (process_exited)",
                 now_ms,
+                snapshot.as_deref(),
             );
         }
     }
@@ -313,6 +319,18 @@ impl BusState {
         class: &str,
         text: &str,
         at_ms: u64,
+    ) {
+        self.record_request_event_with(request, kind, class, text, at_ms, None);
+    }
+
+    fn record_request_event_with(
+        &mut self,
+        request: &Request,
+        kind: WorkerEventKind,
+        class: &str,
+        text: &str,
+        at_ms: u64,
+        detail: Option<&str>,
     ) {
         let group = reply_key(request);
         // A resumed background turn can go idle or stall again. Persist its
@@ -335,11 +353,14 @@ impl BusState {
                 episode,
                 kind,
                 text: format!(
-                    "{}; message {} (request {}).\nInspect: bus message status {}",
+                    "{}; message {} (request {}).\nInspect: bus message status {}{}",
                     preview(text, &format!("bus message status {}", request.prompt.id.0)),
                     request.prompt.id.0,
                     request.id.0,
-                    request.prompt.id.0
+                    request.prompt.id.0,
+                    detail
+                        .map(|detail| format!("\n{detail}"))
+                        .unwrap_or_default()
                 ),
                 route: ReplyRoute::Pending,
             });

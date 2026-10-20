@@ -378,6 +378,50 @@ pub(crate) struct RoomAgent {
     /// agent (see `rejection_reason`); cleared once a submission is confirmed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) delivery_rejection: Option<String>,
+    /// What the agent's terminal showed when its provider last exited on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_snapshot: Option<ExitSnapshot>,
+}
+
+/// The screen Bus saved when an agent's provider exited without Bus asking,
+/// before its terminal was closed.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ExitSnapshot {
+    /// The launch whose exit this is; one snapshot per launch.
+    pub(crate) launch_id: Option<String>,
+    pub(crate) terminal_id: String,
+    /// The saved screen and scrollback, or None when the pane could not be read.
+    pub(crate) path: Option<PathBuf>,
+    /// Why nothing was saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+    /// The last non-blank lines, shown inline in exit notices.
+    pub(crate) tail: String,
+    pub(crate) at_ms: u64,
+    /// Bus closed the terminal after saving it.
+    pub(crate) terminal_closed: bool,
+}
+
+impl ExitSnapshot {
+    /// The exit notices' lines about this snapshot.
+    pub(crate) fn notice(&self) -> String {
+        let Some(path) = &self.path else {
+            return format!(
+                "Exit snapshot unavailable: {}",
+                self.error.as_deref().unwrap_or("unknown error")
+            );
+        };
+        let terminal = if self.terminal_closed {
+            "Bus closed its terminal"
+        } else {
+            "its terminal is still open"
+        };
+        format!(
+            "Exit snapshot: {} ({terminal}).\nLast lines:\n{}",
+            path.display(),
+            self.tail
+        )
+    }
 }
 
 /// Context compactions reported by the provider's SessionStart hook

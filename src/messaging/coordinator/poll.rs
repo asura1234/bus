@@ -74,7 +74,13 @@ impl Worker {
                 }
             }
             let status = polled_status(agent, info);
-            observe_attention_exit(self.transport.as_mut(), &mut state, agent, info)?;
+            observe_attention_exit(
+                self.transport.as_mut(),
+                &self.data_dir,
+                &mut state,
+                agent,
+                info,
+            )?;
             confirm_interactive_agent(&mut state, agent, info)?;
             state
                 .observe_status(agent.id, status, io::now_ms())
@@ -143,6 +149,7 @@ fn branch_for(cwd: &Path) -> Option<String> {
 
 fn observe_attention_exit(
     transport: &mut dyn super::Transport,
+    data_dir: &Path,
     state: &mut BusState,
     agent: &RoomAgent,
     info: Option<&schema::AgentInfo>,
@@ -173,8 +180,21 @@ fn observe_attention_exit(
         _ => None,
     };
     if evidence == Some(true) {
+        if let (Some(pane), Some(terminal)) = (
+            agent.runtime_identity.pane_id.as_deref(),
+            agent.runtime_identity.terminal_id.as_deref(),
+        ) {
+            super::exit_snapshot::save(transport, data_dir, state, agent, pane, terminal)?;
+        }
         state.record_worker_exit(agent.id, io::now_ms());
     }
+    let snapshot = state.agent(agent.id).and_then(|a| a.exit_snapshot.as_ref());
+    let resume = if snapshot.is_some_and(|s| s.terminal_closed) {
+        ""
+    } else {
+        " Inspect the machine to resume it."
+    };
+    let snapshot = snapshot.map(|s| format!("\n{}", s.notice()));
     let key = format!(
         "exit:{}:{}",
         agent.id.0,
@@ -190,8 +210,10 @@ fn observe_attention_exit(
             evidence,
             agent.id,
             &format!(
-                "Agent process exited: {} (agent {}). Inspect the machine to resume it.",
-                agent.name, agent.id.0
+                "Agent process exited: {} (agent {}).{resume}{}",
+                agent.name,
+                agent.id.0,
+                snapshot.unwrap_or_default()
             ),
             io::now_ms(),
         )

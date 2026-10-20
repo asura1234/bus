@@ -30,11 +30,11 @@ pub(crate) use {
     crate::messaging::model::types::RoomAgent,
     types::{
         AgentId, AgentRecipients, AgentRuntimeIdentity, AgentStartup, Author, CallbackDisposition,
-        CallbackEventKind, CallbackRejection, Compactions, Draft, ModelError, PendingFinal, Prompt,
-        PromptId, Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, Room,
-        RoomId, RoomKind, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, DELIVERED_STALL_MS,
-        DEVELOPER_RECIPIENT, HELD_REPLY_SETTLE_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS,
-        STEERING_SETTLE_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
+        CallbackEventKind, CallbackRejection, Compactions, Draft, ExitSnapshot, ModelError,
+        PendingFinal, Prompt, PromptId, Provider, ProviderCallback, Reply, Request, RequestId,
+        RequestPhase, Room, RoomId, RoomKind, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS,
+        DELIVERED_STALL_MS, DEVELOPER_RECIPIENT, HELD_REPLY_SETTLE_MS, MASTER_ROOM_NAME,
+        QUEUED_STALL_MS, STEERING_SETTLE_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },
 };
 

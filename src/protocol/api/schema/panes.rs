@@ -12,6 +12,10 @@ pub struct PaneCloseIfIdentityParams {
     /// provider exited and the managed name was released. Old servers ignore it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub close_exited_shell: bool,
+    /// With `close_exited_shell`, close that shell even while it runs a
+    /// command, given the server's own evidence that the provider exited.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_busy_shell: bool,
 }
 
 use super::agents::AgentSessionInfo;

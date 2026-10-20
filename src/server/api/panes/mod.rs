@@ -208,7 +208,8 @@ impl App {
     /// expected provider session under the Bus managed name, or, for
     /// `close_exited_shell`, the provider exited, released that name, and only
     /// an idle shell remains. A running command, a detected agent or any
-    /// managed name means the pane is in use.
+    /// managed name means the pane is in use. `allow_busy_shell` also closes a
+    /// shell running a command, but only on this terminal's own exit evidence.
     fn close_guard_owns(
         &self,
         params: &crate::protocol::api::schema::PaneCloseIfIdentityParams,
@@ -220,10 +221,11 @@ impl App {
             return terminal.agent_name.is_none()
                 && terminal.managed_agent_kind().is_none()
                 && pane.agent.is_none()
-                && self
-                    .terminal_runtimes
-                    .get(terminal_id)
-                    .is_some_and(crate::server::terminals::agents::runtime_is_idle_shell);
+                && (params.allow_busy_shell && pane.agent_process_exited
+                    || self
+                        .terminal_runtimes
+                        .get(terminal_id)
+                        .is_some_and(crate::server::terminals::agents::runtime_is_idle_shell));
         }
         pane.agent.as_deref() == Some(params.expected_agent.as_str())
             && terminal.agent_name.as_deref() == Some(params.expected_managed_name.as_str())

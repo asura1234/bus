@@ -229,3 +229,70 @@ async fn guarded_close_of_an_exited_provider_closes_a_real_idle_shell() {
         "an idle released shell must be closed; response: {response}"
     );
 }
+
+/// A provider Bus started exited on its own and its shell now runs something
+/// else (an updater prompt, a command). With `allow_busy_shell` that
+/// Bus-created terminal is closed anyway, but only on the server's own exit
+/// evidence: a busy released shell without it is still preserved.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn guarded_close_of_an_exited_provider_closes_its_busy_shell_only_on_exit_evidence() {
+    let (mut app, mut params, pane_id, _) = guarded_close_fixture();
+    let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+    let (events, _event_rx) = tokio::sync::mpsc::channel(64);
+    let runtime = crate::terminal::TerminalRuntime::spawn_argv_command(
+        pane_id,
+        24,
+        80,
+        std::env::temp_dir(),
+        &["/bin/sh".into(), "-i".into()],
+        &crate::terminal::runtime::PaneLaunchEnv::default(),
+        crate::terminal::runtime::AgentDetection::Disabled,
+        0,
+        crate::utils::theme::color::TerminalTheme::default(),
+        None,
+        events,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+        std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
+    )
+    .unwrap();
+    let shell_pid = runtime.child_pid().unwrap();
+    runtime
+        .try_send_bytes(bytes::Bytes::from_static(b"sleep 30\n"))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !crate::platform::session_processes(shell_pid)
+        .iter()
+        .any(|pid| *pid != shell_pid)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "foreground command did not start"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.clear_agent_name();
+    terminal.set_detected_state(None, AgentState::Idle);
+    params.close_exited_shell = true;
+    params.allow_busy_shell = true;
+    let response = app.handle_pane_close_if_identity("no-evidence".into(), params.clone());
+    assert!(
+        app.state.workspaces[0].pane_state(pane_id).is_some(),
+        "a busy shell without exit evidence must be preserved; response: {response}"
+    );
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.set_detected_state_with_visible_blocker(
+        Some(crate::agents::AgentKind::Codex),
+        AgentState::Idle,
+        false,
+        true,
+    );
+    terminal.set_detected_state(None, AgentState::Idle);
+    let response = app.handle_pane_close_if_identity("exited".into(), params);
+    assert!(
+        app.state.workspaces[0].pane_state(pane_id).is_none(),
+        "the exited provider's busy shell must be closed; response: {response}"
+    );
+}

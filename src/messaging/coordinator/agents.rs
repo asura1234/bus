@@ -113,6 +113,14 @@ impl Worker {
             }
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
         };
+        if agent
+            .exit_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.terminal_closed && snapshot.terminal_id == *terminal)
+        {
+            // Bus already closed it after saving the exited provider's screen.
+            return Ok(None);
+        }
         let managed_name = identity::managed_name(agent.room_id, id);
         let kind = identity::provider_kind(agent.provider).label();
         let expected_session = identity.session_id.clone();
@@ -131,6 +139,7 @@ impl Worker {
                 expected_managed_name: managed_name.clone(),
                 expected_session_id: expected_session.clone(),
                 close_exited_shell: false,
+                allow_busy_shell: false,
             },
         ));
         match result {
@@ -276,8 +285,10 @@ impl Worker {
         ))
     }
 
-    /// Close the agent's own terminal when only an idle shell remains in it,
-    /// else return it as left open: what runs there now is not Bus's.
+    /// Close the agent's own terminal once its provider exited, even with a
+    /// command running in the shell left behind (the server requires its own
+    /// exit evidence for that); else return it as left open: another agent
+    /// or managed name runs there now.
     fn close_exited_shell(
         &mut self,
         terminal: LeftOpenTerminal,
@@ -294,6 +305,7 @@ impl Worker {
                     expected_managed_name: managed_name.into(),
                     expected_session_id: session,
                     close_exited_shell: true,
+                    allow_busy_shell: true,
                 },
             )),
             Ok(ResponseResult::Ok {})
@@ -301,7 +313,7 @@ impl Worker {
         if closed {
             tracing::info!(event = "bus.deletion.exited_shell_closed", agent_id = terminal.agent_id.0,
                 pane_id = %terminal.pane_id, terminal_id = %terminal.terminal_id,
-                "Closed the idle shell the exited provider left");
+                "Closed the shell the exited provider left");
             return None;
         }
         tracing::info!(event = "bus.deletion.terminal_released", agent_id = terminal.agent_id.0,
