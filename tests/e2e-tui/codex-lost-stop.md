@@ -32,15 +32,15 @@ read-only `state`, `history --room stop-lab`, `message status` and `agent read w
 1. Complete setup. Click `room:stop-lab`, press `ctrl+p`, click `recipient:worker`, click
    `composer`, paste `fake:lose-cwd merge the PR`, press `enter` (one driver call each). Within
    30s the room shows the worker's `fake reply: fake:lose-cwd merge the PR` (`wait --text`).
-   `T bus history --room stop-lab` lists that reply from the worker once. Check its request
-   with `T bus message status MESSAGE_ID`: `completed`, no `failure_reason`. In `T bus state` the worker has no
-   `actionable_error` and is `idle`. Take and open a screenshot of the room.
+   `T bus history --room stop-lab` lists that reply from the worker once, nested under the
+   original prompt. Pass that history entry's `prompt.id` to `T bus message status MESSAGE_ID`: the
+   worker's `requests[]` entry has `stage: "replied"` and `reason: null`. In `T bus state` the
+   worker has no `actionable_error` and is `idle`. Take and open a screenshot of the room.
 2. Click `composer`, paste `fake:work 3 copy the evidence`, press `enter`. This turn runs no
    hooks at all, so Bus never sees it start; `fake:work 3` keeps it working for 3 seconds, as a
    real turn takes, so Bus sees the agent Working and then Idle. Within 30s the room shows
    `fake reply: fake:work 3 copy the evidence`.
-   `T bus history --room stop-lab` lists each of the two replies exactly once and supplies their
-   message IDs. Check both with `T bus message status MESSAGE_ID`: the second request is
-   `completed` with no `failure_reason`, and neither request
-   has the reason `reply_not_captured`. Take and open a screenshot of the room. Stop the
-   session.
+   `T bus history --room stop-lab` lists each of the two replies exactly once, nested under
+   their original prompts. Check both `prompt.id` values with `T bus message status MESSAGE_ID`:
+   the second request has `stage: "replied"` and `reason: null`, and neither request has
+   `reason: "reply_not_captured"`. Take and open a screenshot of the room. Stop the session.
