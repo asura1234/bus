@@ -156,12 +156,11 @@ impl Worker {
         let Some(inherited) = self.claude_settled_shells.get(&id) else {
             return false;
         };
-        let Some(body) = callback.prompt_payload.as_deref().and_then(|prompt| {
-            prompt
-                .trim()
-                .strip_prefix("<task-notification>")?
-                .strip_suffix("</task-notification>")
-        }) else {
+        let Some(body) = callback
+            .prompt_payload
+            .as_deref()
+            .and_then(crate::agents::providers::claude_code::hooks::task_notification_body)
+        else {
             return false;
         };
         let task = body

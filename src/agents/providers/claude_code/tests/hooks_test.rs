@@ -325,6 +325,35 @@ fn direct_bus_control_shells_do_not_hold_replies() {
     }
 }
 
+#[test]
+fn async_dispatch_file_arguments_and_completion_echo_do_not_hold_replies() {
+    for command in [
+        r#"bus send --to worker --async --text "$(cat brief.md)""#,
+        r#"cd /tmp; ./bus send --async --to worker --text "$(cat 'brief with spaces.md')" > out.json 2>&1; echo sent"#,
+        r#"bus send --to worker --async --text $(cat brief.md)"#,
+        r#"bus send --to worker --async --text go >/dev/null; echo sent"#,
+    ] {
+        assert!(is_bus_control(command), "dispatch only: {command}");
+    }
+}
+
+#[test]
+fn async_dispatch_wrappers_cannot_hide_real_work() {
+    for command in [
+        r#"bus send --async --text "$(cat brief.md; cargo test)""#,
+        r#"bus send --async --text "$(cat $(generate-brief))""#,
+        r#"bus send --async --text "$(cat <(cargo test))""#,
+        r#"bus send --async --text "$(cat)""#,
+        r#"bus send --async --text "$(cat -)""#,
+        r#"bus send --async --text "$(cat brief.md)"; cargo test"#,
+        r#"bus send --async --text "$(cat brief.md)"; echo "$(cargo test)""#,
+        r#"bus send --async --text "$(cat brief.md)" | tee out.json"#,
+        r#"bus send --async --text "$(cat 'brief.md)""#,
+    ] {
+        assert!(!is_bus_control(command), "must hold work: {command}");
+    }
+}
+
 /// A background shell that runs real work and only then reports over Bus
 /// (`cargo build && bus send ...`) is work the reply waits on: its exit
 /// wakes the turn with the build's outcome, so it still holds the reply.
@@ -477,4 +506,69 @@ fn scheduled_prompt_identity_requires_matching_provider_metadata_in_a_bounded_ta
     assert_eq!(super::scheduled_prompt(&hook), None);
     assert_eq!(super::scheduled_prompt(&json!({})), None);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn dispatch_completion_echo_cannot_smuggle_real_work() {
+    for command in [
+        r#"bus send --to w --async --text "$(cat brief.md)"; echo sent >(cargo test)"#,
+        r#"bus send --to w --async --text "$(cat brief.md)"; echo sent; exec cargo test"#,
+        "bus send --to w --async --text \"$(cat <<'EOF'\ncargo test\nEOF\n)\"",
+        r#"bus send --to w --async --text "$(cat brief.md)"; echo "${RESULT:=$(cargo test)}""#,
+        r#"echo sent; cargo test"#,
+        r#"$(cat runner.txt) send --to w --async --text go"#,
+        r#"bus $(cat subcommand.txt) --to w"#,
+    ] {
+        assert!(!is_bus_control(command), "must hold work: {command}");
+    }
+}
+
+#[test]
+fn dispatch_reading_several_brief_files_or_assigning_one_does_not_hold() {
+    for command in [
+        r#"bus send --to w --async --text "$(cat header.md brief.md)" > out.json 2>&1; echo sent"#,
+        r#"BRIEF="$(cat brief.md)" bus send --to w --async --text "$BRIEF""#,
+        r#"bus send --to w --async --text '$(cargo test)'; echo sent"#,
+    ] {
+        assert!(is_bus_control(command), "dispatch only: {command}");
+    }
+}
+
+// The classifier documents stdin reads as opaque work.
+#[test]
+fn dispatch_reading_stdin_through_a_device_path_still_holds() {
+    for command in [
+        r#"bus send --async --text "$(cat /dev/stdin)""#,
+        r#"bus send --async --text "$(cat /dev/fd/0)""#,
+    ] {
+        assert!(!is_bus_control(command), "must hold work: {command}");
+    }
+}
+
+// A shell comment inside the substitution hides the real closing parenthesis.
+#[test]
+fn file_substitution_with_a_comment_cannot_hide_real_work() {
+    let command = "bus send --async --to w --text \"$(cat brief.md #)\ncargo test)\"";
+    assert!(!is_bus_control(command), "must hold work: {command}");
+}
+
+#[test]
+fn task_notifications_require_a_whole_envelope_but_not_a_task_id() {
+    assert_eq!(
+        super::task_notification_body(" \n<task-notification>finished</task-notification>\n"),
+        Some("finished")
+    );
+    assert_eq!(
+        super::task_notification_body(
+            "<task-notification><task-id>b1</task-id></task-notification>"
+        ),
+        Some("<task-id>b1</task-id>")
+    );
+    for prompt in [
+        "<task-notification>unfinished",
+        "prefix <task-notification>done</task-notification>",
+        "<task-notification>done</task-notification> suffix",
+    ] {
+        assert_eq!(super::task_notification_body(prompt), None, "{prompt}");
+    }
 }

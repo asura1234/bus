@@ -267,12 +267,24 @@ pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet
         .collect()
 }
 
+/// Claude can submit a background notification inside an existing prompt turn.
+/// Keep recognition of its complete envelope shared by binding and shell wakes.
+pub(crate) fn task_notification_body(prompt: &str) -> Option<&str> {
+    prompt
+        .trim()
+        .strip_prefix("<task-notification>")?
+        .strip_suffix("</task-notification>")
+}
+
 /// Exclude only shells made up of Bus controls and setup. A build that reports
 /// through Bus is still real background work. Quotes and escapes keep message
 /// text from being mistaken for command separators; unfamiliar shell constructs
 /// conservatively keep the hold.
 pub(crate) fn is_bus_control(command: &str) -> bool {
-    let Some(segments) = bus_control_segments(command) else {
+    let Some(command) = bus_control_file_arguments(command) else {
+        return false;
+    };
+    let Some(segments) = bus_control_segments(&command) else {
         return false;
     };
     let mut saw_bus = false;
@@ -286,6 +298,9 @@ pub(crate) fn is_bus_control(command: &str) -> bool {
             continue;
         };
         if program == "cd" {
+            continue;
+        }
+        if program == "echo" && saw_bus {
             continue;
         }
         let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
@@ -320,6 +335,57 @@ pub(crate) fn is_bus_control(command: &str) -> bool {
         saw_bus = true;
     }
     saw_bus
+}
+
+/// Reading a literal brief file is part of dispatch, not background work.
+/// Replace only that expansion for lexical classification; never read or run it.
+/// Other substitutions, stdin reads and compound commands remain opaque.
+fn bus_control_file_arguments(command: &str) -> Option<String> {
+    let mut result = String::with_capacity(command.len());
+    let mut chars = command.char_indices().peekable();
+    let mut quote = None;
+    let mut escaped = false;
+    while let Some((index, ch)) = chars.next() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if quote != Some('\'')
+            && ch == '$'
+            && chars.peek().is_some_and(|(_, next)| *next == '(')
+        {
+            let rest = &command[index + 2..];
+            let end = rest.find(')')?;
+            let read = &rest[..end];
+            if read.contains(['$', '`', ';', '&', '|', '<', '>', '(', '{', '}', '#', '\n']) {
+                return None;
+            }
+            bus_control_segments(read)?;
+            let words = shell_words(read);
+            if words.first().map(String::as_str) != Some("cat")
+                || words.len() < 2
+                || words[1..]
+                    .iter()
+                    .any(|word| word.starts_with('-') || word.starts_with("/dev/"))
+            {
+                return None;
+            }
+            result.push_str("brief-file");
+            while chars
+                .peek()
+                .is_some_and(|(next, _)| *next <= index + 2 + end)
+            {
+                chars.next();
+            }
+            continue;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        }
+        result.push(ch);
+    }
+    Some(result)
 }
 
 fn shell_assignment(word: &str) -> bool {
