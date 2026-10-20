@@ -10,6 +10,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+// These are coordinator contract tests, not subprocess startup benchmarks.
+// Leave headroom for the stand-in interpreter under instrumented gate load;
+// production timeouts remain unchanged.
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
+const COMPLETION_TIMEOUT: Duration = Duration::from_secs(45);
+
 struct NoNative;
 impl Transport for NoNative {
     fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
@@ -39,7 +45,7 @@ impl Fixture {
             &settings::BusSettings::default(),
         )
         .unwrap();
-        worker.attention.client = Client::on_path(&root, Duration::from_secs(3));
+        worker.attention.client = Client::on_path(&root, CLI_TIMEOUT);
         let mut state = worker.state.clone();
         let master = state.ensure_master_room();
         let work = state.create_room("work").unwrap();
@@ -75,7 +81,7 @@ impl Fixture {
     fn flush(&mut self) {
         self.now += 2000;
         self.pump();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + COMPLETION_TIMEOUT;
         while self.worker.attention.job.is_some() {
             assert!(Instant::now() < deadline, "send did not complete");
             std::thread::sleep(Duration::from_millis(5));
@@ -116,6 +122,7 @@ fn feishu_waiting_variants_invoke_bot_dm_once_with_exact_action_and_argv() {
             "Summary\n{marker}\nApprove access\nPRIVATE attachment /tmp/secret"
         ));
         f.flush();
+        assert_eq!(f.worker.attention.status.error, None, "{marker}");
         f.now += 5000;
         f.pump();
         let calls = f.calls();
@@ -236,7 +243,9 @@ fn feishu_failure_logs_warning_and_never_blocks_coordinator_or_retries() {
     );
     assert_eq!(f.calls().len(), 1);
     std::fs::write(f.root.join("mode"), "hang").unwrap();
-    f.worker.attention.client = Client::on_path(&f.root, Duration::from_secs(1));
+    // The stand-in sleeps for 60 seconds, so this still exercises a real
+    // timeout without requiring the interpreter to start within one second.
+    f.worker.attention.client = Client::on_path(&f.root, Duration::from_secs(10));
     f.post("[waiting_on_you] timed out");
     f.now += 2000;
     let start = Instant::now();
