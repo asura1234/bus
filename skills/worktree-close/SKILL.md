@@ -1,6 +1,6 @@
 ---
 name: worktree-close
-description: Remove a git worktree that is no longer needed. Before removal it explicitly checks the worktree for uncommitted changes and unpushed commits, and only uses --force after the user confirms discarding them. PRs to this repo may be squash-merged, so whether a branch has landed is decided by content rather than ancestry; a local branch judged landed is deleted with -D without asking, one that has not landed or cannot be judged is kept and handed back, and the remote branch is deleted only when the user explicitly asks. Use when the user asks to "delete a worktree", "clean up a worktree", "close a worktree", "wrap up a worktree", or "I don't need this isolated copy anymore". Works across agents; mainly git, plus basic shell tools such as sed/du/mkdir/cp, and reads and writes the Claude memory directory. It refuses to remove the worktree its own agent session runs in and hands that back. Argument — worktree name or path (defaults to the current worktree).
+description: Remove a git worktree that is no longer needed. Before removal it explicitly checks the worktree for uncommitted changes and unpushed commits, and only uses --force after the user confirms discarding them. PRs to this repo may be squash-merged, so whether a branch has landed is decided by content rather than ancestry; a local branch judged landed is deleted with -D without asking, one that has not landed or cannot be judged is kept and handed back, and the remote branch is deleted only when the user explicitly asks. Use when the user asks to "delete a worktree", "clean up a worktree", "close a worktree", "wrap up a worktree", or "I don't need this isolated copy anymore". Works across agents; mainly git, plus basic shell tools such as sed/du/mkdir/cp, and reads and writes the Claude memory directory. It refuses to remove the worktree its own agent session runs in and hands that back. Argument — worktree name or path (defaults to the worktree containing the current directory, which is refused when that is the session's own worktree).
 ---
 
 Remove a git worktree you no longer need. Mostly git, plus basic shell tools (sed/du/mkdir/cp) and a
@@ -11,7 +11,8 @@ it may be long-lived, may have been used for many branches, and may be on a deta
 skill removes the worktree, and decides the branch separately: a branch whose content is already in
 origin/master is swept up automatically, anything else is kept and handed back to the user.
 
-Target: $ARGUMENTS (uses the worktree containing the current directory if not provided)
+Target: $ARGUMENTS (uses the worktree containing the current directory if not provided; that
+default is refused below when it is the session's own working directory)
 
 ```
 ========== RESOLVE TARGET ==========
@@ -43,8 +44,8 @@ IF <worktree_path> is <main_worktree>
 branch = branch checked out in <worktree_path> (may be empty for a detached HEAD)
 
 -- Never remove the worktree this agent session runs in. The session's working directory is the
---   one the session was started in (Claude Code resets its shell there; Codex keeps it for the
---   whole session), not whatever `cd` last chose. Live (2026-10-20, Codex 0.163.0): a worker
+--   one the session was started in, the provider's own cwd for its whole life, not whatever a
+--   shell `cd` last chose. Live (2026-10-20, Codex 0.163.0): a worker
 --   removed its own worktree mid-turn; Codex then ran no Stop hook, so Bus never received that
 --   answer or the next one and closed both requests as reply_not_captured.
 session_cwd = the working directory this agent session was started in
