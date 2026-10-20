@@ -301,8 +301,12 @@ impl BusUi {
                 true,
             );
             y += 1;
-            // The prompt takes what the buttons and a validation error leave.
-            let below = if self.visible_error().is_some() { 7 } else { 3 };
+            // Leave room for the buttons, validation error and a short PWD list.
+            let mut below = if self.visible_error().is_some() { 7 } else { 3 };
+            let suggestions = self.suggestions.entries.len().min(3) as u16;
+            if suggestions > 0 {
+                below += 2 + suggestions;
+            }
             let height = main.bottom().saturating_sub(y + below).clamp(1, 16);
             view.editor(
                 Rect::new(x, y, width, height),

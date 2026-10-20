@@ -597,6 +597,7 @@ fn pwd_tab_moves_the_suggestion_highlight_and_enter_takes_the_path_without_addin
             _ => usize::MAX,
         };
 
+        room_screen(&mut ui, 120, 40);
         // Tab walks the list and wraps; the field text and focus stay put.
         for expected in [1, 2, 0, 1] {
             key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
@@ -663,4 +664,71 @@ fn ctrl_enter_confirms_the_typed_pwd_even_with_directory_suggestions_open() {
             "Ctrl+Enter confirms the form's typed directory; suggestions open: {expanded}"
         );
     }
+}
+
+#[test]
+fn master_pwd_suggestions_are_visible_before_enter_completes_at_120x40() {
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let master = snapshot.state.ensure_master_room();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.action(render::Action::Room(master));
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Provider(Provider::ClaudeCode));
+    ui.action(render::Action::Field(2));
+    if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
+        *name = editor::Editor::new("orchestrator".into());
+        *cwd = editor::Editor::new("/projects/fr".into());
+    }
+    ui.receive_event(BusEvent::Suggestions {
+        query_id: ui.suggestions.query_id,
+        result: Ok(["/projects/frontend", "/projects/framework", "/projects/fresh"]
+            .into_iter()
+            .map(|path| crate::agents::providers::suggest::PathSuggestion {
+                path: path.into(),
+                is_directory: true,
+            })
+            .collect()),
+    });
+    for error in [None, Some("PWD must be a directory".to_owned())] {
+        ui.error = error;
+        let screen = room_screen(&mut ui, 120, 40);
+        assert!(screen.contains("System prompt"), "{screen}");
+        assert!(screen.contains("Add (Enter)"), "{screen}");
+        assert!(screen.contains("/projects/frontend/"), "{screen}");
+        key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+        let screen = room_screen(&mut ui, 120, 40);
+        let selected = ui.suggestions.selected;
+        assert!(screen.contains(&format!("{}/", ui.suggestions.entries[selected].path.display())), "{screen}");
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(matches!(&ui.form, Some(forms::Form::Agent { cwd, field: 2, .. })
+        if cwd.text == "/projects/fresh/"));
+    assert!(!ui.pending.iter().any(|p| matches!(p.command,
+        BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..))));
+    assert_ne!(master, room);
+}
+
+#[test]
+fn enter_uses_typed_pwd_when_the_suggestion_list_does_not_fit() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Provider(Provider::ClaudeCode));
+    ui.action(render::Action::Field(2));
+    if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
+        *name = editor::Editor::new("worker".into());
+        *cwd = editor::Editor::new("/projects".into());
+    }
+    ui.receive_event(BusEvent::Suggestions {
+        query_id: ui.suggestions.query_id,
+        result: Ok(vec![crate::agents::providers::suggest::PathSuggestion {
+            path: "/projects/hidden".into(),
+            is_directory: true,
+        }]),
+    });
+    let screen = room_screen(&mut ui, 120, 16);
+    assert!(!screen.contains("/projects/hidden"), "{screen}");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.pending.iter().any(|p| matches!(&p.command,
+        BusCommand::AddAgent(input) if input.cwd == "/projects")));
 }

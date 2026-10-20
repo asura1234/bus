@@ -906,3 +906,48 @@ fn scrolled_master_sidebar_reaches_its_last_orchestrator_below_the_room_name() {
     assert_eq!(rows_of(render::Action::Room(pr)), [1, 1, 8]);
     assert_eq!(rows_of(render::Action::NewAgent), [4]);
 }
+
+#[test]
+fn master_pwd_enter_completes_only_a_visible_highlight_when_more_than_three_suggestions_scroll() {
+    let (mut ui, master, _, _, _) = master_fixture();
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Provider(Provider::ClaudeCode));
+    ui.action(render::Action::Field(2));
+    if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
+        *name = editor::Editor::new("scroll-orch".into());
+        *cwd = editor::Editor::new("/projects/f".into());
+    }
+    let paths =
+        ["alpha", "bravo", "charlie", "delta", "echo"].map(|leaf| format!("/projects/f-{leaf}"));
+    ui.receive_event(BusEvent::Suggestions {
+        query_id: ui.suggestions.query_id,
+        result: Ok(paths
+            .iter()
+            .map(|path| crate::agents::providers::suggest::PathSuggestion {
+                path: path.into(),
+                is_directory: true,
+            })
+            .collect()),
+    });
+    for step in 0..paths.len() {
+        let screen = room_screen(&mut ui, 120, 40);
+        assert_eq!(ui.suggestions.selected, step);
+        assert!(
+            screen.contains(&format!("{}/", paths[step])),
+            "step {step}:\n{screen}"
+        );
+        if step + 1 < paths.len() {
+            key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+        }
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(
+        matches!(&ui.form, Some(forms::Form::Agent { cwd, field: 2, .. })
+        if cwd.text == "/projects/f-echo/")
+    );
+    assert!(!ui.pending.iter().any(|p| matches!(
+        p.command,
+        BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+    )));
+}

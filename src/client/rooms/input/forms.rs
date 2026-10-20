@@ -303,7 +303,14 @@ impl BusUi {
     /// when no list is shown or the key is not one of Tab, Shift+Tab or plain Enter.
     fn pwd_suggestion_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         let count = self.suggestions.entries.len();
-        if count == 0 || self.form.as_ref().and_then(Form::path_query).is_none() {
+        if count == 0
+            || self.form.as_ref().and_then(Form::path_query).is_none()
+            || !self
+                .view
+                .hits
+                .iter()
+                .any(|hit| hit.action == Action::Suggestion(self.suggestions.selected))
+        {
             return false;
         }
         let selected = self.suggestions.selected;
