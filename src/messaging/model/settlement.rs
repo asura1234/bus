@@ -10,8 +10,13 @@ use super::{
 pub(crate) enum RecordedTurnEnd {
     /// The provider error that ended the turn.
     Error(String),
-    /// The final answer of provider turn `turn_id`, attributed to the request.
-    Final { turn_id: String, text: String },
+    /// The final answer of provider turn `turn_id`, attributed to the
+    /// request, with every prompt the provider recorded for that turn.
+    Final {
+        turn_id: String,
+        text: String,
+        prompts: Vec<String>,
+    },
 }
 
 impl BusState {
@@ -255,8 +260,19 @@ impl BusState {
             return None;
         }
         let provider_error = match recorded_end(request) {
-            Some(RecordedTurnEnd::Final { turn_id, text }) => {
-                if let Some(id) = self.deliver_recorded_final(agent, id, turn_id, text, now_ms) {
+            Some(RecordedTurnEnd::Final {
+                turn_id,
+                text,
+                prompts,
+            }) => {
+                let answer = PendingFinal {
+                    callback_id: format!("rollout:{turn_id}"),
+                    text,
+                    received_at_ms: now_ms,
+                    provider_session_id: None,
+                    provider_turn_id: Some(turn_id),
+                };
+                if let Some(id) = self.deliver_recorded_final(agent, id, answer, &prompts, now_ms) {
                     return Some(id);
                 }
                 None
@@ -299,34 +315,56 @@ impl BusState {
     }
 
     /// Completes the agent's current request `id`, with its group, on the
-    /// answer the provider recorded for its turn `turn_id`, unless a reply for
-    /// that turn was already delivered.
+    /// `answer` the provider recorded for its turn, unless a reply for that
+    /// turn was already delivered. A message typed into the turn that no hook
+    /// placed shares the answer only when `prompts`, the turn's recorded
+    /// prompts, hold it: Codex may have run it as a turn of its own (found in
+    /// review of #112), so otherwise it leaves the group as
+    /// `reply_not_captured` rather than take another turn's answer.
     fn deliver_recorded_final(
         &mut self,
         agent: AgentId,
         id: RequestId,
-        turn_id: String,
-        text: String,
+        mut answer: PendingFinal,
+        prompts: &[String],
         now_ms: u64,
     ) -> Option<RequestId> {
         let request = self.requests.get(&id)?;
         let key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
             request.provider_session_id.as_deref(),
-            Some(&turn_id),
+            answer.provider_turn_id.as_deref(),
         );
         if key.is_some_and(|key| self.consumed_provider_turns.contains(&key)) {
             return None;
         }
+        for member in self.group_members(id) {
+            let Some(member) = self.requests.get_mut(&member).filter(|member| {
+                member.steered
+                    && !member.trusted_start_bound
+                    && !member.settled()
+                    && !prompts
+                        .iter()
+                        .any(|prompt| member.matches_callback_payload(prompt))
+            }) else {
+                continue;
+            };
+            member.group = None;
+            member.phase = RequestPhase::Abandoned;
+            member.completed_at_ms = Some(now_ms);
+            member.failure_reason = Some("reply_not_captured".to_owned());
+            tracing::info!(
+                event = "bus.message.recovered",
+                request_id = member.id.0,
+                agent_id = agent.0,
+                reason = "reply_not_captured",
+                "Typed-in message not found in the recovered turn"
+            );
+        }
         let request = self.requests.get_mut(&id)?;
         request.turn_ended_at_ms = None;
-        request.pending_final = Some(PendingFinal {
-            callback_id: format!("rollout:{turn_id}"),
-            text,
-            received_at_ms: now_ms,
-            provider_session_id: request.provider_session_id.clone(),
-            provider_turn_id: Some(turn_id),
-        });
+        answer.provider_session_id = request.provider_session_id.clone();
+        request.pending_final = Some(answer);
         // Unseen steering keeps the final pending for its settle window.
         self.complete_pending_final(agent, now_ms).ok()?;
         tracing::info!(

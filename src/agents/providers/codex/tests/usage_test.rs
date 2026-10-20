@@ -272,3 +272,41 @@ fn rollout_prompt_search_refuses_a_window_longer_than_it_reads() {
     assert_eq!(find(64 * 1024).unwrap(), None);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn rollout_prompt_search_says_why_it_attributes_nothing() {
+    let dir = rollout_dir("prompt-outcome");
+    let path = dir.join("rollout-2026-10-20T00-00-00-abc.jsonl");
+    let mut lines = codex_turn("turn-1", "2026-10-20T05:06:51.361Z", "status?", Some("a"));
+    lines.extend(codex_turn(
+        "turn-2",
+        "2026-10-20T05:06:59.000Z",
+        "status?",
+        Some("b"),
+    ));
+    lines.extend(codex_turn(
+        "turn-3",
+        "2026-10-20T05:07:30.000Z",
+        "close it",
+        Some("c"),
+    ));
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    let since = 1_792_472_820_000; // 2026-10-20T05:07:00Z
+    let outcome = |prompt: &str| codex_prompt_turn(&path, since, |text| text == prompt).unwrap();
+    assert_eq!(outcome("close it"), PromptTurn::Found("turn-3".into()));
+    assert_eq!(outcome("unrelated"), PromptTurn::NoMatch);
+    // Both earlier turns lie within the clock margin before the send.
+    assert_eq!(outcome("status?"), PromptTurn::Ambiguous);
+    let late = 1_792_472_870_000; // 2026-10-20T05:07:50Z
+    let late_outcome = codex_prompt_turn(&path, late, |text| text == "close it").unwrap();
+    assert_eq!(late_outcome, PromptTurn::StartedBeforeSend);
+    assert_eq!(
+        prompt_turn_within(&path, since, |text| text == "close it", 64).unwrap(),
+        PromptTurn::WindowTooLong
+    );
+    assert_eq!(
+        codex_turn_prompts(&path, "turn-2", since - 60_000).unwrap(),
+        vec!["status?".to_owned()]
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

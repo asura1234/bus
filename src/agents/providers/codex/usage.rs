@@ -99,13 +99,36 @@ pub(crate) fn read_codex_turn_end(
     }))
 }
 
+/// Where the prompt of a message Bus typed but never saw start ran, per
+/// `codex_prompt_turn`. Each outcome but `Found` attributes nothing.
+#[derive(Debug, PartialEq)]
+pub(crate) enum PromptTurn {
+    /// The one turn that ran it.
+    Found(String),
+    /// No turn in the window ran it.
+    NoMatch,
+    /// More than one turn could be the message's, so none is.
+    Ambiguous,
+    /// The one turn that ran it is stamped before the send.
+    StartedBeforeSend,
+    /// The rollout written since the send is too long to read whole: an
+    /// earlier matching turn could hide past what was read.
+    WindowTooLong,
+}
+
 /// The turn that ran a prompt `matches` accepts and started at or after
-/// `since_ms`: the turn of a message Bus typed then but never saw start.
-/// `Ok(None)` when no such turn is in the rollout, when another turn that ran
-/// the prompt started within `SEND_CLOCK_MARGIN_MS` before or any time after
-/// the send (the message's turn cannot then be told apart), or when the rollout
-/// written since `since_ms` is too long to read whole: an earlier matching
-/// turn could hide past what was read and make a later one look unique.
+/// `since_ms`, the send. A clock stepped back after the send can stamp the
+/// message's own turn as older, so every matching turn started within
+/// `SEND_CLOCK_MARGIN_MS` before the send counts against uniqueness too.
+pub(crate) fn codex_prompt_turn(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+) -> std::io::Result<PromptTurn> {
+    prompt_turn_within(path, since_ms, matches, ROLLOUT_WINDOW_BYTES)
+}
+
+#[cfg(test)]
 pub(crate) fn find_codex_prompt_turn(
     path: &Path,
     since_ms: u64,
@@ -114,23 +137,72 @@ pub(crate) fn find_codex_prompt_turn(
     find_prompt_turn_within(path, since_ms, matches, ROLLOUT_WINDOW_BYTES)
 }
 
+#[cfg(test)]
 fn find_prompt_turn_within(
     path: &Path,
     since_ms: u64,
     matches: impl Fn(&str) -> bool,
     cap: u64,
 ) -> std::io::Result<Option<String>> {
-    let Some(tail) = read_rollout_since(path, since_ms, cap)? else {
-        return Ok(None);
+    Ok(match prompt_turn_within(path, since_ms, matches, cap)? {
+        PromptTurn::Found(turn) => Some(turn),
+        _ => None,
+    })
+}
+
+fn prompt_turn_within(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+    cap: u64,
+) -> std::io::Result<PromptTurn> {
+    let Some(text) = read_rollout_since(path, since_ms, cap)? else {
+        return Ok(PromptTurn::WindowTooLong);
     };
-    // A clock stepped back after the send can stamp the message's own turn
-    // as older than the send, so every matching turn started within the
-    // margin before it counts against uniqueness; only one started at or
-    // after the send is ever taken.
     let earliest_ms = since_ms.saturating_sub(SEND_CLOCK_MARGIN_MS);
-    let mut current: Option<(String, u64)> = None;
     let mut found: Vec<(String, u64)> = Vec::new();
-    for line in tail.lines() {
+    for (turn, started_at_ms, prompt) in turn_prompts(&text) {
+        if started_at_ms >= earliest_ms
+            && matches(&prompt)
+            && !found.iter().any(|(seen, _)| *seen == turn)
+        {
+            found.push((turn, started_at_ms));
+        }
+    }
+    Ok(match found.as_slice() {
+        [] => PromptTurn::NoMatch,
+        [(turn, started_at_ms)] if *started_at_ms >= since_ms => PromptTurn::Found(turn.clone()),
+        [_] => PromptTurn::StartedBeforeSend,
+        _ => PromptTurn::Ambiguous,
+    })
+}
+
+/// Every prompt Codex recorded for turn `turn_id` since `since_ms`; none when
+/// the rollout since then is too long to read whole.
+pub(crate) fn codex_turn_prompts(
+    path: &Path,
+    turn_id: &str,
+    since_ms: u64,
+) -> std::io::Result<Vec<String>> {
+    let Some(text) = read_rollout_since(path, since_ms, ROLLOUT_WINDOW_BYTES)? else {
+        return Ok(Vec::new());
+    };
+    // Codex records each prompt twice: as a message item and a completed item.
+    let mut prompts: Vec<String> = Vec::new();
+    for (turn, _, prompt) in turn_prompts(&text) {
+        if turn == turn_id && !prompts.contains(&prompt) {
+            prompts.push(prompt);
+        }
+    }
+    Ok(prompts)
+}
+
+/// Each user prompt in rollout `text`, with the turn it ran in and that
+/// turn's start time.
+fn turn_prompts(text: &str) -> Vec<(String, u64, String)> {
+    let mut current: Option<(String, u64)> = None;
+    let mut prompts = Vec::new();
+    for line in text.lines() {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -142,20 +214,11 @@ fn find_prompt_turn_within(
                 .map(|(turn, at)| (turn.to_owned(), at));
             continue;
         }
-        let Some((turn, started_at_ms)) = &current else {
-            continue;
-        };
-        if *started_at_ms >= earliest_ms
-            && user_prompt(&event).is_some_and(|prompt| matches(&prompt))
-            && !found.iter().any(|(seen, _)| seen == turn)
-        {
-            found.push((turn.clone(), *started_at_ms));
+        if let (Some((turn, started_at_ms)), Some(prompt)) = (&current, user_prompt(&event)) {
+            prompts.push((turn.clone(), *started_at_ms, prompt));
         }
     }
-    Ok(match found.as_slice() {
-        [(turn, started_at_ms)] if *started_at_ms >= since_ms => Some(turn.clone()),
-        _ => None,
-    })
+    prompts
 }
 
 /// The rollout's whole lines from a line stamped `SEND_CLOCK_MARGIN_MS`
