@@ -337,12 +337,27 @@ fn wait_for_clipboard_read(
     mut elapsed: impl FnMut() -> std::time::Duration,
     mut pause: impl FnMut(),
 ) -> bool {
-    while elapsed() < CLIPBOARD_READ_TIMEOUT {
+    loop {
         match child.poll() {
             Ok(Some(success)) => return success,
-            Ok(None) => pause(),
-            Err(_) => break,
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(event = "bus.clipboard.image_read.wait_failed", %error,
+                    "could not wait for clipboard image reader");
+                break;
+            }
         }
+        let waited = elapsed();
+        if waited >= CLIPBOARD_READ_TIMEOUT {
+            tracing::warn!(
+                event = "bus.clipboard.image_read.timed_out",
+                elapsed_ms = waited.as_millis() as u64,
+                timeout_ms = CLIPBOARD_READ_TIMEOUT.as_millis() as u64,
+                "clipboard image reader timed out"
+            );
+            break;
+        }
+        pause();
     }
     child.terminate_and_reap();
     false

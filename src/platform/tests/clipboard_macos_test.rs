@@ -37,7 +37,7 @@ fn clipboard_read_timeout_terminates_and_reaps_without_wall_clock_wait() {
         },
     ));
     assert_eq!(elapsed.get(), CLIPBOARD_READ_TIMEOUT);
-    assert_eq!(child.polls, 2);
+    assert_eq!(child.polls, 3);
     assert!(child.terminated_and_reaped);
 }
 
@@ -74,4 +74,25 @@ fn clipboard_read_poll_error_terminates_and_reaps() {
         || panic!("must not wait after a poll error")
     ));
     assert!(child.terminated_and_reaped);
+}
+
+#[test]
+fn clipboard_read_accepts_exit_observed_at_deadline() {
+    for success in [true, false] {
+        let mut child = FakeClipboardRead {
+            results: VecDeque::from([Ok(None), Ok(Some(success))]),
+            ..Default::default()
+        };
+        let elapsed = Cell::new(Duration::ZERO);
+        assert_eq!(
+            wait_for_clipboard_read(
+                &mut child,
+                || elapsed.get(),
+                || elapsed.set(CLIPBOARD_READ_TIMEOUT),
+            ),
+            success
+        );
+        assert!(!child.terminated_and_reaped);
+        assert_eq!(child.polls, 2);
+    }
 }
