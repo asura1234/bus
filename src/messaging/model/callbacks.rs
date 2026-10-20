@@ -208,10 +208,9 @@ impl BusState {
         // progress within that turn, not a new binding that clears its answer.
         if matches!(callback.kind, CallbackEventKind::PromptStarted)
             && bound_callback_turn(request, &callback)
-            && callback
-                .prompt_payload
-                .as_deref()
-                .is_some_and(|payload| !request.matches_callback_payload(payload))
+            && callback.prompt_payload.as_deref().is_some_and(|payload| {
+                is_task_notification(payload) && !request.matches_callback_payload(payload)
+            })
         {
             return CallbackDisposition::AcceptedProgress;
         }
@@ -636,6 +635,11 @@ impl BusState {
         }
         Ok(())
     }
+}
+
+fn is_task_notification(payload: &str) -> bool {
+    let payload = payload.trim();
+    payload.starts_with("<task-notification>") && payload.ends_with("</task-notification>")
 }
 
 fn bound_callback_turn(request: &Request, callback: &ProviderCallback) -> bool {
