@@ -2,7 +2,7 @@
 pub(crate) const MAX_WINDOW_TITLE_CHARS: usize = 200;
 
 pub(crate) fn default_window_title() -> String {
-    "{hostname}: {workspace}".to_string()
+    "{workspace}".to_string()
 }
 
 pub(crate) fn sanitize_window_title_text(value: &str) -> Option<String> {
@@ -150,10 +150,16 @@ mod tests {
     }
 
     #[test]
-    fn default_template_parses() {
-        assert!(WindowTitleTemplate::parse(&default_window_title())
+    fn default_template_is_workspace_only() {
+        let default = default_window_title();
+        assert_eq!(default, "{workspace}");
+        let template = WindowTitleTemplate::parse(&default)
             .expect("parse")
-            .is_some());
+            .expect("template");
+        assert_eq!(
+            template.parts(),
+            [WindowTitlePart::Token(WindowTitleToken::Workspace)]
+        );
     }
 
     #[test]

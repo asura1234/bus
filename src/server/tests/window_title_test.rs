@@ -46,11 +46,10 @@ async fn headless_api_reads_latest_title_without_spinner_event_flooding() {
 }
 
 #[test]
-fn window_title_waits_for_a_foreground_client_to_exist() {
+fn default_window_title_renders_only_workspace_for_foreground_client() {
     let mut server = test_headless_server();
     server.app.state.workspaces = vec![crate::server::workspaces::Workspace::test_new("herd")];
     server.app.state.active = Some(0);
-    server.app.configure_window_title("{workspace}");
 
     // The server renders before the first client attaches. Nothing was
     // delivered, so nothing may be recorded as delivered either.
