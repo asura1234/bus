@@ -101,8 +101,9 @@ pub(crate) fn read_codex_turn_end(
 
 /// The turn that ran a prompt `matches` accepts and started at or after
 /// `since_ms`: the turn of a message Bus typed then but never saw start.
-/// `Ok(None)` when no such turn is in the rollout, when more than one is
-/// (the message's turn cannot then be told apart), or when the rollout
+/// `Ok(None)` when no such turn is in the rollout, when another turn that ran
+/// the prompt started within `SEND_CLOCK_MARGIN_MS` before or any time after
+/// the send (the message's turn cannot then be told apart), or when the rollout
 /// written since `since_ms` is too long to read whole: an earlier matching
 /// turn could hide past what was read and make a later one look unique.
 pub(crate) fn find_codex_prompt_turn(
@@ -122,8 +123,13 @@ fn find_prompt_turn_within(
     let Some(tail) = read_rollout_since(path, since_ms, cap)? else {
         return Ok(None);
     };
+    // A clock stepped back after the send can stamp the message's own turn
+    // as older than the send, so every matching turn started within the
+    // margin before it counts against uniqueness; only one started at or
+    // after the send is ever taken.
+    let earliest_ms = since_ms.saturating_sub(SEND_CLOCK_MARGIN_MS);
     let mut current: Option<(String, u64)> = None;
-    let mut found: Vec<String> = Vec::new();
+    let mut found: Vec<(String, u64)> = Vec::new();
     for line in tail.lines() {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -139,15 +145,15 @@ fn find_prompt_turn_within(
         let Some((turn, started_at_ms)) = &current else {
             continue;
         };
-        if *started_at_ms >= since_ms
+        if *started_at_ms >= earliest_ms
             && user_prompt(&event).is_some_and(|prompt| matches(&prompt))
-            && !found.contains(turn)
+            && !found.iter().any(|(seen, _)| seen == turn)
         {
-            found.push(turn.clone());
+            found.push((turn.clone(), *started_at_ms));
         }
     }
     Ok(match found.as_slice() {
-        [turn] => Some(turn.clone()),
+        [(turn, started_at_ms)] if *started_at_ms >= since_ms => Some(turn.clone()),
         _ => None,
     })
 }

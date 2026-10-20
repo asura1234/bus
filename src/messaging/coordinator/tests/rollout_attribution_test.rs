@@ -1,5 +1,5 @@
 //! Adversarial attribution cases for the unbound rollout fallback, adopted
-//! from the bug-reply-not-captured verifier (2026-10-20, rounds 1 and 2):
+//! from the bug-reply-not-captured verifier (2026-10-20, rounds 1 to 3):
 //! an unbound request takes a rollout answer only when the one turn that ran
 //! its prompt since the send can be proven; otherwise `reply_not_captured`.
 use super::*;
@@ -273,5 +273,82 @@ fn clock_rollback_near_send_must_not_hide_an_earlier_matching_turn() {
             f.reply(id)
         );
         assert!(f.reply(id).is_none(), "an append-only rollout with two matching post-send starts must remain ambiguous despite clock rollback");
+    }
+}
+
+// Round 3: clock steps within the 60-second margin.
+
+#[test]
+fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answer() {
+    for rollback_ms in [0_u64, 1_000] {
+        let (mut f, path) = with_rollout();
+        let id = f.send("clock-start", false);
+        f.deliver();
+        let since = f.request(id).prompt.submitted_at_ms;
+        assert_eq!(f.typed().last().unwrap().0, "clock-start");
+        assert!(f.request(id).provider_turn_id.is_none());
+        // Both inputs are appended after Bus typed the request. The clock
+        // steps back 1 s between that send and the original task_started;
+        // the later same-prompt retry starts after the clock has caught up.
+        // The control changes only the original turn's timestamp.
+        let original_at = since + 1 - rollback_ms;
+        let before_step = json!({"timestamp":at(since),"type":"event_msg",
+            "payload":{"type":"token_count"}});
+        std::fs::write(
+            &path,
+            format!("{before_step}\n")
+                + &turn("original", original_at, "clock-start", "ORIGINAL")
+                + &turn("retry", since + 1_000, "clock-start", "WRONG RETRY"),
+        )
+        .unwrap();
+        // The file is tiny: the entire original turn is in the reader's
+        // window. This does not exercise an early backward-read stop.
+        assert!(std::fs::metadata(&path).unwrap().len() < 256 * 1024);
+        let selected = find_codex_prompt_turn(&path, since, |p| p == "clock-start").unwrap();
+        let worker_cwd = f.worker.state.agent(f.agent).unwrap().cwd.clone();
+        std::fs::remove_dir(worker_cwd).unwrap();
+        f.now = since + 1_001;
+        idle_then_settle(&mut f, id);
+        println!(
+            "START ROLLBACK_MS={rollback_ms}: selected={selected:?}; phase={:?}; reply={:?}",
+            f.request(id).phase,
+            f.reply(id)
+        );
+        assert!(f.reply(id).is_none(), "a 1-second clock step after the send must not exclude the original input and publish the retry's answer");
+    }
+}
+
+#[test]
+fn the_backward_window_keeps_both_matching_turns_for_rollbacks_up_to_sixty_seconds() {
+    for rollback_ms in [1_u64, 3, 1_000, 30_000, 59_999, 60_000] {
+        let (mut f, path) = with_rollout();
+        let id = f.send("margin", false);
+        f.deliver();
+        let since = f.request(id).prompt.submitted_at_ms;
+        let first = turn("first", since + 1, "margin", "FIRST");
+        let parts: Vec<_> = first.lines().collect();
+        let filler = json!({"timestamp":at(since + 2),"type":"response_item",
+            "payload":{"type":"reasoning","encrypted_content":"x".repeat(300 * 1024)}});
+        let mut complete: Value = serde_json::from_str(parts[2]).unwrap();
+        complete["timestamp"] = json!(at(since + 2 - rollback_ms));
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n{filler}\n{complete}\n", parts[0], parts[1])
+                + &turn("later", since + 1_000, "margin", "LATER"),
+        )
+        .unwrap();
+        let selected = find_codex_prompt_turn(&path, since, |p| p == "margin").unwrap();
+        f.now = since + 1_001;
+        idle_then_settle(&mut f, id);
+        println!(
+            "WINDOW ROLLBACK_MS={rollback_ms}: selected={selected:?}; reply={:?}",
+            f.reply(id)
+        );
+        assert!(selected.is_none());
+        assert!(f.reply(id).is_none());
+        assert_eq!(
+            f.request(id).failure_reason.as_deref(),
+            Some("reply_not_captured")
+        );
     }
 }

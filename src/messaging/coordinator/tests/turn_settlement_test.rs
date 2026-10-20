@@ -1488,7 +1488,8 @@ fn an_unbound_codex_turn_delivers_the_answer_of_the_rollout_turn_that_ran_its_pr
         "source":"startup","transcript_path":rollout}),
     );
     fixture.consume();
-    let earlier = rollout_at(&fixture, -60_000);
+    // An identical turn older than the 60 s clock margin is not a candidate.
+    let earlier = rollout_at(&fixture, -120_000);
     append(
         &rollout,
         &codex_turn(&earlier, "turn-0", "close the worktree", Some("old")),
