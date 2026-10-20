@@ -338,15 +338,20 @@ impl BusState {
         if key.is_some_and(|key| self.consumed_provider_turns.contains(&key)) {
             return None;
         }
-        for member in self.group_members(id) {
-            let Some(member) = self.requests.get_mut(&member).filter(|member| {
+        let members = self.group_members(id);
+        let unproven: Vec<RequestId> = members
+            .iter()
+            .filter_map(|member| self.requests.get(member))
+            .filter(|member| {
                 member.steered
                     && !member.trusted_start_bound
                     && !member.settled()
-                    && !prompts
-                        .iter()
-                        .any(|prompt| member.matches_callback_payload(prompt))
-            }) else {
+                    && !self.recorded_for(member, id, &members, prompts)
+            })
+            .map(|member| member.id)
+            .collect();
+        for member in unproven {
+            let Some(member) = self.requests.get_mut(&member) else {
                 continue;
             };
             member.group = None;
@@ -375,6 +380,33 @@ impl BusState {
             "Reply recovered from the provider's record of the turn"
         );
         Some(id)
+    }
+
+    /// Whether `prompts`, one per submission the turn recorded, hold
+    /// `member`'s own: more of its text than the other requests of the group
+    /// led by `lead` that share that text can account for. A repeat of the
+    /// lead's text recorded once is the lead's (found in review of #112).
+    fn recorded_for(
+        &self,
+        member: &Request,
+        lead: RequestId,
+        members: &[RequestId],
+        prompts: &[String],
+    ) -> bool {
+        let own = |prompt: &&String| member.matches_callback_payload(prompt);
+        let recorded = prompts.iter().filter(own).count();
+        let others = std::iter::once(&lead)
+            .chain(members)
+            .filter(|other| **other != member.id)
+            .filter_map(|other| self.requests.get(other))
+            .filter(|other| {
+                prompts
+                    .iter()
+                    .filter(own)
+                    .any(|prompt| other.matches_callback_payload(prompt))
+            })
+            .count();
+        recorded > others
     }
 
     /// Abandon `id`'s turn with `reason`. Messages typed or coalesced into

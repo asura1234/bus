@@ -168,3 +168,6 @@ fn steered_input_recorded_in_the_lead_turn_shares_its_recorded_answer() {
         assert_eq!(fixture.reply(id).as_deref(), Some("Merged and closed."));
     }
 }
+
+#[path = "codex_identical_steering_test.rs"]
+mod codex_identical_steering_tests;

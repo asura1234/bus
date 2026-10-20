@@ -161,12 +161,12 @@ fn prompt_turn_within(
     };
     let earliest_ms = since_ms.saturating_sub(SEND_CLOCK_MARGIN_MS);
     let mut found: Vec<(String, u64)> = Vec::new();
-    for (turn, started_at_ms, prompt) in turn_prompts(&text) {
-        if started_at_ms >= earliest_ms
-            && matches(&prompt)
-            && !found.iter().any(|(seen, _)| *seen == turn)
+    for prompt in turn_prompts(&text) {
+        if prompt.started_at_ms >= earliest_ms
+            && matches(&prompt.text)
+            && !found.iter().any(|(seen, _)| *seen == prompt.turn)
         {
-            found.push((turn, started_at_ms));
+            found.push((prompt.turn, prompt.started_at_ms));
         }
     }
     Ok(match found.as_slice() {
@@ -177,8 +177,9 @@ fn prompt_turn_within(
     })
 }
 
-/// Every prompt Codex recorded for turn `turn_id` since `since_ms`; none when
-/// the rollout since then is too long to read whole.
+/// Every prompt Codex recorded for turn `turn_id` since `since_ms`, once per
+/// submission so identical prompts can be counted; none when the rollout
+/// since then is too long to read whole.
 pub(crate) fn codex_turn_prompts(
     path: &Path,
     turn_id: &str,
@@ -187,19 +188,26 @@ pub(crate) fn codex_turn_prompts(
     let Some(text) = read_rollout_since(path, since_ms, ROLLOUT_WINDOW_BYTES)? else {
         return Ok(Vec::new());
     };
-    // Codex records each prompt twice: as a message item and a completed item.
-    let mut prompts: Vec<String> = Vec::new();
-    for (turn, _, prompt) in turn_prompts(&text) {
-        if turn == turn_id && !prompts.contains(&prompt) {
-            prompts.push(prompt);
-        }
-    }
-    Ok(prompts)
+    // Codex records each submission as a message item and as an event; the
+    // events alone count each one once.
+    Ok(turn_prompts(&text)
+        .into_iter()
+        .filter(|prompt| prompt.event && prompt.turn == turn_id)
+        .map(|prompt| prompt.text)
+        .collect())
 }
 
-/// Each user prompt in rollout `text`, with the turn it ran in and that
-/// turn's start time.
-fn turn_prompts(text: &str) -> Vec<(String, u64, String)> {
+/// A user prompt recorded in a rollout.
+struct TurnPrompt {
+    turn: String,
+    started_at_ms: u64,
+    text: String,
+    /// Recorded as an event, which Codex writes once per submission.
+    event: bool,
+}
+
+/// Each user prompt in rollout `text`, with the turn it ran in.
+fn turn_prompts(text: &str) -> Vec<TurnPrompt> {
     let mut current: Option<(String, u64)> = None;
     let mut prompts = Vec::new();
     for line in text.lines() {
@@ -214,8 +222,15 @@ fn turn_prompts(text: &str) -> Vec<(String, u64, String)> {
                 .map(|(turn, at)| (turn.to_owned(), at));
             continue;
         }
-        if let (Some((turn, started_at_ms)), Some(prompt)) = (&current, user_prompt(&event)) {
-            prompts.push((turn.clone(), *started_at_ms, prompt));
+        if let (Some((turn, started_at_ms)), Some(text)) = (&current, user_prompt(&event)) {
+            // A completed item names its turn; trust that over line order.
+            let turn = payload["turn_id"].as_str().unwrap_or(turn);
+            prompts.push(TurnPrompt {
+                turn: turn.to_owned(),
+                started_at_ms: *started_at_ms,
+                text,
+                event: event["type"] == "event_msg",
+            });
         }
     }
     prompts
