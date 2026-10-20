@@ -14,6 +14,11 @@ const ROLLOUT_TAIL_BYTES: u64 = 256 * 1024;
 /// The most rollout Bus reads back to see every turn since a message was
 /// sent. One turn can write megabytes (live, 2026-10-20: 5.7 MB).
 const ROLLOUT_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
+/// How far before a send the backward rollout read must reach. One line's
+/// timestamp is no proof that every later line came after it: a wall clock
+/// stepped back can stamp a line inside the window as older than the send.
+/// Reading further only adds candidates the send time then rejects.
+const SEND_CLOCK_MARGIN_MS: u64 = 60_000;
 
 /// Accept only Codex rollout files: hook payloads name the path, and Bus
 /// should not parse arbitrary files a payload points at.
@@ -147,10 +152,11 @@ fn find_prompt_turn_within(
     })
 }
 
-/// The rollout's whole lines from a line written before `since_ms` on, when
-/// the last `cap` bytes reach back that far; `Ok(None)` when they do not.
-/// Codex appends events as they happen, so every line after one written
-/// before `since_ms` is in the text, and none is missed.
+/// The rollout's whole lines from a line stamped `SEND_CLOCK_MARGIN_MS`
+/// before `since_ms` on, when the last `cap` bytes reach back that far;
+/// `Ok(None)` when they do not. Codex appends events as they happen, so every
+/// line written since `since_ms` follows that one, unless the clock stepped
+/// back by more than the margin.
 fn read_rollout_since(path: &Path, since_ms: u64, cap: u64) -> std::io::Result<Option<String>> {
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
@@ -173,7 +179,7 @@ fn read_rollout_since(path: &Path, since_ms: u64, cap: u64) -> std::io::Result<O
                     let event: Value = serde_json::from_str(line).ok()?;
                     rfc3339_ms(event["timestamp"].as_str()?)
                 })
-                .is_some_and(|at| at < since_ms);
+                .is_some_and(|at| at < since_ms.saturating_sub(SEND_CLOCK_MARGIN_MS));
         if reached {
             return Ok(Some(text));
         }
