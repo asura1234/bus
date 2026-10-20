@@ -479,10 +479,11 @@ fn the_fake_codex_hooks_decode_as_an_interactive_codex_turn() {
             text: "fake reply: hey".into()
         }
     );
-    // No usage is read from it: Bus takes only Codex `rollout-*` files.
+    // Bus reads the fake's rollout as Codex's; it holds no `token_count`,
+    // so no usage comes from it.
     assert_eq!(
         crate::agents::providers::codex::usage::codex_rollout_path(&stop),
-        None
+        Some(agent.rollout().as_path())
     );
     // The fake Claude keeps Claude's turn field.
     let claude = FakeAgent::new("claude", Value::Null);
