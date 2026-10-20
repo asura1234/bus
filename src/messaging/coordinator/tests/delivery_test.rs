@@ -601,13 +601,13 @@ fn claude_still_requires_real_session_start_before_submission() {
 }
 
 #[test]
-fn claude_textless_background_pause_stays_active_until_its_trusted_continuation_settles() {
+fn claude_background_pending_reply_stays_active_until_its_trusted_continuation_settles() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let request = queue(&mut worker, room, agent, "review the plan");
     worker.submit_ready().unwrap();
     for value in [
         json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":"prompt-1","prompt":"review the plan"}),
-        json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"prompt-1","background_tasks":[{"task_id":"reviewer-1","status":"running"}],"session_crons":[]}),
+        json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"prompt-1","last_assistant_message":"Waiting for reviewers","background_tasks":[{"task_id":"reviewer-1","status":"running"}],"session_crons":[]}),
     ] {
         record(&dir, Provider::ClaudeCode, value);
     }

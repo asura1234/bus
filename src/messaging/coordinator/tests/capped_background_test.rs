@@ -51,7 +51,7 @@ fn background_stops_keep_their_reply_and_release_at_the_first_hold_deadline() {
         f.status(RuntimeStatus::Idle);
         f.consume();
         assert_eq!(f.request(lead).phase, RequestPhase::Completed, "{tasks}");
-        assert_eq!(f.reply(lead).as_deref(), Some("First report"));
+        assert_eq!(f.reply(lead).as_deref(), Some("Latest report"));
         f.worker.expire_queued_requests(f.now).unwrap();
         assert_eq!(f.request(next).phase, RequestPhase::Queued);
         f.deliver();

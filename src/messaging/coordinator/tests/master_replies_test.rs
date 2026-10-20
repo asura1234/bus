@@ -1,10 +1,7 @@
 //! Reproductions for the MASTER-room reply bugs of 2026-10-20 (A, B, C).
-//! Copied from the investigator's reproductions and retained under
-//! `steering_tests`, reusing that module's real coordinator fixture.
+//! Mounted as a child of `steering_tests` by `run_reproduction.sh` in an
+//! isolated copy of the tree; it reuses that module's `Fixture`.
 use super::*;
-
-#[path = "master_reply_ownership_test.rs"]
-mod ownership;
 
 // Exact background commands from the incident transcripts.
 const A_DISPATCH: &str = r#"/Users/dylanliu/work/bus/target/debug/bus send --room 13389 --as "mobile master" --to wt-close --async --text "Task: clean up the mobile (libtv-app) worktrees." >/dev/null; echo sent"#;
@@ -183,3 +180,84 @@ fn bug_b_task_notification_absorbed_mid_turn_does_not_lose_the_reply() {
     );
     assert_eq!(f.request(second).failure_reason, None);
 }
+
+// ---- Verification of the fix (2026-10-21): paths the change could break. ----
+
+const REAL_WORK: &str = "cargo test --workspace 2>&1 | tail -5";
+
+fn notice_texts(f: &Fixture, room: RoomId) -> Vec<String> {
+    f.worker
+        .state
+        .notices(room)
+        .map(|notice| notice.text.clone())
+        .collect()
+}
+
+/// A request whose turn waits on a real long shell, then the shell's wake turn
+/// reports the result. Returns the request, and its phase right after turn-1.
+fn real_shell_then_wake(f: &mut Fixture) -> (RequestId, RequestPhase) {
+    f.consume();
+    let lead = running(f, "run the full test suite", "turn-1");
+    stop(
+        f,
+        "turn-1",
+        "Running the suite in the background.",
+        &[("btest", REAL_WORK)],
+    );
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    let held_phase = f.request(lead).phase;
+    f.now += 4 * 60_000;
+    f.status(RuntimeStatus::Working);
+    f.started("turn-2", &notification("btest"));
+    f.consume();
+    stop(f, "turn-2", "All 812 tests passed.", &[]);
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    f.now += crate::messaging::model::HELD_REPLY_SETTLE_MS + 1;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    (lead, held_phase)
+}
+
+/// Worker in a work room, developer asks directly; the turn's only real
+/// answer comes from the wake turn after the background suite finishes.
+#[test]
+fn verify_worker_real_background_shell_result_is_the_reply() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
+    let (lead, held_phase) = real_shell_then_wake(&mut f);
+    diag(&f, "V worker after wake turn", lead);
+    eprintln!("V worker held phase after turn-1: {held_phase:?}");
+    eprintln!("V worker room notices: {:?}", notice_texts(&f, f.room));
+    assert_eq!(f.reply(lead).as_deref(), Some("All 812 tests passed."));
+}
+
+/// Same in MASTER: the developer's MASTER message waits on a real shell.
+#[test]
+fn verify_master_real_background_shell_result_is_the_reply() {
+    let mut f = master();
+    let (lead, held_phase) = real_shell_then_wake(&mut f);
+    diag(&f, "V master after wake turn", lead);
+    eprintln!("V master held phase after turn-1: {held_phase:?}");
+    eprintln!("V master room notices: {:?}", notice_texts(&f, f.room));
+    assert_eq!(f.reply(lead).as_deref(), Some("All 812 tests passed."));
+}
+
+/// A wrapper that hides real work in backticks after the dispatch still holds.
+#[test]
+fn verify_backtick_work_after_dispatch_still_holds() {
+    use crate::agents::providers::claude_code::hooks::is_bus_control;
+    for command in [
+        r#"bus send --to w --async --text go; echo `cargo test`"#,
+        r#"bus send --to w --async --text "`cargo test`""#,
+        r#"bus send --to w --async --text "$(cat brief.md)" && echo $(cargo test)"#,
+    ] {
+        assert!(!is_bus_control(command), "must hold work: {command}");
+    }
+}
+
+#[path = "master_reply_ownership_test.rs"]
+mod ownership;

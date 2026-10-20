@@ -214,13 +214,15 @@ impl BusState {
         {
             return CallbackDisposition::AcceptedProgress;
         }
-        // A textless background pause may resume in a later turn. Captured
-        // text, including a shell-held reply, belongs to its original turn.
+        // A turn that wakes after the request paused for background work carries
+        // the real reply. Once the request holds a final reply, a new turn is the
+        // agent's own activity and must not replace or discard that reply.
+        // A shell-held interim still leaves that door open if another shell
+        // wakes a turn during the no-Stop settlement window.
         let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
             && request.trusted_start_bound
             && request.pending_final.is_none()
-            && Self::held_interim(request).is_none()
-            && request.turn_ended_at_ms.is_none()
+            && (request.turn_ended_at_ms.is_none() || Self::held_interim(request).is_some())
             && request.provider_session_id.is_some()
             && callback.provider_session_id == request.provider_session_id
             && request.provider_turn_id.is_some()
@@ -239,22 +241,12 @@ impl BusState {
                 .as_deref()
                 .is_some_and(|payload| !request.matches_callback_payload(payload))
         {
-            let answered = Self::held_interim(request).is_some();
             // A new turn of its own after one already finished: the typed
             // request is not coming, so the queue moves on.
             if !request.trusted_start_bound && request.foreign_turn_settled_at_ms.is_some() {
                 self.release_unbound_request(callback.agent_id, callback.occurred_at_ms);
             }
             self.unrelated_provider_turns.extend(turn_key);
-            if answered {
-                // End the old turn's background wait without transferring its
-                // identity or text. Its captured answer uses the existing
-                // late-Stop grace when the agent next becomes Idle.
-                if let Some(request) = self.requests.get_mut(&request_id) {
-                    request.awaiting_background = false;
-                }
-                return CallbackDisposition::AcceptedProgress;
-            }
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
         if let Err(reason) = check_callback_turn(request, &callback, continuation) {

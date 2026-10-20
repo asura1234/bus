@@ -44,9 +44,8 @@ impl Worker {
     }
 
     /// A Claude reply waits while shells started by its request still run:
-    /// each wakes a turn when it ends. Captured replies stay attached to the
-    /// turn that answered; later wake turns cannot replace them.
-    /// Shells inherited from an earlier request (say a hung
+    /// each wakes a turn when it ends, and the last such turn carries the real
+    /// reply. Shells inherited from an earlier request (say a hung
     /// `find /`) are listed by every later `Stop` and never hold a reply.
     /// Every held `Stop`, including cron/non-shell waits, returns its interim
     /// text for bounded delivery. Missing text remains an observation only.
