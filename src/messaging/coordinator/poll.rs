@@ -74,7 +74,7 @@ impl Worker {
                 }
             }
             let status = polled_status(agent, info);
-            observe_attention_exit(
+            observe_exit(
                 self.transport.as_mut(),
                 &self.data_dir,
                 &mut state,
@@ -147,7 +147,7 @@ fn branch_for(cwd: &Path) -> Option<String> {
     (!branch.is_empty()).then_some(branch)
 }
 
-fn observe_attention_exit(
+fn observe_exit(
     transport: &mut dyn super::Transport,
     data_dir: &Path,
     state: &mut BusState,
