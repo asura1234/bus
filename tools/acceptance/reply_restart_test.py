@@ -140,7 +140,16 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
-    assert not binary.is_relative_to(ROOT / "target/debug"), "protected target/debug is forbidden"
+    # The first registered worktree is the main checkout. Linked worktrees
+    # build their own disposable bus in target/debug, just as the gate does.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    worktrees = subprocess.check_output(
+        ["git", "-C", str(ROOT), "worktree", "list", "--porcelain", "-z"], env=env,
+    )
+    main_checkout = Path(os.fsdecode(worktrees.split(b"\0", 1)[0].removeprefix(b"worktree ")))
+    live_binary = main_checkout / "target/debug/bus"
+    assert not (binary == live_binary.resolve()
+                or (live_binary.exists() and binary.samefile(live_binary))), "live Bus binary is forbidden"
     with tempfile.TemporaryDirectory(prefix="br-restart-", dir="/private/tmp") as directory:
         root = Path(directory)
         scenario(binary, root / "claude", "claude", True)
