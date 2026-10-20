@@ -305,11 +305,17 @@ fn fill_replaces_every_placeholder() {
         "Put `[waiting-on-you]` before every request that needs the developer",
         "orchestrator-rules.md#waiting-on-you",
     ] {
-        assert!(rules_section.contains(phrase), "missing {phrase}: {rules_section}");
+        assert!(
+            rules_section.contains(phrase),
+            "missing {phrase}: {rules_section}"
+        );
     }
     let rules = include_str!("../../../orchestration/rules.md");
     for anchor in ["chat-markdown", "waiting-on-you"] {
-        assert!(rules.contains(&format!("<a id=\"{anchor}\"></a>")), "missing {anchor}");
+        assert!(
+            rules.contains(&format!("<a id=\"{anchor}\"></a>")),
+            "missing {anchor}"
+        );
     }
     // Tasks go out with --async in the background, never a blocking wait.
     assert!(text.contains("bus send --room 7 --as orch --to AGENT --async --text"));
