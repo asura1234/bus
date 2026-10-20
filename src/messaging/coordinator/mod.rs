@@ -157,7 +157,7 @@ pub(crate) struct LeftOpenTerminal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LeftOpenReason {
-    /// The provider exited and another agent or managed name took its terminal.
+    /// The provider exited and the server refused to close its terminal.
     ProviderExited,
     /// The terminal runs a provider session that may not be Bus's to end.
     SessionMoved,
@@ -173,7 +173,7 @@ impl LeftOpenTerminal {
     ) -> Self {
         let message = match reason {
             LeftOpenReason::ProviderExited => format!(
-                "The agent's provider exited and its terminal now runs another agent or session, so Bus left the terminal open; close pane {pane_id} yourself if it is no longer needed."
+                "The agent's provider exited and Bus could not close its terminal, for example because another agent or session now runs there, so Bus left the terminal open; close pane {pane_id} yourself if it is no longer needed."
             ),
             LeftOpenReason::SessionMoved => format!(
                 "The agent's terminal now runs another provider session that may not be Bus's to end, so Bus left it open; close pane {pane_id} yourself if it is no longer needed."

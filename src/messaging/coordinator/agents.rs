@@ -113,11 +113,9 @@ impl Worker {
             }
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
         };
-        if agent
-            .exit_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.terminal_closed && snapshot.terminal_id == *terminal)
-        {
+        if agent.exit_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.terminal_closed == Some(true) && snapshot.terminal_id == *terminal
+        }) {
             // Bus already closed it after saving the exited provider's screen.
             return Ok(None);
         }
@@ -287,8 +285,8 @@ impl Worker {
 
     /// Close the agent's own terminal once its provider exited, even with a
     /// command running in the shell left behind (the server requires its own
-    /// exit evidence for that); else return it as left open: another agent
-    /// or managed name runs there now.
+    /// exit evidence for that); else return it as left open: the server
+    /// refused, for example because another agent or managed name took it.
     fn close_exited_shell(
         &mut self,
         terminal: LeftOpenTerminal,
@@ -296,20 +294,15 @@ impl Worker {
         managed_name: &str,
         session: Option<String>,
     ) -> Option<LeftOpenTerminal> {
-        let closed = matches!(
-            self.transport.request(Method::PaneCloseIfIdentity(
-                schema::PaneCloseIfIdentityParams {
-                    pane_id: terminal.pane_id.clone(),
-                    expected_terminal_id: terminal.terminal_id.clone(),
-                    expected_agent: kind.into(),
-                    expected_managed_name: managed_name.into(),
-                    expected_session_id: session,
-                    close_exited_shell: true,
-                    allow_busy_shell: true,
-                },
-            )),
-            Ok(ResponseResult::Ok {})
-        );
+        let closed = self
+            .request_exited_shell_close(
+                &terminal.pane_id,
+                &terminal.terminal_id,
+                kind,
+                managed_name,
+                session,
+            )
+            .is_ok();
         if closed {
             tracing::info!(event = "bus.deletion.exited_shell_closed", agent_id = terminal.agent_id.0,
                 pane_id = %terminal.pane_id, terminal_id = %terminal.terminal_id,
@@ -326,6 +319,37 @@ impl Worker {
             terminal.terminal_id,
             LeftOpenReason::ProviderExited,
         ))
+    }
+
+    /// The guarded close of the shell an exited provider left in this exact
+    /// terminal, busy or idle; the server keeps it unless it saw that exit.
+    pub(super) fn request_exited_shell_close(
+        &mut self,
+        pane: &str,
+        terminal: &str,
+        kind: &str,
+        managed_name: &str,
+        session: Option<String>,
+    ) -> Result<(), crate::messaging::native::TransportError> {
+        match self.transport.request(Method::PaneCloseIfIdentity(
+            schema::PaneCloseIfIdentityParams {
+                pane_id: pane.into(),
+                expected_terminal_id: terminal.into(),
+                expected_agent: kind.into(),
+                expected_managed_name: managed_name.into(),
+                expected_session_id: session,
+                close_exited_shell: true,
+                allow_busy_shell: true,
+            },
+        )) {
+            Ok(ResponseResult::Ok {}) => Ok(()),
+            Ok(other) => Err(crate::messaging::native::TransportError {
+                code: None,
+                message: format!("Unexpected close response: {other:?}"),
+                definitely_rejected: false,
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     /// `agent.list` includes every terminal carrying a managed name, even with

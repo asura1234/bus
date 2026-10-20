@@ -424,10 +424,12 @@ The per-agent `stage` explains how far delivery progressed:
 When an agent's provider exits without Bus asking (not on delete, and not
 during startup, which reports its own screen), Bus first saves the pane's
 visible screen and its last 200 lines of scrollback to
-`<data dir>/exit-snapshots/a<agent id>-<unix ms>.txt`, one file per exit. Then
-it closes the terminal it created for that agent, even if the shell left
-behind is running something (an updater prompt, a command). The exit notices
-carry the snapshot path and the last 20 non-blank lines:
+`<data dir>/exit-snapshots/a<agent id>-<unix ms>.txt`, one file per exit. Once
+that record is saved, it closes the terminal it created for a work-room agent,
+even if the shell left behind is running something (an updater prompt, a
+command); a MASTER orchestrator's terminal stays open. The exit notices carry
+the snapshot path and the last 20 non-blank lines (at most 160 characters each
+and 1,600 in all; the file has the whole screen):
 
 ```text
 Exited with open request (process_exited); message 41 (request 42).
@@ -439,13 +441,16 @@ Last lines:
 ```
 
 The MASTER room gets `Agent process exited: <name> (agent <id>).` with the same
-snapshot lines, also when the worker had no open request. If the pane could not
-be read, the notice says `Exit snapshot unavailable: <reason>` and the terminal
-stays open for you to inspect. `bus state` shows the agent's `exit_snapshot`
-(`path`, `tail`, `at_ms`, `terminal_closed`, `launch_id`, `terminal_id`, or
-`error`), and each request in `bus message status` carries its agent's
-`exit_snapshot`. `bus agent read` cannot read an exited agent; read the snapshot
-file instead.
+snapshot lines, also when the worker had no open request. A message sent to the
+agent after its exit gets the same exit notice. Quoted screen lines never page
+anyone: their `waiting on you` markers are written with no-break spaces. If the
+pane could not be read, the notice says `Exit snapshot unavailable: <reason>`
+and the terminal stays open for you to inspect. `bus state` shows the agent's
+`exit_snapshot` (`path`, `tail`, `at_ms`, `launch_id`, `terminal_id`, or
+`error`; `terminal_closed` is `true` once Bus closed the terminal, `false` when
+it left it open, `null` before it tried), and each request in
+`bus message status` carries its agent's `exit_snapshot`. `bus agent read`
+cannot read an exited agent; read the snapshot file instead.
 
 ### Stalled messages
 
@@ -1068,10 +1073,11 @@ A destructive command without `--confirm` fails and names the missing flag.
 Deletion closes an agent's terminal only while the running server still
 attributes it to that agent. After its provider exited, Bus has usually closed
 that terminal already (see Provider exits); otherwise deletion closes the shell
-the provider left, even if it is running a command. Only when another agent or
-managed name has taken that terminal does Bus still delete the agent and its
-messages, leave the terminal open, and list it under `terminals_left_open` in
-the result. Close it yourself if it is no longer needed.
+the provider left, even if it is running a command. When the server refuses
+that close (another agent or managed name took the terminal, it is shared with
+another pane, or its session would not stop), Bus still deletes the agent and
+its messages, leaves the terminal open, and lists it under
+`terminals_left_open` in the result. Close it yourself if it is no longer needed.
 
 ## Upgrading to the always-on control socket
 

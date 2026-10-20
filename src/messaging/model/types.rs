@@ -398,11 +398,17 @@ pub(crate) struct ExitSnapshot {
     /// The last non-blank lines, shown inline in exit notices.
     pub(crate) tail: String,
     pub(crate) at_ms: u64,
-    /// Bus closed the terminal after saving it.
-    pub(crate) terminal_closed: bool,
+    /// Whether Bus closed the terminal once the snapshot was durable: None
+    /// until it tried, false when it left the terminal open.
+    pub(crate) terminal_closed: Option<bool>,
 }
 
 impl ExitSnapshot {
+    /// The screen is saved and Bus has yet to close the terminal.
+    pub(crate) fn close_pending(&self) -> bool {
+        self.path.is_some() && self.terminal_closed.is_none()
+    }
+
     /// The exit notices' lines about this snapshot.
     pub(crate) fn notice(&self) -> String {
         let Some(path) = &self.path else {
@@ -411,13 +417,13 @@ impl ExitSnapshot {
                 self.error.as_deref().unwrap_or("unknown error")
             );
         };
-        let terminal = if self.terminal_closed {
-            "Bus closed its terminal"
-        } else {
-            "its terminal is still open"
+        let terminal = match self.terminal_closed {
+            Some(true) => " (Bus closed its terminal)",
+            Some(false) => " (its terminal is still open)",
+            None => "",
         };
         format!(
-            "Exit snapshot: {} ({terminal}).\nLast lines:\n{}",
+            "Exit snapshot: {}{terminal}.\nLast lines:\n{}",
             path.display(),
             self.tail
         )

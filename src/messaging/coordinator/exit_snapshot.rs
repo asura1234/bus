@@ -1,15 +1,20 @@
 //! The screen an agent's provider left when it exited without Bus asking.
-use super::{io, schema, BusState, Method, Path, ResponseResult, RoomAgent};
+use super::{io, schema, BusState, Method, Path, ResponseResult, RoomAgent, Worker};
 use crate::messaging::{identity, model::ExitSnapshot, native::Transport};
 
 /// Scrollback lines saved with the visible screen.
 const SCROLLBACK_LINES: u32 = 200;
 /// Non-blank lines quoted in the exit notices.
 const TAIL_LINES: usize = 20;
+/// Characters kept of each quoted line, and of the whole quote, so the exit
+/// notice fits one orchestrator notification; the file keeps everything.
+const TAIL_LINE_CHARS: usize = 160;
+const TAIL_CHARS: usize = 1_600;
 
 /// Save the exited provider's screen once per launch, before anything else
-/// touches the pane, then close the terminal Bus created for it, even with a
-/// command running in its shell. Startup failures report their own screen.
+/// touches the pane. A worker's terminal is closed only after this record is
+/// durable (`Worker::close_exited_terminals`); a MASTER orchestrator's stays
+/// open for the developer. Startup failures report their own screen.
 pub(super) fn save(
     transport: &mut dyn Transport,
     data_dir: &Path,
@@ -42,7 +47,7 @@ pub(super) fn save(
         error: None,
         tail: String::new(),
         at_ms,
-        terminal_closed: false,
+        terminal_closed: agent.orchestrates.map(|_| false),
     };
     match (&visible, &recent) {
         (Err(visible), Err(recent)) => {
@@ -79,17 +84,64 @@ pub(super) fn save(
             }
         }
     }
-    // Without a saved screen the terminal is the only evidence; leave it.
-    if snapshot.path.is_some() {
-        snapshot.terminal_closed = close(transport, agent, pane, terminal);
-    }
     tracing::info!(event = "bus.agent.exit_snapshot", agent_id = agent.id.0,
         pane_id = pane, terminal_id = terminal, path = ?snapshot.path,
-        error = ?snapshot.error, terminal_closed = snapshot.terminal_closed,
-        "Saved the exited provider's screen");
+        error = ?snapshot.error, "Saved the exited provider's screen");
     state
         .record_exit_snapshot(agent.id, snapshot)
         .map_err(|e| e.to_string())
+}
+
+impl Worker {
+    /// Close each worker terminal whose exit snapshot is now durable, even
+    /// with a command running in its shell, then report the exit. A refused
+    /// close is recorded and not retried.
+    pub(super) fn close_exited_terminals(&mut self) -> Result<(), String> {
+        let pending: Vec<_> = self
+            .state
+            .agents()
+            .filter(|agent| {
+                !agent.deletion_pending
+                    && agent.exit_snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.close_pending()
+                            && snapshot.launch_id == agent.runtime_identity.launch_id
+                    })
+            })
+            .cloned()
+            .collect();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.state.clone();
+        for agent in pending {
+            let Some(mut snapshot) = agent.exit_snapshot.clone() else {
+                continue;
+            };
+            let closed = agent.runtime_identity.pane_id.as_deref().map(|pane| {
+                self.request_exited_shell_close(
+                    pane,
+                    &snapshot.terminal_id,
+                    identity::provider_kind(agent.provider).label(),
+                    &identity::managed_name(agent.room_id, agent.id),
+                    agent.runtime_identity.session_id.clone(),
+                )
+            });
+            if let Some(Err(error)) = &closed {
+                tracing::warn!(event = "bus.agent.exit_terminal_kept", agent_id = agent.id.0,
+                    code = ?error.code, detail = %error.message,
+                    "Exited provider's terminal was not closed");
+            }
+            snapshot.terminal_closed = Some(matches!(closed, Some(Ok(()))));
+            tracing::info!(event = "bus.agent.exit_terminal", agent_id = agent.id.0,
+                terminal_id = %snapshot.terminal_id, closed = snapshot.terminal_closed,
+                "Handled the exited provider's terminal");
+            state
+                .record_exit_snapshot(agent.id, snapshot)
+                .map_err(|e| e.to_string())?;
+            super::poll::report_exit(&mut state, agent.id, Some(true))?;
+        }
+        self.save(state)
+    }
 }
 
 fn read(
@@ -112,49 +164,46 @@ fn read(
     }
 }
 
-/// The last non-blank lines, quoted and stripped of control characters.
+/// The last non-blank lines, quoted, stripped of control characters and
+/// bounded; the newest lines are kept.
 fn tail(screen: &str) -> String {
-    let lines: Vec<_> = screen
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    let tail = lines[lines.len().saturating_sub(TAIL_LINES)..]
-        .iter()
-        .map(|line| {
-            let line: String = line
-                .chars()
-                .filter(|c| !c.is_control() || *c == '\t')
-                .take(300)
-                .collect();
-            format!("> {line}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if tail.is_empty() {
+    let mut quoted = Vec::new();
+    let mut chars = 0;
+    for line in screen.lines().rev().filter(|line| !line.trim().is_empty()) {
+        let line: String = line
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\t')
+            .take(TAIL_LINE_CHARS)
+            .collect();
+        let line = format!("> {}", defang(&line));
+        chars += line.chars().count() + 1;
+        if quoted.len() == TAIL_LINES || chars > TAIL_CHARS {
+            break;
+        }
+        quoted.push(line);
+    }
+    quoted.reverse();
+    if quoted.is_empty() {
         "> (screen is empty)".into()
     } else {
-        tail
+        quoted.join("\n")
     }
 }
 
-/// The server closes it only while the provider's exit is its own fact and
-/// no agent or managed name has taken the terminal since.
-fn close(transport: &mut dyn Transport, agent: &RoomAgent, pane: &str, terminal: &str) -> bool {
-    let result = transport.request(Method::PaneCloseIfIdentity(
-        schema::PaneCloseIfIdentityParams {
-            pane_id: pane.into(),
-            expected_terminal_id: terminal.into(),
-            expected_agent: identity::provider_kind(agent.provider).label().into(),
-            expected_managed_name: identity::managed_name(agent.room_id, agent.id),
-            expected_session_id: agent.runtime_identity.session_id.clone(),
-            close_exited_shell: true,
-            allow_busy_shell: true,
-        },
-    ));
-    if let Err(error) = &result {
-        tracing::warn!(event = "bus.agent.exit_terminal_kept", agent_id = agent.id.0,
-            pane_id = pane, code = ?error.code, detail = %error.message,
-            "Exited provider's terminal was not closed");
+/// Screen text is the worker's output, not Bus asking the developer for
+/// anything: its waiting markers get no-break spaces, so they read the same
+/// but never page anyone (`feishu::waiting`).
+fn defang(line: &str) -> String {
+    const MARKERS: [&str; 3] = ["waiting on you", "waiting-on-you", "waiting_on_you"];
+    let folded = line.to_ascii_lowercase();
+    let mut out = line.to_owned();
+    for marker in MARKERS {
+        for (start, _) in folded.match_indices(marker) {
+            // ASCII lowercasing keeps byte offsets, and the separators are ASCII.
+            for offset in [start + 7, start + 10] {
+                out.replace_range(offset..offset + 1, "\u{1}");
+            }
+        }
     }
-    matches!(result, Ok(ResponseResult::Ok {}))
+    out.replace('\u{1}', "\u{a0}")
 }

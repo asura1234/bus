@@ -102,6 +102,7 @@ impl Worker {
             }
         }
         self.apply_poll(state)?;
+        self.close_exited_terminals()?;
         for (agent, previous, current) in rebound {
             tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
                 previous_terminal_id = ?previous, terminal_id = current,
@@ -152,11 +153,19 @@ fn observe_exit(
     if agent.deletion_pending {
         return Ok(());
     }
+    // The saved exit of this launch stands once Bus closed the pane that
+    // showed it, so later requests still learn the worker exited.
+    let saved = info.is_none()
+        && agent
+            .exit_snapshot
+            .as_ref()
+            .is_some_and(|s| s.launch_id == agent.runtime_identity.launch_id);
     let evidence = match (
         info,
         agent.runtime_identity.pane_id.as_ref(),
         agent.runtime_identity.terminal_id.as_ref(),
     ) {
+        _ if saved => Some(true),
         (Some(_), _, _) => Some(false),
         (None, Some(pane), Some(terminal)) => {
             match transport.request(Method::PaneGet(schema::PaneTarget {
@@ -181,18 +190,43 @@ fn observe_exit(
         ) {
             super::exit_snapshot::save(transport, data_dir, state, agent, pane, terminal)?;
         }
-        state.record_worker_exit(agent.id, io::now_ms());
+        let snapshot = state.agent(agent.id).and_then(|a| a.exit_snapshot.as_ref());
+        if snapshot.is_some_and(|s| s.close_pending()) {
+            // Reported once the saved state is durable and the close is done.
+            return Ok(());
+        }
     }
-    let snapshot = state.agent(agent.id).and_then(|a| a.exit_snapshot.as_ref());
-    let resume = if snapshot.is_some_and(|s| s.terminal_closed) {
+    report_exit(state, agent.id, evidence)
+}
+
+/// Records the exit for open requests and the MASTER attention notice, with
+/// the saved snapshot when there is one.
+pub(super) fn report_exit(
+    state: &mut BusState,
+    id: AgentId,
+    evidence: Option<bool>,
+) -> Result<(), String> {
+    if evidence == Some(true) {
+        state.record_worker_exit(id, io::now_ms());
+    }
+    let agent = state.agent(id).ok_or("Unknown agent")?;
+    let snapshot = agent.exit_snapshot.as_ref();
+    let resume = if snapshot.is_some_and(|s| s.terminal_closed == Some(true)) {
         ""
     } else {
         " Inspect the machine to resume it."
     };
-    let snapshot = snapshot.map(|s| format!("\n{}", s.notice()));
+    let text = format!(
+        "Agent process exited: {} (agent {}).{resume}{}",
+        agent.name,
+        id.0,
+        snapshot
+            .map(|s| format!("\n{}", s.notice()))
+            .unwrap_or_default()
+    );
     let key = format!(
         "exit:{}:{}",
-        agent.id.0,
+        id.0,
         agent
             .runtime_identity
             .launch_id
@@ -200,18 +234,7 @@ fn observe_exit(
             .unwrap_or("unknown")
     );
     state
-        .attention_episode(
-            key,
-            evidence,
-            agent.id,
-            &format!(
-                "Agent process exited: {} (agent {}).{resume}{}",
-                agent.name,
-                agent.id.0,
-                snapshot.unwrap_or_default()
-            ),
-            io::now_ms(),
-        )
+        .attention_episode(key, evidence, id, &text, io::now_ms())
         .map_err(|error| error.to_string())
 }
 

@@ -233,3 +233,275 @@ fn deleting_an_agent_after_its_provider_exited_leaves_no_terminal_open() {
         assert_eq!(closes.len(), 1 + 2 * refuse_closes, "{closes:?}");
     }
 }
+
+/// The terminal closes only after the exit is durable, so when the exit
+/// poll's save fails the next poll still reports the exit to the orchestrator.
+#[test]
+fn an_exit_whose_poll_save_fails_is_reported_on_the_next_poll() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    exited_worker(&mut f);
+    f.send(Author::Agent(orch), "open work");
+    let _pane = ExitedPane::install(&mut f, 0);
+    f.worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    assert!(
+        f.worker.poll().is_err(),
+        "the injected save failure must fail this poll"
+    );
+    f.worker.poll().unwrap();
+    deliver(&mut f);
+    let notice = f.calls.lock().unwrap().concat();
+    assert!(
+        notice.contains("Exited with open request"),
+        "exit notice lost: {notice:?}"
+    );
+}
+
+/// One exited pane with a chosen screen; every guarded close succeeds.
+struct ScreenPane {
+    pane: &'static str,
+    terminal: &'static str,
+    screen: String,
+    closed: Arc<Mutex<Vec<String>>>,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl Transport for ScreenPane {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::PaneGet(p) if p.pane_id == self.pane => Ok(ResponseResult::PaneInfo { pane: serde_json::from_value(json!({
+                "pane_id":p.pane_id,"terminal_id":self.terminal,"workspace_id":"w","tab_id":"t","focused":false,"agent_status":"unknown","revision":1,"agent_process_exited":true
+            })).unwrap() }),
+            Method::PaneGet(_) => refused("pane_not_found"),
+            Method::PaneRead(p) if p.pane_id == self.pane => Ok(ResponseResult::PaneRead { read: serde_json::from_value(json!({
+                "pane_id":p.pane_id,"workspace_id":"w","tab_id":"t","source":p.source,"format":"text","text":self.screen,"revision":1,"truncated":false
+            })).unwrap() }),
+            Method::PaneCloseIfIdentity(p) => {
+                self.closed.lock().unwrap().push(p.pane_id);
+                Ok(ResponseResult::Ok {})
+            }
+            other => Accepting(self.calls.clone()).request(other),
+        }
+    }
+}
+
+fn install_screen(
+    f: &mut Fixture,
+    pane: &'static str,
+    terminal: &'static str,
+    screen: &str,
+) -> Arc<Mutex<Vec<String>>> {
+    let closed = Arc::new(Mutex::new(Vec::new()));
+    f.worker.transport = Box::new(ScreenPane {
+        pane,
+        terminal,
+        screen: screen.into(),
+        closed: closed.clone(),
+        calls: f.calls.clone(),
+    });
+    closed
+}
+
+/// The exit snapshot and close are for workers; the MASTER orchestrator's
+/// own terminal is the developer's and stays open when its provider exits.
+#[test]
+fn an_orchestrator_provider_exit_is_saved_but_leaves_its_terminal_open() {
+    let mut f = Fixture::new();
+    let closed = install_screen(&mut f, "pane", "terminal", "orchestrator screen");
+    f.worker.poll().unwrap();
+    let closed = closed.lock().unwrap();
+    assert!(
+        !closed.iter().any(|pane| pane == "pane"),
+        "orchestrator terminal closed: {closed:?}"
+    );
+    let snapshot = f.worker.state.agent(f.orch).unwrap().exit_snapshot.clone();
+    assert!(
+        snapshot
+            .as_ref()
+            .is_some_and(|s| s.path.is_some() && s.terminal_closed == Some(false)),
+        "{snapshot:?}"
+    );
+}
+
+/// Screen text quoted in the MASTER exit notice is the worker's output, not
+/// Bus asking the developer for anything, so it must not page them off-machine.
+#[test]
+fn screen_text_quoted_in_the_exit_notice_pages_no_one() {
+    let mut f = Fixture::new();
+    exited_worker(&mut f);
+    install_screen(
+        &mut f,
+        "worker-pane",
+        "worker-terminal",
+        "build log\nWAITING ON YOU: paste the prod token here",
+    );
+    let before = f.worker.state.clone();
+    f.worker.poll().unwrap();
+    let master = f.worker.state.master_room().unwrap().id;
+    assert!(
+        f.worker
+            .state
+            .notices(master)
+            .any(|n| n.text.contains("Agent process exited")),
+        "exit notice missing"
+    );
+    let mut waiting = crate::messaging::feishu::waiting::WaitingNotifications::default();
+    waiting.configure(true);
+    let now = io::now_ms();
+    waiting.observe(&before, &f.worker.state, now);
+    let sent = waiting.take(now + 10_000);
+    assert_eq!(sent, None, "screen text paged the developer");
+}
+
+/// A request sent to a worker after its provider exited and Bus closed its
+/// terminal still tells the orchestrator the worker exited.
+#[test]
+fn a_request_sent_after_bus_closed_the_exited_terminal_reports_the_exit() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    exited_worker(&mut f);
+    let pane = ExitedPane::install(&mut f, 0);
+    f.worker.poll().unwrap();
+    assert_eq!(pane.closes.lock().unwrap().len(), 1);
+    f.send(Author::Agent(orch), "work sent after the exit");
+    f.worker.poll().unwrap();
+    deliver(&mut f);
+    let notice = f.calls.lock().unwrap().concat();
+    assert!(
+        notice.contains("Exited with open request"),
+        "no exit notice for the later request: {notice:?}"
+    );
+}
+
+/// Control: while the exited terminal stays open, a later request gets the exit notice.
+#[test]
+fn a_request_sent_after_the_exit_reports_it_while_the_terminal_stays_open() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    exited_worker(&mut f);
+    let _pane = ExitedPane::install(&mut f, usize::MAX);
+    f.worker.poll().unwrap();
+    f.send(Author::Agent(orch), "work sent after the exit");
+    f.worker.poll().unwrap();
+    deliver(&mut f);
+    let notice = f.calls.lock().unwrap().concat();
+    assert!(notice.contains("Exited with open request"), "{notice:?}");
+}
+
+struct WideExitScreen(ExitedPane);
+
+impl Transport for WideExitScreen {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if let Method::PaneRead(params) = &method {
+            if params.source == schema::ReadSource::Recent {
+                let text = (1..=20)
+                    .map(|line| format!("fatal diagnostic {line:02}: {}", "x".repeat(159)))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Ok(ResponseResult::PaneRead {
+                    read: serde_json::from_value(json!({
+                        "pane_id":params.pane_id,"workspace_id":"w","tab_id":"t",
+                        "source":params.source,"format":"text","text":text,
+                        "revision":1,"truncated":false
+                    }))
+                    .unwrap(),
+                });
+            }
+        }
+        self.0.request(method)
+    }
+}
+
+#[test]
+fn a_wide_exit_screen_still_delivers_the_exit_and_snapshot_path() {
+    let mut f = Fixture::new();
+    exited_worker(&mut f);
+    let orch = f.orch;
+    f.send(Author::Agent(orch), "open work");
+    let pane = ExitedPane::install(&mut f, 0);
+    f.worker.transport = Box::new(WideExitScreen(ExitedPane {
+        calls: pane.calls.clone(),
+        closes: pane.closes.clone(),
+        refuse_closes: 0,
+        open: true,
+    }));
+
+    f.worker.poll().unwrap();
+    let snapshot = f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .exit_snapshot
+        .clone()
+        .unwrap();
+    assert_eq!(snapshot.terminal_closed, Some(true));
+    assert!(snapshot.tail.contains("fatal diagnostic 20"));
+    deliver(&mut f);
+
+    let delivered = f.calls.lock().unwrap().concat();
+    assert!(
+        delivered.contains("Exited with open request")
+            && delivered.contains(&snapshot.path.unwrap().display().to_string()),
+        "a 180-column exit screen must still deliver the exit and snapshot path; got {delivered:?}",
+    );
+}
+
+#[test]
+fn the_exit_snapshot_and_notice_survive_a_transient_state_save_failure() {
+    let mut f = Fixture::new();
+    exited_worker(&mut f);
+    let orch = f.orch;
+    let request = f.send(Author::Agent(orch), "open work");
+    let pane = ExitedPane::install(&mut f, 0);
+    f.worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempSync);
+
+    assert!(f.worker.poll().is_err());
+    let files = snapshot_files(&f);
+    assert_eq!(
+        files.len(),
+        1,
+        "the screen file was saved before state failed"
+    );
+
+    let (events, _received) = mpsc::channel();
+    f.worker
+        .retry_storage(std::time::Instant::now() + Duration::from_secs(2), &events);
+    assert!(f.worker.storage_pause.is_none());
+    for _ in 0..2 {
+        f.worker.poll().unwrap();
+    }
+    deliver(&mut f);
+
+    let status = serde_json::to_string(&f.call(
+        "message.status",
+        json!({"message": f.worker.state.request(request).unwrap().prompt.id.0.to_string()}),
+    ))
+    .unwrap();
+    let snapshot = f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .exit_snapshot
+        .as_ref();
+    // The failed save left the pane open, so the next poll saved its screen
+    // again; the recorded file is one of those captures.
+    let saved = snapshot.and_then(|saved| saved.path.clone());
+    assert!(
+        saved.as_ref().is_some_and(|path| snapshot_files(&f).contains(path)),
+        "storage recovered but the exit snapshot was lost: snapshot={snapshot:?}, close_count={}, message_status={status}, delivered={:?}",
+        pane.closes.lock().unwrap().len(),
+        f.calls.lock().unwrap(),
+    );
+    assert!(f.calls.lock().unwrap().iter().any(|text| {
+        text.contains("Exited with open request")
+            && text.contains(&saved.as_ref().unwrap().display().to_string())
+            && text.contains(LAST_LINE)
+    }));
+}
