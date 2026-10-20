@@ -1569,3 +1569,38 @@ fn a_codex_turn_whose_rollout_has_no_answer_for_it_stays_reply_not_captured() {
         assert_reply_not_captured(&fixture, lead);
     }
 }
+
+/// Verifier regression (2026-10-20, temp/bug-reply-not-captured section 6):
+/// the earlier of two turns that ran the same prompt since it was sent sat
+/// outside the rollout tail Bus read, so the later turn's answer was
+/// delivered to the earlier request. Every turn since the send must be seen;
+/// two matching turns are ambiguous and deliver nothing.
+#[test]
+fn truncated_tail_must_not_assign_a_later_identical_turn_to_an_earlier_request() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
+    fixture.record(
+        json!({"hook_event_name":"SessionStart","session_id":"session",
+        "source":"startup","transcript_path":rollout}),
+    );
+    fixture.consume();
+    let id = fixture.send("status?", false);
+    fixture.deliver();
+    let typed = fixture.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(&rollout_at(&fixture, 1), "first", &typed, None),
+    );
+    // Real rollout reasoning and tool output often exceed 256 KiB.
+    let reasoning = json!({"timestamp":rollout_at(&fixture, 2),"type":"response_item",
+        "payload":{"type":"reasoning","encrypted_content":"x".repeat(300 * 1024)}});
+    let complete = json!({"timestamp":rollout_at(&fixture, 60_000),"type":"event_msg",
+        "payload":{"type":"task_complete","turn_id":"first","last_agent_message":"FIRST"}});
+    append(&rollout, &format!("{reasoning}\n{complete}\n"));
+    let at = rollout_at(&fixture, 60_001);
+    append(&rollout, &codex_turn(&at, "later", &typed, Some("LATER")));
+    fixture.now += 60_002;
+    end_without_stop(&mut fixture);
+    assert!(fixture.reply(id).is_none(), "{:?}", fixture.reply(id));
+    assert_reply_not_captured(&fixture, id);
+}

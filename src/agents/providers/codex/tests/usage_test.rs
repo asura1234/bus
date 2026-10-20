@@ -214,3 +214,61 @@ fn rollout_finds_the_one_turn_that_ran_a_prompt_after_it_was_sent() {
     assert!(find_codex_prompt_turn(&dir.join("missing.jsonl"), 0, |_| true).is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn rollout_prompt_search_sees_every_turn_since_the_send_however_long() {
+    let dir = rollout_dir("prompt-window");
+    let path = dir.join("rollout-2026-10-20T00-00-00-abc.jsonl");
+    let mut lines = codex_turn("turn-0", "2026-10-20T05:00:00.000Z", "older", Some("o"));
+    lines.extend(codex_turn(
+        "turn-1",
+        "2026-10-20T05:06:51.361Z",
+        "status?",
+        None,
+    ));
+    // A turn's reasoning and tool output can run to megabytes.
+    let filler = json!({"timestamp":"2026-10-20T05:07:00.000Z","type":"response_item",
+        "payload":{"type":"reasoning","encrypted_content":"x".repeat(300 * 1024)}});
+    lines.push(filler.to_string());
+    lines.extend(codex_turn(
+        "turn-2",
+        "2026-10-20T05:54:12.249Z",
+        "status?",
+        Some("b"),
+    ));
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    let since = 1_792_472_500_000; // 2026-10-20T05:01:40Z
+                                   // The earlier matching turn lies past the last 256 KiB, yet still counts.
+    assert_eq!(
+        find_codex_prompt_turn(&path, since, |text| text == "status?").unwrap(),
+        None
+    );
+    assert_eq!(
+        find_codex_prompt_turn(&path, since, |text| text == "older").unwrap(),
+        None
+    );
+    // A window longer than Bus will read is never searched in part.
+    let cap = 64 * 1024;
+    assert_eq!(
+        find_prompt_turn_within(&path, since, |text| text == "status?", cap).unwrap(),
+        None
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rollout_prompt_search_refuses_a_window_longer_than_it_reads() {
+    let dir = rollout_dir("prompt-cap");
+    let path = dir.join("rollout-2026-10-20T00-00-00-abc.jsonl");
+    let mut lines = codex_turn("turn-1", "2026-10-20T05:06:51.361Z", "close it", Some("a"));
+    let filler = json!({"timestamp":"2026-10-20T05:07:00.000Z","type":"response_item",
+        "payload":{"type":"reasoning","encrypted_content":"x".repeat(100 * 1024)}});
+    lines.push(filler.to_string());
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    let since = 1_792_472_800_000; // 2026-10-20T05:06:40Z
+    let find = |cap| find_prompt_turn_within(&path, since, |text| text == "close it", cap);
+    assert_eq!(find(1024 * 1024).unwrap(), Some("turn-1".into()));
+    // Bus cannot see where the window starts, so it attributes nothing.
+    assert_eq!(find(64 * 1024).unwrap(), None);
+    std::fs::remove_dir_all(dir).unwrap();
+}

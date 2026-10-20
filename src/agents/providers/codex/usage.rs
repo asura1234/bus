@@ -11,6 +11,9 @@ use serde_json::Value;
 
 /// Enough rollout tail to reach the last `token_count` event after a turn.
 const ROLLOUT_TAIL_BYTES: u64 = 256 * 1024;
+/// The most rollout Bus reads back to see every turn since a message was
+/// sent. One turn can write megabytes (live, 2026-10-20: 5.7 MB).
+const ROLLOUT_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Accept only Codex rollout files: hook payloads name the path, and Bus
 /// should not parse arbitrary files a payload points at.
@@ -93,14 +96,27 @@ pub(crate) fn read_codex_turn_end(
 
 /// The turn that ran a prompt `matches` accepts and started at or after
 /// `since_ms`: the turn of a message Bus typed then but never saw start.
-/// `Ok(None)` when no such turn is in the rollout tail, or when more than
-/// one is, since the message's turn cannot then be told apart.
+/// `Ok(None)` when no such turn is in the rollout, when more than one is
+/// (the message's turn cannot then be told apart), or when the rollout
+/// written since `since_ms` is too long to read whole: an earlier matching
+/// turn could hide past what was read and make a later one look unique.
 pub(crate) fn find_codex_prompt_turn(
     path: &Path,
     since_ms: u64,
     matches: impl Fn(&str) -> bool,
 ) -> std::io::Result<Option<String>> {
-    let tail = read_rollout_tail(path)?;
+    find_prompt_turn_within(path, since_ms, matches, ROLLOUT_WINDOW_BYTES)
+}
+
+fn find_prompt_turn_within(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+    cap: u64,
+) -> std::io::Result<Option<String>> {
+    let Some(tail) = read_rollout_since(path, since_ms, cap)? else {
+        return Ok(None);
+    };
     let mut current: Option<(String, u64)> = None;
     let mut found: Vec<String> = Vec::new();
     for line in tail.lines() {
@@ -129,6 +145,43 @@ pub(crate) fn find_codex_prompt_turn(
         [turn] => Some(turn.clone()),
         _ => None,
     })
+}
+
+/// The rollout's whole lines from a line written before `since_ms` on, when
+/// the last `cap` bytes reach back that far; `Ok(None)` when they do not.
+/// Codex appends events as they happen, so every line after one written
+/// before `since_ms` is in the text, and none is missed.
+fn read_rollout_since(path: &Path, since_ms: u64, cap: u64) -> std::io::Result<Option<String>> {
+    let mut file = std::fs::File::open(path)?;
+    let length = file.metadata()?.len();
+    let mut size = ROLLOUT_TAIL_BYTES.min(cap);
+    loop {
+        let start = length.saturating_sub(size);
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = Vec::new();
+        (&mut file).take(size).read_to_end(&mut bytes)?;
+        let mut text = String::from_utf8_lossy(&bytes).into_owned();
+        if start > 0 {
+            // The first line begins before the seek.
+            let whole = text.find('\n').map_or(text.len(), |at| at + 1);
+            text.drain(..whole);
+        }
+        let reached = start == 0
+            || text
+                .lines()
+                .find_map(|line| {
+                    let event: Value = serde_json::from_str(line).ok()?;
+                    rfc3339_ms(event["timestamp"].as_str()?)
+                })
+                .is_some_and(|at| at < since_ms);
+        if reached {
+            return Ok(Some(text));
+        }
+        if size >= cap {
+            return Ok(None);
+        }
+        size = size.saturating_mul(4).min(cap);
+    }
 }
 
 /// The prompt text of a user input event: an `item_completed` `UserMessage`
