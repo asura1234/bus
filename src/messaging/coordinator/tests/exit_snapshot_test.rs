@@ -72,7 +72,9 @@ impl Transport for ExitedPane {
             Method::PaneCloseIfIdentity(p) => {
                 self.closes.lock().unwrap().push(p.clone());
                 if !self.open {
-                    return refused("pane_not_found");
+                    // As the server: a close of a terminal already gone succeeds,
+                    // so a retry after a lost response is safe.
+                    return Ok(ResponseResult::Ok {});
                 }
                 if !(p.close_exited_shell && p.allow_busy_shell)
                     || p.pane_id != "worker-pane"
@@ -505,3 +507,7 @@ fn the_exit_snapshot_and_notice_survive_a_transient_state_save_failure() {
             && text.contains(LAST_LINE)
     }));
 }
+
+#[cfg(unix)]
+#[path = "exit_snapshot_save_retry_test.rs"]
+mod save_retry;
