@@ -15,6 +15,7 @@ mod dialogs;
 mod directives;
 mod input;
 mod question;
+mod rollout;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
 use directives::{api_error, dialog_seconds, show_dialog, work_seconds};
@@ -143,6 +144,8 @@ struct FakeAgent {
     shells: Vec<String>,
     /// When the newest shell ends and wakes a turn (`fake:wake N`).
     wake: Option<(Instant, String, bool)>,
+    /// Codex runs no more hooks once `fake:lose-cwd` removed its directory.
+    hooks_lost: bool,
 }
 
 /// What a keystroke ended in, besides editing the draft.
@@ -168,6 +171,7 @@ impl FakeAgent {
             working: None,
             shells: Vec::new(),
             wake: None,
+            hooks_lost: false,
         }
     }
 
@@ -187,8 +191,7 @@ impl FakeAgent {
 
     /// `payload` for `event` as the played provider reports it. Codex names
     /// its turn `turn_id` (Claude: `prompt_id`) and always names its rollout:
-    /// Bus ignores a Codex hook without one as a background session. The path
-    /// is no `rollout-*` file, so Bus reads no usage from it. Cursor names its
+    /// Bus ignores a Codex hook without one as a background session. Cursor names its
     /// session `conversation_id` and its turn `generation_id`, and gets no
     /// transcript: Bus would wait for one to settle the reply.
     fn payload(&self, event: &str, turn: Option<&str>, mut payload: Value) -> Value {
@@ -204,8 +207,7 @@ impl FakeAgent {
             payload[turn_key] = json!(turn);
         }
         if self.codex() {
-            let rollout = std::env::temp_dir().join(format!("fake-codex-{}.jsonl", self.session));
-            payload["transcript_path"] = json!(rollout);
+            payload["transcript_path"] = json!(self.rollout());
         }
         payload
     }
@@ -225,7 +227,8 @@ impl FakeAgent {
                 Some(hooks) => hooks.iter().collect(),
                 None => vec![entry],
             })
-            .filter_map(|hook| hook["command"].as_str());
+            .filter_map(|hook| hook["command"].as_str())
+            .filter(|_| !self.hooks_lost);
         for command in commands {
             run_hook(command, &payload);
         }
@@ -326,6 +329,7 @@ impl FakeAgent {
             "UserPromptSubmit"
         };
         self.hook(submit, Some(&turn), json!({"prompt": prompt}));
+        self.record_prompt(&turn, prompt);
         if dialogs::redraw_requested(prompt) {
             if let Err(code) = self.settlement_dialog(prompt) {
                 return Some(code);
@@ -382,6 +386,7 @@ impl FakeAgent {
             self.hook("afterAgentResponse", Some(&turn), json!({"text": reply}));
             self.hook("stop", Some(&turn), json!({"status": "completed"}));
         } else {
+            self.record_answer(&turn, &reply);
             let payload = self.stop_payload(prompt, &reply);
             self.hook("Stop", Some(&turn), payload);
         }
