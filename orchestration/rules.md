@@ -84,8 +84,11 @@ the wrapper remains held.
   or a room, uses Markdown formatting. *Why:* structure and links make a
   message faster for the developer to read and act on.
   - Link online reference material with a Markdown hyperlink.
-  - Give a pull request or merge request as a hyperlink plus its title, e.g.
+  - Give a pull request, merge request or issue as a hyperlink plus its title, e.g.
     [#24 split control commands into an agent tier and a dev tier](https://github.com/asura1234/bus/pull/24).
+    Never write a bare number such as "#24": the developer cannot tell what it is.
+    Look up the title and URL in the repository it belongs to, e.g.
+    `gh pr view N --repo OWNER/REPO --json title,url` or `gh issue view N ...`.
 - **Dispatch every task with `bus send --async` in the background.** Run
   `bus send --room ROOM --as YOUR_NAME --to AGENT --async --text "..."` as a
   background tool call (Claude Code: Bash with `run_in_background`; Cursor: a
