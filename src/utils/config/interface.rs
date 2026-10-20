@@ -142,7 +142,7 @@ pub struct UiConfig {
     /// Desktop tab row placement. Default: top.
     pub tab_bar_position: TabBarPositionConfig,
     /// Format for the outer terminal window title. Empty leaves the title alone.
-    /// Default: "{hostname}: {workspace}".
+    /// Default: "{workspace}".
     pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
