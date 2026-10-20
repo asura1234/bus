@@ -325,6 +325,35 @@ fn direct_bus_control_shells_do_not_hold_replies() {
     }
 }
 
+#[test]
+fn async_dispatch_file_arguments_and_completion_echo_do_not_hold_replies() {
+    for command in [
+        r#"bus send --to worker --async --text "$(cat brief.md)""#,
+        r#"cd /tmp; ./bus send --async --to worker --text "$(cat 'brief with spaces.md')" > out.json 2>&1; echo sent"#,
+        r#"bus send --to worker --async --text $(cat brief.md)"#,
+        r#"bus send --to worker --async --text go >/dev/null; echo sent"#,
+    ] {
+        assert!(is_bus_control(command), "dispatch only: {command}");
+    }
+}
+
+#[test]
+fn async_dispatch_wrappers_cannot_hide_real_work() {
+    for command in [
+        r#"bus send --async --text "$(cat brief.md; cargo test)""#,
+        r#"bus send --async --text "$(cat $(generate-brief))""#,
+        r#"bus send --async --text "$(cat <(cargo test))""#,
+        r#"bus send --async --text "$(cat)""#,
+        r#"bus send --async --text "$(cat -)""#,
+        r#"bus send --async --text "$(cat brief.md)"; cargo test"#,
+        r#"bus send --async --text "$(cat brief.md)"; echo "$(cargo test)""#,
+        r#"bus send --async --text "$(cat brief.md)" | tee out.json"#,
+        r#"bus send --async --text "$(cat 'brief.md)""#,
+    ] {
+        assert!(!is_bus_control(command), "must hold work: {command}");
+    }
+}
+
 /// A background shell that runs real work and only then reports over Bus
 /// (`cargo build && bus send ...`) is work the reply waits on: its exit
 /// wakes the turn with the build's outcome, so it still holds the reply.

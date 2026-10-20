@@ -754,3 +754,6 @@ fn shell_held_turns_keep_their_replies_and_folded_messages_share_them() {
 
 #[path = "codex_unbound_reply_recovery_test.rs"]
 mod codex_unbound_reply_recovery_tests;
+
+#[path = "master_replies_test.rs"]
+mod master_replies_tests;

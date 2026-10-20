@@ -381,10 +381,14 @@ fn a_claude_turn_waiting_on_shells_it_started_keeps_its_request_open() {
     fixture.record(claude_stop("turn-3", "Both test runs passed.", &[]));
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += HELD_REPLY_GRACE_MS + 1;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert_eq!(
         fixture.reply(lead).as_deref(),
-        Some("Both test runs passed.")
+        Some("Waiting on the background shells.")
     );
 }
 
@@ -579,10 +583,9 @@ fn a_claude_reply_held_past_the_shell_cap_is_delivered_as_its_interim_text() {
     assert_eq!(fixture.request(next).phase, RequestPhase::Active);
 }
 
-/// The cap counts from the first hold; a shell finishing wakes a turn that may
-/// hold again with newer text, and that newer text is what the cap delivers.
+/// A later wake turn cannot refresh the held answer or its first deadline.
 #[test]
-fn the_shell_cap_counts_from_the_first_hold_and_delivers_the_newest_interim_text() {
+fn a_wake_turn_preserves_the_first_held_answer_and_deadline() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = held_on_a_started_shell(&mut fixture);
     fixture.now += 5 * 60 * 1000;
@@ -607,7 +610,7 @@ fn the_shell_cap_counts_from_the_first_hold_and_delivers_the_newest_interim_text
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert_eq!(
         fixture.reply(lead).as_deref(),
-        Some("Build done; waiting on the server.")
+        Some("Waiting on the build.")
     );
 }
 
@@ -745,7 +748,13 @@ fn a_queued_message_survives_the_wake_up_turn_that_ends_a_shell_hold() {
     fixture.now = crate::messaging::storage::io::now_ms();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.reply(lead).as_deref(), Some("Build done."));
+    fixture.now += HELD_REPLY_GRACE_MS + 1;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
     fixture.deliver();
     assert_eq!(
         fixture.typed().last().unwrap(),
@@ -889,13 +898,15 @@ fn a_cron_hold_after_an_ended_shell_hold_is_reported_like_a_cron_hold() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = held_on_a_started_shell(&mut fixture);
     fixture.now += 60_000;
+    // The notification is folded into the request's own turn; a separate
+    // wake turn cannot replace its answer or start a cron wait for it.
     fixture.started(
-        "turn-2",
+        "turn-1",
         "<task-notification>b1 completed</task-notification>",
     );
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
-    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-2","last_assistant_message":"Build done; checking the deploy every five minutes.","background_tasks":[],"session_crons":[{"cron_id":"cron-1","status":"running"}]}));
+    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1","last_assistant_message":"Build done; checking the deploy every five minutes.","background_tasks":[],"session_crons":[{"cron_id":"cron-1","status":"running"}]}));
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
@@ -1129,8 +1140,8 @@ fn a_late_stop_within_the_held_reply_window_is_still_the_turn_reply() {
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
     assert!(fixture.worker.state.settling(fixture.request(joined)));
-    // ...and that Stop, with no shell left running, is the reply.
-    fixture.record(claude_stop("turn-2", "Ready: the build passed.", &[]));
+    // ...and a delayed Stop from the request's own turn is still its reply.
+    fixture.record(claude_stop("turn-1", "Ready: the build passed.", &[]));
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     for id in [lead, joined] {
@@ -1143,12 +1154,10 @@ fn a_late_stop_within_the_held_reply_window_is_still_the_turn_reply() {
     }
 }
 
-/// A wake turn ended without a `Stop` (say Bus restarted under it), and the
-/// turn's second shell finishes inside the held-reply window: Claude wakes a
-/// new turn for it, whose `Stop` carries the real reply. That captured reply,
-/// not the older interim, is what the held messages get.
+/// Multiple wake turns, including one without Stop, cannot replace the
+/// request's captured answer during its late-Stop window.
 #[test]
-fn a_second_wake_turn_inside_the_held_reply_window_carries_the_reply() {
+fn a_second_wake_turn_inside_the_held_reply_window_cannot_replace_the_reply() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     fixture.record(claude_startup());
     fixture.consume();
@@ -1190,7 +1199,10 @@ fn a_second_wake_turn_inside_the_held_reply_window_carries_the_reply() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
-    assert_eq!(fixture.reply(lead).as_deref(), Some("Both builds passed."));
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
 }
 
 /// Live MASTER regression: five messages were answered by five distinct
