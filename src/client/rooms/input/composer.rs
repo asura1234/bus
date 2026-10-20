@@ -422,9 +422,9 @@ impl BusUi {
     }
 
     pub(super) fn paste_image(&mut self) {
-        let Some(image) = crate::platform::read_clipboard_image(
-            crate::protocol::wire::MAX_CLIPBOARD_IMAGE_PAYLOAD,
-        ) else {
+        let Some(image) =
+            (self.clipboard_image_reader)(crate::protocol::wire::MAX_CLIPBOARD_IMAGE_PAYLOAD)
+        else {
             return;
         };
         self.attach_image_data(

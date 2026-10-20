@@ -12,12 +12,15 @@ pub(super) fn fixture() -> (BusUi, RoomId, AgentId) {
             Some("main".into()),
         )
         .unwrap();
-    let ui = BusUi::new(Arc::new(BusSnapshot {
-        state,
-        revision: 0,
-        last_command_id: 0,
-        error: None,
-    }));
+    let ui = BusUi::with_clipboard_reader(
+        Arc::new(BusSnapshot {
+            state,
+            revision: 0,
+            last_command_id: 0,
+            error: None,
+        }),
+        |_| None,
+    );
     (ui, room, agent)
 }
 

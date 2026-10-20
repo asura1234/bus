@@ -128,8 +128,21 @@ fn stash_backslash_enter_and_ctrl_g_use_composer_chords() {
 #[test]
 fn ctrl_v_does_not_insert_a_letter() {
     let (mut ui, room, _) = fixture();
-    key(&mut ui, KeyCode::Char('v'), KeyModifiers::CONTROL);
-    assert!(ui.locals[&room].text.text.is_empty());
+    static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    ui.clipboard_image_reader = |max_bytes| {
+        assert_eq!(
+            max_bytes,
+            crate::protocol::wire::MAX_CLIPBOARD_IMAGE_PAYLOAD
+        );
+        READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        None
+    };
+    for (index, code) in ['v', 'V'].into_iter().enumerate() {
+        key(&mut ui, KeyCode::Char(code), KeyModifiers::CONTROL);
+        assert!(ui.locals[&room].text.text.is_empty());
+        assert!(ui.pending.is_empty());
+        assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), index + 1);
+    }
 }
 
 #[test]
