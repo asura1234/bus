@@ -1,6 +1,6 @@
 ---
 name: worktree-close
-description: Remove a git worktree that is no longer needed. Before removal it explicitly checks the worktree for uncommitted changes and unpushed commits, and only uses --force after the user confirms discarding them. PRs to this repo may be squash-merged, so whether a branch has landed is decided by content rather than ancestry; a local branch judged landed is deleted with -D without asking, one that has not landed or cannot be judged is kept and handed back, and the remote branch is deleted only when the user explicitly asks. Use when the user asks to "delete a worktree", "clean up a worktree", "close a worktree", "wrap up a worktree", or "I don't need this isolated copy anymore". Works across agents; mainly git, plus basic shell tools such as sed/du/mkdir/cp, and reads and writes the Claude memory directory. Argument — worktree name or path (defaults to the current worktree).
+description: Remove a git worktree that is no longer needed. Before removal it explicitly checks the worktree for uncommitted changes and unpushed commits, and only uses --force after the user confirms discarding them. PRs to this repo may be squash-merged, so whether a branch has landed is decided by content rather than ancestry; a local branch judged landed is deleted with -D without asking, one that has not landed or cannot be judged is kept and handed back, and the remote branch is deleted only when the user explicitly asks. Use when the user asks to "delete a worktree", "clean up a worktree", "close a worktree", "wrap up a worktree", or "I don't need this isolated copy anymore". Works across agents; mainly git, plus basic shell tools such as sed/du/mkdir/cp, and reads and writes the Claude memory directory. It refuses to remove the worktree its own agent session runs in and hands that back. Argument — worktree name or path (defaults to the current worktree).
 ---
 
 Remove a git worktree you no longer need. Mostly git, plus basic shell tools (sed/du/mkdir/cp) and a
@@ -42,9 +42,14 @@ IF <worktree_path> is <main_worktree>
 
 branch = branch checked out in <worktree_path> (may be empty for a detached HEAD)
 
-is_inside_target = (`pwd` is <worktree_path> or below it)
-IF is_inside_target
-  Print "⚠️ Running inside the target worktree; this directory will no longer exist after removal."
+-- Never remove the worktree this agent session runs in. The session's working directory is the
+--   one the session was started in (Claude Code resets its shell there; Codex keeps it for the
+--   whole session), not whatever `cd` last chose. Live (2026-10-20, Codex 0.163.0): a worker
+--   removed its own worktree mid-turn; Codex then ran no Stop hook, so Bus never received that
+--   answer or the next one and closed both requests as reply_not_captured.
+session_cwd = the working directory this agent session was started in
+IF <session_cwd> is <worktree_path> or below it
+  ERROR "Refusing to remove <worktree_path>: it is this agent session's working directory, and removing it breaks the session's completion hooks. Hand it back: have an agent whose working directory is outside it (for example one in <main_worktree>) run worktree-close on it."
 
 ========== CHECK FOR UNSAVED WORK ==========
 
@@ -191,10 +196,4 @@ Print:
 
 `git -C <main_worktree> worktree list`
 
-IF is_inside_target
-  Print ""
-  Print "Next steps:"
-  Print "1. Exit the current AI session"
-  Print "2. In a terminal, switch to the main worktree: cd <main_worktree>"
-  Print ""
 ```

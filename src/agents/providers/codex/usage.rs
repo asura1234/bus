@@ -52,9 +52,22 @@ fn read_rollout_tail(path: &Path) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&tail).into_owned())
 }
 
-/// The error that ended Codex turn `turn_id`, from its `task_complete`
-/// event. Codex fires no Stop hook for such turns.
-pub(crate) fn read_codex_turn_error(path: &Path, turn_id: &str) -> std::io::Result<Option<String>> {
+/// How a Codex turn ended, from its rollout `task_complete` event.
+#[derive(Debug, PartialEq)]
+pub(crate) enum CodexTurnEnd {
+    /// The error that ended the turn. Codex fires no Stop hook for it.
+    Error(String),
+    /// The turn's final answer: what its Stop hook would have reported, for
+    /// when that hook never ran (Codex runs none once its cwd is removed).
+    Final(String),
+}
+
+/// How Codex turn `turn_id` ended; `Ok(None)` while the rollout tail records
+/// no end for it, or its end carries neither an error nor an answer.
+pub(crate) fn read_codex_turn_end(
+    path: &Path,
+    turn_id: &str,
+) -> std::io::Result<Option<CodexTurnEnd>> {
     let tail = read_rollout_tail(path)?;
     Ok(tail.lines().rev().find_map(|line| {
         let event: Value = serde_json::from_str(line).ok()?;
@@ -65,12 +78,85 @@ pub(crate) fn read_codex_turn_error(path: &Path, turn_id: &str) -> std::io::Resu
         {
             return None;
         }
-        let message = payload["error"]["message"].as_str()?;
-        Some(match payload["error"]["codex_error_info"].as_str() {
-            Some(code) => format!("{message} ({code})"),
-            None => message.to_owned(),
-        })
+        if let Some(message) = payload["error"]["message"].as_str() {
+            return Some(CodexTurnEnd::Error(
+                match payload["error"]["codex_error_info"].as_str() {
+                    Some(code) => format!("{message} ({code})"),
+                    None => message.to_owned(),
+                },
+            ));
+        }
+        let answer = payload["last_agent_message"].as_str()?;
+        Some(CodexTurnEnd::Final(answer.to_owned()))
     }))
+}
+
+/// The turn that ran a prompt `matches` accepts and started at or after
+/// `since_ms`: the turn of a message Bus typed then but never saw start.
+/// `Ok(None)` when no such turn is in the rollout tail, or when more than
+/// one is, since the message's turn cannot then be told apart.
+pub(crate) fn find_codex_prompt_turn(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+) -> std::io::Result<Option<String>> {
+    let tail = read_rollout_tail(path)?;
+    let mut current: Option<(String, u64)> = None;
+    let mut found: Vec<String> = Vec::new();
+    for line in tail.lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let payload = &event["payload"];
+        if event["type"] == "event_msg" && payload["type"] == "task_started" {
+            current = payload["turn_id"]
+                .as_str()
+                .zip(event["timestamp"].as_str().and_then(rfc3339_ms))
+                .map(|(turn, at)| (turn.to_owned(), at));
+            continue;
+        }
+        let Some((turn, started_at_ms)) = &current else {
+            continue;
+        };
+        if *started_at_ms >= since_ms
+            && user_prompt(&event).is_some_and(|prompt| matches(&prompt))
+            && !found.contains(turn)
+        {
+            found.push(turn.clone());
+        }
+    }
+    Ok(match found.as_slice() {
+        [turn] => Some(turn.clone()),
+        _ => None,
+    })
+}
+
+/// The prompt text of a user input event: an `item_completed` `UserMessage`
+/// (Codex 0.163.0), a `user` message item, or a legacy `user_message` event.
+fn user_prompt(event: &Value) -> Option<String> {
+    let payload = &event["payload"];
+    let content = match (event["type"].as_str()?, payload["type"].as_str()?) {
+        ("event_msg", "user_message") => return Some(payload["message"].as_str()?.to_owned()),
+        ("event_msg", "item_completed") if payload["item"]["type"] == "UserMessage" => {
+            payload["item"]["content"].as_array()?
+        }
+        ("response_item", "message") if payload["role"] == "user" => {
+            payload["content"].as_array()?
+        }
+        _ => return None,
+    };
+    Some(
+        content
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect(),
+    )
+}
+
+fn rfc3339_ms(value: &str) -> Option<u64> {
+    time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .and_then(|at| u64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok())
 }
 
 fn codex_rate_limits(line: &str) -> Option<CodexUsage> {
@@ -103,10 +189,7 @@ fn codex_rate_limits(line: &str) -> Option<CodexUsage> {
     }
     let observed_at_ms = event["timestamp"]
         .as_str()
-        .and_then(|value| {
-            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
-        })
-        .and_then(|at| u64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok())
+        .and_then(rfc3339_ms)
         .unwrap_or(0);
     Some(CodexUsage {
         windows,

@@ -498,14 +498,10 @@ impl Worker {
                 .release_shell_hold(agent, observed_at_ms, hold_cap_ms)
                 .is_some();
             let rollout = self.codex_rollouts.get(&agent);
-            let provider_error = |request: &crate::messaging::model::Request| {
-                let turn = request.provider_turn_id.as_deref()?;
-                crate::agents::providers::codex::usage::read_codex_turn_error(rollout?, turn)
-                    .ok()
-                    .flatten()
-            };
+            let recorded_end =
+                |request: &crate::messaging::model::Request| recorded_codex_end(rollout?, request);
             changed |= state
-                .settle_ended_request(agent, observed_at_ms, provider_error)
+                .settle_ended_request(agent, observed_at_ms, recorded_end)
                 .is_some();
         }
         if changed {
@@ -513,6 +509,32 @@ impl Worker {
         }
         Ok(())
     }
+}
+
+/// How Codex recorded the end of `request`'s turn in its rollout: the bound
+/// turn, or else the one turn that ran the typed prompt after it was sent.
+fn recorded_codex_end(
+    rollout: &Path,
+    request: &crate::messaging::model::Request,
+) -> Option<crate::messaging::model::RecordedTurnEnd> {
+    use crate::agents::providers::codex::usage::{
+        find_codex_prompt_turn, read_codex_turn_end, CodexTurnEnd,
+    };
+    use crate::messaging::model::RecordedTurnEnd;
+    let turn_id = match &request.provider_turn_id {
+        Some(turn) => turn.clone(),
+        None => find_codex_prompt_turn(rollout, request.prompt.submitted_at_ms, |prompt| {
+            request.matches_callback_payload(prompt)
+        })
+        .ok()
+        .flatten()?,
+    };
+    Some(
+        match read_codex_turn_end(rollout, &turn_id).ok().flatten()? {
+            CodexTurnEnd::Error(message) => RecordedTurnEnd::Error(message),
+            CodexTurnEnd::Final(text) => RecordedTurnEnd::Final { turn_id, text },
+        },
+    )
 }
 
 /// The next command to run: the developer's oldest UI command when only
