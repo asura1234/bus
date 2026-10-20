@@ -1,8 +1,23 @@
 //! Close finished turns after giving their completion callbacks time to arrive.
 use super::{
-    types::ShellHold, AgentId, BusState, ModelError, PendingFinal, Request, RequestId,
-    RequestPhase, RuntimeStatus, HELD_REPLY_SETTLE_MS, TURN_SETTLE_MS,
+    callbacks::provider_turn_key, types::ShellHold, AgentId, BusState, ModelError, PendingFinal,
+    Request, RequestId, RequestPhase, RuntimeStatus, HELD_REPLY_SETTLE_MS, TURN_SETTLE_MS,
 };
+
+/// How the provider's own record says a turn ended, for a turn whose
+/// completion callback never came.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RecordedTurnEnd {
+    /// The provider error that ended the turn.
+    Error(String),
+    /// The final answer of provider turn `turn_id`, attributed to the
+    /// request, with every prompt the provider recorded for that turn.
+    Final {
+        turn_id: String,
+        text: String,
+        prompts: Vec<String>,
+    },
+}
 
 impl BusState {
     pub(super) fn note_turn_end(&mut self, agent: AgentId, now_ms: u64) {
@@ -214,20 +229,24 @@ impl BusState {
     }
 
     /// Run after callback consumption, so a final spooled at the deadline wins.
-    /// No reply is invented when capture failed; the sender sees `abandoned`
-    /// with a reason: `provider_error: ...` when `provider_error` finds the
-    /// error that ended the turn, else `reply_not_captured`. A reply captured
-    /// earlier and held for the turn's shells is never lost that way: once
-    /// `HELD_REPLY_SETTLE_MS` has passed with no late `Stop`, it is delivered
-    /// with reason `background_shells_interim` (live, 2026-10-16: an
-    /// orchestrator's wake turns ended without a `Stop`, under a Bus restart
-    /// and under a folded task notification, and both groups of MASTER
-    /// messages were abandoned with their captured replies).
+    /// `recorded_end` reads how the provider's own record says the turn ended.
+    /// A final answer it attributes to this request is the reply (live,
+    /// 2026-10-20: a Codex worker removed its own cwd, after which Codex ran
+    /// no `Stop` hook, and two finished answers were lost). Otherwise no reply
+    /// is invented; the sender sees `abandoned` with a reason:
+    /// `provider_error: ...` when the record names the error that ended the
+    /// turn, else `reply_not_captured`. A reply captured earlier and held for
+    /// the turn's shells is never lost that way: once `HELD_REPLY_SETTLE_MS`
+    /// has passed with no late `Stop`, it is delivered with reason
+    /// `background_shells_interim` (live, 2026-10-16: an orchestrator's wake
+    /// turns ended without a `Stop`, under a Bus restart and under a folded
+    /// task notification, and both groups of MASTER messages were abandoned
+    /// with their captured replies).
     pub(crate) fn settle_ended_request(
         &mut self,
         agent: AgentId,
         now_ms: u64,
-        provider_error: impl FnOnce(&Request) -> Option<String>,
+        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
         let request = self.settle_candidate(agent)?;
         let id = request.id;
@@ -240,7 +259,27 @@ impl BusState {
         if now_ms < request.turn_ended_at_ms?.saturating_add(settle_ms) {
             return None;
         }
-        let provider_error = provider_error(request);
+        let provider_error = match recorded_end(request) {
+            Some(RecordedTurnEnd::Final {
+                turn_id,
+                text,
+                prompts,
+            }) => {
+                let answer = PendingFinal {
+                    callback_id: format!("rollout:{turn_id}"),
+                    text,
+                    received_at_ms: now_ms,
+                    provider_session_id: None,
+                    provider_turn_id: Some(turn_id),
+                };
+                if let Some(id) = self.deliver_recorded_final(agent, id, answer, &prompts, now_ms) {
+                    return Some(id);
+                }
+                None
+            }
+            Some(RecordedTurnEnd::Error(message)) => Some(message),
+            None => None,
+        };
         if let (None, Some(interim)) = (&provider_error, held) {
             return self.deliver_held_interim(
                 agent,
@@ -273,6 +312,101 @@ impl BusState {
             "Finished turn released"
         );
         Some(id)
+    }
+
+    /// Completes the agent's current request `id`, with its group, on the
+    /// `answer` the provider recorded for its turn, unless a reply for that
+    /// turn was already delivered. A message typed into the turn that no hook
+    /// placed shares the answer only when `prompts`, the turn's recorded
+    /// prompts, hold it: Codex may have run it as a turn of its own (found in
+    /// review of #112), so otherwise it leaves the group as
+    /// `reply_not_captured` rather than take another turn's answer.
+    fn deliver_recorded_final(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        mut answer: PendingFinal,
+        prompts: &[String],
+        now_ms: u64,
+    ) -> Option<RequestId> {
+        let request = self.requests.get(&id)?;
+        let key = provider_turn_key(
+            request.expected_launch_id.as_deref().unwrap_or_default(),
+            request.provider_session_id.as_deref(),
+            answer.provider_turn_id.as_deref(),
+        );
+        if key.is_some_and(|key| self.consumed_provider_turns.contains(&key)) {
+            return None;
+        }
+        let members = self.group_members(id);
+        let unproven: Vec<RequestId> = members
+            .iter()
+            .filter_map(|member| self.requests.get(member))
+            .filter(|member| {
+                member.steered
+                    && !member.trusted_start_bound
+                    && !member.settled()
+                    && !self.recorded_for(member, id, &members, prompts)
+            })
+            .map(|member| member.id)
+            .collect();
+        for member in unproven {
+            let Some(member) = self.requests.get_mut(&member) else {
+                continue;
+            };
+            member.group = None;
+            member.phase = RequestPhase::Abandoned;
+            member.completed_at_ms = Some(now_ms);
+            member.failure_reason = Some("reply_not_captured".to_owned());
+            tracing::info!(
+                event = "bus.message.recovered",
+                request_id = member.id.0,
+                agent_id = agent.0,
+                reason = "reply_not_captured",
+                "Typed-in message not found in the recovered turn"
+            );
+        }
+        let request = self.requests.get_mut(&id)?;
+        request.turn_ended_at_ms = None;
+        answer.provider_session_id = request.provider_session_id.clone();
+        request.pending_final = Some(answer);
+        // Unseen steering keeps the final pending for its settle window.
+        self.complete_pending_final(agent, now_ms).ok()?;
+        tracing::info!(
+            event = "bus.message.recovered",
+            request_id = id.0,
+            agent_id = agent.0,
+            reason = "provider_recorded_final",
+            "Reply recovered from the provider's record of the turn"
+        );
+        Some(id)
+    }
+
+    /// Whether `prompts`, one per submission the turn recorded, hold
+    /// `member`'s own: more of its text than the other requests of the group
+    /// led by `lead` that share that text can account for. A repeat of the
+    /// lead's text recorded once is the lead's (found in review of #112).
+    fn recorded_for(
+        &self,
+        member: &Request,
+        lead: RequestId,
+        members: &[RequestId],
+        prompts: &[String],
+    ) -> bool {
+        let own = |prompt: &&String| member.matches_callback_payload(prompt);
+        let recorded = prompts.iter().filter(own).count();
+        let others = std::iter::once(&lead)
+            .chain(members)
+            .filter(|other| **other != member.id)
+            .filter_map(|other| self.requests.get(other))
+            .filter(|other| {
+                prompts
+                    .iter()
+                    .filter(own)
+                    .any(|prompt| other.matches_callback_payload(prompt))
+            })
+            .count();
+        recorded > others
     }
 
     /// Abandon `id`'s turn with `reason`. Messages typed or coalesced into

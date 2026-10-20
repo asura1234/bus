@@ -226,6 +226,9 @@ the wrapper remains held.
 - **Always run `worktree-close` after a merge.** Have an agent run it when a PR
   is merged, or when a temporary worktree is merged into the local feature
   branch. *Why:* stale worktrees and branches pile up and get edited by mistake.
+  The agent that runs it must work outside that worktree (for example in the
+  main checkout), never the worker whose working directory it is: an agent
+  that removes its own working directory stops reporting its replies.
 - **Check data-volume free space at kickoff and every phase boundary.** Delegate
   a `df` check. Below 30 GiB, declare a `DISK HOLD`: no builds, benchmarks or
   large copies until space is back. Worktree-heavy spikes, best-of-N and

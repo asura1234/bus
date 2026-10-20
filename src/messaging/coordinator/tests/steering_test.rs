@@ -12,6 +12,9 @@ use std::sync::{
 #[path = "turn_settlement_test.rs"]
 mod turn_settlement_tests;
 
+#[path = "rollout_attribution_test.rs"]
+mod rollout_attribution_tests;
+
 #[path = "capped_background_test.rs"]
 mod capped_background_tests;
 
@@ -748,3 +751,6 @@ fn shell_held_turns_keep_their_replies_and_folded_messages_share_them() {
     assert_eq!(fixture.reply(third).as_deref(), Some("pong"));
     assert_eq!(fixture.error(), None);
 }
+
+#[path = "codex_unbound_reply_recovery_test.rs"]
+mod codex_unbound_reply_recovery_tests;

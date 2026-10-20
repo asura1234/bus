@@ -11,6 +11,14 @@ use serde_json::Value;
 
 /// Enough rollout tail to reach the last `token_count` event after a turn.
 const ROLLOUT_TAIL_BYTES: u64 = 256 * 1024;
+/// The most rollout Bus reads back to see every turn since a message was
+/// sent. One turn can write megabytes (live, 2026-10-20: 5.7 MB).
+const ROLLOUT_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
+/// How far before a send the backward rollout read must reach. One line's
+/// timestamp is no proof that every later line came after it: a wall clock
+/// stepped back can stamp a line inside the window as older than the send.
+/// Reading further only adds candidates the send time then rejects.
+const SEND_CLOCK_MARGIN_MS: u64 = 60_000;
 
 /// Accept only Codex rollout files: hook payloads name the path, and Bus
 /// should not parse arbitrary files a payload points at.
@@ -52,9 +60,22 @@ fn read_rollout_tail(path: &Path) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&tail).into_owned())
 }
 
-/// The error that ended Codex turn `turn_id`, from its `task_complete`
-/// event. Codex fires no Stop hook for such turns.
-pub(crate) fn read_codex_turn_error(path: &Path, turn_id: &str) -> std::io::Result<Option<String>> {
+/// How a Codex turn ended, from its rollout `task_complete` event.
+#[derive(Debug, PartialEq)]
+pub(crate) enum CodexTurnEnd {
+    /// The error that ended the turn. Codex fires no Stop hook for it.
+    Error(String),
+    /// The turn's final answer: what its Stop hook would have reported, for
+    /// when that hook never ran (Codex runs none once its cwd is removed).
+    Final(String),
+}
+
+/// How Codex turn `turn_id` ended; `Ok(None)` while the rollout tail records
+/// no end for it, or its end carries neither an error nor an answer.
+pub(crate) fn read_codex_turn_end(
+    path: &Path,
+    turn_id: &str,
+) -> std::io::Result<Option<CodexTurnEnd>> {
     let tail = read_rollout_tail(path)?;
     Ok(tail.lines().rev().find_map(|line| {
         let event: Value = serde_json::from_str(line).ok()?;
@@ -65,12 +86,220 @@ pub(crate) fn read_codex_turn_error(path: &Path, turn_id: &str) -> std::io::Resu
         {
             return None;
         }
-        let message = payload["error"]["message"].as_str()?;
-        Some(match payload["error"]["codex_error_info"].as_str() {
-            Some(code) => format!("{message} ({code})"),
-            None => message.to_owned(),
-        })
+        if let Some(message) = payload["error"]["message"].as_str() {
+            return Some(CodexTurnEnd::Error(
+                match payload["error"]["codex_error_info"].as_str() {
+                    Some(code) => format!("{message} ({code})"),
+                    None => message.to_owned(),
+                },
+            ));
+        }
+        let answer = payload["last_agent_message"].as_str()?;
+        Some(CodexTurnEnd::Final(answer.to_owned()))
     }))
+}
+
+/// Where the prompt of a message Bus typed but never saw start ran, per
+/// `codex_prompt_turn`. Each outcome but `Found` attributes nothing.
+#[derive(Debug, PartialEq)]
+pub(crate) enum PromptTurn {
+    /// The one turn that ran it.
+    Found(String),
+    /// No turn in the window ran it.
+    NoMatch,
+    /// More than one turn could be the message's, so none is.
+    Ambiguous,
+    /// The one turn that ran it is stamped before the send.
+    StartedBeforeSend,
+    /// The rollout written since the send is too long to read whole: an
+    /// earlier matching turn could hide past what was read.
+    WindowTooLong,
+}
+
+/// The turn that ran a prompt `matches` accepts and started at or after
+/// `since_ms`, the send. A clock stepped back after the send can stamp the
+/// message's own turn as older, so every matching turn started within
+/// `SEND_CLOCK_MARGIN_MS` before the send counts against uniqueness too.
+pub(crate) fn codex_prompt_turn(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+) -> std::io::Result<PromptTurn> {
+    prompt_turn_within(path, since_ms, matches, ROLLOUT_WINDOW_BYTES)
+}
+
+#[cfg(test)]
+pub(crate) fn find_codex_prompt_turn(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+) -> std::io::Result<Option<String>> {
+    find_prompt_turn_within(path, since_ms, matches, ROLLOUT_WINDOW_BYTES)
+}
+
+#[cfg(test)]
+fn find_prompt_turn_within(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+    cap: u64,
+) -> std::io::Result<Option<String>> {
+    Ok(match prompt_turn_within(path, since_ms, matches, cap)? {
+        PromptTurn::Found(turn) => Some(turn),
+        _ => None,
+    })
+}
+
+fn prompt_turn_within(
+    path: &Path,
+    since_ms: u64,
+    matches: impl Fn(&str) -> bool,
+    cap: u64,
+) -> std::io::Result<PromptTurn> {
+    let Some(text) = read_rollout_since(path, since_ms, cap)? else {
+        return Ok(PromptTurn::WindowTooLong);
+    };
+    let earliest_ms = since_ms.saturating_sub(SEND_CLOCK_MARGIN_MS);
+    let mut found: Vec<(String, u64)> = Vec::new();
+    for prompt in turn_prompts(&text) {
+        if prompt.started_at_ms >= earliest_ms
+            && matches(&prompt.text)
+            && !found.iter().any(|(seen, _)| *seen == prompt.turn)
+        {
+            found.push((prompt.turn, prompt.started_at_ms));
+        }
+    }
+    Ok(match found.as_slice() {
+        [] => PromptTurn::NoMatch,
+        [(turn, started_at_ms)] if *started_at_ms >= since_ms => PromptTurn::Found(turn.clone()),
+        [_] => PromptTurn::StartedBeforeSend,
+        _ => PromptTurn::Ambiguous,
+    })
+}
+
+/// Every prompt Codex recorded for turn `turn_id` since `since_ms`, once per
+/// submission so identical prompts can be counted; none when the rollout
+/// since then is too long to read whole.
+pub(crate) fn codex_turn_prompts(
+    path: &Path,
+    turn_id: &str,
+    since_ms: u64,
+) -> std::io::Result<Vec<String>> {
+    let Some(text) = read_rollout_since(path, since_ms, ROLLOUT_WINDOW_BYTES)? else {
+        return Ok(Vec::new());
+    };
+    // Codex records each submission as a message item and as an event; the
+    // events alone count each one once.
+    Ok(turn_prompts(&text)
+        .into_iter()
+        .filter(|prompt| prompt.event && prompt.turn == turn_id)
+        .map(|prompt| prompt.text)
+        .collect())
+}
+
+/// A user prompt recorded in a rollout.
+struct TurnPrompt {
+    turn: String,
+    started_at_ms: u64,
+    text: String,
+    /// Recorded as an event, which Codex writes once per submission.
+    event: bool,
+}
+
+/// Each user prompt in rollout `text`, with the turn it ran in.
+fn turn_prompts(text: &str) -> Vec<TurnPrompt> {
+    let mut current: Option<(String, u64)> = None;
+    let mut prompts = Vec::new();
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let payload = &event["payload"];
+        if event["type"] == "event_msg" && payload["type"] == "task_started" {
+            current = payload["turn_id"]
+                .as_str()
+                .zip(event["timestamp"].as_str().and_then(rfc3339_ms))
+                .map(|(turn, at)| (turn.to_owned(), at));
+            continue;
+        }
+        if let (Some((turn, started_at_ms)), Some(text)) = (&current, user_prompt(&event)) {
+            // A completed item names its turn; trust that over line order.
+            let turn = payload["turn_id"].as_str().unwrap_or(turn);
+            prompts.push(TurnPrompt {
+                turn: turn.to_owned(),
+                started_at_ms: *started_at_ms,
+                text,
+                event: event["type"] == "event_msg",
+            });
+        }
+    }
+    prompts
+}
+
+/// The rollout's whole lines from a line stamped `SEND_CLOCK_MARGIN_MS`
+/// before `since_ms` on, when the last `cap` bytes reach back that far;
+/// `Ok(None)` when they do not. Codex appends events as they happen, so every
+/// line written since `since_ms` follows that one, unless the clock stepped
+/// back by more than the margin.
+fn read_rollout_since(path: &Path, since_ms: u64, cap: u64) -> std::io::Result<Option<String>> {
+    let mut file = std::fs::File::open(path)?;
+    let length = file.metadata()?.len();
+    let mut size = ROLLOUT_TAIL_BYTES.min(cap);
+    loop {
+        let start = length.saturating_sub(size);
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = Vec::new();
+        (&mut file).take(size).read_to_end(&mut bytes)?;
+        let mut text = String::from_utf8_lossy(&bytes).into_owned();
+        if start > 0 {
+            // The first line begins before the seek.
+            let whole = text.find('\n').map_or(text.len(), |at| at + 1);
+            text.drain(..whole);
+        }
+        let reached = start == 0
+            || text
+                .lines()
+                .find_map(|line| {
+                    let event: Value = serde_json::from_str(line).ok()?;
+                    rfc3339_ms(event["timestamp"].as_str()?)
+                })
+                .is_some_and(|at| at < since_ms.saturating_sub(SEND_CLOCK_MARGIN_MS));
+        if reached {
+            return Ok(Some(text));
+        }
+        if size >= cap {
+            return Ok(None);
+        }
+        size = size.saturating_mul(4).min(cap);
+    }
+}
+
+/// The prompt text of a user input event: an `item_completed` `UserMessage`
+/// (Codex 0.163.0), a `user` message item, or a legacy `user_message` event.
+fn user_prompt(event: &Value) -> Option<String> {
+    let payload = &event["payload"];
+    let content = match (event["type"].as_str()?, payload["type"].as_str()?) {
+        ("event_msg", "user_message") => return Some(payload["message"].as_str()?.to_owned()),
+        ("event_msg", "item_completed") if payload["item"]["type"] == "UserMessage" => {
+            payload["item"]["content"].as_array()?
+        }
+        ("response_item", "message") if payload["role"] == "user" => {
+            payload["content"].as_array()?
+        }
+        _ => return None,
+    };
+    Some(
+        content
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect(),
+    )
+}
+
+fn rfc3339_ms(value: &str) -> Option<u64> {
+    time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .and_then(|at| u64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok())
 }
 
 fn codex_rate_limits(line: &str) -> Option<CodexUsage> {
@@ -103,10 +332,7 @@ fn codex_rate_limits(line: &str) -> Option<CodexUsage> {
     }
     let observed_at_ms = event["timestamp"]
         .as_str()
-        .and_then(|value| {
-            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
-        })
-        .and_then(|at| u64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok())
+        .and_then(rfc3339_ms)
         .unwrap_or(0);
     Some(CodexUsage {
         windows,

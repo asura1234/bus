@@ -23,6 +23,7 @@ pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 pub(crate) use history::ARCHIVE_AFTER_MS;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS, HISTORY_RETENTION_MS};
 pub(crate) use interrupts::INTERRUPTED;
+pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::{fingerprint_digest, BusState};
 #[cfg(test)]
 use types::payload_matches;

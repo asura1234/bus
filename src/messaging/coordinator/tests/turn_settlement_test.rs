@@ -1384,3 +1384,224 @@ fn a_bus_message_matching_an_inherited_task_notification_keeps_its_reply() {
         Some("That is a task notification.")
     );
 }
+
+/// A rollout timestamp `offset_ms` after the fixture's clock.
+fn rollout_at(fixture: &Fixture, offset_ms: i64) -> String {
+    let ms = i128::from(fixture.now) + i128::from(offset_ms);
+    time::OffsetDateTime::from_unix_timestamp_nanos(ms * 1_000_000)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap()
+}
+
+/// Codex 0.163.0 rollout lines for one turn (shapes measured 2026-10-20).
+fn codex_turn(at: &str, turn: &str, prompt: &str, answer: Option<&str>) -> String {
+    let mut lines = vec![
+        json!({"timestamp":at,"type":"event_msg","payload":{"type":"task_started","turn_id":turn}}),
+        json!({"timestamp":at,"type":"event_msg","payload":{"type":"item_completed","turn_id":turn,
+            "item":{"type":"UserMessage","content":[{"type":"text","text":prompt}]}}}),
+    ];
+    if let Some(answer) = answer {
+        lines.push(
+            json!({"timestamp":at,"type":"event_msg","payload":{"type":"task_complete",
+            "turn_id":turn,"last_agent_message":answer}}),
+        );
+    }
+    lines.iter().map(|line| format!("{line}\n")).collect()
+}
+
+fn append(path: &std::path::Path, lines: &str) {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(lines.as_bytes())
+        .unwrap();
+}
+
+/// Runs the agent's turn to Idle with no `Stop` and waits out the settle window.
+fn end_without_stop(fixture: &mut Fixture) {
+    fixture.status(RuntimeStatus::Working);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+}
+
+fn assert_reply_not_captured(fixture: &Fixture, id: RequestId) {
+    assert_eq!(fixture.request(id).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture.request(id).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+}
+
+/// Live (2026-10-20, Codex 0.163.0): a worker removed its own worktree, its
+/// cwd, during the turn. Codex then ran no `Stop` hook, though the turn
+/// finished and its rollout recorded the answer, and Bus abandoned the
+/// request as `reply_not_captured`.
+#[test]
+fn a_codex_turn_ending_without_stop_delivers_the_answer_its_rollout_recorded() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
+    let lead = fixture.send("merge the PR", false);
+    fixture.deliver();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"merge the PR","transcript_path":rollout}),
+    );
+    fixture.consume();
+    assert!(fixture.request(lead).trusted_start_bound);
+    let at = rollout_at(&fixture, 1);
+    append(
+        &rollout,
+        &codex_turn(&at, "turn-1", "merge the PR", Some("Merged #1627.")),
+    );
+    end_without_stop(&mut fixture);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Merged #1627."));
+    assert!(fixture.error().is_none());
+    // A late Stop for the same turn is not a second reply.
+    fixture.stopped("turn-1", "Merged #1627.");
+    fixture.consume();
+    let replies = &fixture
+        .worker
+        .state
+        .room(fixture.room)
+        .unwrap()
+        .latest_replies;
+    assert_eq!(replies.len(), 1);
+}
+
+/// Live (2026-10-20): the follow-up to the turn above was never bound, since
+/// Codex ran no hook at all once its cwd was gone. Its rollout turn is the one
+/// that ran the typed prompt after Bus sent it.
+#[test]
+fn an_unbound_codex_turn_delivers_the_answer_of_the_rollout_turn_that_ran_its_prompt() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
+    fixture.record(
+        json!({"hook_event_name":"SessionStart","session_id":"session",
+        "source":"startup","transcript_path":rollout}),
+    );
+    fixture.consume();
+    // An identical turn older than the 60 s clock margin is not a candidate.
+    let earlier = rollout_at(&fixture, -120_000);
+    append(
+        &rollout,
+        &codex_turn(&earlier, "turn-0", "close the worktree", Some("old")),
+    );
+    let lead = fixture.send("close the worktree", false);
+    fixture.deliver();
+    assert!(!fixture.request(lead).trusted_start_bound);
+    let typed = fixture.typed().last().unwrap().0.clone();
+    let at = rollout_at(&fixture, 1);
+    append(
+        &rollout,
+        &codex_turn(&at, "turn-2", &typed, Some("Copied 374 files.")),
+    );
+    end_without_stop(&mut fixture);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Copied 374 files."));
+}
+
+/// An unbound request whose prompt no rollout turn ran since it was sent
+/// cannot be given an answer: a turn the agent ran on its own, or an older
+/// turn with the same text, is not its turn.
+#[test]
+fn an_unbound_codex_turn_without_its_prompt_in_the_rollout_stays_reply_not_captured() {
+    for own_turn in [true, false] {
+        let mut fixture = Fixture::new(Provider::Codex);
+        let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
+        fixture.record(
+            json!({"hook_event_name":"SessionStart","session_id":"session",
+            "source":"startup","transcript_path":rollout}),
+        );
+        fixture.consume();
+        let lead = fixture.send("close the worktree", false);
+        fixture.deliver();
+        let typed = fixture.typed().last().unwrap().0.clone();
+        let (at, prompt) = if own_turn {
+            (rollout_at(&fixture, 1), "something else".to_owned())
+        } else {
+            (rollout_at(&fixture, -1), typed)
+        };
+        append(
+            &rollout,
+            &codex_turn(&at, "turn-2", &prompt, Some("not this")),
+        );
+        end_without_stop(&mut fixture);
+        assert_reply_not_captured(&fixture, lead);
+    }
+}
+
+/// A bound turn whose rollout records no answer for it (the turn's
+/// `task_complete` is missing, names another turn, or carries no message)
+/// still closes as `reply_not_captured`: no reply is invented.
+#[test]
+fn a_codex_turn_whose_rollout_has_no_answer_for_it_stays_reply_not_captured() {
+    for recorded in [
+        codex_turn("2026-10-20T05:06:51.361Z", "turn-1", "merge the PR", None),
+        codex_turn(
+            "2026-10-20T05:06:51.361Z",
+            "turn-other",
+            "merge the PR",
+            Some("other"),
+        ),
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1",
+            "last_agent_message":null}})
+        .to_string()
+            + "\n",
+    ] {
+        let mut fixture = Fixture::new(Provider::Codex);
+        let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
+        append(&rollout, &recorded);
+        let lead = fixture.send("merge the PR", false);
+        fixture.deliver();
+        fixture.record(
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+            "turn_id":"turn-1","prompt":"merge the PR","transcript_path":rollout}),
+        );
+        fixture.consume();
+        end_without_stop(&mut fixture);
+        assert_reply_not_captured(&fixture, lead);
+    }
+}
+
+/// Verifier regression (2026-10-20, temp/bug-reply-not-captured section 6):
+/// the earlier of two turns that ran the same prompt since it was sent sat
+/// outside the rollout tail Bus read, so the later turn's answer was
+/// delivered to the earlier request. Every turn since the send must be seen;
+/// two matching turns are ambiguous and deliver nothing.
+#[test]
+fn truncated_tail_must_not_assign_a_later_identical_turn_to_an_earlier_request() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
+    fixture.record(
+        json!({"hook_event_name":"SessionStart","session_id":"session",
+        "source":"startup","transcript_path":rollout}),
+    );
+    fixture.consume();
+    let id = fixture.send("status?", false);
+    fixture.deliver();
+    let typed = fixture.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(&rollout_at(&fixture, 1), "first", &typed, None),
+    );
+    // Real rollout reasoning and tool output often exceed 256 KiB.
+    let reasoning = json!({"timestamp":rollout_at(&fixture, 2),"type":"response_item",
+        "payload":{"type":"reasoning","encrypted_content":"x".repeat(300 * 1024)}});
+    let complete = json!({"timestamp":rollout_at(&fixture, 60_000),"type":"event_msg",
+        "payload":{"type":"task_complete","turn_id":"first","last_agent_message":"FIRST"}});
+    append(&rollout, &format!("{reasoning}\n{complete}\n"));
+    let at = rollout_at(&fixture, 60_001);
+    append(&rollout, &codex_turn(&at, "later", &typed, Some("LATER")));
+    fixture.now += 60_002;
+    end_without_stop(&mut fixture);
+    assert!(fixture.reply(id).is_none(), "{:?}", fixture.reply(id));
+    assert_reply_not_captured(&fixture, id);
+}
