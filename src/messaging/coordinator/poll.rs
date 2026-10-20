@@ -38,6 +38,7 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rebound = Vec::new();
         let mut waits = Vec::new();
+        let dir = &self.data_dir;
         for agent in self.state.agents() {
             let info = infos
                 .iter()
@@ -74,13 +75,7 @@ impl Worker {
                 }
             }
             let status = polled_status(agent, info);
-            observe_exit(
-                self.transport.as_mut(),
-                &self.data_dir,
-                &mut state,
-                agent,
-                info,
-            )?;
+            observe_exit(self.transport.as_mut(), dir, &mut state, agent, info)?;
             confirm_interactive_agent(&mut state, agent, info)?;
             state
                 .observe_status(agent.id, status, io::now_ms())
