@@ -53,8 +53,9 @@ def pids_holding(paths):
 class Bus:
     """One throwaway Bus: a TUI client in a pty plus the dev CLI against its data dir."""
 
-    def __init__(self, binary, run_dir, env):
+    def __init__(self, binary, run_dir, env, workspace=None):
         self.binary, self.run_dir, self.env = binary, run_dir, env
+        self.workspace = Path(workspace) if workspace is not None else WORKSPACE
         self.data = Path(env["BUS_DATA_DIR"])
         self.child = None
         self.master = None
@@ -65,7 +66,7 @@ class Bus:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 160, 0, 0))
         tty_log = open(self.run_dir / "tui.log", "ab")
         self.child = subprocess.Popen(bus_argv(self.binary), stdin=slave, stdout=slave, stderr=slave,
-                                      env=self.env, cwd=str(WORKSPACE), start_new_session=True)
+                                      env=self.env, cwd=str(self.workspace), start_new_session=True)
         os.close(slave)
         master = self.master
 
@@ -132,7 +133,7 @@ class Bus:
         killed = []
         for sig in (signal.SIGTERM, signal.SIGKILL):
             deadline = time.monotonic() + 5
-            while pids := pids_holding([self.data, WORKSPACE]):
+            while pids := pids_holding([self.data, self.workspace]):
                 if time.monotonic() > deadline:
                     for pid in pids:
                         try:
