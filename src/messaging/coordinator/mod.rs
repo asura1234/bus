@@ -2,6 +2,7 @@
 pub(crate) mod agents;
 pub(crate) mod attention;
 mod delivery;
+mod exit_snapshot;
 mod expiry;
 mod poll;
 #[cfg(test)]
@@ -156,7 +157,7 @@ pub(crate) struct LeftOpenTerminal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LeftOpenReason {
-    /// The provider exited and its shell now runs something else.
+    /// The provider exited and the server refused to close its terminal.
     ProviderExited,
     /// The terminal runs a provider session that may not be Bus's to end.
     SessionMoved,
@@ -172,7 +173,7 @@ impl LeftOpenTerminal {
     ) -> Self {
         let message = match reason {
             LeftOpenReason::ProviderExited => format!(
-                "The agent's provider exited and its shell is running something else, so Bus left the terminal open; close pane {pane_id} yourself if it is no longer needed."
+                "The agent's provider exited and Bus could not close its terminal, for example because another agent or session now runs there, so Bus left the terminal open; close pane {pane_id} yourself if it is no longer needed."
             ),
             LeftOpenReason::SessionMoved => format!(
                 "The agent's terminal now runs another provider session that may not be Bus's to end, so Bus left it open; close pane {pane_id} yourself if it is no longer needed."

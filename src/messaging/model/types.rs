@@ -378,6 +378,56 @@ pub(crate) struct RoomAgent {
     /// agent (see `rejection_reason`); cleared once a submission is confirmed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) delivery_rejection: Option<String>,
+    /// What the agent's terminal showed when its provider last exited on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_snapshot: Option<ExitSnapshot>,
+}
+
+/// The screen Bus saved when an agent's provider exited without Bus asking,
+/// before its terminal was closed.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ExitSnapshot {
+    /// The launch whose exit this is; one snapshot per launch.
+    pub(crate) launch_id: Option<String>,
+    pub(crate) terminal_id: String,
+    /// The saved screen and scrollback, or None when the pane could not be read.
+    pub(crate) path: Option<PathBuf>,
+    /// Why nothing was saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+    /// The last non-blank lines, shown inline in exit notices.
+    pub(crate) tail: String,
+    pub(crate) at_ms: u64,
+    /// Whether Bus closed the terminal once the snapshot was durable: None
+    /// until it tried, false when it left the terminal open.
+    pub(crate) terminal_closed: Option<bool>,
+}
+
+impl ExitSnapshot {
+    /// The screen is saved and Bus has yet to close the terminal.
+    pub(crate) fn close_pending(&self) -> bool {
+        self.path.is_some() && self.terminal_closed.is_none()
+    }
+
+    /// The exit notices' lines about this snapshot.
+    pub(crate) fn notice(&self) -> String {
+        let Some(path) = &self.path else {
+            return format!(
+                "Exit snapshot unavailable: {}",
+                self.error.as_deref().unwrap_or("unknown error")
+            );
+        };
+        let terminal = match self.terminal_closed {
+            Some(true) => " (Bus closed its terminal)",
+            Some(false) => " (its terminal is still open)",
+            None => "",
+        };
+        format!(
+            "Exit snapshot: {}{terminal}.\nLast lines:\n{}",
+            path.display(),
+            self.tail
+        )
+    }
 }
 
 /// Context compactions reported by the provider's SessionStart hook

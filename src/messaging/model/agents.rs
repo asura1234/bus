@@ -69,6 +69,7 @@ impl BusState {
                 status_since_ms: 0,
                 observed_at_ms: 0,
                 delivery_rejection: None,
+                exit_snapshot: None,
             },
         );
         self.queues.insert(id, Vec::new());
@@ -251,6 +252,19 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(id))?;
         agent.cwd = cwd;
         agent.branch = branch;
+        Ok(())
+    }
+
+    /// Keeps the screen saved for this agent's provider exit.
+    pub(crate) fn record_exit_snapshot(
+        &mut self,
+        id: AgentId,
+        snapshot: super::ExitSnapshot,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .exit_snapshot = Some(snapshot);
         Ok(())
     }
 

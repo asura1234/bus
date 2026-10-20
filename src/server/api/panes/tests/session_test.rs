@@ -49,6 +49,7 @@ fn guarded_close_fixture() -> (
         expected_managed_name: "bus-r1-a2".into(),
         expected_session_id: None,
         close_exited_shell: false,
+        allow_busy_shell: false,
     };
     (app, params, pane_id, other)
 }
