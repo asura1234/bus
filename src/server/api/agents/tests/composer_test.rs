@@ -343,7 +343,7 @@ fn a_collapsed_paste_beside_image_chips_is_ours_only_with_our_line_and_image_cou
         format!("first line\nsecond line\nthird line\nfourth line\nfifth line\n{image}"),
         "first line\nsecond line\nthird line\nfourth line".to_owned(),
         format!("first line\nsecond line\nthird line\nfourth line\n{image}\n{image}"),
-        format!("first line\nsecond line\nthird line\nfourth line\n\"/tmp/notes.diff\""),
+        "first line\nsecond line\nthird line\nfourth line\n\"/tmp/notes.diff\"".to_owned(),
     ] {
         assert_eq!(
             observe(AgentKind::Claude, screen, &expected),
