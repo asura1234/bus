@@ -834,6 +834,31 @@ fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_r
     );
 }
 
+/// #128 scratch e2e: a message queued before `agent interrupt` was typed
+/// into the stopped turn while Bus still saw it Working; the agent ran it as a
+/// turn of its own, whose reply the interrupted lead then took. A pressed stop
+/// key ends steering: the message stays queued and closes with the turn.
+#[test]
+fn messages_are_not_typed_into_a_turn_after_its_stop_key() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    let mut state = fixture.worker.state.clone();
+    state.begin_interrupt(fixture.agent).unwrap();
+    fixture.worker.save(state).unwrap();
+    let queued = fixture.send("also add tests", false);
+    fixture.deliver();
+    assert_eq!(fixture.typed().len(), 1, "{:?}", fixture.typed());
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for id in [lead, queued] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            fixture.request(id).failure_reason.as_deref(),
+            Some(crate::messaging::model::INTERRUPTED)
+        );
+    }
+}
+
 /// Deleting one recipient of a multi-recipient message must not make the
 /// message read complete for the recipients that remain, so async waiters
 /// do not exit 0 on work that never ran.
