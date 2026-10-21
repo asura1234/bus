@@ -20,7 +20,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
    `bus send --room {{ROOM_ID}} --as {{AGENT_NAME}} --to AGENT --async --text ...`,
    run as a background tool call (Claude Code: Bash with `run_in_background`;
    Cursor: a background shell with timeout 0). It has no time limit for a healthy
-   Bus and exits once every recipient worked on the message and went idle, or
+   Bus and exits once the message is complete (every recipient replied or Bus
+   closed its request), or
    early on an error such as `bus_down` after four consecutive transport failures.
    Live-server overload is retried; your CLI wakes you when it exits. Never sit
    idle waiting for a worker.

@@ -271,9 +271,9 @@ bus wait --message "$message_id" --timeout 600
 
 `wait` defaults to 60 seconds and accepts `--timeout` from 1 through 600.
 Use `bus wait --message "$message_id" --async` to wait without an overall
-deadline until every recipient’s turn ends, a request is abandoned or stalls,
-or a recipient needs a dialog. Like `send --async`, ended turns succeed even
-when the final reply was not captured (`complete` can remain `false`). It returns
+deadline until the message is complete, a request is abandoned or stalls, or a
+recipient needs a dialog. Like `send --async`, it succeeds only on
+`complete: true`; a turn Bus closed as `reply_not_captured` counts as done. It returns
 `agent_waiting_on_dialog` with the last status; answer the dialog, then wait
 again. `--async` and an explicit `--timeout` cannot be combined. Unlike
 `send --async`, `wait --async` stops at a dialog rather than waiting for it to
@@ -297,8 +297,8 @@ defaults to 60 seconds.
 
 ### Send and follow a task with `--async`
 
-`send --async` sends as usual, then blocks with no time limit until every
-recipient has worked on the message and gone idle again. It emits one JSON
+`send --async` sends as usual, then blocks with no time limit until the message
+is complete: every recipient replied or Bus closed its request. It emits one JSON
 object containing the final `message status`, `message_id`, and the original
 send receipt in `result.send_receipt`:
 
@@ -307,12 +307,14 @@ bus send --room "$room_id" --as "$me" --to "$agent_id" --async \
   --text "Implement the parser and report what you changed."
 ```
 
-It follows agent status and the request lifecycle, not reply capture: a
+It succeeds only once `message status` reports `complete: true`. A
 recipient's turn has ended (`turn_ended: true` in `message status`) once,
 after the message was submitted, Bus saw it Working or Blocked or its provider
 reported the turn start for the message, and Bus has seen it Idle since. The
 provider's turn start covers a turn that starts and ends between two status
-polls. A captured reply also counts. A turn that ended without a captured
+polls. A captured reply also counts. An ended turn is not yet done: a message
+typed into a running turn reads ended for a few seconds while Bus holds the
+group's reply, and the command waits until it is `replied`. A turn that ended without a captured
 reply is `settling: true` for a few seconds while Bus waits for a late reply;
 the command waits for that settlement too. If the provider ended the turn on an
 error (a Codex model at capacity, say), Bus then abandons the request with reason
@@ -322,7 +324,9 @@ error (a Codex model at capacity, say), Bus then abandons the request with reaso
 request at once with the same reason, carrying Claude's error text and
 category. Without a provider error,
 settlement abandons it with reason `reply_not_captured`, which `--async` counts
-as an ended turn and succeeds on.
+as done and succeeds on. If the agent went unavailable after its turn ended (its
+provider exited, say), settlement abandons it with reason `agent_unavailable` and
+the command exits 1 with `message_abandoned`.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
 command keeps waiting until someone answers it. Both async waits retry live-server
 overload, including accepted connections closed without a response. Four consecutive
@@ -482,14 +486,13 @@ fix the cause (clear the input box, answer the agent, restart it), or recover
 the request explicitly with `request recover`. `wait` and `send --async` stop
 at a typed stall with exit code 3 and the reason in the JSON error; an abandoned
 queued request exits with code 1. For `--async`,
-a finished turn whose reply was not captured counts as done, not stalled, even
-once settlement abandons it as `reply_not_captured`. A bounded `wait` needs the
+a finished turn whose reply was not captured counts as done once settlement
+abandons it as `reply_not_captured`. A bounded `wait` needs the
 reply: it fails on any abandoned request, with `message_provider_error` for a
 provider error and `message_abandoned` otherwise (exit 1).
 
 Treat `complete: true` from `message status` or bounded `wait` as the durable
-settlement signal. An async wait can succeed earlier when every `turn_ended`
-is true and none is `settling`, without claiming that a reply was captured.
+settlement signal; async waits succeed only on it.
 A successful terminal write or a visually idle agent is
 not proof that the request completed.
 
