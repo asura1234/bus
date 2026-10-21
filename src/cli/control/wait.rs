@@ -240,6 +240,26 @@ fn dialog_response(id: &str, last_status: Value) -> Response {
     response
 }
 
+/// A one-shot command reports whether it ran, so a caller knows whether
+/// retrying could apply it twice.
+fn transport_error(id: &str, method: &str, message: &str) -> Response {
+    let (applied, outcome) = if crate::messaging::control::undelivered(message) {
+        (json!(false), "was not delivered, so it did not run")
+    } else {
+        (
+            json!("unknown"),
+            "may have run; check Bus state before retrying",
+        )
+    };
+    let mut response = Response::failure(
+        id,
+        "transport_error",
+        format!("{message}; {method} {outcome}"),
+    );
+    response.result = json!({ "applied": applied });
+    response
+}
+
 fn remaining_time(deadline: Option<Instant>) -> Option<Duration> {
     deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
 }
@@ -292,26 +312,10 @@ pub(super) fn execute(
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return timeout_response(&id, last_status);
                 }
-                // A one-shot command reports whether it ran, so a caller
-                // knows whether retrying could apply it twice.
-                let (applied, outcome) = if crate::messaging::control::undelivered(&message) {
-                    (json!(false), "was not delivered, so it did not run")
-                } else {
-                    (
-                        json!("unknown"),
-                        "may have run; check Bus state before retrying",
-                    )
-                };
-                let mut response = Response::failure(
-                    &id,
-                    "transport_error",
-                    format!("{message}; {} {outcome}", request.method),
-                );
-                response.result = if waiting {
-                    last_status
-                } else {
-                    json!({ "applied": applied })
-                };
+                let mut response = transport_error(&id, &request.method, &message);
+                if waiting {
+                    response.result = last_status;
+                }
                 return response;
             }
         };
