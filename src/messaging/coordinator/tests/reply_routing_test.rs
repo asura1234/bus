@@ -969,3 +969,181 @@ fn reply_routing_coalesced_rejection_does_not_rearm_without_a_new_arrival() {
     );
     assert!(f.notices().iter().all(|r| r.phase == RequestPhase::Queued));
 }
+
+#[test]
+fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() {
+    let mut missing = Vec::new();
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        let mut f = Fixture::with_provider(provider);
+        let mut state = f.worker.state.clone();
+        state
+            .set_agent_runtime_identity(
+                f.agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("worker".into()),
+                    terminal_id: Some("worker-terminal".into()),
+                    pane_id: Some("worker-pane".into()),
+                    session_id: Some("worker-session".into()),
+                },
+            )
+            .unwrap();
+        state.confirm_hook_setup(f.agent).unwrap();
+        state
+            .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms() - 10_000)
+            .unwrap();
+        f.worker.save(state).unwrap();
+        let lead = f.send(Author::Developer, "developer asks");
+        let member = f.send(Author::Agent(f.orch), "orchestrator asks");
+        let mut state = f.worker.state.clone();
+        let payload = state.coalesce_queue(lead).unwrap();
+        state.begin_submission(lead, "worker", 0).unwrap();
+        state
+            .record_submission(
+                lead,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: Some("worker-session".into()),
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
+        let callback = |sequence, kind, prompt_payload| ProviderCallback {
+            callback_id: format!("group-{sequence}"),
+            sequence,
+            occurred_at_ms: io::now_ms() - 4_000,
+            agent_id: f.agent,
+            launch_id: "worker".into(),
+            provider_session_id: Some("worker-session".into()),
+            provider_turn_id: Some("shared-turn".into()),
+            provider_prompt_id: (provider == Provider::ClaudeCode).then_some("shared-turn".into()),
+            prompt_payload,
+            kind,
+        };
+        assert_eq!(
+            state.accept_callback(callback(1, CallbackEventKind::PromptStarted, Some(payload))),
+            CallbackDisposition::AcceptedBinding
+        );
+        if provider == Provider::ClaudeCode {
+            assert_eq!(
+                state.accept_callback(callback(2, CallbackEventKind::BackgroundPending, None)),
+                CallbackDisposition::AcceptedProgress
+            );
+            state.hold_background_reply(
+                f.agent,
+                crate::messaging::model::PendingFinal {
+                    callback_id: "group-interim".into(),
+                    text: "Shared work still running.".into(),
+                    received_at_ms: io::now_ms() - 4_000,
+                    provider_session_id: Some("worker-session".into()),
+                    provider_turn_id: Some("shared-turn".into()),
+                },
+            );
+            let since = state
+                .request(lead)
+                .unwrap()
+                .shell_hold
+                .as_ref()
+                .unwrap()
+                .since_ms;
+            assert_eq!(
+                state.release_shell_hold(f.agent, since + 900_000, 900_000),
+                Some(lead)
+            );
+        } else {
+            state
+                .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+                .unwrap();
+            assert_eq!(
+                state.accept_callback(callback(
+                    2,
+                    CallbackEventKind::Final {
+                        text: "Shared work still running.".into(),
+                    },
+                    None,
+                )),
+                CallbackDisposition::AcceptedCompleted
+            );
+        }
+        assert_eq!(
+            state.request(member).unwrap().phase,
+            RequestPhase::Completed
+        );
+        state
+            .see_worker_reply(member, f.orch, io::now_ms())
+            .unwrap();
+        let original = state.request(member).unwrap().pending_final.clone();
+        for (index, mut invalid) in [
+            callback(
+                0,
+                CallbackEventKind::Final {
+                    text: "Stale result".into(),
+                },
+                None,
+            ),
+            callback(
+                3,
+                CallbackEventKind::Final {
+                    text: "Foreign launch".into(),
+                },
+                None,
+            ),
+            callback(
+                3,
+                CallbackEventKind::Final {
+                    text: "Foreign session".into(),
+                },
+                None,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            invalid.callback_id = format!("invalid-group-{index}");
+            if index == 1 {
+                invalid.launch_id = "another-launch".into();
+            } else if index == 2 {
+                invalid.provider_session_id = Some("another-session".into());
+            }
+            state.accept_callback(invalid);
+        }
+        state.accept_callback(callback(
+            3,
+            CallbackEventKind::Final {
+                text: "Shared work actually finished.".into(),
+            },
+            None,
+        ));
+        state.accept_callback(callback(
+            4,
+            CallbackEventKind::Final {
+                text: "Shared work actually finished.".into(),
+            },
+            None,
+        ));
+        assert_eq!(state.request(member).unwrap().pending_final, original);
+        assert_eq!(state.request(lead).unwrap().pending_final, original);
+        state
+            .route_worker_replies(io::now_ms() + 10_000, &BTreeSet::new())
+            .unwrap();
+        f.worker.save(state).unwrap();
+        f.worker.submit_ready().unwrap();
+        let calls = f.calls.lock().unwrap();
+        assert!(!calls
+            .iter()
+            .any(|text| text.contains("Stale result") || text.contains("Foreign")));
+        if !calls.iter().any(|text| {
+            text.contains("Late reply") && text.contains("Shared work actually finished.")
+        }) {
+            missing.push(provider);
+        } else {
+            assert_eq!(
+                calls.len(),
+                1,
+                "late result must wake the sender exactly once"
+            );
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "an orchestrator's coalesced message still owes the changed late final: {missing:?}"
+    );
+}

@@ -1411,3 +1411,177 @@ fn handled_old_idle_episodes_expire_only_after_new_work_supersedes_them() {
 
 #[path = "worker_event_waiter_overlap_test.rs"]
 mod waiter_overlap;
+
+fn late_final_after_new_input_joins_the_completed_turn(provider: Provider) {
+    let mut f = Fixture::with_provider(provider);
+    let source = if provider == Provider::ClaudeCode {
+        capped_background_request(&mut f)
+    } else {
+        let orch = f.orch;
+        let source = running(&mut f, Author::Agent(orch));
+        let mut state = f.worker.state.clone();
+        state
+            .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+            .unwrap();
+        state.accept_callback(callback(
+            &f,
+            "owned",
+            2,
+            CallbackEventKind::Final {
+                text: "Interim result.".into(),
+            },
+        ));
+        state
+            .see_worker_reply(source, f.orch, io::now_ms())
+            .unwrap();
+        f.worker.save(state).unwrap();
+        source
+    };
+    let next = f.send(Author::Agent(f.orch), "continue the background task");
+    let mut state = f.worker.state.clone();
+    state.begin_submission(next, "worker", 10).unwrap();
+    state
+        .record_submission(
+            next,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("worker-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    // Both providers can fold newly typed input into the still-running turn.
+    let mut started = callback(&f, "owned", 11, CallbackEventKind::PromptStarted);
+    started.prompt_payload = Some("continue the background task".into());
+    assert_eq!(
+        state.accept_callback(started),
+        CallbackDisposition::AcceptedBinding
+    );
+    let disposition = state.accept_callback(callback(
+        &f,
+        "owned",
+        12,
+        CallbackEventKind::Final {
+            text: "The real background result.".into(),
+        },
+    ));
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1,
+        "{provider:?}: the original async sender must receive the late final; disposition={disposition:?}");
+    assert!(calls[0].contains("The real background result."));
+    let source_prompt = f.worker.state.request(source).unwrap().prompt.id;
+    assert!(calls[0].contains(&format!("Late reply to message {}", source_prompt.0)));
+}
+
+#[test]
+fn late_final_after_new_input_joins_the_completed_turn_claude() {
+    late_final_after_new_input_joins_the_completed_turn(Provider::ClaudeCode);
+}
+
+#[test]
+fn late_final_after_new_input_joins_the_completed_turn_codex() {
+    late_final_after_new_input_joins_the_completed_turn(Provider::Codex);
+}
+
+#[test]
+fn background_wake_on_a_new_claude_prompt_after_the_cap_notifies_the_sender() {
+    let mut f = Fixture::new();
+    let source = capped_background_request(&mut f);
+    // Claude wakes for a finished background shell with a task notification,
+    // which can open a turn under a new prompt_id rather than the capped one.
+    let mut state = f.worker.state.clone();
+    let mut wake = callback(&f, "wake", 20, CallbackEventKind::PromptStarted);
+    wake.prompt_payload =
+        Some("<task-notification>\nCI watcher finished\n</task-notification>".into());
+    state.accept_callback(wake);
+    state.accept_callback(callback(
+        &f,
+        "wake",
+        21,
+        CallbackEventKind::Final {
+            text: "CI passed; the real final result.".into(),
+        },
+    ));
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "the sender must be woken once: {calls:?}");
+    assert!(calls[0].contains("CI passed; the real final result."));
+    let prompt = f.worker.state.request(source).unwrap().prompt.id;
+    assert!(calls[0].contains("Turn final"));
+    assert!(
+        !calls[0].contains(&format!("Late reply to message {}", prompt.0)),
+        "a fresh turn has no proof tying it to the capped message: {}",
+        calls[0]
+    );
+}
+
+#[test]
+fn late_final_reaches_orchestrator_message_steered_into_an_abandoned_developer_turn() {
+    let mut f = Fixture::new();
+    ready_worker(&mut f);
+    let lead = f.send(Author::Developer, "developer work");
+    let mut state = f.worker.state.clone();
+    state.begin_submission(lead, "worker", 0).unwrap();
+    state
+        .record_submission(
+            lead,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("worker-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let mut started = callback(&f, "owned", 1, CallbackEventKind::PromptStarted);
+    started.prompt_payload = Some("developer work".into());
+    assert_eq!(
+        state.accept_callback(started),
+        CallbackDisposition::AcceptedBinding
+    );
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, io::now_ms() - 9_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let member = f.send(Author::Agent(f.orch), "orchestrator follow-up");
+    let mut state = f.worker.state.clone();
+    assert_eq!(state.next_steering(f.agent), Some((member, lead)));
+    state.begin_steering(member, lead).unwrap();
+    state
+        .record_steering(
+            member,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("worker-session".into()),
+                provider_turn_id: Some("owned".into()),
+            },
+        )
+        .unwrap();
+    let mut steered = callback(&f, "owned", 2, CallbackEventKind::PromptStarted);
+    steered.prompt_payload = Some(state.request(member).unwrap().prompt.rendered_payload());
+    assert_eq!(
+        state.accept_callback(steered),
+        CallbackDisposition::AcceptedSteering
+    );
+    let now = io::now_ms();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(lead)
+    );
+    assert_eq!(
+        state.request(member).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    f.worker.save(state).unwrap();
+    autonomous(&mut f, "owned", "The real late result.");
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|text| text.contains("Late reply") && text.contains("The real late result.")),
+        "the orchestrator's steered message owes the late final: {calls:?}"
+    );
+}

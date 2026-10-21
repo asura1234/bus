@@ -55,8 +55,14 @@ launch/session/turn is retained in room history and automatically wakes the orig
 room orchestrator with a **Late reply** notice; the completed result stays unchanged.
 The same rule covers Codex Stops without a background-task census. Identical text is
 deduplicated across envelopes and restarts, while successive changed finals remain
-deliverable. Coordinator regressions cover timeout/ordinary completion, restart,
-newer unbound input, both Stop shapes, and repeated/foreign callbacks.
+deliverable, including after abandonment. Coalesced and steered members use their
+group lead's attested submission boundary and turn; an orchestrator-authored member
+establishes who awaits the late answer. New input binding to an already consumed
+turn cannot suppress the old request's follow-up. Fresh autonomous turns retain
+their generic **Turn final** notice without inventing a request attribution.
+Coordinator regressions cover timeout/ordinary completion, restart, newer bound
+and unbound input, developer-led groups, both Stop shapes, and repeated/foreign
+callbacks.
 
 Deadline scenarios age persisted clock fields then run the real coordinator. This avoids sleeping for a 15-minute hold or 30-second grace; it does not replace the live socket deadline or soak wall clock. The EAGAIN test uses the production native API client, real local sockets, production socket connection handler and App dispatcher. It pauses server dispatch and waits for the real three-second receive timeout (WouldBlock/EAGAIN on macOS, TimedOut on other kernels), then recovers without resubmitting the prompt.
 

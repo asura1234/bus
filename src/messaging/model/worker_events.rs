@@ -58,6 +58,7 @@ impl BusState {
                     | CallbackRejection::WrongPrompt
                     | CallbackRejection::UnboundFinal
                     | CallbackRejection::BeforeSubmissionBoundary
+                    | CallbackRejection::DuplicateFinal
             )
         ) {
             return;
@@ -93,10 +94,10 @@ impl BusState {
             })
             .collect();
         let late = self.late_worker_request(callback);
-        // A post-cap Stop can itself still be intermediate. Retain each changed
-        // final of a completed turn, rather than spending the turn on the first
+        // A late Stop can itself still be intermediate. Retain each changed
+        // final of a closed turn, rather than spending the turn on the first
         // update. Text keys also deduplicate fresh envelopes after a restart.
-        let key = if late.is_some_and(|r| r.phase == RequestPhase::Completed) {
+        let key = if late.is_some() {
             format!(
                 "final:{turn}:{}",
                 crate::utils::time::digest(text.as_bytes())
@@ -160,18 +161,27 @@ impl BusState {
     /// and route changed text as a follow-up, under the same attested turn.
     pub(crate) fn late_worker_request(&self, callback: &ProviderCallback) -> Option<&Request> {
         self.requests().find(|r| {
+            // Coalesced and steered members share the lead's submission and
+            // final. The member proves who awaits the answer; the lead proves
+            // which provider turn owns it, including its callback boundary.
+            let Some(lead) = self.request(reply_key(r)) else {
+                return false;
+            };
             r.agent_id == callback.agent_id
-                && r.submission_boundary.is_some_and(|b| callback.sequence > b)
+                && lead.agent_id == r.agent_id
+                && lead
+                    .submission_boundary
+                    .is_some_and(|b| callback.sequence > b)
                 && (r.phase == RequestPhase::Abandoned
                     || r.phase == RequestPhase::Completed
-                        && r.trusted_start_bound
+                        && lead.trusted_start_bound
                         && matches!(&callback.kind, CallbackEventKind::Final { text }
                             if r.pending_final.as_ref().is_some_and(|reply| reply.text != *text)))
                 && self.reply_orchestrator(r).is_some()
-                && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
-                && r.provider_session_id == callback.provider_session_id
-                && r.provider_turn_id.is_some()
-                && r.provider_turn_id == callback.provider_turn_id
+                && lead.expected_launch_id.as_deref() == Some(&callback.launch_id)
+                && lead.provider_session_id == callback.provider_session_id
+                && lead.provider_turn_id.is_some()
+                && lead.provider_turn_id == callback.provider_turn_id
         })
     }
 

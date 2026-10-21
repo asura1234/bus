@@ -230,3 +230,305 @@ fn changed_claude_session_preserves_the_active_request_and_logs_both_sessions() 
         std::fs::remove_dir_all(dir).unwrap();
     });
 }
+
+/// A work-room Claude worker whose room orchestrator sends it async requests.
+fn orchestrated_worker() -> (Worker, AgentId, AgentId, RoomId, PathBuf) {
+    struct ConfirmedPrompts(FakeTransport);
+    impl Transport for ConfirmedPrompts {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if matches!(
+                method,
+                Method::AgentPromptIfIdle(_) | Method::AgentPromptIfUnbound(_)
+            ) {
+                return Ok(ResponseResult::AgentPrompted {
+                    agent: native_info("pane", "claude", "session"),
+                });
+            }
+            self.0.request(method)
+        }
+    }
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::ClaudeCode, vec![]);
+    worker.transport = Box::new(ConfirmedPrompts(FakeTransport {
+        replies: VecDeque::new(),
+        calls,
+        state_path: dir.join("state.json"),
+    }));
+    let mut state = worker.state.clone();
+    let master = state.master_room().unwrap().id;
+    let orch = state
+        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(orch, room).unwrap();
+    worker.save(state).unwrap();
+    (worker, agent, orch, room, dir)
+}
+
+fn send_from(
+    worker: &mut Worker,
+    room: RoomId,
+    orch: AgentId,
+    agent: AgentId,
+    text: &str,
+) -> RequestId {
+    let mut state = worker.state.clone();
+    let id = state
+        .submit_message_from(
+            room,
+            crate::messaging::model::Draft {
+                text: text.into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            crate::messaging::model::Author::Agent(orch),
+            io::now_ms() - 4_000,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
+    id
+}
+
+fn orchestrator_notices(worker: &Worker, orch: AgentId, agent: AgentId) -> Vec<String> {
+    worker
+        .state
+        .requests()
+        .filter(|r| {
+            r.agent_id == orch && r.prompt.author == crate::messaging::model::Author::Agent(agent)
+        })
+        .map(|r| r.prompt.text.clone())
+        .collect()
+}
+
+fn route_at(worker: &mut Worker, at_ms: u64) {
+    let mut state = worker.state.clone();
+    state
+        .route_worker_replies(at_ms, &std::collections::BTreeSet::new())
+        .unwrap();
+    worker.save(state).unwrap();
+}
+
+/// The request completes on an interim Stop (a Codex-style Stop without a
+/// task census) and the async sender has already seen that interim.
+fn completed_on_interim(
+    worker: &mut Worker,
+    agent: AgentId,
+    orch: AgentId,
+    room: RoomId,
+    dir: &Path,
+) -> RequestId {
+    let source = send_from(worker, room, orch, agent, "open work");
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(source)
+    );
+    record(dir, Provider::ClaudeCode, claude_start("p1", "open work"));
+    consume(worker, agent, dir);
+    record(
+        dir,
+        Provider::ClaudeCode,
+        claude_stop("p1", "Waiting for CI.", json!([])),
+    );
+    consume(worker, agent, dir);
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    assert_eq!(
+        worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    let mut state = worker.state.clone();
+    state.see_worker_reply(source, orch, io::now_ms()).unwrap();
+    worker.save(state).unwrap();
+    source
+}
+
+#[test]
+fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_new_request() {
+    for next_started in [false, true] {
+        let (mut worker, agent, orch, room, dir) = orchestrated_worker();
+        let source = completed_on_interim(&mut worker, agent, orch, room, &dir);
+        let next = send_from(&mut worker, room, orch, agent, "second work");
+        worker.submit_ready().unwrap();
+        // The fake transport's bare Ok is not an AgentPrompted reply; clear
+        // that harness-only error so only callback handling can set one.
+        let mut state = worker.state.clone();
+        state.set_agent_error(agent, None).unwrap();
+        worker.save(state).unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().current_request,
+            Some(next)
+        );
+        if next_started {
+            record(
+                &dir,
+                Provider::ClaudeCode,
+                claude_start("p2", "second work"),
+            );
+            consume(&mut worker, agent, &dir);
+            assert!(worker.state.request(next).unwrap().trusted_start_bound);
+        }
+        // The old turn's real final is spooled after Bus typed the newer request.
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_stop("p1", "CI passed: real result.", json!([])),
+        );
+        consume(&mut worker, agent, &dir);
+        assert!(
+            callbacks::records(&dir.join("callbacks/launch"))
+                .unwrap()
+                .is_empty(),
+            "next_started={next_started}: late final must not stay spooled"
+        );
+        assert!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .is_none(),
+            "next_started={next_started}: {:?}",
+            worker.state.agent(agent).unwrap().actionable_error
+        );
+        assert!(worker.state.request(next).unwrap().pending_final.is_none());
+        route_at(&mut worker, io::now_ms() + 10_000);
+        let notices = orchestrator_notices(&worker, orch, agent);
+        assert_eq!(notices.len(), 1, "next_started={next_started}: {notices:?}");
+        assert!(notices[0].contains(&format!(
+            "Late reply to message {}",
+            worker.state.request(source).unwrap().prompt.id.0
+        )));
+        assert!(notices[0].contains("CI passed: real result."));
+        // The newer request still binds and answers with its own turn.
+        if !next_started {
+            record(
+                &dir,
+                Provider::ClaudeCode,
+                claude_start("p2", "second work"),
+            );
+            consume(&mut worker, agent, &dir);
+        }
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_stop("p2", "Second reply.", json!([])),
+        );
+        consume(&mut worker, agent, &dir);
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+            .unwrap();
+        let next_request = worker.state.request(next).unwrap();
+        assert_eq!(
+            next_request.phase,
+            RequestPhase::Completed,
+            "next_started={next_started}"
+        );
+        assert_eq!(
+            next_request.pending_final.as_ref().unwrap().text,
+            "Second reply."
+        );
+        assert_eq!(
+            worker
+                .state
+                .request(source)
+                .unwrap()
+                .pending_final
+                .as_ref()
+                .unwrap()
+                .text,
+            "Waiting for CI."
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn successive_late_finals_after_completion_each_wake_the_sender_once() {
+    let (mut worker, agent, orch, room, dir) = orchestrated_worker();
+    completed_on_interim(&mut worker, agent, orch, room, &dir);
+    let now = io::now_ms();
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude_stop("p1", "Still waiting for the reviewer.", json!([])),
+    );
+    consume(&mut worker, agent, &dir);
+    route_at(&mut worker, now + 10_000);
+    assert_eq!(orchestrator_notices(&worker, orch, agent).len(), 1);
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude_stop("p1", "Reviewer approved.", json!([])),
+    );
+    // The identical interim and a repeat of an already-delivered update are not news.
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude_stop("p1", "Still waiting for the reviewer.", json!([])),
+    );
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude_stop("p1", "Waiting for CI.", json!([])),
+    );
+    consume(&mut worker, agent, &dir);
+    route_at(&mut worker, now + 30_000);
+    let notices = orchestrator_notices(&worker, orch, agent);
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert!(notices[1].contains("Reviewer approved."));
+    assert!(!notices[1].contains("Still waiting") && !notices[1].contains("Waiting for CI."));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn abandoned_request_does_not_spend_its_turn_on_a_first_interim_late_final() {
+    let (mut worker, agent, orch, room, dir) = orchestrated_worker();
+    let source = send_from(&mut worker, room, orch, agent, "open work");
+    worker.submit_ready().unwrap();
+    record(&dir, Provider::ClaudeCode, claude_start("p1", "open work"));
+    consume(&mut worker, agent, &dir);
+    let now = io::now_ms();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, now - 9_000)
+        .unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    let mut state = worker.state.clone();
+    assert_eq!(
+        state.settle_ended_request(agent, now, |_| None),
+        Some(source)
+    );
+    worker.save(state).unwrap();
+    assert_eq!(
+        worker.state.request(source).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude_stop("p1", "Still waiting for the reviewer.", json!([])),
+    );
+    consume(&mut worker, agent, &dir);
+    route_at(&mut worker, now + 10_000);
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude_stop("p1", "Reviewer approved.", json!([])),
+    );
+    consume(&mut worker, agent, &dir);
+    route_at(&mut worker, now + 30_000);
+    let notices = orchestrator_notices(&worker, orch, agent);
+    assert!(
+        notices.iter().any(|n| n.contains("Reviewer approved.")),
+        "the later changed final of an abandoned turn was dropped: {notices:?}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
