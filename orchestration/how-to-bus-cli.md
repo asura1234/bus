@@ -334,7 +334,7 @@ transport failures exit 1 with `bus_down`; a live status reply or accepted-conne
 disconnect resets this budget. It exits early only if Bus is unreachable, the send
 fails or Bus abandons a recipient's request other than as `reply_not_captured`
 (exit 1), or a recipient's message
-stalls before its turn ended (exit 3, see Stalled messages); the reason is in
+stalls before it settled (exit 3, see Stalled messages); the reason is in
 the JSON error object.
 `--async` cannot be combined with `--to human`.
 
