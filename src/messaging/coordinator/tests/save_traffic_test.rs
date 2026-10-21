@@ -162,6 +162,7 @@ fn status_call(id: usize, message: PromptId) -> BusCommand {
             params: json!({"message": message.0.to_string()}),
         },
         reply,
+        deadline: None,
         _poll_permit: None,
     })
 }
@@ -225,6 +226,7 @@ fn a_ui_command_never_overtakes_a_control_mutation() {
             params: json!({"name": "from-control"}),
         },
         reply,
+        deadline: None,
         _poll_permit: None,
     });
     let queued = vec![

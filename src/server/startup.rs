@@ -61,6 +61,9 @@ pub fn run_server(
         .build()
         .map_err(io::Error::other)?;
 
+    // The server loop answers the coordinator's API calls and every pane's
+    // output; agents' builds must not starve it.
+    crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Initiated);
     let result = rt.block_on(async {
         // Create the App (with AppState, event channels, etc.).
         let mut app = app::App::new(

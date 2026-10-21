@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{
     io::{self, Write},
     sync::{mpsc::SyncSender, Arc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(super) const MAX_REQUEST_BYTES: usize = 256 * 1024;
@@ -72,6 +72,9 @@ impl Response {
 pub(crate) struct ControlCall {
     pub request: Request,
     pub reply: SyncSender<Response>,
+    /// When the caller is answered `coordinator_timeout`; a read still queued
+    /// then has no one to answer and is skipped. None never expires.
+    pub(crate) deadline: Option<Instant>,
     /// Held through coordinator completion, even after the caller times out.
     pub(crate) _poll_permit: Option<Arc<()>>,
 }

@@ -52,6 +52,7 @@ impl Transport for FreshLaunchNative {
                                 params: json!({"message":request.prompt.id.0.to_string()}),
                             },
                             reply,
+                            deadline: None,
                             _poll_permit: None,
                         }),
                     ))
@@ -162,6 +163,7 @@ impl Transport for PollingNative {
                             params: json!({"message": self.message.0.to_string()}),
                         },
                         reply,
+                        deadline: None,
                         _poll_permit: None,
                     })
                 };

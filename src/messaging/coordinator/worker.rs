@@ -310,6 +310,8 @@ impl Worker {
         events: mpsc::Sender<BusEvent>,
         snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
+        // Agents' builds can saturate the machine; control replies must still run.
+        crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
         self.compact_history();
         let mut next_poll = std::time::Instant::now();
         let mut pending_commands = std::collections::VecDeque::new();
@@ -335,6 +337,22 @@ impl Worker {
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     self.fold_journal();
                     break;
+                }
+                Ok((_id, BusCommand::Control(call)))
+                    if call
+                        .deadline
+                        .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+                        && !control_dispatch::is_mutation(&call.request.method) =>
+                {
+                    // The caller was already answered `coordinator_timeout`;
+                    // a read has nothing to commit, so skip it.
+                    perf::CONTROL_SKIPPED.add(1);
+                    tracing::debug!(
+                        event = "bus.control.command.skipped",
+                        control_request_id = %call.request.id,
+                        method = perf::control_method_label(&call.request.method),
+                        "Control read skipped after its caller's deadline"
+                    );
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
@@ -579,7 +597,8 @@ fn recorded_codex_end(
 
 /// The next command to run: the developer's oldest UI command when only
 /// control reads (follower status polls) are queued ahead of it, else the
-/// oldest command. Control mutations and shutdown are never overtaken.
+/// oldest command other than a status poll, else the oldest poll. Control
+/// mutations and shutdown are never overtaken.
 fn next_command(
     commands: &mpsc::Receiver<(u64, BusCommand)>,
     pending: &mut std::collections::VecDeque<(u64, BusCommand)>,
@@ -603,7 +622,21 @@ fn next_command(
         {
             pending.remove(index)
         }
-        _ => pending.pop_front(),
+        _ => {
+            // Followers poll status by the hundred; a caller's one read,
+            // interrupt or delete must not wait behind them. Shutdown keeps
+            // its place, so polls queued before it are still answered.
+            let interactive = pending.iter().position(|(_, command)| match command {
+                BusCommand::Control(call) => call.request.method != "message.status",
+                _ => true,
+            });
+            match interactive {
+                Some(index) if !matches!(pending[index].1, BusCommand::Shutdown) => {
+                    pending.remove(index)
+                }
+                _ => pending.pop_front(),
+            }
+        }
     }
 }
 
