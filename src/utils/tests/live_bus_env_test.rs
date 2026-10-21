@@ -113,3 +113,6 @@ fn a_test_started_again_by_a_test_keeps_the_variables_it_was_given() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
 }
+
+#[path = "inherited_env_fixture_test.rs"]
+mod fixture_environment_tests;
