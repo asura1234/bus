@@ -783,3 +783,53 @@ mod codex_unbound_reply_recovery_tests;
 
 #[path = "master_replies_test.rs"]
 mod master_replies_tests;
+
+/// Whether `send --async` / `wait --async` exit 0 on this `message.status`:
+/// the message is complete and no request closed other than as
+/// `reply_not_captured`.
+fn async_waiters_exit_zero(status: &Value) -> bool {
+    status["complete"] == true
+        && status["requests"].as_array().unwrap().iter().all(|r| {
+            r["stage"] == "replied"
+                || (r["stage"] == "abandoned" && r["reason"] == "reply_not_captured")
+        })
+}
+
+/// The goal of the async-wait fix: an interrupted message never exits 0. A
+/// message typed into a turn whose reply arrived, then run by the agent and
+/// interrupted inside the steering settle window, must not read replied.
+#[test]
+fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_replied() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    running(&mut fixture, "write the parser", "turn-1");
+    let correction = fixture.send("also add tests", false);
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    // The agent runs the typed input; its submit hook has not been seen.
+    fixture.status(RuntimeStatus::Working);
+    let response = fixture.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "probe-interrupt-window".into(),
+            method: "agent.interrupt".into(),
+            params: json!({"agent": "builder"}),
+        },
+        None,
+    );
+    assert!(response.ok, "{response:?}");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let status = fixture
+        .worker
+        .control_message(fixture.request(correction).prompt.id)
+        .unwrap();
+    assert!(
+        !async_waiters_exit_zero(&status),
+        "an interrupted typed message lets async waiters exit 0: {status}"
+    );
+}

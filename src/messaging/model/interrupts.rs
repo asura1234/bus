@@ -1,6 +1,8 @@
 //! `agent interrupt`: the provider's stop key was pressed, so the running turn
 //! and the messages waiting for the agent close instead of running on.
-use super::{AgentId, Author, BusState, ModelError, Prompt, PromptId, RequestId, RoomId};
+use super::{
+    AgentId, Author, BusState, ModelError, Prompt, PromptId, RequestId, RequestPhase, RoomId,
+};
 
 /// The reason an interrupted request closed with, which `wait` reports as
 /// `message_interrupted`.
@@ -19,7 +21,9 @@ impl BusState {
 
     /// Closes `agent`'s open turn, with every message typed into it, and its
     /// queue as interrupted. A reply captured before the stop took effect means
-    /// the turn ended on its own first: that reply still completes it.
+    /// the turn ended on its own first: that reply still completes it, but not
+    /// the messages typed in that no hook placed in that turn. The agent ran
+    /// those after the reply, and the stop ended them.
     pub(crate) fn close_interrupted(
         &mut self,
         agent: AgentId,
@@ -32,13 +36,28 @@ impl BusState {
         agent_state.interrupt_pending = false;
         let current = agent_state.current_request;
         let mut closed = Vec::new();
-        if let Some(current) = current.filter(|id| {
-            self.requests
-                .get(id)
-                .is_some_and(|request| request.pending_final.is_none())
-        }) {
+        let replied = current
+            .and_then(|id| self.requests.get(&id))
+            .is_some_and(|request| request.pending_final.is_some());
+        if let Some(current) = current.filter(|_| !replied) {
             self.close_turn_with_reason(current, now_ms, INTERRUPTED.into())?;
             closed.push(current);
+        }
+        if let Some(current) = current.filter(|_| replied) {
+            for member in self.group_members(current) {
+                let Some(request) = self
+                    .requests
+                    .get_mut(&member)
+                    .filter(|m| m.steered && !m.trusted_start_bound && !m.settled())
+                else {
+                    continue;
+                };
+                request.group = None;
+                request.phase = RequestPhase::Abandoned;
+                request.completed_at_ms = Some(now_ms);
+                request.failure_reason = Some(INTERRUPTED.into());
+                closed.push(member);
+            }
         }
         for queued in self.queued_requests(agent).to_vec() {
             self.recover_idle_request(queued, now_ms)?;
