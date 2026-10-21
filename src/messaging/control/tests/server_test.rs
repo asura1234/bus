@@ -539,8 +539,12 @@ fn slow_unknown_control_methods_do_not_log_user_supplied_text() {
         ))
         .unwrap();
     let capture = crate::utils::logging::test_capture::Capture::default();
+    // CONTROL_REQUEST is process-wide; a concurrent test's slow request
+    // must not consume the one-WARN-per-second window this test asserts on.
     capture.run(|| {
-        assert!(client.poll(&tx, &mut next_id, None));
+        crate::utils::perf::without_warn_throttle(|| {
+            assert!(client.poll(&tx, &mut next_id, None));
+        });
     });
     let text = capture.text();
     assert!(

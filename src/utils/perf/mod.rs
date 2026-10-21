@@ -109,11 +109,12 @@ impl Timer {
         let now = now_us();
         let last = self.last_warn_us.load(Ordering::Relaxed);
         let interval = u64::try_from(WARN_INTERVAL.as_micros()).unwrap_or(u64::MAX);
-        if last != 0 && now.saturating_sub(last) < interval
-            || self
-                .last_warn_us
-                .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
-                .is_err()
+        if !warn_throttle_bypassed()
+            && (last != 0 && now.saturating_sub(last) < interval
+                || self
+                    .last_warn_us
+                    .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_err())
         {
             self.suppressed.fetch_add(1, Ordering::Relaxed);
             return;
@@ -164,6 +165,37 @@ impl Timer {
         };
         (count > 0).then_some(window)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static WARN_THROTTLE_BYPASSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `action` with slow-op WARNs on this thread exempt from the
+/// process-wide per-timer throttle, so a test asserting on a shared timer's
+/// WARN cannot lose it to a concurrent test's slow op.
+#[cfg(test)]
+pub(crate) fn without_warn_throttle<R>(action: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            WARN_THROTTLE_BYPASSED.with(|bypassed| bypassed.set(false));
+        }
+    }
+    WARN_THROTTLE_BYPASSED.with(|bypassed| bypassed.set(true));
+    let _reset = Reset;
+    action()
+}
+
+#[cfg(test)]
+fn warn_throttle_bypassed() -> bool {
+    WARN_THROTTLE_BYPASSED.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+const fn warn_throttle_bypassed() -> bool {
+    false
 }
 
 pub(crate) struct TimerGuard {
