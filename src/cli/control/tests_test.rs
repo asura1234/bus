@@ -1898,12 +1898,12 @@ fn async_following_survives_live_control_server_dropping_excess_connections() {
         std::process::id(),
         crate::messaging::storage::io::now_ns()
     ));
-    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let (tx, rx) = std::sync::mpsc::sync_channel(16);
     let _server = crate::messaging::control::start(&dir, tx).unwrap();
-    let socket = dir.join("control.sock");
+    let socket = dir.join("control-wait.sock");
     let mut stalled = Vec::new();
     let mut streams = Vec::new();
-    for id in 0..64 {
+    for id in 0..16 {
         let mut stream = crate::platform::ipc::connect_local_stream(&socket).unwrap();
         let request = Request {
             id: format!("stalled-{id}"),
@@ -2608,4 +2608,128 @@ fn feishu_enable_status_failure_preserves_caller_request_id() {
     let response: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(response["error"]["code"], "coordinator_busy");
     assert_eq!(response["id"], "enable-notifications");
+}
+
+/// Sharing the interactive socket with slow status reads rejects mutations once
+/// followers fill it, even though every follower reconnects between polls.
+#[cfg(unix)]
+#[test]
+fn one_hundred_async_waiters_do_not_starve_interrupt_or_new_send() {
+    use crate::messaging::{control, coordinator::BusCommand};
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::time::Instant;
+    let dir = std::env::temp_dir().join(format!(
+        "bcl100-{:x}-{:x}",
+        std::process::id(),
+        crate::messaging::storage::io::now_ns()
+    ));
+    let (tx, rx) = std::sync::mpsc::sync_channel(256);
+    let server = control::start(&dir, tx).unwrap();
+    let release = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::new(AtomicBool::new(false));
+    let pending_count = Arc::new(AtomicUsize::new(0));
+    let first_responses = Arc::new(AtomicUsize::new(0));
+    let worker = {
+        let release = release.clone();
+        let stopping = stopping.clone();
+        let pending_count = pending_count.clone();
+        thread::spawn(move || {
+            let mut pending = Vec::new();
+            while !stopping.load(Ordering::Acquire) {
+                if let Ok((_, BusCommand::Control(call))) =
+                    rx.recv_timeout(Duration::from_millis(5))
+                {
+                    if call.request.method == "message.status" {
+                        pending.push(call);
+                        pending_count.fetch_add(1, Ordering::Release);
+                    } else {
+                        let _ = call.reply.send(Response::success(
+                            &call.request.id,
+                            json!({"accepted": true}),
+                        ));
+                    }
+                }
+                if release.load(Ordering::Acquire) {
+                    for call in pending.drain(..) {
+                        let _ = call.reply.send(Response::success(
+                            &call.request.id,
+                            status(vec![recipient(1, "replied", true)]),
+                        ));
+                    }
+                }
+            }
+        })
+    };
+    let followers: Vec<_> = (0..100)
+        .map(|id| {
+            let dir = dir.clone();
+            let first_responses = first_responses.clone();
+            thread::spawn(move || {
+                let mut first = true;
+                follow_message(
+                    &format!("follower-{id}"),
+                    &json!(id),
+                    &mut |request, _| {
+                        let response = control::request(&dir, request);
+                        if first {
+                            first = false;
+                            first_responses.fetch_add(1, Ordering::Release);
+                        }
+                        response
+                    },
+                    &mut thread::sleep,
+                )
+            })
+        })
+        .collect();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while pending_count.load(Ordering::Acquire) + first_responses.load(Ordering::Acquire) < 100 {
+        assert!(
+            Instant::now() < deadline,
+            "all 100 followers must reach the saturated server"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(followers.iter().all(|f| !f.is_finished()));
+    let outcomes: Vec<_> = [
+        "agent.interrupt",
+        "message.send",
+        "state.get",
+        "agent.answer",
+    ]
+    .into_iter()
+    .map(|method| {
+        control::request_with_timeout(
+            &dir,
+            &Request {
+                id: method.into(),
+                method: method.into(),
+                params: json!({"agent": "worker", "text": "new work"}),
+            },
+            Duration::from_secs(2),
+        )
+    })
+    .collect();
+    release.store(true, Ordering::Release);
+    let completed: Vec<_> = followers.into_iter().map(|f| f.join().unwrap()).collect();
+    stopping.store(true, Ordering::Release);
+    worker.join().unwrap();
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+    for (method, outcome) in ["interrupt", "send", "state", "answer"]
+        .into_iter()
+        .zip(outcomes)
+    {
+        assert!(
+            outcome.as_ref().is_ok_and(|r| r.ok),
+            "{method} was starved by followers: {outcome:?}"
+        );
+    }
+    assert!(
+        completed.iter().all(|r| r.ok),
+        "all 100 async followers must finish successfully"
+    );
 }

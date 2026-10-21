@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     io::{self, Write},
-    sync::mpsc::SyncSender,
+    sync::{mpsc::SyncSender, Arc},
     time::Duration,
 };
 
@@ -16,6 +16,8 @@ pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// The control socket in a session's data directory. Every session runs it;
 /// the `--dev` flag only decides which methods answer.
 pub(crate) const SOCKET_NAME: &str = "control.sock";
+/// Status polling has independent admission from interactive control calls.
+pub(super) const WAIT_SOCKET_NAME: &str = "control-wait.sock";
 pub(super) const LOCK_NAME: &str = "control.lock";
 /// The socket name of a Bus started by a build from before every session ran
 /// the control socket. Such a Bus keeps it until it is restarted.
@@ -70,6 +72,8 @@ impl Response {
 pub(crate) struct ControlCall {
     pub request: Request,
     pub reply: SyncSender<Response>,
+    /// Held through coordinator completion, even after the caller times out.
+    pub(crate) _poll_permit: Option<Arc<()>>,
 }
 
 pub(super) struct ControlledStream(pub(super) ipc::LocalStream);

@@ -2,7 +2,7 @@
 use super::protocol::{
     encode, poll_write, ControlledStream, Frame, FrameError, Request, Response, IO_TIMEOUT,
     LEGACY_SOCKET_NAME, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME,
-    WORKER_TIMEOUT,
+    WAIT_SOCKET_NAME, WORKER_TIMEOUT,
 };
 use crate::platform::ipc;
 use std::{
@@ -36,11 +36,11 @@ pub(crate) fn request_with_timeout(
     if remaining.is_zero() {
         return Err("request_timeout: request deadline elapsed".into());
     }
-    let stream =
-        ipc::connect_local_stream_timeout(&socket_path(data_dir), remaining.min(IO_TIMEOUT))
-            .map_err(|e| {
-                format!("control_unavailable: connect to an existing Bus instance: {e}")
-            })?;
+    let stream = ipc::connect_local_stream_timeout(
+        &socket_path(data_dir, request),
+        remaining.min(IO_TIMEOUT),
+    )
+    .map_err(|e| format!("control_unavailable: connect to an existing Bus instance: {e}"))?;
     let mut stream = ControlledStream(stream);
     let mut offset = 0;
     let write_deadline = deadline.min(Instant::now() + IO_TIMEOUT);
@@ -80,11 +80,15 @@ pub(crate) fn request_with_timeout(
     }
 }
 
-/// The session's control socket. A Bus started by an older build still
+/// Route all status reads to their own finite connection pool. Interactive
+/// calls retain the legacy name fallback: a Bus started by an older build still
 /// listens on the legacy name until restarted, and agents inside it keep
 /// using newer CLI builds meanwhile, so fall back to that name when only it
 /// exists.
-fn socket_path(data_dir: &Path) -> std::path::PathBuf {
+fn socket_path(data_dir: &Path, request: &Request) -> std::path::PathBuf {
+    if request.method == "message.status" {
+        return data_dir.join(WAIT_SOCKET_NAME);
+    }
     let current = data_dir.join(SOCKET_NAME);
     let legacy = data_dir.join(LEGACY_SOCKET_NAME);
     if current.symlink_metadata().is_err() && legacy.symlink_metadata().is_ok() {
