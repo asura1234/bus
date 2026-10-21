@@ -41,10 +41,17 @@ fn overlay_label_shows_cpu_memory_and_fps() {
         sys_cpu_pct: 40.0,
     };
     assert_eq!(
-        overlay_label(Some(sample), Some(29.6)),
-        " CPU 12.3% MEM 92MB FPS 30 "
+        overlay_label(Some(sample), Some(29.6), None),
+        " CPU 12.3% MEM 92MB FPS 30 AGENTS n/a "
     );
-    assert_eq!(overlay_label(None, None), " CPU n/a MEM n/a FPS n/a ");
+    assert_eq!(
+        overlay_label(None, None, None),
+        " CPU n/a MEM n/a FPS n/a AGENTS n/a "
+    );
+    assert_eq!(
+        overlay_label(None, None, Some(&BusState::default())),
+        " CPU n/a MEM n/a FPS n/a AGENTS 0 running / 0 live "
+    );
 }
 
 #[test]
@@ -55,7 +62,7 @@ fn an_off_overlay_leaves_frames_alone_and_counts_nothing() {
     meter.note_frame();
     meter.stamp(&mut frame);
     assert_eq!(frame, before);
-    assert!(!meter.tick(Instant::now() + Duration::from_secs(5), None));
+    assert!(!meter.tick(Instant::now() + Duration::from_secs(5), None, None));
     assert_eq!(meter.frames_since_sample(), 0);
 }
 
@@ -63,33 +70,36 @@ fn an_off_overlay_leaves_frames_alone_and_counts_nothing() {
 fn an_on_overlay_refreshes_once_a_second_with_fps_and_stamps_the_top_right() {
     let meter = OverlayMeter::new();
     let start = Instant::now();
-    meter.set_on(true, start);
+    meter.set_on(true, start, None);
     assert!(meter.is_on());
     for _ in 0..30 {
         meter.note_frame();
     }
     assert!(
-        !meter.tick(start + Duration::from_millis(500), None),
+        !meter.tick(start + Duration::from_millis(500), None, None),
         "not yet a second"
     );
     assert!(
-        meter.tick(start + Duration::from_secs(1), None),
+        meter.tick(start + Duration::from_secs(1), None, None),
         "a new second repaints"
     );
-    assert!(!meter.tick(start + Duration::from_millis(1_100), None));
+    assert!(!meter.tick(start + Duration::from_millis(1_100), None, None));
 
-    let mut frame = blank_frame(40, 3);
+    let mut frame = blank_frame(80, 3);
     meter.stamp(&mut frame);
     let top = row(&frame, 0);
-    assert!(top.ends_with(" CPU n/a MEM n/a FPS 30 "), "{top:?}");
+    assert!(
+        top.ends_with(" CPU n/a MEM n/a FPS 30 AGENTS n/a "),
+        "{top:?}"
+    );
     assert_eq!(row(&frame, 1).trim(), "", "only the top row changes");
-    let start_col = 40 - " CPU n/a MEM n/a FPS 30 ".len();
+    let start_col = 80 - " CPU n/a MEM n/a FPS 30 AGENTS n/a ".len();
     assert_ne!(
         frame.cells[start_col].bg, 2,
         "the label has its own background"
     );
 
-    meter.set_on(false, start);
+    meter.set_on(false, start, None);
     let mut cleared = blank_frame(40, 3);
     meter.stamp(&mut cleared);
     assert_eq!(row(&cleared, 0).trim(), "");
@@ -98,7 +108,7 @@ fn an_on_overlay_refreshes_once_a_second_with_fps_and_stamps_the_top_right() {
 #[test]
 fn a_narrow_frame_gets_a_clipped_label_without_panicking() {
     let meter = OverlayMeter::new();
-    meter.set_on(true, Instant::now());
+    meter.set_on(true, Instant::now(), None);
     let mut frame = blank_frame(10, 1);
     meter.stamp(&mut frame);
     assert_eq!(row(&frame, 0).chars().count(), 10);
@@ -123,7 +133,7 @@ fn overlay_cost_profile() {
     };
     let off = OverlayMeter::new();
     let on = OverlayMeter::new();
-    on.set_on(true, Instant::now());
+    on.set_on(true, Instant::now(), None);
     println!(
         "overlay ns/frame: off={} on_without_fps={} on_with_fps={}",
         per_frame(&off, true),
@@ -138,4 +148,91 @@ fn overlay_cost_profile() {
         "fps counter ns/frame: {}",
         started.elapsed().as_nanos() / u128::from(FRAMES)
     );
+}
+
+#[test]
+fn overlay_counts_shown_status_across_all_rooms_and_refreshes_after_turns() {
+    use crate::messaging::model::{BusState, Provider, RuntimeStatus};
+
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let first = state.create_room("first").unwrap();
+    let second = state.create_room("second").unwrap();
+    let mut working = Vec::new();
+    for (room, name, status) in [
+        (master, "orchestrator", RuntimeStatus::Working),
+        (first, "alpha", RuntimeStatus::Working),
+        (second, "beta", RuntimeStatus::Working),
+        (first, "idle", RuntimeStatus::Idle),
+        (second, "launching", RuntimeStatus::Launching),
+        (second, "blocked", RuntimeStatus::Blocked),
+        (first, "unavailable", RuntimeStatus::Unavailable),
+        (first, "dialog", RuntimeStatus::Working),
+    ] {
+        let id = state
+            .create_agent(room, name, Provider::ClaudeCode, "/scratch".into(), None)
+            .unwrap();
+        state.observe_status(id, status, 1).unwrap();
+        if name == "dialog" {
+            state.observe_dialog(id, true).unwrap();
+        } else if status == RuntimeStatus::Working {
+            working.push(id);
+        }
+    }
+    assert!(overlay_label(None, None, Some(&state)).ends_with("AGENTS 3 running / 7 live "));
+
+    let meter = OverlayMeter::new();
+    let start = Instant::now();
+    meter.set_on(true, start, None);
+    assert!(meter.tick(start + Duration::from_secs(1), None, Some(&state)));
+    let mut frame = blank_frame(100, 1);
+    meter.stamp(&mut frame);
+    assert!(row(&frame, 0).ends_with("AGENTS 3 running / 7 live "));
+
+    for id in working {
+        state.observe_status(id, RuntimeStatus::Idle, 2).unwrap();
+    }
+    assert!(meter.tick(start + Duration::from_secs(2), None, Some(&state)));
+    meter.stamp(&mut frame);
+    assert!(row(&frame, 0).ends_with("AGENTS 0 running / 7 live "));
+}
+
+#[test]
+fn an_overlay_immediately_shows_snapshot_agent_counts_when_enabled() {
+    use crate::messaging::model::Provider;
+
+    let mut state = BusState::default();
+    let room = state.ensure_master_room();
+    for (name, status) in [
+        ("working", RuntimeStatus::Working),
+        ("idle", RuntimeStatus::Idle),
+    ] {
+        let id = state
+            .create_agent(room, name, Provider::ClaudeCode, "/scratch".into(), None)
+            .unwrap();
+        state.observe_status(id, status, 1).unwrap();
+    }
+    let meter = OverlayMeter::new();
+    meter.set_on(true, Instant::now(), Some(&state));
+    let mut frame = blank_frame(100, 1);
+    meter.stamp(&mut frame);
+    let top = row(&frame, 0);
+    assert!(top.contains("FPS n/a"), "{top:?}");
+    assert!(top.ends_with("AGENTS 1 running / 2 live "), "{top:?}");
+}
+
+#[test]
+fn an_overlay_tick_without_state_marks_agent_counts_unavailable() {
+    let meter = OverlayMeter::new();
+    let start = Instant::now();
+    meter.set_on(true, start, Some(&BusState::default()));
+    let mut frame = blank_frame(100, 1);
+    meter.stamp(&mut frame);
+    assert!(row(&frame, 0).ends_with("AGENTS 0 running / 0 live "));
+
+    meter.note_frame();
+    assert!(meter.tick(start + Duration::from_secs(1), None, None));
+    meter.stamp(&mut frame);
+    let top = row(&frame, 0);
+    assert!(top.ends_with("FPS 1 AGENTS n/a "), "{top:?}");
 }

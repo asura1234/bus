@@ -1,5 +1,6 @@
 //! The client's perf metrics; the recorder writes them to `perf/client.jsonl`.
 use super::events::ClientLoopEvent;
+use crate::messaging::model::{BusState, RuntimeStatus};
 use crate::protocol::wire::FrameData;
 use crate::utils::perf::{ContextSample, Field, Gauge, LoopWatch, Timer};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -71,11 +72,11 @@ impl OverlayMeter {
         self.on.load(Ordering::Relaxed)
     }
 
-    pub(super) fn set_on(&self, on: bool, now: Instant) {
+    pub(super) fn set_on(&self, on: bool, now: Instant, state: Option<&BusState>) {
         self.frames.store(0, Ordering::Relaxed);
         if let Ok(mut shown) = self.shown.lock() {
             shown.since = Some(now);
-            shown.label = overlay_label(crate::utils::perf::context(), None);
+            shown.label = overlay_label(crate::utils::perf::context(), None, state);
         }
         self.on.store(on, Ordering::Relaxed);
     }
@@ -93,7 +94,12 @@ impl OverlayMeter {
     }
 
     /// Refreshes the label once a second; true when the overlay needs a repaint.
-    pub(super) fn tick(&self, now: Instant, context: Option<ContextSample>) -> bool {
+    pub(super) fn tick(
+        &self,
+        now: Instant,
+        context: Option<ContextSample>,
+        state: Option<&BusState>,
+    ) -> bool {
         if !self.is_on() {
             return false;
         }
@@ -107,7 +113,7 @@ impl OverlayMeter {
         }
         let frames = self.frames.swap(0, Ordering::Relaxed);
         let fps = frames as f64 / elapsed.as_secs_f64();
-        shown.label = overlay_label(context, Some(fps));
+        shown.label = overlay_label(context, Some(fps), state);
         shown.since = Some(now);
         true
     }
@@ -121,7 +127,7 @@ impl OverlayMeter {
             return;
         };
         let label = if shown.label.is_empty() {
-            overlay_label(None, None)
+            overlay_label(None, None, None)
         } else {
             shown.label.clone()
         };
@@ -145,15 +151,33 @@ impl OverlayMeter {
     }
 }
 
-pub(super) fn overlay_label(context: Option<ContextSample>, fps: Option<f64>) -> String {
+pub(super) fn overlay_label(
+    context: Option<ContextSample>,
+    fps: Option<f64>,
+    state: Option<&BusState>,
+) -> String {
     let cpu = context
         .map(|context| context.cpu_pct)
         .filter(|cpu| cpu.is_finite());
     let mem = context
         .map(|context| context.rss_mb)
         .filter(|mem| mem.is_finite());
+    // Use the same shown status as `bus state`, including dialog overrides.
+    let agents = state
+        .map(|state| {
+            let (running, live) =
+                state.agents().fold((0, 0), |(running, live), agent| {
+                    match agent.shown_status() {
+                        RuntimeStatus::Working => (running + 1, live + 1),
+                        RuntimeStatus::Unavailable => (running, live),
+                        _ => (running, live + 1),
+                    }
+                });
+            format!("{running} running / {live} live")
+        })
+        .unwrap_or_else(|| "n/a".into());
     format!(
-        " CPU {} MEM {} FPS {} ",
+        " CPU {} MEM {} FPS {} AGENTS {agents} ",
         cpu.map_or("n/a".into(), |cpu| format!("{}%", Field(Some(cpu)))),
         mem.map_or("n/a".into(), |mem| format!("{mem:.0}MB")),
         fps.map_or("n/a".into(), |fps| format!("{fps:.0}")),

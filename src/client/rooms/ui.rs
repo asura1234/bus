@@ -267,7 +267,11 @@ impl BusUi {
     /// Client-local and not saved: each run starts with the overlay off.
     pub(super) fn toggle_perf_overlay(&mut self) {
         let overlay = &crate::client::perf::OVERLAY;
-        overlay.set_on(!overlay.is_on(), std::time::Instant::now());
+        overlay.set_on(
+            !overlay.is_on(),
+            std::time::Instant::now(),
+            Some(&self.snapshot.state),
+        );
         if let Some(field) = self.perf_overlay_field() {
             self.settings_field = field;
         }
