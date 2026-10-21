@@ -11,6 +11,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Whether a `request` error proves the server never received the complete
+/// request line, so the method did not run. Any other error may follow dispatch.
+pub(crate) fn undelivered(error: &str) -> bool {
+    [
+        "invalid_request:",
+        "control_unavailable:",
+        "request_too_large:",
+        "request_timeout:",
+        "control_unsent:",
+    ]
+    .iter()
+    .any(|prefix| error.starts_with(prefix))
+}
+
 /// One JSON line in each direction, with no endpoint creation or stale-file removal.
 pub(crate) fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
     request_with_timeout(data_dir, request, WORKER_TIMEOUT + IO_TIMEOUT * 3)
@@ -44,7 +58,9 @@ pub(crate) fn request_with_timeout(
     let mut stream = ControlledStream(stream);
     let mut offset = 0;
     let write_deadline = deadline.min(Instant::now() + IO_TIMEOUT);
-    while !poll_write(&mut stream.0, &bytes, &mut offset).map_err(|e| format!("control_io: {e}"))? {
+    while !poll_write(&mut stream.0, &bytes, &mut offset)
+        .map_err(|e| format!("control_unsent: {e}"))?
+    {
         if Instant::now() >= write_deadline {
             return Err("request_timeout: request write deadline elapsed".into());
         }

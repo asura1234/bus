@@ -135,19 +135,23 @@ impl Endpoint {
             let Some(listener) = &self.listener else {
                 break;
             };
+            // Excess callers wait in the listen backlog: closing an accepted
+            // connection unanswered leaves its caller unable to tell whether
+            // its request ran.
+            if self.clients.len() > MAX_CLIENTS {
+                break;
+            }
             match listener.accept() {
-                Ok(stream) if self.clients.len() >= MAX_CLIENTS => {
+                Ok(stream) if self.clients.len() == MAX_CLIENTS => {
                     // One extra bounded slot delivers overload errors without
                     // leaving unread Windows pipe writes in a linger pool.
-                    if self.clients.len() == MAX_CLIENTS {
-                        let mut client = Client::new(stream);
-                        if client.respond(Response::failure(
-                            "",
-                            "server_busy",
-                            "Control connection limit reached",
-                        )) {
-                            self.clients.push(client);
-                        }
+                    let mut client = Client::new(stream);
+                    if client.respond(Response::failure(
+                        "",
+                        "server_busy",
+                        "Control connection limit reached",
+                    )) {
+                        self.clients.push(client);
                     }
                 }
                 Ok(stream) => self.clients.push(Client::new(stream)),

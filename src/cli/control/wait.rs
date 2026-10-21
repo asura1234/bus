@@ -46,6 +46,12 @@ fn is_status_overloaded(response: &Response) -> bool {
             })
 }
 
+/// The endpoint accepted the connection, so Bus is up; a status read that
+/// lost its connection afterwards is retried.
+fn connected_failure(message: &str) -> bool {
+    message.starts_with("control_io:") || message.starts_with("control_unsent:")
+}
+
 fn next_busy_delay(delay: Duration) -> Duration {
     (delay * 2).min(BUSY_MAX_DELAY)
 }
@@ -81,10 +87,9 @@ pub(super) fn follow_message(
             params,
         };
         let response = match send(&request, None) {
-            // The bounded control server can drop accepted connections at its
-            // overload limit. Connecting proves the endpoint was reachable;
-            // retry this status read, and detect a later outage on reconnect.
-            Err(message) if message.starts_with("control_io:") => {
+            // Connecting proves the endpoint was reachable; retry this status
+            // read, and detect a later outage on reconnect.
+            Err(message) if connected_failure(&message) => {
                 transport_failures = 0;
                 pause(busy_delay);
                 busy_delay = next_busy_delay(busy_delay);
@@ -265,7 +270,7 @@ pub(super) fn execute(
                 transport_failures = 0;
                 response
             }
-            Err(message) if waiting && message.starts_with("control_io:") => {
+            Err(message) if waiting && connected_failure(&message) => {
                 transport_failures = 0;
                 thread::sleep(remaining.map_or(busy_delay, |d| d.min(busy_delay)));
                 busy_delay = next_busy_delay(busy_delay);
@@ -287,8 +292,26 @@ pub(super) fn execute(
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return timeout_response(&id, last_status);
                 }
-                let mut response = Response::failure(&id, "transport_error", message);
-                response.result = last_status;
+                // A one-shot command reports whether it ran, so a caller
+                // knows whether retrying could apply it twice.
+                let (applied, outcome) = if crate::messaging::control::undelivered(&message) {
+                    (json!(false), "was not delivered, so it did not run")
+                } else {
+                    (
+                        json!("unknown"),
+                        "may have run; check Bus state before retrying",
+                    )
+                };
+                let mut response = Response::failure(
+                    &id,
+                    "transport_error",
+                    format!("{message}; {} {outcome}", request.method),
+                );
+                response.result = if waiting {
+                    last_status
+                } else {
+                    json!({ "applied": applied })
+                };
                 return response;
             }
         };
