@@ -2813,7 +2813,16 @@ fn async_follower_reports_bus_down_after_a_saturated_server_stops() {
 #[test]
 fn transport_errors_say_whether_the_command_ran() {
     let args = [
-        "agent", "add", "--room", "7", "--name", "w1", "--provider", "claude", "--pwd", "/tmp",
+        "agent",
+        "add",
+        "--room",
+        "7",
+        "--name",
+        "w1",
+        "--provider",
+        "claude",
+        "--pwd",
+        "/tmp",
     ];
     for (error, applied, says) in [
         (
@@ -2855,4 +2864,23 @@ fn transport_errors_say_whether_the_command_ran() {
         assert!(message.contains(says), "{message}");
         assert_eq!(response["result"]["applied"], applied, "{error}");
     }
+}
+
+/// The follow-up `--text` send of `agent interrupt` is a one-shot mutation
+/// too; its transport failure must still say whether the message was sent.
+#[test]
+fn interrupt_text_transport_error_says_whether_the_text_was_sent() {
+    let (outcome, response) = run_captured(
+        &["agent", "interrupt", "a4", "--text", "next task"],
+        |request, _| match request.method.as_str() {
+            "agent.interrupt" => Ok(Response::success(
+                &request.id,
+                json!({"room_id": 7, "agents": [{"agent_id": 4, "name": "a4", "outcome": "already_idle"}]}),
+            )),
+            _ => Err("control_io: response connection closed or failed".into()),
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "transport_error", "{response}");
+    assert_eq!(response["result"]["applied"], "unknown", "{response}");
 }
