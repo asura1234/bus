@@ -46,6 +46,12 @@ fn is_status_overloaded(response: &Response) -> bool {
             })
 }
 
+/// The endpoint accepted the connection, so Bus is up; a status read that
+/// lost its connection afterwards is retried.
+fn connected_failure(message: &str) -> bool {
+    message.starts_with("control_io:") || message.starts_with("control_unsent:")
+}
+
 fn next_busy_delay(delay: Duration) -> Duration {
     (delay * 2).min(BUSY_MAX_DELAY)
 }
@@ -81,10 +87,9 @@ pub(super) fn follow_message(
             params,
         };
         let response = match send(&request, None) {
-            // The bounded control server can drop accepted connections at its
-            // overload limit. Connecting proves the endpoint was reachable;
-            // retry this status read, and detect a later outage on reconnect.
-            Err(message) if message.starts_with("control_io:") => {
+            // Connecting proves the endpoint was reachable; retry this status
+            // read, and detect a later outage on reconnect.
+            Err(message) if connected_failure(&message) => {
                 transport_failures = 0;
                 pause(busy_delay);
                 busy_delay = next_busy_delay(busy_delay);
@@ -235,6 +240,26 @@ fn dialog_response(id: &str, last_status: Value) -> Response {
     response
 }
 
+/// A one-shot command reports whether it ran, so a caller knows whether
+/// retrying could apply it twice; a wait reports its last status instead.
+fn transport_error(id: &str, method: &str, message: &str, status: Option<Value>) -> Response {
+    let (applied, outcome) = if crate::messaging::control::undelivered(message) {
+        (json!(false), "was not delivered, so it did not run")
+    } else {
+        (
+            json!("unknown"),
+            "may have run; check Bus state before retrying",
+        )
+    };
+    let mut response = Response::failure(
+        id,
+        "transport_error",
+        format!("{message}; {method} {outcome}"),
+    );
+    response.result = status.unwrap_or_else(|| json!({ "applied": applied }));
+    response
+}
+
 fn remaining_time(deadline: Option<Instant>) -> Option<Duration> {
     deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
 }
@@ -265,7 +290,7 @@ pub(super) fn execute(
                 transport_failures = 0;
                 response
             }
-            Err(message) if waiting && message.starts_with("control_io:") => {
+            Err(message) if waiting && connected_failure(&message) => {
                 transport_failures = 0;
                 thread::sleep(remaining.map_or(busy_delay, |d| d.min(busy_delay)));
                 busy_delay = next_busy_delay(busy_delay);
@@ -287,9 +312,8 @@ pub(super) fn execute(
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return timeout_response(&id, last_status);
                 }
-                let mut response = Response::failure(&id, "transport_error", message);
-                response.result = last_status;
-                return response;
+                let status = waiting.then_some(last_status);
+                return transport_error(&id, &request.method, &message, status);
             }
         };
         response.id.clone_from(&id);

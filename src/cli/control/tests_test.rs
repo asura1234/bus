@@ -1886,12 +1886,12 @@ fn async_waiters_exit_after_a_connected_endpoint_disappears() {
     }
 }
 
-/// A live control server at its connection limit closes excess connections
-/// without a reply while its coordinator is stalled; the follower must keep
-/// following instead of reporting that Bus is down.
+/// A live control server at its connection limit keeps excess callers waiting
+/// or answers server_busy while its coordinator is stalled; the follower must
+/// keep following instead of reporting that Bus is down.
 #[cfg(unix)]
 #[test]
-fn async_following_survives_live_control_server_dropping_excess_connections() {
+fn async_following_survives_live_control_server_at_its_connection_limit() {
     use std::io::Write as _;
     let dir = std::env::temp_dir().join(format!(
         "bcl-{:x}-{:x}",
@@ -2806,4 +2806,81 @@ fn async_follower_reports_bus_down_after_a_saturated_server_stops() {
     assert!(saw_overload.unwrap());
     let response = response.expect("a stopped poll endpoint must exhaust reconnect grace");
     assert_eq!(response.error.unwrap().code, "bus_down");
+}
+
+/// A failed `agent add` must say whether the add ran: failures before the
+/// request was delivered prove it did not; a lost reply leaves it unknown.
+#[test]
+fn transport_errors_say_whether_the_command_ran() {
+    let args = [
+        "agent",
+        "add",
+        "--room",
+        "7",
+        "--name",
+        "w1",
+        "--provider",
+        "claude",
+        "--pwd",
+        "/tmp",
+    ];
+    for (error, applied, says) in [
+        (
+            "control_unavailable: connect to an existing Bus instance: refused",
+            json!(false),
+            "agent.add was not delivered, so it did not run",
+        ),
+        (
+            "request_timeout: request write deadline elapsed",
+            json!(false),
+            "agent.add was not delivered, so it did not run",
+        ),
+        (
+            "control_unsent: Broken pipe (os error 32)",
+            json!(false),
+            "agent.add was not delivered, so it did not run",
+        ),
+        (
+            "control_io: response connection closed or failed",
+            json!("unknown"),
+            "agent.add may have run",
+        ),
+        (
+            "response_timeout: response deadline elapsed",
+            json!("unknown"),
+            "agent.add may have run",
+        ),
+    ] {
+        let mut sends = 0;
+        let (outcome, response) = run_captured(&args, |_, _| {
+            sends += 1;
+            Err(error.into())
+        });
+        assert!(outcome.is_err());
+        assert_eq!(sends, 1, "{error}");
+        assert_eq!(response["error"]["code"], "transport_error", "{error}");
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.starts_with(error), "{message}");
+        assert!(message.contains(says), "{message}");
+        assert_eq!(response["result"]["applied"], applied, "{error}");
+    }
+}
+
+/// The follow-up `--text` send of `agent interrupt` is a one-shot mutation
+/// too; its transport failure must still say whether the message was sent.
+#[test]
+fn interrupt_text_transport_error_says_whether_the_text_was_sent() {
+    let (outcome, response) = run_captured(
+        &["agent", "interrupt", "a4", "--text", "next task"],
+        |request, _| match request.method.as_str() {
+            "agent.interrupt" => Ok(Response::success(
+                &request.id,
+                json!({"room_id": 7, "agents": [{"agent_id": 4, "name": "a4", "outcome": "already_idle"}]}),
+            )),
+            _ => Err("control_io: response connection closed or failed".into()),
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(response["error"]["code"], "transport_error", "{response}");
+    assert_eq!(response["result"]["applied"], "unknown", "{response}");
 }

@@ -78,9 +78,14 @@ pub(super) fn run(
         &mut *send,
     );
     if !sent.ok {
+        // Keep the send's transport outcome beside the interrupt rows.
+        let applied = sent.result.get("applied").cloned();
         let mut failure = sent;
         failure.id = id.clone();
         failure.result = result;
+        if let Some(applied) = applied {
+            failure.result["applied"] = applied;
+        }
         return failure;
     }
     result["message_id"] = sent.result["message_id"].clone();

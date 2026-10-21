@@ -135,6 +135,13 @@ impl Endpoint {
             let Some(listener) = &self.listener else {
                 break;
             };
+            // Excess interactive callers wait in the listen backlog: closing an
+            // accepted connection unanswered leaves its caller unable to tell
+            // whether its request ran. Status reads are repeatable, so excess
+            // pollers are closed and retry rather than fill the backlog.
+            if self.clients.len() > MAX_CLIENTS && self.poll_budget.is_none() {
+                break;
+            }
             match listener.accept() {
                 Ok(stream) if self.clients.len() >= MAX_CLIENTS => {
                     // One extra bounded slot delivers overload errors without
@@ -274,6 +281,15 @@ impl Client {
                     }
                     Err(FrameError::Io(_)) => return false,
                 };
+                // A caller that gave up while its request waited in the listen
+                // backlog has reported a failure; running it now would apply it
+                // behind that report, so a closed peer's request never runs.
+                if !matches!(
+                    ipc::poll_local_stream_read_count(&mut self.stream.0, &mut [0]),
+                    Ok(ipc::LocalStreamReadCount::Pending)
+                ) {
+                    return false;
+                }
                 self.dispatch_request(&bytes, commands, next_id, poll_budget)
             }
 

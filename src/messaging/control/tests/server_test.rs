@@ -437,6 +437,52 @@ fn completed_responses_remain_counted_until_peers_close() {
     }
 }
 
+/// With every slot and the overload reply slot taken, a further caller must
+/// not be closed unanswered: it could not tell whether its mutation ran.
+#[test]
+fn excess_caller_waits_for_a_slot_instead_of_being_closed_unanswered() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(32);
+    let _server = start(&dir.0, tx).unwrap();
+    let mut streams = Vec::new();
+    let mut pending = Vec::new();
+    for id in 0..16 {
+        let mut stream = ipc::connect_local_stream(&dir.socket()).unwrap();
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&call(&format!("stalled-{id}"))).unwrap()
+        )
+        .unwrap();
+        pending.push(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        streams.push(stream);
+    }
+    // Another overloaded caller holds the single server_busy reply slot.
+    let busy_holder = ipc::connect_local_stream(&dir.socket()).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let path = dir.0.clone();
+    let add = thread::spawn(move || {
+        request(
+            &path,
+            &Request {
+                id: "add".into(),
+                method: "agent.add".into(),
+                params: Value::Null,
+            },
+        )
+    });
+    thread::sleep(Duration::from_millis(300));
+    assert!(!add.is_finished(), "excess caller must wait for a slot");
+    drop(busy_holder);
+    // The freed slot answers the waiting caller with an explicit overload
+    // reply, which proves its request never reached the coordinator.
+    let outcome = add.join().unwrap().unwrap();
+    assert_eq!(outcome.error.unwrap().code, "server_busy");
+    assert_eq!(pending.len(), 16);
+    drop(streams);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
 #[test]
 fn startup_reclaims_a_closed_listener_after_obtaining_its_lease() {
     let dir = TestDir::new();
@@ -841,4 +887,85 @@ fn saturated_interactive_pool_does_not_block_status_polls() {
         .send(Response::success("poll", json!({})))
         .unwrap();
     assert!(read_response(stream).ok);
+}
+
+/// Status reads are repeatable, so a saturated status endpoint closes an
+/// excess poll at once for its follower to retry, instead of leaving it in a
+/// listen backlog that can fill and refuse a live Bus's pollers.
+#[test]
+fn saturated_status_endpoint_closes_excess_polls_promptly() {
+    let dir = TestDir::new();
+    let (tx, _rx) = mpsc::sync_channel(256);
+    let _server = start(&dir.0, tx).unwrap();
+    let mut idle = Vec::new();
+    for _ in 0..=MAX_CLIENTS {
+        idle.push(ipc::connect_local_stream(&dir.0.join(WAIT_SOCKET_NAME)).unwrap());
+    }
+    thread::sleep(Duration::from_millis(50));
+    let started = Instant::now();
+    let outcome = request(&dir.0, &status_request("excess"));
+    assert!(
+        outcome
+            .as_ref()
+            .is_err_and(|e| e.starts_with("control_io:")),
+        "{outcome:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+/// A caller that already gave up while waiting for a slot reported a
+/// failure; its buffered request must not run afterwards.
+#[test]
+fn excess_caller_that_timed_out_waiting_never_runs_later() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(32);
+    let _server = start(&dir.0, tx).unwrap();
+    let mut streams = Vec::new();
+    let mut pending = Vec::new();
+    for id in 0..16 {
+        let mut stream = ipc::connect_local_stream(&dir.socket()).unwrap();
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&call(&format!("stalled-{id}"))).unwrap()
+        )
+        .unwrap();
+        let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("wrong coordinator command");
+        };
+        pending.push(call);
+        streams.push(stream);
+    }
+    let busy_holder = ipc::connect_local_stream(&dir.socket()).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let outcome = request_with_timeout(
+        &dir.0,
+        &Request {
+            id: "late-add".into(),
+            method: "agent.add".into(),
+            params: Value::Null,
+        },
+        Duration::from_millis(300),
+    );
+    assert!(
+        outcome
+            .as_ref()
+            .is_err_and(|e| e.starts_with("response_timeout:")),
+        "{outcome:?}"
+    );
+    // Regular slots free after the caller has already reported failure.
+    for _ in 0..2 {
+        let call = pending.remove(0);
+        call.reply
+            .try_send(Response::success(&call.request.id, json!({})))
+            .unwrap();
+        drop(streams.remove(0));
+    }
+    let late = rx.recv_timeout(Duration::from_secs(2));
+    assert!(
+        !matches!(&late, Ok((_, BusCommand::Control(call))) if call.request.id == "late-add"),
+        "the abandoned agent.add was dispatched after its caller timed out"
+    );
+    drop(busy_holder);
 }
