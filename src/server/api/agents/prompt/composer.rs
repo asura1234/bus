@@ -112,16 +112,37 @@ fn composer_frame(kind: AgentKind, screen: &str) -> bool {
 }
 
 /// Claude Code shows a pasted line that is one quoted image path as a leading
-/// `[Image #N]` chip. The draft is ours only when every chip stands for one of
-/// our image lines and the rest is exactly our remaining text.
+/// `[Image #N]` chip. The remaining text follows as typed, or as one collapsed
+/// `[Pasted text #N +K lines]` chip when it is long (live 2026-10-21: a
+/// developer message with an image was withdrawn as never shown, forever).
+/// The draft is ours only when every chip stands for one of our image lines
+/// and the rest is exactly our remaining text.
 fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String) -> bool {
-    use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_lifted_images,
-    };
-    let (length, images) = claude_image_placeholders(body);
+    use crate::agents::providers::claude_code::hooks::claude_lifted_images;
+    let (images, rest) = image_chips(body);
     let (lifted, remaining) =
         claude_lifted_images(&expected.replace("\r\n", "\n").replace('\r', "\n"));
-    images > 0 && images == lifted && normalize(&body[length..]) == normalize(&remaining)
+    images > 0
+        && images == lifted
+        && (normalize(rest) == normalize(&remaining)
+            || collapsed_paste(AgentKind::Claude, rest, &remaining))
+}
+
+/// The leading `[Image #N]` chips of a Claude composer and the text after them.
+/// The composer separates chips with one space (2.1.306), unlike the
+/// submit hook's prompt.
+fn image_chips(body: &str) -> (usize, &str) {
+    use crate::agents::providers::claude_code::hooks::claude_image_placeholders;
+    let (mut images, mut rest) = (0, body);
+    loop {
+        let (length, count) = claude_image_placeholders(rest);
+        images += count;
+        rest = &rest[length..];
+        match rest.strip_prefix(' ') {
+            Some(next) if count > 0 && claude_image_placeholders(next).1 > 0 => rest = next,
+            _ => return (images, rest),
+        }
+    }
 }
 
 fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {

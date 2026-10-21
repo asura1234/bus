@@ -289,6 +289,79 @@ fn claude_shows_a_pasted_image_path_as_a_leading_image_chip_that_is_still_our_dr
     );
 }
 
+/// Captured like the screens above, from Claude Code 2.1.306 in a 120x45 PTY:
+/// image lines lifted beside text long enough to collapse into one paste chip.
+const CAPTURE_COLLAPSED: &str =
+    "/private/tmp/claude-501/-Users-dylanliu-work-bus/0442051f-5cb4-4c5e-85b0-2f3af02e3a36/scratchpad/capture";
+
+fn collapsed_image(dir: &str, suffix: &str) -> String {
+    format!("\"{CAPTURE_COLLAPSED}/{dir}/paste-0123456789abcdef{suffix}.png\"")
+}
+
+#[test]
+fn claude_shows_lifted_images_beside_a_collapsed_paste_that_is_still_our_draft() {
+    for (screen, expected) in [
+        (
+            include_str!("fixtures/claude_image_long_paste.txt"),
+            format!(
+                "first line\nsecond line\nthird line\nfourth line\n{}",
+                collapsed_image("work-claude-long", "")
+            ),
+        ),
+        (
+            include_str!("fixtures/claude_image_long_line_paste.txt"),
+            format!(
+                "{}\n{}",
+                ["review"; 200].join(" "),
+                collapsed_image("work-claude-long-line", "")
+            ),
+        ),
+        // Image lines between text lines; the chips are joined by a space.
+        (
+            include_str!("fixtures/claude_interleaved_images_long_paste.txt"),
+            format!(
+                "first line\n{}\nsecond line\n\nthird line\n{}\nfourth line",
+                collapsed_image("work-claude-interleaved", ""),
+                collapsed_image("work-claude-interleaved", "-1")
+            ),
+        ),
+    ] {
+        assert_eq!(
+            observe(AgentKind::Claude, screen, &expected),
+            InputObservation::Pending,
+            "{screen}"
+        );
+    }
+}
+
+#[test]
+fn a_collapsed_paste_beside_image_chips_is_ours_only_with_our_line_and_image_counts() {
+    let screen = include_str!("fixtures/claude_image_long_paste.txt");
+    let image = collapsed_image("work-claude-long", "");
+    for expected in [
+        format!("first line\nsecond line\nthird line\n{image}"),
+        format!("first line\nsecond line\nthird line\nfourth line\nfifth line\n{image}"),
+        "first line\nsecond line\nthird line\nfourth line".to_owned(),
+        format!("first line\nsecond line\nthird line\nfourth line\n{image}\n{image}"),
+        format!("first line\nsecond line\nthird line\nfourth line\n\"/tmp/notes.diff\""),
+    ] {
+        assert_eq!(
+            observe(AgentKind::Claude, screen, &expected),
+            InputObservation::Other,
+            "{expected}"
+        );
+    }
+    let one_line = include_str!("fixtures/claude_image_long_line_paste.txt");
+    assert_eq!(
+        observe(
+            AgentKind::Claude,
+            one_line,
+            &format!("first line\nsecond line\n{image}")
+        ),
+        InputObservation::Other
+    );
+}
+
 #[test]
 fn an_image_chip_never_makes_someone_elses_draft_ours() {
     let screen = include_str!("fixtures/claude_image_paste.txt");
