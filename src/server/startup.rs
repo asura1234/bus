@@ -56,11 +56,18 @@ pub fn run_server(
         Err(err) => return Err(err),
     };
 
+    // Pane output runs on the runtime's workers; agents' builds must not
+    // starve it.
     let rt = tokio::runtime::Builder::new_multi_thread()
+        .on_thread_start(|| {
+            crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Initiated)
+        })
         .enable_all()
         .build()
         .map_err(io::Error::other)?;
 
+    // The coordinator blocks on this loop's API answers.
+    crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
     let result = rt.block_on(async {
         // Create the App (with AppState, event channels, etc.).
         let mut app = app::App::new(

@@ -109,6 +109,7 @@ fn serve(
     commands: SyncSender<(u64, BusCommand)>,
     stopped: Arc<AtomicBool>,
 ) {
+    crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
     let mut endpoints = listeners
         .into_iter()
         .enumerate()
@@ -376,11 +377,14 @@ impl Client {
         let (reply, receiver) = mpsc::sync_channel(1);
         let command_id = *next_id;
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;
+        let started = Instant::now();
+        let deadline = started + WORKER_TIMEOUT;
         match commands.try_send((
             command_id,
             BusCommand::Control(ControlCall {
                 request,
                 reply,
+                deadline: Some(deadline),
                 _poll_permit: poll_budget.cloned(),
             }),
         )) {
@@ -388,10 +392,10 @@ impl Client {
                 self.state = State::Waiting {
                     id,
                     method,
-                    started: Instant::now(),
+                    started,
                     reply: receiver,
                 };
-                self.deadline = Instant::now() + WORKER_TIMEOUT;
+                self.deadline = deadline;
                 true
             }
             Err(mpsc::TrySendError::Full(_)) => self.respond(Response::failure(

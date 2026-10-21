@@ -50,6 +50,9 @@ pub(super) fn start_server_inner(
     let running = Arc::new(AtomicBool::new(true));
     let listener_running = Arc::clone(&running);
     let thread = std::thread::spawn(move || {
+        // The coordinator blocks on these API calls; agents' builds must not
+        // starve them. New threads start at the default QoS.
+        crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -59,6 +62,9 @@ pub(super) fn start_server_inner(
                     let server_stop = Arc::clone(&server_stop);
                     let connection_running = Arc::clone(&listener_running);
                     std::thread::spawn(move || {
+                        crate::platform::set_current_thread_priority(
+                            crate::platform::ThreadPriority::Interactive,
+                        );
                         if let Err(err) = handle_connection_with_stop(
                             stream,
                             &api_tx,

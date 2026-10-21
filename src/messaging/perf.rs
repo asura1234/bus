@@ -11,6 +11,9 @@ pub(crate) static CONTROL: Timer = Timer::new("coordinator.control");
 pub(crate) static TICK: Timer = Timer::new("coordinator.tick");
 /// Building the snapshot the room UI reads.
 pub(crate) static SNAPSHOT: Timer = Timer::new("coordinator.snapshot");
+/// Control reads skipped because their caller had already timed out.
+pub(crate) static CONTROL_SKIPPED: crate::utils::perf::Counter =
+    crate::utils::perf::Counter::new("coordinator.control.skipped");
 /// A control socket request from dispatch to reply, including its wait in the command queue.
 pub(crate) static CONTROL_REQUEST: Timer = Timer::new("control.request");
 /// One call from the coordinator to the server API; slow ones are logged with the method.

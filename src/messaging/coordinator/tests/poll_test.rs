@@ -605,3 +605,6 @@ fn recovered_update_preserves_an_unrelated_error_after_coordinator_restart() {
     assert_eq!(actual.as_deref(), Some("unrelated delivery error"));
     assert_eq!(update_error, None);
 }
+
+#[path = "control_priority_test.rs"]
+mod control_priority_tests;

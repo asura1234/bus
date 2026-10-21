@@ -227,6 +227,52 @@ pub use desktop::{
     open_url, read_clipboard_image, reveal_path, show_desktop_notification, write_clipboard,
 };
 
+/// How the OS should schedule the calling thread against the rest of the
+/// machine, where agents' builds and simulators run at the default level.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ThreadPriority {
+    /// Work a waiting caller is blocked on, such as control replies.
+    Interactive,
+    /// Work the user started and expects soon, such as the terminal server.
+    Initiated,
+}
+
+/// Raises the calling thread's macOS QoS class to `priority`, never lowering
+/// one already above it (a process's main thread starts at USER_INTERACTIVE);
+/// elsewhere a no-op, since raising priority there needs privileges Bus does
+/// not have.
+pub(crate) fn set_current_thread_priority(priority: ThreadPriority) {
+    #[cfg(target_os = "macos")]
+    {
+        let class = match priority {
+            ThreadPriority::Interactive => libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE,
+            ThreadPriority::Initiated => libc::qos_class_t::QOS_CLASS_USER_INITIATED,
+        };
+        let mut current = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+        let mut relative = 0;
+        // SAFETY: reads the calling thread's own QoS into valid locals.
+        unsafe {
+            libc::pthread_get_qos_class_np(libc::pthread_self(), &mut current, &mut relative)
+        };
+        // QoS class values are ordered: a higher value is scheduled first.
+        if current as u32 >= class as u32 {
+            return;
+        }
+        // SAFETY: changes only the calling thread's own scheduling class.
+        let result = unsafe { libc::pthread_set_qos_class_self_np(class, 0) };
+        if result != 0 {
+            tracing::warn!(
+                event = "bus.platform.qos_failed",
+                ?priority,
+                error = result,
+                "Thread QoS unchanged"
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = priority;
+}
+
 pub(crate) mod fs;
 pub(crate) use fs::{
     atomic_write, create_private_state_file, launches_code, sync_parent_directory,

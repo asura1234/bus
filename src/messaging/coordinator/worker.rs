@@ -304,18 +304,52 @@ impl Worker {
         }
     }
 
+    /// Answers one control call, unless it is a read whose caller was
+    /// already answered `coordinator_timeout`: that has nothing to commit.
+    fn serve_control(
+        &mut self,
+        call: crate::messaging::control::server::ControlCall,
+        events: &mpsc::Sender<BusEvent>,
+    ) {
+        if call
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            && !control_dispatch::is_mutation(&call.request.method)
+        {
+            perf::CONTROL_SKIPPED.add(1);
+            tracing::debug!(
+                event = "bus.control.command.skipped",
+                control_request_id = %call.request.id,
+                method = perf::control_method_label(&call.request.method),
+                "Control read skipped after its caller's deadline"
+            );
+            return;
+        }
+        let started = std::time::Instant::now();
+        let response = self.control_response_with_events(&call.request, Some(events));
+        perf::CONTROL.record_op(
+            started.elapsed(),
+            perf::control_method_label(&call.request.method),
+        );
+        // A disconnected client does not cancel or replay a committed action.
+        let _ = call.reply.try_send(response);
+    }
+
     pub(super) fn run(
         mut self,
         commands: mpsc::Receiver<(u64, BusCommand)>,
         events: mpsc::Sender<BusEvent>,
         snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
+        // Agents' builds can saturate the machine; control replies must still run.
+        crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
         self.compact_history();
         let mut next_poll = std::time::Instant::now();
         let mut pending_commands = std::collections::VecDeque::new();
+        let mut poll_overtakes = 0;
         loop {
             let timeout = next_poll.saturating_duration_since(std::time::Instant::now());
-            let received = next_command(&commands, &mut pending_commands)
+            let received = next_command(&commands, &mut pending_commands, &mut poll_overtakes)
                 .map(Ok)
                 .unwrap_or_else(|| commands.recv_timeout(timeout));
             let busy = perf::COORDINATOR_LOOP.enter("command");
@@ -338,14 +372,7 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
-                    let started = std::time::Instant::now();
-                    let response = self.control_response_with_events(&call.request, Some(&events));
-                    perf::CONTROL.record_op(
-                        started.elapsed(),
-                        perf::control_method_label(&call.request.method),
-                    );
-                    // A disconnected client does not cancel or replay a committed action.
-                    let _ = call.reply.try_send(response);
+                    self.serve_control(call, &events);
                 }
                 Ok((id, command)) => {
                     let submitting =
@@ -577,12 +604,19 @@ fn recorded_codex_end(
     })
 }
 
+/// How many commands may run ahead of a waiting status poll before it runs:
+/// interactive calls skip the poll backlog, and polls still progress.
+const STATUS_POLL_OVERTAKES: usize = 4;
+
 /// The next command to run: the developer's oldest UI command when only
 /// control reads (follower status polls) are queued ahead of it, else the
-/// oldest command. Control mutations and shutdown are never overtaken.
+/// oldest command other than a status poll, else the oldest poll. A waiting
+/// poll is overtaken at most `STATUS_POLL_OVERTAKES` times in a row, counted
+/// in `overtakes`. Control mutations and shutdown are never overtaken.
 fn next_command(
     commands: &mpsc::Receiver<(u64, BusCommand)>,
     pending: &mut std::collections::VecDeque<(u64, BusCommand)>,
+    overtakes: &mut usize,
 ) -> Option<(u64, BusCommand)> {
     for _ in 0..super::COMMAND_QUEUE_CAPACITY {
         match commands.try_recv() {
@@ -603,7 +637,29 @@ fn next_command(
         {
             pending.remove(index)
         }
-        _ => pending.pop_front(),
+        _ => {
+            // Followers poll status by the hundred; a caller's one read,
+            // interrupt or delete must not wait behind them. Shutdown keeps
+            // its place, so polls queued before it are still answered.
+            let interactive = pending.iter().position(|(_, command)| match command {
+                BusCommand::Control(call) => call.request.method != "message.status",
+                _ => true,
+            });
+            match interactive {
+                Some(0) => pending.pop_front(),
+                Some(index)
+                    if !matches!(pending[index].1, BusCommand::Shutdown)
+                        && *overtakes < STATUS_POLL_OVERTAKES =>
+                {
+                    *overtakes += 1;
+                    pending.remove(index)
+                }
+                _ => {
+                    *overtakes = 0;
+                    pending.pop_front()
+                }
+            }
+        }
     }
 }
 
