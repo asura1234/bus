@@ -2697,8 +2697,8 @@ fn one_hundred_async_waiters_do_not_starve_interrupt_or_new_send() {
     let outcomes: Vec<_> = [
         "agent.interrupt",
         "message.send",
-        "state.get",
-        "agent.answer",
+        "state",
+        "agent.dialog.answer",
     ]
     .into_iter()
     .map(|method| {
