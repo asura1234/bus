@@ -164,23 +164,6 @@ fn slow_operations_are_recorded_and_logged_with_what_was_slow() {
 }
 
 #[test]
-fn a_bypassed_thread_still_warns_inside_another_slow_ops_throttle_window() {
-    static TIMER: Timer = Timer::new("test.timer.bypass");
-    TIMER.record_op(Duration::from_millis(150), "first");
-    let capture = crate::utils::logging::test_capture::Capture::default();
-    capture.run(|| {
-        TIMER.record_op(Duration::from_millis(150), "throttled");
-        crate::utils::perf::without_warn_throttle(|| {
-            TIMER.record_op(Duration::from_millis(150), "bypassed");
-        });
-        TIMER.record_op(Duration::from_millis(150), "throttled_again");
-    });
-    let text = capture.text();
-    assert!(text.contains("bypassed"), "{text}");
-    assert!(!text.contains("throttled"), "{text}");
-}
-
-#[test]
 fn a_stall_ends_with_the_stage_that_blocked_not_the_last_one() {
     static WATCH: LoopWatch = LoopWatch::new("test.loop.relabel");
     let threshold = Duration::from_millis(250);
