@@ -10,8 +10,7 @@ pub(super) struct ParsedCommand {
     pub(super) request_id: String,
     pub(super) wait_timeout: Option<Duration>,
     pub(super) wait_for_message: bool,
-    /// `send --async`: after sending, follow the message until every
-    /// recipient's turn ended.
+    /// `send --async`: after sending, follow the message until it is complete.
     pub(super) follow: bool,
 }
 

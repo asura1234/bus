@@ -4,11 +4,14 @@ use crate::messaging::prefs::colors;
 use std::path::PathBuf;
 use {
     super::{
-        AgentId, AgentRuntimeIdentity, BusState, Compactions, ModelError, Provider, RoomId,
-        RuntimeStatus, DEVELOPER_RECIPIENT, UNBOUND_SETTLE_MS,
+        AgentId, AgentRuntimeIdentity, BusState, Compactions, ModelError, Provider, RequestPhase,
+        RoomId, RuntimeStatus, DEVELOPER_RECIPIENT, UNBOUND_SETTLE_MS,
     },
     crate::messaging::model::RoomAgent,
 };
+
+/// Why a request closed when its agent was deleted before it settled.
+pub(crate) const AGENT_DELETED: &str = "agent_deleted";
 
 impl BusState {
     pub(crate) fn create_agent(
@@ -130,12 +133,31 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn delete_agent(&mut self, id: AgentId) -> Result<(), ModelError> {
+    /// Removes agent `id` with its queue and requests at `now_ms`. An
+    /// unsettled request of a message that other existing agents also
+    /// received, live or archived, stays, closed as `agent_deleted`, so the
+    /// message never reads complete without it.
+    pub(crate) fn delete_agent(&mut self, id: AgentId, now_ms: u64) -> Result<(), ModelError> {
         self.agents
             .remove(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
         self.queues.remove(&id);
-        self.requests.retain(|_, request| request.agent_id != id);
+        let shared: std::collections::BTreeSet<_> = self
+            .requests()
+            .filter(|request| self.agents.contains_key(&request.agent_id))
+            .map(|request| request.prompt.id)
+            .collect();
+        self.requests.retain(|_, request| {
+            request.agent_id != id || !request.settled() && shared.contains(&request.prompt.id)
+        });
+        for request in self.requests.values_mut() {
+            if request.agent_id == id {
+                request.group = None;
+                request.phase = RequestPhase::Abandoned;
+                request.completed_at_ms = Some(now_ms);
+                request.failure_reason = Some(AGENT_DELETED.into());
+            }
+        }
         self.drop_history_of_agent(id);
         for room in self.rooms.values_mut() {
             room.draft.recipient_ids.remove(&id);
@@ -387,6 +409,10 @@ impl BusState {
             agent_state.interrupt_pending = false;
         }
         agent_state.observed_at_ms = now_ms;
+        // Deletion and an invalidated session close the request their own way.
+        let gone = status == RuntimeStatus::Unavailable
+            && !agent_state.deletion_pending
+            && !agent_state.session_binding_invalidated;
         if status == RuntimeStatus::Idle {
             // No hook reports an interrupted turn; the idle screen is its end.
             // Codex reports Idle under an approval dialog, which is not one.
@@ -403,6 +429,11 @@ impl BusState {
             if settled_idle {
                 self.release_unbound_request(agent, now_ms);
             }
+        }
+        // A provider that went away cannot extend its turn, so a reply it
+        // already gave completes the turn as an idle screen would.
+        if gone {
+            self.complete_pending_final(agent, now_ms)?;
         }
         Ok(())
     }

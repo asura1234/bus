@@ -116,7 +116,7 @@ the wrapper remains held.
   submission race can expose both outputs; submitted events are never replayed.
   The first upgrade recovers retained older replies/outcomes once.
   Never sit idle waiting for a worker. *Why:* `--async` has no time limit for a
-  healthy Bus and returns after every recipient worked and went idle, or exits
+  healthy Bus and returns once the message is complete, or exits
   early on an error such as `bus_down` after four consecutive transport failures,
   so you stay free for the developer meanwhile. Live-server overload is retried.
 - **Delegate everything; write no code.** Send every task to an agent in your

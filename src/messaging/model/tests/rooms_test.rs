@@ -107,7 +107,10 @@ fn master_room_cannot_be_renamed_or_deleted_and_its_name_is_reserved() {
         state.prepare_delete_room(master),
         Err(ModelError::MasterRoomFixed)
     );
-    assert_eq!(state.delete_room(master), Err(ModelError::MasterRoomFixed));
+    assert_eq!(
+        state.delete_room(master, 0),
+        Err(ModelError::MasterRoomFixed)
+    );
     assert!(!state.room(master).unwrap().deletion_pending);
     for name in ["MASTER", "master", " Master "] {
         assert_eq!(state.create_room(name), Err(ModelError::ReservedRoomName));
@@ -203,7 +206,7 @@ fn deleting_a_room_deletes_its_orchestrator_too() {
     state.prepare_delete_room(pr).unwrap();
     assert!(state.agent(orchestrator).unwrap().deletion_pending);
     assert!(!state.agent(bystander).unwrap().deletion_pending);
-    state.delete_room(pr).unwrap();
+    state.delete_room(pr, 0).unwrap();
 
     assert!(state.agent(orchestrator).is_none());
     assert!(state.agent(worker).is_none());
@@ -294,7 +297,7 @@ fn deleting_the_visible_room_drops_its_orchestrators_master_requests_and_shows_m
     state.select_room(pr).unwrap();
 
     state.prepare_delete_room(pr).unwrap();
-    state.delete_room(pr).unwrap();
+    state.delete_room(pr, 0).unwrap();
 
     assert_eq!(state.visible_room(), Some(master));
     assert!(state.request(queued).is_none());

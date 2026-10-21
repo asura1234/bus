@@ -213,14 +213,14 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
+    pub(crate) fn delete_room(&mut self, id: RoomId, now_ms: u64) -> Result<(), ModelError> {
         match self.rooms.get(&id) {
             None => return Err(ModelError::UnknownRoom(id)),
             Some(room) if room.kind == RoomKind::Master => return Err(ModelError::MasterRoomFixed),
             Some(_) => {}
         }
         for agent in self.agents_deleted_with_room(id) {
-            self.delete_agent(agent)?;
+            self.delete_agent(agent, now_ms)?;
         }
         self.rooms.remove(&id);
         self.requests.retain(|_, request| request.room_id != id);

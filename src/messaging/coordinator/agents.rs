@@ -39,7 +39,9 @@ impl Worker {
                 )
                 .map_err(|e| e.to_string())?;
         }
-        state.delete_agent(id).map_err(|e| e.to_string())?;
+        state
+            .delete_agent(id, super::io::now_ms())
+            .map_err(|e| e.to_string())?;
         self.save(state)?;
         self.branch_checks.remove(&id);
         self.codex_rollouts.remove(&id);
@@ -72,7 +74,9 @@ impl Worker {
                 )
                 .map_err(|e| e.to_string())?;
         }
-        state.delete_room(id).map_err(|e| e.to_string())?;
+        state
+            .delete_room(id, super::io::now_ms())
+            .map_err(|e| e.to_string())?;
         self.save(state)?;
         for agent in agents {
             self.branch_checks.remove(&agent);

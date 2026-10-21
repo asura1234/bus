@@ -362,6 +362,32 @@ fn typed_input_without_a_submit_hook_settles_after_a_short_wait() {
     );
 }
 
+/// Live e2e (#121's 100-follower run): for `STEERING_SETTLE_MS` after the lead
+/// turn's reply arrives, a joined message reads ended and not settling, yet is
+/// incomplete. Async followers must keep waiting through this window.
+#[test]
+fn a_joined_message_reads_ended_but_incomplete_while_its_group_reply_settles() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    running(&mut fixture, "write the parser", "turn-1");
+    let correction = fixture.send("also add tests", false);
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser and tests written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let message = fixture.request(correction).prompt.id;
+    let status = fixture.worker.control_message(message).unwrap();
+    assert_eq!(status["complete"], false);
+    assert_eq!(status["requests"][0]["stage"], "joined");
+    assert_eq!(status["requests"][0]["turn_ended"], true);
+    assert_eq!(status["requests"][0]["settling"], false);
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    let status = fixture.worker.control_message(message).unwrap();
+    assert_eq!(status["complete"], true);
+    assert_eq!(status["requests"][0]["stage"], "replied");
+}
+
 #[test]
 fn uncertain_steering_without_its_own_start_can_complete_with_a_group_reply() {
     struct UncertainNative;
@@ -757,3 +783,260 @@ mod codex_unbound_reply_recovery_tests;
 
 #[path = "master_replies_test.rs"]
 mod master_replies_tests;
+
+/// Whether `send --async` / `wait --async` exit 0 on this `message.status`:
+/// the message is complete and no request closed other than as
+/// `reply_not_captured`.
+fn async_waiters_exit_zero(status: &Value) -> bool {
+    status["complete"] == true
+        && status["requests"].as_array().unwrap().iter().all(|r| {
+            r["stage"] == "replied"
+                || (r["stage"] == "abandoned" && r["reason"] == "reply_not_captured")
+        })
+}
+
+/// The goal of the async-wait fix: an interrupted message never exits 0. A
+/// message typed into a turn whose reply arrived, then run by the agent and
+/// interrupted inside the steering settle window, must not read replied.
+#[test]
+fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_replied() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    running(&mut fixture, "write the parser", "turn-1");
+    let correction = fixture.send("also add tests", false);
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    // The agent runs the typed input; its submit hook has not been seen.
+    fixture.status(RuntimeStatus::Working);
+    let response = fixture.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "probe-interrupt-window".into(),
+            method: "agent.interrupt".into(),
+            params: json!({"agent": "builder"}),
+        },
+        None,
+    );
+    assert!(response.ok, "{response:?}");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    let status = fixture
+        .worker
+        .control_message(fixture.request(correction).prompt.id)
+        .unwrap();
+    assert!(
+        !async_waiters_exit_zero(&status),
+        "an interrupted typed message lets async waiters exit 0: {status}"
+    );
+}
+
+/// #128 scratch e2e: a message queued before `agent interrupt` was typed
+/// into the stopped turn while Bus still saw it Working; the agent ran it as a
+/// turn of its own, whose reply the interrupted lead then took. A pressed stop
+/// key ends steering: the message stays queued and closes with the turn.
+#[test]
+fn messages_are_not_typed_into_a_turn_after_its_stop_key() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    let mut state = fixture.worker.state.clone();
+    state.begin_interrupt(fixture.agent).unwrap();
+    fixture.worker.save(state).unwrap();
+    let queued = fixture.send("also add tests", false);
+    fixture.deliver();
+    assert_eq!(fixture.typed().len(), 1, "{:?}", fixture.typed());
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    for id in [lead, queued] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            fixture.request(id).failure_reason.as_deref(),
+            Some(crate::messaging::model::INTERRUPTED)
+        );
+    }
+}
+
+/// Deleting one recipient of a multi-recipient message must not make the
+/// message read complete for the recipients that remain, so async waiters
+/// do not exit 0 on work that never ran.
+#[test]
+fn deleting_an_unfinished_recipient_does_not_complete_a_multi_recipient_message() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let mut state = fixture.worker.state.clone();
+    let other = state
+        .create_agent(
+            fixture.room,
+            "reviewer",
+            Provider::ClaudeCode,
+            fixture.dir.clone(),
+            None,
+        )
+        .unwrap();
+    let ids = state
+        .submit_message_with(
+            fixture.room,
+            Draft {
+                text: "write the parser".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent, other].into(),
+            },
+            Author::Developer,
+            fixture.now,
+            false,
+        )
+        .unwrap();
+    fixture.worker.save(state).unwrap();
+    fixture.deliver();
+    fixture.started("turn-1", "write the parser");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.stopped("turn-1", "parser written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let message = fixture.request(ids[0]).prompt.id;
+    let before = fixture.worker.control_message(message).unwrap();
+    assert_eq!(before["complete"], false, "{before}");
+    let mut state = fixture.worker.state.clone();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
+    fixture.worker.save(state).unwrap();
+    let after = fixture.worker.control_message(message);
+    assert!(
+        after.as_ref().map_or(true, |s| !async_waiters_exit_zero(s)),
+        "a deleted recipient's message reads complete: {after:?}"
+    );
+}
+
+/// One completed recipient and one still-open recipient share a message.
+fn a_shared_message_with_one_completed_recipient() -> (Fixture, AgentId, PromptId) {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let mut state = fixture.worker.state.clone();
+    let other = state
+        .create_agent(
+            fixture.room,
+            "reviewer",
+            Provider::ClaudeCode,
+            fixture.dir.clone(),
+            None,
+        )
+        .unwrap();
+    let ids = state
+        .submit_message_with(
+            fixture.room,
+            Draft {
+                text: "write the parser".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent, other].into(),
+            },
+            Author::Developer,
+            fixture.now,
+            false,
+        )
+        .unwrap();
+    fixture.worker.save(state).unwrap();
+    fixture.deliver();
+    fixture.started("turn-1", "write the parser");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.stopped("turn-1", "parser written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let message = fixture.request(ids[0]).prompt.id;
+    let before = fixture.worker.control_message(message).unwrap();
+    assert_eq!(before["complete"], false, "{before}");
+    (fixture, other, message)
+}
+
+#[test]
+fn deleting_a_recipient_preserves_failure_when_the_other_reply_is_archived() {
+    let (mut fixture, other, message) = a_shared_message_with_one_completed_recipient();
+    let later =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::ARCHIVE_AFTER_MS + 1;
+    fixture.worker.archive_history(later).unwrap();
+    assert_eq!(
+        fixture.worker.control_message(message).unwrap()["complete"],
+        false
+    );
+    let mut state = fixture.worker.state.clone();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
+    fixture.worker.save(state).unwrap();
+    let status = fixture.worker.control_message(message).unwrap();
+    assert!(
+        !async_waiters_exit_zero(&status),
+        "deleting an unfinished recipient after its peer reply was archived reads success: {status}"
+    );
+}
+
+#[test]
+fn a_deleted_recipient_failure_survives_history_archive_reload() {
+    let (mut fixture, other, message) = a_shared_message_with_one_completed_recipient();
+    let mut state = fixture.worker.state.clone();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
+    fixture.worker.save(state).unwrap();
+    let before = fixture.worker.control_message(message).unwrap();
+    assert!(!async_waiters_exit_zero(&before), "{before}");
+    let later =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::ARCHIVE_AFTER_MS + 1;
+    fixture.worker.archive_history(later).unwrap();
+    let reloaded = JsonStore::new(fixture.dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    fixture.worker.state = reloaded;
+    let status = fixture.worker.control_message(message).unwrap();
+    assert!(
+        !async_waiters_exit_zero(&status),
+        "reloading archived history erased the deleted recipient failure: {status}"
+    );
+}
+
+#[test]
+fn a_deleted_recipients_closed_request_survives_archive_reload_and_history() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let mut state = fixture.worker.state.clone();
+    let other = state
+        .create_agent(
+            fixture.room,
+            "reviewer",
+            Provider::ClaudeCode,
+            fixture.dir.clone(),
+            None,
+        )
+        .unwrap();
+    let ids = state
+        .submit_message_with(
+            fixture.room,
+            Draft {
+                text: "review the parser".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent, other].into(),
+            },
+            Author::Developer,
+            fixture.now,
+            false,
+        )
+        .unwrap();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
+    let saved = serde_json::to_value(&state).unwrap();
+    let mut reloaded: crate::messaging::model::BusState = serde_json::from_value(saved).unwrap();
+    reloaded.archive(fixture.now + crate::messaging::model::ARCHIVE_AFTER_MS + 1);
+    fixture.worker.save(reloaded).unwrap();
+    let message = fixture.request(ids[0]).prompt.id;
+    let status = fixture.worker.control_message(message).unwrap();
+    assert_eq!(status["requests"].as_array().unwrap().len(), 2, "{status}");
+    let history = fixture.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "history".into(),
+            method: "room.history".into(),
+            params: json!({"room": fixture.room.0.to_string()}),
+        },
+        None,
+    );
+    assert!(history.ok, "{history:?}");
+}

@@ -73,7 +73,7 @@ impl Transport for FailedLaunchNative {
 fn failed_startup_reports_evidence_and_deletes_instead_of_staying_unavailable() {
     let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
-    state.delete_agent(previous).unwrap();
+    state.delete_agent(previous, 0).unwrap();
     worker.save(state).unwrap();
     worker.transport = Box::new(FailedLaunchNative {
         state_path: dir.join("state.json"),

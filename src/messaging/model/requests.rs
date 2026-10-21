@@ -512,6 +512,8 @@ impl BusState {
             RuntimeStatus::Working | RuntimeStatus::Idle
         ) || agent_state.dialog
             || agent_state.deletion_pending
+            // A pressed stop key ends the turn: its queue closes with it.
+            || agent_state.interrupt_pending
         {
             return None;
         }

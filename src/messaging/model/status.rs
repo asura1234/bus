@@ -158,7 +158,7 @@ mod tests {
             .observe_status(codex, RuntimeStatus::Blocked, 1)
             .unwrap();
         assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
-        state.delete_agent(codex).unwrap();
+        state.delete_agent(codex, 0).unwrap();
         assert_eq!(state.room_status(room), RuntimeStatus::Working);
     }
 

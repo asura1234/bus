@@ -56,11 +56,11 @@ fn next_busy_delay(delay: Duration) -> Duration {
     (delay * 2).min(BUSY_MAX_DELAY)
 }
 
-/// `send --async`: reads the message's status until every recipient has worked
-/// on it and gone idle again (`turn_ended`), with no deadline. Orchestrators
+/// `send --async`: reads the message's status until it is complete (every
+/// recipient's request replied or closed), with no deadline. Orchestrators
 /// run it as a background tool call and are woken when it exits, so a long
-/// task must never time out. A blocked recipient is not idle, so it keeps
-/// waiting. It fails when a request is abandoned, an unfinished turn stalls, or the message is gone.
+/// task must never time out. A blocked recipient keeps it waiting. It fails
+/// when a request is abandoned, an unfinished turn stalls, or the message is gone.
 pub(super) fn follow_message(
     id: &str,
     message: &Value,
@@ -128,29 +128,26 @@ pub(super) fn follow_message(
     }
 }
 
-/// `Some(Ok)` once every recipient's turn ended, `Some(Err)` with an error
-/// code when Bus abandoned a recipient's request (other than one settled as
-/// `reply_not_captured`) or one stalled, `None` while any recipient still
-/// works, is blocked, or has not started.
+/// `Some(Ok)` once the message is complete, `Some(Err)` with an error code
+/// when Bus abandoned a recipient's request (other than one settled as
+/// `reply_not_captured`) or an unsettled one stalled, `None` while any
+/// recipient's request is still open.
+///
+/// An ended turn is not enough: a message typed into a running turn reads
+/// `turn_ended` while its group reply waits out `STEERING_SETTLE_MS`, and an
+/// interrupt can still close it (live, #121's 100-follower e2e: 5 joined
+/// followers exited 0 with `complete` false). Settlement closes every ended
+/// turn, as replied or with a reason, so waiting for it cannot hang.
 fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
-    let requests = status["requests"].as_array()?;
+    status["requests"].as_array()?;
     if let Some(error) = abandonment(status, true) {
         return Some(Err(error));
     }
-    let ended = |r: &Value| {
-        // A settling turn ended without a reply; Bus has yet to attach why.
-        let settling = r["settling"] == true;
-        settled_without_reply(r)
-            || r["turn_ended"] == true
-                && !settling
-                && (r["stage"] == "replied"
-                    || !(r["uncertain_outcome"] == true && r["start_bound"] != true))
-    };
-    if requests.iter().all(ended) {
+    if status["complete"] == true {
         return Some(Ok(()));
     }
-    // A finished turn whose reply was not captured is done for --async.
-    stalled(status, |r| !ended(r)).map(Err)
+    let settled = |r: &Value| r["stage"] == "replied" || settled_without_reply(r);
+    stalled(status, |r| !settled(r)).map(Err)
 }
 
 /// A request settlement closed because its turn ended without a captured
@@ -162,8 +159,8 @@ fn settled_without_reply(r: &Value) -> bool {
 /// The first abandoned request as an error: `message_interrupted` when
 /// `agent interrupt` stopped its turn, `message_provider_error` when a
 /// provider error ended it (worth a retry), else `message_abandoned`.
-/// An async follower takes a turn settled without a reply as done, as it does
-/// any ended turn; a bounded wait needs the reply, so it fails on that too.
+/// An async follower takes a turn settled without a reply as done; a bounded
+/// wait needs the reply, so it fails on that too.
 fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)> {
     let abandoned = status["requests"]
         .as_array()?

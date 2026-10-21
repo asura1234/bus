@@ -465,7 +465,7 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
             let (sender, room, recipients) = if in_master {
                 let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
                 let mut state = worker.state.clone();
-                state.delete_agent(agent).unwrap();
+                state.delete_agent(agent, 0).unwrap();
                 state
                     .set_agent_runtime_identity(orchestrator, identity)
                     .unwrap();

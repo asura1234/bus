@@ -72,7 +72,7 @@ fn agent_colors_survive_rename_neighbor_deletion_and_restart() {
     let (mut state, _, first, second) = state_with_room_and_agents();
     let original = serialized_agent_color(&state, second);
     state.rename_agent(second, "new name").unwrap();
-    state.delete_agent(first).unwrap();
+    state.delete_agent(first, 0).unwrap();
     let reloaded: BusState = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
     assert_eq!(serialized_agent_color(&reloaded, second), original);
     assert_eq!(reloaded, state);
@@ -109,7 +109,7 @@ fn legacy_agent_colors_backfill_without_recoloring_saved_neighbors() {
 #[test]
 fn agent_colors_migrate_unreadable_or_reserved_saved_rgb() {
     let (mut state, _, first, second) = state_with_room_and_agents();
-    state.delete_agent(second).unwrap();
+    state.delete_agent(second, 0).unwrap();
     for invalid in [[0, 0, 0], [102, 255, 102], [0, 170, 0]] {
         let mut document = serde_json::to_value(&state).unwrap();
         document["agents"][first.0.to_string()]["color"] = serde_json::json!(invalid);
@@ -128,7 +128,7 @@ fn accessible_agent_colors_persist_beside_standard_colors() {
     ));
     assert_ne!(serialized_accessible_color(&state, first), accessible);
     state.rename_agent(second, "new name").unwrap();
-    state.delete_agent(first).unwrap();
+    state.delete_agent(first, 0).unwrap();
     let reloaded: BusState = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
     assert_eq!(serialized_agent_color(&reloaded, second), standard);
     assert_eq!(serialized_accessible_color(&reloaded, second), accessible);
@@ -167,7 +167,7 @@ fn deletion_cleans_owned_state_preserves_neighbors_and_never_reuses_ids() {
     );
     let unrelated_room = state.create_room("unrelated").unwrap();
     let unaffected = state.agent(other).unwrap().clone();
-    state.delete_agent(agent).unwrap();
+    state.delete_agent(agent, 0).unwrap();
     assert_eq!(state.agent(other), Some(&unaffected));
     assert!(state.request(request).is_none());
     assert!(state.request(queued).is_none());
@@ -191,7 +191,7 @@ fn deletion_cleans_owned_state_preserves_neighbors_and_never_reuses_ids() {
         CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest)
     ));
     state.select_room(room).unwrap();
-    state.delete_room(room).unwrap();
+    state.delete_room(room, 0).unwrap();
     assert!(state.agent(other).is_none());
     let fallback = state.rooms().next().map(|room| room.id);
     assert!(fallback.is_some());
@@ -200,7 +200,7 @@ fn deletion_cleans_owned_state_preserves_neighbors_and_never_reuses_ids() {
     let new_room = state.create_room("new").unwrap();
     assert!(new_room.0 > unrelated_room.0);
     assert!(!state.is_pristine());
-    state.delete_room(new_room).unwrap();
-    state.delete_room(unrelated_room).unwrap();
+    state.delete_room(new_room, 0).unwrap();
+    state.delete_room(unrelated_room, 0).unwrap();
     assert!(!state.is_pristine());
 }

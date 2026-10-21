@@ -93,7 +93,7 @@ fn deletion_snapshot_retires_failed_saves_for_the_deleted_room() {
         result: Ok(()),
     });
     let mut snapshot = (*ui.snapshot).clone();
-    snapshot.state.delete_room(room).unwrap();
+    snapshot.state.delete_room(room, 0).unwrap();
     snapshot.last_command_id = delete;
     ui.receive_snapshot(Arc::new(snapshot));
     ui.settle();
@@ -249,7 +249,7 @@ fn confirmed_room_deletion_reconciles_removed_agents_and_preserves_another_room(
     );
     assert!(ui.locals.contains_key(&room));
     let mut snapshot = (*ui.snapshot).clone();
-    snapshot.state.delete_room(room).unwrap();
+    snapshot.state.delete_room(room, 0).unwrap();
     snapshot.last_command_id = command_id;
     ui.receive_snapshot(Arc::new(snapshot));
     ui.settle();
@@ -269,11 +269,11 @@ fn deleting_agent_prunes_checked_recipient_and_last_room_stays_deleted_after_res
     let (mut ui, room, agent) = fixture();
     ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
     let mut snapshot = (*ui.snapshot).clone();
-    snapshot.state.delete_agent(agent).unwrap();
+    snapshot.state.delete_agent(agent, 0).unwrap();
     ui.receive_snapshot(Arc::new(snapshot.clone()));
     assert!(ui.locals[&room].recipients.is_empty());
     assert_eq!(ui.room, Some(room));
-    snapshot.state.delete_room(room).unwrap();
+    snapshot.state.delete_room(room, 0).unwrap();
     ui.receive_snapshot(Arc::new(snapshot.clone()));
     assert!(ui.room.is_none() && ui.locals.is_empty());
     assert!(room_screen(&mut ui, 100, 30)
@@ -398,7 +398,7 @@ fn recipient_menu_enter_does_not_select_all_after_the_highlighted_agent_disappea
     }
     assert_eq!(ui.recipient_index, 3);
     let mut snapshot = (*ui.snapshot).clone();
-    snapshot.state.delete_agent(removed).unwrap();
+    snapshot.state.delete_agent(removed, 0).unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     ui.compute_view(100, 30);
     assert!(ui.recipient_menu);

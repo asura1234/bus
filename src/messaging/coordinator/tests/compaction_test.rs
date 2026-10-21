@@ -218,7 +218,7 @@ fn a_replacement_agent_starts_from_zero_and_can_notify_again() {
     compact(&mut worker, old, 5);
     assert_eq!(notices(&worker, room).len(), 1);
     let mut state = worker.state.clone();
-    state.delete_agent(old).unwrap();
+    state.delete_agent(old, 0).unwrap();
     let new = state
         .create_agent(room, "impl-fresh", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
