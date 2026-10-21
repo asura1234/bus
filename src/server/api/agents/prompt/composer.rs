@@ -76,6 +76,7 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
     if normalize(&body) == normalize(expected)
         || collapsed_paste(kind, &body, expected)
         || kind == AgentKind::Claude && lifted_images(&body, expected, normalize)
+        || kind == AgentKind::Codex && codex_image_attachment(&body, expected)
     {
         InputObservation::Pending
     } else {
@@ -126,6 +127,17 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
         && images == lifted
         && (normalize(rest) == normalize(&remaining)
             || collapsed_paste(AgentKind::Claude, rest, &remaining))
+}
+
+/// Codex (0.163.0) attaches a paste that is only one quoted image path and
+/// shows one `[Image #N]` chip; anything with text or a second path stays text.
+fn codex_image_attachment(body: &str, expected: &str) -> bool {
+    use crate::agents::providers::claude_code::hooks::{
+        claude_image_placeholders, claude_lifted_images,
+    };
+    !expected.contains(['\n', '\r'])
+        && claude_image_placeholders(body) == (body.len(), 1)
+        && claude_lifted_images(expected) == (1, String::new())
 }
 
 /// The leading `[Image #N]` chips of a Claude composer and the text after them.

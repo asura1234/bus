@@ -379,6 +379,30 @@ fn an_image_chip_never_makes_someone_elses_draft_ours() {
     }
 }
 
+/// codex-cli 0.163.0, captured beside the Claude screens above: a paste that
+/// is only one quoted image path becomes an attachment chip. With text, or with
+/// two paths, Codex keeps the paste as text.
+#[test]
+fn codex_shows_a_lone_pasted_image_path_as_an_image_chip_that_is_still_our_draft() {
+    let screen = include_str!("fixtures/codex_image_only_paste.txt");
+    let image = collapsed_image("work-codex-image-only", "");
+    assert_eq!(
+        observe(AgentKind::Codex, screen, &image),
+        InputObservation::Pending
+    );
+    for expected in [
+        format!("please review this screenshot\n{image}"),
+        format!("{image} {}", collapsed_image("work-codex-image-only", "-1")),
+        "\"/tmp/notes.diff\"".to_owned(),
+    ] {
+        assert_eq!(
+            observe(AgentKind::Codex, screen, &expected),
+            InputObservation::Other,
+            "{expected}"
+        );
+    }
+}
+
 #[test]
 fn codex_and_cursor_keep_a_pasted_image_path_as_text() {
     let expected = |dir| captured_payload("please review this screenshot", dir, 1);

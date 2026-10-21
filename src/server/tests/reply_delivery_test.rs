@@ -479,6 +479,34 @@ async fn claude_image_chip_beside_a_collapsed_paste_is_submitted_and_binds_its_r
     f.assert_reply(request, "templates reviewed");
 }
 
+/// codex-cli 0.163.0 shows a message that is only an image as `[Image #1]`
+/// and its submit hook reports that same text as the prompt.
+#[tokio::test]
+async fn codex_image_only_message_is_submitted_and_binds_its_reply() {
+    let mut f = Delivery::new(&[Provider::Codex], true);
+    let agent = f.agents[0];
+    f.captured_composer(
+        agent,
+        include_str!("../api/agents/tests/fixtures/codex_image_only_paste.txt"),
+    );
+    let image = f.dir.join("attachment.png");
+    image::RgbImage::new(2, 2).save(&image).unwrap();
+    let sent = f.call(
+        "message.send",
+        json!({"room":"master","to":[agent.0.to_string()],"text":"","files":[image]}),
+    );
+    let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
+    f.tick();
+    assert_eq!(
+        f.typed(agent).len(),
+        1,
+        "a lone image chip is our draft and must receive Enter"
+    );
+    f.start(agent, "image", "[Image #1]");
+    f.stop(agent, "image", "image reviewed", json!([]), json!([]));
+    f.assert_reply(request, "image reviewed");
+}
+
 #[tokio::test]
 async fn codex_startup_dialog_keeps_requests_queued_until_composer_recovers() {
     let mut f = Delivery::new(&[Provider::Codex], false);
