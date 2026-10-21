@@ -139,9 +139,6 @@ class BusQualityTest(unittest.TestCase):
                         "/debug/bus.exe" if os.name == "nt" else "/debug/bus"
                     )
                 )
-                self.assertEqual(
-                    env.get("BUS_DATA_DIR"), os.environ.get("BUS_DATA_DIR")
-                )
                 self.assertIn("%p", env["LLVM_PROFILE_FILE"])
                 # Python tests run plainly: no coverage.py, no Python floor.
                 self.assertEqual(
@@ -472,6 +469,46 @@ class BusQualityTest(unittest.TestCase):
                 self.assertIn(path, files)
         self.assertIn("tools/tests/acceptance_live_ui_test.py", files)
         self.assertIn("skills/gate-and-fix/scripts/tests/bus_quality_test.py", files)
+
+    def test_children_never_inherit_a_live_bus_environment(self):
+        # A gate started from a Bus agent pane inherits that Bus's variables.
+        live = {
+            "BUS_DATA_DIR": "/fake/live-bus",
+            "BUS_SESSION_ID": "0123456789abcdef",
+            "BUS_CALLBACK_DIR": "/fake/live-bus/callbacks",
+            "BUS_DEV": "1",
+            "HERDR_ENV": "1",
+            "HERDR_SOCKET_PATH": "/fake/live-bus/herdr.sock",
+            "HERDR_PANE_ID": "w1:pFAKE",
+        }
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.dict(os.environ, {**live, "KEEP_ME": "1"}),
+            patch.object(quality.subprocess, "run") as spawn,
+        ):
+            spawn.return_value.returncode = 0
+            quality.run("cargo", "nextest", "run")
+            quality.windows_lint()
+            root = Path(folder)
+            with (
+                patch.object(quality, "ROOT", root),
+                patch.object(quality, "OUTPUT", root / "profiles"),
+                patch.object(quality, "head", return_value="fixture"),
+                patch.object(
+                    quality, "python_files", return_value=[root / "scripts/one_test.py"]
+                ),
+                patch.object(quality, "rust_test", return_value=0),
+            ):
+                quality.unit()
+            for call in spawn.call_args_list:
+                env = call.kwargs["env"]
+                self.assertEqual(env["KEEP_ME"], "1")
+                self.assertEqual(
+                    [name for name in env if name.startswith(("BUS_", "HERDR_"))
+                     and name != "BUS_TEST_BINARY"],
+                    [],
+                    call.args,
+                )
 
     def test_optional_nextest_has_a_real_cargo_fallback(self):
         for nextest in (False, True):

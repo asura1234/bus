@@ -58,9 +58,19 @@ def python_roots() -> tuple[str, ...]:
     return tuple(name for name in PYTHON_ROOTS if (ROOT / name).is_dir())
 
 
+def child_env(**overrides: str) -> dict:
+    """A gate started from a Bus agent pane inherits that live Bus's BUS_*/HERDR_*
+    variables; tests must never see them (or reach its data dir), so drop them all."""
+    env = {
+        name: value for name, value in os.environ.items()
+        if not name.startswith(("BUS_", "HERDR_"))
+    }
+    return {**env, **overrides}
+
+
 def run(*argv: str, env: dict | None = None) -> int:
     print("+ " + subprocess.list2cmdline(argv), flush=True)
-    return subprocess.run(argv, cwd=ROOT, env=env).returncode
+    return subprocess.run(argv, cwd=ROOT, env=child_env() if env is None else env).returncode
 
 
 def python_files() -> list[Path]:
@@ -113,7 +123,7 @@ def clippy_commands(
 def windows_lint() -> int:
     """Use the same production/test policy for the cross-target check."""
     policy = tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
-    env = {**os.environ, "LIBGHOSTTY_VT_SIMD": "false"}
+    env = child_env(LIBGHOSTTY_VT_SIMD="false")
     return int(any([
         run(*argv, env=env)
         for argv in clippy_commands(policy, "x86_64-pc-windows-msvc")
@@ -271,8 +281,7 @@ def unit() -> int:
         "--help",
     )
     target = llvm_cov_target(os.environ)
-    test_env = dict(
-        os.environ,
+    test_env = child_env(
         BUS_TEST_BINARY=str(
             target / "debug" / ("bus.exe" if os.name == "nt" else "bus")
         ),
