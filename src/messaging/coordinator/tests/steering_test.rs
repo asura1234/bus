@@ -362,6 +362,32 @@ fn typed_input_without_a_submit_hook_settles_after_a_short_wait() {
     );
 }
 
+/// Live e2e (#121's 100-follower run): for `STEERING_SETTLE_MS` after the lead
+/// turn's reply arrives, a joined message reads ended and not settling, yet is
+/// incomplete. Async followers must keep waiting through this window.
+#[test]
+fn a_joined_message_reads_ended_but_incomplete_while_its_group_reply_settles() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    running(&mut fixture, "write the parser", "turn-1");
+    let correction = fixture.send("also add tests", false);
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser and tests written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let message = fixture.request(correction).prompt.id;
+    let status = fixture.worker.control_message(message).unwrap();
+    assert_eq!(status["complete"], false);
+    assert_eq!(status["requests"][0]["stage"], "joined");
+    assert_eq!(status["requests"][0]["turn_ended"], true);
+    assert_eq!(status["requests"][0]["settling"], false);
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    let status = fixture.worker.control_message(message).unwrap();
+    assert_eq!(status["complete"], true);
+    assert_eq!(status["requests"][0]["stage"], "replied");
+}
+
 #[test]
 fn uncertain_steering_without_its_own_start_can_complete_with_a_group_reply() {
     struct UncertainNative;

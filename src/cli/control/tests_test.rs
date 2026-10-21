@@ -817,8 +817,13 @@ fn recipient(agent: u64, stage: &str, turn_ended: bool) -> Value {
         "stage": stage, "turn_ended": turn_ended})
 }
 
+/// A `message.status` result; like Bus, it is complete once every request
+/// replied or was abandoned.
 fn status(requests: Vec<Value>) -> Value {
-    json!({"message_id": 19, "complete": false, "requests": requests})
+    let complete = requests
+        .iter()
+        .all(|r| r["stage"] == "replied" || r["stage"] == "abandoned");
+    json!({"message_id": 19, "complete": complete, "requests": requests})
 }
 
 /// Runs `send --async` against scripted statuses; returns the outcome,
@@ -896,13 +901,13 @@ fn send_async_emits_one_json_document() {
 }
 
 #[test]
-fn send_async_returns_the_message_id_and_receipt_once_the_turn_ended() {
+fn send_async_returns_the_message_id_and_receipt_once_the_message_completed() {
     let (outcome, lines, timeouts, pauses) = run_async(
         &[],
         [
             status(vec![recipient(1, "queued", false)]),
             status(vec![recipient(1, "delivered", false)]),
-            status(vec![recipient(1, "delivered", true)]),
+            status(vec![recipient(1, "replied", true)]),
         ],
     );
     assert!(outcome.is_ok());
@@ -925,7 +930,7 @@ fn send_async_has_no_time_limit_and_keeps_waiting_while_blocked() {
     let polls = 10_000;
     let statuses = (0..polls)
         .map(|_| status(vec![recipient(1, "delivered", false)]))
-        .chain([status(vec![recipient(1, "delivered", true)])]);
+        .chain([status(vec![recipient(1, "replied", true)])]);
     let (outcome, lines, _, pauses) = run_async(&[], statuses);
     assert!(outcome.is_ok());
     assert_eq!(lines.len(), 1);
@@ -948,7 +953,7 @@ fn send_async_waits_for_every_recipient() {
             ]),
             status(vec![
                 recipient(1, "replied", true),
-                recipient(2, "delivered", true),
+                recipient(2, "replied", true),
             ]),
         ],
     );
@@ -1039,6 +1044,54 @@ fn async_followers_finish_a_settled_turn_whose_reply_was_not_captured() {
     assert!(outcome.is_ok(), "{response}");
 }
 
+/// The incomplete status a joined message shows while its group reply settles
+/// (see `a_joined_message_reads_ended_but_incomplete_while_its_group_reply_settles`).
+fn joined_ended_unsettled() -> Value {
+    let mut joined = recipient(1, "joined", true);
+    joined["settling"] = json!(false);
+    joined["group"] = json!(5);
+    status(vec![joined])
+}
+
+/// Live e2e (#121): 5 of 100 async followers exited 0 on a joined message whose
+/// turn read ended while `complete` was still false. A follower exits 0 only once
+/// the message is complete, and reports an interrupt that lands in that window.
+#[test]
+fn async_followers_keep_waiting_on_an_ended_but_incomplete_joined_message() {
+    let mut replied = recipient(1, "replied", true);
+    replied["group"] = json!(5);
+    let mut done = status(vec![replied]);
+    done["complete"] = json!(true);
+    let mut interrupted = recipient(1, "abandoned", false);
+    interrupted["reason"] = json!("interrupted");
+    let mut stopped = status(vec![interrupted]);
+    stopped["complete"] = json!(true);
+
+    let (outcome, lines, _, _) = run_async(&[], [joined_ended_unsettled(), done.clone()]);
+    assert!(outcome.is_ok(), "{lines:?}");
+    assert_eq!(lines[0]["result"]["complete"], true);
+    let (outcome, lines, _, _) = run_async(&[], [joined_ended_unsettled(), stopped.clone()]);
+    assert!(outcome.is_err(), "{lines:?}");
+    assert_eq!(lines[0]["error"]["code"], "message_interrupted");
+
+    for last in [done, stopped] {
+        let mut reads = vec![joined_ended_unsettled(), last.clone()].into_iter();
+        let (_, response) = run_captured(&["wait", "--message", "19", "--async"], |request, _| {
+            Ok(Response::success(&request.id, reads.next().unwrap()))
+        });
+        assert_eq!(response["result"], last, "{response}");
+        let mut reads = vec![joined_ended_unsettled(), last.clone()].into_iter();
+        let followed = follow_message(
+            "send-follow",
+            &json!(19),
+            &mut |request, _| Ok(Response::success(&request.id, reads.next().unwrap())),
+            &mut |_| {},
+        );
+        assert_eq!(followed.result, last);
+        assert_eq!(followed.ok, last["requests"][0]["stage"] == "replied");
+    }
+}
+
 #[test]
 fn waits_started_after_reply_not_captured_settlement_preserve_async_and_bounded_contracts() {
     let mut closed = recipient(1, "abandoned", false);
@@ -1112,8 +1165,10 @@ fn send_async_exits_early_with_the_stalled_code_and_reason() {
     assert_eq!(lines[0]["error"]["code"], "message_stalled");
 }
 
+/// Settlement closes an ended turn without a captured reply as
+/// `reply_not_captured`, which is done; one still open when it stalls is not.
 #[test]
-fn send_async_counts_a_finished_turn_without_a_captured_reply_as_done() {
+fn send_async_reports_a_finished_turn_that_stalled_without_settling() {
     let (outcome, lines, _, _) = run_async(
         &[],
         [status(vec![stalled_recipient(
@@ -1123,8 +1178,8 @@ fn send_async_counts_a_finished_turn_without_a_captured_reply_as_done() {
             true,
         )])],
     );
-    assert!(outcome.is_ok());
-    assert_eq!(lines[0]["ok"], true);
+    assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE));
+    assert_eq!(lines[0]["error"]["code"], "message_stalled");
 }
 
 #[test]
@@ -1136,7 +1191,7 @@ fn send_async_does_not_complete_an_uncertain_unbound_submission_on_idle() {
         &[],
         [
             status(vec![uncertain]),
-            status(vec![recipient(1, "delivered", true)]),
+            status(vec![recipient(1, "replied", true)]),
         ],
     );
     assert!(outcome.is_ok());
@@ -1397,8 +1452,8 @@ fn send_async_recovers_from_transient_server_busy_after_queued_receipt() {
             Ok(match polls {
                 1 => Response::success(&request.id, status(vec![recipient(1, "queued", false)])),
                 2 => Response::failure("", "server_busy", "Development connection limit reached"),
-                3 => Response::success(&request.id, status(vec![recipient(1, "delivered", true)])),
-                _ => panic!("must stop following once the recipient's turn ended"),
+                3 => Response::success(&request.id, status(vec![recipient(1, "replied", true)])),
+                _ => panic!("must stop following once the message completed"),
             })
         },
         |pause| pauses.push(pause),
@@ -1559,7 +1614,7 @@ fn wait_preserves_last_status_when_server_busy_persists_until_deadline() {
 fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy() {
     let mut calls = 0;
     let mut pauses = Vec::new();
-    let completed = status(vec![recipient(1, "delivered", true)]);
+    let completed = status(vec![recipient(1, "replied", true)]);
     let response = follow_message(
         "follow-19",
         &json!(19),
@@ -1593,7 +1648,7 @@ fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy
 fn async_following_retries_coordinator_overload_without_reporting_bus_down() {
     let mut calls = 0;
     let mut pauses = Vec::new();
-    let completed = status(vec![recipient(1, "delivered", true)]);
+    let completed = status(vec![recipient(1, "replied", true)]);
     let response = follow_message(
         "coordinator-overload",
         &json!(19),
@@ -1643,7 +1698,7 @@ fn wait_async_retries_coordinator_overload_status_reads() {
             Ok(match calls {
                 1 => Response::failure(&request.id, "coordinator_timeout", "still active"),
                 2 => Response::failure(&request.id, "coordinator_busy", "still active"),
-                _ => Response::success(&request.id, status(vec![recipient(1, "delivered", true)])),
+                _ => Response::success(&request.id, status(vec![recipient(1, "replied", true)])),
             })
         });
     assert!(outcome.is_ok(), "{response}");
@@ -1748,19 +1803,21 @@ fn wait_async_with_an_explicit_timeout_names_the_conflicting_options() {
 #[test]
 fn wait_async_keeps_waiting_through_a_transient_transport_error() {
     let mut reads = 0;
-    let (outcome, response) = run_captured(
-        &["wait", "--message", "19", "--async"],
-        |request, _| {
+    let (outcome, response) =
+        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
             reads += 1;
             if reads == 2 {
                 return Err("No developer endpoint is available".into());
             }
             Ok(Response::success(
                 &request.id,
-                json!({"message_id":19,"complete":reads >= 3,"requests":[recipient(1, "delivered", reads >= 3)]}),
+                status(vec![recipient(
+                    1,
+                    if reads >= 3 { "replied" } else { "delivered" },
+                    reads >= 3,
+                )]),
             ))
-        },
-    );
+        });
     assert!(outcome.is_ok(), "{response}");
     assert_eq!(reads, 3);
 }
@@ -1823,7 +1880,7 @@ fn wait_async_retries_connected_control_disconnects() {
             }
             Ok(Response::success(
                 &request.id,
-                status(vec![recipient(1, "delivered", true)]),
+                status(vec![recipient(1, "replied", true)]),
             ))
         });
     assert!(outcome.is_ok(), "{response}");
@@ -1917,7 +1974,7 @@ fn async_following_survives_live_control_server_at_its_connection_limit() {
     // Another overloaded caller holds the single server_busy slot.
     let busy_holder = crate::platform::ipc::connect_local_stream(&socket).unwrap();
     thread::sleep(Duration::from_millis(100));
-    let completed = status(vec![recipient(1, "delivered", true)]);
+    let completed = status(vec![recipient(1, "replied", true)]);
     let mut calls = 0;
     let mut transport_errors = Vec::new();
     let response = follow_message(
@@ -1961,7 +2018,11 @@ fn async_transport_budget_resets_after_successful_status_reads() {
             }
             Ok(Response::success(
                 &request.id,
-                json!({"requests":[recipient(1, "delivered", reads == 12)]}),
+                status(vec![recipient(
+                    1,
+                    if reads == 12 { "replied" } else { "delivered" },
+                    reads == 12,
+                )]),
             ))
         },
         &mut |_| {
@@ -1981,7 +2042,11 @@ fn async_transport_budget_resets_after_successful_status_reads() {
             }
             Ok(Response::success(
                 &request.id,
-                json!({"requests":[recipient(1, "delivered", reads == 8)]}),
+                status(vec![recipient(
+                    1,
+                    if reads == 8 { "replied" } else { "delivered" },
+                    reads == 8,
+                )]),
             ))
         });
     assert!(outcome.is_ok(), "{response}");
@@ -2061,35 +2126,36 @@ fn restart_statuses() -> Value {
     serde_json::from_str(include_str!("tests/fixtures/restart-statuses.json")).unwrap()
 }
 
+/// #43's snapshots, recorded across a Bus restart: turns that ended with no
+/// captured reply are still open, so async waits keep following them until
+/// settlement closes them as `reply_not_captured`.
 #[test]
-fn wait_async_finishes_recorded_ended_turns_without_captured_replies() {
+fn async_waits_follow_recorded_ended_turns_until_they_settle() {
     for snapshot in restart_statuses()["ended"].as_array().unwrap() {
+        assert_eq!(snapshot["complete"], false);
+        let mut settled = snapshot.clone();
+        settled["complete"] = json!(true);
+        settled["requests"][0]["stage"] = json!("abandoned");
+        settled["requests"][0]["reason"] = json!("reply_not_captured");
         let message = snapshot["message_id"].to_string();
-        let mut reads = 0;
+        let mut reads = vec![snapshot.clone(), settled.clone()].into_iter();
         let (outcome, response) = run_captured(
             &["wait", "--message", &message, "--async"],
             |request, timeout| {
                 assert_eq!(request.method, "message.status");
                 assert!(timeout.is_none());
-                reads += 1;
-                assert_eq!(
-                    reads, 1,
-                    "wait --async polled again after every turn ended: {snapshot}"
-                );
-                Ok(Response::success(&request.id, snapshot.clone()))
+                Ok(Response::success(&request.id, reads.next().unwrap()))
             },
         );
         assert!(outcome.is_ok(), "{response}");
-        assert_eq!(
-            response["result"], *snapshot,
-            "preserve the server's status snapshot"
-        );
-        assert_eq!(response["result"]["complete"], false);
+        assert_eq!(reads.len(), 0, "wait --async finished on an open request");
+        assert_eq!(response["result"], settled);
+        let mut reads = vec![snapshot.clone(), settled.clone()].into_iter();
         let sent = follow_message(
             "send-follow",
             &snapshot["message_id"],
-            &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
-            &mut |_| panic!("send --async must also finish immediately"),
+            &mut |request, _| Ok(Response::success(&request.id, reads.next().unwrap())),
+            &mut |_| {},
         );
         assert!(sent.ok);
         assert_eq!(response["result"], sent.result);
@@ -2154,8 +2220,10 @@ fn wait_async_and_send_async_agree_on_invalidated_joined_stalls() {
     assert_eq!(response["result"], sent.result);
 }
 
+/// A turn that ended yet stalled was never settled, so it is not done; the
+/// wait reports the stall even while another recipient still works.
 #[test]
-fn wait_async_ignores_finished_stalls_while_other_recipients_work() {
+fn wait_async_reports_a_finished_stall_while_other_recipients_work() {
     let mut finished = recipient(1, "stalled", true);
     finished["stalled_from"] = json!("delivered");
     finished["reason"] = json!("transcript_unmatched");
@@ -2163,17 +2231,14 @@ fn wait_async_ignores_finished_stalls_while_other_recipients_work() {
     let (outcome, response) =
         run_captured(&["wait", "--message", "19", "--async"], |request, _| {
             reads += 1;
-            assert!(reads <= 2);
             Ok(Response::success(
                 &request.id,
-                status(vec![
-                    finished.clone(),
-                    recipient(2, "delivered", reads == 2),
-                ]),
+                status(vec![finished.clone(), recipient(2, "delivered", false)]),
             ))
         });
-    assert!(outcome.is_ok(), "{response}");
-    assert_eq!(reads, 2);
+    assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE), "{response}");
+    assert_eq!(response["error"]["code"], "message_stalled");
+    assert_eq!(reads, 1);
 }
 
 #[test]

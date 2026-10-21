@@ -84,8 +84,8 @@ wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 wait --async has no deadline and stops when the message settles or a recipient needs a dialog.
 Both async waits exit 1 with bus_down after four consecutive transport failures.
 Live-server overload replies and accepted-connection disconnects back off and retry.
-send --async blocks with no time limit until every recipient has worked on the message
-and gone idle again (a blocked recipient keeps it waiting), then prints one JSON object
+send --async blocks with no time limit until the message is complete: every recipient
+replied or Bus closed its request (a blocked recipient keeps it waiting). It prints one JSON object
 with the final message status, message_id and send_receipt. It exits 1 if Bus is unreachable,
 the send fails or Bus abandons a recipient's request, and 3 if a message stalls
 (stage stalled, reason in message status).
