@@ -237,8 +237,10 @@ pub(crate) enum ThreadPriority {
     Initiated,
 }
 
-/// Raises the calling thread's macOS QoS class; elsewhere a no-op, since
-/// raising priority there needs privileges Bus does not have.
+/// Raises the calling thread's macOS QoS class to `priority`, never lowering
+/// one already above it (a process's main thread starts at USER_INTERACTIVE);
+/// elsewhere a no-op, since raising priority there needs privileges Bus does
+/// not have.
 pub(crate) fn set_current_thread_priority(priority: ThreadPriority) {
     #[cfg(target_os = "macos")]
     {
@@ -246,6 +248,16 @@ pub(crate) fn set_current_thread_priority(priority: ThreadPriority) {
             ThreadPriority::Interactive => libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE,
             ThreadPriority::Initiated => libc::qos_class_t::QOS_CLASS_USER_INITIATED,
         };
+        let mut current = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+        let mut relative = 0;
+        // SAFETY: reads the calling thread's own QoS into valid locals.
+        unsafe {
+            libc::pthread_get_qos_class_np(libc::pthread_self(), &mut current, &mut relative)
+        };
+        // QoS class values are ordered: a higher value is scheduled first.
+        if current as u32 >= class as u32 {
+            return;
+        }
         // SAFETY: changes only the calling thread's own scheduling class.
         let result = unsafe { libc::pthread_set_qos_class_self_np(class, 0) };
         if result != 0 {
