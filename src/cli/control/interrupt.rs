@@ -103,6 +103,7 @@ fn wait_for_stops(
     // Pauses and reads both count, so a slow or failing read cannot stretch
     // the deadline; each read is bounded by what is left of it.
     let mut waited = Duration::ZERO;
+    let mut observed_working = false;
     let interrupting = |row: &Value| row["outcome"] == "interrupting";
     while rows.iter().any(interrupting) {
         let request = Request {
@@ -127,7 +128,7 @@ fn wait_for_stops(
                     Some(a) if a["status"] == "unavailable" => {
                         fail(row, format!("agent {name} became unavailable"));
                     }
-                    Some(_) => {}
+                    Some(_) => observed_working = true,
                 }
             }
         }
@@ -136,19 +137,18 @@ fn wait_for_stops(
         }
         if waited >= STOP_DEADLINE {
             for row in rows.iter_mut().filter(|row| interrupting(row)) {
-                let reason = if let Err(error) = &read {
-                    format!(
+                let reason = match &read {
+                    Err(error) if !observed_working => format!(
                         "could not confirm agent {} stopped within {}s: state read failed: {error}; if it stops later, its turn closes as interrupted",
                         row["name"].as_str().unwrap_or("unknown"),
                         STOP_DEADLINE.as_secs(),
-                    )
-                } else {
-                    format!(
+                    ),
+                    _ => format!(
                         "agent {} was still working {}s after {}; if it stops later, its turn closes as interrupted",
                         row["name"].as_str().unwrap_or("unknown"),
                         STOP_DEADLINE.as_secs(),
                         row["key"].as_str().unwrap_or("the stop key"),
-                    )
+                    ),
                 };
                 fail(row, reason);
             }

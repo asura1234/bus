@@ -2487,6 +2487,24 @@ fn agent_interrupt_reports_deleted_only_from_a_valid_agent_list() {
 }
 
 #[test]
+fn agent_interrupt_still_reports_a_deletion_seen_after_a_busy_read() {
+    let (outcome, response, requests, _) = run_interrupt_reads(
+        &["agent", "interrupt", "a4", "--text", "report status"],
+        interrupting(4),
+        [
+            Ok(Response::failure("state", "server_busy", "try again")),
+            Ok(Response::success(
+                "state",
+                json!({"agents": [agent_row(5, "idle", false)]}),
+            )),
+        ],
+    );
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(response["result"]["reason"], "agent a4 was deleted");
+    assert!(requests.iter().all(|r| r.method != "message.send"));
+}
+
+#[test]
 fn agent_interrupt_of_an_idle_agent_still_delivers_the_text() {
     let receipt =
         json!({"room_id": 7, "agents": [{"agent_id": 4, "name": "a4", "outcome": "already_idle"}]});
@@ -2992,4 +3010,85 @@ fn interrupt_text_transport_error_says_whether_the_text_was_sent() {
     assert!(outcome.is_err());
     assert_eq!(response["error"]["code"], "transport_error", "{response}");
     assert_eq!(response["result"]["applied"], "unknown", "{response}");
+}
+
+#[test]
+fn agent_interrupt_still_reports_a_deletion_seen_after_failed_state_reads() {
+    let (outcome, response, requests, _) = run_interrupt_reads(
+        &["agent", "interrupt", "a4", "--text", "report status"],
+        interrupting(4),
+        [
+            Ok(Response::failure("state", "server_busy", "try again")),
+            Err("socket read timed out".into()),
+            Ok(Response::success(
+                "state",
+                json!({"agents": [agent_row(5, "idle", false)]}),
+            )),
+        ],
+    );
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(response["result"]["reason"], "agent a4 was deleted");
+    assert!(requests.iter().all(|r| r.method != "message.send"));
+    assert_eq!(requests.iter().filter(|r| r.method == "state").count(), 3);
+}
+
+#[test]
+fn agent_interrupt_sends_text_only_to_the_agent_that_stopped_when_another_was_deleted() {
+    let receipt = json!({"room_id": 7, "agents": [
+        {"agent_id": 4, "name": "a4", "outcome": "interrupting", "key": "esc"},
+        {"agent_id": 5, "name": "a5", "outcome": "interrupting", "key": "esc"},
+    ]});
+    let (outcome, response, requests, _) = run_interrupt_reads(
+        &[
+            "agent",
+            "interrupt",
+            "--room",
+            "7",
+            "--text",
+            "report status",
+        ],
+        receipt,
+        [
+            Ok(Response::success(
+                "state",
+                json!({"agents": [agent_row(4, "working", true), agent_row(5, "working", true)]}),
+            )),
+            Ok(Response::failure("state", "coordinator_busy", "try again")),
+            Ok(Response::success(
+                "state",
+                json!({"agents": [agent_row(4, "idle", false)]}),
+            )),
+        ],
+    );
+    assert_eq!(exit_code(&outcome), Some(1), "{response}");
+    let send = requests
+        .iter()
+        .find(|r| r.method == "message.send")
+        .unwrap();
+    assert_eq!(send.params["to"], json!(["4"]));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("agent a5 was deleted"));
+}
+
+#[test]
+fn agent_interrupt_deadline_reason_reflects_the_last_successful_read_not_one_late_failure() {
+    // Bus answered "still working" for nearly the whole deadline; only the
+    // final read failed. The agent was observed working, not unobservable.
+    let reads = std::iter::repeat_with(|| {
+        Ok(Response::success(
+            "state",
+            json!({"agents": [agent_row(4, "working", true)]}),
+        ))
+    })
+    .take(75)
+    .chain(std::iter::repeat_with(|| {
+        Ok(Response::failure("state", "server_busy", "try again"))
+    }));
+    let (outcome, response, _, _) =
+        run_interrupt_reads(&["agent", "interrupt", "a4"], interrupting(4), reads);
+    assert_eq!(exit_code(&outcome), Some(1));
+    let reason = response["result"]["reason"].as_str().unwrap();
+    assert!(reason.contains("still working"), "{reason}");
 }
