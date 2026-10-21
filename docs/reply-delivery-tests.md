@@ -84,6 +84,9 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 
 | Test | Failure caught |
 | --- | --- |
+| `numbered_native_draft_edits_never_publish_blocked_or_resolved_notices` | Editing a numbered Claude native composer must not become a series of false dialog IDs and Blocked/Resolved notices, in MASTER or a work room, including restart. |
+| `numbered_codex_native_draft_edits_never_publish_blocked_notices` | Editing a numbered Codex composer above its model footer must not request dialog attention in MASTER or a work room. Adopted red-first from the Claude review. |
+| `dialog_episodes_publish_once_despite_detection_flaps_and_restart` | Two real episodes with the same menu each publish one Blocked and one Resolved; synchronized redraws with missing detection, selection changes, status flapping and coordinator reload cannot repeat or prematurely resolve them. |
 | `captured_reply_reaches_its_source_room_once_for_both_providers_and_authors` | Claude, Codex and Cursor; MASTER/work; identical developer/agent messages; completion, publication counters and no mirrored notice after restart. |
 | `cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final` | Injected user rows, omitted commentary suffixes and a newer transcript turn cannot replace the owned Cursor final (0dcc4bd2/44e94f38). |
 | `independently_answered_turns_keep_five_distinct_replies_while_shells_live` | Five answered turns with shells persisting across turns must keep five distinct answers (#96). |

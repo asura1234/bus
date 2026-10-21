@@ -365,6 +365,30 @@ fn transcripts_and_idle_screens_have_no_dialog() {
     }
 }
 
+#[test]
+fn numbered_claude_composer_drafts_are_not_dialogs() {
+    for draft in [
+        "1. Confirm the bug\n  2. Add a regression test",
+        "1. Confirm the bug\n  2. Add a regression test\n  3. Run the gates",
+        "1. Confirm the bug\n  2. Add a regression test with enter and esc in its text",
+    ] {
+        let screen = format!(
+            "────────────────────────\n❯ {draft}\n────────────────────────\n  ⏵⏵ auto mode on\n"
+        );
+        assert!(
+            parse(&screen).is_none(),
+            "composer draft became a dialog: {screen}"
+        );
+    }
+    let composer = "────────────────\n❯ 1. Confirm\n  2. Test\n────────────────\n";
+    assert!(parse(&format!("{CLAUDE_BASH}\n{composer}")).is_none());
+    assert_eq!(
+        parse(&format!("{composer}\n{CLAUDE_BASH}")),
+        parse(CLAUDE_BASH),
+        "a previous composer cannot hide a later permission dialog"
+    );
+}
+
 // Captured live from Claude Code 2.1.291, which no longer numbers this prompt.
 const CLAUDE_TRUST_UNNUMBERED: &str = concat!(
     "─────────────────────────────────────────────────\n",
@@ -814,4 +838,38 @@ fn codex_queued_message_hides_the_question_and_owns_shift_left() {
     assert!(screen.contains("⇧← edit last queued message"));
     assert!(!codex_question_pending(screen));
     assert!(parse(screen).is_none());
+}
+
+#[test]
+fn numbered_codex_composer_drafts_are_not_dialogs() {
+    for draft in [
+        "1. Confirm the bug\n  2. Add a regression test",
+        "1. Confirm the bug\n  2. Add a regression test\n  3. Run the gates",
+    ] {
+        let screen = format!(
+            "• Done. The parser is fixed.\n\n› {draft}\n\n  gpt-5.4 · minimal · ~/work/bus\n"
+        );
+        assert!(
+            parse(&screen).is_none(),
+            "composer draft became a dialog: {screen}"
+        );
+    }
+}
+
+#[test]
+fn codex_menu_controls_are_not_an_editable_composer_footer() {
+    for menu in [
+        CODEX_COMMAND,
+        CODEX_QUESTION,
+        CODEX_TRUST,
+        CODEX_UPDATE_WRAPPED,
+    ] {
+        let screen = format!("{menu}\n  gpt-5.4 · minimal · ~/work/bus\n");
+        assert_eq!(parse(&screen), parse(menu), "real menu hidden: {screen}");
+    }
+    let command = CODEX_COMMAND.replace("────────────────\n", "");
+    assert!(
+        parse(&command).is_some(),
+        "command accelerators are menu controls"
+    );
 }

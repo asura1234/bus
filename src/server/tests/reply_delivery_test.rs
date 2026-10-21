@@ -6,6 +6,133 @@ use crate::messaging::model::{Provider, RequestPhase};
 use serde_json::json;
 
 #[tokio::test]
+async fn numbered_native_draft_edits_never_publish_blocked_or_resolved_notices() {
+    for in_master in [false, true] {
+        let mut f = Delivery::new(&[Provider::ClaudeCode], in_master);
+        let agent = f.agents[0];
+        let room = if in_master { f.master } else { f.work };
+        for draft in [
+            "1. Confirm the bug\r\n  2. Add",
+            "1. Confirm the bug\r\n  2. Add a regression test",
+            "1. Confirm the bug\r\n  2. Add a regression test\r\n  3. Run the gates",
+            "1. Confirm the bug\r\n  2. Add a regression test",
+            "",
+        ] {
+            f.draw(agent, Some(&format!(
+                "\x1b[2J\x1b[H────────────────────────\r\n❯ {draft}\r\n────────────────────────\r\n  ⏵⏵ auto mode on"
+            )));
+            for _ in 0..3 {
+                f.tick();
+            }
+            f.reopen();
+            f.tick();
+            assert_eq!(f.state().notices(room).count(), 0, "draft edit: {draft}");
+            assert_eq!(f.state().notices(f.master).count(), 0);
+            assert!(f.state().agent(agent).unwrap().dialog_notice.is_none());
+        }
+        assert!(f.state().requests().next().is_none());
+    }
+}
+
+#[tokio::test]
+async fn numbered_codex_native_draft_edits_never_publish_blocked_notices() {
+    for in_master in [false, true] {
+        let mut f = Delivery::new(&[Provider::Codex], in_master);
+        let agent = f.agents[0];
+        let room = if in_master { f.master } else { f.work };
+        for draft in [
+            "1. Confirm the bug\r\n  2. Add",
+            "1. Confirm the bug\r\n  2. Add a regression test",
+            "1. Confirm the bug\r\n  2. Add a regression test\r\n  3. Run the gates",
+            "",
+        ] {
+            f.draw(agent, Some(&format!(
+                "\x1b[2J\x1b[H• Done. The parser is fixed.\r\n\r\n› {draft}\r\n\r\n  gpt-5.4 · minimal · ~/work/bus"
+            )));
+            for _ in 0..3 {
+                f.tick();
+            }
+            assert_eq!(f.state().notices(room).count(), 0, "draft edit: {draft}");
+            assert!(f.state().agent(agent).unwrap().dialog_notice.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn dialog_episodes_publish_once_despite_detection_flaps_and_restart() {
+    let dialog = "\x1b[2J\x1b[HDo you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n\r\nEnter to confirm · Esc to cancel";
+    for in_master in [false, true] {
+        let mut f = Delivery::new(&[Provider::ClaudeCode], in_master);
+        let agent = f.agents[0];
+        let room = if in_master { f.master } else { f.work };
+        for episode in 1..=2 {
+            f.draw(agent, Some(dialog));
+            for _ in 0..3 {
+                f.tick();
+            }
+            // A synchronized redraw with no readable list metadata must not
+            // settle an open episode. The native observation is unavailable.
+            f.draw(agent, Some("\x1b[?2026h\x1b[2J\x1b[H"));
+            for _ in 0..3 {
+                f.tick();
+            }
+            assert!(f.state().agent(agent).unwrap().dialog_notice.is_some());
+            f.draw(agent, Some(&format!("{dialog}\x1b[?2026l")));
+            f.reopen();
+            for status in [AgentState::Blocked, AgentState::Idle, AgentState::Working] {
+                f.status(agent, status);
+                f.draw(
+                    agent,
+                    Some(&dialog.replace("❯ 1. Yes\r\n   2. No", "  1. Yes\r\n ❯ 2. No")),
+                );
+                for _ in 0..3 {
+                    f.tick();
+                }
+            }
+            let notices: Vec<_> = f.state().notices(room).collect();
+            assert_eq!(notices.len(), episode * 2 - 1);
+            assert_eq!(
+                notices
+                    .iter()
+                    .filter(|n| n.text.contains("Blocked, needs help"))
+                    .count(),
+                episode
+            );
+            assert_eq!(
+                notices
+                    .iter()
+                    .filter(|n| n.text.contains("Resolved; dialog"))
+                    .count(),
+                episode - 1
+            );
+            assert!(f.state().requests().next().is_none());
+            // Provider output after the answer closes the native dialog.
+            f.draw(agent, None);
+            for _ in 0..4 {
+                f.tick();
+            }
+            f.reopen();
+            for _ in 0..3 {
+                f.tick();
+            }
+            let notices: Vec<_> = f.state().notices(room).collect();
+            assert_eq!(notices.len(), episode * 2);
+            assert_eq!(
+                notices
+                    .iter()
+                    .filter(|n| n.text.contains("Resolved; dialog"))
+                    .count(),
+                episode
+            );
+            assert!(f.state().agent(agent).unwrap().dialog_notice.is_none());
+            if !in_master {
+                assert_eq!(f.state().notices(f.master).count(), 0);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn captured_reply_reaches_its_source_room_once_for_both_providers_and_authors() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         for master in [false, true] {
