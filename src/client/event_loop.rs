@@ -545,7 +545,11 @@ impl ClientLoopDriver {
                 outcome.actions.extend(actions);
             }
             outcome.repaint |= shell.tick_copy_feedback(now);
-            outcome.repaint |= perf::OVERLAY.tick(now, crate::utils::perf::context());
+            outcome.repaint |= perf::OVERLAY.tick(
+                now,
+                crate::utils::perf::context(),
+                shell.bus.as_ref().map(|bus| &bus.snapshot.state),
+            );
             outcome
         })
     }
