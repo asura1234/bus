@@ -177,36 +177,12 @@ fn record_build_identity() {
     };
     let sha = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=BUS_BUILD_SHA={sha}");
-    let short = match (
-        git(&["rev-parse", "--short", "HEAD"]),
-        git(&["status", "--porcelain", "--untracked-files=normal"]),
-    ) {
-        (Some(short), Some(status)) if !status.is_empty() => format!("{short}-dirty"),
-        (Some(short), Some(_)) => short,
-        _ => "unknown".into(),
-    };
-    println!("cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}");
     println!(
         "cargo:rustc-env=BUS_BUILD_PROFILE={}",
         env::var("PROFILE").unwrap_or_else(|_| "unknown".into())
     );
-    // Re-evaluate dirtiness on tracked source edits and staging/restoring files.
-    // Never watch the whole checkout: ignored target/temp output changes on builds.
-    if let Some(files) = git(&[
-        "ls-files",
-        "-z",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-    ]) {
-        for path in files.split('\0').filter(|path| !path.is_empty()) {
-            println!("cargo:rerun-if-changed={path}");
-        }
-    }
-    if let Some(path) = git(&["rev-parse", "--git-path", "index"]) {
-        if PathBuf::from(&path).exists() {
-            println!("cargo:rerun-if-changed={path}");
-        }
+    if env::var_os("CARGO_FEATURE_DEV_TOOLS").is_some() {
+        record_dev_build_identity(manifest.as_deref(), &git);
     }
     if let Some(path) = git(&["rev-parse", "--git-path", "HEAD"]) {
         println!("cargo:rerun-if-changed={path}");
@@ -225,6 +201,55 @@ fn record_build_identity() {
             if PathBuf::from(&path).exists() {
                 println!("cargo:rerun-if-changed={path}");
             }
+        }
+    }
+}
+
+fn record_dev_build_identity(
+    manifest: Option<&std::path::Path>,
+    git: &impl Fn(&[&str]) -> Option<String>,
+) {
+    // Match dirty detection to the inputs compiled into Bus, not docs/plans/tools.
+    // Ghostty's generated zig-out/.zig-cache directories are deliberately excluded.
+    let inputs: Vec<String> = [
+        "src",
+        "build.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "assets",
+        "orchestration",
+        "workflows",
+        "docs/dev-tools.md",
+        "docs/tui-driver.md",
+        "vendor/portable-pty",
+        "vendor/libghostty-vt.vendor.json",
+    ]
+    .into_iter()
+    .map(String::from)
+    .chain(
+        VENDORED_INPUTS
+            .iter()
+            .map(|path| format!("vendor/libghostty-vt/{path}")),
+    )
+    .collect();
+    let mut status_args = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
+    status_args.extend(inputs.iter().map(String::as_str));
+    let short = match (git(&["rev-parse", "--short", "HEAD"]), git(&status_args)) {
+        (Some(short), Some(status)) if !status.is_empty() => format!("{short}-dirty"),
+        (Some(short), Some(_)) => short,
+        _ => "unknown".into(),
+    };
+    println!("cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}");
+    for path in inputs {
+        // Directory watches detect additions/deletions without watching missing files
+        // forever. Archives and minimal build-identity test crates may omit inputs.
+        if manifest.is_some_and(|root| root.join(&path).exists()) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
+    if let Some(path) = git(&["rev-parse", "--git-path", "index"]) {
+        if PathBuf::from(&path).exists() {
+            println!("cargo:rerun-if-changed={path}");
         }
     }
 }
