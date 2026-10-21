@@ -241,8 +241,8 @@ fn dialog_response(id: &str, last_status: Value) -> Response {
 }
 
 /// A one-shot command reports whether it ran, so a caller knows whether
-/// retrying could apply it twice.
-fn transport_error(id: &str, method: &str, message: &str) -> Response {
+/// retrying could apply it twice; a wait reports its last status instead.
+fn transport_error(id: &str, method: &str, message: &str, status: Option<Value>) -> Response {
     let (applied, outcome) = if crate::messaging::control::undelivered(message) {
         (json!(false), "was not delivered, so it did not run")
     } else {
@@ -256,7 +256,7 @@ fn transport_error(id: &str, method: &str, message: &str) -> Response {
         "transport_error",
         format!("{message}; {method} {outcome}"),
     );
-    response.result = json!({ "applied": applied });
+    response.result = status.unwrap_or_else(|| json!({ "applied": applied }));
     response
 }
 
@@ -312,11 +312,8 @@ pub(super) fn execute(
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return timeout_response(&id, last_status);
                 }
-                let mut response = transport_error(&id, &request.method, &message);
-                if waiting {
-                    response.result = last_status;
-                }
-                return response;
+                let status = waiting.then_some(last_status);
+                return transport_error(&id, &request.method, &message, status);
             }
         };
         response.id.clone_from(&id);
