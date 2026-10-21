@@ -112,14 +112,12 @@ fn wait_for_stops(
         };
         let remaining = STOP_DEADLINE.saturating_sub(waited).max(POLL);
         let read_started = Instant::now();
-        let read = send(&request, Some(remaining));
+        let read = send(&request, Some(remaining)).and_then(state_agents);
         waited += read_started.elapsed();
         // A missed read only delays the check; the deadline still holds.
-        if let Ok(state) = read.map(|response| response.result) {
+        if let Ok(agents) = &read {
             for row in rows.iter_mut().filter(|row| interrupting(row)) {
-                let agent = state["agents"]
-                    .as_array()
-                    .and_then(|agents| agents.iter().find(|a| a["id"] == row["agent_id"]));
+                let agent = agents.iter().find(|a| a["id"] == row["agent_id"]);
                 let name = row["name"].as_str().unwrap_or("unknown").to_owned();
                 match agent {
                     None => fail(row, format!("agent {name} was deleted")),
@@ -138,12 +136,20 @@ fn wait_for_stops(
         }
         if waited >= STOP_DEADLINE {
             for row in rows.iter_mut().filter(|row| interrupting(row)) {
-                let reason = format!(
-                    "agent {} was still working {}s after {}; if it stops later, its turn closes as interrupted",
-                    row["name"].as_str().unwrap_or("unknown"),
-                    STOP_DEADLINE.as_secs(),
-                    row["key"].as_str().unwrap_or("the stop key"),
-                );
+                let reason = if let Err(error) = &read {
+                    format!(
+                        "could not confirm agent {} stopped within {}s: state read failed: {error}; if it stops later, its turn closes as interrupted",
+                        row["name"].as_str().unwrap_or("unknown"),
+                        STOP_DEADLINE.as_secs(),
+                    )
+                } else {
+                    format!(
+                        "agent {} was still working {}s after {}; if it stops later, its turn closes as interrupted",
+                        row["name"].as_str().unwrap_or("unknown"),
+                        STOP_DEADLINE.as_secs(),
+                        row["key"].as_str().unwrap_or("the stop key"),
+                    )
+                };
                 fail(row, reason);
             }
             break;
@@ -151,6 +157,20 @@ fn wait_for_stops(
         pause(POLL);
         waited += POLL;
     }
+}
+
+/// Only a successful, complete agent list can establish that an agent is gone.
+fn state_agents(response: Response) -> Result<Vec<Value>, String> {
+    if !response.ok {
+        return Err(response.error.map_or_else(
+            || "state request failed".into(),
+            |error| format!("{}: {}", error.code, error.message),
+        ));
+    }
+    response.result["agents"]
+        .as_array()
+        .cloned()
+        .ok_or_else(|| "state response has no agents array".into())
 }
 
 fn fail(row: &mut Value, reason: String) {
