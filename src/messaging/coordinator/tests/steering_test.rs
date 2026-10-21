@@ -994,3 +994,49 @@ fn a_deleted_recipient_failure_survives_history_archive_reload() {
         "reloading archived history erased the deleted recipient failure: {status}"
     );
 }
+
+#[test]
+fn a_deleted_recipients_closed_request_survives_archive_reload_and_history() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let mut state = fixture.worker.state.clone();
+    let other = state
+        .create_agent(
+            fixture.room,
+            "reviewer",
+            Provider::ClaudeCode,
+            fixture.dir.clone(),
+            None,
+        )
+        .unwrap();
+    let ids = state
+        .submit_message_with(
+            fixture.room,
+            Draft {
+                text: "review the parser".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent, other].into(),
+            },
+            Author::Developer,
+            fixture.now,
+            false,
+        )
+        .unwrap();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
+    let saved = serde_json::to_value(&state).unwrap();
+    let mut reloaded: crate::messaging::model::BusState = serde_json::from_value(saved).unwrap();
+    reloaded.archive(fixture.now + crate::messaging::model::ARCHIVE_AFTER_MS + 1);
+    fixture.worker.save(reloaded).unwrap();
+    let message = fixture.request(ids[0]).prompt.id;
+    let status = fixture.worker.control_message(message).unwrap();
+    assert_eq!(status["requests"].as_array().unwrap().len(), 2, "{status}");
+    let history = fixture.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "history".into(),
+            method: "room.history".into(),
+            params: json!({"room": fixture.room.0.to_string()}),
+        },
+        None,
+    );
+    assert!(history.ok, "{history:?}");
+}
