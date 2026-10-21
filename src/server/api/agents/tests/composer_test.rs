@@ -509,7 +509,16 @@ fn cursor_background_composer_excludes_model_and_directory_footer() {
 async fn cursor_background_composer_receives_paste_then_enter() {
     let (runtime, mut writes) =
         crate::terminal::TerminalRuntime::test_with_channel_capacity(131, 45, 32);
-    runtime.test_process_pty_bytes(include_bytes!("fixtures/cursor_20261014_empty.ansi"));
+    let show = |screen: &str| {
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+        runtime.test_process_pty_bytes(
+            screen
+                .replace("\r\n", "\n")
+                .replace('\n', "\r\n")
+                .as_bytes(),
+        );
+    };
+    show(include_str!("fixtures/cursor_20261014_empty.ansi"));
     let text = "first line\n\nGPT-6 and Claude\nlast line";
     let completion = super::super::queue_prompt_input(
         &runtime,
@@ -529,8 +538,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         text.as_bytes(),
         "an empty composer must receive the prompt before editing keys"
     );
-    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
-    runtime.test_process_pty_bytes(include_bytes!("fixtures/cursor_20261014_draft.ansi"));
+    show(include_str!("fixtures/cursor_20261014_draft.ansi"));
     let enter = tokio::time::timeout(std::time::Duration::from_secs(1), writes.recv())
         .await
         .unwrap()
@@ -540,8 +548,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         b"\r",
         "only the matching rendered draft receives Enter"
     );
-    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
-    runtime.test_process_pty_bytes(include_bytes!("fixtures/cursor_20261014_empty.ansi"));
+    show(include_str!("fixtures/cursor_20261014_empty.ansi"));
     assert!(completion
         .recv_timeout(std::time::Duration::from_secs(2))
         .unwrap()
