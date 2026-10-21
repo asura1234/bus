@@ -313,8 +313,14 @@ impl BusUi {
         } else {
             u16::from(self.quitting.is_some())
         };
-        // The settings divider and button stay pinned below any exit notices.
-        view.sidebar_body = Rect::new(0, 0, sidebar.width, rows.saturating_sub(notices + 2));
+        // The footer stays pinned below any exit notices.
+        let footer_rows = 2 + u16::from(cfg!(feature = "dev-tools"));
+        view.sidebar_body = Rect::new(
+            0,
+            0,
+            sidebar.width,
+            rows.saturating_sub(notices + footer_rows),
+        );
         view.sidebar_max_scroll =
             content_height.saturating_sub(usize::from(view.sidebar_body.height));
         self.sidebar_scroll = self.sidebar_scroll.min(view.sidebar_max_scroll);
@@ -602,8 +608,9 @@ impl BusUi {
 
     fn sidebar_footer(&self, view: &mut View, rows: u16) {
         let sw = view.sidebar.width.saturating_sub(3);
+        let build_row = u16::from(cfg!(feature = "dev-tools"));
         view.row(
-            Rect::new(1, rows.saturating_sub(4), sw, 1),
+            Rect::new(1, rows.saturating_sub(4 + build_row), sw, 1),
             if self.force_exit_available {
                 "Unsaved: Ctrl+Shift+Q exits"
             } else {
@@ -614,7 +621,7 @@ impl BusUi {
             true,
         );
         view.row(
-            Rect::new(1, rows.saturating_sub(3), sw, 1),
+            Rect::new(1, rows.saturating_sub(3 + build_row), sw, 1),
             if self.quitting.is_some() {
                 "Saving before exit…"
             } else if self.force_exit_available {
@@ -626,7 +633,15 @@ impl BusUi {
             false,
             true,
         );
-        view.settings_divider = Rect::new(1, rows.saturating_sub(2), sw, 1);
+        view.settings_divider = Rect::new(1, rows.saturating_sub(2 + build_row), sw, 1);
+        #[cfg(feature = "dev-tools")]
+        view.row(
+            Rect::new(1, rows.saturating_sub(2), sw, 1),
+            env!("BUS_BUILD_SHORT_SHA"),
+            None,
+            false,
+            true,
+        );
         let settings_width = ("Settings".len() as u16).min(sw);
         view.row(
             Rect::new(1, rows.saturating_sub(1), settings_width, 1),

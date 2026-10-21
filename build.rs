@@ -166,6 +166,8 @@ fn record_build_identity() {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_COMMON_DIR")
+            // Reading status must not refresh the index we watch for rebuilds.
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .args(args)
             .output()
             .ok()
@@ -175,10 +177,37 @@ fn record_build_identity() {
     };
     let sha = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=BUS_BUILD_SHA={sha}");
+    let short = match (
+        git(&["rev-parse", "--short", "HEAD"]),
+        git(&["status", "--porcelain", "--untracked-files=normal"]),
+    ) {
+        (Some(short), Some(status)) if !status.is_empty() => format!("{short}-dirty"),
+        (Some(short), Some(_)) => short,
+        _ => "unknown".into(),
+    };
+    println!("cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}");
     println!(
         "cargo:rustc-env=BUS_BUILD_PROFILE={}",
         env::var("PROFILE").unwrap_or_else(|_| "unknown".into())
     );
+    // Re-evaluate dirtiness on tracked source edits and staging/restoring files.
+    // Never watch the whole checkout: ignored target/temp output changes on builds.
+    if let Some(files) = git(&[
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+    ]) {
+        for path in files.split('\0').filter(|path| !path.is_empty()) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
+    if let Some(path) = git(&["rev-parse", "--git-path", "index"]) {
+        if PathBuf::from(&path).exists() {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
     if let Some(path) = git(&["rev-parse", "--git-path", "HEAD"]) {
         println!("cargo:rerun-if-changed={path}");
     }

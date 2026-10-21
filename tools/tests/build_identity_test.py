@@ -76,8 +76,26 @@ class BuildIdentityTests(unittest.TestCase):
         source.mkdir()
         output = self.record(source)
         self.assertIn("cargo:rustc-env=BUS_BUILD_SHA=unknown\n", output)
+        self.assertIn("cargo:rustc-env=BUS_BUILD_SHORT_SHA=unknown\n", output)
         self.assertNotIn(self.sha, output)
         self.assertNotIn("cargo:rerun-if-changed=", output)
+
+    def test_short_hash_tracks_clean_and_dirty_source(self) -> None:
+        source = self.repo / "tracked.txt"
+        source.write_text("clean\n")
+        self.git(self.repo, "add", "tracked.txt")
+        self.git(self.repo, "commit", "-q", "-m", "source")
+        short = self.git(self.repo, "rev-parse", "--short", "HEAD")
+        self.assertIn(f"cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}\n", self.record(self.repo))
+        source.write_text("dirty\n")
+        self.assertIn(f"cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}-dirty\n", self.record(self.repo))
+        self.git(self.repo, "restore", "tracked.txt")
+        (self.repo / "untracked.txt").write_text("new source\n")
+        self.assertIn(f"cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}-dirty\n", self.record(self.repo))
+
+    def test_missing_git_uses_unknown_short_hash(self) -> None:
+        output = self.record(self.repo, {"PATH": str(self.hooks)})
+        self.assertIn("cargo:rustc-env=BUS_BUILD_SHORT_SHA=unknown\n", output)
 
     def test_checkout_does_not_use_ambient_git_directories(self) -> None:
         foreign = self.directory / "foreign"
@@ -120,7 +138,10 @@ class BuildIdentityTests(unittest.TestCase):
             '[package]\nname="freeze_identity_fixture"\nversion="0.0.0"\nedition="2021"\n'
         )
         (self.repo / "src").mkdir()
-        (self.repo / "src/main.rs").write_text('fn main() { println!("{}", env!("BUS_BUILD_SHA")); }\n')
+        (self.repo / "src/main.rs").write_text(
+            'fn main() { println!("{} {}", env!("BUS_BUILD_SHA"), '
+            'option_env!("BUS_BUILD_SHORT_SHA").unwrap_or("missing")); }\n'
+        )
         (self.repo / "build.rs").write_text(
             "mod production {\n"
             f"include!({json.dumps((ROOT / 'build.rs').as_posix())});\n"
@@ -142,10 +163,12 @@ class BuildIdentityTests(unittest.TestCase):
         cargo("generate-lockfile", "--offline")
         binary = target / "debug" / ("freeze_identity_fixture.exe" if os.name == "nt" else "freeze_identity_fixture")
 
-        def build(expected_sha: str, cached: bool = False) -> None:
+        def build(expected_sha: str, cached: bool = False, dirty: bool = False) -> None:
             before = binary.stat().st_mtime_ns if binary.exists() else None
             result = cargo("build", "--locked", "--offline", "-j", "4", "--message-format", "json")
-            self.assertEqual(subprocess.check_output([str(binary)], text=True).strip(), expected_sha)
+            short = self.git(self.repo, "rev-parse", "--short", expected_sha)
+            expected = f"{expected_sha} {short}{'-dirty' if dirty else ''}"
+            self.assertEqual(subprocess.check_output([str(binary)], text=True).strip(), expected)
             if cached:
                 artifacts = [json.loads(line) for line in result.stdout.splitlines()]
                 binary_artifact = next(item for item in artifacts
@@ -154,14 +177,30 @@ class BuildIdentityTests(unittest.TestCase):
                 self.assertTrue(binary_artifact["fresh"], result.stderr)
                 self.assertEqual(binary.stat().st_mtime_ns, before, "unchanged build recompiled the crate")
 
+        (self.repo / "tracked.txt").write_text("clean\n")
+        self.git(self.repo, "add", "Cargo.toml", "Cargo.lock", "src/main.rs", "build.rs", "tracked.txt")
+        self.git(self.repo, "commit", "-q", "-m", "fixture source")
+        self.sha = self.git(self.repo, "rev-parse", "HEAD")
         self.git(self.repo, "pack-refs", "--all", "--prune")
         build(self.sha)
         build(self.sha, cached=True)
         self.git(self.repo, "commit", "--allow-empty", "-q", "-m", "next")
         next_sha = self.git(self.repo, "rev-parse", "HEAD")
+        old_short = self.git(self.repo, "rev-parse", "--short", self.sha)
+        self.assertEqual(subprocess.check_output([str(binary)], text=True).strip(),
+                         f"{self.sha} {old_short}", "running binary keeps its embedded identity")
         build(next_sha)
         build(next_sha, cached=True)
         self.git(self.repo, "pack-refs", "--all", "--prune")
+        build(next_sha)
+        build(next_sha, cached=True)
+
+        (self.repo / "tracked.txt").write_text("changed\n")
+        build(next_sha, dirty=True)
+        build(next_sha, cached=True, dirty=True)
+        self.git(self.repo, "add", "tracked.txt")
+        build(next_sha, dirty=True)
+        self.git(self.repo, "restore", "--staged", "--worktree", "tracked.txt")
         build(next_sha)
         build(next_sha, cached=True)
 
