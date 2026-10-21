@@ -91,17 +91,13 @@ impl BusState {
                 && r.provider_turn_id == callback.provider_turn_id
         });
         let late = self.late_worker_request(callback);
-        // A late Stop can itself still be intermediate. Retain each changed
-        // final of a closed turn, rather than spending the turn on the first
-        // update. Text keys also deduplicate fresh envelopes after a restart.
-        let key = if late.is_some() {
-            format!(
-                "final:{turn}:{}",
-                crate::utils::time::digest(text.as_bytes())
-            )
-        } else {
-            format!("final:{turn}")
-        };
+        // A later request adopting this turn cannot change a final's identity.
+        // Text keys deduplicate autonomous replays and preserve each changed
+        // final of a closed turn, including across coordinator restarts.
+        let key = format!(
+            "final:{turn}:{}",
+            crate::utils::time::digest(text.as_bytes())
+        );
         let orphan = matches!(
             disposition,
             CallbackDisposition::Rejected(

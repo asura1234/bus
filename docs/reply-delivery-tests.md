@@ -60,6 +60,9 @@ group lead's attested submission boundary and turn; an orchestrator-authored mem
 establishes who awaits the late answer. New input binding to an already consumed
 turn cannot suppress the old request's follow-up. Fresh autonomous turns retain
 their generic **Turn final** notice without inventing a request attribution.
+If a later request adopts the same turn and is abandoned, replaying that earlier
+autonomous result neither republishes it nor relabels it as the later request's
+late reply. Autonomous turns still publish only once.
 Coordinator regressions cover timeout/ordinary completion, restart, newer bound
 and unbound input, developer-led groups, both Stop shapes, and repeated/foreign
 callbacks.

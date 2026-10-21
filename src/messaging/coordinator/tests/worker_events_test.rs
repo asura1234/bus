@@ -504,10 +504,23 @@ fn pending_autonomous_burst_survives_restart_and_duplicate_turn_callbacks() {
     );
     let mut state = f.worker.state.clone();
     state.accept_callback(cb);
+    state.accept_callback(callback(
+        &f,
+        "background",
+        12,
+        CallbackEventKind::Final {
+            text: "Changed text on the same autonomous turn.".into(),
+        },
+    ));
     f.worker.save(state).unwrap();
     collect(&mut f);
     assert_eq!(f.notices().len(), 1);
     assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(!f
+        .worker
+        .state
+        .notices(f.room)
+        .any(|p| p.text == "Changed text on the same autonomous turn."));
 }
 
 #[test]
@@ -1584,4 +1597,77 @@ fn late_final_reaches_orchestrator_message_steered_into_an_abandoned_developer_t
             .any(|text| text.contains("Late reply") && text.contains("The real late result.")),
         "the orchestrator's steered message owes the late final: {calls:?}"
     );
+}
+
+fn replayed_autonomous_final_after_later_abandonment(provider: Provider) {
+    let mut f = Fixture::with_provider(provider);
+    ready_worker(&mut f);
+    autonomous(&mut f, "owned", "Earlier autonomous result.");
+    collect(&mut f);
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(f.calls.lock().unwrap()[0].contains("Turn final"));
+
+    let next = f.send(Author::Agent(f.orch), "continue this turn");
+    let mut state = f.worker.state.clone();
+    state.begin_submission(next, "worker", 20).unwrap();
+    state
+        .record_submission(
+            next,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("worker-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let mut started = callback(&f, "owned", 21, CallbackEventKind::PromptStarted);
+    started.prompt_payload = Some("continue this turn".into());
+    assert_eq!(
+        state.accept_callback(started),
+        CallbackDisposition::AcceptedBinding
+    );
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    state.recover_idle_request(next, io::now_ms()).unwrap();
+    // A fresh envelope replays the identical Stop already delivered before
+    // this request existed. A new attribution must not bypass its dedup key.
+    state.accept_callback(callback(
+        &f,
+        "owned",
+        22,
+        CallbackEventKind::Final {
+            text: "Earlier autonomous result.".into(),
+        },
+    ));
+    f.worker.save(state).unwrap();
+    f.reopen();
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(
+        f.worker
+            .state
+            .notices(f.room)
+            .filter(|prompt| prompt.text == "Earlier autonomous result.")
+            .count(),
+        1,
+        "{provider:?}: replayed final must not be delivered again as a late reply to request {next:?}: {calls:?}"
+    );
+    let notices = f.notices();
+    let result_notices: Vec<_> = notices
+        .iter()
+        .filter(|request| request.prompt.text.contains("Earlier autonomous result."))
+        .collect();
+    assert_eq!(result_notices.len(), 1, "{provider:?}: {notices:?}");
+    assert!(result_notices[0].prompt.text.contains("Turn final"));
+    assert!(!result_notices[0].prompt.text.contains("Late reply"));
+}
+
+#[test]
+fn replayed_autonomous_final_after_later_abandonment_claude() {
+    replayed_autonomous_final_after_later_abandonment(Provider::ClaudeCode);
+}
+
+#[test]
+fn replayed_autonomous_final_after_later_abandonment_codex() {
+    replayed_autonomous_final_after_later_abandonment(Provider::Codex);
 }
