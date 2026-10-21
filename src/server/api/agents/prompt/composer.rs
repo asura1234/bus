@@ -1,5 +1,5 @@
 //! Read only the live composer, excluding suggestions and transcript prompts.
-use super::styled_chars;
+use super::{styled_chars, StyledChar};
 use crate::agents::AgentKind;
 use crate::terminal::runtime::InputObservation;
 
@@ -180,25 +180,24 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
             }
         })
         .collect();
-    // Cursor Agent 2026.10 draws `→` inside half-block borders; older builds `>`.
+    // Cursor 2026.10.14 has a shaded box; older builds have half-block borders.
     let markers: &[char] = match kind {
         AgentKind::Claude => &['❯'],
         AgentKind::Cursor => &['>', '→'],
         _ => &['›'],
     };
-    let index = lines.iter().enumerate().rev().find_map(|(index, line)| {
-        let prompt = line.trim_start().trim_start_matches('│').trim_start();
-        (prompt.starts_with(markers)
-            && (kind != AgentKind::Claude
-                || index > 0 && plain_rule(screen.lines().nth(index - 1)?)))
-        .then_some(index)
+    let background_box = (kind == AgentKind::Cursor)
+        .then(|| cursor_background_composer(&styled, &lines))
+        .flatten();
+    let index = background_box.map(|(start, _)| start).or_else(|| {
+        lines.iter().enumerate().rev().find_map(|(index, line)| {
+            let prompt = line.trim_start().trim_start_matches('│').trim_start();
+            (prompt.starts_with(markers)
+                && (kind != AgentKind::Claude
+                    || index > 0 && plain_rule(screen.lines().nth(index - 1)?)))
+            .then_some(index)
+        })
     })?;
-    // Cursor 2026.10.14 draws a background-only box instead of border glyphs.
-    // Its model and directory are outside that box; neither belongs to a draft.
-    let background_box = kind == AgentKind::Cursor
-        && styled[index]
-            .iter()
-            .any(|c| markers.contains(&c.character) && c.background);
     let first = lines[index]
         .trim_start()
         .trim_start_matches('│')
@@ -208,17 +207,17 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
         .trim();
     let first = cursor_input_line(kind, first);
     let mut body = first.to_owned();
-    for (offset, line) in lines[index + 1..].iter().enumerate() {
-        if background_box && !styled[index + 1 + offset].iter().any(|c| c.background) {
-            break;
-        }
+    let end = background_box.map_or(lines.len(), |(_, end)| end);
+    for line in &lines[index + 1..end] {
         let line = cursor_input_line(kind, line.trim().trim_end_matches('│').trim());
         // Only Codex prints its model under the composer; elsewhere a wrapped prompt
         // line may itself start with a model name.
-        if line.starts_with(['─', '╰', '└', '▀'])
-            || kind == AgentKind::Codex && (line.starts_with("GPT-") || line.starts_with("gpt-"))
-            || line.starts_with("? for")
-            || line.starts_with("/ commands")
+        if background_box.is_none()
+            && (line.starts_with(['─', '╰', '└', '▀'])
+                || kind == AgentKind::Codex
+                    && (line.starts_with("GPT-") || line.starts_with("gpt-"))
+                || line.starts_with("? for")
+                || line.starts_with("/ commands"))
         {
             break;
         }
@@ -243,6 +242,40 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
         body.clear();
     }
     Some(body)
+}
+
+/// The first marked row in the last shaded composer starts its draft. Later
+/// markers and border-like characters are input, not controls. Half-block
+/// frames retain the legacy parser even when their interior is shaded.
+fn cursor_background_composer(
+    styled: &[Vec<StyledChar>],
+    lines: &[String],
+) -> Option<(usize, usize)> {
+    let shaded = |row: usize| styled[row].iter().any(|c| c.background);
+    let mut before = styled.len();
+    while let Some(last) = (0..before).rfind(|&row| shaded(row)) {
+        let start = (0..last)
+            .rfind(|&row| !shaded(row))
+            .map_or(0, |row| row + 1);
+        let end = last + 1;
+        if let Some(prompt) = (start..end).find(|&row| {
+            lines[row].trim_start().starts_with(['>', '→'])
+                && styled[row]
+                    .iter()
+                    .any(|c| c.background && matches!(c.character, '>' | '→'))
+        }) {
+            if start > 0 && lines[start - 1].trim_start().starts_with('▄')
+                || lines
+                    .get(end)
+                    .is_some_and(|line| line.trim_start().starts_with('▀'))
+            {
+                return None;
+            }
+            return Some((prompt, end));
+        }
+        before = start;
+    }
+    None
 }
 
 fn cursor_input_line(kind: AgentKind, line: &str) -> &str {

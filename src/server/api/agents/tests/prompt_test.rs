@@ -435,3 +435,90 @@ async fn agent_prompt_rejects_managed_agent_while_startup_is_pending() {
     assert_eq!(error.error.code, "agent_not_ready");
     assert!(rx.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn guarded_cursor_background_multiline_quote_is_submitted_as_the_complete_draft() {
+    use crate::protocol::api::schema::{AgentPromptIfIdleParams, Method};
+
+    let mut app = app_with_agent();
+    let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    let now = std::time::Instant::now();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.begin_managed_agent(
+        "cursor-multiline".into(),
+        AgentKind::Cursor,
+        now,
+        Duration::ZERO,
+        Duration::from_secs(10),
+    );
+    terminal.set_detected_state(Some(AgentKind::Cursor), AgentState::Idle);
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+    terminal.set_agent_session_ref_for_session_start(
+        "bus".into(),
+        "cursor".into(),
+        crate::agents::resume::catalog::AgentSessionRef::id("cursor-session"),
+        Some(1),
+        None,
+        &[],
+    );
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(131, 45, 32);
+    runtime.test_process_pty_bytes(b"\x1b[?2004h\x1b[2J\x1b[H");
+    let empty = include_str!("fixtures/cursor_20261014_empty.ansi").replace('\n', "\r\n");
+    runtime.test_process_pty_bytes(empty.as_bytes());
+    app.state.insert_test_runtime(pane_id, runtime);
+
+    let info = app.agent_info(0, pane_id).unwrap();
+    let text = "first line\n\n> quoted line\nlast line";
+    let response = submission_tests::start(
+        &mut app,
+        Method::AgentPromptIfIdle(AgentPromptIfIdleParams {
+            target: info.pane_id.clone(),
+            text: text.into(),
+            expected_terminal_id: info.terminal_id,
+            expected_pane_id: info.pane_id,
+            expected_agent: "cursor".into(),
+            expected_session_id: "cursor-session".into(),
+            steer: false,
+        }),
+    );
+    let paste = tokio::time::timeout(Duration::from_secs(2), writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        paste.as_ref(),
+        format!("\x1b[200~{text}\x1b[201~").as_bytes(),
+        "the empty captured composer must receive the complete multiline prompt"
+    );
+
+    // Keep the captured background styling and a final ordinary draft line:
+    // the quote is continuation text, not a second composer or its footer.
+    let draft = include_str!("fixtures/cursor_20261014_draft.ansi")
+        .replace("GPT-6 and Claude", "> quoted line")
+        .replace('\n', "\r\n");
+    let runtime = app.lookup_runtime_sender(0, pane_id).unwrap();
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(draft.as_bytes());
+    let enter = tokio::time::timeout(Duration::from_secs(3), writes.recv())
+        .await
+        .expect("matching rendered multiline draft must receive Enter")
+        .expect("native writer must remain available");
+    assert_eq!(
+        enter.as_ref(),
+        b"\r",
+        "a Markdown quote inside the matching draft must not trigger draft-clearing keys"
+    );
+
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(empty.as_bytes());
+    let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(response.contains("agent_prompted"), "{response}");
+    assert!(
+        writes.try_recv().is_err(),
+        "the prompt must be pasted only once"
+    );
+}

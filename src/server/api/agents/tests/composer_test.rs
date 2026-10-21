@@ -554,3 +554,207 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         .unwrap()
         .is_ok());
 }
+
+#[test]
+fn cursor_background_composer_keeps_directory_tree_lines_in_the_draft() {
+    let screen =
+        include_str!("fixtures/cursor_20261014_draft.ansi").replace("GPT-6 and Claude", "└── src");
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            &screen,
+            "first line\n\n└── src\nlast line"
+        ),
+        InputObservation::Pending,
+        "a directory-tree continuation inside the shaded composer is draft text",
+    );
+}
+
+#[test]
+fn cursor_background_composer_ignores_changed_model_and_workspace_footers() {
+    for model in [
+        "Auto",
+        "Claude Sonnet",
+        "another model · memory 0%",
+        "\x1b[48;5;2mAuto\x1b[49m",
+    ] {
+        let screen = include_str!("fixtures/cursor_20261014_empty.ansi")
+            .replace("Grok 4.7 256K High", model)
+            .replace("Run Everything", "Ask Before Running")
+            .replace(
+                "/private/tmp/bus-tui/cursor-capture/work",
+                "/workspace/project",
+            );
+        assert_eq!(
+            observe(AgentKind::Cursor, &screen, "from bus"),
+            InputObservation::Empty
+        );
+    }
+}
+
+#[test]
+fn background_color_tracking_keeps_claude_and_codex_composer_text_visible() {
+    for style in ["\x1b[41m", "\x1b[104m", "\x1b[48;5;2m", "\x1b[48;2;2;7;22m"] {
+        for (kind, screen) in [
+            (
+                AgentKind::Claude,
+                format!("────────────────\n❯ {style}from bus\x1b[49m\x1b[0m\n────────────────"),
+            ),
+            (
+                AgentKind::Codex,
+                format!("› {style}from bus\x1b[49m\x1b[0m\nGPT-6 · /repo"),
+            ),
+        ] {
+            assert_eq!(
+                observe(kind, &screen, "from bus"),
+                InputObservation::Pending,
+                "{kind:?} {style:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cursor_background_composer_ends_at_the_box_even_without_a_blank_separator() {
+    let screen = include_str!("fixtures/cursor_20261014_draft.ansi");
+    let lines: Vec<&str> = screen.lines().collect();
+    let model = lines
+        .iter()
+        .position(|line| line.contains("Grok 4.7"))
+        .expect("fixture footer");
+    assert!(
+        lines[model - 1].trim().is_empty(),
+        "fixture has a separator"
+    );
+    let mut adjacent = lines.clone();
+    adjacent.remove(model - 1);
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            &adjacent.join("\n"),
+            "first line\n\nGPT-6 and Claude\nlast line"
+        ),
+        InputObservation::Pending,
+    );
+}
+
+#[tokio::test]
+async fn cursor_background_composer_keeps_blank_rows_painted_by_erase_line() {
+    // A blank shaded row may be painted with erase-in-line under a background
+    // color instead of explicit spaces; it is still inside the composer box.
+    let runtime = crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 8).0;
+    let bg = "\x1b[48;2;18;18;18m";
+    let screen = [
+        format!(" {bg}\x1b[K\x1b[0m"),
+        format!(" {bg} → first line\x1b[K\x1b[0m"),
+        format!(" {bg}\x1b[K\x1b[0m"),
+        format!(" {bg}   last line\x1b[K\x1b[0m"),
+        format!(" {bg}\x1b[K\x1b[0m"),
+        String::new(),
+        "  \x1b[2mGrok 4.7 256K High\x1b[0m".into(),
+        "  \x1b[2m/workspace/project\x1b[0m".into(),
+    ]
+    .join("\r\n");
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(screen.as_bytes());
+    let rendered = runtime.visible_ansi();
+    assert_eq!(
+        observe(AgentKind::Cursor, &rendered, "first line\n\nlast line"),
+        InputObservation::Pending,
+        "{rendered:?}"
+    );
+}
+
+#[test]
+fn cursor_half_block_composer_with_shaded_interior_still_ends_at_its_border() {
+    let bg = "\x1b[48;2;18;18;18m";
+    let fg = "\x1b[38;2;18;18;18m";
+    let frame = |rows: &[&str]| {
+        let mut lines = vec![format!(" {fg}▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\x1b[0m")];
+        lines.extend(
+            rows.iter()
+                .map(|row| format!(" {bg} {row}          \x1b[0m")),
+        );
+        lines.push(format!(" {fg}▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\x1b[0m"));
+        lines.push("  Grok 4.7 500K Extra High · MAX          Run Everything".into());
+        lines.push("  /workspace/project".into());
+        lines.join("\n")
+    };
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            &frame(&["→ Plan, search, build anything"]),
+            "from bus"
+        ),
+        InputObservation::Empty,
+    );
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            &frame(&["→ first line", "", "  second line"]),
+            "first line\n\nsecond line"
+        ),
+        InputObservation::Pending,
+    );
+}
+
+#[test]
+fn cursor_background_composer_collapsed_paste_is_owned_input() {
+    let bg = "\x1b[48;2;18;18;18m";
+    let screen = [
+        format!(" {bg}                              \x1b[0m"),
+        format!(" {bg} → [Pasted text #1 +4 lines]  \x1b[0m"),
+        format!(" {bg}                              \x1b[0m"),
+        String::new(),
+        "  \x1b[2mGrok 4.7 256K High\x1b[0m".into(),
+        "  \x1b[2m/workspace/project\x1b[0m".into(),
+    ]
+    .join("\n");
+    assert_eq!(
+        observe(AgentKind::Cursor, &screen, "a\nb\nc\nd"),
+        InputObservation::Pending,
+    );
+    assert_eq!(
+        observe(AgentKind::Cursor, &screen, "a\nb"),
+        InputObservation::Other,
+    );
+}
+
+#[test]
+fn cursor_background_composer_keeps_border_and_footer_like_draft_lines() {
+    for line in [
+        "─ separator",
+        "╰ nested",
+        "▀ literal",
+        "? for clarification",
+        "/ commands to inspect",
+    ] {
+        let screen =
+            include_str!("fixtures/cursor_20261014_draft.ansi").replace("GPT-6 and Claude", line);
+        let expected = format!("first line\n\n{line}\nlast line");
+        assert_eq!(
+            observe(AgentKind::Cursor, &screen, &expected),
+            InputObservation::Pending,
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn cursor_background_composer_keeps_quoted_markers_in_continuations() {
+    for line in ["> quoted line", "→ quoted line"] {
+        let screen =
+            include_str!("fixtures/cursor_20261014_draft.ansi").replace("GPT-6 and Claude", line);
+        let expected = format!("first line\n\n{line}\nlast line");
+        assert_eq!(
+            observe(AgentKind::Cursor, &screen, &expected),
+            InputObservation::Pending,
+            "{line}"
+        );
+        assert_eq!(
+            observe(AgentKind::Cursor, &screen, "quoted line\nlast line"),
+            InputObservation::Other,
+            "a continuation is not a complete draft"
+        );
+    }
+}
