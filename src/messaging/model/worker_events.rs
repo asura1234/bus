@@ -57,6 +57,8 @@ impl BusState {
                     | CallbackRejection::WrongTurn
                     | CallbackRejection::WrongPrompt
                     | CallbackRejection::UnboundFinal
+                    | CallbackRejection::BeforeSubmissionBoundary
+                    | CallbackRejection::DuplicateFinal
             )
         ) {
             return;
@@ -82,17 +84,20 @@ impl BusState {
         ) else {
             return;
         };
-        let owned: Vec<_> = self
-            .requests()
-            .filter(|r| {
-                r.agent_id == agent.id
-                    && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
-                    && r.provider_session_id == callback.provider_session_id
-                    && r.provider_turn_id == callback.provider_turn_id
-            })
-            .collect();
+        let owned = self.requests().any(|r| {
+            r.agent_id == agent.id
+                && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
+                && r.provider_session_id == callback.provider_session_id
+                && r.provider_turn_id == callback.provider_turn_id
+        });
         let late = self.late_worker_request(callback);
-        let key = format!("final:{turn}");
+        // A later request adopting this turn cannot change a final's identity.
+        // Text keys deduplicate autonomous replays and preserve each changed
+        // final of a closed turn, including across coordinator restarts.
+        let key = format!(
+            "final:{turn}:{}",
+            crate::utils::time::digest(text.as_bytes())
+        );
         let orphan = matches!(
             disposition,
             CallbackDisposition::Rejected(
@@ -100,8 +105,7 @@ impl BusState {
             )
         );
         if self.worker_events.contains_key(&key)
-            || late.is_none()
-                && (!orphan || !owned.is_empty() || self.consumed_provider_turns.contains(&turn))
+            || late.is_none() && (!orphan || owned || self.consumed_provider_turns.contains(&turn))
         {
             return;
         }
@@ -144,15 +148,32 @@ impl BusState {
     }
 
     /// A final for a closed owned turn must not wait behind newer unbound work.
+    /// Completion can have delivered an interim (the background hold cap, or
+    /// Codex Stop without task metadata). Keep the original outcome immutable
+    /// and route changed text as a follow-up, under the same attested turn.
     pub(crate) fn late_worker_request(&self, callback: &ProviderCallback) -> Option<&Request> {
         self.requests().find(|r| {
+            // Coalesced and steered members share the lead's submission and
+            // final. The member proves who awaits the answer; the lead proves
+            // which provider turn owns it, including its callback boundary.
+            let Some(lead) = self.request(reply_key(r)) else {
+                return false;
+            };
             r.agent_id == callback.agent_id
-                && r.phase == RequestPhase::Abandoned
+                && lead.agent_id == r.agent_id
+                && lead
+                    .submission_boundary
+                    .is_some_and(|b| callback.sequence > b)
+                && (r.phase == RequestPhase::Abandoned
+                    || r.phase == RequestPhase::Completed
+                        && lead.trusted_start_bound
+                        && matches!(&callback.kind, CallbackEventKind::Final { text }
+                            if r.pending_final.as_ref().is_some_and(|reply| reply.text != *text)))
                 && self.reply_orchestrator(r).is_some()
-                && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
-                && r.provider_session_id == callback.provider_session_id
-                && r.provider_turn_id.is_some()
-                && r.provider_turn_id == callback.provider_turn_id
+                && lead.expected_launch_id.as_deref() == Some(&callback.launch_id)
+                && lead.provider_session_id == callback.provider_session_id
+                && lead.provider_turn_id.is_some()
+                && lead.provider_turn_id == callback.provider_turn_id
         })
     }
 
