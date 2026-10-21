@@ -186,18 +186,20 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
         AgentKind::Cursor => &['>', '→'],
         _ => &['›'],
     };
+    let marked_row = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let prompt = line.trim_start().trim_start_matches('│').trim_start();
+        (prompt.starts_with(markers)
+            && (kind != AgentKind::Claude
+                || index > 0 && plain_rule(screen.lines().nth(index - 1)?)))
+        .then_some(index)
+    });
     let background_box = (kind == AgentKind::Cursor)
         .then(|| cursor_background_composer(&styled, &lines))
-        .flatten();
-    let index = background_box.map(|(start, _)| start).or_else(|| {
-        lines.iter().enumerate().rev().find_map(|(index, line)| {
-            let prompt = line.trim_start().trim_start_matches('│').trim_start();
-            (prompt.starts_with(markers)
-                && (kind != AgentKind::Claude
-                    || index > 0 && plain_rule(screen.lines().nth(index - 1)?)))
-            .then_some(index)
-        })
-    })?;
+        .flatten()
+        // A later legacy prompt wins over older shaded history. A marker
+        // inside this box is a continuation, so keep the box's first row.
+        .filter(|(_, end)| marked_row.is_none_or(|row| row < *end));
+    let index = background_box.map(|(start, _)| start).or(marked_row)?;
     let first = lines[index]
         .trim_start()
         .trim_start_matches('│')

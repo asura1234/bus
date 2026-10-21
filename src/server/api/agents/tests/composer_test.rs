@@ -758,3 +758,55 @@ fn cursor_background_composer_keeps_quoted_markers_in_continuations() {
         );
     }
 }
+
+#[tokio::test]
+async fn cursor_newer_legacy_composer_is_not_shadowed_by_shaded_history() {
+    let history = "Earlier assistant output:\n\x1b[48;2;18;18;18m> quoted example from the transcript\x1b[0m\n\n";
+    let legacy = include_str!("fixtures/cursor_empty.txt");
+    let (runtime, _writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(200, 45, 8);
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(
+        format!("{history}{legacy}")
+            .replace('\n', "\r\n")
+            .as_bytes(),
+    );
+    let screen = runtime.visible_ansi();
+    assert_eq!(
+        observe(AgentKind::Cursor, &screen, "from bus"),
+        InputObservation::Empty,
+        "the captured later legacy composer is empty; shaded history must not replace it",
+    );
+}
+
+#[test]
+fn cursor_composer_format_order_preserves_the_newest_draft() {
+    let legacy_text = "legacy draft from bus";
+    let legacy = include_str!("fixtures/cursor_empty.txt")
+        .replace("Plan, search, build anything", legacy_text);
+    let background_text = "first line\n\nGPT-6 and Claude\nlast line";
+    let background = include_str!("fixtures/cursor_20261014_draft.ansi");
+    for (screen, current, previous) in [
+        (
+            format!("{background}\n{legacy}"),
+            legacy_text,
+            background_text,
+        ),
+        (
+            format!("{legacy}\n{background}"),
+            background_text,
+            legacy_text,
+        ),
+    ] {
+        assert_eq!(
+            observe(AgentKind::Cursor, &screen, current),
+            InputObservation::Pending,
+            "the newest composer owns the current draft"
+        );
+        assert_eq!(
+            observe(AgentKind::Cursor, &screen, previous),
+            InputObservation::Other,
+            "an older composer cannot own the current draft"
+        );
+    }
+}
