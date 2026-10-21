@@ -411,7 +411,7 @@ fn returning_to_a_room_reuses_layout_until_width_changes() {
             .iter()
             .any(|line| line.text.trim() == "reply"));
     }
-    state.delete_room(second).unwrap();
+    state.delete_room(second, 0).unwrap();
     history.lines(
         &state,
         state.room(first).unwrap(),

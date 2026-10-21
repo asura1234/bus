@@ -5,7 +5,7 @@ fn master_fixture() -> (Worker, AgentId, RoomId, PathBuf) {
     let (mut worker, previous, work, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let mut state = worker.state.clone();
     let identity = state.agent(previous).unwrap().runtime_identity.clone();
-    state.delete_agent(previous).unwrap();
+    state.delete_agent(previous, 0).unwrap();
     let master = state.master_room().unwrap().id;
     let agent = state
         .create_agent(master, "lead", Provider::ClaudeCode, dir.clone(), None)

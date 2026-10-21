@@ -901,11 +901,96 @@ fn deleting_an_unfinished_recipient_does_not_complete_a_multi_recipient_message(
     assert_eq!(before["complete"], false, "{before}");
     let mut state = fixture.worker.state.clone();
     state.prepare_delete_agent(other).unwrap();
-    state.delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
     fixture.worker.save(state).unwrap();
     let after = fixture.worker.control_message(message);
     assert!(
         after.as_ref().map_or(true, |s| !async_waiters_exit_zero(s)),
         "a deleted recipient's message reads complete: {after:?}"
+    );
+}
+
+/// One completed recipient and one still-open recipient share a message.
+fn a_shared_message_with_one_completed_recipient() -> (Fixture, AgentId, PromptId) {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let mut state = fixture.worker.state.clone();
+    let other = state
+        .create_agent(
+            fixture.room,
+            "reviewer",
+            Provider::ClaudeCode,
+            fixture.dir.clone(),
+            None,
+        )
+        .unwrap();
+    let ids = state
+        .submit_message_with(
+            fixture.room,
+            Draft {
+                text: "write the parser".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent, other].into(),
+            },
+            Author::Developer,
+            fixture.now,
+            false,
+        )
+        .unwrap();
+    fixture.worker.save(state).unwrap();
+    fixture.deliver();
+    fixture.started("turn-1", "write the parser");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.stopped("turn-1", "parser written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let message = fixture.request(ids[0]).prompt.id;
+    let before = fixture.worker.control_message(message).unwrap();
+    assert_eq!(before["complete"], false, "{before}");
+    (fixture, other, message)
+}
+
+#[test]
+fn deleting_a_recipient_preserves_failure_when_the_other_reply_is_archived() {
+    let (mut fixture, other, message) = a_shared_message_with_one_completed_recipient();
+    let later =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::ARCHIVE_AFTER_MS + 1;
+    fixture.worker.archive_history(later).unwrap();
+    assert_eq!(
+        fixture.worker.control_message(message).unwrap()["complete"],
+        false
+    );
+    let mut state = fixture.worker.state.clone();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
+    fixture.worker.save(state).unwrap();
+    let status = fixture.worker.control_message(message).unwrap();
+    assert!(
+        !async_waiters_exit_zero(&status),
+        "deleting an unfinished recipient after its peer reply was archived reads success: {status}"
+    );
+}
+
+#[test]
+fn a_deleted_recipient_failure_survives_history_archive_reload() {
+    let (mut fixture, other, message) = a_shared_message_with_one_completed_recipient();
+    let mut state = fixture.worker.state.clone();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other, fixture.now).unwrap();
+    fixture.worker.save(state).unwrap();
+    let before = fixture.worker.control_message(message).unwrap();
+    assert!(!async_waiters_exit_zero(&before), "{before}");
+    let later =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::ARCHIVE_AFTER_MS + 1;
+    fixture.worker.archive_history(later).unwrap();
+    let reloaded = JsonStore::new(fixture.dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    fixture.worker.state = reloaded;
+    let status = fixture.worker.control_message(message).unwrap();
+    assert!(
+        !async_waiters_exit_zero(&status),
+        "reloading archived history erased the deleted recipient failure: {status}"
     );
 }

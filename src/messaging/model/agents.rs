@@ -11,7 +11,7 @@ use {
 };
 
 /// Why a request closed when its agent was deleted before it settled.
-const AGENT_DELETED: &str = "agent_deleted";
+pub(crate) const AGENT_DELETED: &str = "agent_deleted";
 
 impl BusState {
     pub(crate) fn create_agent(
@@ -133,19 +133,17 @@ impl BusState {
         Ok(())
     }
 
-    /// Removes agent `id` with its queue and requests. An unsettled request
-    /// of a message that other existing agents also received stays, closed as
-    /// `agent_deleted`, so the message never reads complete without it.
-    pub(crate) fn delete_agent(&mut self, id: AgentId) -> Result<(), ModelError> {
-        let deleted_at_ms = self
-            .agents
+    /// Removes agent `id` with its queue and requests at `now_ms`. An
+    /// unsettled request of a message that other existing agents also
+    /// received, live or archived, stays, closed as `agent_deleted`, so the
+    /// message never reads complete without it.
+    pub(crate) fn delete_agent(&mut self, id: AgentId, now_ms: u64) -> Result<(), ModelError> {
+        self.agents
             .remove(&id)
-            .ok_or(ModelError::UnknownAgent(id))?
-            .observed_at_ms;
+            .ok_or(ModelError::UnknownAgent(id))?;
         self.queues.remove(&id);
         let shared: std::collections::BTreeSet<_> = self
-            .requests
-            .values()
+            .requests()
             .filter(|request| self.agents.contains_key(&request.agent_id))
             .map(|request| request.prompt.id)
             .collect();
@@ -156,7 +154,7 @@ impl BusState {
             if request.agent_id == id {
                 request.group = None;
                 request.phase = RequestPhase::Abandoned;
-                request.completed_at_ms = Some(deleted_at_ms);
+                request.completed_at_ms = Some(now_ms);
                 request.failure_reason = Some(AGENT_DELETED.into());
             }
         }

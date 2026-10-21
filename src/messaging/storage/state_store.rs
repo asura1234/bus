@@ -270,8 +270,11 @@ impl JsonStore {
             let kept = (item.settled_at_ms() >= cutoff || pinned_reply || pinned_event)
                 && state.room(item.room()).is_some()
                 && match &item {
+                    // A deleted recipient's open request stays as its failure.
                     Archived::Request(request) => {
-                        state.agent(request.agent_id).is_some()
+                        (state.agent(request.agent_id).is_some()
+                            || request.failure_reason.as_deref()
+                                == Some(crate::messaging::model::AGENT_DELETED))
                             && state.request(request.id).is_none()
                     }
                     Archived::Notice { room, prompt } => {
