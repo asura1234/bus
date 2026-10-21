@@ -30,10 +30,15 @@ fn fixture_environment_is_not_mistaken_for_an_inherited_live_bus() {
     // fixture has configured its own isolated root.
     let inspected = std::thread::spawn(|| {
         std::panic::catch_unwind(no_live_bus_variable_reaches_this_test_binary)
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
     match before {
         Some(value) => std::env::set_var("BUS_DATA_DIR", value),
         None => std::env::remove_var("BUS_DATA_DIR"),
     }
-    assert!(inspected.is_ok(), "a controlled fixture root was reported as an inherited live Bus");
+    assert!(
+        inspected.is_ok(),
+        "a controlled fixture root was reported as an inherited live Bus"
+    );
 }

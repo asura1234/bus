@@ -41,8 +41,15 @@ fn drop_inherited_live_bus_variables() {
     std::env::set_var(DROPPED, "1");
 }
 
+/// Set only in the child that the re-run test below starts. The check runs there
+/// alone: in a shared process another test's own fixture root would look inherited.
+const PROBE: &str = "BUS_TEST_LIVE_BUS_ENV_PROBE";
+
 #[test]
 fn no_live_bus_variable_reaches_this_test_binary() {
+    if std::env::var_os(PROBE).is_none() {
+        return;
+    }
     let leaked: Vec<_> = std::env::vars_os()
         .map(|(name, _)| name)
         .filter(|name| names_a_live_bus(name))
@@ -76,7 +83,11 @@ fn a_test_binary_started_in_a_live_bus_pane_drops_its_variables() {
     ] {
         child.env(name, fake.join(name));
     }
-    let output = child.env("BUS_UPDATE_API_SCHEMA", "kept").output().unwrap();
+    let output = child
+        .env(PROBE, "1")
+        .env("BUS_UPDATE_API_SCHEMA", "kept")
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "{}{}",
