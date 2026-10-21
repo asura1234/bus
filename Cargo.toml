@@ -96,6 +96,10 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
 schemars = { version = "1.2.1", features = ["derive"] }
 
+[dev-dependencies]
+# Drops a live Bus's variables before any test runs (src/utils/tests/live_bus_env_test.rs).
+ctor = "1.0.13"
+
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
 

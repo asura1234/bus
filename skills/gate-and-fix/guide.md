@@ -41,6 +41,9 @@ replace `rebase-origin-main` or PR creation.
     This includes all maintenance suites and all skill suites, on every round.
     The instrumented CLI is built before Python tests; its explicit `BUS_TEST_BINARY` and profile
     path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
+  - **Environment**: every lane's children run without inherited `BUS_*`/`HERDR_*` variables, so a
+    gate started from a Bus agent pane never sees (or writes to) that live Bus. Each Rust test
+    binary also drops a live Bus's variables before its tests run (`src/utils/tests/live_bus_env_test.rs`).
   - **Integration**: all Rust integration targets under `tests/`, then the in-process
     `IN_PROCESS_SERVER_TESTS` harness. The same prefix drives nextest and libtest filters.
     Then the dev variant, uninstrumented, with `--features dev-tools`: the `cli` and `tui-driver`
@@ -62,9 +65,8 @@ replace `rebase-origin-main` or PR creation.
   wrapper argv and its logs record every underlying command.
 - Coverage reports live in ignored `temp/gate-and-fix/coverage/`; instrumented Cargo output stays
   in `target/llvm-cov-target/`. Tests run only once per round; coverage consumes their profiles.
-  The gate retains the parent `BUS_DATA_DIR`, `BUS_SESSION_ID`, and the native-session
-  compatibility key `HERDR_SESSION`; tests that
-  model isolated config roots clear and restore those variables within their fixture boundaries.
+  The gate drops every inherited `BUS_*`/`HERDR_*` variable (see **Environment** above); tests
+  that model isolated config roots set and restore those variables within their fixture boundaries.
 - Rust coverage includes host-compiled first-party `src/` executable lines. Vendor/dependencies,
   build.rs, generated files from `lint-policy.toml`'s `generated_files`, `tests/` and inline
   `#[cfg(test)] mod` bodies are excluded. Host-inactive platform code is outside LLVM's inventory.

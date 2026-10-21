@@ -6,6 +6,8 @@
 #[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
 pub mod detach_reattach_support;
+#[path = "../../src/utils/tests/live_bus_env_test.rs"]
+mod live_bus_env;
 
 #[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
