@@ -1903,7 +1903,7 @@ fn async_following_survives_live_control_server_dropping_excess_connections() {
     let socket = dir.join("control.sock");
     let mut stalled = Vec::new();
     let mut streams = Vec::new();
-    for id in 0..16 {
+    for id in 0..64 {
         let mut stream = crate::platform::ipc::connect_local_stream(&socket).unwrap();
         let request = Request {
             id: format!("stalled-{id}"),

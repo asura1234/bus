@@ -290,11 +290,11 @@ fn unanswered_coordinator_request_has_finite_deadline() {
 #[test]
 fn active_connection_limit_rejects_excess_clients() {
     let dir = TestDir::new();
-    let (tx, rx) = mpsc::sync_channel(16);
+    let (tx, rx) = mpsc::sync_channel(MAX_CLIENTS);
     let _server = start(&dir.0, tx).unwrap();
     let mut clients = Vec::new();
     let mut pending = Vec::new();
-    for id in 0..16 {
+    for id in 0..MAX_CLIENTS {
         let mut client = ipc::connect_local_stream(&dir.socket()).unwrap();
         writeln!(
             client,
@@ -307,7 +307,58 @@ fn active_connection_limit_rejects_excess_clients() {
     }
     let excess = ipc::connect_local_stream(&dir.socket()).unwrap();
     assert_eq!(read_response(excess).error.unwrap().code, "server_busy");
-    assert_eq!(pending.len(), 16);
+    assert_eq!(pending.len(), MAX_CLIENTS);
+}
+
+#[test]
+fn thirty_two_pending_status_reads_leave_headroom_for_an_interrupt() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(64);
+    let _server = start(&dir.0, tx).unwrap();
+    let mut clients = Vec::new();
+    let mut pending = Vec::new();
+    for id in 0..32 {
+        let mut stream = ipc::connect_local_stream(&dir.socket()).unwrap();
+        let request = Request {
+            id: format!("follower-{id}"),
+            method: "message.status".into(),
+            params: json!({"message": "19"}),
+        };
+        writeln!(stream, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(call) => pending.push(call),
+            Err(error) => panic!(
+                "status poll {id} must be admitted before an interrupt: {error}; response: {:?}",
+                read_response(stream)
+            ),
+        }
+        clients.push(stream);
+    }
+    // The coordinator is slow to answer the followers; their turns may last
+    // minutes, but only this status read occupies each connection.
+    let mut interrupt = ipc::connect_local_stream(&dir.socket()).unwrap();
+    let request = Request {
+        id: "interactive-interrupt".into(),
+        method: "agent.interrupt".into(),
+        params: json!({"agent": "worker"}),
+    };
+    writeln!(interrupt, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+    let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(1)).unwrap() else {
+        panic!("expected an interrupt control call")
+    };
+    assert_eq!(call.request.method, "agent.interrupt");
+    call.reply
+        .send(Response::success(
+            &call.request.id,
+            json!({"admitted": true}),
+        ))
+        .unwrap();
+    let response = read_response(interrupt);
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.id, "interactive-interrupt");
+    assert_eq!(response.result, json!({"admitted": true}));
+    assert_eq!(pending.len(), 32);
+    assert_eq!(clients.len(), 32);
 }
 
 #[test]
@@ -355,10 +406,10 @@ fn client_rejects_a_response_for_another_request() {
 #[test]
 fn completed_responses_remain_counted_until_peers_close() {
     let dir = TestDir::new();
-    let (tx, rx) = mpsc::sync_channel(16);
+    let (tx, rx) = mpsc::sync_channel(MAX_CLIENTS);
     let _server = start(&dir.0, tx).unwrap();
     let mut clients = Vec::new();
-    for id in 0..16 {
+    for id in 0..MAX_CLIENTS {
         let mut stream = ipc::connect_local_stream(&dir.socket()).unwrap();
         writeln!(
             stream,

@@ -23,7 +23,9 @@ use std::{
     time::Instant,
 };
 
-const MAX_CLIENTS: usize = 16;
+// Async status polls can overlap while the coordinator is busy. Leave bounded
+// headroom for interactive calls alongside dozens of followers.
+const MAX_CLIENTS: usize = 64;
 const CONTROL_COMMAND_BIT: u64 = 1 << 63;
 
 pub(crate) struct Server {
