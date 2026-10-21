@@ -2733,3 +2733,77 @@ fn one_hundred_async_waiters_do_not_starve_interrupt_or_new_send() {
         "all 100 async followers must finish successfully"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn async_follower_reports_bus_down_after_a_saturated_server_stops() {
+    use crate::messaging::control;
+    use std::io::Write as _;
+    use std::sync::mpsc;
+    let dir = std::env::temp_dir().join(format!(
+        "bcl-stop-{:x}-{:x}",
+        std::process::id(),
+        crate::messaging::storage::io::now_ns()
+    ));
+    let (commands, received) = mpsc::sync_channel(16);
+    let server = control::start(&dir, commands).unwrap();
+    let socket = dir.join("wait.sock");
+    let mut pending = Vec::new();
+    let mut peers = Vec::new();
+    for id in 0..16 {
+        let mut peer = crate::platform::ipc::connect_local_stream(&socket).unwrap();
+        let request = Request {
+            id: format!("held-{id}"),
+            method: "message.status".into(),
+            params: json!({"message": "19"}),
+        };
+        writeln!(peer, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+        pending.push(received.recv_timeout(Duration::from_secs(5)).unwrap());
+        peers.push(peer);
+    }
+    // Keep the extra overload response slot occupied while the follower connects.
+    let overload_peer = crate::platform::ipc::connect_local_stream(&socket).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let (attempted, first_attempt) = mpsc::sync_channel(1);
+    let (finished, outcome) = mpsc::sync_channel(1);
+    let follower = {
+        let dir = dir.clone();
+        thread::spawn(move || {
+            let mut first = true;
+            let response = follow_message(
+                "follow-after-stop",
+                &json!(19),
+                &mut |request, _| {
+                    let response = control::request(&dir, request);
+                    if first {
+                        first = false;
+                        let overloaded = match &response {
+                            Ok(response) => response
+                                .error
+                                .as_ref()
+                                .is_some_and(|error| error.code == "server_busy"),
+                            Err(error) => error.starts_with("control_io:"),
+                        };
+                        attempted.send(overloaded).unwrap();
+                    }
+                    response
+                },
+                &mut thread::sleep,
+            );
+            finished.send(response).unwrap();
+        })
+    };
+    let saw_overload = first_attempt.recv_timeout(Duration::from_secs(5));
+    drop(server);
+    drop(overload_peer);
+    drop(peers);
+    drop(pending);
+    let response = outcome.recv_timeout(Duration::from_secs(8));
+    if response.is_ok() {
+        follower.join().unwrap();
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(saw_overload.unwrap());
+    let response = response.expect("a stopped poll endpoint must exhaust reconnect grace");
+    assert_eq!(response.error.unwrap().code, "bus_down");
+}

@@ -753,3 +753,80 @@ fn failed_waiter_accept_keeps_the_interactive_endpoint_serving() {
     }
     worker.join().unwrap();
 }
+
+fn status_request(id: &str) -> Request {
+    Request {
+        id: id.into(),
+        method: "message.status".into(),
+        params: json!({"message": "1"}),
+    }
+}
+
+#[test]
+fn coordinator_stopping_answers_queued_status_polls() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(256);
+    let _server = start(&dir.0, tx).unwrap();
+    let wait = dir.0.join(WAIT_SOCKET_NAME);
+    let mut streams = Vec::new();
+    for id in 0..4 {
+        let mut stream = ipc::connect_local_stream(&wait).unwrap();
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&status_request(&format!("s-{id}"))).unwrap()
+        )
+        .unwrap();
+        streams.push(stream);
+    }
+    let mut calls = Vec::new();
+    for _ in 0..4 {
+        calls.push(rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    }
+    // Bus shutdown: the coordinator drops its receiver and pending calls.
+    drop(calls);
+    drop(rx);
+    for stream in streams {
+        let response = read_response(stream);
+        assert_eq!(response.error.unwrap().code, "coordinator_unavailable");
+    }
+    let mut late = ipc::connect_local_stream(&wait).unwrap();
+    writeln!(
+        late,
+        "{}",
+        serde_json::to_string(&status_request("late")).unwrap()
+    )
+    .unwrap();
+    assert_eq!(
+        read_response(late).error.unwrap().code,
+        "coordinator_unavailable"
+    );
+}
+
+#[test]
+fn saturated_interactive_pool_does_not_block_status_polls() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(256);
+    let _server = start(&dir.0, tx).unwrap();
+    let mut idle = Vec::new();
+    for _ in 0..=MAX_CLIENTS + 4 {
+        idle.push(ipc::connect_local_stream(&dir.socket()).unwrap());
+    }
+    thread::sleep(Duration::from_millis(50));
+    let mut stream = ipc::connect_local_stream(&dir.0.join(WAIT_SOCKET_NAME)).unwrap();
+    writeln!(
+        stream,
+        "{}",
+        serde_json::to_string(&status_request("poll")).unwrap()
+    )
+    .unwrap();
+    let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(1)).unwrap() else {
+        panic!()
+    };
+    assert_eq!(call.request.method, "message.status");
+    assert!(call._poll_permit.is_some());
+    call.reply
+        .send(Response::success("poll", json!({})))
+        .unwrap();
+    assert!(read_response(stream).ok);
+}
