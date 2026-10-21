@@ -370,6 +370,17 @@ class BuildIdentityTests(unittest.TestCase):
         )
 
 
+    def test_staging_an_unrelated_file_keeps_a_clean_dev_build_cached(self) -> None:
+        build = self.cargo_fixture()
+        short = self.git(self.repo, "rev-parse", "--short", "HEAD")
+        self.assertEqual(build()[0], short)
+        (self.repo / "notes.md").write_text("staged unrelated edit\n")
+        self.git(self.repo, "add", "notes.md")
+        text, fresh = build()
+        self.assertEqual(text, short)
+        self.assertTrue(fresh, "staging an unrelated file recompiled the crate")
+
+
 class BuildIdentityCacheProbeTests(BuildIdentityTests):
     def short_hash_crate(self, root: Path):
         (root / "Cargo.toml").write_text(

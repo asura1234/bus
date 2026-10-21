@@ -166,7 +166,7 @@ fn record_build_identity() {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_COMMON_DIR")
-            // Reading status must not refresh the index we watch for rebuilds.
+            // Build metadata collection must not refresh or rewrite the index.
             .env("GIT_OPTIONAL_LOCKS", "0")
             .args(args)
             .output()
@@ -244,11 +244,6 @@ fn record_dev_build_identity(
         // Directory watches detect additions/deletions without watching missing files
         // forever. Archives and minimal build-identity test crates may omit inputs.
         if manifest.is_some_and(|root| root.join(&path).exists()) {
-            println!("cargo:rerun-if-changed={path}");
-        }
-    }
-    if let Some(path) = git(&["rev-parse", "--git-path", "index"]) {
-        if PathBuf::from(&path).exists() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
