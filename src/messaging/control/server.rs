@@ -3,7 +3,8 @@
 use super::client::{request, request_with_timeout};
 use super::protocol::{
     encode, poll_write, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME, WORKER_TIMEOUT,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME, WAIT_SOCKET_NAME,
+    WORKER_TIMEOUT,
 };
 pub(crate) use super::protocol::{ControlCall, Request, Response};
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
@@ -23,13 +24,14 @@ use std::{
     time::Instant,
 };
 
+// Independent finite pools: status followers cannot consume interactive slots.
 const MAX_CLIENTS: usize = 16;
 const CONTROL_COMMAND_BIT: u64 = 1 << 63;
 
 pub(crate) struct Server {
     stopped: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    _socket: OwnedSocket,
+    _sockets: [OwnedSocket; 2],
     _lease: std::fs::File,
 }
 
@@ -63,7 +65,24 @@ pub(crate) fn start(
         .map_err(|e| format!("control_private_directory: {e}"))?;
     let lease = storage_io::lock(&data_dir.join(LOCK_NAME))
         .map_err(|e| format!("Cannot own Bus control endpoint: {e}"))?;
-    let path = data_dir.join(SOCKET_NAME);
+    let (interactive, socket) = bind_endpoint(data_dir, SOCKET_NAME)?;
+    let (waiters, wait_socket) = bind_endpoint(data_dir, WAIT_SOCKET_NAME)?;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&stopped);
+    let thread = thread::Builder::new()
+        .name("bus-control".into())
+        .spawn(move || serve([interactive, waiters], commands, stop))
+        .map_err(|e| e.to_string())?;
+    Ok(Server {
+        stopped,
+        thread: Some(thread),
+        _sockets: [socket, wait_socket],
+        _lease: lease,
+    })
+}
+
+fn bind_endpoint(data_dir: &Path, name: &str) -> Result<(ipc::LocalListener, OwnedSocket), String> {
+    let path = data_dir.join(name);
     ipc::reclaim_stale_private_socket(&path, IO_TIMEOUT)
         .map_err(|e| format!("Cannot prepare Bus control endpoint: {e}"))?;
     let listener = ipc::bind_private_local_listener(&path)
@@ -76,60 +95,84 @@ pub(crate) fn start(
     listener
         .set_nonblocking(ListenerNonblockingMode::Both)
         .map_err(|e| e.to_string())?;
-    let stopped = Arc::new(AtomicBool::new(false));
-    let stop = Arc::clone(&stopped);
-    let thread = thread::Builder::new()
-        .name("bus-control".into())
-        .spawn(move || serve(listener, commands, stop))
-        .map_err(|e| e.to_string())?;
-    Ok(Server {
-        stopped,
-        thread: Some(thread),
-        _socket: socket,
-        _lease: lease,
-    })
+    Ok((listener, socket))
+}
+
+struct Endpoint {
+    listener: Option<ipc::LocalListener>,
+    clients: Vec<Client>,
+    poll_budget: Option<Arc<()>>,
 }
 
 fn serve(
-    listener: ipc::LocalListener,
+    listeners: [ipc::LocalListener; 2],
     commands: SyncSender<(u64, BusCommand)>,
     stopped: Arc<AtomicBool>,
 ) {
-    let mut clients = Vec::new();
+    let mut endpoints = listeners
+        .into_iter()
+        .enumerate()
+        .map(|(index, listener)| Endpoint {
+            listener: Some(listener),
+            clients: Vec::new(),
+            poll_budget: (index == 1).then(|| Arc::new(())),
+        })
+        .collect::<Vec<_>>();
     let mut next_id = CONTROL_COMMAND_BIT;
     while !stopped.load(Ordering::Acquire) {
-        // Limit accept work per pass so connection floods cannot starve existing calls.
+        // Interactive admission and replies run first, regardless of poll load.
+        for endpoint in &mut endpoints {
+            endpoint.poll(&commands, &mut next_id);
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+impl Endpoint {
+    fn poll(&mut self, commands: &SyncSender<(u64, BusCommand)>, next_id: &mut u64) {
+        // Bound accept work and overload replies independently for each endpoint.
         for _ in 0..MAX_CLIENTS {
+            let Some(listener) = &self.listener else {
+                break;
+            };
             match listener.accept() {
-                Ok(stream) if clients.len() >= MAX_CLIENTS => {
+                Ok(stream) if self.clients.len() >= MAX_CLIENTS => {
                     // One extra bounded slot delivers overload errors without
                     // leaving unread Windows pipe writes in a linger pool.
-                    if clients.len() == MAX_CLIENTS {
+                    if self.clients.len() == MAX_CLIENTS {
                         let mut client = Client::new(stream);
                         if client.respond(Response::failure(
                             "",
                             "server_busy",
                             "Control connection limit reached",
                         )) {
-                            clients.push(client);
+                            self.clients.push(client);
                         }
                     }
                 }
-                Ok(stream) => clients.push(Client::new(stream)),
+                Ok(stream) => self.clients.push(Client::new(stream)),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => {
                     tracing::warn!(
                         event = "bus.control.transport.failed",
                         stage = "accept",
-                        "Control listener failed"
+                        endpoint = if self.poll_budget.is_some() {
+                            "status"
+                        } else {
+                            "interactive"
+                        },
+                        "Control listener failed; endpoint disabled"
                     );
-                    return;
+                    // Retire only this listener; existing clients still get
+                    // replies and the other endpoint remains available.
+                    self.listener = None;
+                    break;
                 }
             }
         }
-        clients.retain_mut(|client| client.poll(&commands, &mut next_id));
-        thread::sleep(POLL_INTERVAL);
+        self.clients
+            .retain_mut(|client| client.poll(commands, next_id, self.poll_budget.as_ref()));
     }
 }
 
@@ -181,7 +224,12 @@ impl Client {
         true
     }
 
-    fn poll(&mut self, commands: &SyncSender<(u64, BusCommand)>, next_id: &mut u64) -> bool {
+    fn poll(
+        &mut self,
+        commands: &SyncSender<(u64, BusCommand)>,
+        next_id: &mut u64,
+        poll_budget: Option<&Arc<()>>,
+    ) -> bool {
         if Instant::now() >= self.deadline {
             return match &self.state {
                 State::Reading(_) => self.respond(Response::failure(
@@ -226,7 +274,7 @@ impl Client {
                     }
                     Err(FrameError::Io(_)) => return false,
                 };
-                self.dispatch_request(&bytes, commands, next_id)
+                self.dispatch_request(&bytes, commands, next_id, poll_budget)
             }
 
             State::Waiting {
@@ -272,6 +320,7 @@ impl Client {
         bytes: &[u8],
         commands: &SyncSender<(u64, BusCommand)>,
         next_id: &mut u64,
+        poll_budget: Option<&Arc<()>>,
     ) -> bool {
         let request: Request = match serde_json::from_slice(bytes) {
             Ok(request) => request,
@@ -290,6 +339,22 @@ impl Client {
                 "id and method must be nonempty",
             ));
         }
+        if (request.method == "message.status") != poll_budget.is_some() {
+            return self.respond(Response::failure(
+                &request.id,
+                "invalid_request",
+                "Method belongs to the other control endpoint",
+            ));
+        }
+        // A timed-out transport must not release a queued poll's capacity.
+        // At most MAX_CLIENTS polls can occupy the shared coordinator queue.
+        if poll_budget.is_some_and(|budget| Arc::strong_count(budget) > MAX_CLIENTS) {
+            return self.respond(Response::failure(
+                &request.id,
+                "server_busy",
+                "Status poll budget reached",
+            ));
+        }
         let id = request.id.clone();
         let method = crate::messaging::perf::control_method_label(&request.method);
         let (reply, receiver) = mpsc::sync_channel(1);
@@ -297,7 +362,11 @@ impl Client {
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;
         match commands.try_send((
             command_id,
-            BusCommand::Control(ControlCall { request, reply }),
+            BusCommand::Control(ControlCall {
+                request,
+                reply,
+                _poll_permit: poll_budget.cloned(),
+            }),
         )) {
             Ok(()) => {
                 self.state = State::Waiting {

@@ -52,6 +52,7 @@ impl Transport for FreshLaunchNative {
                                 params: json!({"message":request.prompt.id.0.to_string()}),
                             },
                             reply,
+                            _poll_permit: None,
                         }),
                     ))
                     .unwrap();
@@ -161,6 +162,7 @@ impl Transport for PollingNative {
                             params: json!({"message": self.message.0.to_string()}),
                         },
                         reply,
+                        _poll_permit: None,
                     })
                 };
                 self.commands.send((1, command)).unwrap();

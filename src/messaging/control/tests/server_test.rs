@@ -76,6 +76,7 @@ fn every_session_listens_on_control_sock() {
     let (tx, _rx) = mpsc::sync_channel(1);
     let _server = start(&dir.0, tx).unwrap();
     assert!(dir.socket().exists());
+    assert!(dir.0.join(WAIT_SOCKET_NAME).exists());
     assert!(!dir.0.join("dev-control.sock").exists());
 }
 
@@ -149,6 +150,7 @@ fn roundtrip_returns_exact_worker_outcome_with_disjoint_command_ids() {
     worker.join().unwrap();
     drop(server);
     assert!(!dir.socket().exists());
+    assert!(!dir.0.join(WAIT_SOCKET_NAME).exists());
 }
 
 #[test]
@@ -289,25 +291,78 @@ fn unanswered_coordinator_request_has_finite_deadline() {
 
 #[test]
 fn active_connection_limit_rejects_excess_clients() {
+    for (socket, method) in [
+        (SOCKET_NAME, "state.get"),
+        (WAIT_SOCKET_NAME, "message.status"),
+    ] {
+        let dir = TestDir::new();
+        let (tx, rx) = mpsc::sync_channel(MAX_CLIENTS);
+        let _server = start(&dir.0, tx).unwrap();
+        let mut clients = Vec::new();
+        let mut pending = Vec::new();
+        for id in 0..MAX_CLIENTS {
+            let mut client = ipc::connect_local_stream(&dir.0.join(socket)).unwrap();
+            let mut request = call(&format!("pending-{id}"));
+            request.method = method.into();
+            writeln!(client, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+            pending.push(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+            clients.push(client);
+        }
+        let excess = ipc::connect_local_stream(&dir.0.join(socket)).unwrap();
+        assert_eq!(read_response(excess).error.unwrap().code, "server_busy");
+        assert_eq!(pending.len(), MAX_CLIENTS);
+    }
+}
+
+#[test]
+fn saturated_status_endpoint_leaves_headroom_for_an_interrupt() {
     let dir = TestDir::new();
-    let (tx, rx) = mpsc::sync_channel(16);
+    let (tx, rx) = mpsc::sync_channel(64);
     let _server = start(&dir.0, tx).unwrap();
     let mut clients = Vec::new();
     let mut pending = Vec::new();
     for id in 0..16 {
-        let mut client = ipc::connect_local_stream(&dir.socket()).unwrap();
-        writeln!(
-            client,
-            "{}",
-            serde_json::to_string(&call(&format!("pending-{id}"))).unwrap()
-        )
-        .unwrap();
-        pending.push(rx.recv_timeout(Duration::from_secs(5)).unwrap());
-        clients.push(client);
+        let mut stream = ipc::connect_local_stream(&dir.0.join(WAIT_SOCKET_NAME)).unwrap();
+        let request = Request {
+            id: format!("follower-{id}"),
+            method: "message.status".into(),
+            params: json!({"message": "19"}),
+        };
+        writeln!(stream, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(call) => pending.push(call),
+            Err(error) => panic!(
+                "status poll {id} must be admitted before an interrupt: {error}; response: {:?}",
+                read_response(stream)
+            ),
+        }
+        clients.push(stream);
     }
-    let excess = ipc::connect_local_stream(&dir.socket()).unwrap();
-    assert_eq!(read_response(excess).error.unwrap().code, "server_busy");
+    // The coordinator is slow to answer the followers; their turns may last
+    // minutes, but only this status read occupies each connection.
+    let mut interrupt = ipc::connect_local_stream(&dir.socket()).unwrap();
+    let request = Request {
+        id: "interactive-interrupt".into(),
+        method: "agent.interrupt".into(),
+        params: json!({"agent": "worker"}),
+    };
+    writeln!(interrupt, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+    let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(1)).unwrap() else {
+        panic!("expected an interrupt control call")
+    };
+    assert_eq!(call.request.method, "agent.interrupt");
+    call.reply
+        .send(Response::success(
+            &call.request.id,
+            json!({"admitted": true}),
+        ))
+        .unwrap();
+    let response = read_response(interrupt);
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.id, "interactive-interrupt");
+    assert_eq!(response.result, json!({"admitted": true}));
     assert_eq!(pending.len(), 16);
+    assert_eq!(clients.len(), 16);
 }
 
 #[test]
@@ -354,29 +409,32 @@ fn client_rejects_a_response_for_another_request() {
 
 #[test]
 fn completed_responses_remain_counted_until_peers_close() {
-    let dir = TestDir::new();
-    let (tx, rx) = mpsc::sync_channel(16);
-    let _server = start(&dir.0, tx).unwrap();
-    let mut clients = Vec::new();
-    for id in 0..16 {
-        let mut stream = ipc::connect_local_stream(&dir.socket()).unwrap();
-        writeln!(
-            stream,
-            "{}",
-            serde_json::to_string(&call(&format!("retain-{id}"))).unwrap()
-        )
-        .unwrap();
-        let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(2)).unwrap() else {
-            panic!()
-        };
-        dev.reply
-            .try_send(Response::success(&dev.request.id, json!("ready")))
-            .unwrap();
-        assert!(read_response_open(&mut stream).ok);
-        clients.push(stream);
+    for (socket, method) in [
+        (SOCKET_NAME, "state.get"),
+        (WAIT_SOCKET_NAME, "message.status"),
+    ] {
+        let dir = TestDir::new();
+        let (tx, rx) = mpsc::sync_channel(MAX_CLIENTS);
+        let _server = start(&dir.0, tx).unwrap();
+        let mut clients = Vec::new();
+        for id in 0..MAX_CLIENTS {
+            let mut stream = ipc::connect_local_stream(&dir.0.join(socket)).unwrap();
+            let mut request = call(&format!("retain-{id}"));
+            request.method = method.into();
+            writeln!(stream, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+            let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(2)).unwrap()
+            else {
+                panic!()
+            };
+            dev.reply
+                .try_send(Response::success(&dev.request.id, json!("ready")))
+                .unwrap();
+            assert!(read_response_open(&mut stream).ok);
+            clients.push(stream);
+        }
+        let excess = ipc::connect_local_stream(&dir.0.join(socket)).unwrap();
+        assert_eq!(read_response(excess).error.unwrap().code, "server_busy");
     }
-    let excess = ipc::connect_local_stream(&dir.socket()).unwrap();
-    assert_eq!(read_response(excess).error.unwrap().code, "server_busy");
 }
 
 #[test]
@@ -463,7 +521,12 @@ fn slow_unknown_control_methods_do_not_log_user_supplied_text() {
         params: Value::Null,
     };
     let mut next_id = CONTROL_COMMAND_BIT;
-    assert!(client.dispatch_request(&serde_json::to_vec(&request).unwrap(), &tx, &mut next_id));
+    assert!(client.dispatch_request(
+        &serde_json::to_vec(&request).unwrap(),
+        &tx,
+        &mut next_id,
+        None
+    ));
     let (_, BusCommand::Control(call)) = rx.recv().unwrap() else {
         panic!("control call")
     };
@@ -477,7 +540,7 @@ fn slow_unknown_control_methods_do_not_log_user_supplied_text() {
         .unwrap();
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
-        assert!(client.poll(&tx, &mut next_id));
+        assert!(client.poll(&tx, &mut next_id, None));
     });
     let text = capture.text();
     assert!(
@@ -488,4 +551,282 @@ fn slow_unknown_control_methods_do_not_log_user_supplied_text() {
         !text.contains(secret),
         "user supplied method leaked into WARN: {text}"
     );
+}
+
+#[test]
+fn timed_out_status_connections_cannot_accumulate_coordinator_commands() {
+    use interprocess::local_socket::traits::Listener as _;
+    let dir = TestDir::new();
+    storage_io::private_dir(&dir.0).unwrap();
+    let listener = ipc::bind_private_local_listener(&dir.socket()).unwrap();
+    let (tx, rx) = mpsc::sync_channel(256);
+    let budget = Arc::new(());
+    let mut next_id = CONTROL_COMMAND_BIT;
+    let mut pending = Vec::new();
+    // Model transports reaching their coordinator deadline while their commands
+    // remain queued. Retries must not consume the interactive queue's capacity.
+    for id in 0..100 {
+        let peer = ipc::connect_local_stream(&dir.socket()).unwrap();
+        let mut client = Client::new(listener.accept().unwrap());
+        let request = Request {
+            id: id.to_string(),
+            method: "message.status".into(),
+            params: json!({"message": "1"}),
+        };
+        assert!(client.dispatch_request(
+            &serde_json::to_vec(&request).unwrap(),
+            &tx,
+            &mut next_id,
+            Some(&budget)
+        ));
+        if id < 16 {
+            pending.push(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+            client.deadline = Instant::now();
+            assert!(client.poll(&tx, &mut next_id, Some(&budget)));
+        }
+        assert!(client.poll(&tx, &mut next_id, Some(&budget)));
+        let response = read_response(peer);
+        assert_eq!(
+            response.error.unwrap().code,
+            if id < 16 {
+                "coordinator_timeout"
+            } else {
+                "server_busy"
+            }
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "timed-out retries must not enqueue more polls"
+        );
+    }
+    // Completing one old command releases exactly enough budget for a retry.
+    pending.pop();
+    let _peer = ipc::connect_local_stream(&dir.socket()).unwrap();
+    let mut client = Client::new(listener.accept().unwrap());
+    let request = Request {
+        id: "retry".into(),
+        method: "message.status".into(),
+        params: json!({"message": "1"}),
+    };
+    assert!(client.dispatch_request(
+        &serde_json::to_vec(&request).unwrap(),
+        &tx,
+        &mut next_id,
+        Some(&budget)
+    ));
+    let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(1)).unwrap() else {
+        panic!("expected retry")
+    };
+    assert_eq!(call.request.id, "retry");
+}
+
+#[test]
+fn control_endpoints_enforce_their_method_boundary() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(256);
+    let _server = start(&dir.0, tx).unwrap();
+    for (socket, method) in [
+        (SOCKET_NAME, "message.status"),
+        (WAIT_SOCKET_NAME, "message.send"),
+    ] {
+        let mut stream = ipc::connect_local_stream(&dir.0.join(socket)).unwrap();
+        let request = Request {
+            id: "wrong-endpoint".into(),
+            method: method.into(),
+            params: json!({}),
+        };
+        writeln!(stream, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+        assert_eq!(read_response(stream).error.unwrap().code, "invalid_request");
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "wrong-endpoint calls must never be dispatched"
+    );
+}
+
+#[test]
+fn failed_poll_endpoint_startup_removes_only_the_new_interactive_socket() {
+    let dir = TestDir::new();
+    storage_io::private_dir(&dir.0).unwrap();
+    let path = dir.0.join(WAIT_SOCKET_NAME);
+    std::fs::write(&path, b"user data").unwrap();
+    let (tx, _) = mpsc::sync_channel(0);
+    assert!(start(&dir.0, tx).is_err());
+    assert!(!dir.socket().exists());
+    assert_eq!(std::fs::read(&path).unwrap(), b"user data");
+    std::fs::remove_file(&path).unwrap();
+    let (tx, _) = mpsc::sync_channel(0);
+    let server = start(&dir.0, tx).unwrap();
+    drop(server);
+    assert!(!dir.socket().exists());
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn control_server_starts_when_the_interactive_socket_path_fits() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = TestDir::new();
+    let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    let max_socket_bytes = address.sun_path.len() - 1;
+    let parent_bytes = max_socket_bytes - SOCKET_NAME.len() - 1;
+    let padding = parent_bytes
+        .checked_sub(dir.0.as_os_str().as_bytes().len() + 1)
+        .expect("fixture must leave room for a near-limit private data directory");
+    let data_dir = dir.0.join("p".repeat(padding));
+    storage_io::private_dir(&data_dir).unwrap();
+    let socket = data_dir.join(SOCKET_NAME);
+    assert_eq!(socket.as_os_str().as_bytes().len(), max_socket_bytes);
+    let listener = ipc::bind_private_local_listener(&socket)
+        .expect("the existing interactive socket name must fit");
+    drop(listener);
+    std::fs::remove_file(socket).unwrap();
+    let (tx, _rx) = mpsc::sync_channel(1);
+    let result = start(&data_dir, tx);
+    assert!(
+        result.is_ok(),
+        "a data directory supporting control.sock must still start: {:?}",
+        result.err()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_waiter_accept_keeps_the_interactive_endpoint_serving() {
+    use interprocess::os::unix::uds_local_socket;
+    use std::os::{fd::OwnedFd, unix::net::UnixStream};
+
+    let dir = TestDir::new();
+    storage_io::private_dir(&dir.0).unwrap();
+    let lease = storage_io::lock(&dir.0.join(LOCK_NAME)).unwrap();
+    let (interactive, socket) = bind_endpoint(&dir.0, SOCKET_NAME).unwrap();
+    let (waiter, wait_socket) = bind_endpoint(&dir.0, WAIT_SOCKET_NAME).unwrap();
+    drop(waiter);
+    // A connected Unix socket is valid but cannot accept: exercise a real
+    // non-transient kernel error without exhausting process-wide descriptors.
+    let (stream, _peer) = UnixStream::pair().unwrap();
+    let failed: ipc::LocalListener = uds_local_socket::Listener::from(OwnedFd::from(stream)).into();
+    let error = failed.accept().unwrap_err();
+    assert!(!matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+    ));
+
+    let (tx, rx) = mpsc::sync_channel(2);
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop = stopped.clone();
+    let thread = thread::spawn(move || serve([interactive, failed], tx, stop));
+    let _server = Server {
+        stopped,
+        thread: Some(thread),
+        _sockets: [socket, wait_socket],
+        _lease: lease,
+    };
+    thread::sleep(Duration::from_millis(50));
+    let worker = thread::spawn(move || {
+        for id in ["interrupt", "new-send"] {
+            let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected interactive control call")
+            };
+            assert_eq!(call.request.id, id);
+            call.reply
+                .send(Response::success(id, json!({"served": id})))
+                .unwrap();
+        }
+    });
+    for (id, method) in [
+        ("interrupt", "agent.interrupt"),
+        ("new-send", "message.send"),
+    ] {
+        let response = request(
+            &dir.0,
+            &Request {
+                id: id.into(),
+                method: method.into(),
+                params: json!({}),
+            },
+        )
+        .expect("a failed waiter listener must not stop interactive control");
+        assert!(response.ok, "{response:?}");
+        assert_eq!(response.result, json!({"served": id}));
+    }
+    worker.join().unwrap();
+}
+
+fn status_request(id: &str) -> Request {
+    Request {
+        id: id.into(),
+        method: "message.status".into(),
+        params: json!({"message": "1"}),
+    }
+}
+
+#[test]
+fn coordinator_stopping_answers_queued_status_polls() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(256);
+    let _server = start(&dir.0, tx).unwrap();
+    let wait = dir.0.join(WAIT_SOCKET_NAME);
+    let mut streams = Vec::new();
+    for id in 0..4 {
+        let mut stream = ipc::connect_local_stream(&wait).unwrap();
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&status_request(&format!("s-{id}"))).unwrap()
+        )
+        .unwrap();
+        streams.push(stream);
+    }
+    let mut calls = Vec::new();
+    for _ in 0..4 {
+        calls.push(rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    }
+    // Bus shutdown: the coordinator drops its receiver and pending calls.
+    drop(calls);
+    drop(rx);
+    for stream in streams {
+        let response = read_response(stream);
+        assert_eq!(response.error.unwrap().code, "coordinator_unavailable");
+    }
+    let mut late = ipc::connect_local_stream(&wait).unwrap();
+    writeln!(
+        late,
+        "{}",
+        serde_json::to_string(&status_request("late")).unwrap()
+    )
+    .unwrap();
+    assert_eq!(
+        read_response(late).error.unwrap().code,
+        "coordinator_unavailable"
+    );
+}
+
+#[test]
+fn saturated_interactive_pool_does_not_block_status_polls() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(256);
+    let _server = start(&dir.0, tx).unwrap();
+    let mut idle = Vec::new();
+    for _ in 0..=MAX_CLIENTS + 4 {
+        idle.push(ipc::connect_local_stream(&dir.socket()).unwrap());
+    }
+    thread::sleep(Duration::from_millis(50));
+    let mut stream = ipc::connect_local_stream(&dir.0.join(WAIT_SOCKET_NAME)).unwrap();
+    writeln!(
+        stream,
+        "{}",
+        serde_json::to_string(&status_request("poll")).unwrap()
+    )
+    .unwrap();
+    let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(1)).unwrap() else {
+        panic!()
+    };
+    assert_eq!(call.request.method, "message.status");
+    assert!(call._poll_permit.is_some());
+    call.reply
+        .send(Response::success("poll", json!({})))
+        .unwrap();
+    assert!(read_response(stream).ok);
 }

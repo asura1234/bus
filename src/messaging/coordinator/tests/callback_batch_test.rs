@@ -154,6 +154,7 @@ fn read_call(id: &str) -> BusCommand {
             params: json!({}),
         },
         reply,
+        _poll_permit: None,
     })
 }
 
