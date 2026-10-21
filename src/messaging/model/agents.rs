@@ -4,11 +4,14 @@ use crate::messaging::prefs::colors;
 use std::path::PathBuf;
 use {
     super::{
-        AgentId, AgentRuntimeIdentity, BusState, Compactions, ModelError, Provider, RoomId,
-        RuntimeStatus, DEVELOPER_RECIPIENT, UNBOUND_SETTLE_MS,
+        AgentId, AgentRuntimeIdentity, BusState, Compactions, ModelError, Provider, RequestPhase,
+        RoomId, RuntimeStatus, DEVELOPER_RECIPIENT, UNBOUND_SETTLE_MS,
     },
     crate::messaging::model::RoomAgent,
 };
+
+/// Why a request closed when its agent was deleted before it settled.
+const AGENT_DELETED: &str = "agent_deleted";
 
 impl BusState {
     pub(crate) fn create_agent(
@@ -130,12 +133,33 @@ impl BusState {
         Ok(())
     }
 
+    /// Removes agent `id` with its queue and requests. An unsettled request
+    /// of a message that other existing agents also received stays, closed as
+    /// `agent_deleted`, so the message never reads complete without it.
     pub(crate) fn delete_agent(&mut self, id: AgentId) -> Result<(), ModelError> {
-        self.agents
+        let deleted_at_ms = self
+            .agents
             .remove(&id)
-            .ok_or(ModelError::UnknownAgent(id))?;
+            .ok_or(ModelError::UnknownAgent(id))?
+            .observed_at_ms;
         self.queues.remove(&id);
-        self.requests.retain(|_, request| request.agent_id != id);
+        let shared: std::collections::BTreeSet<_> = self
+            .requests
+            .values()
+            .filter(|request| self.agents.contains_key(&request.agent_id))
+            .map(|request| request.prompt.id)
+            .collect();
+        self.requests.retain(|_, request| {
+            request.agent_id != id || !request.settled() && shared.contains(&request.prompt.id)
+        });
+        for request in self.requests.values_mut() {
+            if request.agent_id == id {
+                request.group = None;
+                request.phase = RequestPhase::Abandoned;
+                request.completed_at_ms = Some(deleted_at_ms);
+                request.failure_reason = Some(AGENT_DELETED.into());
+            }
+        }
         self.drop_history_of_agent(id);
         for room in self.rooms.values_mut() {
             room.draft.recipient_ids.remove(&id);

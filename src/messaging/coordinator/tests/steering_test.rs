@@ -833,3 +833,54 @@ fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_r
         "an interrupted typed message lets async waiters exit 0: {status}"
     );
 }
+
+/// Deleting one recipient of a multi-recipient message must not make the
+/// message read complete for the recipients that remain, so async waiters
+/// do not exit 0 on work that never ran.
+#[test]
+fn deleting_an_unfinished_recipient_does_not_complete_a_multi_recipient_message() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let mut state = fixture.worker.state.clone();
+    let other = state
+        .create_agent(
+            fixture.room,
+            "reviewer",
+            Provider::ClaudeCode,
+            fixture.dir.clone(),
+            None,
+        )
+        .unwrap();
+    let ids = state
+        .submit_message_with(
+            fixture.room,
+            Draft {
+                text: "write the parser".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent, other].into(),
+            },
+            Author::Developer,
+            fixture.now,
+            false,
+        )
+        .unwrap();
+    fixture.worker.save(state).unwrap();
+    fixture.deliver();
+    fixture.started("turn-1", "write the parser");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.stopped("turn-1", "parser written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    let message = fixture.request(ids[0]).prompt.id;
+    let before = fixture.worker.control_message(message).unwrap();
+    assert_eq!(before["complete"], false, "{before}");
+    let mut state = fixture.worker.state.clone();
+    state.prepare_delete_agent(other).unwrap();
+    state.delete_agent(other).unwrap();
+    fixture.worker.save(state).unwrap();
+    let after = fixture.worker.control_message(message);
+    assert!(
+        after.as_ref().map_or(true, |s| !async_waiters_exit_zero(s)),
+        "a deleted recipient's message reads complete: {after:?}"
+    );
+}
