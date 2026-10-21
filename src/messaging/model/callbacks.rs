@@ -204,15 +204,15 @@ impl BusState {
         let Some(request) = self.requests.get(&request_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
-        // A task notification can be folded into an already bound turn. It is
-        // progress within that turn, not a new binding that clears its answer.
+        // Native question answers, direct input and task notifications can all
+        // join an already bound turn. After matching Bus steering above, treat
+        // the additional input as progress without rebinding or clearing its answer.
         if matches!(callback.kind, CallbackEventKind::PromptStarted)
             && bound_callback_turn(request, &callback)
-            && callback.prompt_payload.as_deref().is_some_and(|payload| {
-                crate::agents::providers::claude_code::hooks::task_notification_body(payload)
-                    .is_some()
-                    && !request.matches_callback_payload(payload)
-            })
+            && callback
+                .prompt_payload
+                .as_deref()
+                .is_some_and(|payload| !request.matches_callback_payload(payload))
         {
             return CallbackDisposition::AcceptedProgress;
         }

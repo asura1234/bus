@@ -830,6 +830,15 @@ fn codex_native_question_answer_keeps_the_active_request_until_its_final() {
             }),
         );
         worker.consume_callbacks(agent, &spool).unwrap();
+        assert!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .is_none(),
+            "answering a native question must not report an unbound callback"
+        );
         assert_eq!(
             worker.state.agent(agent).unwrap().current_request,
             Some(request)
