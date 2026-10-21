@@ -404,6 +404,11 @@ impl BusState {
                 self.release_unbound_request(agent, now_ms);
             }
         }
+        // A provider that went away cannot extend its turn, so a reply it
+        // already gave completes the turn as an idle screen would.
+        if status == RuntimeStatus::Unavailable {
+            self.complete_pending_final(agent, now_ms)?;
+        }
         Ok(())
     }
 }

@@ -19,6 +19,9 @@ pub(crate) enum RecordedTurnEnd {
     },
 }
 
+/// Why an ended turn closed without a reply once its agent went unavailable.
+const AGENT_UNAVAILABLE: &str = "agent_unavailable";
+
 impl BusState {
     pub(super) fn note_turn_end(&mut self, agent: AgentId, now_ms: u64) {
         let Some(agent_state) = self.agents.get(&agent).filter(|agent| !agent.dialog) else {
@@ -202,12 +205,17 @@ impl BusState {
 
     /// The agent's current request when its turn ended without a reply and
     /// `settle_ended_request` will close it once the settle window passes.
+    /// An agent that went unavailable after the turn ended (its provider
+    /// exited, say) settles too, or async waiters on it would never finish.
     fn settle_candidate(&self, agent: AgentId) -> Option<&Request> {
         let agent_state = self.agents.get(&agent)?;
         if agent_state.deletion_pending
             || agent_state.session_binding_invalidated
             || agent_state.dialog
-            || agent_state.status != RuntimeStatus::Idle
+            || !matches!(
+                agent_state.status,
+                RuntimeStatus::Idle | RuntimeStatus::Unavailable
+            )
         {
             return None;
         }
@@ -235,7 +243,10 @@ impl BusState {
     /// no `Stop` hook, and two finished answers were lost). Otherwise no reply
     /// is invented; the sender sees `abandoned` with a reason:
     /// `provider_error: ...` when the record names the error that ended the
-    /// turn, else `reply_not_captured`. A reply captured earlier and held for
+    /// turn, else `reply_not_captured`, or `agent_unavailable` when the agent
+    /// is unavailable. An unavailable agent gets the window again from when it
+    /// went unavailable, so one that only reattaches (a Bus restart) and is
+    /// Idle again settles as usual. A reply captured earlier and held for
     /// the turn's shells is never lost that way: once `HELD_REPLY_SETTLE_MS`
     /// has passed with no late `Stop`, it is delivered with reason
     /// `background_shells_interim` (live, 2026-10-16: an orchestrator's wake
@@ -256,7 +267,13 @@ impl BusState {
         } else {
             TURN_SETTLE_MS
         };
-        if now_ms < request.turn_ended_at_ms?.saturating_add(settle_ms) {
+        let agent_state = self.agents.get(&agent)?;
+        let unavailable = agent_state.status == RuntimeStatus::Unavailable;
+        let mut since = request.turn_ended_at_ms?;
+        if unavailable {
+            since = since.max(agent_state.status_since_ms);
+        }
+        if now_ms < since.saturating_add(settle_ms) {
             return None;
         }
         let provider_error = match recorded_end(request) {
@@ -291,6 +308,10 @@ impl BusState {
         }
         let (reason, error) = match &provider_error {
             Some(message) => provider_error_outcome(message),
+            None if unavailable => (
+                AGENT_UNAVAILABLE.to_owned(),
+                "Agent became unavailable after its turn ended without a captured reply; request closed. Inspect its terminal and resume it.".to_owned(),
+            ),
             None => (
                 "reply_not_captured".to_owned(),
                 "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.".to_owned(),
@@ -306,6 +327,8 @@ impl BusState {
             agent_id = agent.0,
             reason = if provider_error.is_some() {
                 "provider_error"
+            } else if unavailable {
+                AGENT_UNAVAILABLE
             } else {
                 "reply_not_captured"
             },

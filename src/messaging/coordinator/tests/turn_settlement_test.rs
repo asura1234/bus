@@ -499,10 +499,10 @@ fn a_reply_less_ended_turn_reports_settling_until_its_reason_is_attached() {
     }
 }
 
-/// A turn Bus will not settle (its agent went unavailable, as after a
-/// restart) is not settling, so followers still finish on it.
+/// An ended turn whose agent then went unavailable is settling: async
+/// waiters, which finish only on a complete message, wait for its reason.
 #[test]
-fn an_ended_turn_whose_agent_is_unavailable_is_not_settling() {
+fn an_ended_turn_whose_agent_is_unavailable_is_settling() {
     let mut fixture = Fixture::new(Provider::Codex);
     let lead = running(&mut fixture, "implement the change", "turn-1");
     fixture.status(RuntimeStatus::Idle);
@@ -514,7 +514,87 @@ fn an_ended_turn_whose_agent_is_unavailable_is_not_settling() {
         .control_message_at(message, fixture.now)
         .unwrap();
     assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
+    assert_eq!(status["requests"][0]["settling"], true, "{status}");
+}
+
+/// Review of #128: a provider that exits after its turn ended left the
+/// request open forever, so `send --async` / `wait --async` never exited.
+/// Once the settle window passes from when the agent went unavailable, the
+/// request closes as `agent_unavailable` and the waiters exit 1.
+#[test]
+fn an_ended_turn_on_an_unavailable_agent_eventually_releases_async_waiters() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    // Ended long ago; the window counts from going unavailable.
+    fixture.now += CALLBACK_GRACE_MS * 10;
+    fixture.status(RuntimeStatus::Unavailable);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Unavailable);
+    fixture.consume();
+    let message = fixture.request(lead).prompt.id;
+    let status = fixture
+        .worker
+        .control_message_at(message, fixture.now)
+        .unwrap();
+    assert_eq!(status["complete"], true, "{status}");
+    assert_eq!(status["requests"][0]["stage"], "abandoned", "{status}");
+    assert_eq!(
+        status["requests"][0]["reason"], "agent_unavailable",
+        "{status}"
+    );
     assert_eq!(status["requests"][0]["settling"], false, "{status}");
+}
+
+/// An agent that is unavailable only while it reattaches (a Bus restart)
+/// and is Idle again within the window settles as an idle agent would.
+#[test]
+fn an_ended_turn_whose_agent_reattaches_within_the_window_settles_as_idle() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "implement the change", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Unavailable);
+    fixture.now += CALLBACK_GRACE_MS - 10;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+}
+
+/// A reply held for the steering settle window still completes its group
+/// when the agent goes unavailable instead of Idle.
+#[test]
+fn a_held_group_reply_completes_when_the_agent_goes_unavailable() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    let correction = fixture.send("also add tests", false);
+    fixture.deliver();
+    fixture.stopped("turn-1", "parser and tests written");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Unavailable);
+    assert_eq!(fixture.request(correction).phase, RequestPhase::Active);
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.status(RuntimeStatus::Unavailable);
+    fixture.consume();
+    for id in [lead, correction] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("parser and tests written")
+        );
+    }
 }
 
 const SHELL_HOLD_MS: u64 = 15 * 60 * 1000;
