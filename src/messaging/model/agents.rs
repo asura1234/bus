@@ -387,6 +387,10 @@ impl BusState {
             agent_state.interrupt_pending = false;
         }
         agent_state.observed_at_ms = now_ms;
+        // Deletion and an invalidated session close the request their own way.
+        let gone = status == RuntimeStatus::Unavailable
+            && !agent_state.deletion_pending
+            && !agent_state.session_binding_invalidated;
         if status == RuntimeStatus::Idle {
             // No hook reports an interrupted turn; the idle screen is its end.
             // Codex reports Idle under an approval dialog, which is not one.
@@ -406,7 +410,7 @@ impl BusState {
         }
         // A provider that went away cannot extend its turn, so a reply it
         // already gave completes the turn as an idle screen would.
-        if status == RuntimeStatus::Unavailable {
+        if gone {
             self.complete_pending_final(agent, now_ms)?;
         }
         Ok(())
