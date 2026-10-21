@@ -508,40 +508,52 @@ fn control_requests_are_timed_from_dispatch_to_reply() {
 #[test]
 fn slow_unknown_control_methods_do_not_log_user_supplied_text() {
     use interprocess::local_socket::traits::Listener as _;
-    let dir = TestDir::new();
-    storage_io::private_dir(&dir.0).unwrap();
-    let listener = ipc::bind_private_local_listener(&dir.socket()).unwrap();
-    let _peer = ipc::connect_local_stream(&dir.socket()).unwrap();
-    let mut client = Client::new(listener.accept().unwrap());
-    let (tx, rx) = mpsc::sync_channel(1);
     let secret = "private draft text accidentally passed as method";
-    let request = Request {
-        id: "unknown".into(),
-        method: secret.into(),
-        params: Value::Null,
+    let slow_unknown_request = |capture: &crate::utils::logging::test_capture::Capture| {
+        let dir = TestDir::new();
+        storage_io::private_dir(&dir.0).unwrap();
+        let listener = ipc::bind_private_local_listener(&dir.socket()).unwrap();
+        let _peer = ipc::connect_local_stream(&dir.socket()).unwrap();
+        let mut client = Client::new(listener.accept().unwrap());
+        let (tx, rx) = mpsc::sync_channel(1);
+        let request = Request {
+            id: "unknown".into(),
+            method: secret.into(),
+            params: Value::Null,
+        };
+        let mut next_id = CONTROL_COMMAND_BIT;
+        assert!(client.dispatch_request(
+            &serde_json::to_vec(&request).unwrap(),
+            &tx,
+            &mut next_id,
+            None
+        ));
+        let (_, BusCommand::Control(call)) = rx.recv().unwrap() else {
+            panic!("control call")
+        };
+        thread::sleep(Duration::from_millis(120));
+        call.reply
+            .try_send(Response::failure(
+                "unknown",
+                "unknown_method",
+                "Unknown method",
+            ))
+            .unwrap();
+        capture.run(|| {
+            assert!(client.poll(&tx, &mut next_id, None));
+        });
     };
-    let mut next_id = CONTROL_COMMAND_BIT;
-    assert!(client.dispatch_request(
-        &serde_json::to_vec(&request).unwrap(),
-        &tx,
-        &mut next_id,
-        None
-    ));
-    let (_, BusCommand::Control(call)) = rx.recv().unwrap() else {
-        panic!("control call")
-    };
-    thread::sleep(Duration::from_millis(120));
-    call.reply
-        .try_send(Response::failure(
-            "unknown",
-            "unknown_method",
-            "Unknown method",
-        ))
-        .unwrap();
+    // CONTROL_REQUEST WARNs are throttled to one per second per process, and
+    // concurrent tests in this binary record slow control requests too; once
+    // the window that swallowed this request's WARN has passed, retry.
     let capture = crate::utils::logging::test_capture::Capture::default();
-    capture.run(|| {
-        assert!(client.poll(&tx, &mut next_id, None));
-    });
+    for _ in 0..5 {
+        slow_unknown_request(&capture);
+        if capture.text().contains("perf.slow_op") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1_100));
+    }
     let text = capture.text();
     assert!(
         text.contains("perf.slow_op"),
