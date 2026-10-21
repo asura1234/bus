@@ -346,9 +346,10 @@ impl Worker {
         self.compact_history();
         let mut next_poll = std::time::Instant::now();
         let mut pending_commands = std::collections::VecDeque::new();
+        let mut poll_overtakes = 0;
         loop {
             let timeout = next_poll.saturating_duration_since(std::time::Instant::now());
-            let received = next_command(&commands, &mut pending_commands)
+            let received = next_command(&commands, &mut pending_commands, &mut poll_overtakes)
                 .map(Ok)
                 .unwrap_or_else(|| commands.recv_timeout(timeout));
             let busy = perf::COORDINATOR_LOOP.enter("command");
@@ -603,13 +604,19 @@ fn recorded_codex_end(
     })
 }
 
+/// How many commands may run ahead of a waiting status poll before it runs:
+/// interactive calls skip the poll backlog, and polls still progress.
+const STATUS_POLL_OVERTAKES: usize = 4;
+
 /// The next command to run: the developer's oldest UI command when only
 /// control reads (follower status polls) are queued ahead of it, else the
-/// oldest command other than a status poll, else the oldest poll. Control
-/// mutations and shutdown are never overtaken.
+/// oldest command other than a status poll, else the oldest poll. A waiting
+/// poll is overtaken at most `STATUS_POLL_OVERTAKES` times in a row, counted
+/// in `overtakes`. Control mutations and shutdown are never overtaken.
 fn next_command(
     commands: &mpsc::Receiver<(u64, BusCommand)>,
     pending: &mut std::collections::VecDeque<(u64, BusCommand)>,
+    overtakes: &mut usize,
 ) -> Option<(u64, BusCommand)> {
     for _ in 0..super::COMMAND_QUEUE_CAPACITY {
         match commands.try_recv() {
@@ -639,10 +646,18 @@ fn next_command(
                 _ => true,
             });
             match interactive {
-                Some(index) if !matches!(pending[index].1, BusCommand::Shutdown) => {
+                Some(0) => pending.pop_front(),
+                Some(index)
+                    if !matches!(pending[index].1, BusCommand::Shutdown)
+                        && *overtakes < STATUS_POLL_OVERTAKES =>
+                {
+                    *overtakes += 1;
                     pending.remove(index)
                 }
-                _ => pending.pop_front(),
+                _ => {
+                    *overtakes = 0;
+                    pending.pop_front()
+                }
             }
         }
     }

@@ -153,3 +153,30 @@ fn the_coordinator_thread_runs_at_user_interactive_qos() {
         "{class:?}"
     );
 }
+
+#[path = "control_fairness_test.rs"]
+mod control_fairness_tests;
+
+#[test]
+fn a_read_queued_behind_polls_never_overtakes_an_earlier_mutation() {
+    let order = run_queued("read-after-mutation", |reply| {
+        vec![
+            call(
+                "poll",
+                "message.status",
+                json!({"message": "1"}),
+                None,
+                reply,
+            ),
+            call(
+                "create",
+                "room.create",
+                json!({"name": "first"}),
+                None,
+                reply,
+            ),
+            call("state", "state", json!({}), None, reply),
+        ]
+    });
+    assert_eq!(order, ["create", "state", "poll"]);
+}
