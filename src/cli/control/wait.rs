@@ -159,8 +159,8 @@ fn settled_without_reply(r: &Value) -> bool {
 /// The first abandoned request as an error: `message_interrupted` when
 /// `agent interrupt` stopped its turn, `message_provider_error` when a
 /// provider error ended it (worth a retry), else `message_abandoned`.
-/// An async follower takes a turn settled without a reply as done, as it does
-/// any ended turn; a bounded wait needs the reply, so it fails on that too.
+/// An async follower takes a turn settled without a reply as done; a bounded
+/// wait needs the reply, so it fails on that too.
 fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)> {
     let abandoned = status["requests"]
         .as_array()?
