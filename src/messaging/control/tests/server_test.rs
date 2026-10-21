@@ -689,3 +689,67 @@ fn control_server_starts_when_the_interactive_socket_path_fits() {
         result.err()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn failed_waiter_accept_keeps_the_interactive_endpoint_serving() {
+    use interprocess::os::unix::uds_local_socket;
+    use std::os::{fd::OwnedFd, unix::net::UnixStream};
+
+    let dir = TestDir::new();
+    storage_io::private_dir(&dir.0).unwrap();
+    let lease = storage_io::lock(&dir.0.join(LOCK_NAME)).unwrap();
+    let (interactive, socket) = bind_endpoint(&dir.0, SOCKET_NAME).unwrap();
+    let (waiter, wait_socket) = bind_endpoint(&dir.0, WAIT_SOCKET_NAME).unwrap();
+    drop(waiter);
+    // A connected Unix socket is valid but cannot accept: exercise a real
+    // non-transient kernel error without exhausting process-wide descriptors.
+    let (stream, _peer) = UnixStream::pair().unwrap();
+    let failed: ipc::LocalListener = uds_local_socket::Listener::from(OwnedFd::from(stream)).into();
+    let error = failed.accept().unwrap_err();
+    assert!(!matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+    ));
+
+    let (tx, rx) = mpsc::sync_channel(2);
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop = stopped.clone();
+    let thread = thread::spawn(move || serve([interactive, failed], tx, stop));
+    let _server = Server {
+        stopped,
+        thread: Some(thread),
+        _sockets: [socket, wait_socket],
+        _lease: lease,
+    };
+    thread::sleep(Duration::from_millis(50));
+    let worker = thread::spawn(move || {
+        for id in ["interrupt", "new-send"] {
+            let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected interactive control call")
+            };
+            assert_eq!(call.request.id, id);
+            call.reply
+                .send(Response::success(id, json!({"served": id})))
+                .unwrap();
+        }
+    });
+    for (id, method) in [
+        ("interrupt", "agent.interrupt"),
+        ("new-send", "message.send"),
+    ] {
+        let response = request(
+            &dir.0,
+            &Request {
+                id: id.into(),
+                method: method.into(),
+                params: json!({}),
+            },
+        )
+        .expect("a failed waiter listener must not stop interactive control");
+        assert!(response.ok, "{response:?}");
+        assert_eq!(response.result, json!({"served": id}));
+    }
+    worker.join().unwrap();
+}

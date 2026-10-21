@@ -99,7 +99,7 @@ fn bind_endpoint(data_dir: &Path, name: &str) -> Result<(ipc::LocalListener, Own
 }
 
 struct Endpoint {
-    listener: ipc::LocalListener,
+    listener: Option<ipc::LocalListener>,
     clients: Vec<Client>,
     poll_budget: Option<Arc<()>>,
 }
@@ -113,7 +113,7 @@ fn serve(
         .into_iter()
         .enumerate()
         .map(|(index, listener)| Endpoint {
-            listener,
+            listener: Some(listener),
             clients: Vec::new(),
             poll_budget: (index == 1).then(|| Arc::new(())),
         })
@@ -122,19 +122,20 @@ fn serve(
     while !stopped.load(Ordering::Acquire) {
         // Interactive admission and replies run first, regardless of poll load.
         for endpoint in &mut endpoints {
-            if !endpoint.poll(&commands, &mut next_id) {
-                return;
-            }
+            endpoint.poll(&commands, &mut next_id);
         }
         thread::sleep(POLL_INTERVAL);
     }
 }
 
 impl Endpoint {
-    fn poll(&mut self, commands: &SyncSender<(u64, BusCommand)>, next_id: &mut u64) -> bool {
+    fn poll(&mut self, commands: &SyncSender<(u64, BusCommand)>, next_id: &mut u64) {
         // Bound accept work and overload replies independently for each endpoint.
         for _ in 0..MAX_CLIENTS {
-            match self.listener.accept() {
+            let Some(listener) = &self.listener else {
+                break;
+            };
+            match listener.accept() {
                 Ok(stream) if self.clients.len() >= MAX_CLIENTS => {
                     // One extra bounded slot delivers overload errors without
                     // leaving unread Windows pipe writes in a linger pool.
@@ -156,15 +157,22 @@ impl Endpoint {
                     tracing::warn!(
                         event = "bus.control.transport.failed",
                         stage = "accept",
-                        "Control listener failed"
+                        endpoint = if self.poll_budget.is_some() {
+                            "status"
+                        } else {
+                            "interactive"
+                        },
+                        "Control listener failed; endpoint disabled"
                     );
-                    return false;
+                    // Retire only this listener; existing clients still get
+                    // replies and the other endpoint remains available.
+                    self.listener = None;
+                    break;
                 }
             }
         }
         self.clients
             .retain_mut(|client| client.poll(commands, next_id, self.poll_budget.as_ref()));
-        true
     }
 }
 
