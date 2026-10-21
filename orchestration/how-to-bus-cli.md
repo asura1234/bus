@@ -831,18 +831,21 @@ follows it, as in Claude Code's folder trust prompt (`❯ No, exit` above
 marks such an agent `dialog: true` and `status: blocked`, using the same status
 as the agent list even when its provider still reports idle.
 
-Bus is not an agent and never sends a message as "Bus". Instead, once an
-agent has been blocked for about a second, on a dialog, a question, a trust
+Once an agent has been blocked for about a second, on a dialog, a question, a trust
 prompt or any other screen it cannot pass alone, the blocked agent posts one
 message in its work room: `AGENT → ORCHESTRATOR: Blocked, needs help to
 continue.` when the room has an orchestrator, delivered and waking it like any
 agent message, or `AGENT → You: Blocked, needs help to continue.` when it has
-none. The text is the same for every blocker and carries no command, options or
-fingerprint: look at the agent's terminal with `bus agent dialog AGENT` (or
+none. The notice names the agent and includes `Inspect: bus agent dialog AGENT`,
+but no options or fingerprint: look at the agent's terminal with that command (or
 `bus agent read AGENT --source visible`) and answer as below. It is posted once
-per blocked episode, not again while the agent stays blocked, and nothing
-follows when it is answered. A blocked MASTER orchestrator notifies the developer
-in MASTER, since MASTER has no orchestrator of its own.
+per dialog episode; selection changes and unreadable redraws do not repeat it.
+Once the dialog is confirmed closed, one `Resolved; dialog is gone` notice
+follows through the same route, authored by the agent. A blocked MASTER
+orchestrator instead sends a Bus-authored developer-attention notice in MASTER,
+since MASTER has no orchestrator of its own; its Resolved notice retains the
+ordinary agent author. Numbered text in an editable native composer is not a
+dialog and generates neither notice.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked

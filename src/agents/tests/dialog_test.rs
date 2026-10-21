@@ -365,6 +365,30 @@ fn transcripts_and_idle_screens_have_no_dialog() {
     }
 }
 
+#[test]
+fn numbered_claude_composer_drafts_are_not_dialogs() {
+    for draft in [
+        "1. Confirm the bug\n  2. Add a regression test",
+        "1. Confirm the bug\n  2. Add a regression test\n  3. Run the gates",
+        "1. Confirm the bug\n  2. Add a regression test with enter and esc in its text",
+    ] {
+        let screen = format!(
+            "────────────────────────\n❯ {draft}\n────────────────────────\n  ⏵⏵ auto mode on\n"
+        );
+        assert!(
+            parse(&screen).is_none(),
+            "composer draft became a dialog: {screen}"
+        );
+    }
+    let composer = "────────────────\n❯ 1. Confirm\n  2. Test\n────────────────\n";
+    assert!(parse(&format!("{CLAUDE_BASH}\n{composer}")).is_none());
+    assert_eq!(
+        parse(&format!("{composer}\n{CLAUDE_BASH}")),
+        parse(CLAUDE_BASH),
+        "a previous composer cannot hide a later permission dialog"
+    );
+}
+
 // Captured live from Claude Code 2.1.291, which no longer numbers this prompt.
 const CLAUDE_TRUST_UNNUMBERED: &str = concat!(
     "─────────────────────────────────────────────────\n",
