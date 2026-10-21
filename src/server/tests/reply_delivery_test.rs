@@ -459,7 +459,10 @@ async fn claude_image_chip_beside_a_collapsed_paste_is_submitted_and_binds_its_r
     let image = f.dir.join("attachment.png");
     image::RgbImage::new(2, 2).save(&image).unwrap();
     let text = "first line\nsecond line\nthird line\nfourth line";
-    let sent = f.call("message.send", json!({"room":"master","to":[agent.0.to_string()],"text":text,"files":[image]}));
+    let sent = f.call(
+        "message.send",
+        json!({"room":"master","to":[agent.0.to_string()],"text":text,"files":[image]}),
+    );
     let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
     f.tick();
     assert_eq!(

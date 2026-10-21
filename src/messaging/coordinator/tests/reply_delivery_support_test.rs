@@ -135,8 +135,9 @@ impl NativeServer {
                 }
                 // An independently captured Claude composer is the image oracle;
                 // never transform the draft with the observer's production rule.
-                let display = if let Some(captured) =
-                    terminal.captured_screen.filter(|_| !terminal.draft.is_empty())
+                let display = if let Some(captured) = terminal
+                    .captured_screen
+                    .filter(|_| !terminal.draft.is_empty())
                 {
                     format!("\x1b[2J\x1b[H{captured}")
                 } else {
