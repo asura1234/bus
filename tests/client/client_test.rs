@@ -6,7 +6,7 @@
 #[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
 pub mod client_mode_support;
-#[path = "../support/live_bus_env_test.rs"]
+#[path = "../../src/utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;
 
 mod client_mode {

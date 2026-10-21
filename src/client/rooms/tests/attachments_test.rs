@@ -291,6 +291,7 @@ fn attaching_from_inside_a_live_bus_pane_leaves_that_bus_untouched() {
             "1",
         ])
         .env("BUS_DATA_DIR", &live)
+        .env_remove("BUS_TEST_INHERITED_ENV_DROPPED")
         .output()
         .unwrap();
     let written: Vec<_> = walk(&live);

@@ -89,7 +89,7 @@ fn configure_session(args: &[String]) {
 }
 
 #[cfg(test)]
-#[path = "../tests/support/live_bus_env_test.rs"]
+#[path = "utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;
 
 #[cfg(test)]

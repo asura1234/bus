@@ -1,7 +1,7 @@
 //! Built-binary room screen regression, including the Windows host-VT case.
 #![cfg(any(unix, windows))]
 
-#[path = "../support/live_bus_env_test.rs"]
+#[path = "../../src/utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;
 #[path = "screen_support_test.rs"]
 mod room_host_screen;

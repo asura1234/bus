@@ -23,14 +23,22 @@ fn names_a_live_bus(name: &OsStr) -> bool {
         .is_some_and(|name| name.starts_with("HERDR_") || LIVE_BUS_VARS.contains(&name))
 }
 
+/// Set once the variables are dropped. A test binary that a test starts again
+/// inherits it and keeps the variables that test set on purpose.
+const DROPPED: &str = "BUS_TEST_INHERITED_ENV_DROPPED";
+
 // Runs before main, while the process is still single-threaded.
 #[ctor::ctor(unsafe)]
 fn drop_inherited_live_bus_variables() {
+    if std::env::var_os(DROPPED).is_some() {
+        return;
+    }
     for (name, _) in std::env::vars_os() {
         if names_a_live_bus(&name) {
             std::env::remove_var(name);
         }
     }
+    std::env::set_var(DROPPED, "1");
 }
 
 #[test]
@@ -50,7 +58,8 @@ fn a_test_binary_started_in_a_live_bus_pane_drops_its_variables() {
     let fake = std::env::temp_dir().join(format!("bus-live-env-{}", std::process::id()));
     let data = fake.join("data");
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-    child.args([
+    // Started from a pane, not by another test.
+    child.env_remove(DROPPED).args([
         "--exact",
         "live_bus_env::no_live_bus_variable_reaches_this_test_binary",
         "--test-threads",
@@ -78,4 +87,29 @@ fn a_test_binary_started_in_a_live_bus_pane_drops_its_variables() {
     assert!(!fake.exists(), "a test wrote into the inherited Bus dir");
     assert!(!names_a_live_bus(OsStr::new("BUS_UPDATE_API_SCHEMA")));
     assert!(!names_a_live_bus(OsStr::new("BUS_SOUND_RELOAD_TEST_CHILD")));
+}
+
+#[test]
+fn a_test_started_again_by_a_test_keeps_the_variables_it_was_given() {
+    if let Some(expected) = std::env::var_os("BUS_TEST_EXPECT_DATA_DIR") {
+        assert_eq!(std::env::var_os("BUS_DATA_DIR"), Some(expected));
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "live_bus_env::a_test_started_again_by_a_test_keeps_the_variables_it_was_given",
+            "--test-threads",
+            "1",
+        ])
+        .env("BUS_DATA_DIR", "/given")
+        .env("BUS_TEST_EXPECT_DATA_DIR", "/given")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
 }
