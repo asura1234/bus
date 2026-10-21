@@ -89,6 +89,10 @@ fn configure_session(args: &[String]) {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/live_bus_env_test.rs"]
+mod live_bus_env;
+
+#[cfg(test)]
 mod tests {
     use super::args_as_utf8;
 

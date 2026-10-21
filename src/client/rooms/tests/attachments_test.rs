@@ -277,6 +277,37 @@ fn pasted_temporary_images_are_copied_into_the_room_attachments() {
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
+#[test]
+fn attaching_from_inside_a_live_bus_pane_leaves_that_bus_untouched() {
+    // Run from an agent pane, the image copy once landed in the live Bus's
+    // attachments; the test binary now drops the inherited data root.
+    let live = std::env::temp_dir().join(format!("bus-live-attach-{}", std::process::id()));
+    std::fs::create_dir_all(&live).unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "client::rooms::tests::valid_images_attach_by_drop_pasted_path_and_pasted_data_as_before",
+            "--test-threads",
+            "1",
+        ])
+        .env("BUS_DATA_DIR", &live)
+        .output()
+        .unwrap();
+    let written: Vec<_> = walk(&live);
+    std::fs::remove_dir_all(&live).unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    assert!(written.is_empty(), "wrote into the inherited Bus: {written:?}");
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .flat_map(|path| if path.is_dir() { walk(&path) } else { vec![path] })
+        .collect()
+}
+
 /// A PNG whose header (and so its dimensions) reads, but whose compressed
 /// pixels fail to decode.
 fn corrupt_png(dir: &std::path::Path, name: &str) -> std::path::PathBuf {

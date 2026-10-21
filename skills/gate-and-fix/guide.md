@@ -41,6 +41,9 @@ replace `rebase-origin-main` or PR creation.
     This includes all maintenance suites and all skill suites, on every round.
     The instrumented CLI is built before Python tests; its explicit `BUS_TEST_BINARY` and profile
     path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
+  - **Environment**: every lane's children run without inherited `BUS_*`/`HERDR_*` variables, so a
+    gate started from a Bus agent pane never sees (or writes to) that live Bus. Each Rust test
+    binary also drops a live Bus's variables before its tests run (`tests/support/live_bus_env_test.rs`).
   - **Integration**: all Rust integration targets under `tests/`, then the in-process
     `IN_PROCESS_SERVER_TESTS` harness. The same prefix drives nextest and libtest filters.
     Then the dev variant, uninstrumented, with `--features dev-tools`: the `cli` and `tui-driver`

@@ -5,6 +5,8 @@
 // Sessions start only on macOS, where the effect recorder covers Bus.
 #![cfg(all(target_os = "macos", feature = "dev-tools"))]
 
+#[path = "../support/live_bus_env_test.rs"]
+mod live_bus_env;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
