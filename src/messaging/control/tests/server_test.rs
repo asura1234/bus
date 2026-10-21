@@ -661,3 +661,31 @@ fn failed_poll_endpoint_startup_removes_only_the_new_interactive_socket() {
     assert!(!dir.socket().exists());
     assert!(!path.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn control_server_starts_when_the_interactive_socket_path_fits() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = TestDir::new();
+    let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    let max_socket_bytes = address.sun_path.len() - 1;
+    let parent_bytes = max_socket_bytes - SOCKET_NAME.len() - 1;
+    let padding = parent_bytes
+        .checked_sub(dir.0.as_os_str().as_bytes().len() + 1)
+        .expect("fixture must leave room for a near-limit private data directory");
+    let data_dir = dir.0.join("p".repeat(padding));
+    storage_io::private_dir(&data_dir).unwrap();
+    let socket = data_dir.join(SOCKET_NAME);
+    assert_eq!(socket.as_os_str().as_bytes().len(), max_socket_bytes);
+    let listener = ipc::bind_private_local_listener(&socket)
+        .expect("the existing interactive socket name must fit");
+    drop(listener);
+    std::fs::remove_file(socket).unwrap();
+    let (tx, _rx) = mpsc::sync_channel(1);
+    let result = start(&data_dir, tx);
+    assert!(
+        result.is_ok(),
+        "a data directory supporting control.sock must still start: {:?}",
+        result.err()
+    );
+}

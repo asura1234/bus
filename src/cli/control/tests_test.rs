@@ -1900,7 +1900,7 @@ fn async_following_survives_live_control_server_dropping_excess_connections() {
     ));
     let (tx, rx) = std::sync::mpsc::sync_channel(16);
     let _server = crate::messaging::control::start(&dir, tx).unwrap();
-    let socket = dir.join("control-wait.sock");
+    let socket = dir.join("wait.sock");
     let mut stalled = Vec::new();
     let mut streams = Vec::new();
     for id in 0..16 {

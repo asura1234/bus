@@ -17,7 +17,7 @@ pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// the `--dev` flag only decides which methods answer.
 pub(crate) const SOCKET_NAME: &str = "control.sock";
 /// Status polling has independent admission from interactive control calls.
-pub(super) const WAIT_SOCKET_NAME: &str = "control-wait.sock";
+pub(super) const WAIT_SOCKET_NAME: &str = "wait.sock";
 pub(super) const LOCK_NAME: &str = "control.lock";
 /// The socket name of a Bus started by a build from before every session ran
 /// the control socket. Such a Bus keeps it until it is restarted.
