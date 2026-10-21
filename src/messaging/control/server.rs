@@ -135,23 +135,26 @@ impl Endpoint {
             let Some(listener) = &self.listener else {
                 break;
             };
-            // Excess callers wait in the listen backlog: closing an accepted
-            // connection unanswered leaves its caller unable to tell whether
-            // its request ran.
-            if self.clients.len() > MAX_CLIENTS {
+            // Excess interactive callers wait in the listen backlog: closing an
+            // accepted connection unanswered leaves its caller unable to tell
+            // whether its request ran. Status reads are repeatable, so excess
+            // pollers are closed and retry rather than fill the backlog.
+            if self.clients.len() > MAX_CLIENTS && self.poll_budget.is_none() {
                 break;
             }
             match listener.accept() {
-                Ok(stream) if self.clients.len() == MAX_CLIENTS => {
+                Ok(stream) if self.clients.len() >= MAX_CLIENTS => {
                     // One extra bounded slot delivers overload errors without
                     // leaving unread Windows pipe writes in a linger pool.
-                    let mut client = Client::new(stream);
-                    if client.respond(Response::failure(
-                        "",
-                        "server_busy",
-                        "Control connection limit reached",
-                    )) {
-                        self.clients.push(client);
+                    if self.clients.len() == MAX_CLIENTS {
+                        let mut client = Client::new(stream);
+                        if client.respond(Response::failure(
+                            "",
+                            "server_busy",
+                            "Control connection limit reached",
+                        )) {
+                            self.clients.push(client);
+                        }
                     }
                 }
                 Ok(stream) => self.clients.push(Client::new(stream)),
@@ -278,6 +281,15 @@ impl Client {
                     }
                     Err(FrameError::Io(_)) => return false,
                 };
+                // A caller that gave up while its request waited in the listen
+                // backlog has reported a failure; running it now would apply it
+                // behind that report, so a closed peer's request never runs.
+                if !matches!(
+                    ipc::poll_local_stream_read_count(&mut self.stream.0, &mut [0]),
+                    Ok(ipc::LocalStreamReadCount::Pending)
+                ) {
+                    return false;
+                }
                 self.dispatch_request(&bytes, commands, next_id, poll_budget)
             }
 
