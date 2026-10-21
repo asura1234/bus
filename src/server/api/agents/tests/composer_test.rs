@@ -476,3 +476,74 @@ fn captured_dialogs_are_never_editable_composers() {
         );
     }
 }
+
+// Captured from real cursor-agent 2026.10.14-0f9edde at 131x45.
+// Its composer uses background-only rows, with no half-block border glyphs.
+#[test]
+fn cursor_background_composer_excludes_model_and_directory_footer() {
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            include_str!("fixtures/cursor_20261014_empty.ansi"),
+            "from bus",
+        ),
+        InputObservation::Empty,
+    );
+    let screen = include_str!("fixtures/cursor_20261014_draft.ansi");
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            screen,
+            "first line\n\nGPT-6 and Claude\nlast line"
+        ),
+        InputObservation::Pending,
+    );
+    assert_eq!(
+        observe(AgentKind::Cursor, screen, "first line"),
+        InputObservation::Other,
+        "wrapped input remains part of the draft",
+    );
+}
+
+#[tokio::test]
+async fn cursor_background_composer_receives_paste_then_enter() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(131, 45, 32);
+    runtime.test_process_pty_bytes(include_bytes!("fixtures/cursor_20261014_empty.ansi"));
+    let text = "first line\n\nGPT-6 and Claude\nlast line";
+    let completion = super::super::queue_prompt_input(
+        &runtime,
+        AgentKind::Cursor,
+        text.into(),
+        true,
+        std::time::Duration::ZERO,
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
+    )
+    .unwrap();
+    let paste = tokio::time::timeout(std::time::Duration::from_secs(1), writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        paste.as_ref(),
+        text.as_bytes(),
+        "an empty composer must receive the prompt before editing keys"
+    );
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(include_bytes!("fixtures/cursor_20261014_draft.ansi"));
+    let enter = tokio::time::timeout(std::time::Duration::from_secs(1), writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        enter.as_ref(),
+        b"\r",
+        "only the matching rendered draft receives Enter"
+    );
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(include_bytes!("fixtures/cursor_20261014_empty.ansi"));
+    assert!(completion
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap()
+        .is_ok());
+}

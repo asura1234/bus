@@ -37,7 +37,7 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
         .map(|line| {
             styled_chars(line)
                 .iter()
-                .map(|(c, _)| *c)
+                .map(|c| c.character)
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
@@ -162,18 +162,18 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
 }
 
 fn input(kind: AgentKind, screen: &str) -> Option<String> {
-    let lines: Vec<String> = screen
-        .lines()
-        .map(|line| {
-            let chars = styled_chars(line);
-            let plain: String = chars.iter().map(|(c, _)| *c).collect();
+    let styled: Vec<_> = screen.lines().map(styled_chars).collect();
+    let lines: Vec<String> = styled
+        .iter()
+        .map(|chars| {
+            let plain: String = chars.iter().map(|c| c.character).collect();
             if kind == AgentKind::Claude
                 && !plain.contains("[Pasted text #")
                 && !plain.trim().starts_with('─')
             {
                 chars
-                    .into_iter()
-                    .filter_map(|(c, faint)| (!faint).then_some(c))
+                    .iter()
+                    .filter_map(|c| (!c.faint).then_some(c.character))
                     .collect()
             } else {
                 plain
@@ -193,6 +193,12 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
                 || index > 0 && plain_rule(screen.lines().nth(index - 1)?)))
         .then_some(index)
     })?;
+    // Cursor 2026.10.14 draws a background-only box instead of border glyphs.
+    // Its model and directory are outside that box; neither belongs to a draft.
+    let background_box = kind == AgentKind::Cursor
+        && styled[index]
+            .iter()
+            .any(|c| markers.contains(&c.character) && c.background);
     let first = lines[index]
         .trim_start()
         .trim_start_matches('│')
@@ -202,7 +208,10 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
         .trim();
     let first = cursor_input_line(kind, first);
     let mut body = first.to_owned();
-    for line in &lines[index + 1..] {
+    for (offset, line) in lines[index + 1..].iter().enumerate() {
+        if background_box && !styled[index + 1 + offset].iter().any(|c| c.background) {
+            break;
+        }
         let line = cursor_input_line(kind, line.trim().trim_end_matches('│').trim());
         // Only Codex prints its model under the composer; elsewhere a wrapped prompt
         // line may itself start with a model name.
@@ -251,7 +260,7 @@ fn cursor_input_line(kind: AgentKind, line: &str) -> &str {
 fn plain_rule(line: &str) -> bool {
     styled_chars(line)
         .iter()
-        .map(|(c, _)| *c)
+        .map(|c| c.character)
         .collect::<String>()
         .trim()
         .starts_with('─')
