@@ -304,6 +304,37 @@ impl Worker {
         }
     }
 
+    /// Answers one control call, unless it is a read whose caller was
+    /// already answered `coordinator_timeout`: that has nothing to commit.
+    fn serve_control(
+        &mut self,
+        call: crate::messaging::control::server::ControlCall,
+        events: &mpsc::Sender<BusEvent>,
+    ) {
+        if call
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            && !control_dispatch::is_mutation(&call.request.method)
+        {
+            perf::CONTROL_SKIPPED.add(1);
+            tracing::debug!(
+                event = "bus.control.command.skipped",
+                control_request_id = %call.request.id,
+                method = perf::control_method_label(&call.request.method),
+                "Control read skipped after its caller's deadline"
+            );
+            return;
+        }
+        let started = std::time::Instant::now();
+        let response = self.control_response_with_events(&call.request, Some(events));
+        perf::CONTROL.record_op(
+            started.elapsed(),
+            perf::control_method_label(&call.request.method),
+        );
+        // A disconnected client does not cancel or replay a committed action.
+        let _ = call.reply.try_send(response);
+    }
+
     pub(super) fn run(
         mut self,
         commands: mpsc::Receiver<(u64, BusCommand)>,
@@ -338,32 +369,9 @@ impl Worker {
                     self.fold_journal();
                     break;
                 }
-                Ok((_id, BusCommand::Control(call)))
-                    if call
-                        .deadline
-                        .is_some_and(|deadline| std::time::Instant::now() >= deadline)
-                        && !control_dispatch::is_mutation(&call.request.method) =>
-                {
-                    // The caller was already answered `coordinator_timeout`;
-                    // a read has nothing to commit, so skip it.
-                    perf::CONTROL_SKIPPED.add(1);
-                    tracing::debug!(
-                        event = "bus.control.command.skipped",
-                        control_request_id = %call.request.id,
-                        method = perf::control_method_label(&call.request.method),
-                        "Control read skipped after its caller's deadline"
-                    );
-                }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
-                    let started = std::time::Instant::now();
-                    let response = self.control_response_with_events(&call.request, Some(&events));
-                    perf::CONTROL.record_op(
-                        started.elapsed(),
-                        perf::control_method_label(&call.request.method),
-                    );
-                    // A disconnected client does not cancel or replay a committed action.
-                    let _ = call.reply.try_send(response);
+                    self.serve_control(call, &events);
                 }
                 Ok((id, command)) => {
                     let submitting =
