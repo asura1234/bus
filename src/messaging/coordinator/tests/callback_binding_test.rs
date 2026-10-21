@@ -1,4 +1,4 @@
-//! Fault injection for the unbound-callback investigation; no live provider.
+//! Callback-binding regressions from the unbound-callback investigation; no live provider.
 use super::*;
 
 fn master_fixture() -> (Worker, AgentId, RoomId, PathBuf) {
@@ -28,7 +28,7 @@ fn master_fixture() -> (Worker, AgentId, RoomId, PathBuf) {
 }
 
 #[test]
-fn callback_binding_diagnostics_explain_wrong_prompt_without_exposing_content() {
+fn same_turn_claude_input_is_progress_without_exposing_content() {
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
         let (mut worker, agent, room, dir) = master_fixture();
@@ -47,8 +47,7 @@ fn callback_binding_diagnostics_explain_wrong_prompt_without_exposing_content() 
         );
         consume(&mut worker, agent, &dir);
         let logs = capture.text();
-        assert!(logs.contains("Rejected(WrongPrompt)"), "{logs}");
-        // This reproduces the error string, but does NOT reproduce a dropped request.
+        assert!(logs.contains("disposition=AcceptedProgress"), "{logs}");
         assert_eq!(
             worker.state.agent(agent).unwrap().current_request,
             Some(request)
@@ -59,12 +58,11 @@ fn callback_binding_diagnostics_explain_wrong_prompt_without_exposing_content() 
             .agent(agent)
             .unwrap()
             .actionable_error
-            .as_deref()
-            .unwrap()
-            .starts_with("Unbound provider callback"));
-        let rejection = logs
+            .is_none());
+        assert!(!logs.contains("Rejected("), "{logs}");
+        let progress = logs
             .lines()
-            .find(|line| line.contains("Rejected(WrongPrompt)"))
+            .find(|line| line.contains("disposition=AcceptedProgress"))
             .unwrap();
         for field in [
             "bus.callback.binding",
@@ -78,7 +76,7 @@ fn callback_binding_diagnostics_explain_wrong_prompt_without_exposing_content() 
             "raw_payload_matches=Some(false)",
             "submission_boundary=Some(0)",
         ] {
-            assert!(rejection.contains(field), "missing {field}: {rejection}");
+            assert!(progress.contains(field), "missing {field}: {progress}");
         }
         assert!(!logs.contains("PRIVATE_ORIGINAL") && !logs.contains("PRIVATE_OTHER_INPUT"));
         record(
@@ -87,6 +85,33 @@ fn callback_binding_diagnostics_explain_wrong_prompt_without_exposing_content() 
             claude_stop("turn", "PRIVATE_REPLY", json!([])),
         );
         consume(&mut worker, agent, &dir);
+        // More input in the same owned turn must not clear a captured answer,
+        // even after restoring the durable request binding.
+        drop(worker);
+        let mut worker = reopen_saved(&dir);
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_start("turn", "PRIVATE_LATE_INPUT"),
+        );
+        consume(&mut worker, agent, &dir);
+        assert_eq!(
+            worker
+                .state
+                .request(request)
+                .unwrap()
+                .pending_final
+                .as_ref()
+                .unwrap()
+                .text,
+            "PRIVATE_REPLY"
+        );
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
         worker
             .state
             .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
@@ -94,6 +119,10 @@ fn callback_binding_diagnostics_explain_wrong_prompt_without_exposing_content() 
         assert_eq!(
             worker.state.request(request).unwrap().phase,
             RequestPhase::Completed
+        );
+        assert_eq!(
+            worker.state.room(room).unwrap().latest_replies[&agent].text,
+            "PRIVATE_REPLY"
         );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();

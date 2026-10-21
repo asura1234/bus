@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn same_turn_input_is_progress_only_for_the_bound_prompt_identity() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "owned prompt");
+    submit_request(&mut state, request, "launch-codex", 10);
+    let start = ProviderCallback {
+        callback_id: "trusted-start".into(),
+        sequence: 11,
+        occurred_at_ms: 11,
+        agent_id: agent,
+        launch_id: "launch-codex".into(),
+        provider_session_id: Some("provider-session".into()),
+        provider_turn_id: Some("turn-1".into()),
+        provider_prompt_id: Some("prompt-1".into()),
+        prompt_payload: Some("owned prompt".into()),
+        kind: CallbackEventKind::PromptStarted,
+    };
+    assert_eq!(
+        state.accept_callback(start.clone()),
+        CallbackDisposition::AcceptedBinding
+    );
+
+    let mut additional = ProviderCallback {
+        callback_id: "other-prompt".into(),
+        sequence: 12,
+        occurred_at_ms: 12,
+        provider_prompt_id: Some("prompt-2".into()),
+        prompt_payload: Some("additional input".into()),
+        ..start
+    };
+    assert_eq!(
+        state.accept_callback(additional.clone()),
+        CallbackDisposition::Rejected(CallbackRejection::WrongPrompt)
+    );
+    additional.callback_id = "same-prompt".into();
+    additional.sequence = 13;
+    additional.provider_prompt_id = Some("prompt-1".into());
+    assert_eq!(
+        state.accept_callback(additional),
+        CallbackDisposition::AcceptedProgress
+    );
+    let request = state.request(request).unwrap();
+    assert!(request.trusted_start_bound);
+    assert_eq!(request.provider_prompt_id.as_deref(), Some("prompt-1"));
+    assert_eq!(request.provider_turn_id.as_deref(), Some("turn-1"));
+    assert!(state.room(room).unwrap().latest_replies.is_empty());
+}
+
+#[test]
 fn confirmed_provider_ids_cannot_bypass_trusted_prompt_start_binding() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let request = submit_text(&mut state, room, agent, "same prompt");
