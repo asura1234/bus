@@ -35,6 +35,30 @@ async fn numbered_native_draft_edits_never_publish_blocked_or_resolved_notices()
 }
 
 #[tokio::test]
+async fn numbered_codex_native_draft_edits_never_publish_blocked_notices() {
+    for in_master in [false, true] {
+        let mut f = Delivery::new(&[Provider::Codex], in_master);
+        let agent = f.agents[0];
+        let room = if in_master { f.master } else { f.work };
+        for draft in [
+            "1. Confirm the bug\r\n  2. Add",
+            "1. Confirm the bug\r\n  2. Add a regression test",
+            "1. Confirm the bug\r\n  2. Add a regression test\r\n  3. Run the gates",
+            "",
+        ] {
+            f.draw(agent, Some(&format!(
+                "\x1b[2J\x1b[H• Done. The parser is fixed.\r\n\r\n› {draft}\r\n\r\n  gpt-5.4 · minimal · ~/work/bus"
+            )));
+            for _ in 0..3 {
+                f.tick();
+            }
+            assert_eq!(f.state().notices(room).count(), 0, "draft edit: {draft}");
+            assert!(f.state().agent(agent).unwrap().dialog_notice.is_none());
+        }
+    }
+}
+
+#[tokio::test]
 async fn dialog_episodes_publish_once_despite_detection_flaps_and_restart() {
     let dialog = "\x1b[2J\x1b[HDo you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n\r\nEnter to confirm · Esc to cancel";
     for in_master in [false, true] {

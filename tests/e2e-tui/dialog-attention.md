@@ -13,11 +13,12 @@ state, history, agent reads and dialog APIs may corroborate each step.
 The session status supplies its private work directory WORK. CLI fixture setup
 is allowed: create `dialog-lab`, then add the case's worker with
 `bus agent add --room dialog-lab --name worker --provider PROVIDER --pwd WORK
---consent-hooks`. Wait for the worker to be idle. Beyond setup, use the UI for
-native editing and message submission. CLI is limited to read-only observations
+--consent-hooks`. Wait for the worker to be idle, then select `room:dialog-lab`
+so its worker is visible. Beyond setup, use the UI for native editing and
+message submission. CLI is limited to read-only observations
 and the dialog/choose API tested below. Do not edit stored state.
 
-### DA-01 — Numbered native composer edits do not request help
+### DA-01 — Numbered Claude composer edits do not request help
 
 Use a Claude worker.
 
@@ -59,3 +60,22 @@ never executes the displayed command.
    fingerprint. Wait for idle and the second Resolved notice. History contains
    exactly two Blocked and two Resolved notices. Capture and open a cell
    screenshot. Stop the session.
+
+### DA-03 — Numbered Codex composer edits do not request help
+
+Use a Codex worker.
+
+1. Complete setup. Click `agent:worker` to open its native terminal. Type
+   `1. Confirm the bug`, press `ctrl+j`, then type `2. Add a regression test`,
+   one call per action. Wait for the native composer rows to be stable for
+   1500ms. Read `bus agent dialog worker`, state and room history. The native
+   numbered draft is visible above Codex's model footer, dialog is null,
+   and history has zero Blocked and zero Resolved notices. Capture and open a
+   cell screenshot.
+2. Press `ctrl+j` and type `3. Run the gates`, then append ` with coverage`,
+   one call per action. Wait for the native composer rows to be stable for
+   1500ms. Dialog remains null and history still has zero Blocked/Resolved
+   notices. Capture and open a cell screenshot.
+3. Press `ctrl+u` five times to clear the three-line native draft. Wait for the
+   composer rows to be stable for 1500ms. The draft is empty, dialog is null,
+   and history still has zero Blocked/Resolved notices. Stop the session.

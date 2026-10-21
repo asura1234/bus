@@ -10,6 +10,7 @@
 
 use sha2::{Digest, Sha256};
 mod claude;
+mod composer;
 
 pub(crate) const CODEX_PENDING_QUESTION_ID: &str = "codex:pending_question";
 
@@ -213,7 +214,7 @@ fn is_hint(line: &str) -> bool {
 pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let (texts, styles) = styled_lines(screen);
     let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
-    if claude::composer_contains(&lines) {
+    if composer::contains(&lines) {
         return None;
     }
     claude::parse(&lines, &styles)

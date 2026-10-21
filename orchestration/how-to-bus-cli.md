@@ -844,8 +844,8 @@ Once the dialog is confirmed closed, one `Resolved; dialog is gone` notice
 follows through the same route, authored by the agent. A blocked MASTER
 orchestrator instead sends a Bus-authored developer-attention notice in MASTER,
 since MASTER has no orchestrator of its own; its Resolved notice retains the
-ordinary agent author. Numbered text in an editable native composer is not a
-dialog and generates neither notice.
+ordinary agent author. Numbered text in an editable Claude or Codex native
+composer is not a dialog and generates neither notice.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked

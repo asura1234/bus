@@ -4,28 +4,6 @@ use super::{
     unboxed, Dialog, DialogKind, DialogOption, OptionLine, Style,
 };
 
-/// Claude's ruled editable composer can contain the same numbered text and
-/// marker as a chooser. Inspect only the last numbered block's enclosing frame,
-/// so an earlier transcript composer cannot hide a later real permission dialog.
-pub(super) fn composer_contains(lines: &[&str]) -> bool {
-    let Some(start) = lines
-        .iter()
-        .rposition(|line| option_line(line).is_some_and(|option| option.number == 1))
-    else {
-        return false;
-    };
-    let Some(top) = lines[..start]
-        .iter()
-        .rposition(|line| is_separator(unboxed(line)))
-    else {
-        return false;
-    };
-    unboxed(lines[top + 1]).trim_start().starts_with('❯')
-        && lines[start + 1..]
-            .iter()
-            .any(|line| is_separator(unboxed(line)))
-}
-
 pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     let start = lines
         .iter()
