@@ -72,11 +72,11 @@ impl OverlayMeter {
         self.on.load(Ordering::Relaxed)
     }
 
-    pub(super) fn set_on(&self, on: bool, now: Instant) {
+    pub(super) fn set_on(&self, on: bool, now: Instant, state: Option<&BusState>) {
         self.frames.store(0, Ordering::Relaxed);
         if let Ok(mut shown) = self.shown.lock() {
             shown.since = Some(now);
-            shown.label = overlay_label(crate::utils::perf::context(), None, None);
+            shown.label = overlay_label(crate::utils::perf::context(), None, state);
         }
         self.on.store(on, Ordering::Relaxed);
     }
@@ -163,19 +163,21 @@ pub(super) fn overlay_label(
         .map(|context| context.rss_mb)
         .filter(|mem| mem.is_finite());
     // Use the same shown status as `bus state`, including dialog overrides.
-    let (running, live) = state
+    let agents = state
         .map(|state| {
-            state.agents().fold((0, 0), |(running, live), agent| {
-                match agent.shown_status() {
-                    RuntimeStatus::Working => (running + 1, live + 1),
-                    RuntimeStatus::Unavailable => (running, live),
-                    _ => (running, live + 1),
-                }
-            })
+            let (running, live) =
+                state.agents().fold((0, 0), |(running, live), agent| {
+                    match agent.shown_status() {
+                        RuntimeStatus::Working => (running + 1, live + 1),
+                        RuntimeStatus::Unavailable => (running, live),
+                        _ => (running, live + 1),
+                    }
+                });
+            format!("{running} running / {live} live")
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| "n/a".into());
     format!(
-        " CPU {} MEM {} FPS {} AGENTS {running} running / {live} live ",
+        " CPU {} MEM {} FPS {} AGENTS {agents} ",
         cpu.map_or("n/a".into(), |cpu| format!("{}%", Field(Some(cpu)))),
         mem.map_or("n/a".into(), |mem| format!("{mem:.0}MB")),
         fps.map_or("n/a".into(), |fps| format!("{fps:.0}")),
