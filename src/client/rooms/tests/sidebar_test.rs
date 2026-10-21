@@ -161,6 +161,8 @@ fn selected_sidebar_rows_have_accent_bar_bold_name_and_tinted_background() {
 
 #[test]
 fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
+    // Keep the content viewport identical in both build variants.
+    let rows = 14 + u16::from(cfg!(feature = "dev-tools"));
     for (invalidated, deleting) in [(false, false), (true, false), (false, true)] {
         let (mut ui, room, agent) = fixture();
         let mut snapshot = (*ui.snapshot).clone();
@@ -169,7 +171,7 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
             .create_agent(room, "second", Provider::Cursor, "/other".into(), None)
             .unwrap();
         ui.receive_snapshot(Arc::new(snapshot.clone()));
-        let before = room_screen(&mut ui, 100, 14);
+        let before = room_screen(&mut ui, 100, rows);
         let sidebar_width = usize::from(ui.view.sidebar.width);
         let sidebar = |screen: &str| {
             screen
@@ -191,7 +193,7 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
             snapshot.state.prepare_delete_agent(agent).unwrap();
         }
         ui.receive_snapshot(Arc::new(snapshot));
-        let after = room_screen(&mut ui, 100, 14);
+        let after = room_screen(&mut ui, 100, rows);
         assert_eq!(sidebar(&after), sidebar(&before));
         assert_eq!(ui.view.sidebar_max_scroll, max_scroll);
         assert!(ui
@@ -204,6 +206,7 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
 
 #[test]
 fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
+    let rows = 16 + u16::from(cfg!(feature = "dev-tools"));
     let (mut ui, room, first) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let second = snapshot
@@ -217,11 +220,11 @@ fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
             .unwrap();
     }
     ui.receive_snapshot(Arc::new(snapshot));
-    ui.compute_view(100, 16);
+    ui.compute_view(100, rows);
     assert_eq!(ui.view.sidebar_max_scroll, 2);
     ui.sidebar_scroll = usize::MAX;
-    ui.compute_view(100, 16);
-    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 16));
+    ui.compute_view(100, rows);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, rows));
     ui.render(&mut buffer);
     let row_text = |y| {
         (1..ui.view.sidebar.right() - 1)
@@ -253,9 +256,10 @@ fn sidebar_pins_green_divider_and_settings_button_to_lower_left() {
     ui.render(&mut buffer);
     let green = ratatui::style::Color::Rgb(102, 255, 102);
     let right = ui.view.sidebar.right() - 2;
+    let divider_y = 28 - u16::from(cfg!(feature = "dev-tools"));
     for x in 1..right {
-        assert_eq!(buffer[(x, 28)].symbol(), "─", "divider at x={x}");
-        assert_eq!(buffer[(x, 28)].fg, green, "divider at x={x}");
+        assert_eq!(buffer[(x, divider_y)].symbol(), "─", "divider at x={x}");
+        assert_eq!(buffer[(x, divider_y)].fg, green, "divider at x={x}");
     }
     let settings = ui
         .view
@@ -271,6 +275,33 @@ fn sidebar_pins_green_divider_and_settings_button_to_lower_left() {
             .collect::<String>(),
         "Settings"
     );
+}
+
+#[test]
+fn sidebar_build_hash_is_dev_only_directly_above_settings() {
+    let (mut ui, _, _) = fixture();
+    let (buffer, y, right) = settings_row(&mut ui, 100, 30);
+    let above = (1..right)
+        .map(|x| buffer[(x, y - 1)].symbol())
+        .collect::<String>();
+    if cfg!(feature = "dev-tools") {
+        let hash = option_env!("BUS_BUILD_SHORT_SHA").unwrap_or("missing-build-hash");
+        assert_eq!(above.trim_end(), hash);
+        for x in 1..=hash.len() as u16 {
+            assert_eq!(
+                buffer[(x, y - 1)].fg,
+                ratatui::style::Color::Rgb(145, 148, 159)
+            );
+            assert_eq!(ui.view.hit_at(x, y - 1), None, "hash is a plain label");
+        }
+        assert_eq!(ui.view.sidebar_body.bottom(), y - 2);
+    } else {
+        assert!(
+            above.chars().all(|ch| ch == '─'),
+            "non-dev footer has no hash: {above}"
+        );
+        assert_eq!(ui.view.sidebar_body.bottom(), y - 1);
+    }
 }
 
 fn settings_row(ui: &mut BusUi, cols: u16, rows: u16) -> (ratatui::buffer::Buffer, u16, u16) {
@@ -752,4 +783,20 @@ fn room_renders_without_native_snapshot_and_only_approved_chrome_and_collapsed_m
         .hits
         .iter()
         .any(|h| h.action == render::Action::NewRoom));
+}
+
+#[test]
+fn sidebar_build_hash_keeps_save_failure_notices_visible() {
+    let (mut ui, _, _) = fixture();
+    ui.force_exit_available = true;
+    let (buffer, y, right) = settings_row(&mut ui, 100, 30);
+    let extra = u16::from(cfg!(feature = "dev-tools"));
+    let text = |row| {
+        (1..right)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect::<String>()
+    };
+    assert!(text(y - 3 - extra).starts_with("Unsaved:"));
+    assert!(text(y - 2 - extra).starts_with("Ctrl+Q retries saving"));
+    assert_eq!(ui.view.sidebar_body.bottom(), y - 3 - extra);
 }

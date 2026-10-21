@@ -895,12 +895,14 @@ fn agents_header_respects_configured_and_terminal_capped_sidebar_widths() {
 fn scrolled_master_sidebar_reaches_its_last_orchestrator_below_the_room_name() {
     let (mut ui, master, pr, _, orchestrator) = master_fixture();
     ui.open_room(master);
-    ui.compute_view(100, 12);
+    // Keep ten content rows when the dev build adds its hash to the footer.
+    let rows = 12 + u16::from(cfg!(feature = "dev-tools"));
+    ui.compute_view(100, rows);
     // MASTER, gap, ROOMS, gap, two rooms, divider, `# MASTER` header, gap,
     // then a four-row orchestrator card below the leading blank row.
     assert_eq!(ui.view.sidebar_max_scroll, 14 - 10);
     ui.sidebar_scroll = usize::MAX;
-    ui.compute_view(100, 12);
+    ui.compute_view(100, rows);
     let rows_of = |action| hit_rows(&ui, action);
     assert_eq!(rows_of(render::Action::Agent(orchestrator)), [6, 6, 7]);
     assert_eq!(rows_of(render::Action::Room(pr)), [1, 1, 8]);
