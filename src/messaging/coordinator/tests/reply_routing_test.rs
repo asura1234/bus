@@ -38,6 +38,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_provider(Provider::ClaudeCode)
+    }
+
+    fn with_provider(provider: Provider) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "bus-reply-route-{}-{}-{}",
             std::process::id(),
@@ -59,7 +63,7 @@ impl Fixture {
             .unwrap();
         state.bind_orchestrator(orch, room).unwrap();
         let agent = state
-            .create_agent(room, "builder", Provider::ClaudeCode, dir.clone(), None)
+            .create_agent(room, "builder", provider, dir.clone(), None)
             .unwrap();
         state
             .set_agent_runtime_identity(

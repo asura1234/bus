@@ -57,6 +57,7 @@ impl BusState {
                     | CallbackRejection::WrongTurn
                     | CallbackRejection::WrongPrompt
                     | CallbackRejection::UnboundFinal
+                    | CallbackRejection::BeforeSubmissionBoundary
             )
         ) {
             return;
@@ -92,7 +93,17 @@ impl BusState {
             })
             .collect();
         let late = self.late_worker_request(callback);
-        let key = format!("final:{turn}");
+        // A post-cap Stop can itself still be intermediate. Retain each changed
+        // final of a completed turn, rather than spending the turn on the first
+        // update. Text keys also deduplicate fresh envelopes after a restart.
+        let key = if late.is_some_and(|r| r.phase == RequestPhase::Completed) {
+            format!(
+                "final:{turn}:{}",
+                crate::utils::time::digest(text.as_bytes())
+            )
+        } else {
+            format!("final:{turn}")
+        };
         let orphan = matches!(
             disposition,
             CallbackDisposition::Rejected(
@@ -144,10 +155,18 @@ impl BusState {
     }
 
     /// A final for a closed owned turn must not wait behind newer unbound work.
+    /// Completion can have delivered an interim (the background hold cap, or
+    /// Codex Stop without task metadata). Keep the original outcome immutable
+    /// and route changed text as a follow-up, under the same attested turn.
     pub(crate) fn late_worker_request(&self, callback: &ProviderCallback) -> Option<&Request> {
         self.requests().find(|r| {
             r.agent_id == callback.agent_id
-                && r.phase == RequestPhase::Abandoned
+                && r.submission_boundary.is_some_and(|b| callback.sequence > b)
+                && (r.phase == RequestPhase::Abandoned
+                    || r.phase == RequestPhase::Completed
+                        && r.trusted_start_bound
+                        && matches!(&callback.kind, CallbackEventKind::Final { text }
+                            if r.pending_final.as_ref().is_some_and(|reply| reply.text != *text)))
                 && self.reply_orchestrator(r).is_some()
                 && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
                 && r.provider_session_id == callback.provider_session_id

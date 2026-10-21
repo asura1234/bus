@@ -48,6 +48,16 @@ The harness opens a real coordinator on a unique private scratch directory, seed
 
 Claude uses `prompt_id`, lifted image chips, atomic paste frames and `background_tasks`/`session_crons`. Codex uses `turn_id`, an interactive `transcript_path`, and JSONL `event_msg/task_complete` provider errors. These are different contracts: Claude finals come from Stop hooks, not a standalone transcript reader. The image composer uses the independently captured `src/server/api/agents/tests/fixtures/claude_image_paste.txt`, never the production image-lifting rule. The fixture also records their JSONL shapes; recording a transcript is not evidence that Claude reads it.
 
+A background hold still releases its captured interim at `background_shell_hold_minutes`
+(15 by default), with reason `background_shells_timeout`. Completion does not prove
+that the worker's background work ended. A later changed final on the same attested
+launch/session/turn is retained in room history and automatically wakes the original
+room orchestrator with a **Late reply** notice; the completed result stays unchanged.
+The same rule covers Codex Stops without a background-task census. Identical text is
+deduplicated across envelopes and restarts, while successive changed finals remain
+deliverable. Coordinator regressions cover timeout/ordinary completion, restart,
+newer unbound input, both Stop shapes, and repeated/foreign callbacks.
+
 Deadline scenarios age persisted clock fields then run the real coordinator. This avoids sleeping for a 15-minute hold or 30-second grace; it does not replace the live socket deadline or soak wall clock. The EAGAIN test uses the production native API client, real local sockets, production socket connection handler and App dispatcher. It pauses server dispatch and waits for the real three-second receive timeout (WouldBlock/EAGAIN on macOS, TimedOut on other kernels), then recovers without resubmitting the prompt.
 
 `reply_delivery_survives_actual_server_restart_mid_request` runs in the dev-tools `tui-driver` integration target. It starts its own PTY Bus with fake providers, pauses only its coordinator after a trusted start, waits for a durable Stop, shuts down the actual native server, kills that scratch coordinator and starts a new server/coordinator on the same scratch data. It covers Claude in MASTER and Codex in a separate work room. The default first work room is an observer, so neither reply source is visible across restart; publication counters in both source rooms and standalone notices detect duplicate or wrong-room posting, and repeated status/history reads must leave counters unchanged. No desktop automation or installed provider is used; fake provider/effect executables, HOME, project and data are private to that test.

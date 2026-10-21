@@ -166,6 +166,252 @@ fn reply_not_captured_then_late_final_keeps_the_actual_result() {
     assert!(calls[0].contains("Late reply"));
 }
 
+fn capped_background_request(f: &mut Fixture) -> RequestId {
+    let orch = f.orch;
+    let source = running(f, Author::Agent(orch));
+    let mut state = f.worker.state.clone();
+    assert_eq!(
+        state.accept_callback(callback(
+            f,
+            "owned",
+            2,
+            CallbackEventKind::BackgroundPending
+        )),
+        CallbackDisposition::AcceptedProgress
+    );
+    state.hold_background_reply(
+        f.agent,
+        crate::messaging::model::PendingFinal {
+            callback_id: "interim".into(),
+            text: "Waiting for CI and background reviewers.".into(),
+            received_at_ms: io::now_ms() - 4_000,
+            provider_session_id: Some("worker-session".into()),
+            provider_turn_id: Some("owned".into()),
+        },
+    );
+    let since = state
+        .request(source)
+        .unwrap()
+        .shell_hold
+        .as_ref()
+        .unwrap()
+        .since_ms;
+    assert_eq!(
+        state.release_shell_hold(f.agent, since + 900_000, 900_000),
+        Some(source)
+    );
+    // The async sender already printed/acknowledged the interim and exited.
+    state
+        .see_worker_reply(source, f.orch, io::now_ms())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    source
+}
+
+#[test]
+fn background_timeout_or_codex_stop_late_same_turn_final_wakes_sender_after_restart() {
+    for provider in [Provider::Codex, Provider::ClaudeCode] {
+        let mut f = Fixture::with_provider(provider);
+        let source = if provider == Provider::ClaudeCode {
+            capped_background_request(&mut f)
+        } else {
+            // Codex Stop has no task census: its initial Stop completes normally.
+            let orch = f.orch;
+            let source = running(&mut f, Author::Agent(orch));
+            let mut state = f.worker.state.clone();
+            state
+                .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+                .unwrap();
+            state.accept_callback(callback(
+                &f,
+                "owned",
+                2,
+                CallbackEventKind::Final {
+                    text: "Waiting for CI and background reviewers.".into(),
+                },
+            ));
+            state
+                .see_worker_reply(source, f.orch, io::now_ms())
+                .unwrap();
+            f.worker.save(state).unwrap();
+            source
+        };
+        f.reopen();
+        let next = f.send(Author::Agent(f.orch), "new unbound work");
+        let mut state = f.worker.state.clone();
+        // The old Stop was spooled before Bus typed the newer request. Its
+        // sequence must be checked against its own source, not this boundary.
+        state.begin_submission(next, "worker", 100).unwrap();
+        state
+            .record_submission(
+                next,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: Some("worker-session".into()),
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
+        f.worker.save(state).unwrap();
+        let spool = f.dir.join("callbacks/worker");
+        callbacks::initialize(
+            &spool,
+            &callbacks::Manifest {
+                routing_key: callbacks::RoutingKey(f.agent.0),
+                provider,
+                launch_id: "worker".into(),
+            },
+        )
+        .unwrap();
+        callbacks::append(
+            &spool,
+            "worker",
+            provider,
+            json!({
+                "hook_event_name":"Stop", "session_id":"worker-session",
+                "prompt_id":"owned", "turn_id":"owned",
+                "transcript_path":f.dir.join("rollout.jsonl"),
+                "last_assistant_message":"CI passed; the real final result.",
+                "background_tasks":[], "session_crons":[]
+            }),
+            &[],
+            false,
+        )
+        .unwrap();
+        f.worker.consume_callbacks(f.agent, &spool).unwrap();
+        collect(&mut f);
+        let calls = f.calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            1,
+            "{provider:?}: late final must wake the original sender"
+        );
+        assert!(calls[0].contains("Late reply to message"));
+        assert!(calls[0].contains("CI passed; the real final result."));
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(next)
+        );
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        assert!(f
+            .worker
+            .state
+            .request(next)
+            .unwrap()
+            .pending_final
+            .is_none());
+        assert_eq!(
+            f.worker
+                .state
+                .request(source)
+                .unwrap()
+                .failure_reason
+                .as_deref(),
+            if provider == Provider::ClaudeCode {
+                Some("background_shells_timeout")
+            } else {
+                None
+            }
+        );
+        assert_eq!(
+            f.worker
+                .state
+                .request(source)
+                .unwrap()
+                .pending_final
+                .as_ref()
+                .unwrap()
+                .text,
+            "Waiting for CI and background reviewers."
+        );
+    }
+}
+
+#[test]
+fn background_timeout_does_not_spend_subsequent_changed_same_turn_finals() {
+    let mut f = Fixture::new();
+    capped_background_request(&mut f);
+    // A shell-only Stop after the cap can itself still be an interim report.
+    // Its notification must not consume the later real final of that turn.
+    autonomous(&mut f, "owned", "Still waiting for the last reviewer.");
+    let mut state = f.worker.state.clone();
+    state.accept_callback(callback(
+        &f,
+        "owned",
+        11,
+        CallbackEventKind::Final {
+            text: "All reviewers and CI passed.".into(),
+        },
+    ));
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].contains("Still waiting for the last reviewer."));
+    assert!(calls[0].contains("All reviewers and CI passed."));
+}
+
+#[test]
+fn background_timeout_late_notifications_deduplicate_text_and_preserve_identity() {
+    let mut f = Fixture::new();
+    capped_background_request(&mut f);
+    let mut state = f.worker.state.clone();
+    for (sequence, text) in [
+        (0, "STALE RESULT"),
+        (10, "Waiting for CI and background reviewers."),
+        (11, "Real final."),
+        (12, "Real final."),
+    ] {
+        state.accept_callback(callback(
+            &f,
+            "owned",
+            sequence,
+            CallbackEventKind::Final { text: text.into() },
+        ));
+    }
+    for foreign_launch in [false, true] {
+        let mut cb = callback(
+            &f,
+            "owned",
+            13 + u64::from(foreign_launch),
+            CallbackEventKind::Final {
+                text: "FOREIGN RESULT".into(),
+            },
+        );
+        if foreign_launch {
+            cb.launch_id = "other-launch".into();
+        } else {
+            cb.provider_session_id = Some("other-session".into());
+        }
+        state.accept_callback(cb);
+    }
+    f.worker.save(state).unwrap();
+    f.reopen();
+    // A new envelope for the same final after restart must remain deduplicated.
+    let mut state = f.worker.state.clone();
+    state.accept_callback(callback(
+        &f,
+        "owned",
+        15,
+        CallbackEventKind::Final {
+            text: "Real final.".into(),
+        },
+    ));
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].matches("Real final.").count(), 1);
+    assert!(!calls[0].contains("Waiting for CI"));
+    assert!(!calls[0].contains("FOREIGN RESULT"));
+    assert!(!calls[0].contains("STALE RESULT"));
+}
+
 #[test]
 fn persistent_idle_background_hold_with_open_orchestrator_request_notifies_once() {
     let mut f = Fixture::new();
