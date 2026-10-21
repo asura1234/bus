@@ -84,15 +84,12 @@ impl BusState {
         ) else {
             return;
         };
-        let owned: Vec<_> = self
-            .requests()
-            .filter(|r| {
-                r.agent_id == agent.id
-                    && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
-                    && r.provider_session_id == callback.provider_session_id
-                    && r.provider_turn_id == callback.provider_turn_id
-            })
-            .collect();
+        let owned = self.requests().any(|r| {
+            r.agent_id == agent.id
+                && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
+                && r.provider_session_id == callback.provider_session_id
+                && r.provider_turn_id == callback.provider_turn_id
+        });
         let late = self.late_worker_request(callback);
         // A late Stop can itself still be intermediate. Retain each changed
         // final of a closed turn, rather than spending the turn on the first
@@ -112,8 +109,7 @@ impl BusState {
             )
         );
         if self.worker_events.contains_key(&key)
-            || late.is_none()
-                && (!orphan || !owned.is_empty() || self.consumed_provider_turns.contains(&turn))
+            || late.is_none() && (!orphan || owned || self.consumed_provider_turns.contains(&turn))
         {
             return;
         }
