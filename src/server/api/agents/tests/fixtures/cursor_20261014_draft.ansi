@@ -1,0 +1,18 @@
+bogon:work dylanliu$ cursor-agent --trust
+
+
+  Cursor Agent
+  [0m[2mv2026.10.14-0f9edde[0m
+  [0m[2mTip: Use /mcp to connect Cursor to your tools and data sources.[0m
+
+
+
+ [0m[48;2;18;18;18m                                                                                                                                 [0m
+ [0m[48;2;18;18;18m → first line                                                                                                                    [0m
+ [0m[48;2;18;18;18m                                                                                                                                 [0m
+ [0m[48;2;18;18;18m   GPT-6 and Claude                                                                                                              [0m
+ [0m[48;2;18;18;18m   last line[0m[7m[48;2;18;18;18m [0m[48;2;18;18;18m                                                                                                                    [0m
+ [0m[48;2;18;18;18m                                                                                                                                 [0m
+
+  [0m[2mGrok 4.7 256K High[0m                                                                                               [0m[38;5;5mRun Everything[0m
+  [0m[2m/private/tmp/bus-tui/cursor-capture/work[0m

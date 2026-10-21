@@ -10,15 +10,24 @@ mod composer;
 
 pub(super) const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
-/// Each visible character of an ANSI screen line, with whether it is drawn
-/// dimmed or inverse.
-fn styled_chars(line: &str) -> Vec<(char, bool)> {
+struct StyledChar {
+    character: char,
+    faint: bool,
+    background: bool,
+}
+
+/// Retain the styles that distinguish suggestions and composer chrome.
+fn styled_chars(line: &str) -> Vec<StyledChar> {
     let mut out = Vec::new();
-    let (mut dim, mut inverse) = (false, false);
+    let (mut dim, mut inverse, mut background) = (false, false, false);
     let mut chars = line.chars();
     while let Some(c) = chars.next() {
         if c != '\x1b' {
-            out.push((c, dim || inverse));
+            out.push(StyledChar {
+                character: c,
+                faint: dim || inverse,
+                background,
+            });
             continue;
         }
         match chars.next() {
@@ -33,7 +42,7 @@ fn styled_chars(line: &str) -> Vec<(char, bool)> {
                     params.push(c);
                 }
                 if last == Some('m') {
-                    apply_sgr(&params, &mut dim, &mut inverse);
+                    apply_sgr(&params, &mut dim, &mut inverse, &mut background);
                 }
             }
             // OSC (hyperlinks): skip to BEL or ST.
@@ -54,24 +63,35 @@ fn styled_chars(line: &str) -> Vec<(char, bool)> {
     out
 }
 
-fn apply_sgr(params: &str, dim: &mut bool, inverse: &mut bool) {
+fn apply_sgr(params: &str, dim: &mut bool, inverse: &mut bool, background: &mut bool) {
     let params: Vec<&str> = params.split(';').collect();
     let mut index = 0;
     while index < params.len() {
         match params[index] {
-            "" | "0" => (*dim, *inverse) = (false, false),
+            "" | "0" => (*dim, *inverse, *background) = (false, false, false),
             "2" => *dim = true,
             "22" => *dim = false,
             "7" => *inverse = true,
             "27" => *inverse = false,
+            "49" => *background = false,
             // Extended colors carry their own numbers (38;2;R;G;B or 38;5;N),
             // which must not read as dim or inverse.
             "38" | "48" | "58" => {
+                if params[index] == "48" {
+                    *background = true;
+                }
                 index += match params.get(index + 1) {
                     Some(&"5") => 2,
                     Some(&"2") => 4,
                     _ => 0,
                 }
+            }
+            value
+                if value.parse::<u8>().ok().is_some_and(|value| {
+                    (40..=47).contains(&value) || (100..=107).contains(&value)
+                }) =>
+            {
+                *background = true;
             }
             _ => {}
         }
