@@ -71,7 +71,7 @@ fn github_watch_parser_reads_real_pr_shapes_and_pages_back_to_initial_scan_bound
     let mut v = response();
     v["data"]["repository"]["b0"] = json!({"target":{"author":{"user":{"login":"alice"}}}});
     v["data"]["repository"]["open"] = json!({"pageInfo":{"hasNextPage":true,"endCursor":"open-next"},"nodes":[{"number":1,"headRefName":"fix/a","baseRefName":"main","author":{"login":"alice"},"isDraft":false,"mergeable":"CONFLICTING","headRefOid":"head"}]});
-    v["data"]["repository"]["merged"] = json!({"pageInfo":{"hasNextPage":true,"endCursor":"merge-next"},"nodes":[{"number":137,"headRefName":"fix/a","baseRefName":"main","author":{"login":"alice"},"mergedAt":"1970-01-02T00:00:01Z","updatedAt":"1970-01-02T00:00:01Z","mergedBy":{"login":"merger"}}]});
+    v["data"]["repository"]["merged"] = json!({"pageInfo":{"hasNextPage":true,"endCursor":"merge-next"},"nodes":[{"number":137,"headRefName":"fix/a","baseRefName":"main","author":{"login":"alice"},"state":"MERGED","mergedAt":"1970-01-02T00:00:01Z","updatedAt":"1970-01-02T00:00:01Z","mergedBy":{"login":"merger"}}]});
     let page = parse(&q, &v).unwrap();
     assert_eq!(page.open_cursor.as_deref(), Some("open-next"));
     assert_eq!(
@@ -272,4 +272,22 @@ fn github_watch_discovery_accepts_github_remote_with_trailing_slash() {
         "github.com remote missed: {:?}",
         found.keys()
     );
+}
+
+#[test]
+fn github_watch_fetches_closed_prs_without_reporting_them_as_merges() {
+    let q = request();
+    assert!(
+        query(&q).contains("states: [MERGED, CLOSED]"),
+        "closed PRs are never fetched"
+    );
+    let mut v = response();
+    v["data"]["repository"]["merged"]["nodes"] = json!([{
+        "number": 200, "headRefName": "fix/closed", "baseRefName": "main",
+        "state": "CLOSED", "mergedAt": null, "updatedAt": "2026-10-22T12:00:00Z"
+    }]);
+    let page = parse(&q, &v).unwrap();
+    assert!(page.merged.is_empty(), "a closed PR became a merge event");
+    assert_eq!(page.closed.len(), 1);
+    assert_eq!(page.closed[0].branch, "fix/closed");
 }

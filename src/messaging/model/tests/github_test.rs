@@ -16,6 +16,15 @@ fn github_watch_notices_and_watermarks_survive_restart_and_keep_normal_bus_deliv
         )
         .unwrap();
     state.bind_orchestrator(agent, room).unwrap();
+    state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::Codex,
+            "/repo".into(),
+            Some("fix/ours".into()),
+        )
+        .unwrap();
     let page = Page {
         default_branch: "main".into(),
         merged: vec![PullRequest {
@@ -363,5 +372,639 @@ fn github_watch_outages_recover_per_repo_and_persist_per_room() {
         state.notices(a).count(),
         3,
         "the recovered repo must report one new outage"
+    );
+}
+
+#[test]
+fn github_watch_orchestrator_discovers_repos_without_contributing_owned_heads() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/orchestrator".into());
+    state
+        .create_agent(
+            room,
+            "member",
+            super::super::Provider::ClaudeCode,
+            "/member".into(),
+            Some("fix/member".into()),
+        )
+        .unwrap();
+    let interests = state.github_interests();
+    assert!(interests[0]
+        .agents
+        .iter()
+        .any(|(cwd, _)| cwd == &std::path::PathBuf::from("/repo")));
+    let branches: Vec<_> = interests[0]
+        .agents
+        .iter()
+        .filter_map(|(_, b)| b.as_deref())
+        .collect();
+    assert_eq!(
+        branches,
+        ["fix/member"],
+        "orchestrator head became room ownership"
+    );
+}
+
+#[test]
+fn github_watch_merged_head_expires_and_is_not_remembered_again_after_restart() {
+    let (mut state, room, _) = bound_room();
+    let coverage = Update::Coverage(
+        [(
+            "o/r".into(),
+            vec![Scope {
+                room: room.0,
+                branches: ["fix/ours".into()].into(),
+            }],
+        )]
+        .into(),
+    );
+    state.apply_github(&coverage, 1).unwrap();
+    state
+        .apply_github(&merged_update(room, "fix/ours"), 2)
+        .unwrap();
+    assert!(
+        state
+            .room(room)
+            .unwrap()
+            .github_branches
+            .get("o/r")
+            .is_none_or(|b| !b.contains("fix/ours")),
+        "merged head stayed remembered"
+    );
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state.apply_github(&coverage, 3).unwrap();
+    assert!(
+        state
+            .room(room)
+            .unwrap()
+            .github_branches
+            .get("o/r")
+            .is_none_or(|b| !b.contains("fix/ours")),
+        "discovery re-remembered a terminal head"
+    );
+}
+
+#[test]
+fn github_watch_closed_head_expires_but_a_different_open_pr_keeps_the_head_owned() {
+    let (mut state, room, _) = bound_room();
+    let mut update = merged_update(room, "fix/ours");
+    let open = PullRequest {
+        number: 138,
+        branch: "fix/ours".into(),
+        base: "main".into(),
+        ..Default::default()
+    };
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            open: vec![open.clone()],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 1).unwrap();
+    state
+        .apply_github(&merged_update(room, "fix/ours"), 2)
+        .unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"),
+        "an older merged PR disowned the active PR on the same head"
+    );
+    let before = state.requests().count();
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            closed: vec![open.clone()],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 3).unwrap();
+    assert!(!state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"));
+    assert!(!state.github_watermarks()["o/r"].observed[&room.0].contains_key(&138));
+    assert_eq!(
+        state.requests().count(),
+        before,
+        "closure must not become a merge notification"
+    );
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            open: vec![open],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 4).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"),
+        "reopened PR could not restore current-member ownership"
+    );
+}
+
+#[test]
+fn github_watch_new_open_pr_can_reestablish_retired_head_ownership() {
+    let (mut state, room, _) = bound_room();
+    state
+        .apply_github(&merged_update(room, "fix/ours"), 1)
+        .unwrap();
+    assert!(!state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"));
+    let mut update = merged_update(room, "fix/ours");
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            open: vec![PullRequest {
+                number: 138,
+                branch: "fix/ours".into(),
+                base: "main".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 2).unwrap();
+    assert!(state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"));
+}
+
+#[test]
+fn github_watch_a_closed_pr_does_not_retire_a_head_whose_open_pr_is_on_a_later_page() {
+    let (mut state, room, _) = bound_room();
+    // The worker that opened fix/ours has been deleted; only the remembered
+    // head links the room to its still-open PR #10.
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/ours".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    // The poller builds each scan's scope from the room's remembered heads.
+    let page = |state: &BusState, result: Page| Update::Repo {
+        repo: "o/r".into(),
+        scopes: vec![Scope {
+            room: room.0,
+            branches: state.room(room).unwrap().github_branches["o/r"].clone(),
+        }],
+        result: Ok(result),
+        at_ms: 2000,
+    };
+    let pr = |number| PullRequest {
+        number,
+        branch: "fix/ours".into(),
+        base: "main".into(),
+        ..Default::default()
+    };
+    // An earlier PR #9 from the same head was closed. More than one page of
+    // open PRs exists, so PR #10 has not been scanned yet.
+    let first = page(
+        &state,
+        Page {
+            default_branch: "main".into(),
+            closed: vec![pr(9)],
+            open_cursor: Some("next".into()),
+            ..Default::default()
+        },
+    );
+    state.apply_github(&first, 2).unwrap();
+    let second = page(
+        &state,
+        Page {
+            default_branch: "main".into(),
+            open: vec![pr(10)],
+            ..Default::default()
+        },
+    );
+    state.apply_github(&second, 3).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"),
+        "a closed PR seen before its head's open PR permanently disowned the open PR"
+    );
+}
+
+#[test]
+fn github_watch_an_orchestrator_head_saved_before_the_exclusion_stops_owning_prs() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/orchestrator".into());
+    // Saved by a Bus that still remembered the orchestrator's checkout branch.
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .entry("o/r".into())
+        .or_default()
+        .insert("fix/orchestrator".into());
+    let interests = state.github_interests();
+    let coverage = Update::Coverage(
+        [(
+            "o/r".into(),
+            vec![Scope {
+                room: room.0,
+                branches: interests[0]
+                    .agents
+                    .iter()
+                    .filter_map(|(_, branch)| branch.clone())
+                    .collect(),
+            }],
+        )]
+        .into(),
+    );
+    state.apply_github(&coverage, 1).unwrap();
+    assert!(
+        !state.room(room).unwrap().github_branches["o/r"].contains("fix/orchestrator"),
+        "an orchestrator head remembered by an older Bus still establishes ownership"
+    );
+}
+
+fn remembered_scope(state: &BusState, room: RoomId) -> Vec<Scope> {
+    let interest = state
+        .github_interests()
+        .into_iter()
+        .find(|interest| interest.room == room.0)
+        .unwrap();
+    vec![Scope {
+        room: room.0,
+        branches: interest
+            .owned_branches
+            .get("o/r")
+            .cloned()
+            .unwrap_or_default(),
+    }]
+}
+
+#[test]
+fn github_watch_reopened_pr_restores_ownership_after_worker_cleanup_and_restart() {
+    let (mut state, room, orchestrator) = bound_room();
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            Some("fix/ours".into()),
+        )
+        .unwrap();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/ours".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    state.delete_agent(worker, 2).unwrap();
+    let mut pr = PullRequest {
+        number: 9,
+        branch: "fix/ours".into(),
+        base: "main".into(),
+        ..Default::default()
+    };
+    state
+        .apply_github(
+            &Update::Repo {
+                repo: "o/r".into(),
+                scopes: remembered_scope(&state, room),
+                result: Ok(Page {
+                    closed: vec![pr.clone()],
+                    ..Default::default()
+                }),
+                at_ms: 3,
+            },
+            3,
+        )
+        .unwrap();
+    assert!(
+        remembered_scope(&state, room)[0].branches.is_empty(),
+        "closed head still owns PRs"
+    );
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    for at in [4, 5] {
+        pr.status.ready = at == 5;
+        state
+            .apply_github(
+                &Update::Repo {
+                    repo: "o/r".into(),
+                    scopes: remembered_scope(&state, room),
+                    result: Ok(Page {
+                        open: vec![pr.clone()],
+                        ..Default::default()
+                    }),
+                    at_ms: at,
+                },
+                at,
+            )
+            .unwrap();
+    }
+    assert!(
+        remembered_scope(&state, room)[0]
+            .branches
+            .contains("fix/ours"),
+        "reopened head lost ownership after worker cleanup"
+    );
+    assert!(
+        state
+            .requests()
+            .any(|request| request.agent_id == orchestrator
+                && request.prompt.text.contains("#9 ready for review")),
+        "reopened PR's transition did not reach its orchestrator"
+    );
+}
+
+#[test]
+fn github_watch_terminal_observation_mid_scan_waits_for_the_next_full_open_pass() {
+    let (mut state, room, _) = bound_room();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/ours".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    let pages = [
+        Page {
+            open_cursor: Some("page-2".into()),
+            ..Default::default()
+        },
+        Page {
+            closed: vec![PullRequest {
+                number: 9,
+                branch: "fix/ours".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        Page {
+            open_cursor: Some("page-2".into()),
+            ..Default::default()
+        },
+        Page::default(),
+    ];
+    for (index, page) in pages.into_iter().enumerate() {
+        state
+            .apply_github(
+                &Update::Repo {
+                    repo: "o/r".into(),
+                    scopes: remembered_scope(&state, room),
+                    result: Ok(page),
+                    at_ms: index as u64 + 2,
+                },
+                index as u64 + 2,
+            )
+            .unwrap();
+        assert_eq!(
+            remembered_scope(&state, room)[0]
+                .branches
+                .contains("fix/ours"),
+            index < 3,
+            "retirement must follow a full pass begun since the terminal observation"
+        );
+        let restarted = serde_json::to_string(&state).unwrap();
+        state = serde_json::from_str(&restarted).unwrap();
+    }
+}
+
+#[test]
+fn github_watch_orchestrator_head_shared_by_a_current_member_keeps_ownership() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::Codex,
+            "/repo".into(),
+            Some("fix/shared".into()),
+        )
+        .unwrap();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/shared".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    assert!(remembered_scope(&state, room)[0]
+        .branches
+        .contains("fix/shared"));
+    assert!(state.github_interests()[0]
+        .agents
+        .iter()
+        .any(|(_, branch)| branch.as_deref() == Some("fix/shared")));
+}
+
+#[test]
+fn github_watch_a_shared_checkout_head_stays_owned_after_its_workers_are_cleaned_up() {
+    // The orchestrator and its worker share one checkout on the room's feature
+    // branch; the worker opened PR #10 from it and was then deleted.
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            Some("fix/shared".into()),
+        )
+        .unwrap();
+    let scan = |state: &BusState| {
+        let branches = state.github_interests()[0]
+            .agents
+            .iter()
+            .filter_map(|(_, branch)| branch.clone())
+            .chain(
+                state
+                    .room(room)
+                    .unwrap()
+                    .github_branches
+                    .get("o/r")
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+            .collect();
+        Update::Repo {
+            repo: "o/r".into(),
+            scopes: vec![Scope {
+                room: room.0,
+                branches,
+            }],
+            result: Ok(Page {
+                default_branch: "main".into(),
+                open: vec![PullRequest {
+                    number: 10,
+                    branch: "fix/shared".into(),
+                    base: "main".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            at_ms: 2000,
+        }
+    };
+    state.apply_github(&scan(&state), 1).unwrap();
+    assert!(state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"));
+    state.prepare_delete_agent(worker).unwrap();
+    state.apply_github(&scan(&state), 2).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"),
+        "the room's open PR head was purged as an orchestrator-only branch"
+    );
+}
+
+#[test]
+fn github_watch_member_provenance_survives_cleanup_before_a_pr_is_seen_and_stays_repo_local() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            Some("fix/shared".into()),
+        )
+        .unwrap();
+    let scope = || {
+        vec![Scope {
+            room: room.0,
+            branches: ["fix/shared".into()].into(),
+        }]
+    };
+    state
+        .apply_github(&Update::Coverage([("o/r".into(), scope())].into()), 1)
+        .unwrap();
+    state.delete_agent(worker, 2).unwrap();
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .insert("other/repo".into(), ["fix/shared".into()].into());
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state
+        .apply_github(
+            &Update::Coverage([("o/r".into(), scope()), ("other/repo".into(), scope())].into()),
+            3,
+        )
+        .unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"),
+        "member-attributed head was purged after cleanup without any PR observation"
+    );
+    assert!(
+        !state.room(room).unwrap().github_branches["other/repo"].contains("fix/shared"),
+        "member provenance leaked to an unattributed legacy head in another repository"
+    );
+}
+
+#[test]
+fn github_watch_known_open_pr_protects_an_unattributed_legacy_head_after_restart() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .insert("o/r".into(), ["fix/shared".into()].into());
+    state
+        .github_watch
+        .entry("o/r".into())
+        .or_default()
+        .head_prs
+        .insert("fix/shared".into(), [(10, false)].into());
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/shared".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    assert!(
+        remembered_scope(&state, room)[0]
+            .branches
+            .contains("fix/shared"),
+        "known open PR lost ownership while legacy member provenance was unavailable"
+    );
+}
+
+#[test]
+fn github_watch_an_upgraded_room_keeps_its_open_pr_head_after_worker_cleanup() {
+    // State saved by the previous Bus: the shared-checkout head is remembered
+    // without member attribution or PR lifecycle history, and the worker that
+    // opened PR #10 from it is already gone.
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .entry("o/r".into())
+        .or_default()
+        .insert("fix/shared".into());
+    let update = Update::Repo {
+        repo: "o/r".into(),
+        scopes: vec![Scope {
+            room: room.0,
+            branches: ["fix/shared".into()].into(),
+        }],
+        result: Ok(Page {
+            default_branch: "main".into(),
+            open: vec![PullRequest {
+                number: 10,
+                branch: "fix/shared".into(),
+                base: "main".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        at_ms: 2000,
+    };
+    state.apply_github(&update, 1).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"),
+        "the first scan after upgrade purged the head of a PR it was reporting as open"
     );
 }

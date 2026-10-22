@@ -5,8 +5,9 @@ Bus watches GitHub repositories covered by each work room. It reads GitHub using
 Only github.com remotes are supported.
 
 Repositories come from the git remotes of the room's agents, including its MASTER
-orchestrator. Bus remembers discovered repositories so cleaning up the last worker
-does not stop merge monitoring. Set an explicit list, return to discovery, or turn
+orchestrator. The orchestrator contributes repository coverage only; its branch
+does not establish room ownership. Bus remembers discovered repositories so
+cleaning up the last worker does not stop merge monitoring. Set an explicit list, return to discovery, or turn
 monitoring off for a room:
 
 ```sh
@@ -16,13 +17,29 @@ bus room github ROOM --off
 ```
 
 `bus state` includes `github_repos` (null means automatic, [] means off) and
-`github_discovered`, plus remembered `github_branches` per repository. Overrides
-are saved with the room. MASTER itself has no watch.
+`github_discovered`, plus active remembered `github_branches` per repository.
+Retired ownership history is saved with the room separately. Overrides are saved
+with the room. MASTER itself has no watch.
 
 A PR belongs to the rooms whose current or remembered agent feature branches match
 its head branch. Bus persists these branches per room and repository when discovery
-sees them, so worker cleanup or switching branches does not lose ownership. An
-unmatched head is informational; author identity never establishes ownership. The
+sees them, so worker cleanup or switching branches does not lose ownership. Only
+room-member branches are remembered. Bus saves member provenance per room,
+repository and head, so cleaning up a worker cannot turn its shared-checkout
+branch into legacy orchestrator data. Coverage purges a previously saved head
+matching the current orchestrator's branch only if it has no member provenance,
+no current member shares it, and no known PR on that head is open. Older state
+loads without attribution; a known open PR still protects its remembered head.
+A remembered head is marked retired after its known PRs are all seen merged or
+closed and a full open-PR scan has finished since that terminal observation. If
+the observation occurs partway through a scan, retirement waits for the next full
+pass. Another open PR on a later page keeps ownership active. Retired history is
+kept per room and repository across restarts, but does not establish ownership
+while the head remains closed, even if a worker still has that checkout. Seeing
+any PR open on that head restores ownership automatically, including after the
+worker has been cleaned up. Its first open observation records a baseline and
+later transitions notify the orchestrator.
+An unmatched head is informational; author identity never establishes ownership. The
 repository's default branch does not establish ownership. With an explicit repo
 list, the room's current agent branches apply to each listed repository.
 
@@ -54,8 +71,10 @@ resumes pagination and suppresses already reported merges and PR-state edges.
 The initial merge-time eligibility floor is fixed; the moving scan boundary uses
 updatedAt, so a merge that moves pages remains eligible on the next scan. Seen
 merge IDs remain persisted to avoid replay when older PRs receive new comments.
-Open-PR observations are retained across page gaps; a confirmed merged PR removes
-its open observation. Absence from a page is not treated as proof of closure.
+Open-PR observations are retained across page gaps; a confirmed merged or closed
+PR removes its open observation. Both terminal states share the paginated scan,
+so closed PR cleanup does not require another GitHub request. Absence from a page
+is not treated as proof of closure.
 CI completion uses GitHub's full state counts when checks span more than one page,
 so a failure does not conceal other jobs still running.
 
