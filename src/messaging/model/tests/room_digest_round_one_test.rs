@@ -485,6 +485,13 @@ fn room_digest_reference_keys_belong_to_the_tag_or_explicit_head_field() {
         (" abcdef123456", "Verify abcdef123", true),
         (" head 870112624", "Verify at 8701126", true),
         ("\nSHA: 870112624", "Verify at 8701126", true),
+        ("\nhead abcdef123456", "Verify abcdef123", true),
+        (
+            "\nhead abcdef123456 of a dependency",
+            "Read abcdef123",
+            false,
+        ),
+        ("\nhead", "Read abcdef123", false),
         ("\nRebased onto head 870112624", "Read 8701126", false),
         ("", "Rebase now; #1602 is waiting for a verifier", true),
     ] {
@@ -501,4 +508,26 @@ fn room_digest_reference_keys_belong_to_the_tag_or_explicit_head_field() {
             "{final_text:?}: {message}"
         );
     }
+}
+
+#[test]
+fn room_digest_a_dependency_head_sentence_does_not_supply_milestone_identity() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(
+        &mut s,
+        room,
+        orch,
+        worker,
+        "READY FOR VERIFY #1602\nHead of the dependency branch is SHA abcdef123456.",
+    );
+    let other = s
+        .create_agent(room, "docs", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    dispatch(&mut s, room, orch, &[other], "Read abcdef123");
+    assert!(
+        facts(&s, orch).iter().any(|fact| fact["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("READY"))),
+        "a dependency's SHA in ordinary prose cleared the #1602 READY"
+    );
 }

@@ -113,16 +113,28 @@ pub(super) fn references_fact(text: &str, fact: &RoomFact) -> bool {
     };
     heads(first, false).iter().any(|head| matches(head, false))
         || body.lines().enumerate().any(|(index, line)| {
+            // Outside the tag line, the entire value must be a standalone head/SHA field.
+            if index != 0 {
+                let Some((label, value)) = line
+                    .split_once(':')
+                    .or_else(|| line.trim().split_once(char::is_whitespace))
+                else {
+                    return false;
+                };
+                let value = value.trim();
+                return matches!(label.trim(), "head" | "sha")
+                    && heads(value, true)
+                        .iter()
+                        .any(|head| *head == value && matches(head, true));
+            }
             let words: Vec<_> = line
                 .split(|c: char| !c.is_ascii_alphanumeric())
                 .filter(|word| !word.is_empty())
                 .collect();
-            // Outside the tag line, only a standalone head/SHA metadata field is identity.
-            (index == 0 || words.first().is_some_and(|w| matches!(*w, "head" | "sha")))
-                && words.windows(2).any(|pair| {
-                    matches!(pair[0], "head" | "sha")
-                        && heads(pair[1], true).iter().any(|head| matches(head, true))
-                })
+            words.windows(2).any(|pair| {
+                matches!(pair[0], "head" | "sha")
+                    && heads(pair[1], true).iter().any(|head| matches(head, true))
+            })
         })
 }
 
