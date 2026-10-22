@@ -24,8 +24,9 @@ impl BusState {
                 .clone()
                 .or_else(|| self.message_sender(&request.prompt.author));
             if let Some((name, room)) = identity {
-                if !starts_with_sender(&request.prompt.text, &name, sender.0) {
-                    text = format!("{} (agent {}, room {}):\n{text}", name, sender.0, room.0);
+                let header = format!("{} (agent {}, room {}):", name, sender.0, room.0);
+                if !starts_with_sender(&request.prompt.text, &name, sender.0, &header) {
+                    text = format!("{header}\n{text}");
                 }
             }
         }
@@ -34,27 +35,16 @@ impl BusState {
     }
 }
 
-/// Recognize a leading identity line, including older hand-written headers.
-/// A name or ID embedded later in the message does not identify its author.
-fn starts_with_sender(text: &str, name: &str, id: u64) -> bool {
-    let first = text.trim_start().lines().next().unwrap_or_default().trim();
-    let agent_id = format!("agent {id}");
-    let identifies = |line: &str| identity_prefix(line, name) || identity_prefix(line, &agent_id);
-    identifies(first)
-        || (first
-            .get(..5)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("from "))
-            && identifies(first[5..].trim_start()))
-}
-
-fn identity_prefix(line: &str, identity: &str) -> bool {
-    !identity.is_empty()
-        && line
-            .get(..identity.len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(identity))
-        && line.get(identity.len()..).is_some_and(|rest| {
-            rest.chars().next().is_none_or(|c| {
-                c.is_whitespace() || matches!(c, '(' | ')' | ':' | ',' | '.' | '—' | '–' | '-')
+/// Only a complete identity line can replace Bus's genuine attribution.
+/// Ordinary sentences and headers carrying another ID or room need the real header.
+fn starts_with_sender(text: &str, name: &str, id: u64, header: &str) -> bool {
+    let first = text.lines().next().unwrap_or_default().trim();
+    first == header
+        || [name.to_owned(), format!("agent {id}")]
+            .iter()
+            .any(|identity| {
+                [":", " here —"]
+                    .iter()
+                    .any(|ending| first.eq_ignore_ascii_case(&format!("{identity}{ending}")))
             })
-        })
 }
