@@ -10,6 +10,8 @@ mod dialogs_tests;
 mod inspect_tests;
 #[path = "messages_test.rs"]
 mod messages_tests;
+#[path = "option_list_test.rs"]
+mod option_list_tests;
 #[path = "rooms_test.rs"]
 mod rooms_tests;
 

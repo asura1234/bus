@@ -4,8 +4,8 @@ use crate::messaging::prefs::colors;
 use std::path::PathBuf;
 use {
     super::{
-        AgentId, AgentRuntimeIdentity, BusState, Compactions, ModelError, Provider, RequestPhase,
-        RoomId, RuntimeStatus, DEVELOPER_RECIPIENT, UNBOUND_SETTLE_MS,
+        AgentId, AgentRuntimeIdentity, BusState, Compactions, DialogNoticeTo, ModelError, Provider,
+        RequestPhase, RoomId, RuntimeStatus, DEVELOPER_RECIPIENT, UNBOUND_SETTLE_MS,
     },
     crate::messaging::model::RoomAgent,
 };
@@ -58,6 +58,7 @@ impl BusState {
                 dialog_notice: None,
                 dialog_answered: false,
                 dialog_answer: None,
+                dialog_notice_to: None,
                 actionable_error: None,
                 update_error: None,
                 current_request: None,
@@ -363,6 +364,18 @@ impl BusState {
         agent.dialog_notice = notice;
         agent.dialog_answered = false;
         agent.dialog_answer = None;
+        Ok(())
+    }
+
+    pub(crate) fn set_dialog_notice_to(
+        &mut self,
+        agent: AgentId,
+        to: Option<DialogNoticeTo>,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .dialog_notice_to = to;
         Ok(())
     }
 

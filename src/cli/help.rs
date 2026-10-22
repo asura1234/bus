@@ -58,7 +58,13 @@ agent dialog opens queued Codex questions and shows choices or a focused text qu
 It returns a single-use fingerprint. agent choose selects a native row with Up/Down and Enter,
 including Claude checkbox toggles and Submit/Next; its question-tab options send Left/Right.
 Use the returned option numbers. agent answer pastes
-text and presses Enter, or skips the question. Both require the exact observed dialog.
+text and presses Enter, or skips the question (never Claude's: Esc cancels its form); on a
+choice with a free_text option it
+moves to that row, types the text and submits it. Both require the exact observed dialog.
+On Claude multi-select fields, pasting ticks the custom answer; Bus leaves it checked
+without Enter, then choose Next or Submit. For every provider, including Codex Other
+and Cursor fields, existing drafts refuse further text (free_text_holds_draft);
+edit or submit the draft in the agent's pane.
 Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by that room agent or the room's MASTER

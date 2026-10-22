@@ -681,7 +681,7 @@ async fn claude_tabbed_custom_answer_is_observed_as_an_option_free_text_question
 }
 
 #[tokio::test]
-async fn claude_tabbed_custom_answer_writes_text_and_skip_with_a_wrapped_hint() {
+async fn claude_tabbed_custom_answer_writes_text_and_never_skips_with_esc() {
     let (mut app, mut writes) =
         app_with_dialog(CLAUDE_TABBED_CUSTOM_ANSWER.as_bytes(), Some("session"));
     let observed = observe_dialog(&mut app);
@@ -705,11 +705,13 @@ async fn claude_tabbed_custom_answer_writes_text_and_skip_with_a_wrapped_hint() 
             .unwrap(),
         Bytes::from_static(b"\r")
     );
+    // Esc declines every question of Claude's form, not just this one.
     let skipped = chosen(
         &app.handle_agent_dialog_answer("skip".into(), answer_params(&observed, None, true)),
     );
-    assert!(skipped.written);
-    assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\x1b"));
+    assert!(!skipped.written);
+    assert_eq!(skipped.reason.as_deref(), Some("skip_would_cancel_form"));
+    assert!(writes.try_recv().is_err());
 }
 
 #[test]
@@ -759,4 +761,345 @@ fn claude_review_screen_under_tab_header_offers_submit_and_cancel() {
         .collect();
     assert_eq!(labels, ["Submit answers", "Cancel"]);
     assert_eq!(dialog.keys_for(1).unwrap(), ["enter"]);
+}
+
+const CLAUDE_OPTION_LIST: &str =
+    include_str!("../../../../../tests/fixtures/claude-option-list/tall-rest.ansi");
+
+#[tokio::test]
+async fn claude_option_list_free_text_answer_focuses_fills_and_submits_its_field() {
+    let (mut app, mut writes) =
+        app_with_dialog_sized(CLAUDE_OPTION_LIST.as_bytes(), Some("session"), 92, 45);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert!(dialog.options[4].free_text);
+
+    // Choosing the empty field would only press Enter on it.
+    let refused = chosen(&choose(
+        &mut app,
+        &observation,
+        Some("session"),
+        &dialog.digest,
+        5,
+    ));
+    assert!(!refused.written);
+    assert!(writes.try_recv().is_err());
+
+    let params = answer_params(&observation, Some("Remap whole clips only"), false);
+    let choice = chosen(&app.handle_agent_dialog_answer("answer".into(), params));
+    assert!(choice.written, "{:?}", choice.reason);
+    assert_eq!(choice.keys, ["down", "down", "down", "down", "enter"]);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[200~Remap whole clips only\x1b[201~")
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+}
+
+#[tokio::test]
+async fn claude_option_list_free_text_answer_leaves_a_draft_and_skips_alone() {
+    let draft = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-rest-freetext-holds-text.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(draft.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "draft".into(),
+        answer_params(&observation, Some("token"), false),
+    ));
+    assert!(!result.written);
+    assert_eq!(result.reason.as_deref(), Some("free_text_holds_draft"));
+    let (mut app, mut writes_too) =
+        app_with_dialog_sized(CLAUDE_OPTION_LIST.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let skipped = chosen(
+        &app.handle_agent_dialog_answer("skip".into(), answer_params(&observation, None, true)),
+    );
+    assert!(!skipped.written);
+    assert_eq!(skipped.reason.as_deref(), Some("not_a_free_text_question"));
+    assert!(writes.try_recv().is_err());
+    assert!(writes_too.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn claude_focused_free_text_draft_refuses_an_answer_without_writing() {
+    let draft = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-freetext-with-text-focused.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(draft.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.as_ref().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Question);
+    assert!(dialog.free_text.unwrap().draft);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "draft".into(),
+        answer_params(&observation, Some("must not be pasted"), false),
+    ));
+    assert!(!result.written);
+    assert_eq!(result.reason.as_deref(), Some("free_text_holds_draft"));
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn claude_multi_select_custom_answer_pastes_without_unticking_it_with_enter() {
+    // Real Claude 2.1.308: paste ticks the custom entry; Enter unticks it.
+    let before =
+        include_str!("../../../../../tests/fixtures/claude-option-list/multi-select-rest.ansi");
+    let checked = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/multi-select-custom-checked.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(before.as_bytes(), Some("session"), 92, 45);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("CX paste without Enter"), false),
+    ));
+    assert!(result.written, "{:?}", result.reason);
+    assert_eq!(result.keys, ["down", "down"]);
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"\x1b[B\x1b[B\x1b[200~CX paste without Enter\x1b[201~")
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), writes.recv())
+            .await
+            .is_err(),
+        "a delayed Enter would clear the custom checkbox"
+    );
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{checked}").as_bytes());
+    let after = observe_dialog(&mut app);
+    let dialog = after.dialog.as_ref().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert_eq!(dialog.options[2].label, "[✔] CX paste without Enter");
+    assert_eq!(dialog.options[3].label, "Next");
+    let next = chosen(&choose(
+        &mut app,
+        &after,
+        Some("session"),
+        &dialog.digest,
+        4,
+    ));
+    assert!(next.written, "{:?}", next.reason);
+    assert_eq!(next.keys, ["down", "enter"]);
+}
+
+#[tokio::test]
+async fn claude_focused_empty_multi_select_row_takes_text_without_enter() {
+    let focused = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/multi-select-empty-focused.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(focused.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.as_ref().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert!(dialog.free_text.unwrap().checkbox);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("keep this custom answer"), false),
+    ));
+    assert!(result.written, "{:?}", result.reason);
+    assert!(result.keys.is_empty());
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"keep this custom answer")
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), writes.recv())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn claude_tabbed_form_free_text_answer_fills_the_row_and_choose_refuses_it() {
+    let form = include_str!("../../../../../tests/fixtures/claude-option-list/tabs-q1-rest.ansi");
+    let (mut app, mut writes) = app_with_dialog_sized(form.as_bytes(), Some("session"), 92, 45);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.tabs.len(), 3);
+    assert!(dialog.tabs[0].active && !dialog.tabs[0].answered);
+    assert!(dialog.options[2].free_text);
+    let refused = chosen(&choose(
+        &mut app,
+        &observation,
+        Some("session"),
+        &dialog.digest,
+        3,
+    ));
+    assert!(!refused.written);
+    assert!(writes.try_recv().is_err());
+    let answered = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("Fresh dir per run"), false),
+    ));
+    assert!(answered.written, "{:?}", answered.reason);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from("\x1b[B\x1b[B\x1b[200~Fresh dir per run\x1b[201~")
+    );
+}
+
+#[tokio::test]
+async fn claude_short_pane_option_list_takes_free_text_scrolled_below_the_window() {
+    // A 15-row pane shows options 1-3 and Chat; Type something. (5) is hidden
+    // but its number is known from Chat (6).
+    let short =
+        include_str!("../../../../../tests/fixtures/claude-option-list/short-rest-top.ansi");
+    let (mut app, mut writes) = app_with_dialog_sized(short.as_bytes(), Some("session"), 72, 15);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    assert_eq!(
+        observation.dialog.as_ref().unwrap().kind,
+        AgentDialogKind::Choice
+    );
+    let answered = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("Remap whole clips only"), false),
+    ));
+    assert!(
+        answered.written,
+        "free text must be answerable in one command in a short pane: {:?}",
+        answered.reason
+    );
+    // Only the moves: the hidden field may hold a draft until it is redrawn.
+    assert_eq!(answered.reason.as_deref(), Some("free_text_focused"));
+    assert_eq!(
+        writes.try_recv().unwrap(),
+        Bytes::from_static(b"\x1b[B\x1b[B\x1b[B\x1b[B")
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn claude_tabbed_multi_select_question_takes_free_text_in_one_answer() {
+    let screen = include_str!("../../../../../tests/fixtures/claude-question/multi-select.txt")
+        .replace('\n', "\r\n");
+    let (mut app, _writes) = app_with_dialog_sized(screen.as_bytes(), Some("session"), 80, 24);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert!(!dialog.tabs.is_empty(), "a tabbed form");
+    assert!(
+        dialog.options.iter().any(|option| option.free_text),
+        "the form's Type something row is not reported as free text: {:?}",
+        dialog.options
+    );
+}
+
+#[tokio::test]
+async fn claude_option_list_free_text_row_holding_a_draft_can_still_be_submitted() {
+    // Someone left text in the field; Enter on it submits that text rather
+    // than declining, yet neither choose nor answer can reach it.
+    let draft = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-rest-freetext-holds-text.ansi"
+    );
+    let (mut app, _writes) = app_with_dialog_sized(draft.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.options[4].label, "Combined write: arrows then paste");
+    let submitted = chosen(&choose(
+        &mut app,
+        &observation,
+        Some("session"),
+        &dialog.digest,
+        5,
+    ));
+    assert!(
+        submitted.written,
+        "the draft row is unreachable: {:?}",
+        submitted.reason
+    );
+}
+
+fn scrolled_tabbed_question(active: usize) -> String {
+    // Both questions can legitimately have the same prompt/options. Preserve
+    // the captured short-pane scrolling rows and vary only the active tab.
+    let header = match active {
+        0 => "← \x1b[7m ☐ Backend \x1b[0m ☐ Frontend  ✔ Submit  →",
+        1 => "←  ☐ Backend \x1b[7m ☐ Frontend \x1b[0m ✔ Submit  →",
+        _ => unreachable!(),
+    };
+    let scrolled = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-cursor3-scrolled.ansi"
+    );
+    let old_header = scrolled.lines().nth(1).unwrap();
+    scrolled.replace(old_header, header)
+}
+
+#[tokio::test]
+async fn scrolled_tabbed_question_rejects_a_choice_observed_on_another_tab() {
+    use crate::terminal::runtime::{DialogChoice, TerminalRuntime};
+
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel(80, 24);
+    let paint = |screen: String| {
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+    };
+    paint(scrolled_tabbed_question(0));
+    let observed =
+        crate::agents::dialog::parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
+    assert!(observed.tabs[0].active);
+    paint(scrolled_tabbed_question(1));
+    let current =
+        crate::agents::dialog::parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
+    assert!(current.tabs[1].active);
+    assert_eq!(
+        runtime
+            .try_choose_dialog_option(&observed.digest(), 3)
+            .unwrap(),
+        DialogChoice::Stale,
+        "switching to another tab invalidates the observed answer"
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_other_answer_over_a_typed_draft_is_refused() {
+    let typed = include_str!("../../../../../tests/fixtures/codex-question/other-typed.txt")
+        .replace('\n', "\r\n");
+    let (mut app, mut writes) = app_with_dialog(typed.as_bytes(), Some("session"));
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Question);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("more"), false),
+    ));
+    assert!(!result.written);
+    assert_eq!(result.reason.as_deref(), Some("free_text_holds_draft"));
+    assert!(writes.try_recv().is_err());
 }

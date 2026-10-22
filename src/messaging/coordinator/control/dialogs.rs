@@ -24,12 +24,19 @@ struct DialogFingerprintClaims {
     /// The question and labels without the selection, to tell a moved
     /// selection from a different dialog.
     dialog_shape: String,
+    /// The highest option number; a scrolled list can hide some below it.
     options: u32,
+    /// Claude's free-text row: answered with text rather than chosen, unless
+    /// it holds a draft (Enter submits it) or is a checkbox (Enter toggles it).
+    free_text: Option<schema::AgentDialogFreeText>,
     /// Makes each observation's fingerprint distinct, so spending one never
     /// blocks answering the same dialog after observing it again.
     observed_at_ns: u128,
 }
 
+/// The native answer only moved to a hidden free-text row (see
+/// `fill_focused_free_text`).
+const FREE_TEXT_FOCUSED: &str = "free_text_focused";
 /// How long `agent choose` watches the screen for the dialog to react.
 const DIALOG_SETTLE_POLLS: u32 = 20;
 const DIALOG_SETTLE_INTERVAL: Duration = Duration::from_millis(100);
@@ -198,7 +205,8 @@ impl Worker {
                 content_revision: observation.content_revision,
                 dialog_digest: dialog.digest.clone(),
                 dialog_shape: dialog.id.clone(),
-                options: dialog.options.len() as u32,
+                options: dialog.options.last().map_or(0, |option| option.number),
+                free_text: dialog.free_text,
                 observed_at_ns: crate::messaging::storage::io::now_ns(),
             })?),
             None => None,
@@ -263,9 +271,7 @@ impl Worker {
         if option.is_some_and(|option| option == 0 || option > claims.options) {
             return Err(format!("Option must be between 1 and {}", claims.options));
         }
-        if option.is_none() && claims.options != 0 {
-            return Err("This is a choice dialog; use agent choose".into());
-        }
+        check_free_text(&claims, option, skip)?;
         let digest = fingerprint_digest(fingerprint);
         if self.state.dialog_answer_spent(digest) {
             return Err("Dialog fingerprint was already used; observe the dialog again".into());
@@ -294,6 +300,18 @@ impl Worker {
         };
         let native = self.transport.request(method);
         let keys = match native {
+            Ok(ResponseResult::AgentDialogChosen { choice })
+                if choice.written && choice.reason.as_deref() == Some(FREE_TEXT_FOCUSED) =>
+            {
+                let mut keys = choice.keys;
+                keys.extend(self.fill_focused_free_text(
+                    &pane_id,
+                    &terminal_id,
+                    session_id.as_deref(),
+                    text.unwrap_or_default(),
+                )?);
+                keys
+            }
             Ok(ResponseResult::AgentDialogChosen { choice }) if choice.written => choice.keys,
             Ok(ResponseResult::AgentDialogChosen { choice }) => {
                 return Err(format!(
@@ -334,6 +352,71 @@ impl Worker {
         Ok(result)
     }
 
+    /// The second step of answering a free-text row scrolled out of view:
+    /// once the moves redraw it as the focused field, type only if it is empty.
+    fn fill_focused_free_text(
+        &mut self,
+        pane_id: &str,
+        terminal_id: &str,
+        session_id: Option<&str>,
+        text: &str,
+    ) -> Result<Vec<String>, String> {
+        let mut field = None;
+        for poll in 0..DIALOG_SETTLE_POLLS {
+            if poll > 0 {
+                std::thread::sleep(DIALOG_SETTLE_INTERVAL);
+            }
+            if let Ok(observation) =
+                self.native_dialog_checked(pane_id, terminal_id, session_id, false)
+            {
+                field = observation.dialog.filter(|dialog| {
+                    dialog.kind == schema::AgentDialogKind::Question
+                        || dialog.free_text.is_some_and(|field| {
+                            field.checkbox
+                                && dialog
+                                    .options
+                                    .iter()
+                                    .any(|row| row.number == field.option && row.selected)
+                        })
+                });
+                if field.is_some() {
+                    break;
+                }
+            }
+        }
+        let field = field.ok_or(
+            "Moved to the free-text row, but it never showed as a focused field; no text was typed",
+        )?;
+        if field.free_text.is_some_and(|free_text| free_text.draft) {
+            return Err(
+                "Moved to the free-text row; no text was typed (free_text_holds_draft): edit the draft in the agent's pane or answer it there".into(),
+            );
+        }
+        let answer =
+            self.transport
+                .request(Method::AgentDialogAnswer(schema::AgentDialogAnswerParams {
+                    target: pane_id.into(),
+                    expected_terminal_id: terminal_id.into(),
+                    expected_pane_id: pane_id.into(),
+                    expected_session_id: session_id.map(str::to_owned),
+                    expected_dialog_digest: field.digest,
+                    text: Some(text.into()),
+                    skip: false,
+                }));
+        match answer {
+            Ok(ResponseResult::AgentDialogChosen { choice }) if choice.written => Ok(choice.keys),
+            Ok(ResponseResult::AgentDialogChosen { choice }) => Err(format!(
+                "Moved to the free-text row; no text was typed ({})",
+                choice.reason.as_deref().unwrap_or("dialog changed")
+            )),
+            Ok(_) => Err("Unexpected native dialog response; outcome is uncertain".into()),
+            Err(error) => Err(format!(
+                "Dialog answer outcome is uncertain: {}",
+                error.message
+            )),
+        }
+    }
+
     fn settle_dialog_answer(
         &mut self,
         pane_id: &str,
@@ -367,6 +450,15 @@ impl Worker {
             outcome = match &observation.dialog {
                 None => "closed",
                 Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
+                // Text typed into a choice list's free-text row shows as its
+                // focused field until Claude takes the delayed Enter.
+                Some(dialog)
+                    if !choice
+                        && claims.free_text.is_some()
+                        && dialog.kind == schema::AgentDialogKind::Question =>
+                {
+                    "input_changed"
+                }
                 Some(dialog) if dialog.id == claims.dialog_shape => {
                     if choice {
                         "selection_moved"
@@ -409,13 +501,48 @@ impl Worker {
     }
 }
 
+/// Claude's free-text row takes text, not Enter, unless Enter is harmless
+/// there: on a draft it submits the draft, on a checkbox it toggles it.
+fn check_free_text(
+    claims: &DialogFingerprintClaims,
+    option: Option<u32>,
+    skip: bool,
+) -> Result<(), String> {
+    match (option, claims.free_text) {
+        (Some(option), Some(field)) if option == field.option && !field.draft && !field.checkbox => {
+            Err(format!(
+                "Option {option} is a free-text field, and Enter on it without text declines the question; use agent answer --text"
+            ))
+        }
+        (Some(_), _) => Ok(()),
+        (None, Some(field)) if field.draft && !skip => {
+            let action = if field.option == 0 {
+                "edit or submit it in the agent's pane".into()
+            } else {
+                format!("agent choose {} submits it, or edit it in the agent's pane", field.option)
+            };
+            Err(format!("The free-text field already holds a draft (free_text_holds_draft); {action}"))
+        }
+        _ if claims.options == 0 => Ok(()),
+        (None, Some(_)) if !skip => Ok(()),
+        _ => Err("This is a choice dialog; use agent choose".into()),
+    }
+}
+
 fn dialog_json(dialog: &schema::AgentDialog) -> Value {
-    json!({
+    let mut value = json!({
         "kind": dialog.kind,
         "text": dialog.text,
         "options": dialog.options,
         "hint": dialog.hint,
-    })
+    });
+    if !dialog.tabs.is_empty() {
+        value["tabs"] = json!(dialog.tabs);
+    }
+    if let Some(field) = dialog.free_text {
+        value["free_text"] = json!(field);
+    }
+    value
 }
 
 fn encode_dialog_fingerprint(claims: &DialogFingerprintClaims) -> Result<String, String> {

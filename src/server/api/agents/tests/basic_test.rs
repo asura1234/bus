@@ -105,6 +105,15 @@ fn app_with_dialog(
     screen: &[u8],
     session: Option<&str>,
 ) -> (App, tokio::sync::mpsc::Receiver<Bytes>) {
+    app_with_dialog_sized(screen, session, 80, 24)
+}
+
+fn app_with_dialog_sized(
+    screen: &[u8],
+    session: Option<&str>,
+    columns: u16,
+    rows: u16,
+) -> (App, tokio::sync::mpsc::Receiver<Bytes>) {
     let mut app = app_with_agent();
     let pane_id = app.state.workspaces[0].tabs[0].root_pane;
     let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
@@ -123,7 +132,7 @@ fn app_with_dialog(
             &[],
         );
     }
-    let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+    let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(columns, rows);
     runtime.test_process_pty_bytes(screen);
     app.state.insert_test_runtime(pane_id, runtime);
     (app, writes)

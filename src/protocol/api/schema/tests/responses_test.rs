@@ -132,10 +132,13 @@ fn agent_dialog_observation_round_trips_with_and_without_a_dialog() {
                 number: 1,
                 label: "Yes".into(),
                 selected: true,
+                free_text: false,
             }],
             hint: None,
             id: "id".into(),
             digest: "digest".into(),
+            free_text: None,
+            tabs: Vec::new(),
         }),
     ] {
         let result = ResponseResult::AgentDialog {

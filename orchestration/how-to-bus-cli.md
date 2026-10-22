@@ -921,20 +921,46 @@ bus agent answer "$agent_id" --skip --fingerprint "$fingerprint"
 `agent answer` uses the same identity and single-use fingerprint checks as
 `choose`, including the current input text. It pastes the literal text and
 presses Enter after the short confirmation delay; `--skip` sends Codex's
-Ctrl+] or the other providers' Esc. Its result includes `keys`, `skipped`, and
+Ctrl+] or Cursor's Esc. Claude questions refuse `--skip`
+(`skip_would_cancel_form`): Esc there declines the whole question or form. Its result includes `keys`, `skipped`, and
 the same `outcome` values, with `input_changed` for a question whose text field
-changed while it remained open. A numbered choice cannot be answered as text.
+changed while it remained open. A numbered choice cannot be answered as text,
+except through its free-text row (below).
 
 Codex's expanded `Queued follow-up inputs` / `Type your answer` form is
 supported; its collapsed question banner remains a working state while the
 agent is running. Expand that banner in the native pane with Shift+Left.
-Claude Code's `AskUserQuestion` and Cursor's questions also support text
-answers when their custom input is focused: move to Claude's `Type something.`
-row or Cursor's `Other` row in the native pane, then use `agent dialog` and
-`agent answer`. Moving to a custom field requires native pane navigation;
-`choose` confirms a numbered option with Enter, and Cursor's checkbox chooser
-still needs its own navigation adapter. Unfocused custom fields are not
-treated as text questions.
+Claude Code's `AskUserQuestion` option list ends with a `Type something.` row,
+which `agent dialog` marks `"free_text": true` (multi-select forms: the
+`[ ] Type something` checkbox) and summarizes as `free_text` (`option`,
+`draft`, `checkbox`). Answer it in one step with
+`agent answer --text` on the choice dialog's fingerprint: Bus moves to the row,
+types the text and presses Enter for a single-select field. On a multi-select
+field, typing ticks the checkbox; Bus sends no Enter, which would untick it.
+`agent choose` refuses an empty single-select field, because Enter there declines
+the whole question. If someone left a draft
+in the row, `agent answer` refuses (`free_text_holds_draft`) and `agent choose`
+on the row submits the draft; replacing a draft needs the agent's pane.
+`agent answer --text` refuses existing drafts (`free_text_holds_draft`) for every
+provider, including focused Codex `Other` and Cursor fields; edit or submit those
+drafts in the agent's pane. In a
+short pane Claude shows only part of the list: `agent dialog` returns the
+visible options with their real numbers, `choose` also takes the numbers
+scrolled out of view above or below the window, and `free_text.option` names
+the row even when hidden. `answer --text` then moves to it first and types
+only once the redrawn field shows it empty (a draft there gets no text,
+`free_text_holds_draft`). After a free-text answer on a multi-select question,
+the ticked field keeps focus; it stays a choice, so choose Next or Submit.
+When the cursor is already on the row, `agent dialog` shows it as a focused
+text question, as it does for Cursor's `Other` row.
+A multi-question form (`←  ☐ Fresh files  ☐ Helper home  ✔ Submit  →`) shows
+one question at a time; `agent dialog` adds `tabs`, each with `label`,
+`answered` and `active`. Answer the active question with `choose` or, for its
+free-text row, `answer --text`; Claude then moves to the next question. When
+every question is answered, the Submit tab offers `Submit answers` and
+`Cancel`; choose `Submit answers`. `--skip` is refused for Claude questions
+(`skip_would_cancel_form`): Esc declines the whole form, not one question. Cursor's checkbox chooser
+still needs its own navigation adapter.
 
 ## Build reliable automation
 

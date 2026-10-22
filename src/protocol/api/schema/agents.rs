@@ -36,6 +36,9 @@ pub struct AgentDialogOption {
     pub number: u32,
     pub label: String,
     pub selected: bool,
+    /// An inline text field: answer it with text, not by choosing it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free_text: bool,
 }
 
 #[derive(
@@ -63,6 +66,29 @@ pub struct AgentDialog {
     pub id: String,
     /// Identifies this exact dialog, including its selected option.
     pub digest: String,
+    /// A multi-question form's question tabs, then its Submit tab.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<AgentDialogTab>,
+    /// Claude's `Type something` row, also when a short pane scrolls it away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_text: Option<AgentDialogFreeText>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentDialogFreeText {
+    pub option: u32,
+    /// It holds text someone typed, which Enter on the row submits.
+    pub draft: bool,
+    /// A multi-select checkbox, which Enter toggles.
+    pub checkbox: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentDialogTab {
+    pub label: String,
+    pub answered: bool,
+    /// The tab whose question the dialog shows.
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

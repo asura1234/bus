@@ -35,7 +35,7 @@ fn codex_free_text_question_has_no_options_and_tracks_input_edits() {
     assert_eq!(dialog.text, "What token should Bus use?");
     assert!(dialog.options.is_empty());
     assert!(dialog.keys_for(1).is_none());
-    assert_eq!(dialog.input.as_ref().unwrap().skip_key, "ctrl+]");
+    assert_eq!(dialog.input.as_ref().unwrap().skip_key, Some("ctrl+]"));
     let edited = parse(&CODEX_TEXT_QUESTION.replace("Type your answer", "MY_TOKEN")).unwrap();
     assert_eq!(dialog.id(), edited.id());
     assert_ne!(dialog.digest(), edited.digest());
@@ -70,7 +70,7 @@ fn cursor_other_text_question_requires_the_focused_other_row() {
     let dialog = parse(CURSOR_OTHER).unwrap();
     assert_eq!(dialog.kind, DialogKind::Question);
     assert_eq!(dialog.text, "What token should Bus use?");
-    assert_eq!(dialog.input.as_ref().unwrap().skip_key, "esc");
+    assert_eq!(dialog.input.as_ref().unwrap().skip_key, Some("esc"));
     let edited = parse(&CURSOR_OTHER.replace("(type to answer)", "MY_TOKEN")).unwrap();
     assert_eq!(dialog.id(), edited.id());
     assert_ne!(dialog.digest(), edited.digest());
@@ -101,7 +101,11 @@ fn claude_focused_custom_answer_is_a_text_question_before_enter() {
     let dialog = parse(&screen).unwrap();
     assert_eq!(dialog.kind, DialogKind::Question);
     assert_eq!(dialog.text, "Which storage should the cache use?");
-    assert_eq!(dialog.input.as_ref().unwrap().skip_key, "esc");
+    assert_eq!(
+        dialog.input.as_ref().unwrap().skip_key,
+        None,
+        "Esc declines the whole question"
+    );
     let edited = parse(&screen.replace("Type something.", "MY_TOKEN")).unwrap();
     assert_eq!(dialog.id(), edited.id());
     assert_ne!(dialog.digest(), edited.digest());
@@ -564,7 +568,7 @@ fn codex_queued_question_fixtures_preserve_choices_and_focused_other_input() {
     assert_eq!(other.text, chooser.text);
     assert!(other.options.is_empty());
     assert_eq!(other.input.as_ref().unwrap().value, "");
-    assert_eq!(other.input.as_ref().unwrap().skip_key, "ctrl+]");
+    assert_eq!(other.input.as_ref().unwrap().skip_key, Some("ctrl+]"));
     let typed = parse(include_str!(
         "../../../tests/fixtures/codex-question/other-typed.txt"
     ))
@@ -810,7 +814,7 @@ fn claude_checkbox_toggle_preserves_dialog_identity_but_invalidates_digest() {
 }
 
 #[test]
-fn claude_focused_checkbox_custom_field_is_an_empty_text_question_with_stable_identity() {
+fn claude_focused_checkbox_custom_field_keeps_submit_reachable_and_tracks_edits() {
     let focused = CLAUDE_MULTI_SELECT
         .replace("❯ 1.", "  1.")
         .replace("  5. [ ] Type something", "❯ 5. [ ] Type something")
@@ -819,13 +823,18 @@ fn claude_focused_checkbox_custom_field_is_an_empty_text_question_with_stable_id
             "Enter to toggle · Tab/Arrow keys to navigate\nctrl+g to edit in Vim · Esc to cancel",
         );
     let dialog = parse(&focused).unwrap();
-    assert_eq!(dialog.kind, DialogKind::Question);
-    assert!(dialog.options.is_empty());
-    assert_eq!(dialog.text, "Which caches may be removed?");
-    assert_eq!(dialog.input.as_ref().unwrap().value, "");
-    let typed = parse(&focused.replace("[ ] Type something", "[ ] MY_TOKEN")).unwrap();
-    assert_eq!(typed.input.as_ref().unwrap().value, "MY_TOKEN");
-    assert_eq!(dialog.id(), typed.id());
+    assert_eq!(dialog.kind, DialogKind::Choice);
+    assert!(dialog.input.is_none());
+    assert_eq!(dialog.selected(), Some(5));
+    assert_eq!(dialog.free_text_summary(), Some((5, false, true)));
+    assert_eq!(dialog.free_text_keys(), Some(vec![]));
+    assert_eq!(dialog.id(), parse(CLAUDE_MULTI_SELECT).unwrap().id());
+    assert_eq!(dialog.keys_for(6).unwrap(), ["down", "enter"]);
+    // Real Claude ticks the custom entry on paste, before any Enter.
+    let typed = parse(&focused.replace("[ ] Type something", "[✔] MY_TOKEN")).unwrap();
+    assert_eq!(typed.kind, DialogKind::Choice);
+    assert_eq!(typed.options[4].label, "[✔] MY_TOKEN");
+    assert_eq!(typed.keys_for(6).unwrap(), ["down", "enter"]);
     assert_ne!(dialog.digest(), typed.digest());
 }
 

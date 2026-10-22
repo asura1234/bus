@@ -227,7 +227,8 @@ its context.
   (`bus agent read AGENT --source visible` for any other screen). Then `bus
   agent choose AGENT --option N --fingerprint F`, or for a free-text question
   `bus agent answer AGENT --text "..." --fingerprint F` (`--skip` instead of
-  `--text`). Decide, answer, and check the reported `outcome`; nothing follows
+  `--text`, except on Claude questions, where Esc cancels the form); `--text`
+  also answers a choice's `free_text` option. Decide, answer, and check the reported `outcome`; nothing follows
   when the dialog closes.
   Ask the developer before approving anything destructive or outward-facing.
 - **Stuck requests:** check `bus message status` (each request's `stage` and

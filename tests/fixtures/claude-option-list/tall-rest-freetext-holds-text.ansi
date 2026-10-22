@@ -1,0 +1,45 @@
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mCall the AskUserQuestion tool exactly once with one question: question 'Which fix should [0m[48;2;55;55;55m [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mI implement for M2?', header 'Fix', multiSelect false, and four options: 'A: new clip [0m[48;2;55;55;55m    [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mnode (Recommended)' with description 'Main creates a new clip node with the agent [0m[48;2;55;55;55m        [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mtimeline and subtitles.', 'B: remap via source time' with description 'Re-time cues onto [0m[48;2;55;55;55m [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mthe user clips. Lossy and fragile.', 'C: drop subtitles' with description 'Keep the user [0m[48;2;55;55;55m [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mnode, discard cues.', 'D: ask the user' with description 'Show a prompt in the app.'. [0m[48;2;55;55;55m    [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mAfter the answer, reply with exactly the answer text you received and do nothing else.[0m[48;2;55;55;55m    [0m
+
+[0m[38;2;153;153;153m⏺ [0mUser declined to answer questions
+[0m[38;2;153;153;153m  ⎿  · Which fix should I implement for M2? (A: new clip node (Recommended) / B: remap via [0m
+     [0m[38;2;153;153;153msource time / C: drop subtitles / D: ask the user)[0m
+
+[0m[38;2;153;153;153m✻ Cooked for 6s · done 1:14 PM[0m
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mCall the AskUserQuestion tool again with exactly the same single question and four [0m[48;2;55;55;55m       [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55moptions as before. After the answer, reply with exactly the answer text you received.[0m[48;2;55;55;55m     [0m
+
+[0m[38;2;153;153;153m⏺ [0mUser answered Claude's questions:
+[0m[38;2;153;153;153m  ⎿  · Which fix should I implement for M2? → Use the source-time remap, but only for whole [0m
+     [0m[38;2;153;153;153mclips[0m
+
+[0m[38;2;255;255;255m⏺ [0mUse the source-time remap, but only for whole clips
+
+[0m[38;2;153;153;153m✻ Brewed for 6s · done 1:16 PM[0m
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mCall the AskUserQuestion tool again with exactly the same single question and four [0m[48;2;55;55;55m       [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55moptions as before. After the answer, reply with exactly the answer text you received.[0m[48;2;55;55;55m     [0m
+[0m[38;2;153;153;153m────────────────────────────────────────────────────────────────────────────────────────────[0m
+[0m[38;2;0;0;0m[48;2;177;185;249m ☐ Fix [0m
+
+[0m[1m[38;2;255;255;255mWhich fix should I implement for M2?[0m
+
+[0m[38;2;177;185;249m❯ [0m[38;2;153;153;153m1. [0m[38;2;177;185;249mA: new clip node (Recommended)[0m
+     [0m[38;2;153;153;153mMain creates a new clip node with the agent timeline and subtitles.[0m
+  [0m[38;2;153;153;153m2. [0mB: remap via source time
+     [0m[38;2;153;153;153mRe-time cues onto the user clips. Lossy and fragile.[0m
+  [0m[38;2;153;153;153m3. [0mC: drop subtitles
+     [0m[38;2;153;153;153mKeep the user node, discard cues.[0m
+  [0m[38;2;153;153;153m4. [0mD: ask the user
+     [0m[38;2;153;153;153mShow a prompt in the app.[0m
+  [0m[38;2;153;153;153m5. [0mCombined write: arrows then paste
+[0m[38;2;153;153;153m────────────────────────────────────────────────────────────────────────────────────────────[0m
+  6. Chat about this
+
+[0m[38;2;153;153;153mEnter to select · ↑/↓ to navigate · Esc to cancel[0m

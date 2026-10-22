@@ -4244,6 +4244,17 @@
               "description": "Identifies this exact dialog, including its selected option.",
               "type": "string"
             },
+            "free_text": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentDialogFreeText"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Claude's `Type something` row, also when a short pane scrolls it away."
+            },
             "hint": {
               "description": "The key hint below the options, such as `Esc to cancel`.",
               "type": [
@@ -4262,6 +4273,13 @@
             "options": {
               "items": {
                 "$ref": "#/schemas/success_response/$defs/AgentDialogOption"
+              },
+              "type": "array"
+            },
+            "tabs": {
+              "description": "A multi-question form's question tabs, then its Submit tab.",
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AgentDialogTab"
               },
               "type": "array"
             },
@@ -4303,6 +4321,29 @@
           "required": [
             "written",
             "observation"
+          ],
+          "type": "object"
+        },
+        "AgentDialogFreeText": {
+          "properties": {
+            "checkbox": {
+              "description": "A multi-select checkbox, which Enter toggles.",
+              "type": "boolean"
+            },
+            "draft": {
+              "description": "It holds text someone typed, which Enter on the row submits.",
+              "type": "boolean"
+            },
+            "option": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "option",
+            "draft",
+            "checkbox"
           ],
           "type": "object"
         },
@@ -4358,6 +4399,10 @@
         "AgentDialogOption": {
           "description": "One numbered option of a choice dialog on an agent's screen.",
           "properties": {
+            "free_text": {
+              "description": "An inline text field: answer it with text, not by choosing it.",
+              "type": "boolean"
+            },
             "label": {
               "type": "string"
             },
@@ -4374,6 +4419,26 @@
             "number",
             "label",
             "selected"
+          ],
+          "type": "object"
+        },
+        "AgentDialogTab": {
+          "properties": {
+            "active": {
+              "description": "The tab whose question the dialog shows.",
+              "type": "boolean"
+            },
+            "answered": {
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "answered",
+            "active"
           ],
           "type": "object"
         },

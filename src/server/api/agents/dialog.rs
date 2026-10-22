@@ -9,6 +9,10 @@ use crate::server::api::errors::{encode_error, encode_error_body, encode_success
 use crate::server::app::App;
 use sha2::{Digest, Sha256};
 
+/// A written answer that only moved to a hidden free-text row; the caller
+/// checks the redrawn field before typing.
+pub(crate) const FREE_TEXT_FOCUSED: &str = "free_text_focused";
+
 impl App {
     pub(in crate::server::api) fn handle_agent_dialog_observe(
         &mut self,
@@ -84,9 +88,12 @@ impl App {
                 Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
                     (Vec::new(), Some("option_missing_or_selection_not_visible"))
                 }
-                Ok(crate::terminal::runtime::DialogChoice::NotQuestion) => {
-                    (Vec::new(), Some("not_a_free_text_question"))
-                }
+                Ok(
+                    crate::terminal::runtime::DialogChoice::NotQuestion
+                    | crate::terminal::runtime::DialogChoice::Unskippable
+                    | crate::terminal::runtime::DialogChoice::FreeTextDraft
+                    | crate::terminal::runtime::DialogChoice::Focused(_),
+                ) => (Vec::new(), Some("not_a_free_text_question")),
                 Err(error) => return encode_error(id, "dialog_write_failed", error),
             };
         let Some(observation) = dialog_observation(&agent, runtime) else {
@@ -160,6 +167,15 @@ impl App {
             Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
                 (Vec::new(), Some("question_input_unavailable"))
             }
+            Ok(crate::terminal::runtime::DialogChoice::Unskippable) => {
+                (Vec::new(), Some("skip_would_cancel_form"))
+            }
+            Ok(crate::terminal::runtime::DialogChoice::FreeTextDraft) => {
+                (Vec::new(), Some("free_text_holds_draft"))
+            }
+            Ok(crate::terminal::runtime::DialogChoice::Focused(keys)) => {
+                (keys, Some(FREE_TEXT_FOCUSED))
+            }
             Err(error) => return encode_error(id, "dialog_write_failed", error),
         };
         let Some(observation) = dialog_observation(&agent, runtime) else {
@@ -173,7 +189,7 @@ impl App {
             id,
             ResponseResult::AgentDialogChosen {
                 choice: AgentDialogChooseResult {
-                    written: reason.is_none(),
+                    written: reason.is_none_or(|reason| reason == FREE_TEXT_FOCUSED),
                     reason: reason.map(str::to_owned),
                     keys,
                     observation,
@@ -235,6 +251,22 @@ fn dialog_observation(
             },
             id: dialog.id(),
             digest: dialog.digest(),
+            free_text: dialog.free_text_summary().map(|(option, draft, checkbox)| {
+                crate::protocol::api::schema::AgentDialogFreeText {
+                    option,
+                    draft,
+                    checkbox,
+                }
+            }),
+            tabs: dialog
+                .tabs
+                .into_iter()
+                .map(|tab| crate::protocol::api::schema::AgentDialogTab {
+                    label: tab.label,
+                    answered: tab.answered,
+                    active: tab.active,
+                })
+                .collect(),
             text: dialog.text,
             options: dialog
                 .options
@@ -243,6 +275,7 @@ fn dialog_observation(
                     number: option.number,
                     label: option.label,
                     selected: option.selected,
+                    free_text: option.free_text,
                 })
                 .collect(),
             hint: dialog.hint,

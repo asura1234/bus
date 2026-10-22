@@ -13,8 +13,15 @@ pub(crate) enum DialogChoice {
     Stale,
     /// The option does not exist or the current selection is not visible.
     Unreachable,
-    /// Text answering is only available on a focused free-text question.
+    /// Text answering needs a free-text question or field.
     NotQuestion,
+    /// The question's skip key would cancel more than this question.
+    Unskippable,
+    /// The free-text row already holds text someone typed.
+    FreeTextDraft,
+    /// Arrows moved to a free-text row scrolled out of view; no text was
+    /// typed, since only the redrawn row shows whether it holds a draft.
+    Focused(Vec<String>),
 }
 
 impl TerminalRuntime {
@@ -56,19 +63,7 @@ impl TerminalRuntime {
         let Some(keys) = dialog.keys_for(option) else {
             return Ok(DialogChoice::Unreachable);
         };
-        let encode = |key: &str| {
-            let code = match key {
-                "up" => crossterm::event::KeyCode::Up,
-                "down" => crossterm::event::KeyCode::Down,
-                "left" => crossterm::event::KeyCode::Left,
-                "right" => crossterm::event::KeyCode::Right,
-                "enter" => crossterm::event::KeyCode::Enter,
-                digit => crossterm::event::KeyCode::Char(digit.chars().next().unwrap_or('0')),
-            };
-            self.encode_terminal_key(
-                crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE).into(),
-            )
-        };
+        let encode = |key: &str| self.encode_dialog_key(key);
         match keys.split_last() {
             // Moves then Enter: confirm only after the TUI redrew the selection.
             Some((enter, moves)) if !moves.is_empty() => {
@@ -92,6 +87,20 @@ impl TerminalRuntime {
         Ok(DialogChoice::Sent(
             keys.into_iter().map(str::to_owned).collect(),
         ))
+    }
+
+    fn encode_dialog_key(&self, key: &str) -> Vec<u8> {
+        let code = match key {
+            "up" => crossterm::event::KeyCode::Up,
+            "down" => crossterm::event::KeyCode::Down,
+            "left" => crossterm::event::KeyCode::Left,
+            "right" => crossterm::event::KeyCode::Right,
+            "enter" => crossterm::event::KeyCode::Enter,
+            digit => crossterm::event::KeyCode::Char(digit.chars().next().unwrap_or('0')),
+        };
+        self.encode_terminal_key(
+            crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE).into(),
+        )
     }
 
     /// Choose the live dialog option whose label starts with `label`. The
@@ -134,10 +143,16 @@ impl TerminalRuntime {
         else {
             return Ok(DialogChoice::Stale);
         };
-        let Some(input) = dialog.input else {
-            return Ok(DialogChoice::NotQuestion);
+        let Some(input) = dialog.input.as_ref() else {
+            return self.answer_free_text_option(&dialog, text, skip);
         };
-        let (code, modifiers, key) = if skip && input.skip_key == "ctrl+]" {
+        if text.is_some() && !input.value.is_empty() {
+            return Ok(DialogChoice::FreeTextDraft);
+        }
+        if skip && input.skip_key.is_none() {
+            return Ok(DialogChoice::Unskippable);
+        }
+        let (code, modifiers, key) = if skip && input.skip_key == Some("ctrl+]") {
             (
                 crossterm::event::KeyCode::Char(']'),
                 crossterm::event::KeyModifiers::CONTROL,
@@ -177,5 +192,69 @@ impl TerminalRuntime {
                 .map_err(|error| error.to_string())?;
         }
         Ok(DialogChoice::Sent(vec![key.into()]))
+    }
+
+    /// Claude's option lists end with an inline text field. Arrows focus it
+    /// and the text fills it in one write. Single-select fields need Enter;
+    /// checkbox fields tick themselves on paste, so Enter would untick them.
+    fn answer_free_text_option(
+        &self,
+        dialog: &crate::agents::dialog::Dialog,
+        text: Option<String>,
+        skip: bool,
+    ) -> Result<DialogChoice, String> {
+        let (Some(text), false) = (text, skip) else {
+            return Ok(DialogChoice::NotQuestion);
+        };
+        if dialog.free_text_option().is_none() {
+            return Ok(DialogChoice::NotQuestion);
+        }
+        if dialog.free_text_draft() {
+            return Ok(DialogChoice::FreeTextDraft);
+        }
+        let Some(moves) = dialog.free_text_keys() else {
+            return Ok(DialogChoice::Unreachable);
+        };
+        if !dialog.options.iter().any(|option| option.free_text) {
+            self.io
+                .try_send_bytes(Bytes::from(
+                    moves
+                        .iter()
+                        .flat_map(|key| self.encode_dialog_key(key))
+                        .collect::<Vec<_>>(),
+                ))
+                .map_err(|error| error.to_string())?;
+            return Ok(DialogChoice::Focused(
+                moves.into_iter().map(str::to_owned).collect(),
+            ));
+        }
+        if !self.bracketed_paste_enabled() && text.contains(['\n', '\t']) {
+            return Err("Multiline answers require bracketed paste support".into());
+        }
+        let mut input: Vec<u8> = moves
+            .iter()
+            .flat_map(|key| self.encode_dialog_key(key))
+            .collect();
+        input.extend_from_slice(&self.paste_payload(text));
+        let mut keys: Vec<String> = moves.into_iter().map(str::to_owned).collect();
+        if dialog
+            .free_text_summary()
+            .is_some_and(|(_, _, checkbox)| checkbox)
+        {
+            self.io
+                .try_send_bytes(Bytes::from(input))
+                .map_err(|error| error.to_string())?;
+            return Ok(DialogChoice::Sent(keys));
+        }
+        self.io
+            .queue_user_input_submission(
+                Bytes::from(input),
+                Bytes::from(self.encode_dialog_key("enter")),
+                DIALOG_CONFIRM_DELAY,
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        keys.push("enter".into());
+        Ok(DialogChoice::Sent(keys))
     }
 }

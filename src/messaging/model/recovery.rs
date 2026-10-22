@@ -1,5 +1,5 @@
 //! Explicit recovery and terminal failure of unsubmitted queued requests.
-use super::{BusState, ModelError, RequestId, RequestPhase, RuntimeStatus};
+use super::{BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus};
 
 impl BusState {
     /// Capture all reasons before recovery clears the agent's last refusal.
@@ -36,9 +36,38 @@ impl BusState {
                     "Queued request {} was not submitted ({reason}); it was closed and will not run later. Resend the message when ready.", id.0
                 ));
             }
+            self.redirect_dialog_notice(id, &reason, now_ms)?;
             expired.push(id);
         }
         Ok(expired)
+    }
+
+    /// A blocked notice the orchestrator never took would leave the dialog
+    /// unreported for as long as it stays open, so the developer gets it.
+    fn redirect_dialog_notice(
+        &mut self,
+        request: RequestId,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let Some((agent, room)) = self
+            .agents
+            .values()
+            .find(|agent| agent.dialog_notice_to == Some(DialogNoticeTo::Orchestrator(request)))
+            .map(|agent| (agent.id, agent.room_id))
+        else {
+            return Ok(());
+        };
+        let text = format!(
+            "{}\nThe orchestrator did not receive this ({reason}).",
+            self.requests
+                .get(&request)
+                .ok_or(ModelError::UnknownRequest(request))?
+                .prompt
+                .text
+        );
+        self.post_to_developer(room, agent, text, Vec::new(), now_ms)?;
+        self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 
     pub(crate) fn recover_idle_request(

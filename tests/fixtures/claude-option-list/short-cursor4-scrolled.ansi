@@ -1,0 +1,15 @@
+[0m[38;2;153;153;153m────────────────────────────────────────────────────────────────────────[0m
+[0m[38;2;0;0;0m[48;2;177;185;249m ☐ Fix [0m
+
+[0m[1m[38;2;255;255;255mWhich fix should I implement for M2?[0m
+
+[0m[38;2;153;153;153m↑ 2. [0mB: remap via source time
+     [0m[38;2;153;153;153mRe-time cues onto the user clips. Lossy and fragile.[0m
+  [0m[38;2;153;153;153m3. [0mC: drop subtitles
+     [0m[38;2;153;153;153mKeep the user node, discard cues.[0m
+[0m[38;2;177;185;249m❯ [0m[38;2;153;153;153m4.[0m [0m[38;2;177;185;249mD: ask the user[0m
+     [0m[38;2;153;153;153mShow a prompt in the app.[0m
+[0m[38;2;153;153;153m────────────────────────────────────────────────────────────────────────[0m
+  6. Chat about this
+
+[0m[38;2;153;153;153mEnter to select · ↑/↓ to navigate · Esc to cancel[0m

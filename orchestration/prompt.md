@@ -129,7 +129,9 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   `bus agent dialog AGENT` shows a dialog with a fresh fingerprint (`bus agent
   read AGENT --source visible` shows any other screen). Then use `bus agent
   choose AGENT --option N --fingerprint F` for choices, or `bus agent answer
-  AGENT --text "..." --fingerprint F` / `--skip` for text questions.
+  AGENT --text "..." --fingerprint F` / `--skip` for text questions. A
+  choice option marked `free_text` (Claude's `Type something.`) takes
+  `agent answer --text`, never `agent choose`.
   Answer promptly. Ask the developer before approving anything
   destructive or outward-facing.
 - Steer a working agent with a plain `bus send`; it joins the running turn.

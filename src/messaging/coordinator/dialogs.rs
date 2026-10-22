@@ -8,6 +8,7 @@ use super::{
     ResponseResult, RoomId, RuntimeStatus, Transport,
 };
 use super::{AgentId, Author, BusState, Draft, Worker};
+use crate::messaging::model::DialogNoticeTo;
 
 /// Fallback notice key for blocked list metadata without a dialog id.
 pub(super) const BLOCKED: &str = "blocked";
@@ -25,13 +26,18 @@ impl Worker {
             .agent(id)
             .filter(|agent| agent.dialog_notice.is_some())
         {
-            let readable = agent.dialog_notice.as_deref() != Some(BLOCKED);
+            // The resolution follows the blocked notice to whoever got it.
+            let to_orchestrator = agent.dialog_notice.as_deref() != Some(BLOCKED)
+                && agent.dialog_notice_to != Some(DialogNoticeTo::Developer);
             let text = format!(
                 "{} (agent {}). Resolved; dialog is gone; previous blocked notice needs no action",
                 agent.name, id.0
             );
-            post_dialog_notice(&mut state, id, readable, text)?;
+            post_dialog_notice(&mut state, id, to_orchestrator, text)?;
         }
+        state
+            .set_dialog_notice_to(id, None)
+            .map_err(|error| error.to_string())?;
         state
             .observe_dialog(id, false)
             .map_err(|error| error.to_string())?;
@@ -117,11 +123,16 @@ impl Worker {
                 continue;
             }
             let mut state = self.state.clone();
-            if starts {
-                post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;
-            }
+            let to = if starts {
+                post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?
+            } else {
+                None
+            };
             state
                 .set_dialog_notice(id, wait)
+                .map_err(|error| error.to_string())?;
+            state
+                .set_dialog_notice_to(id, to)
                 .map_err(|error| error.to_string())?;
             self.save(state)?;
         }
@@ -135,7 +146,11 @@ impl Worker {
 /// orchestrator, which delivers it like any agent message and wakes the
 /// orchestrator, or else to the developer. A blocked MASTER orchestrator tells
 /// the developer directly, since MASTER cannot itself be orchestrated.
-fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
+fn post_blocked(
+    state: &mut BusState,
+    id: AgentId,
+    open_dialog: bool,
+) -> Result<Option<DialogNoticeTo>, String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
     let text = format!(
         "{} (agent {}). {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
@@ -144,21 +159,23 @@ fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<
     if state.is_developer_attention_author(agent.room_id, &Author::Agent(id)) {
         return state
             .post_developer_attention(id, &text, crate::messaging::storage::io::now_ms())
+            .map(|_| None)
             .map_err(|error| error.to_string());
     }
     post_dialog_notice(state, id, open_dialog, text)
 }
 
 /// Blocked and resolved notices share the existing room/recipient policy.
+/// Returns who the notice went to.
 pub(super) fn post_dialog_notice(
     state: &mut BusState,
     id: AgentId,
     open_dialog: bool,
     text: String,
-) -> Result<(), String> {
+) -> Result<Option<DialogNoticeTo>, String> {
     let room = state.agent(id).ok_or("Unknown agent")?.room_id;
     if state.room(room).is_none() {
-        return Ok(());
+        return Ok(None);
     }
     let now = crate::messaging::storage::io::now_ms();
     let orchestrator = state
@@ -179,10 +196,10 @@ pub(super) fn post_dialog_notice(
                 Author::Agent(id),
                 now,
             )
-            .map(|_| ()),
+            .map(|requests| requests.first().copied().map(DialogNoticeTo::Orchestrator)),
         None => state
             .post_to_developer(room, id, text, Vec::new(), now)
-            .map(|_| ()),
+            .map(|_| Some(DialogNoticeTo::Developer)),
     }
     .map_err(|error| error.to_string())
 }

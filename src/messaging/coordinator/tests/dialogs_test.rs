@@ -29,16 +29,20 @@ fn dialog() -> schema::AgentDialog {
                 number: 1,
                 label: "Yes".into(),
                 selected: true,
+                free_text: false,
             },
             schema::AgentDialogOption {
                 number: 2,
                 label: "No".into(),
                 selected: false,
+                free_text: false,
             },
         ],
         hint: Some("Esc to cancel".into()),
         id: "dialog-id".into(),
         digest: "dialog-digest".into(),
+        free_text: None,
+        tabs: Vec::new(),
     }
 }
 
@@ -371,6 +375,57 @@ fn the_same_blocked_screen_is_not_reported_again_after_a_flicker() {
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_blocked_notice_the_orchestrator_never_takes_reaches_the_developer() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let blocked = expected_blocked(&worker, agent);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(vec![orchestrator], blocked.clone())]
+    );
+    // The orchestrator never takes its queue; the notice expires untyped.
+    let now = crate::messaging::storage::io::now_ms();
+    worker
+        .expire_queued_requests(now + crate::messaging::model::QUEUED_STALL_MS + 1)
+        .unwrap();
+    let notice = worker
+        .state
+        .requests()
+        .find(|request| request.agent_id == orchestrator)
+        .unwrap();
+    assert_eq!(
+        notice.phase,
+        crate::messaging::model::RequestPhase::Abandoned
+    );
+    let reason = notice.failure_reason.clone().unwrap();
+    let escalated = format!("{blocked}\nThe orchestrator did not receive this ({reason}).");
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [
+            (vec![orchestrator], blocked.clone()),
+            (Vec::new(), escalated.clone())
+        ]
+    );
+    // The open dialog is not reported again, and its end goes to the
+    // developer who was told about it.
+    polls(&mut worker, 3);
+    screen.lock().unwrap().dialog = false;
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [
+            (vec![orchestrator], blocked),
+            (Vec::new(), escalated),
+            (Vec::new(), expected_resolved(&worker, agent))
+        ]
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -1,0 +1,14 @@
+[0m[38;2;153;153;153m← [0m[38;2;0;0;0m[48;2;177;185;249m ☒ Fixes  [0m☐ Strategy  ✔ Submit  →
+
+[0m[1m[38;2;255;255;255mCX probe: Which fixes?[0m
+
+  [0m[38;2;153;153;153m1. [0m[ ] A: new clip node
+         [0m[38;2;153;153;153mAdd a new clip node to handle this case.[0m
+  [0m[38;2;153;153;153m2. [0m[ ] B: remap source time
+         [0m[38;2;153;153;153mRemap using source time.[0m
+[0m[38;2;177;185;249m❯ [0m[38;2;153;153;153m3. [0m[38;2;78;186;101m[✔] [0mCX paste without Enter
+     [0m[1mNext[0m
+[0m[38;2;153;153;153m───────────────────────────────────────────────────────────────────────────────────────────[0m
+  4. Chat about this
+
+[0m[38;2;153;153;153mEnter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel[0m

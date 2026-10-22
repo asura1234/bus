@@ -1,13 +1,10 @@
 //! Editable numbered instructions share the marker of a selected menu option.
-use super::{is_separator, numbered_options, option_line, unboxed};
+use super::{block_start, is_separator, numbered_options, unboxed};
 
 /// Inspect the last numbered block's own frame: transcript composers must not
 /// suppress a later real permission dialog.
 pub(super) fn contains(lines: &[&str]) -> bool {
-    let Some(start) = lines
-        .iter()
-        .rposition(|line| option_line(line).is_some_and(|option| option.number == 1))
-    else {
+    let Some(start) = block_start(lines) else {
         return false;
     };
     if unboxed(lines[start]).trim_start().starts_with('›') {

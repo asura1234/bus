@@ -1,0 +1,39 @@
+
+[0m[38;2;215;119;87m ▐[0m[38;2;215;119;87m[48;2;0;0;0m▛███▛█   [0m[1mClaude Code [0m[38;2;153;153;153mv2.1.308[0m
+[0m[38;2;215;119;87m▝▜[0m[38;2;215;119;87m[48;2;0;0;0m█████[0m[38;2;215;119;87m█▀  [0m[38;2;153;153;153mOpus 5.5 (1M context) · Claude Max[0m
+[0m[38;2;215;119;87m ▝▝   ▝▝   [0m[38;2;153;153;153m/private/tmp/bus-tui/tabs/work/proj[0m
+
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mCall the AskUserQuestion tool exactly once with two questions, multiSelect false for [0m[48;2;55;55;55m     [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mboth. Question 1: header "Fresh files", question "Which fresh-file strategy should the [0m[48;2;55;55;55m   [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mtest use?", options "Temp dir per test (Recommended)" (description "Isolated and parallel[0m[48;2;55;55;55m [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55msafe."), "Shared fixture dir" (description "Faster but order dependent."). Question 2: [0m[48;2;55;55;55m   [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mheader "Helper home", question "Where should the helper binary live?", options "Inside [0m[48;2;55;55;55m   [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mtarget dir (Recommended)" (description "Cleaned with cargo clean."), "Under temp" [0m[48;2;55;55;55m        [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55m(description "Survives rebuilds."). After the answers, reply with exactly the answers you[0m[48;2;55;55;55m [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mreceived.[0m[48;2;55;55;55m                                                                                 [0m
+
+[0m[38;2;153;153;153m⏺ [0mUser declined to answer questions
+[0m[38;2;153;153;153m  ⎿  · Which fresh-file strategy should the test use? (Temp dir per test (Recommended) / [0m
+     [0m[38;2;153;153;153mShared fixture dir)[0m
+     [0m[38;2;153;153;153m· Where should the helper binary live? (Inside target dir (Recommended) / Under temp)[0m
+ 
+[0m[38;2;153;153;153m✻ Churned for 5s · done 1:53 PM[0m
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mCall the AskUserQuestion tool again with exactly the same two questions as before. After [0m[48;2;55;55;55m [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mthe answers, reply with exactly the answers you received.[0m[48;2;55;55;55m                                 [0m
+
+[0m[38;2;153;153;153m────────────────────────────────────────────────────────────────────────────────────────────[0m
+←  ☒ Fresh files  ☒ Helper home [0m[38;2;0;0;0m[48;2;177;185;249m ✔ Submit [0m[38;2;153;153;153m →[0m
+
+[0m[1m[38;2;255;255;255mReview your answers[0m
+ 
+ ● Which fresh-file strategy should the test use?
+   [0m[38;2;78;186;101m→ Fresh dir per run[0m
+ ● Where should the helper binary live?
+   [0m[38;2;78;186;101m→ Under temp[0m
+
+[0m[38;2;153;153;153mReady to submit your answers?[0m
+
+[0m[38;2;177;185;249m❯[0m [0m[38;2;153;153;153m1. [0m[38;2;177;185;249mSubmit answers[0m
+  [0m[38;2;153;153;153m2. [0mCancel
