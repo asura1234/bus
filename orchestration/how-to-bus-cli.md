@@ -921,7 +921,8 @@ bus agent answer "$agent_id" --skip --fingerprint "$fingerprint"
 `agent answer` uses the same identity and single-use fingerprint checks as
 `choose`, including the current input text. It pastes the literal text and
 presses Enter after the short confirmation delay; `--skip` sends Codex's
-Ctrl+] or the other providers' Esc. Its result includes `keys`, `skipped`, and
+Ctrl+] or Cursor's Esc. Claude questions refuse `--skip`
+(`skip_would_cancel_form`): Esc there declines the whole question or form. Its result includes `keys`, `skipped`, and
 the same `outcome` values, with `input_changed` for a question whose text field
 changed while it remained open. A numbered choice cannot be answered as text,
 except through its free-text row (below).
@@ -930,14 +931,18 @@ Codex's expanded `Queued follow-up inputs` / `Type your answer` form is
 supported; its collapsed question banner remains a working state while the
 agent is running. Expand that banner in the native pane with Shift+Left.
 Claude Code's `AskUserQuestion` option list ends with a `Type something.` row,
-which `agent dialog` marks `"free_text": true`. Answer it in one step with
+which `agent dialog` marks `"free_text": true` (multi-select forms: the
+`[ ] Type something` checkbox) and summarizes as `free_text` (`option`,
+`draft`, `checkbox`). Answer it in one step with
 `agent answer --text` on the choice dialog's fingerprint: Bus moves to the row,
 types the text and presses Enter. `agent choose` refuses that row, because
-Enter on the empty field declines the whole question. Bus types into the row
-only while it is visible and empty; a draft someone left there, or a row
-scrolled out of a short pane, makes the answer fail with no keys sent. In a
-short pane Claude shows only part of the list; `agent dialog` returns the
-visible options with their real numbers, which `choose` still accepts.
+Enter on the empty field declines the whole question. If someone left a draft
+in the row, `agent answer` refuses (`free_text_holds_draft`) and `agent choose`
+on the row submits the draft; replacing a draft needs the agent's pane. In a
+short pane Claude shows only part of the list: `agent dialog` returns the
+visible options with their real numbers, `choose` also takes the numbers
+scrolled out of view, and `free_text.option` names the row even when hidden,
+so `answer --text` still reaches it.
 When the cursor is already on the row, `agent dialog` shows it as a focused
 text question, as it does for Cursor's `Other` row.
 A multi-question form (`←  ☐ Fresh files  ☐ Helper home  ✔ Submit  →`) shows

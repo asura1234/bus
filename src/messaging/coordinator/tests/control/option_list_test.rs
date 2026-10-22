@@ -21,6 +21,13 @@ fn observation(screen: &str) -> schema::AgentDialogObservation {
         },
         id: dialog.id(),
         digest: dialog.digest(),
+        free_text: dialog.free_text_summary().map(|(option, draft, checkbox)| {
+            schema::AgentDialogFreeText {
+                option,
+                draft,
+                checkbox,
+            }
+        }),
         tabs: dialog
             .tabs
             .into_iter()
@@ -152,7 +159,7 @@ fn free_text_on_an_option_list_is_one_answer_and_never_a_bare_choice() {
 }
 
 #[test]
-fn a_scrolled_option_list_offers_its_hidden_numbers_but_no_hidden_free_text() {
+fn a_scrolled_option_list_offers_its_hidden_numbers_and_refuses_its_hidden_free_text_row() {
     let (mut worker, agent, dir, native) = option_list_worker(include_str!(
         "../../../../../tests/fixtures/claude-option-list/short-cursor4-scrolled.ansi"
     ));
@@ -164,10 +171,11 @@ fn a_scrolled_option_list_offers_its_hidden_numbers_but_no_hidden_free_text() {
         .map(|option| option["number"].as_u64().unwrap())
         .collect();
     assert_eq!(numbers, [2, 3, 4, 6]);
+    assert_eq!(observed["dialog"]["free_text"]["option"], 5);
     assert!(worker
-        .answer_dialog(agent, Some("text"), false, &fingerprint)
+        .choose_dialog_option(agent, 5, &fingerprint)
         .unwrap_err()
-        .contains("agent choose"));
+        .contains("agent answer"));
     let chosen = worker.choose_dialog_option(agent, 6, &fingerprint).unwrap();
     assert_eq!(chosen["outcome"], "closed");
     assert_eq!(native.lock().unwrap().choices[0].option, 6);
@@ -229,6 +237,37 @@ fn the_filled_field_before_claude_takes_enter_is_not_reported_as_a_new_dialog() 
         .unwrap();
     assert_eq!(answered["outcome"], "closed");
     assert_eq!(answered["dialog"], Value::Null);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_short_pane_at_rest_can_choose_an_option_scrolled_below_the_window() {
+    let dialog = crate::agents::dialog::parse(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-rest-top.ansi"
+    ))
+    .unwrap();
+    // Claude scrolls with the selection, as it does on the way to the visible 6.
+    assert_eq!(
+        dialog.keys_for(6),
+        Some(vec!["down", "down", "down", "down", "down", "enter"])
+    );
+    assert_eq!(
+        dialog.keys_for(4),
+        Some(vec!["down", "down", "down", "enter"]),
+        "option 4 exists between the visible 3 and 6"
+    );
+}
+
+#[test]
+fn a_short_pane_at_rest_takes_a_free_text_answer() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-rest-top.ansi"
+    ));
+    let (_, fingerprint) = fingerprint(&mut worker, agent);
+    let answered = worker.answer_dialog(agent, Some("Remap whole clips only"), false, &fingerprint);
+    assert!(answered.is_ok(), "{answered:?}");
+    assert_eq!(native.lock().unwrap().answers.len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

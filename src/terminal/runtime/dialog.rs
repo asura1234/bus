@@ -17,6 +17,8 @@ pub(crate) enum DialogChoice {
     NotQuestion,
     /// The question's skip key would cancel more than this question.
     Unskippable,
+    /// The free-text row already holds text someone typed.
+    FreeTextDraft,
 }
 
 impl TerminalRuntime {
@@ -198,8 +200,11 @@ impl TerminalRuntime {
         let (Some(text), false) = (text, skip) else {
             return Ok(DialogChoice::NotQuestion);
         };
-        if !dialog.options.iter().any(|option| option.free_text) {
+        if dialog.free_text_option().is_none() {
             return Ok(DialogChoice::NotQuestion);
+        }
+        if dialog.free_text_draft() {
+            return Ok(DialogChoice::FreeTextDraft);
         }
         let Some(moves) = dialog.free_text_keys() else {
             return Ok(DialogChoice::Unreachable);

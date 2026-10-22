@@ -26,8 +26,9 @@ struct DialogFingerprintClaims {
     dialog_shape: String,
     /// The highest option number; a scrolled list can hide some below it.
     options: u32,
-    /// The option that is a text field, answered with text rather than chosen.
-    free_text: Option<u32>,
+    /// Claude's free-text row: answered with text rather than chosen, unless
+    /// it holds a draft (Enter submits it) or is a checkbox (Enter toggles it).
+    free_text: Option<schema::AgentDialogFreeText>,
     /// Makes each observation's fingerprint distinct, so spending one never
     /// blocks answering the same dialog after observing it again.
     observed_at_ns: u128,
@@ -202,11 +203,7 @@ impl Worker {
                 dialog_digest: dialog.digest.clone(),
                 dialog_shape: dialog.id.clone(),
                 options: dialog.options.last().map_or(0, |option| option.number),
-                free_text: dialog
-                    .options
-                    .iter()
-                    .find(|option| option.free_text)
-                    .map(|option| option.number),
+                free_text: dialog.free_text,
                 observed_at_ns: crate::messaging::storage::io::now_ns(),
             })?),
             None => None,
@@ -271,16 +268,7 @@ impl Worker {
         if option.is_some_and(|option| option == 0 || option > claims.options) {
             return Err(format!("Option must be between 1 and {}", claims.options));
         }
-        if option.is_some() && option == claims.free_text {
-            return Err(format!(
-                "Option {} is a free-text field, and Enter on it without text declines the question; use agent answer --text",
-                claims.free_text.unwrap_or_default()
-            ));
-        }
-        // A choice list's free-text field takes the text directly.
-        if option.is_none() && claims.options != 0 && (skip || claims.free_text.is_none()) {
-            return Err("This is a choice dialog; use agent choose".into());
-        }
+        check_free_text(&claims, option, skip)?;
         let digest = fingerprint_digest(fingerprint);
         if self.state.dialog_answer_spent(digest) {
             return Err("Dialog fingerprint was already used; observe the dialog again".into());
@@ -433,6 +421,30 @@ impl Worker {
     }
 }
 
+/// Claude's free-text row takes text, not Enter, unless Enter is harmless
+/// there: on a draft it submits the draft, on a checkbox it toggles it.
+fn check_free_text(
+    claims: &DialogFingerprintClaims,
+    option: Option<u32>,
+    skip: bool,
+) -> Result<(), String> {
+    match (option, claims.free_text) {
+        (Some(option), Some(field)) if option == field.option && !field.draft && !field.checkbox => {
+            Err(format!(
+                "Option {option} is a free-text field, and Enter on it without text declines the question; use agent answer --text"
+            ))
+        }
+        (Some(_), _) => Ok(()),
+        _ if claims.options == 0 => Ok(()),
+        (None, Some(field)) if field.draft && !skip => Err(format!(
+            "Option {} already holds a draft; agent choose {} submits it, or edit it in the agent's pane",
+            field.option, field.option
+        )),
+        (None, Some(_)) if !skip => Ok(()),
+        _ => Err("This is a choice dialog; use agent choose".into()),
+    }
+}
+
 fn dialog_json(dialog: &schema::AgentDialog) -> Value {
     let mut value = json!({
         "kind": dialog.kind,
@@ -442,6 +454,9 @@ fn dialog_json(dialog: &schema::AgentDialog) -> Value {
     });
     if !dialog.tabs.is_empty() {
         value["tabs"] = json!(dialog.tabs);
+    }
+    if let Some(field) = dialog.free_text {
+        value["free_text"] = json!(field);
     }
     value
 }

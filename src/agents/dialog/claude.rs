@@ -93,12 +93,18 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
 
 /// Claude's free-text field sits right above `Chat about this`; a scrolled
 /// list can hide it, leaving a gap in the numbers.
+/// A multi-select form's field is the `[ ] Type something` checkbox instead.
 pub(super) fn free_text_row(options: &[OptionLine]) -> Option<u32> {
+    let chat = options.last().filter(|chat| chat.label == CHAT_LABEL)?;
+    if let Some(row) = options.iter().find(|row| {
+        checkbox_label(&row.label)
+            .is_some_and(|label| label.trim_end_matches('.') == "Type something")
+    }) {
+        return Some(row.number);
+    }
     match options {
-        [.., field, chat]
-            if chat.label == CHAT_LABEL
-                && field.number + 1 == chat.number
-                && checkbox_label(&field.label).is_none() =>
+        [.., field, _]
+            if field.number + 1 == chat.number && checkbox_label(&field.label).is_none() =>
         {
             Some(field.number)
         }

@@ -73,8 +73,10 @@ fn a_scrolled_option_list_in_a_short_pane_is_still_the_dialog() {
         top.keys_for(6),
         Some(vec!["down", "down", "down", "down", "down", "enter"])
     );
-    // The free-text row is scrolled out of view, so its field cannot be checked.
-    assert_eq!(top.free_text_keys(), None);
+    // The free-text row is scrolled out of view, but its number is known.
+    assert_eq!(top.free_text_option(), Some(5));
+    assert_eq!(top.free_text_keys(), Some(vec!["down"; 4]));
+    assert_eq!(top.keys_for(5), None);
 
     let middle = parse(SHORT_CURSOR3_SCROLLED).unwrap();
     assert_eq!(
@@ -225,4 +227,67 @@ fn a_claude_free_text_question_has_no_skip_key_because_esc_cancels_the_form() {
     assert_eq!(typed.input.as_ref().unwrap().value, "Fresh dir per run");
     let single = parse(TALL_FREETEXT_FOCUSED_EMPTY).unwrap();
     assert_eq!(single.input.as_ref().unwrap().skip_key, None);
+}
+
+fn scrolled_tabbed_question(active: usize) -> String {
+    // Both questions can legitimately have the same prompt/options. Preserve
+    // the captured short-pane scrolling rows and vary only the active tab.
+    let header = match active {
+        0 => "← \x1b[7m ☐ Backend \x1b[0m ☐ Frontend  ✔ Submit  →",
+        1 => "←  ☐ Backend \x1b[7m ☐ Frontend \x1b[0m ✔ Submit  →",
+        _ => unreachable!(),
+    };
+    let old_header = SHORT_CURSOR3_SCROLLED.lines().nth(1).unwrap();
+    SHORT_CURSOR3_SCROLLED.replace(old_header, header)
+}
+
+#[test]
+fn scrolled_tabbed_question_fingerprint_tracks_the_active_tab() {
+    let first = parse(&scrolled_tabbed_question(0)).unwrap();
+    let second = parse(&scrolled_tabbed_question(1)).unwrap();
+    assert!(first.tabs[0].active && !first.tabs[1].active);
+    assert!(second.tabs[1].active && !second.tabs[0].active);
+    assert_ne!(
+        first.digest(),
+        second.digest(),
+        "a fingerprint for Backend must not authorize an answer to Frontend"
+    );
+}
+
+#[tokio::test]
+async fn scrolled_tabbed_question_rejects_a_choice_observed_on_another_tab() {
+    use crate::terminal::runtime::{DialogChoice, TerminalRuntime};
+
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel(80, 24);
+    let paint = |screen: String| {
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+    };
+    paint(scrolled_tabbed_question(0));
+    let observed = parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
+    assert!(observed.tabs[0].active);
+    paint(scrolled_tabbed_question(1));
+    let current = parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
+    assert!(current.tabs[1].active);
+    assert_eq!(
+        runtime
+            .try_choose_dialog_option(&observed.digest(), 3)
+            .unwrap(),
+        DialogChoice::Stale,
+        "switching to another tab invalidates the observed answer"
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[test]
+fn unscrolled_tabbed_question_fingerprint_tracks_the_active_tab() {
+    let first = parse(TABS_Q1_REST).unwrap();
+    let screen = TABS_Q1_REST.replace(
+        "\x1b[38;2;0;0;0m\x1b[48;2;177;185;249m ☐ Fresh files  \x1b[0m☐ Helper home",
+        " ☐ Fresh files  \x1b[38;2;0;0;0m\x1b[48;2;177;185;249m☐ Helper home\x1b[0m",
+    );
+    assert_ne!(screen, TABS_Q1_REST);
+    let second = parse(&screen).unwrap();
+    assert!(second.tabs[1].active);
+    assert_ne!(first.digest(), second.digest());
 }

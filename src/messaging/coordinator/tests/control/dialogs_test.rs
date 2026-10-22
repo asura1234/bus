@@ -40,6 +40,7 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
                 hint: Some("Press enter to continue".into()),
                 id: "dialog-id".into(),
                 digest: "dialog-digest".into(),
+                free_text: None,
                 tabs: Vec::new(),
             }),
         }
@@ -283,6 +284,13 @@ fn codex_queued_question_redraw_returns_a_fingerprint_then_allows_choose_and_ans
             },
             id: dialog.id(),
             digest: dialog.digest(),
+            free_text: dialog.free_text_summary().map(|(option, draft, checkbox)| {
+                schema::AgentDialogFreeText {
+                    option,
+                    draft,
+                    checkbox,
+                }
+            }),
             tabs: dialog
                 .tabs
                 .into_iter()

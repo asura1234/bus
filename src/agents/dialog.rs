@@ -26,8 +26,6 @@ const HINT_WORDS: &[&str] = &[
 const MAX_TITLE_LINES: usize = 12;
 /// The last row of a Claude Code question's option list.
 const CHAT_LABEL: &str = "Chat about this";
-/// The empty text field above `Chat about this`.
-const FREE_TEXT_PLACEHOLDER: &str = "Type something.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DialogKind {
@@ -123,6 +121,10 @@ impl Dialog {
                 option.number, option.selected, option.label
             ));
         }
+        // Tabs may repeat a question; only the active tab tells them apart.
+        for tab in &self.tabs {
+            hasher.update(format!("\0{}\0{}\0{}", tab.label, tab.answered, tab.active));
+        }
         hasher.update(b"\0");
         hasher.update(self.hint.as_deref().unwrap_or_default().as_bytes());
         format!("{:x}", hasher.finalize())
@@ -135,32 +137,82 @@ impl Dialog {
             .map(|option| option.number)
     }
 
-    /// The arrows that focus the visible, empty free-text field, after which
-    /// typed text is the answer. `None` without such a field or a visible
-    /// selection: a draft in the field would be edited at an unknown cursor.
+    /// The free-text row's number, also while a short pane scrolls it out of
+    /// view: it sits right above `Chat about this`.
+    pub(crate) fn free_text_option(&self) -> Option<u32> {
+        if let Some(row) = self.options.iter().find(|option| option.free_text) {
+            return Some(row.number);
+        }
+        let chat = self.claude_chat()?;
+        let above = chat.number.checked_sub(1)?;
+        let first = self.options.first()?.number;
+        (above > first && !self.options.iter().any(|option| option.number == above))
+            .then_some(above)
+    }
+
+    /// The visible free-text row holds text someone typed: Enter submits it,
+    /// and typing more would edit it at an unknown cursor.
+    pub(crate) fn free_text_draft(&self) -> bool {
+        self.options.iter().any(|option| {
+            option.free_text && {
+                let label = claude::checkbox_label(&option.label).unwrap_or(&option.label);
+                label.trim_end_matches('.') != "Type something"
+            }
+        })
+    }
+
+    /// The arrows that focus the empty free-text field, after which typed
+    /// text is the answer. `None` without such a field, with a draft in it,
+    /// or without a visible selection.
     pub(crate) fn free_text_keys(&self) -> Option<Vec<&'static str>> {
-        let field = self
-            .options
-            .iter()
-            .find(|option| option.free_text && option.label == FREE_TEXT_PLACEHOLDER)?;
-        self.moves_to(field.number)
+        let number = self.free_text_option()?;
+        if self.free_text_draft() {
+            return None;
+        }
+        self.moves_to(number)
     }
 
     /// The keys that choose `number`: arrows from the selected option, then
-    /// Enter. `None` when the option does not exist or no selection is visible,
-    /// and for the free-text field, where Enter without text declines the
-    /// question.
+    /// Enter. A Claude list's options scrolled out of a short pane count too.
+    /// `None` when the option does not exist or no selection is visible, and
+    /// for an empty single-select free-text field, where Enter declines the
+    /// whole question.
     pub(crate) fn keys_for(&self, number: u32) -> Option<Vec<&'static str>> {
-        let option = self.options.iter().find(|option| option.number == number)?;
-        if let Some(key) = option.navigation_key {
+        let option = self.options.iter().find(|option| option.number == number);
+        if let Some(key) = option.and_then(|option| option.navigation_key) {
             return Some(vec![key]);
         }
-        if option.free_text {
+        let hidden = option.is_none()
+            && self.claude_chat().is_some_and(|chat| {
+                (self.options.first().map_or(1, |first| first.number)..chat.number)
+                    .contains(&number)
+            });
+        if option.is_none() && !hidden {
+            return None;
+        }
+        let checkbox = option.is_some_and(|option| claude::checkbox_label(&option.label).is_some());
+        if Some(number) == self.free_text_option() && !checkbox && !self.free_text_draft() {
             return None;
         }
         let mut keys = self.moves_to(number)?;
         keys.push("enter");
         Some(keys)
+    }
+
+    /// The free-text row's number, whether it holds a draft, and whether it
+    /// is a multi-select checkbox.
+    pub(crate) fn free_text_summary(&self) -> Option<(u32, bool, bool)> {
+        let number = self.free_text_option()?;
+        let checkbox = self.options.iter().any(|option| {
+            option.number == number && claude::checkbox_label(&option.label).is_some()
+        });
+        Some((number, self.free_text_draft(), checkbox))
+    }
+
+    fn claude_chat(&self) -> Option<&DialogOption> {
+        self.options
+            .last()
+            .filter(|option| option.label == CHAT_LABEL && option.navigation_key.is_none())
     }
 
     fn moves_to(&self, number: u32) -> Option<Vec<&'static str>> {

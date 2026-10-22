@@ -822,7 +822,7 @@ async fn claude_option_list_free_text_answer_leaves_a_draft_and_skips_alone() {
         answer_params(&observation, Some("token"), false),
     ));
     assert!(!result.written);
-    assert_eq!(result.reason.as_deref(), Some("question_input_unavailable"));
+    assert_eq!(result.reason.as_deref(), Some("free_text_holds_draft"));
     let (mut app, mut writes_too) =
         app_with_dialog_sized(CLAUDE_OPTION_LIST.as_bytes(), Some("session"), 92, 45);
     let observation = observe_dialog(&mut app);
@@ -868,5 +868,78 @@ async fn claude_tabbed_form_free_text_answer_fills_the_row_and_choose_refuses_it
             .unwrap()
             .unwrap(),
         Bytes::from("\x1b[B\x1b[B\x1b[200~Fresh dir per run\x1b[201~")
+    );
+}
+
+#[tokio::test]
+async fn claude_short_pane_option_list_takes_free_text_scrolled_below_the_window() {
+    // A 15-row pane shows options 1-3 and Chat; Type something. (5) is hidden
+    // but its number is known from Chat (6).
+    let short =
+        include_str!("../../../../../tests/fixtures/claude-option-list/short-rest-top.ansi");
+    let (mut app, mut writes) = app_with_dialog_sized(short.as_bytes(), Some("session"), 72, 15);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    assert_eq!(
+        observation.dialog.as_ref().unwrap().kind,
+        AgentDialogKind::Choice
+    );
+    let answered = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("Remap whole clips only"), false),
+    ));
+    assert!(
+        answered.written,
+        "free text must be answerable in one command in a short pane: {:?}",
+        answered.reason
+    );
+    assert!(writes.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn claude_tabbed_multi_select_question_takes_free_text_in_one_answer() {
+    let screen = include_str!("../../../../../tests/fixtures/claude-question/multi-select.txt")
+        .replace('\n', "\r\n");
+    let (mut app, _writes) = app_with_dialog_sized(screen.as_bytes(), Some("session"), 80, 24);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert!(!dialog.tabs.is_empty(), "a tabbed form");
+    assert!(
+        dialog.options.iter().any(|option| option.free_text),
+        "the form's Type something row is not reported as free text: {:?}",
+        dialog.options
+    );
+}
+
+#[tokio::test]
+async fn claude_option_list_free_text_row_holding_a_draft_can_still_be_submitted() {
+    // Someone left text in the field; Enter on it submits that text rather
+    // than declining, yet neither choose nor answer can reach it.
+    let draft = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-rest-freetext-holds-text.ansi"
+    );
+    let (mut app, _writes) = app_with_dialog_sized(draft.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.options[4].label, "Combined write: arrows then paste");
+    let submitted = chosen(&choose(
+        &mut app,
+        &observation,
+        Some("session"),
+        &dialog.digest,
+        5,
+    ));
+    assert!(
+        submitted.written,
+        "the draft row is unreachable: {:?}",
+        submitted.reason
     );
 }

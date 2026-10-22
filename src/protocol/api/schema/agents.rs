@@ -69,6 +69,18 @@ pub struct AgentDialog {
     /// A multi-question form's question tabs, then its Submit tab.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabs: Vec<AgentDialogTab>,
+    /// Claude's `Type something` row, also when a short pane scrolls it away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_text: Option<AgentDialogFreeText>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentDialogFreeText {
+    pub option: u32,
+    /// It holds text someone typed, which Enter on the row submits.
+    pub draft: bool,
+    /// A multi-select checkbox, which Enter toggles.
+    pub checkbox: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -4244,6 +4244,17 @@
               "description": "Identifies this exact dialog, including its selected option.",
               "type": "string"
             },
+            "free_text": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentDialogFreeText"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Claude's `Type something` row, also when a short pane scrolls it away."
+            },
             "hint": {
               "description": "The key hint below the options, such as `Esc to cancel`.",
               "type": [
@@ -4310,6 +4321,29 @@
           "required": [
             "written",
             "observation"
+          ],
+          "type": "object"
+        },
+        "AgentDialogFreeText": {
+          "properties": {
+            "checkbox": {
+              "description": "A multi-select checkbox, which Enter toggles.",
+              "type": "boolean"
+            },
+            "draft": {
+              "description": "It holds text someone typed, which Enter on the row submits.",
+              "type": "boolean"
+            },
+            "option": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "option",
+            "draft",
+            "checkbox"
           ],
           "type": "object"
         },

@@ -86,7 +86,8 @@ impl App {
                 }
                 Ok(
                     crate::terminal::runtime::DialogChoice::NotQuestion
-                    | crate::terminal::runtime::DialogChoice::Unskippable,
+                    | crate::terminal::runtime::DialogChoice::Unskippable
+                    | crate::terminal::runtime::DialogChoice::FreeTextDraft,
                 ) => (Vec::new(), Some("not_a_free_text_question")),
                 Err(error) => return encode_error(id, "dialog_write_failed", error),
             };
@@ -164,6 +165,9 @@ impl App {
             Ok(crate::terminal::runtime::DialogChoice::Unskippable) => {
                 (Vec::new(), Some("skip_would_cancel_form"))
             }
+            Ok(crate::terminal::runtime::DialogChoice::FreeTextDraft) => {
+                (Vec::new(), Some("free_text_holds_draft"))
+            }
             Err(error) => return encode_error(id, "dialog_write_failed", error),
         };
         let Some(observation) = dialog_observation(&agent, runtime) else {
@@ -239,6 +243,13 @@ fn dialog_observation(
             },
             id: dialog.id(),
             digest: dialog.digest(),
+            free_text: dialog.free_text_summary().map(|(option, draft, checkbox)| {
+                crate::protocol::api::schema::AgentDialogFreeText {
+                    option,
+                    draft,
+                    checkbox,
+                }
+            }),
             tabs: dialog
                 .tabs
                 .into_iter()
