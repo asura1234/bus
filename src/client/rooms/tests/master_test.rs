@@ -694,6 +694,46 @@ fn orchestrators_are_green_in_work_room_messages_in_both_palettes() {
 }
 
 #[test]
+fn bus_signs_its_notices_bus_in_grey_in_work_rooms_and_master() {
+    let grey = ratatui::style::Color::Rgb(145, 148, 159);
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let orchestrator = state
+        .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+        .unwrap();
+    state.bind_orchestrator(orchestrator, work).unwrap();
+    state
+        .submit_message_from(
+            work,
+            Draft {
+                text: "builder (agent 3). Blocked, needs help to continue.".into(),
+                files: Vec::new(),
+                recipient_ids: AgentRecipients::from([orchestrator]),
+            },
+            Author::Bus,
+            5,
+        )
+        .unwrap();
+    state
+        .post_developer_attention(orchestrator, "Blocked, needs help to continue.", 6)
+        .unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+    for color_blind in [false, true] {
+        ui.settings.color_blind_mode = color_blind;
+        ui.open_room(work);
+        assert_eq!(name_colors(&mut ui, "bus → orch", "bus"), [grey; 3]);
+        ui.open_room(master);
+        assert_eq!(name_colors(&mut ui, "bus → You", "bus"), [grey; 3]);
+    }
+}
+
+#[test]
 fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
     let (ui, _, pr, _, _) = master_fixture();
     let mut snapshot = (*ui.snapshot).clone();

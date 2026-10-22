@@ -2,8 +2,8 @@
 use super::types::clock;
 use super::{
     AgentId, Author, BusState, Draft, ModelError, Prompt, PromptId, Request, RequestId,
-    RequestPhase, RoomId, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, DELIVERED_STALL_MS,
-    QUEUED_STALL_MS,
+    RequestPhase, RoomId, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER,
+    DELIVERED_STALL_MS, QUEUED_STALL_MS,
 };
 
 impl BusState {
@@ -103,7 +103,6 @@ impl BusState {
             files: draft.files,
             recipient_ids: draft.recipient_ids,
             submitted_at_ms: now_ms,
-            compaction_limit_notice: false,
             attention_origin: None,
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
@@ -146,14 +145,12 @@ impl BusState {
             .rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
-        // Bus dialog notices are delivery-only (see `Request::delivery_only`).
-        if prompt.author != Author::Bus {
-            // An agent's message is news for the developer, like a reply; their own is not.
-            if prompt.author != Author::Developer && self.visible_room != Some(room) {
-                room_state.unread_count = room_state.unread_count.saturating_add(1);
-            }
-            room_state.latest_prompt = Some(prompt);
+        // An agent's or Bus's message is news for the developer, like a reply;
+        // their own is not.
+        if prompt.author != Author::Developer && self.visible_room != Some(room) {
+            room_state.unread_count = room_state.unread_count.saturating_add(1);
         }
+        room_state.latest_prompt = Some(prompt);
         room_state.draft.text.clear();
         room_state.draft.files.clear();
         Ok(request_ids)
@@ -725,7 +722,7 @@ impl BusState {
     fn sender_name(&self, author: &Author) -> String {
         match author {
             Author::Developer => "the developer".into(),
-            Author::Bus => "Bus".into(),
+            Author::Bus => BUS_SENDER.into(),
             Author::Agent(id) => self
                 .agents
                 .get(id)

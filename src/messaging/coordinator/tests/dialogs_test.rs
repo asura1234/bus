@@ -184,9 +184,11 @@ fn worker(
     (worker, agent, room, orchestrator, screen, dir)
 }
 
-/// Messages `author` sent in `room`: (recipients, text), oldest first. A
-/// message to the developer has no recipients.
-fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>, String)> {
+/// Bus notices about `about` in `room`: (recipients, text), oldest first. A
+/// notice to the developer has no recipients.
+fn sent_by(worker: &Worker, room: RoomId, about: AgentId) -> Vec<(Vec<AgentId>, String)> {
+    let name = &worker.state.agent(about).unwrap().name;
+    let prefix = format!("{name} (agent {}).", about.0);
     let mut sent: BTreeMap<PromptId, (Vec<AgentId>, String)> = worker
         .state
         .requests()
@@ -194,12 +196,12 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
         .map(|request| &request.prompt)
         .chain(worker.state.room(room).unwrap().notices.iter())
         .filter(|prompt| {
-            prompt.author == Author::Agent(author)
-                || (prompt.author == Author::Bus
-                    && prompt
+            prompt.author == Author::Bus
+                && (prompt.text.starts_with(&prefix)
+                    || prompt
                         .attention_origin
                         .as_ref()
-                        .is_some_and(|origin| origin.agent_id == author))
+                        .is_some_and(|origin| origin.agent_id == about))
         })
         .map(|prompt| {
             (
@@ -240,12 +242,12 @@ fn expected_blocked(worker: &Worker, id: AgentId) -> String {
     }
 }
 
-/// Worker blocks stay in their work room, and Bus authors no messages.
-fn assert_bus_sent_nothing(worker: &Worker) {
+/// Worker blocks stay in their work room, signed by Bus, never by the worker.
+fn assert_only_bus_signed_notices(worker: &Worker) {
     assert!(worker
         .state
         .requests()
-        .all(|request| request.prompt.author != Author::Bus));
+        .all(|request| !matches!(request.prompt.author, Author::Agent(_))));
     let master = worker.state.master_room().unwrap().id;
     let master_room = worker.state.room(master).unwrap();
     assert!(master_room.notices.is_empty(), "{:?}", master_room.notices);
@@ -258,7 +260,7 @@ fn assert_bus_sent_nothing(worker: &Worker) {
         assert!(room
             .notices
             .iter()
-            .all(|notice| notice.author != Author::Bus));
+            .all(|notice| !matches!(notice.author, Author::Agent(_))));
     }
 }
 
@@ -321,7 +323,7 @@ fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
             (vec![orchestrator], expected_resolved(&worker, agent))
         ]
     );
-    assert_bus_sent_nothing(&worker);
+    assert_only_bus_signed_notices(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -359,7 +361,7 @@ fn answering_resolves_old_help_and_a_new_dialog_is_a_new_episode() {
             blocked
         ]
     );
-    assert_bus_sent_nothing(&worker);
+    assert_only_bus_signed_notices(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -439,10 +441,10 @@ fn without_an_orchestrator_the_blocked_worker_tells_the_developer() {
         sent_by(&worker, room, agent),
         [(Vec::new(), expected_blocked(&worker, agent))]
     );
-    // An agent's message to the developer is news: it counts as unread.
+    // A Bus notice to the developer is news: it counts as unread.
     assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
     assert_eq!(worker.state.requests().count(), 0);
-    assert_bus_sent_nothing(&worker);
+    assert_only_bus_signed_notices(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -25,6 +25,8 @@ use ratatui::style::{Color, Style};
 
 /// Background of mouse-selected text.
 const SELECTION: Color = Color::Rgb(44, 88, 56);
+/// Muted text, and the "bus" sender of Bus-generated notices.
+pub(super) const GREY: Color = Color::Rgb(145, 148, 159);
 pub(super) const ACCENT: Color = {
     let [r, g, b] = crate::messaging::prefs::colors::YOU_COLOR;
     Color::Rgb(r, g, b)

@@ -331,21 +331,62 @@ impl BusState {
         if agent.deletion_pending {
             return Err(ModelError::DeletionPending);
         }
-        self.record_developer_notice(room, author, text, files, now_ms)
+        self.record_developer_notice(room, Author::Agent(author), text, files, now_ms)
     }
 
-    /// A final cleanup notice from a deleting agent goes to its surviving
+    /// The room's orchestrator when it can take a Bus notice: not being
+    /// deleted, and not the agent the notice is about.
+    pub(crate) fn notice_orchestrator(
+        &self,
+        room: RoomId,
+        about: Option<AgentId>,
+    ) -> Option<AgentId> {
+        self.orchestrator_of(room)
+            .filter(|agent| Some(agent.id) != about && !agent.deletion_pending)
+            .map(|agent| agent.id)
+    }
+
+    /// Posts Bus's own notice in `room`, signed "bus": delivered to
+    /// `orchestrator` like any message, or with none, a notice to the developer.
+    pub(crate) fn post_bus_notice(
+        &mut self,
+        room: RoomId,
+        orchestrator: Option<AgentId>,
+        text: String,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
+        let Some(orchestrator) = orchestrator else {
+            return self.record_developer_notice(room, Author::Bus, text, Vec::new(), now_ms);
+        };
+        let requests = self.submit_message_from(
+            room,
+            Draft {
+                text,
+                files: Vec::new(),
+                recipient_ids: [orchestrator].into(),
+            },
+            Author::Bus,
+            now_ms,
+        )?;
+        requests
+            .first()
+            .and_then(|id| self.requests.get(id))
+            .map(|request| request.prompt.id)
+            .ok_or(ModelError::InvalidTransition)
+    }
+
+    /// Bus's final cleanup notice about a deleting agent goes to its surviving
     /// orchestrator, else room history. A deleting room reports in MASTER.
     pub(crate) fn post_deletion_notice(
         &mut self,
-        author: AgentId,
+        deleted: AgentId,
         message: String,
         now_ms: u64,
     ) -> Result<(), ModelError> {
         let agent = self
             .agents
-            .get(&author)
-            .ok_or(ModelError::UnknownAgent(author))?;
+            .get(&deleted)
+            .ok_or(ModelError::UnknownAgent(deleted))?;
         if !agent.deletion_pending {
             return Err(ModelError::InvalidTransition);
         }
@@ -359,32 +400,15 @@ impl BusState {
         } else {
             agent.room_id
         };
-        if let Some(orchestrator) = self
-            .orchestrator_of(room)
-            .filter(|agent| agent.id != author && !agent.deletion_pending)
-            .map(|agent| agent.id)
-        {
-            self.submit_message_from(
-                room,
-                Draft {
-                    text,
-                    files: Vec::new(),
-                    recipient_ids: [orchestrator].into(),
-                },
-                Author::Agent(author),
-                now_ms,
-            )
+        let orchestrator = self.notice_orchestrator(room, Some(deleted));
+        self.post_bus_notice(room, orchestrator, text, now_ms)
             .map(|_| ())
-        } else {
-            self.record_developer_notice(room, author, text, Vec::new(), now_ms)
-                .map(|_| ())
-        }
     }
 
     fn record_developer_notice(
         &mut self,
         room: RoomId,
-        author: AgentId,
+        author: Author,
         text: String,
         files: Vec<PathBuf>,
         now_ms: u64,
@@ -397,12 +421,11 @@ impl BusState {
             .ok_or(ModelError::UnknownRoom(room))?;
         let prompt = Prompt {
             id,
-            author: Author::Agent(author),
+            author,
             text,
             files,
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: now_ms,
-            compaction_limit_notice: false,
             attention_origin: None,
         };
         // The latest prompt is what rings and what the composer recalls, as

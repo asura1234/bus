@@ -607,7 +607,7 @@ impl BusState {
                 .requests
                 .get(id)
                 .ok_or(ModelError::UnknownRequest(*id))?;
-            if request.delivery_only() || request.settled() {
+            if request.settled() {
                 continue;
             }
             replies.insert(

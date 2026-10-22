@@ -567,7 +567,7 @@ fn left_open_deletion_notifies_orchestrator_once_without_a_composer_error() {
         .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].agent_id, orchestrator);
-    assert_eq!(notices[0].prompt.author, Author::Agent(agent));
+    assert_eq!(notices[0].prompt.author, Author::Bus);
     assert!(notices[0].prompt.text.contains("author") && notices[0].prompt.text.contains("pane"));
     drop(worker);
     let recovered = JsonStore::new(dir.join("state.json"))

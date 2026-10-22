@@ -1,5 +1,5 @@
 //! Durable, code-driven worker context-limit notices.
-use super::{AgentId, Author, BusState, Draft, ModelError, RoomKind};
+use super::{AgentId, BusState, ModelError, RoomKind};
 
 impl BusState {
     /// The notice and its latch are part of the same saved state. Raising the
@@ -48,55 +48,12 @@ impl BusState {
     fn post_compaction_notice(&mut self, id: AgentId, now_ms: u64) -> Result<(), ModelError> {
         let agent = self.agents.get(&id).ok_or(ModelError::UnknownAgent(id))?;
         let room = agent.room_id;
-        let orchestrator = self
-            .orchestrator_of(room)
-            .filter(|agent| !agent.deletion_pending)
-            .map(|agent| agent.id);
-        let to = if orchestrator.is_some() {
-            "orchestrator"
-        } else {
-            "You"
-        };
         let text = format!(
-            "{} -> {to}: reached {} compactions; get a handover note and replace it.",
+            "{} reached {} compactions; get a handover note and replace it.",
             agent.name, agent.compactions.count
         );
-        let prompt_id = if let Some(orchestrator) = orchestrator {
-            let requests = self.submit_message_from(
-                room,
-                Draft {
-                    text,
-                    files: Vec::new(),
-                    recipient_ids: [orchestrator].into(),
-                },
-                Author::Agent(id),
-                now_ms,
-            )?;
-            let request = requests
-                .first()
-                .and_then(|id| self.requests.get_mut(id))
-                .ok_or(ModelError::InvalidTransition)?;
-            request.prompt.compaction_limit_notice = true;
-            request.prompt.id
-        } else {
-            let prompt = self.post_to_developer(room, id, text, Vec::new(), now_ms)?;
-            if let Some(saved) = self
-                .rooms
-                .get_mut(&room)
-                .and_then(|room| room.notices.last_mut())
-            {
-                saved.compaction_limit_notice = true;
-            }
-            prompt
-        };
-        if let Some(prompt) = self
-            .rooms
-            .get_mut(&room)
-            .and_then(|room| room.latest_prompt.as_mut())
-            .filter(|prompt| prompt.id == prompt_id)
-        {
-            prompt.compaction_limit_notice = true;
-        }
-        Ok(())
+        let orchestrator = self.notice_orchestrator(room, Some(id));
+        self.post_bus_notice(room, orchestrator, text, now_ms)
+            .map(|_| ())
     }
 }

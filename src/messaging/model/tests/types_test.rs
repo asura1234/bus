@@ -131,7 +131,7 @@ fn developer_attention_stall_uses_existing_deadline_and_ignores_working_or_block
 }
 
 #[test]
-fn developer_attention_bus_notice_survives_roundtrip_and_legacy_bus_notice_does_not() {
+fn every_bus_notice_survives_a_roundtrip_with_or_without_an_attention_origin() {
     let mut state = BusState::default();
     let master = state.ensure_master_room();
     let work = state.create_room("work").unwrap();
@@ -139,7 +139,7 @@ fn developer_attention_bus_notice_survives_roundtrip_and_legacy_bus_notice_does_
     state.bind_orchestrator(agent, work).unwrap();
     for text in [
         "[needs_developer_attention] Process exited",
-        "legacy Bus notice",
+        "impl reached 5 compactions; get a handover note and replace it.",
     ] {
         state
             .post_to_developer(master, agent, text.into(), vec![], 10)
@@ -157,12 +157,10 @@ fn developer_attention_bus_notice_survives_roundtrip_and_legacy_bus_notice_does_
     });
     let reopened: BusState = serde_json::from_value(encoded).unwrap();
     let notices: Vec<_> = reopened.notices(master).collect();
-    assert_eq!(
-        notices.len(),
-        1,
-        "the tagged Bus notice must remain durable"
-    );
+    assert_eq!(notices.len(), 2, "every Bus notice must remain durable");
     assert!(notices[0].text.contains("Process exited"));
+    assert!(notices[1].text.contains("reached 5 compactions"));
+    assert!(notices.iter().all(|notice| notice.author == Author::Bus));
     let saved = serde_json::to_value(&reopened).unwrap();
     assert_eq!(
         saved["rooms"][master.0.to_string()]["notices"][0]["attention_origin"]["agent_name"],
@@ -405,7 +403,6 @@ fn claude_image_placeholder_matches_when_text_before_the_image_ends_in_whitespac
             files: vec![PathBuf::from("/tmp/a.png")],
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: 0,
-            compaction_limit_notice: false,
             attention_origin: None,
         };
         // Whether the hook keeps the trailing space or not, the lifted image

@@ -15,6 +15,10 @@ id_type!(AgentId);
 id_type!(PromptId);
 id_type!(RequestId);
 
+/// The name every Bus-generated notice is shown under, in chat and in what
+/// agents receive.
+pub(crate) const BUS_SENDER: &str = "bus";
+
 /// Who wrote a prompt. Saved JSON is `"human"`, `"bus"` or `{"agent":N}`.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,7 +27,9 @@ pub(crate) enum Author {
     #[serde(rename = "human")]
     Developer,
     Agent(AgentId),
-    /// Bus itself, such as a notice that an agent waits on a dialog.
+    /// Bus itself, shown as the grey sender "bus": every notice Bus generates
+    /// (a blocked dialog, a compaction or idle-agents limit, a deleted agent's
+    /// open terminal) is signed this way, never with an agent's name.
     Bus,
 }
 
@@ -166,9 +172,6 @@ pub(crate) struct Prompt {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) recipient_ids: AgentRecipients,
     pub(crate) submitted_at_ms: u64,
-    /// Render a code-driven compaction notice as one plain chat line.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) compaction_limit_notice: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
 }
@@ -222,13 +225,9 @@ pub(crate) struct Room {
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
-    /// Messages to the developer with no agent recipients, including typed
-    /// Bus attention notices. Untyped legacy Bus notices are dropped on load.
-    #[serde(
-        default,
-        skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "deserialize_notices"
-    )]
+    /// Messages to the developer with no agent recipients, including Bus's
+    /// own notices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) notices: Vec<Prompt>,
     pub(crate) latest_replies: BTreeMap<AgentId, Reply>,
     #[serde(default)]
@@ -527,14 +526,6 @@ pub(crate) struct ShellHold {
 }
 
 impl Request {
-    /// A Bus-authored request is a dialog notice for a room's orchestrator. It is
-    /// delivered to that agent like any message but is noise for the developer, who
-    /// watches the agent's terminal instead: it never shows in room history,
-    /// previews, unread counts or rings.
-    pub(crate) fn delivery_only(&self) -> bool {
-        self.prompt.author == Author::Bus
-    }
-
     pub(crate) fn matches_callback_payload(&self, payload: &str) -> bool {
         match &self.submitted_payload {
             Some(typed) => payload_matches(payload, typed),
@@ -771,19 +762,6 @@ impl std::fmt::Display for ModelError {
 }
 
 impl std::error::Error for ModelError {}
-
-fn deserialize_notices<'de, D>(deserializer: D) -> Result<Vec<Prompt>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let mut notices = Vec::<Prompt>::deserialize(deserializer)?;
-    notices.retain(|notice| {
-        notice.author != Author::Bus
-            || (notice.attention_origin.is_some()
-                && crate::messaging::attention::text(&notice.text).is_some())
-    });
-    Ok(notices)
-}
 
 /// How long a queued message may wait on an agent that is not working before
 /// it counts as stalled. Delivery normally starts within a status tick of the

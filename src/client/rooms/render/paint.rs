@@ -1,6 +1,6 @@
 //! Paint the prepared view and acknowledge emitted thumbnail graphics.
 use super::super::BusUi;
-use super::{cell_width, display, Row, ACCENT, SELECTION};
+use super::{cell_width, display, Row, ACCENT, GREY, SELECTION};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 use ratatui::{
     buffer::Buffer,
@@ -135,7 +135,7 @@ fn paint_row(row: &Row, buffer: &mut Buffer, sidebar_selected: bool) {
         return;
     }
     let foreground = row.color.unwrap_or(if row.muted {
-        Color::Rgb(145, 148, 159)
+        GREY
     } else {
         Color::Rgb(222, 222, 226)
     });

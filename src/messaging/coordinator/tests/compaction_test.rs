@@ -165,11 +165,11 @@ fn crossing_the_limit_posts_one_plain_notice_to_the_rooms_orchestrator() {
     compact(&mut worker, agent, 1);
     let posted = notices(&worker, room);
     assert_eq!(posted.len(), 1);
-    assert_eq!(posted[0].author, Author::Agent(agent));
+    assert_eq!(posted[0].author, Author::Bus);
     assert_eq!(posted[0].recipient_ids, [orchestrator.unwrap()].into());
     assert_eq!(
         posted[0].text,
-        "impl -> orchestrator: reached 5 compactions; get a handover note and replace it."
+        "impl reached 5 compactions; get a handover note and replace it."
     );
     assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
     compact(&mut worker, agent, 3);
@@ -257,12 +257,13 @@ fn a_room_without_an_orchestrator_addresses_the_developer() {
     compact(&mut worker, agent, 5);
     let posted = notices(&worker, room);
     assert_eq!(posted.len(), 1);
-    assert_eq!(posted[0].author, Author::Agent(agent));
+    assert_eq!(posted[0].author, Author::Bus);
     assert!(posted[0].recipient_ids.is_empty());
     assert_eq!(
         posted[0].text,
-        "impl -> You: reached 5 compactions; get a handover note and replace it."
+        "impl reached 5 compactions; get a handover note and replace it."
     );
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
     assert!(worker.state.requests().next().is_none());
     cleanup(worker, dir);
 }

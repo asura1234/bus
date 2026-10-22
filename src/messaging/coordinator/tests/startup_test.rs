@@ -284,7 +284,7 @@ fn startup_failure_is_delivered_to_the_room_orchestrator_after_broken_author_is_
         .requests()
         .find(|r| r.agent_id == orchestrator)
         .unwrap();
-    assert_eq!(request.prompt.author, Author::Agent(agent));
+    assert_eq!(request.prompt.author, Author::Bus);
     assert!(request.prompt.text.contains("Startup failed"));
     assert_eq!(worker.state.notices(room).count(), 0);
     drop(worker);

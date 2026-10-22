@@ -120,7 +120,6 @@ impl BusState {
             files: Vec::new(),
             recipient_ids: Default::default(),
             submitted_at_ms: now_ms,
-            compaction_limit_notice: false,
             attention_origin: Some(origin),
         };
         room.latest_prompt = Some(prompt.clone());
@@ -272,7 +271,6 @@ impl BusState {
             });
         let replies = self.requests().filter_map(move |request| {
             if Some(request.room_id) != master
-                || request.delivery_only()
                 || request.phase != super::RequestPhase::Completed
                 || !self.is_developer_attention_author(
                     request.room_id,
