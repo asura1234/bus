@@ -221,7 +221,6 @@ impl TerminalRuntime {
             return Ok(DialogChoice::Unreachable);
         }
         let (code, modifiers, key) = if skip && input.skip_key == Some("ctrl+]") {
-
             (
                 crossterm::event::KeyCode::Char(']'),
                 crossterm::event::KeyModifiers::CONTROL,
