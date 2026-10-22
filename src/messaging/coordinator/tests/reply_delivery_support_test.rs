@@ -32,7 +32,7 @@ struct Terminal {
     input: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     draft: String,
     submitted: Vec<String>,
-    captured_image_screen: bool,
+    captured_screen: Option<&'static str>,
 }
 
 struct NativeServer {
@@ -106,7 +106,7 @@ impl NativeServer {
                 input,
                 draft: String::new(),
                 submitted: Vec::new(),
-                captured_image_screen: false,
+                captured_screen: None,
             },
         );
         AgentRuntimeIdentity {
@@ -135,13 +135,11 @@ impl NativeServer {
                 }
                 // An independently captured Claude composer is the image oracle;
                 // never transform the draft with the observer's production rule.
-                let display = if terminal.captured_image_screen && !terminal.draft.is_empty() {
-                    format!(
-                        "\x1b[2J\x1b[H{}",
-                        include_str!(
-                            "../../../server/api/agents/tests/fixtures/claude_image_paste.txt"
-                        )
-                    )
+                let display = if let Some(captured) = terminal
+                    .captured_screen
+                    .filter(|_| !terminal.draft.is_empty())
+                {
+                    format!("\x1b[2J\x1b[H{captured}")
                 } else {
                     screen(terminal.provider, &terminal.draft)
                 };
@@ -579,13 +577,20 @@ impl Delivery {
         writeln!(file, "{row}").unwrap();
     }
     pub(crate) fn captured_image_composer(&mut self, agent: AgentId) {
+        self.captured_composer(
+            agent,
+            include_str!("../../../server/api/agents/tests/fixtures/claude_image_paste.txt"),
+        );
+    }
+    /// Shows `screen`, a composer captured from the real provider, for any draft.
+    pub(crate) fn captured_composer(&mut self, agent: AgentId, screen: &'static str) {
         self.native
             .lock()
             .unwrap()
             .terminals
             .get_mut(&agent)
             .unwrap()
-            .captured_image_screen = true;
+            .captured_screen = Some(screen);
     }
     pub(crate) fn provider_startup(&mut self) {
         for agent in self.agents.clone() {
