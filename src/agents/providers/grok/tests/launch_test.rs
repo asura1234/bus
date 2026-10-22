@@ -239,3 +239,24 @@ fn grok_ad_identity_probe_rejects_oversized_output() {
     fs::write(&executable,"#!/bin/sh\n# SYNTHETIC noisy identity command; no model.\n/usr/bin/head -c 70000 /dev/zero\n").unwrap();
     assert!(identity_output(&executable, "--help").is_err());
 }
+#[test]
+fn grok_launch_from_home_never_installs_a_global_grok_hook() {
+    // `~/.grok/hooks/*.json` is Grok's always-trusted global hook source; a
+    // project install must never land there, even when the launch cwd is HOME.
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let mut spec = f.spec("", true);
+    spec.cwd = home.display().to_string();
+    let prepared = common::prepare(&spec, |hooks| {
+        fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+    let global = home.join(".grok/hooks/bus.json");
+    assert!(
+        !global.exists(),
+        "a launch from HOME wrote the global Grok hook {} (prepare ok: {})",
+        global.display(),
+        prepared.is_ok()
+    );
+}
