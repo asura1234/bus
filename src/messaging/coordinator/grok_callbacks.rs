@@ -294,7 +294,7 @@ impl Worker {
 mod tests {
     use super::*;
     #[test]
-    fn grok_g_reconciliation_retry_budget_survives_reopen_and_never_spins() {
+    fn grok_reconciliation_retry_budget_survives_reopen_and_never_spins() {
         let root = crate::utils::test_temp::unique_temp_path("grok-reconcile-retry");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("event-owned.json");

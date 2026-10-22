@@ -108,7 +108,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn grok_g_synthetic_attestation_needs_owned_root_and_committed_terminal_record() {
+    fn grok_synthetic_attestation_needs_owned_root_and_committed_terminal_record() {
         let root = crate::utils::test_temp::unique_temp_path("grok-synthetic-attestation");
         let path = root.join("work/.grok/bus-fake/session/updates.jsonl");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

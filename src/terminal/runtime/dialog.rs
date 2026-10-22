@@ -11,7 +11,7 @@ mod grok_tests {
     const PERMISSION: &str = include_str!("../../../tests/fixtures/grok-dialog/permission.txt");
 
     #[tokio::test]
-    async fn grok_c_changed_scope_is_stale_under_runtime_content_lock() {
+    async fn grok_changed_scope_is_stale_under_runtime_content_lock() {
         let (runtime, mut writes) =
             crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
         let draw = |screen: &str| {
@@ -33,7 +33,7 @@ mod grok_tests {
     }
 
     #[tokio::test]
-    async fn grok_g_dismiss_exits_free_text_before_shift_x() {
+    async fn grok_dismiss_exits_free_text_before_shift_x() {
         for kitty in [false, true] {
             let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(120, 40, 8);
             if kitty {

@@ -70,7 +70,9 @@ impl NativeServer {
         self.app.state.ensure_test_terminals();
         let kind = match provider {
             crate::agents::providers::ProviderKind::Grok => {
-                panic!("This fixture covers the original providers; use dedicated Grok lane tests")
+                panic!(
+                    "This fixture covers the original providers; use dedicated Grok provider tests"
+                )
             }
             Provider::ClaudeCode => AgentKind::Claude,
             Provider::Codex => AgentKind::Codex,
@@ -625,7 +627,9 @@ impl Delivery {
         let provider = server.terminals[&agent].provider;
         let kind = match provider {
             crate::agents::providers::ProviderKind::Grok => {
-                panic!("This fixture covers the original providers; use dedicated Grok lane tests")
+                panic!(
+                    "This fixture covers the original providers; use dedicated Grok provider tests"
+                )
             }
             Provider::ClaudeCode => AgentKind::Claude,
             Provider::Codex => AgentKind::Codex,

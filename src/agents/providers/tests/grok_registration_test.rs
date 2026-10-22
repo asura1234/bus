@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn grok_g_idle_notification_requests_reconciliation_without_minting_a_turn() {
+fn grok_idle_notification_requests_reconciliation_without_minting_a_turn() {
     let value = serde_json::json!({"hookEventName":"notification", "sessionId":"known", "notificationType":"idle_prompt"});
     let observed = parse(ProviderKind::Grok, &value).unwrap();
     assert_eq!(
@@ -11,7 +11,7 @@ fn grok_g_idle_notification_requests_reconciliation_without_minting_a_turn() {
 }
 
 #[test]
-fn grok_g_shared_resume_delegates_clustered_selectors() {
+fn grok_shared_resume_delegates_clustered_selectors() {
     assert_eq!(
         launch::resumable_options(ProviderKind::Grok, &["-cmgrok-build".into()]),
         ["--model", "grok-build"]

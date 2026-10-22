@@ -31,27 +31,27 @@ def trace():
 
 class GrokProbeTests(unittest.TestCase):
     def setUp(self):
-        self.assertIsNotNone(grok_probe, "lane F native-wake validator is missing")
+        self.assertIsNotNone(grok_probe, "native-wake replay validator is missing")
 
-    def test_grok_f_unsigned_in_never_invokes_a_recorder(self):
+    def test_grok_unsigned_in_never_invokes_a_recorder(self):
         recorder = Mock(side_effect=AssertionError("model must not start"))
         self.assertEqual(grok_probe.run_probe(recorder=recorder)["status"], "PENDING_AUTH")
         recorder.assert_not_called()
 
-    def test_grok_f_replay_never_counts_as_native_pass(self):
+    def test_grok_replay_never_counts_as_native_pass(self):
         self.assertEqual(grok_probe.evaluate_trace(trace())["status"], "REPLAY_VALID")
 
-    def test_grok_f_native_capture_requires_explicit_live_optin(self):
+    def test_grok_native_capture_requires_explicit_live_optin(self):
         with self.assertRaises(ValueError):
             grok_probe.run_probe(authenticated=True, recorder=Mock())
 
-    def test_grok_f_mock_recorder_cannot_claim_a_native_pass(self):
+    def test_grok_mock_recorder_cannot_claim_a_native_pass(self):
         result = grok_probe.run_probe(authenticated=True, allow_live_models=True,
                                      recorder=lambda prompt, timeout: trace())
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(grok_probe.evaluate_trace(trace())["idle_gap_s"], 9)
 
-    def test_grok_f_fake_or_offline_recorder_cannot_pass(self):
+    def test_grok_fake_or_offline_recorder_cannot_pass(self):
         for field, value in (("provenance", "synthetic"), ("synthetic", True),
                              ("authenticated", False), ("binary_sha256", "")):
             evidence = trace()
@@ -61,24 +61,24 @@ class GrokProbeTests(unittest.TestCase):
                                              recorder=lambda p, t: evidence)
                 self.assertNotEqual(result["status"], "PASS")
 
-    def test_grok_f_notification_without_second_model_turn_is_timeout(self):
+    def test_grok_notification_without_second_model_turn_is_timeout(self):
         evidence = trace()
         evidence["events"] = evidence["events"][:5]
         evidence["events"].append({"kind": "notification", "at": 13, "text": "GROK_WOKE"})
         self.assertEqual(grok_probe.evaluate_trace(evidence)["status"], "TIMEOUT")
 
-    def test_grok_f_no_idle_gap_or_polling_in_first_turn_fails(self):
+    def test_grok_no_idle_gap_or_polling_in_first_turn_fails(self):
         for replacement in (12, 13):
             evidence = trace()
             evidence["events"][3]["at"] = replacement
             self.assertEqual(grok_probe.evaluate_trace(evidence)["status"], "FAIL")
 
-    def test_grok_f_extra_keyboard_input_fails_even_before_shell_exit(self):
+    def test_grok_extra_keyboard_input_fails_even_before_shell_exit(self):
         evidence = trace()
         evidence["events"].insert(4, {"kind": "keyboard", "at": 4, "bytes": 1})
         self.assertEqual(grok_probe.evaluate_trace(evidence)["status"], "FAIL")
 
-    def test_grok_f_reused_turn_wrong_session_and_unrelated_wake_fail(self):
+    def test_grok_reused_turn_wrong_session_and_unrelated_wake_fail(self):
         for field, value in (("turn", "p1"), ("session", "other"), ("task", "other"),
                              ("source", "keyboard")):
             evidence = trace()
@@ -86,26 +86,26 @@ class GrokProbeTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertEqual(grok_probe.evaluate_trace(evidence)["status"], "FAIL")
 
-    def test_grok_f_wrong_final_cancel_and_failure_are_not_success(self):
+    def test_grok_wrong_final_cancel_and_failure_are_not_success(self):
         for field, value in (("text", "partial GROK_WOKE"), ("outcome", "cancelled"),
                              ("turn", "p1")):
             evidence = trace()
             evidence["events"][-1][field] = value
             self.assertEqual(grok_probe.evaluate_trace(evidence)["status"], "FAIL")
 
-    def test_grok_f_invalid_time_and_missing_fields_fail_closed(self):
+    def test_grok_invalid_time_and_missing_fields_fail_closed(self):
         for value in (float("nan"), -1, "not-time"):
             evidence = trace()
             evidence["events"][4]["at"] = value
             self.assertEqual(grok_probe.evaluate_trace(evidence)["status"], "FAIL")
         self.assertEqual(grok_probe.evaluate_trace({})["status"], "PENDING_AUTH")
 
-    def test_grok_f_incomplete_capture_is_timeout(self):
+    def test_grok_incomplete_capture_is_timeout(self):
         evidence = trace()
         evidence["events"].pop()
         self.assertEqual(grok_probe.evaluate_trace(evidence)["status"], "TIMEOUT")
 
-    def test_grok_f_only_successful_owned_sleep_counts(self):
+    def test_grok_only_successful_owned_sleep_counts(self):
         for field, value in (("exit_code", 1), ("text", "wrong"), ("session", "other")):
             evidence = copy.deepcopy(trace())
             evidence["events"][4][field] = value
@@ -115,7 +115,7 @@ class GrokProbeTests(unittest.TestCase):
 
 
 class GrokMalformedTraceTests(unittest.TestCase):
-    def test_grok_f_malformed_fields_return_failure_instead_of_crashing(self):
+    def test_grok_malformed_fields_return_failure_instead_of_crashing(self):
         cases = [("binary_sha256", None), ("events", None)]
         for field, value in cases:
             evidence = trace()
@@ -131,7 +131,7 @@ class GrokMalformedTraceTests(unittest.TestCase):
 
 
 class GrokProbeCliTests(unittest.TestCase):
-    def test_grok_f_cli_is_offline_and_never_labels_synthetic_replay_native(self):
+    def test_grok_cli_is_offline_and_never_labels_synthetic_replay_native(self):
         import json
         import os
         import subprocess
@@ -155,7 +155,7 @@ class GrokProbeCliTests(unittest.TestCase):
 
 
 class GrokProbeIdentityTests(unittest.TestCase):
-    def test_grok_f_native_version_matches_captured_build_not_regex_namesake(self):
+    def test_grok_native_version_matches_captured_build_not_regex_namesake(self):
         for version, expected in (("grok 1.0.5 (5115b46bc909)", "TIMEOUT"),
                                   ("grok 1.0.50", "FAIL"), ("GNU grok 1.0.5", "FAIL")):
             evidence = {"authenticated": True, "provenance": "native-pty",
@@ -168,7 +168,7 @@ class GrokProbeIdentityTests(unittest.TestCase):
 
 
 class GrokProbeShellTests(unittest.TestCase):
-    def test_grok_f_sentinel_requires_the_owned_background_sleep(self):
+    def test_grok_sentinel_requires_the_owned_background_sleep(self):
         for field, value in (("command", "printf GROK_WAKE_DONE"), ("background", False),
                              ("turn", "wrong"), ("started_at", 11), ("started_at", None)):
             evidence = trace()
@@ -180,7 +180,7 @@ class GrokProbeShellTests(unittest.TestCase):
 
 
 class GrokFakeIdentityTests(unittest.TestCase):
-    def test_grok_f_fake_binary_marker_cannot_be_relabelled_as_native(self):
+    def test_grok_fake_binary_marker_cannot_be_relabelled_as_native(self):
         evidence = trace()
         evidence.update(provenance="native-pty", synthetic=False,
                         version="grok 1.0.5 (bus-synthetic-fake)")

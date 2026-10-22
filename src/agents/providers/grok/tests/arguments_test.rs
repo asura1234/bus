@@ -6,7 +6,7 @@ fn words(input: &str) -> Vec<String> {
 }
 const ID: &str = "160d1f8b-9023-44b8-9bc7-24333effb185";
 #[test]
-fn grok_ad_adopts_only_one_unambiguous_resume_uuid() {
+fn grok_adopts_only_one_unambiguous_resume_uuid() {
     for input in [
         format!("--model grok-build --resume {ID}"),
         format!("--resume={ID}"),
@@ -36,7 +36,7 @@ fn grok_ad_adopts_only_one_unambiguous_resume_uuid() {
     }
 }
 #[test]
-fn grok_ad_rejects_only_demonstrated_modes_at_argument_positions() {
+fn grok_rejects_only_demonstrated_modes_at_argument_positions() {
     for input in [
         "-p hello",
         "-phello",
@@ -78,13 +78,13 @@ fn grok_ad_rejects_only_demonstrated_modes_at_argument_positions() {
     assert!(validate_args(&["bad\0arg".into()]).is_err());
 }
 #[test]
-fn grok_ad_shared_resume_retains_permissions_and_opaque_options() {
+fn grok_shared_resume_retains_permissions_and_opaque_options() {
     let input=words(&format!("--session-id {ID} --permission-mode default --allow 'Bash(ls*)' --deny 'Bash(rm*)' 'initial prompt' --model grok-build --future-option opaque --resume literal"));
     assert_eq!(common::resumable_options(crate::agents::providers::ProviderKind::Grok,&input),words("--permission-mode default --allow 'Bash(ls*)' --deny 'Bash(rm*)' --model grok-build --future-option opaque --resume literal"));
 }
 
 #[test]
-fn grok_ad_rejects_native_commands_after_an_initial_prompt() {
+fn grok_rejects_native_commands_after_an_initial_prompt() {
     for input in [
         "'initial synthetic prompt' agent stdio",
         "'initial synthetic prompt' export",
@@ -107,7 +107,7 @@ fn grok_ad_rejects_native_commands_after_an_initial_prompt() {
 }
 
 #[test]
-fn grok_ad_rejects_short_clusters_that_disable_or_relocate_the_managed_terminal() {
+fn grok_rejects_short_clusters_that_disable_or_relocate_the_managed_terminal() {
     for input in ["-cpSYNTHETIC_UNUSED", "-cwSYNTHETIC_UNUSED", "-cv", "-ch"] {
         assert!(
             validate_args(&words(input)).is_err(),
@@ -127,7 +127,7 @@ fn grok_ad_rejects_short_clusters_that_disable_or_relocate_the_managed_terminal(
 }
 
 #[test]
-fn grok_ad_resume_splits_native_continue_model_cluster_without_replaying_selectors() {
+fn grok_resume_splits_native_continue_model_cluster_without_replaying_selectors() {
     for input in [
         "-cmgrok-build",
         "-c -m grok-build",
@@ -157,7 +157,7 @@ fn grok_ad_resume_splits_native_continue_model_cluster_without_replaying_selecto
     assert!(resumable_options(&words("-- -cmgrok-build")).is_empty());
 }
 #[test]
-fn grok_ad_continue_cluster_does_not_hide_modes_or_allow_uuid_adoption() {
+fn grok_continue_cluster_does_not_hide_modes_or_allow_uuid_adoption() {
     assert!(validate_args(&words("-cmgrok-build --single SYNTHETIC_UNUSED")).is_err());
     let mut args = words(&format!("--resume {ID} -cmgrok-build"));
     let original = args.clone();
