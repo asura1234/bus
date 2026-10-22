@@ -940,8 +940,10 @@ field, typing ticks the checkbox; Bus sends no Enter, which would untick it.
 `agent choose` refuses an empty single-select field, because Enter there declines
 the whole question. If someone left a draft
 in the row, `agent answer` refuses (`free_text_holds_draft`) and `agent choose`
-on the row submits the draft; replacing a draft needs the agent's pane. A focused
-draft also refuses `answer --text`; edit or submit it in the agent's pane. In a
+on the row submits the draft; replacing a draft needs the agent's pane.
+`agent answer --text` refuses existing drafts (`free_text_holds_draft`) for every
+provider, including focused Codex `Other` and Cursor fields; edit or submit those
+drafts in the agent's pane. In a
 short pane Claude shows only part of the list: `agent dialog` returns the
 visible options with their real numbers, `choose` also takes the numbers
 scrolled out of view above or below the window, and `free_text.option` names
