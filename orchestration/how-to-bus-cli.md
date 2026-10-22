@@ -306,7 +306,7 @@ MASTER).
 
 A worker can message its own room's bound MASTER orchestrator at any time, even
 before the orchestrator has sent it work. Use the orchestrator's name, numeric
-agent ID, or the reserved `orchestrator` alias:
+agent ID, or the case-insensitive reserved `orchestrator` alias:
 
 ```sh
 bus send --room "$room_id" --as "$agent_id" --to orchestrator \
@@ -315,13 +315,17 @@ bus send --room "$room_id" --as "$agent_id" --to orchestrator \
 
 This is a normal message in the work room: it appears in that room's chat and
 history, reaches the orchestrator's existing session, and receives its reply
-there. `--queue`, `wait`, and settlement work as for other agent recipients.
+there. A worker message waits for a running MASTER turn to finish, then gets its
+own turn and reply. The orchestrator's session prefixes the payload with
+`NAME (agent ID) in room ROOM_ID:` so its source is clear. `--queue`, `wait`, and
+settlement work as for other agent recipients.
 Only that room's bound orchestrator is reachable from MASTER this way. Existing
 room members take precedence over a matching orchestrator name or the alias;
 ambiguous member names still require an ID. If no member matches and the room
 has no orchestrator, `--to orchestrator` reports `This room has no bound
 orchestrator`. `--to all` still targets room members only (excluding `--as`).
-The work-room composer's agent picker also includes the bound orchestrator.
+The work-room composer's agent picker lists the bound orchestrator separately;
+its All row selects and clears room members only.
 
 `send` confirms that the message was durably queued. It does not mean the agent
 started or replied. `wait` polls every 200 milliseconds until every recipient

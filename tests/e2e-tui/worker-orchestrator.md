@@ -18,27 +18,32 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
 `qa-work` history is empty: no orchestrator has initiated a worker turn.
 
 1. Fixture: send `WOC alias blocker` from `qa-worker` in `qa-work` to
-   `orchestrator`. Wait for its message to settle. Click `room:qa-work` and
+   `Orchestrator`. Wait for its message to settle. Click `room:qa-work` and
    inspect history and the orchestrator's terminal → one normal worker-authored
    work-room message addressed to the bound orchestrator, delivered into its
-   session, with a `fake reply:` answering that text; both message and reply
+   session with the `qa-worker (agent ID) in room ROOM_ID:` attribution header,
+   with a `fake reply:` answering that text; both message and reply
    show in the work-room chat. MASTER history remains empty.
 2. Fixture: send `WOC name ready` the same way, targeting `libtv-app master` by
    name, then send `WOC id question` targeting its numeric ID. Wait for both
    messages to settle → both use the same orchestrator agent/session and each
    has its own normal reply in `qa-work` history.
-3. Fixture: send `fake:work 8 WOC busy` from the worker to `orchestrator`.
-   Wait until that orchestrator is working, then send `WOC queued verify` with
-   `--queue`. Inspect its status while busy, then wait for both to settle → the
-   second message is queued first and later receives its own reply after the
-   busy turn finishes.
+3. Fixture: send `fake:work 8 WOC MASTER busy` as the developer in MASTER to
+   the bound orchestrator. Wait until it is working, then send `WOC queued verify`
+   from the worker in `qa-work` to `orchestrator`, without `--queue`. Inspect its
+   status while busy, then wait for both to settle → the worker message stays
+   queued until the MASTER turn ends and receives its own attributed reply;
+   the MASTER reply contains only the MASTER request, and neither reply is
+   substituted for the other.
 4. Fixture: send from `qa-worker` to `other-orch` by name and ID in `qa-work`;
    also send without `--as` to `orchestrator` in a newly created room with no orchestrator →
    the first two fail with `No matching room or agent`; the last fails with
    `This room has no bound orchestrator`. No failed send adds a history row or
    a request, and `other-orch` receives no message.
 5. In `qa-work`, press Ctrl+P → the picker lists `qa-worker` and `libtv-app
-   master`, and excludes `other-orch`. Select `recipient:libtv-app master`,
+   master`, and excludes `other-orch`. Click All → only `qa-worker` is checked,
+   All shows checked, and the orchestrator remains unchecked. Click All again →
+   the worker clears. Select `recipient:libtv-app master`,
    close the picker with Esc, click the composer, type `WOC picker verify` and
    press Enter. Wait for its reply → the developer-authored message and its
    orchestrator reply appear in `qa-work` history, proving selection persists
