@@ -3,6 +3,7 @@ use super::events::ClientLoopEvent;
 use crate::messaging::model::{BusState, RuntimeStatus};
 use crate::protocol::wire::FrameData;
 use crate::utils::perf::{ContextSample, Field, Gauge, LoopWatch, Timer};
+use ratatui::layout::Rect;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -119,12 +120,12 @@ impl OverlayMeter {
     }
 
     /// Draws the label over the frame's top-right corner.
-    pub(super) fn stamp(&self, frame: &mut FrameData) {
+    pub(super) fn stamp(&self, frame: &mut FrameData) -> Rect {
         if !self.is_on() {
-            return;
+            return Rect::default();
         }
         let Ok(shown) = self.shown.lock() else {
-            return;
+            return Rect::default();
         };
         let label = if shown.label.is_empty() {
             overlay_label(None, None, None)
@@ -133,21 +134,50 @@ impl OverlayMeter {
         };
         drop(shown);
         let width = usize::from(frame.width);
-        let chars: Vec<char> = label.chars().collect();
-        let visible = &chars[chars.len().saturating_sub(width)..];
-        let start = width - visible.len();
+        let box_width = label
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(width);
+        let start = width - box_width;
+        let area = Rect::new(
+            start as u16,
+            0,
+            box_width as u16,
+            label.lines().count().min(usize::from(frame.height)) as u16,
+        );
         let fg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Black);
         let bg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Yellow);
-        for (offset, ch) in visible.iter().enumerate() {
-            if let Some(cell) = frame.cells.get_mut(start + offset) {
-                cell.symbol = ch.to_string();
-                cell.fg = fg;
-                cell.bg = bg;
-                cell.modifier = 0;
-                cell.skip = false;
-                cell.hyperlink = None;
+        for (row, line) in label.lines().take(usize::from(frame.height)).enumerate() {
+            crate::protocol::ansi::clear_truncated_wide_cell(
+                &mut frame.cells[row * width..row * width + start],
+            );
+            let chars: Vec<char> = line.chars().collect();
+            let visible = &chars[chars.len().saturating_sub(box_width)..];
+            let padding = box_width - visible.len();
+            for offset in 0..box_width {
+                if let Some(cell) = frame.cells.get_mut(row * width + start + offset) {
+                    let ch = if offset < padding {
+                        ' '
+                    } else {
+                        visible[offset - padding]
+                    };
+                    cell.symbol = ch.to_string();
+                    cell.fg = fg;
+                    cell.bg = bg;
+                    cell.modifier = 0;
+                    cell.skip = false;
+                    cell.hyperlink = None;
+                }
             }
         }
+        if let Some(cursor) = frame.cursor.as_mut() {
+            if area.contains((cursor.x, cursor.y).into()) {
+                cursor.visible = false;
+            }
+        }
+        area
     }
 }
 
@@ -177,7 +207,7 @@ pub(super) fn overlay_label(
         })
         .unwrap_or_else(|| "n/a".into());
     format!(
-        " CPU {} MEM {} FPS {} AGENTS {agents} ",
+        " CPU {} MEM {} FPS {} \n AGENTS {agents} ",
         cpu.map_or("n/a".into(), |cpu| format!("{}%", Field(Some(cpu)))),
         mem.map_or("n/a".into(), |mem| format!("{mem:.0}MB")),
         fps.map_or("n/a".into(), |fps| format!("{fps:.0}")),

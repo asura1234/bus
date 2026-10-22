@@ -30,6 +30,8 @@ mod cursor;
 mod diff;
 mod style;
 
+pub(crate) use diff::clear_truncated_wide_cell;
+
 use crate::protocol::wire::{CursorState, FrameData, PaneSurfacePatchRow};
 pub(crate) use cursor::frame_with_drawn_cursor;
 use cursor::{clamp_cursor_position, drawn_cursor_column};
