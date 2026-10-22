@@ -290,6 +290,15 @@ pub(crate) struct AgentStartup {
     pub(crate) reported: bool,
 }
 
+/// Where an agent's blocked notice went.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DialogNoticeTo {
+    /// Queued to the room's orchestrator as this request.
+    Orchestrator(RequestId),
+    Developer,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename = "Agent")]
 pub(crate) struct RoomAgent {
@@ -332,6 +341,9 @@ pub(crate) struct RoomAgent {
     /// The option chosen through Bus, so the closing notice can name it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dialog_answer: Option<u32>,
+    /// Who was told about the reported dialog, so its resolution follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_notice_to: Option<DialogNoticeTo>,
     pub(crate) actionable_error: Option<String>,
     /// The update failure the agent's terminal reported, shown as
     /// `actionable_error`. Saved, so the error still clears once the update is
