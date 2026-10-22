@@ -1,14 +1,12 @@
 //! Rebuild only existing, coordinator-attested Grok capture; never install missing hooks.
-use crate::agents::providers::{
-    hook_json::{self, HookContext},
-    launch as common,
-};
+use crate::agents::providers::hook_json::{self, HookContext};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn capture_args(
     hooks: &HookContext,
     project: &Path,
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
+    let path = super::launch::project_hook_path(project)?;
     super::launch::saved_executable(hooks)?;
     // Missing saved options are an invalid Grok capture, not an empty launch.
     let options: Vec<String> = serde_json::from_value(hook_json::read_resume_json(
@@ -16,7 +14,6 @@ pub(crate) fn capture_args(
     )?)
     .map_err(|_| "Saved Grok launch options are invalid")?;
     super::launch::validate_args(&options)?;
-    let path = common::project_root(project).join(".grok/hooks/bus.json");
     let document = hook_json::read_resume_json(&path)?;
     if document["disableAllHooks"].as_bool() == Some(true) {
         return Err("Bus resume hooks are disabled; existing configuration was kept".into());

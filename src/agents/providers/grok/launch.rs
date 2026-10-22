@@ -13,9 +13,7 @@ use std::{
 };
 mod arguments;
 pub(super) use arguments::runtime_additions;
-pub(crate) use arguments::{
-    is_session_selector, option_arity, resumable_options, take_adopted_session, validate_args,
-};
+pub(crate) use arguments::{option_arity, resumable_options, take_adopted_session, validate_args};
 
 pub(crate) fn runtime_args() -> Vec<String> {
     vec![
@@ -194,15 +192,25 @@ pub(crate) fn resolve_executable() -> Result<PathBuf, String> {
             candidates.push(directory.join("grok"));
         }
     }
+    let mut rejected = None;
     for path in candidates {
-        if validate_executable(&path).is_ok() {
-            return Ok(path);
+        match validate_executable(&path) {
+            Ok(()) => return Ok(path),
+            Err(reason) if path.is_file() => {
+                tracing::warn!(event = "bus.grok.executable_rejected", reason = %reason,
+                    "Installed Grok candidate failed identity validation");
+                rejected.get_or_insert(reason);
+            }
+            Err(_) => {}
         }
     }
-    Err(
-        "Grok Build is not installed at ~/.grok/bin/grok or on PATH; regex grok is unsupported"
-            .into(),
-    )
+    Err(match rejected {
+        Some(reason) => format!("Installed Grok Build candidate was rejected: {reason}"),
+        None => {
+            "Grok Build is not installed at ~/.grok/bin/grok or on PATH; regex grok is unsupported"
+                .into()
+        }
+    })
 }
 
 const EXECUTABLE_FILE: &str = "grok-executable.json";
@@ -252,6 +260,36 @@ pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
     }
 }
 
+/// One containment check for installation and cold-resume rebinding. Project
+/// consent never authorizes a global config or a symlinked config ancestor.
+pub(super) fn project_hook_path(project: &Path) -> Result<PathBuf, String> {
+    let root = common::project_root(project)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if let Some(home) = std::env::home_dir() {
+        let home = home.canonicalize().unwrap_or(home);
+        if root == home || root.starts_with(home.join(".grok")) {
+            return Err("Grok project hooks cannot modify the global ~/.grok configuration".into());
+        }
+    }
+    let mut path = root;
+    for component in [".grok", "hooks", "bus.json"] {
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err("Grok project hook paths cannot contain symlinks".into());
+            }
+            Ok(meta) if component != "bus.json" && !meta.is_dir() => {
+                return Err("Grok project hook ancestor is not a directory".into());
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(path)
+}
+
 pub(crate) fn prepare(
     spec: &LaunchSpec,
     initialize: impl FnOnce(&HookContext) -> Result<(), String>,
@@ -274,14 +312,15 @@ pub(crate) fn prepare(
             notice.message
         ));
     }
+    let path = project_hook_path(&cwd)?;
     let executable = resolve_executable()?;
     let env = environment_for(&spec.hooks, &executable)?;
-    if notice.path.exists()
-        && hook_json::read_resume_json(&notice.path)?["disableAllHooks"].as_bool() == Some(true)
+    if path.exists()
+        && hook_json::read_resume_json(&path)?["disableAllHooks"].as_bool() == Some(true)
     {
         return Err("Grok project hooks are disabled; existing configuration was kept".into());
     }
-    hook_json::install_hooks(&notice.path, super::HOOK_CONTRACT, &spec.hooks.binary)?;
+    hook_json::install_hooks(&path, super::HOOK_CONTRACT, &spec.hooks.binary)?;
     initialize(&spec.hooks)?;
     for (name, bytes) in [
         (

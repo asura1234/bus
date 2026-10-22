@@ -152,3 +152,35 @@ fn grok_ad_cold_resume_rejects_relocating_saved_options_without_changing_hooks()
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn grok_resume_refuses_home_and_external_hook_ancestors_without_rebinding() {
+    for ancestor in [".grok", ".grok/hooks", ".grok/hooks/bus.json"] {
+        let f = Fixture::new();
+        f.install();
+        f.prepare("");
+        let mut spec = f.spec("", true);
+        spec.hooks.binary = f.root.join("replacement-bus");
+        let home = f.root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::rename(f.project.join(".grok"), home.join(".grok")).unwrap();
+        let global = home.join(".grok/hooks/bus.json");
+        let original = std::fs::read(&global).unwrap();
+        assert!(capture_args(&spec.hooks, &home).is_err());
+        assert_eq!(std::fs::read(&global).unwrap(), original);
+        std::fs::rename(home.join(".grok"), f.project.join(".grok")).unwrap();
+        let target = f.project.join(ancestor);
+        let external = f.root.join("external");
+        std::fs::rename(&target, &external).unwrap();
+        std::os::unix::fs::symlink(&external, &target).unwrap();
+        let external_file = match ancestor {
+            ".grok" => external.join("hooks/bus.json"),
+            ".grok/hooks" => external.join("bus.json"),
+            _ => external.clone(),
+        };
+        let original = std::fs::read(&external_file).unwrap();
+        assert!(capture_args(&spec.hooks, &f.project).is_err(), "{ancestor}");
+        assert_eq!(std::fs::read(external_file).unwrap(), original);
+    }
+}
