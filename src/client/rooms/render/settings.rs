@@ -272,36 +272,9 @@ impl BusUi {
             SoundSettingsLine::Empty(text) => {
                 view.row(rect, *text, None, false, true);
             }
-            SoundSettingsLine::Compactions { field } => {
-                self.stepper_settings_row(
-                    view,
-                    rect,
-                    *field,
-                    "Max compactions per agent (1–100)",
-                    self.settings.max_compactions_per_agent.to_string(),
-                    Action::AdjustCompactionLimit,
-                );
-            }
-            SoundSettingsLine::IdleAgents { field } => {
-                self.stepper_settings_row(
-                    view,
-                    rect,
-                    *field,
-                    "Idle agents alert (1–10)",
-                    self.settings.idle_agents_alert.to_string(),
-                    Action::AdjustIdleAgentsAlert,
-                );
-            }
-            SoundSettingsLine::SidebarWidth { field } => {
-                self.stepper_settings_row(
-                    view,
-                    rect,
-                    *field,
-                    "Sidebar width (20–60)",
-                    self.settings.sidebar_width.to_string(),
-                    Action::AdjustSidebarWidth,
-                );
-            }
+            SoundSettingsLine::Compactions { .. }
+            | SoundSettingsLine::IdleAgents { .. }
+            | SoundSettingsLine::SidebarWidth { .. } => self.stepper_line(view, rect, line),
             SoundSettingsLine::PerfOverlay { field } => {
                 let on = crate::client::perf::OVERLAY.is_on();
                 view.row(
@@ -319,6 +292,33 @@ impl BusUi {
                 self.sound_pref_row(view, rect, *field, *target)
             }
         }
+    }
+
+    /// The numeric settings, each a ‹ value › stepper.
+    fn stepper_line(&self, view: &mut View, rect: Rect, line: &SoundSettingsLine) {
+        let settings = &self.settings;
+        let (field, label, value, action): (_, _, _, fn(bool) -> Action) = match line {
+            SoundSettingsLine::Compactions { field } => (
+                field,
+                "Max compactions per agent (1–100)",
+                settings.max_compactions_per_agent.to_string(),
+                Action::AdjustCompactionLimit,
+            ),
+            SoundSettingsLine::IdleAgents { field } => (
+                field,
+                "Idle agents alert (1–10)",
+                settings.idle_agents_alert.to_string(),
+                Action::AdjustIdleAgentsAlert,
+            ),
+            SoundSettingsLine::SidebarWidth { field } => (
+                field,
+                "Sidebar width (20–60)",
+                settings.sidebar_width.to_string(),
+                Action::AdjustSidebarWidth,
+            ),
+            _ => return,
+        };
+        self.stepper_settings_row(view, rect, *field, label, value, action);
     }
 
     fn sound_pref_row(&self, view: &mut View, rect: Rect, field: usize, target: SoundTarget) {

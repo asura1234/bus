@@ -45,26 +45,14 @@ impl Worker {
                 self.set_all_rooms_sound(None, Some(name), events)?;
                 return Ok(());
             }
-            BusCommand::SetMaxCompactionsPerAgent(limit) => {
-                return self.set_max_compactions_per_agent(limit, events);
-            }
-            BusCommand::SetIdleAgentsAlert(limit) => {
-                return self.set_idle_agents_alert(limit, events);
-            }
-            BusCommand::SetFeishuRecipient(recipient) => {
-                return self.set_feishu_recipient(recipient, events);
-            }
-            BusCommand::SetFeishuCliPath(path) => {
-                return self.set_feishu_cli_path(path, events);
-            }
-            BusCommand::SetFreezeNotifications(on) => {
-                return self.set_freeze_notifications(on, events);
-            }
-            BusCommand::SetSidebarWidth(width) => {
-                return self.set_sidebar_width(width, events);
-            }
-            BusCommand::SetFeishuNotifications(on) => {
-                return self.set_feishu_notifications(on, events);
+            command @ (BusCommand::SetMaxCompactionsPerAgent(_)
+            | BusCommand::SetIdleAgentsAlert(_)
+            | BusCommand::SetFeishuRecipient(_)
+            | BusCommand::SetFeishuCliPath(_)
+            | BusCommand::SetFreezeNotifications(_)
+            | BusCommand::SetSidebarWidth(_)
+            | BusCommand::SetFeishuNotifications(_)) => {
+                return self.global_setting_command(command, events);
             }
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
             BusCommand::SetDraftText(id, text) => {

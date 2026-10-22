@@ -1,12 +1,36 @@
 //! Global settings the coordinator applies to its session: MASTER's sound, the
 //! All rooms sound, which new work rooms start with, and the compaction and
 //! idle-agents limits behind Bus's notices (see `bus::settings`).
+use super::BusCommand;
 use super::{mpsc, BusEvent, BusState, Room, RoomId, RoomKind, Worker};
 #[cfg(test)]
-use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
+use super::{Method, Path, PathBuf, ResponseResult, Transport};
 use crate::messaging::prefs::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
+    /// A change to a shared `settings.json` setting; each one saves the file
+    /// and publishes `SettingsChanged` to every Bus UI.
+    pub(super) fn global_setting_command(
+        &mut self,
+        command: BusCommand,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        match command {
+            BusCommand::SetMaxCompactionsPerAgent(limit) => {
+                self.set_max_compactions_per_agent(limit, events)
+            }
+            BusCommand::SetIdleAgentsAlert(limit) => self.set_idle_agents_alert(limit, events),
+            BusCommand::SetFeishuRecipient(recipient) => {
+                self.set_feishu_recipient(recipient, events)
+            }
+            BusCommand::SetFeishuCliPath(path) => self.set_feishu_cli_path(path, events),
+            BusCommand::SetFreezeNotifications(on) => self.set_freeze_notifications(on, events),
+            BusCommand::SetSidebarWidth(width) => self.set_sidebar_width(width, events),
+            BusCommand::SetFeishuNotifications(on) => self.set_feishu_notifications(on, events),
+            _ => Err("Not a global setting".into()),
+        }
+    }
+
     /// Each tick re-reads the limits, so a change made in any Bus applies here.
     pub(super) fn refresh_setting_notices(&mut self) -> Result<(), String> {
         let saved = self

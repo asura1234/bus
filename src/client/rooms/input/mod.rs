@@ -507,14 +507,7 @@ impl BusUi {
             Action::CancelDelete => self.cancel_delete(),
             Action::ConfirmDelete => self.confirm_delete(),
             Action::DismissAlert => self.dismiss_alert(),
-            Action::ScrollFiles(forward) => {
-                self.file_scroll = if forward {
-                    self.file_scroll.saturating_add(1)
-                } else {
-                    self.file_scroll.saturating_sub(1)
-                };
-                self.detail_path = None;
-            }
+            Action::ScrollFiles(forward) => self.scroll_files(forward),
             Action::Room(room) => self.open_room(room),
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
@@ -604,5 +597,14 @@ impl BusUi {
             }
             Action::Add => self.add(),
         }
+    }
+
+    fn scroll_files(&mut self, forward: bool) {
+        self.file_scroll = if forward {
+            self.file_scroll.saturating_add(1)
+        } else {
+            self.file_scroll.saturating_sub(1)
+        };
+        self.detail_path = None;
     }
 }
