@@ -35,6 +35,16 @@ impl Worker {
                 }
                 Ok(result)
             }
+            "room.github" => {
+                let room = self.control_room(required(p, "room")?)?;
+                let repos = p
+                    .get("repos")
+                    .ok_or("Missing repos (null for auto, [] for off)")?;
+                let mut state = self.state.clone();
+                state.set_github_repos(room, repos)?;
+                self.save(state)?;
+                Ok(json!({"updated":true}))
+            }
             "room.create" => {
                 self.control_command(BusCommand::CreateRoom(required(p, "name")?.into()))
             }

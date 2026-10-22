@@ -1,6 +1,9 @@
 //! Persisted DTOs, identities and payload representation.
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -222,6 +225,14 @@ pub(crate) struct Room {
     pub(crate) id: RoomId,
     pub(crate) name: String,
     pub(crate) notes: String,
+    /// None derives repositories; an empty override disables the watch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) github_repos: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) github_discovered: BTreeSet<String>,
+    /// Head branches observed for this room, retained after worker cleanup.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) github_branches: BTreeMap<String, BTreeSet<String>>,
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,

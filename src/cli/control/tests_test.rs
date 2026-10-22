@@ -105,6 +105,7 @@ const SAMPLES: &[&[&str]] = &[
     &["room", "create", "r"],
     &["room", "rename", "r", "s"],
     &["room", "notes", "r", "--text", "t"],
+    &["room", "github", "r", "--auto"],
     &["room", "delete", "r", "--confirm"],
     &["history", "--room", "r"],
     &[
@@ -3156,4 +3157,25 @@ fn agent_interrupt_deadline_reason_reflects_the_last_successful_read_not_one_lat
     assert_eq!(exit_code(&outcome), Some(1));
     let reason = response["result"]["reason"].as_str().unwrap();
     assert!(reason.contains("still working"), "{reason}");
+}
+
+#[test]
+fn github_watch_room_override_has_explicit_auto_off_and_repo_choices() {
+    for (args, repos) in [
+        (vec!["--auto"], serde_json::Value::Null),
+        (vec!["--off"], json!([])),
+        (
+            vec!["--repos", "asura1234/bus,liblib-ai/libtv-app"],
+            json!(["asura1234/bus", "liblib-ai/libtv-app"]),
+        ),
+    ] {
+        let mut argv = vec!["room", "github", "7"];
+        argv.extend(args);
+        let parsed =
+            command(&argv).expect("GitHub room settings must be reachable through the CLI");
+        assert_eq!(parsed.method, "room.github");
+        assert_eq!(parsed.params, json!({"room":"7", "repos":repos}));
+    }
+    assert!(command(&["room", "github", "7"]).is_err());
+    assert!(command(&["room", "github", "7", "--auto", "--off"]).is_err());
 }
