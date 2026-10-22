@@ -382,6 +382,15 @@ impl Worker {
             outcome = match &observation.dialog {
                 None => "closed",
                 Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
+                // Text typed into a choice list's free-text row shows as its
+                // focused field until Claude takes the delayed Enter.
+                Some(dialog)
+                    if !choice
+                        && claims.free_text.is_some()
+                        && dialog.kind == schema::AgentDialogKind::Question =>
+                {
+                    "input_changed"
+                }
                 Some(dialog) if dialog.id == claims.dialog_shape => {
                     if choice {
                         "selection_moved"

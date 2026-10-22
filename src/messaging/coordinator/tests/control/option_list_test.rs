@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct Native {
     screen: &'static str,
+    /// Frames the agent draws after a write, one per observation.
+    after_write: Vec<&'static str>,
     choices: Vec<schema::AgentDialogChooseParams>,
     answers: Vec<schema::AgentDialogAnswerParams>,
 }
@@ -66,9 +68,14 @@ impl Transport for ScreenTransport {
             })
         };
         match method {
-            Method::AgentDialogObserve(_) => Ok(ResponseResult::AgentDialog {
-                observation: observation(native.screen),
-            }),
+            Method::AgentDialogObserve(_) => {
+                if !native.after_write.is_empty() {
+                    native.screen = native.after_write.remove(0);
+                }
+                Ok(ResponseResult::AgentDialog {
+                    observation: observation(native.screen),
+                })
+            }
             Method::AgentDialogChoose(params) => {
                 native.choices.push(params);
                 written(&mut native, vec!["enter".into()])
@@ -196,6 +203,32 @@ fn a_tabbed_form_reports_its_tabs_and_answers_its_free_text_row_with_text() {
         native.lock().unwrap().answers[0].text.as_deref(),
         Some("Fresh dir per run")
     );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_filled_field_before_claude_takes_enter_is_not_reported_as_a_new_dialog() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-rest.ansi"
+    ));
+    let (_, fingerprint) = fingerprint(&mut worker, agent);
+    // Arrows and text land before the delayed Enter: the focused field shows
+    // the answer for a moment, then Claude takes it and the list closes.
+    let filled = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-freetext-with-text-focused.ansi"
+    );
+    native.lock().unwrap().after_write = vec![filled, filled, ""];
+    let answered = worker
+        .answer_dialog(
+            agent,
+            Some("Combined write: arrows then paste"),
+            false,
+            &fingerprint,
+        )
+        .unwrap();
+    assert_eq!(answered["outcome"], "closed");
+    assert_eq!(answered["dialog"], Value::Null);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
