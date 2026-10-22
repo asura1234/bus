@@ -24,7 +24,10 @@ struct DialogFingerprintClaims {
     /// The question and labels without the selection, to tell a moved
     /// selection from a different dialog.
     dialog_shape: String,
+    /// The highest option number; a scrolled list can hide some below it.
     options: u32,
+    /// The option that is a text field, answered with text rather than chosen.
+    free_text: Option<u32>,
     /// Makes each observation's fingerprint distinct, so spending one never
     /// blocks answering the same dialog after observing it again.
     observed_at_ns: u128,
@@ -198,7 +201,12 @@ impl Worker {
                 content_revision: observation.content_revision,
                 dialog_digest: dialog.digest.clone(),
                 dialog_shape: dialog.id.clone(),
-                options: dialog.options.len() as u32,
+                options: dialog.options.last().map_or(0, |option| option.number),
+                free_text: dialog
+                    .options
+                    .iter()
+                    .find(|option| option.free_text)
+                    .map(|option| option.number),
                 observed_at_ns: crate::messaging::storage::io::now_ns(),
             })?),
             None => None,
@@ -263,7 +271,14 @@ impl Worker {
         if option.is_some_and(|option| option == 0 || option > claims.options) {
             return Err(format!("Option must be between 1 and {}", claims.options));
         }
-        if option.is_none() && claims.options != 0 {
+        if option.is_some() && option == claims.free_text {
+            return Err(format!(
+                "Option {} is a free-text field, and Enter on it without text declines the question; use agent answer --text",
+                claims.free_text.unwrap_or_default()
+            ));
+        }
+        // A choice list's free-text field takes the text directly.
+        if option.is_none() && claims.options != 0 && (skip || claims.free_text.is_none()) {
             return Err("This is a choice dialog; use agent choose".into());
         }
         let digest = fingerprint_digest(fingerprint);

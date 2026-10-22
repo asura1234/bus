@@ -36,6 +36,9 @@ pub struct AgentDialogOption {
     pub number: u32,
     pub label: String,
     pub selected: bool,
+    /// An inline text field: answer it with text, not by choosing it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free_text: bool,
 }
 
 #[derive(

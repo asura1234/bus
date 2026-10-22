@@ -13,7 +13,7 @@ pub(crate) enum DialogChoice {
     Stale,
     /// The option does not exist or the current selection is not visible.
     Unreachable,
-    /// Text answering is only available on a focused free-text question.
+    /// Text answering needs a free-text question or field.
     NotQuestion,
 }
 
@@ -56,19 +56,7 @@ impl TerminalRuntime {
         let Some(keys) = dialog.keys_for(option) else {
             return Ok(DialogChoice::Unreachable);
         };
-        let encode = |key: &str| {
-            let code = match key {
-                "up" => crossterm::event::KeyCode::Up,
-                "down" => crossterm::event::KeyCode::Down,
-                "left" => crossterm::event::KeyCode::Left,
-                "right" => crossterm::event::KeyCode::Right,
-                "enter" => crossterm::event::KeyCode::Enter,
-                digit => crossterm::event::KeyCode::Char(digit.chars().next().unwrap_or('0')),
-            };
-            self.encode_terminal_key(
-                crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE).into(),
-            )
-        };
+        let encode = |key: &str| self.encode_dialog_key(key);
         match keys.split_last() {
             // Moves then Enter: confirm only after the TUI redrew the selection.
             Some((enter, moves)) if !moves.is_empty() => {
@@ -92,6 +80,20 @@ impl TerminalRuntime {
         Ok(DialogChoice::Sent(
             keys.into_iter().map(str::to_owned).collect(),
         ))
+    }
+
+    fn encode_dialog_key(&self, key: &str) -> Vec<u8> {
+        let code = match key {
+            "up" => crossterm::event::KeyCode::Up,
+            "down" => crossterm::event::KeyCode::Down,
+            "left" => crossterm::event::KeyCode::Left,
+            "right" => crossterm::event::KeyCode::Right,
+            "enter" => crossterm::event::KeyCode::Enter,
+            digit => crossterm::event::KeyCode::Char(digit.chars().next().unwrap_or('0')),
+        };
+        self.encode_terminal_key(
+            crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE).into(),
+        )
     }
 
     /// Choose the live dialog option whose label starts with `label`. The
@@ -134,8 +136,8 @@ impl TerminalRuntime {
         else {
             return Ok(DialogChoice::Stale);
         };
-        let Some(input) = dialog.input else {
-            return Ok(DialogChoice::NotQuestion);
+        let Some(input) = dialog.input.as_ref() else {
+            return self.answer_free_text_option(&dialog, text, skip);
         };
         let (code, modifiers, key) = if skip && input.skip_key == "ctrl+]" {
             (
@@ -177,5 +179,44 @@ impl TerminalRuntime {
                 .map_err(|error| error.to_string())?;
         }
         Ok(DialogChoice::Sent(vec![key.into()]))
+    }
+
+    /// Claude's option lists end with an inline text field. Arrows focus it
+    /// and the text fills it in one write, then Enter submits it: sent alone,
+    /// Enter on the empty field would decline the question.
+    fn answer_free_text_option(
+        &self,
+        dialog: &crate::agents::dialog::Dialog,
+        text: Option<String>,
+        skip: bool,
+    ) -> Result<DialogChoice, String> {
+        let (Some(text), false) = (text, skip) else {
+            return Ok(DialogChoice::NotQuestion);
+        };
+        if !dialog.options.iter().any(|option| option.free_text) {
+            return Ok(DialogChoice::NotQuestion);
+        }
+        let Some(moves) = dialog.free_text_keys() else {
+            return Ok(DialogChoice::Unreachable);
+        };
+        if !self.bracketed_paste_enabled() && text.contains(['\n', '\t']) {
+            return Err("Multiline answers require bracketed paste support".into());
+        }
+        let mut input: Vec<u8> = moves
+            .iter()
+            .flat_map(|key| self.encode_dialog_key(key))
+            .collect();
+        input.extend_from_slice(&self.paste_payload(text));
+        self.io
+            .queue_user_input_submission(
+                Bytes::from(input),
+                Bytes::from(self.encode_dialog_key("enter")),
+                DIALOG_CONFIRM_DELAY,
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        let mut keys: Vec<String> = moves.into_iter().map(str::to_owned).collect();
+        keys.push("enter".into());
+        Ok(DialogChoice::Sent(keys))
     }
 }

@@ -29,11 +29,13 @@ fn dialog() -> schema::AgentDialog {
                 number: 1,
                 label: "Yes".into(),
                 selected: true,
+                free_text: false,
             },
             schema::AgentDialogOption {
                 number: 2,
                 label: "No".into(),
                 selected: false,
+                free_text: false,
             },
         ],
         hint: Some("Esc to cancel".into()),

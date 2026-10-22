@@ -61,6 +61,7 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         .map(|(index, row)| DialogOption {
             number: index as u32 + 1,
             identity_label: checkbox_label(&row.label).map(str::to_owned),
+            free_text: false,
             label: row.label,
             selected: row.selected,
             navigation_key: None,
@@ -74,6 +75,7 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                 selected: false,
                 navigation_key: Some(key),
                 identity_label: None,
+                free_text: false,
             });
         }
     }
@@ -137,6 +139,7 @@ fn collect_rows(lines: &[&str], start: usize, footer: usize) -> Option<Vec<Optio
                 number: 0,
                 column: indentation(text),
                 label: label.to_owned(),
+                scrolled_above: false,
                 label_at: line[..label.as_ptr() as usize - line.as_ptr() as usize]
                     .chars()
                     .count(),

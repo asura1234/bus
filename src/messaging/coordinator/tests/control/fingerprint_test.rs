@@ -54,6 +54,7 @@ fn fingerprint(worker: &Worker, agent: AgentId, observed_at_ms: u64) -> String {
         dialog_digest: "dialog-digest".into(),
         dialog_shape: "Do you want to proceed?".into(),
         options: 2,
+        free_text: None,
         observed_at_ns: u128::from(observed_at_ms) * 1_000_000,
     })
     .unwrap()

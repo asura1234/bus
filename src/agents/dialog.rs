@@ -21,6 +21,10 @@ const HINT_WORDS: &[&str] = &[
     "enter", "esc", "↑", "↓", "select", "navigate", "confirm", "cancel",
 ];
 const MAX_TITLE_LINES: usize = 12;
+/// The last row of a Claude Code question's option list.
+const CHAT_LABEL: &str = "Chat about this";
+/// The empty text field above `Chat about this`.
+const FREE_TEXT_PLACEHOLDER: &str = "Type something.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DialogKind {
@@ -53,6 +57,8 @@ pub(crate) struct DialogOption {
     pub(crate) number: u32,
     pub(crate) label: String,
     pub(crate) selected: bool,
+    /// Claude's `Type something.` row: an inline text field, not a choice.
+    pub(crate) free_text: bool,
     navigation_key: Option<&'static str>,
     identity_label: Option<String>,
 }
@@ -66,6 +72,16 @@ impl Dialog {
         hasher.update(format!("\0{:?}", self.kind));
         if let Some(input) = &self.input {
             hasher.update(input.skip_key.as_bytes());
+        }
+        // A short pane shows a scrolling window of a Claude question's
+        // options, so only their count identifies it across moves and resizes.
+        if let Some(chat) = self
+            .options
+            .last()
+            .filter(|option| option.label == CHAT_LABEL && option.navigation_key.is_none())
+        {
+            hasher.update(format!("\0{}", chat.number));
+            return format!("{:x}", hasher.finalize());
         }
         for option in &self.options {
             hasher.update(format!(
@@ -106,23 +122,45 @@ impl Dialog {
             .map(|option| option.number)
     }
 
+    /// The arrows that focus the visible, empty free-text field, after which
+    /// typed text is the answer. `None` without such a field or a visible
+    /// selection: a draft in the field would be edited at an unknown cursor.
+    pub(crate) fn free_text_keys(&self) -> Option<Vec<&'static str>> {
+        let field = self
+            .options
+            .iter()
+            .find(|option| option.free_text && option.label == FREE_TEXT_PLACEHOLDER)?;
+        self.moves_to(field.number)
+    }
+
     /// The keys that choose `number`: arrows from the selected option, then
-    /// Enter. `None` when the option does not exist or no selection is visible.
+    /// Enter. `None` when the option does not exist or no selection is visible,
+    /// and for the free-text field, where Enter without text declines the
+    /// question.
     pub(crate) fn keys_for(&self, number: u32) -> Option<Vec<&'static str>> {
         let option = self.options.iter().find(|option| option.number == number)?;
         if let Some(key) = option.navigation_key {
             return Some(vec![key]);
         }
-        let selected = self.selected()?;
-        let step = if number > selected { "down" } else { "up" };
-        let mut keys = vec![step; number.abs_diff(selected) as usize];
+        if option.free_text {
+            return None;
+        }
+        let mut keys = self.moves_to(number)?;
         keys.push("enter");
         Some(keys)
+    }
+
+    fn moves_to(&self, number: u32) -> Option<Vec<&'static str>> {
+        let selected = self.selected()?;
+        let step = if number > selected { "down" } else { "up" };
+        Some(vec![step; number.abs_diff(selected) as usize])
     }
 }
 
 struct OptionLine {
     selected: bool,
+    /// Claude's `↑` before the first visible option of a scrolled list.
+    scrolled_above: bool,
     number: u32,
     /// Column of the number, so wrapped label lines can be recognised.
     column: usize,
@@ -151,12 +189,21 @@ fn option_line(full: &str) -> Option<OptionLine> {
     let indent = indentation(line);
     let mut rest = line.trim_start();
     let mut selected = false;
+    let mut scrolled_above = false;
     let mut column = indent;
     if let Some(after) = rest.strip_prefix(MARKERS) {
         selected = true;
         let gap = indentation(after);
         column += 1 + gap;
         rest = &after[after.len() - after.trim_start().len()..];
+    } else if let Some(after) = rest
+        .strip_prefix(['↑', '↓'])
+        .filter(|after| after.starts_with(' '))
+    {
+        // Claude draws its scroll arrows in the selection column.
+        scrolled_above = rest.starts_with('↑');
+        column += 1 + indentation(after);
+        rest = after.trim_start();
     }
     let digits = rest.chars().take_while(char::is_ascii_digit).count();
     if digits == 0 || digits > 2 {
@@ -174,6 +221,7 @@ fn option_line(full: &str) -> Option<OptionLine> {
     let offset = label.as_ptr() as usize - full.as_ptr() as usize;
     Some(OptionLine {
         selected,
+        scrolled_above,
         number,
         column,
         label: label.to_owned(),
@@ -446,6 +494,7 @@ fn unnumbered(lines: &[&str]) -> Option<Dialog> {
                 selected: index == marked,
                 navigation_key: None,
                 identity_label: None,
+                free_text: false,
             })
             .collect(),
         hint: Some(hint.to_owned()),
@@ -453,12 +502,17 @@ fn unnumbered(lines: &[&str]) -> Option<Dialog> {
     })
 }
 
+/// The first row of the last numbered block, the only one that can be live:
+/// option 1, or the first row of a list Claude scrolled down.
+fn block_start(lines: &[&str]) -> Option<usize> {
+    lines.iter().rposition(|line| {
+        option_line(line).is_some_and(|option| option.number == 1 || option.scrolled_above)
+    })
+}
+
 /// The last block of `1. ...`, `2. ...` options, when it is a live dialog.
 fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
-    // The last option numbered 1 starts the only block that can be live.
-    let start = lines
-        .iter()
-        .rposition(|line| option_line(line).is_some_and(|option| option.number == 1))?;
+    let start = block_start(lines)?;
     let (mut options, end) = numbered_options(lines, start);
     if options.len() < 2 || options.iter().filter(|option| option.selected).count() > 1 {
         return None;
@@ -469,10 +523,19 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         .collect();
     let hint = after
         .iter()
-        .filter(|line| !line.is_empty() && !is_separator(line))
+        .enumerate()
+        .filter(|(_, line)| !line.is_empty() && !is_separator(line))
         .take(2)
-        .find(|line| is_hint(line))
-        .map(|line| (*line).to_owned());
+        .find(|(_, line)| is_hint(line))
+        // A narrow pane wraps the hint onto the following lines.
+        .map(|(at, _)| {
+            after[at..]
+                .iter()
+                .take_while(|line| !line.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
     // A live input prompt below means the list is transcript: dialogs replace
     // the composer. Without a key hint, the list also needs a marked option.
     let prompt_below = after.iter().any(|line| {
@@ -521,20 +584,29 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
             }
         }
     }
+    // Claude's free-text field sits right above `Chat about this`; a
+    // scrolled list can hide it, leaving a gap in the numbers.
+    let free_text = match options.as_slice() {
+        [.., field, chat]
+            if chat.label == CHAT_LABEL
+                && field.number + 1 == chat.number
+                && claude::checkbox_label(&field.label).is_none() =>
+        {
+            Some(field.number)
+        }
+        _ => None,
+    };
     // Claude's custom answer is editable at the resting selection, before
     // Enter. Its editor hint only appears while that text field is focused.
     if let Some(hint) = hint
         .as_deref()
         .filter(|hint| hint.contains("ctrl+g to edit") && hint.contains("Esc to cancel"))
     {
-        if let Some(selected) = options.iter().find(|option| option.selected) {
-            if selected.number as usize == options.len() - 1
-                && options
-                    .last()
-                    .is_some_and(|option| option.label == "Chat about this")
-            {
-                return claude::text_question(&lines[..start], hint, &selected.label);
-            }
+        if let Some(selected) = options
+            .iter()
+            .find(|option| option.selected && Some(option.number) == free_text)
+        {
+            return claude::text_question(&lines[..start], hint, &selected.label);
         }
     }
     Some(Dialog {
@@ -549,6 +621,7 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                 selected: option.selected,
                 navigation_key: None,
                 identity_label: None,
+                free_text: Some(option.number) == free_text,
             })
             .collect(),
         hint,
@@ -560,9 +633,18 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
 fn numbered_options(lines: &[&str], start: usize) -> (Vec<OptionLine>, usize) {
     let mut options: Vec<OptionLine> = Vec::new();
     let mut end = start;
+    let first = option_line(lines[start]).map_or(1, |option| option.number);
+    // The next number in sequence, or `Chat about this` after Claude's rule
+    // when scrolling hides the options between.
+    let follows = |options: &[OptionLine], next: &OptionLine, after_rule: bool| {
+        let expected = first + options.len() as u32;
+        next.number == expected
+            || (after_rule && next.number > expected && next.label == CHAT_LABEL)
+    };
+    let mut after_rule = false;
     for (index, line) in lines.iter().enumerate().skip(start) {
         if let Some(mut option) = option_line(line) {
-            if option.number as usize != options.len() + 1 {
+            if !follows(&options, &option, after_rule) {
                 break;
             }
             // Codex can wrap the whole label, leaving only `› 1.` on this line.
@@ -579,6 +661,7 @@ fn numbered_options(lines: &[&str], start: usize) -> (Vec<OptionLine>, usize) {
             }
             option.line = index;
             options.push(option);
+            after_rule = false;
             end = index + 1;
             continue;
         }
@@ -588,8 +671,9 @@ fn numbered_options(lines: &[&str], start: usize) -> (Vec<OptionLine>, usize) {
             && lines
                 .get(index + 1)
                 .and_then(|next| option_line(next))
-                .is_some_and(|next| next.number as usize == options.len() + 1)
+                .is_some_and(|next| follows(&options, &next, true))
         {
+            after_rule = true;
             continue;
         }
         let Some(last) = options.last_mut() else {
@@ -788,3 +872,7 @@ fn apply_sgr(style: &mut Style, params: &str) {
 #[cfg(test)]
 #[path = "tests/dialog_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/option_list_test.rs"]
+mod option_list_tests;

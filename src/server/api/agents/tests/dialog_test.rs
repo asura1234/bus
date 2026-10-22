@@ -760,3 +760,75 @@ fn claude_review_screen_under_tab_header_offers_submit_and_cancel() {
     assert_eq!(labels, ["Submit answers", "Cancel"]);
     assert_eq!(dialog.keys_for(1).unwrap(), ["enter"]);
 }
+
+const CLAUDE_OPTION_LIST: &str =
+    include_str!("../../../../../tests/fixtures/claude-option-list/tall-rest.ansi");
+
+#[tokio::test]
+async fn claude_option_list_free_text_answer_focuses_fills_and_submits_its_field() {
+    let (mut app, mut writes) =
+        app_with_dialog_sized(CLAUDE_OPTION_LIST.as_bytes(), Some("session"), 92, 45);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert!(dialog.options[4].free_text);
+
+    // Choosing the empty field would only press Enter on it.
+    let refused = chosen(&choose(
+        &mut app,
+        &observation,
+        Some("session"),
+        &dialog.digest,
+        5,
+    ));
+    assert!(!refused.written);
+    assert!(writes.try_recv().is_err());
+
+    let params = answer_params(&observation, Some("Remap whole clips only"), false);
+    let choice = chosen(&app.handle_agent_dialog_answer("answer".into(), params));
+    assert!(choice.written, "{:?}", choice.reason);
+    assert_eq!(choice.keys, ["down", "down", "down", "down", "enter"]);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[200~Remap whole clips only\x1b[201~")
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+}
+
+#[tokio::test]
+async fn claude_option_list_free_text_answer_leaves_a_draft_and_skips_alone() {
+    let draft = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-rest-freetext-holds-text.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(draft.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "draft".into(),
+        answer_params(&observation, Some("token"), false),
+    ));
+    assert!(!result.written);
+    assert_eq!(result.reason.as_deref(), Some("question_input_unavailable"));
+    let (mut app, mut writes_too) =
+        app_with_dialog_sized(CLAUDE_OPTION_LIST.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let skipped = chosen(
+        &app.handle_agent_dialog_answer("skip".into(), answer_params(&observation, None, true)),
+    );
+    assert!(!skipped.written);
+    assert_eq!(skipped.reason.as_deref(), Some("not_a_free_text_question"));
+    assert!(writes.try_recv().is_err());
+    assert!(writes_too.try_recv().is_err());
+}

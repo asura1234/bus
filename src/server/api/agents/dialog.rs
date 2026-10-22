@@ -243,6 +243,7 @@ fn dialog_observation(
                     number: option.number,
                     label: option.label,
                     selected: option.selected,
+                    free_text: option.free_text,
                 })
                 .collect(),
             hint: dialog.hint,
