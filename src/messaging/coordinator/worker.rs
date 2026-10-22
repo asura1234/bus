@@ -105,7 +105,12 @@ impl Worker {
                 .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
                 .map_err(|e| e.to_string())?;
         }
-        super::super::orchestration::queue_upgrade_onboarding(&mut state, &data_dir)?;
+        if let Err(error) =
+            super::super::orchestration::queue_upgrade_onboarding(&mut state, &data_dir)
+        {
+            tracing::warn!(event = "bus.onboarding.upgrade_skipped", %error,
+                "Upgrade onboarding skipped; coordinator startup continues");
+        }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
             disk_space: super::disk_space::DiskSpace::default(),

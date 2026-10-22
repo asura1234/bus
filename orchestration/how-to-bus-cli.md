@@ -334,9 +334,12 @@ else. An ordinary sentence or a header with a forged ID or room always gets
 the genuine sender header. The stored chat text stays as authored;
 the delivered payload and callback matching use the same rendered text.
 
-After an upgrade, existing agents receive these current messaging rules once
+After an upgrade, existing agents receive these current messaging rules from Bus once
 as their first pending message, before waiting work; saved custom prompts are
 preserved. New agents receive the rules at launch.
+
+If the upgrade instruction cannot be prepared, Bus logs a warning and continues
+coordinator startup. It retries the skipped refresh on a later startup.
 
 A message from another conversation room waits for the recipient's running
 turn to finish, then gets its own turn and reply. Same-room steering,

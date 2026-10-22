@@ -677,3 +677,24 @@ fn docs_written_for_agents_name_no_dev_tool_and_no_dev_flag() {
     }
     std::fs::remove_dir_all(data).unwrap();
 }
+
+#[test]
+fn upgrade_onboarding_is_signed_by_bus_not_the_developer() {
+    let data = temp_root("upgrade-onboarding-author");
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(room, "codex1", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let mut value = serde_json::to_value(&state).unwrap();
+    value["agents"][agent.0.to_string()]["messaging_rules_version"] = serde_json::json!(0);
+    let mut state: BusState = serde_json::from_value(value).unwrap();
+    queue_upgrade_onboarding(&mut state, &data).unwrap();
+    let request = state.requests().next().expect("onboarding queued");
+    assert_eq!(
+        request.prompt.author,
+        crate::messaging::model::Author::Bus,
+        "Bus's own rules refresh shown in chat as written by the developer"
+    );
+    std::fs::remove_dir_all(data).unwrap();
+}

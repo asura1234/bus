@@ -37,7 +37,7 @@ impl BusState {
                 files: Vec::new(),
                 recipient_ids: [agent].into_iter().collect(),
             },
-            Author::Developer,
+            Author::Bus,
             now_ms,
             true,
         )?;
