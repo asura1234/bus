@@ -186,6 +186,15 @@ impl BusState {
         }
     }
 
+    pub(super) fn unconfirmed_submission_message(prompt: super::PromptId) -> String {
+        format!(
+            "The outcome of message {} is unknown (submission_unconfirmed). \
+             The agent may have run it. Bus will not retry automatically. \
+             Check the agent's transcript before resending. Inspect: bus message status {}",
+            prompt.0, prompt.0
+        )
+    }
+
     pub(crate) fn notify_stalled_attention(
         &mut self,
         now_ms: u64,
@@ -207,7 +216,18 @@ impl BusState {
         // prune_attention removes it only after the request leaves history.
         for (request, prompt, agent, reason) in observed {
             if let Some(reason) = reason {
-                self.attention_episode(format!("stall:{}", request.0), Some(true), agent, &format!("Agent stalled past its timeout on message {} ({reason}). Inspect: bus message status {}", prompt.0, prompt.0), now_ms)?;
+                let message = if reason == "submission_unconfirmed" {
+                    Self::unconfirmed_submission_message(prompt)
+                } else {
+                    format!("Agent stalled past its timeout on message {} ({reason}). Inspect: bus message status {}", prompt.0, prompt.0)
+                };
+                self.attention_episode(
+                    format!("stall:{}", request.0),
+                    Some(true),
+                    agent,
+                    &message,
+                    now_ms,
+                )?;
             }
         }
         Ok(())

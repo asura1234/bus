@@ -361,6 +361,57 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
 }
 
 #[test]
+fn an_unconfirmed_write_failed_at_its_bound_tells_the_developer() {
+    let (mut worker, agent, room, dir, _calls) = fixture(
+        Provider::ClaudeCode,
+        vec![Err(TransportError {
+            message: "Provider did not accept prompt before submission deadline".into(),
+            code: Some("timeout".into()),
+            definitely_rejected: false,
+        })],
+    );
+    fresh_idle_poll(&mut worker, agent);
+    let lost = queue(&mut worker, room, agent, "worker final");
+    worker.submit_ready().unwrap();
+    assert!(worker.state.request(lost).unwrap().uncertain_outcome);
+    let bound = worker.state.request(lost).unwrap().progress_at_ms.unwrap()
+        + crate::messaging::model::DELIVERED_STALL_MS;
+    // The stall itself is reportable at the bound.
+    let mut reported = worker.state.clone();
+    reported.notify_stalled_attention(bound).unwrap();
+    assert!(reported.master_room().is_some_and(|master| reported
+        .notices(master.id)
+        .any(|notice| notice.text.contains("submission_unconfirmed"))));
+    // The live tick runs every 500 ms: one just before the bound, one at it.
+    worker.expire_queued_requests(bound - 1).unwrap();
+    worker.expire_queued_requests(bound).unwrap();
+    assert_eq!(
+        worker.state.request(lost).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    let notices: Vec<_> = worker
+        .state
+        .master_room()
+        .map(|master| {
+            worker
+                .state
+                .notices(master.id)
+                .map(|notice| notice.text.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        notices
+            .iter()
+            .any(|text| text.starts_with(crate::messaging::attention::TAG)
+                && text.contains("submission_unconfirmed")),
+        "a message Bus gave up on must reach the developer; notices: {notices:?}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn uncertain_submission_survives_restart_and_never_retries() {
     let (mut worker, agent, room, dir, calls) = fixture(
         Provider::Codex,

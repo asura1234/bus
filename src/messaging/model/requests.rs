@@ -509,11 +509,12 @@ impl BusState {
         Some(request)
     }
 
-    /// Fails each typed request whose write Bus could not confirm once its
-    /// agent sat idle past `DELIVERED_STALL_MS` with no start hook: the
-    /// provider never took it, or it would have reported the turn. Bus never
-    /// retypes it (the text may still sit in the composer, which the next
-    /// delivery clears), and the queue behind it moves on.
+    /// Bounds waiting for an unconfirmed write with no observed start hook:
+    /// fail it after `DELIVERED_STALL_MS` from its latest progress or idle
+    /// start, while its agent remains idle. This does not prove the provider
+    /// never ran it. Tell the developer its outcome is unknown, never retype
+    /// it, and let the queue move on. Any text still in the composer is
+    /// cleared by the next delivery.
     pub(crate) fn fail_unconfirmed_submissions(&mut self, now_ms: u64) -> Result<(), ModelError> {
         let unconfirmed: Vec<_> = self
             .agents
@@ -523,13 +524,19 @@ impl BusState {
             .filter(|request| {
                 self.stall_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
             })
-            .map(|request| (request.id, request.agent_id))
+            .map(|request| (request.id, request.agent_id, request.prompt.id))
             .collect();
-        for (request, agent) in unconfirmed {
-            self.abandon_current_request(request, now_ms)?;
-            if let Some(request) = self.requests.get_mut(&request) {
-                request.failure_reason = Some("submission_unconfirmed".into());
-            }
+        for (request, agent, prompt) in unconfirmed {
+            let message = Self::unconfirmed_submission_message(prompt);
+            self.attention_episode(
+                format!("stall:{}", request.0),
+                Some(true),
+                agent,
+                &message,
+                now_ms,
+            )?;
+            self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
+            self.set_agent_error(agent, Some(message))?;
             tracing::info!(
                 event = "bus.message.recovered",
                 request_id = request.0,
