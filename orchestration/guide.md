@@ -233,12 +233,18 @@ remove inactive per-run targets you created, retain only the worktree target,
 and report deleted paths and measured sizes. Close a merged PR's worktree with
 `worktree-close`, preserving source/evidence and checking for unpushed work first.
 
-Room 877 permits **at most two full builds** across the room. Before a full
-gate, coverage run or E2E binary build, atomically acquire one slot, recording
-which `mkdir` succeeded; if both exist, wait 60 seconds and retry:
+Each room permits **at most two full builds**. The orchestrator takes its room
+id from its prompt and resolves `/tmp/bus-<room id>-build-slot-1` and
+`/tmp/bus-<room id>-build-slot-2`. Record both literal absolute paths in the
+workflow and pass them in every build worker's brief. Workers use those supplied
+paths; they do not infer a room id. If the paths are missing, ask the orchestrator.
+
+Before a full gate, coverage run or E2E binary build, set `build_slot_1` and
+`build_slot_2` to the literal paths from the brief, then atomically acquire one
+slot, recording which `mkdir` succeeded; if both exist, wait 60 seconds and retry:
 
 ```sh
-mkdir /tmp/bus-877-build-slot-1 2>/dev/null || mkdir /tmp/bus-877-build-slot-2 2>/dev/null
+mkdir "$build_slot_1" 2>/dev/null || mkdir "$build_slot_2" 2>/dev/null
 ```
 
 Write owner/liveness/expiry metadata for the acquired slot before building.
@@ -426,6 +432,9 @@ investigation.
 
 Ask the developer only for:
 
+- Unknown developer intent: an unknown workflow or skill name, unclear scope,
+  a missing referenced resource or conflicting instructions. Stop the affected
+  work and ask under the assumptions rule.
 - A destructive or outward-facing action outside existing workflow or developer
   authorization, such as publishing or deleting work not covered by that authority.
 - A product decision you have no basis to recommend on. Technical uncertainty
@@ -434,8 +443,8 @@ Ask the developer only for:
 - A change to the goal, including dropping a requirement.
 
 [Never act on assumptions](orchestrator-rules.md#never-act-on-assumptions) still
-applies to unknown intent: resolve facts from instructions and evidence instead
-of inventing a resource, scope or authority. It does not require re-asking for
+applies to unknown intent: stop and ask rather than inventing a resource, scope
+or authority. It does not require re-asking for
 authority already given. Missing intent or conflicting resources block only the
 affected part. When a developer decision is needed, ask in MASTER
 with `[waiting-on-you]`, the cause and a recommended plan where there is a basis
@@ -451,6 +460,12 @@ Manual-test/approval holds still apply. An explicit instruction to leave a PR
 as a draft or not merge it remains a hold.
 
 ## Evidence behind the result and continuation rules
+
+The **2026-10-22 room 877 disk incident** left only **893 MB free**, with roughly
+**81 GB** in per-run Cargo targets. The immediate coordination used
+`/tmp/bus-877-build-slot-1` and `/tmp/bus-877-build-slot-2`. This motivates one
+target per worktree, inactive-output cleanup and bounded builds; the general
+protocol above resolves a separate pair of slot paths from each room's id.
 
 The **2026-10-22 wake-up RCA**, “Which fixes are actually needed”, item 4
 (`temp/orchestrator-wake-rca/README.md` in the main Bus checkout), records

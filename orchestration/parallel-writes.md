@@ -41,6 +41,7 @@ Ownership:
 Shared files: <X>: ask <orchestrator> before writing; wait for grant/release
   or <X>: sole owner <worker>; send proposed edits to that owner
 Checks / build outputs: <worker>: <commands>; <worktree>/target; <build slot/artifacts>
+Build slots: <literal absolute slot-1 path>; <literal absolute slot-2 path>
 Integration: <agent>; <merge, stack or rebase order>; conflicts: <agent>
 Commit access: <agent or grant order>; stage only owned files
 Cleanup: <agent>; <worktrees and target dirs>; <checkpoint>
@@ -73,8 +74,15 @@ Reuse exactly one Cargo target per worktree: export
 `CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run,
 and set `CARGO_LLVM_COV_TARGET_DIR` to that same path for coverage. Never make
 per-run targets or share another worktree's writable target. Serialize conflicting
-builds within a worktree and acquire one of the room's two full-build slots;
-record the owner, expiry and liveness check. Follow the
+builds within a worktree. Each room has two full-build slots:
+`/tmp/bus-<room id>-build-slot-1` and `/tmp/bus-<room id>-build-slot-2`.
+The orchestrator takes its room id from its prompt, resolves both literal
+absolute paths and includes them in each build worker's brief and ownership map.
+Workers use the supplied paths; ask the orchestrator if they are missing.
+Before a gate, coverage or E2E binary build, atomically acquire one of those
+slots with `mkdir`; if both are busy, wait 60 seconds and retry. Record the
+owner, expiry and liveness check, and release only your slot with a trap on
+success or failure. Follow the
 [resource protocol](orchestrator-guide.md#resource-leases-and-build-slots).
 Final review, verification and bot review all use the same integrated head;
 separate worktrees are available for conflicting gates or builds.

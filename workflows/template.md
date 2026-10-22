@@ -53,20 +53,27 @@ flowchart TD
         plan[<agent>: plan] --> implement[<agent>: implement, open PR]
     end
 
-    implement --> verify1[Developer: manual check]:::developer
-    verify1 -- behavior wrong --> plan
+    implement --> initround["Orchestrator: record or resume fix_round in workflow log (new PR: 0)"]
+    initround --> verify1[Developer: manual check]:::developer
+    verify1 -- behavior wrong --> nextfix
     verify1 -- ok --> review
 
     subgraph reviewloop [4. Review]
         review[Fan out reviewers on different models: review-pr]
         review --> ready{All reviewers ready?}
-        ready -- no --> fix[Author: address-review-comments]
-        fix --> review
+        ready -- no --> nextfix["Orchestrator: next_fix_round = fix_round + 1"]
+        nextfix --> overbudget{"next_fix_round > 2?"}
+        overbudget -- no --> countfix["Orchestrator: record fix_round = next_fix_round"]
+        countfix --> fix[Author: address-review-comments or developer feedback; push]
+        fix --> verify1
     end
 
+    overbudget -- yes --> hold[Orchestrator: hold this PR; report cause and plan; keep independent work moving]
+
     ready -- yes --> verify2[Developer: regression test]:::developer
-    verify2 -- problem --> fix
-    verify2 -- ok --> done([Merge])
+    verify2 -- problem --> nextfix
+    verify2 -- ok --> merge[Author: auto-merge-pr under kickoff authority; carry the fix counter and holds]
+    merge --> done([Merged])
 
     classDef developer fill:#fde2e4,stroke:#c9184a
     classDef current stroke-width:3px,stroke:#2563eb
@@ -97,7 +104,12 @@ weekly allowance falls below about 25%.
 ## Decision rules
 
 - <What the orchestrator may decide alone, and what must go to the developer.>
-- If reviewers or best-of-N candidates disagree sharply, stop and ask the developer.
+- Follow the binding orchestrator rules. Allow at most two
+  fix rounds per PR, including developer feedback; review and verify the second
+  repaired head before deciding whether it can merge. Hold a PR needing a third
+  fix, report the cause and plan, and keep independent work moving.
+- For technical disagreement, the author runs `best-of-n` and applies its
+  top-ranked option; only a question it hands back goes to the developer.
 
 ## Log
 

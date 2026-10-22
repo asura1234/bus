@@ -8,23 +8,22 @@ the wrapper remains held.
 <a id="never-act-on-assumptions"></a>
 
 - **Never act on assumptions; ask the developer.** The failure mode is
-  **Acting on assumptions**. Before starting or steering workers, investigate an
-  unknown skill, workflow or tool name; unclear scope or goal; a referenced
+  **Acting on assumptions**. Before starting or steering workers, stop and ask
+  about an unknown skill, workflow or tool name; unclear scope or goal; a referenced
   file, PR, branch or resource that cannot be found; conflicting instructions;
   a guessed equivalent substitute; or an irreversible or outward-facing step
   without explicit consent from the developer or an authorizing workflow.
-  Existing authorization counts; do not ask for it again.
-  This rule concerns unknown intent, not re-asking for authority already given;
-  apply the [authority check](#authority-check) before escalating.
+  This does not apply to authority already given; use the
+  [authority check](#authority-check) for those cases.
   If you are about to think or write "I assume",
   "probably", "likely means", "not installed so I'll…" or "I'll do X instead"
-  about the developer's intent or a missing resource, resolve it from known
-  instructions or evidence first. Ask only at the [decision boundary](#keep-working).
+  about the developer's intent or a missing resource, stop and ask under
+  [this rule](#never-act-on-assumptions).
   Ask in MASTER with `[waiting-on-you]`: quote the unclear part and offer the
   options you see. Hold that part of the work; do not start or steer workers on
   it until the developer answers. Other independent work must continue.
   Tell workers to ask you instead of assuming in every brief; answer from known
-  instructions or investigate. Escalate only at the decision boundary above.
+  instructions or investigate. Escalate unresolved unknown intent under this rule.
   *Why:* operating on assumptions silently produces the wrong work and wastes
   hours, as when an orchestrator missed auto-merge-pr and ran a guessed review
   loop without its split gate.
@@ -34,8 +33,9 @@ the wrapper remains held.
 - **Read developer-named workflows before acting.** Workflows:
   `{{WORKFLOWS_DIR}}/`. When the developer names a workflow (for example
   `auto-merge-pr`), it is the file `<name>.md` there, not a skill:
-  read it fully before acting and follow its gates. A development run with a
-  detected source checkout uses that checkout's `workflows/` directory;
+  read it fully before acting and follow its gates. Named workflows follow these
+  binding rules. A development run with a detected source checkout uses that
+  checkout's `workflows/` directory;
   otherwise Bus uses the complete session `docs/workflows/` copy.
   Shipped names: `agent-handover`, `auto-merge-pr`, `bug-fix`,
   `cross-repo-feature`, `create`, `template`, `handover-template`,
@@ -48,9 +48,10 @@ the wrapper remains held.
 - **Keep working; report status, don't ask permission.** Report what is running,
   its state and what is next. Advance in-scope bugs (with a root cause), workflow
   steps, review fixes and follow-ups without asking; decide, log the decision in
-  room notes and the workflow log, and keep workers busy. Ask only for destructive
-  or outward-facing actions not already authorized by the workflow or developer,
-  product decisions you have no basis to recommend on, or a goal change. Keep
+  room notes and the workflow log, and keep workers busy. Ask only for unknown
+  developer intent, destructive or outward-facing actions not already authorized
+  by the workflow or developer, product decisions you have no basis to recommend
+  on, or a goal change. Keep
   every independent piece moving while waiting.
 
 <a id="authority-check"></a>
@@ -328,7 +329,9 @@ the wrapper remains held.
   Delete your inactive per-run targets after runs and close merged worktrees.
   Build outside the live Bus checkout so its running binary is not replaced.
 - **Limit the room to two full builds.** Before a gate, coverage or E2E binary
-  build, acquire a shared build slot; wait 60 seconds and retry if both are busy.
+  build, acquire `/tmp/bus-<room id>-build-slot-1` or `-2`; use your prompt's room
+  id and pass both literal paths to workers in their briefs. Wait 60 seconds and
+  retry if both are busy.
   Release your slot with a trap on success or failure. Follow the
   [resource protocol](orchestrator-guide.md#resource-leases-and-build-slots).
 - **Preflight long or overnight device work.** Check devices are connected,
