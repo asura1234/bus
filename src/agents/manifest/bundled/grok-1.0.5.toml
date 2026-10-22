@@ -36,13 +36,13 @@ aliases = ["grok-build"]
 # rules must anchor on the [stop] chip, not on a bare spinner glyph.
 
 # A login is never composer readiness, even with an idle OSC title.
-# Synthetic normalized login text; unknown login layouts remain unavailable to
-# the guarded composer observer.
+# The title belongs to a leading control surface, never a line quoted in a
+# previous reply. The last-moment observer separately checks its bounded frame.
 [[rules]]
 id = "login_unavailable"
 state = "blocked"
 priority = 1400
-region = "whole_recent"
+region = "top_non_empty_lines(1)"
 visible_blocker = true
 line_regex = ['(?i)^\s*(?:Log in to Grok|Sign in to Grok|Login required|Login with Grok)\s*$']
 

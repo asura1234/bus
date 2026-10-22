@@ -620,6 +620,17 @@ mod tests {
     }
 
     #[test]
+    fn grok_quoted_login_text_does_not_mark_the_current_composer_blocked() {
+        let empty = include_str!("../../../tests/fixtures/grok-composer/empty.txt");
+        let reply = format!(
+            "◆ Auth diagnostic\nLogin required\n{}\n{empty}",
+            "Reply body\n".repeat(14)
+        );
+        let result = detected(&reply, "grok");
+        assert!(result.visible_idle && !result.visible_blocker);
+    }
+
+    #[test]
     fn grok_screen_rules_recognize_ctrl_x_without_login_readiness() {
         let result = detected(
             include_str!("../../../tests/fixtures/grok-composer/empty.txt"),
