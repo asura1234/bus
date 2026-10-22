@@ -12,6 +12,7 @@ use std::{
     process::Stdio,
 };
 mod arguments;
+mod identity;
 pub(super) use arguments::runtime_additions;
 pub(crate) use arguments::{option_arity, resumable_options, take_adopted_session, validate_args};
 
@@ -178,7 +179,7 @@ fn validate_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn resolve_executable() -> Result<PathBuf, String> {
+fn resolve_identity() -> Result<identity::SavedExecutable, String> {
     let mut candidates = Vec::new();
     if let Some(home) = std::env::home_dir() {
         candidates.push(home.join(".grok/bin/grok"));
@@ -197,8 +198,8 @@ pub(crate) fn resolve_executable() -> Result<PathBuf, String> {
     }
     let mut rejected = None;
     for path in candidates {
-        match validate_executable(&path) {
-            Ok(()) => return Ok(path),
+        match identity::validate(&path) {
+            Ok(identity) => return Ok(identity),
             Err(reason) if path.is_file() => {
                 tracing::warn!(event = "bus.grok.executable_rejected", reason = %reason,
                     "Installed Grok candidate failed identity validation");
@@ -218,13 +219,13 @@ pub(crate) fn resolve_executable() -> Result<PathBuf, String> {
 
 const EXECUTABLE_FILE: &str = "grok-executable.json";
 
+#[cfg(test)]
+pub(crate) fn resolve_executable() -> Result<PathBuf, String> {
+    resolve_identity().map(|identity| identity.alias)
+}
+
 pub(super) fn saved_executable(hooks: &HookContext) -> Result<PathBuf, String> {
-    let path: PathBuf = serde_json::from_value(hook_json::read_resume_json(
-        &hooks.spool.join(EXECUTABLE_FILE),
-    )?)
-    .map_err(|_| "Saved Grok Build executable is invalid")?;
-    validate_executable(&path)?;
-    Ok(path)
+    identity::load(hooks)
 }
 
 fn environment_for(
@@ -248,11 +249,7 @@ fn environment_for(
 }
 
 pub(crate) fn environment(hooks: &HookContext) -> Result<HashMap<String, String>, String> {
-    let executable = match std::fs::symlink_metadata(hooks.spool.join(EXECUTABLE_FILE)) {
-        Ok(_) => saved_executable(hooks)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => resolve_executable()?,
-        Err(e) => return Err(e.to_string()),
-    };
+    let executable = saved_executable(hooks)?;
     environment_for(hooks, &executable)
 }
 
@@ -285,13 +282,14 @@ pub(crate) fn prepare(
             notice.message
         ));
     }
-    let (_, _, executable) = super::project_hooks::update(
+    let (_, _, selected) = super::project_hooks::update(
         &cwd,
         &spec.hooks.binary,
         super::project_hooks::Mode::Install,
-        resolve_executable,
+        resolve_identity,
     )?;
-    let env = environment_for(&spec.hooks, &executable)?;
+    let env = environment_for(&spec.hooks, &selected.alias)?;
+    selected.verify()?;
     initialize(&spec.hooks)?;
     for (name, bytes) in [
         (
@@ -300,7 +298,7 @@ pub(crate) fn prepare(
         ),
         (
             EXECUTABLE_FILE,
-            serde_json::to_vec(&executable).map_err(|e| e.to_string())?,
+            serde_json::to_vec(&selected).map_err(|e| e.to_string())?,
         ),
     ] {
         hook_json::atomic_write(&spec.hooks.spool.join(name), &bytes).map_err(|e| e.to_string())?;
