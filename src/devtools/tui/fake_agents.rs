@@ -299,8 +299,7 @@ impl FakeAgent {
 
     /// Answers `prompt` in one turn; the exit code when interrupted meanwhile.
     fn submit(&mut self, prompt: &str) -> Option<i32> {
-        self.turns += 1;
-        let turn = format!("{}-{}", self.session, self.turns);
+        let turn = self.next_turn();
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();

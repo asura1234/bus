@@ -2,6 +2,11 @@
 use super::{FakeAgent, Value};
 
 impl FakeAgent {
+    pub(super) fn next_turn(&mut self) -> String {
+        self.turns += 1;
+        super::pseudo_uuid()
+    }
+
     pub(super) fn from_args(provider: &str, hooks: Value, args: &[String]) -> Self {
         let mut agent = Self::new(provider, hooks);
         agent.resume(args);
