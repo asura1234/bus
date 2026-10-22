@@ -272,10 +272,11 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
             info!(path = %socket_path.display(), "server socket ready");
             return Ok(());
         }
-        if let Ok(error) =
-            std::fs::read_to_string(crate::utils::paths::server_startup_error_path())
+        if let Ok(error) = std::fs::read_to_string(crate::utils::paths::server_startup_error_path())
         {
-            return Err(io::Error::other(format!("bus server could not start: {error}")));
+            return Err(io::Error::other(format!(
+                "bus server could not start: {error}"
+            )));
         }
         std::thread::sleep(SOCKET_POLL_INTERVAL);
     }
