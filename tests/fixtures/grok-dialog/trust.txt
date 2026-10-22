@@ -1,0 +1,5 @@
+◆ Trust this folder?
+┃ /private/tmp/synthetic-grok-project
+┃ ❯ 1 (○) Trust this folder
+┃   2 (○) No, exit
+1/2:select │ Ctrl+c:cancel

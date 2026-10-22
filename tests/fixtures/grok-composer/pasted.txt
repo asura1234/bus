@@ -1,0 +1,5 @@
+Synthetic session
+╭────────────────────────────────────╮
+│ ❯ [Pasted text: 40000 chars]        │
+╰────────────────────────────────────╯
+Shift+Tab:mode │ Ctrl+x:shortcuts
