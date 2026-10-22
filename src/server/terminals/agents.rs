@@ -197,7 +197,22 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
         let args = params.args;
-        let mut argv = vec![crate::agents::interactive_agent_executable(kind).to_string()];
+        let executable = match (kind, params.executable) {
+            (crate::agents::AgentKind::Grok, Some(path))
+                if std::path::Path::new(&path).is_absolute()
+                    && std::path::Path::new(&path)
+                        .file_name()
+                        .is_some_and(|name| name == "grok")
+                    && !path.chars().any(char::is_control) =>
+            {
+                path
+            }
+            (crate::agents::AgentKind::Grok, _) | (_, Some(_)) => {
+                return Err(AgentStartError::InvalidArgument);
+            }
+            (_, None) => crate::agents::interactive_agent_executable(kind).to_string(),
+        };
+        let mut argv = vec![executable];
         argv.extend(args.iter().cloned());
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;

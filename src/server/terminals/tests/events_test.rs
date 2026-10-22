@@ -127,6 +127,7 @@ mod codex_self_update_listing {
                 kind: "codex".into(),
                 pane_id,
                 args: vec!["-c".into(), "hooks=bus".into()],
+                executable: None,
                 timeout_ms: Some(4_000),
             }),
         });

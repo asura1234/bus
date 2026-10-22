@@ -1,7 +1,79 @@
 use super::{
-    api_session_kind, native_resume_is_empty_for_test, shell_command_from_argv,
-    terminal_resume_identity_for_test, test_support,
+    api_session_kind, native_resume_is_empty_for_test, resume_argv_for_test,
+    shell_command_from_argv, terminal_resume_identity_for_test, test_support,
 };
+
+#[cfg(unix)]
+#[test]
+fn grok_g_resume_binds_selected_alias_after_shell_startup() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = crate::utils::test_temp::unique_temp_path("bus-grok-resume ' executable");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let selected = scratch.join("grok");
+    std::fs::write(
+        &selected,
+        "#!/bin/sh\nprintf 'selected|'; printf '%s\\n' \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let plan = crate::agents::resume::catalog::AgentResumePlan {
+        agent: "grok".into(),
+        argv: vec!["grok".into(), "--resume".into(), "saved-session".into()],
+        dedupe_key: "grok-saved".into(),
+    };
+    let argv = resume_argv_for_test(
+        &plan,
+        vec![("PATH".into(), scratch.to_str().unwrap().into())],
+        vec!["--fullscreen".into(), "literal $() argument".into()],
+    )
+    .unwrap();
+    assert_eq!(argv[0], selected.to_str().unwrap());
+    assert_eq!(plan.argv[0], "grok");
+    let command = shell_command_from_argv(&argv);
+    let output = std::process::Command::new("/bin/zsh")
+        .args([
+            "-f",
+            "-c",
+            &format!("grok() {{ print shell-function-shadow; }}\n{command}"),
+        ])
+        .env("PATH", &scratch)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "selected|--resume\nsaved-session\n--fullscreen\nliteral $() argument\n"
+    );
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn grok_g_resume_refuses_missing_or_relative_selected_executable() {
+    let mut plan = crate::agents::resume::catalog::AgentResumePlan {
+        agent: "grok".into(),
+        argv: vec!["grok".into(), "--resume".into(), "saved-session".into()],
+        dedupe_key: "grok-saved".into(),
+    };
+    assert!(resume_argv_for_test(&plan, Vec::new(), Vec::new()).is_err());
+    let mut env = vec![("PATH".into(), "relative:/bin".into())];
+    assert!(resume_argv_for_test(&plan, env.clone(), Vec::new()).is_err());
+    env[0].1 = "/selected/bin:/bin".into();
+    assert_eq!(
+        resume_argv_for_test(&plan, env.clone(), Vec::new()).unwrap()[0],
+        "/selected/bin/grok"
+    );
+    plan.argv[0] = "/unexpected/grok".into();
+    assert!(resume_argv_for_test(&plan, env.clone(), Vec::new()).is_err());
+    plan.agent = "codex".into();
+    assert_eq!(
+        resume_argv_for_test(&plan, env, Vec::new()).unwrap(),
+        plan.argv
+    );
+}
 #[cfg(unix)]
 use super::{App, Rect};
 

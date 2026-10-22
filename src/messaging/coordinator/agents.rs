@@ -401,6 +401,7 @@ impl Worker {
         if let Some(spec) = &orchestrator {
             self.prepare_orchestrator_prompt(&input, id, &mut state, spec, &mut prepared, &hooks)?;
         }
+        let selected_executable = launch::selected_executable(input.provider, &prepared.env)?;
         let identity = self.persist_agent_launch(
             state,
             id,
@@ -441,7 +442,9 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         self.save(state)?;
         // This identity is durable before start. A missing response must not launch twice.
-        let mut argv = vec![launch::executable(input.provider).to_owned()];
+        let mut argv = vec![selected_executable
+            .clone()
+            .unwrap_or_else(|| launch::executable(input.provider).to_owned())];
         argv.extend(prepared.args.iter().cloned());
         self.watch_agent_startup(id, argv)?;
         let started = self
@@ -451,6 +454,7 @@ impl Worker {
                 kind: identity::provider_kind(input.provider).label().into(),
                 pane_id: pane.clone(),
                 args: prepared.args,
+                executable: selected_executable,
                 timeout_ms: None,
             }));
         match started {
