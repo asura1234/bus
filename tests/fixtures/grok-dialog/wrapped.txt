@@ -1,0 +1,7 @@
+◆ Allow shell command?
+┃ Scope: this command
+┃ ❯ 1 (○) Yes, proceed with the
+┃         synthetic command in
+┃         the scratch directory
+┃   2 (○) No, reject
+1/2:select │ Ctrl+c:cancel

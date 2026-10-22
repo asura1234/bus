@@ -1,0 +1,6 @@
+◆ Choose colours
+┃ Question 1/2
+┃   1 [ ] Red
+┃   2 [✓] Blue
+┃ ❯ z (●) ultraviolet please
+Enter:submit │ Esc:back
