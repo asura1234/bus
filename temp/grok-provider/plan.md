@@ -225,3 +225,31 @@ All three v1 choices are approved: Bus-delivered wakes; macOS / Grok 1.0.5 / ful
 ## Approved G0 override
 
 The developer explicitly requested compiling stubs and every shared-file registration before parallel work. G0 therefore registers ProviderKind::Grok, supplies explicit unfinished-operation errors, and commits all shared delegates. The authoritative interfaces, exact five-lane file lists, test commands and done criteria are in [lanes.md](lanes.md); they supersede the earlier task split and any conflicting signatures or shared-file ownership above. A+D is one lane. Lanes only fill their own new scaffold files and add the listed new test/fixture files; shared files stay with G. G0 does not claim working end-to-end provider support.
+
+
+## G1 joined status and acceptance limits
+
+All five lanes are merged on `bus-grok`. G wires the selected executable at the
+post-shell-startup boundary, the resume-selector helper, ordered question dismissal,
+composer ownership preservation, bounded durable idle-prompt reconciliation, and
+the seven-document inventory. The joined fake acceptance runner is
+`tools/acceptance/grok_fake.py`; the lane handoff details are in
+[lane-addendum.md](lane-addendum.md).
+
+The production native completion producer is intentionally **not implemented**
+without a verified post-gate committed-final schema tied to `promptId`. Native Stop
+remains a candidate and idle is only a reconciliation trigger. The synthetic
+producer is dev-tools-only and restricted to the owned fake scratch process.
+Authenticated capture and that production adapter are required before real replies
+can settle successfully; both worker and orchestrator roles remain in scope.
+
+Native long-paste/bootstrap delivery is also pending: chips do not attest hidden
+contents. Fake QA uses a large visible composer and cannot close that gap. Real
+permission/trust/question fixtures, worker/orchestrator Bus wakes and MASTER routing,
+cold resume, and the idle-session background completion auto-wake probe still need
+signed-in Grok 1.0.5. Native auto-wake remains pending, not blocked or waived.
+
+The current developer request supersedes the historical G2 command list above:
+run the full `gate-and-fix` suite (lint, unit, integration, coverage and diff) under
+the shared gate lock; no release packaging or live-model `just e2e`. Publish a
+**draft only**, never merge and never push to master.

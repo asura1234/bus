@@ -6,6 +6,8 @@
 
 Approved decisions: both worker and orchestrator roles; v1 Bus-delivered wakes with ordinary authored sends; macOS / Grok Build 1.0.5 / fullscreen first; unknown allowance. **Native background wake verification is pending because Grok is not signed in. The developer has not accepted it as blocked or waived it.**
 
+Post-G0 interface decisions are recorded in [lane-addendum.md](lane-addendum.md): B's explicitly Bus-defined completion-attestation contract and pending native evidence; G-owned Notification reconciliation; C's `shift+x` dismissal encoding and Esc-before-dismiss behavior; A+D's rejection of managed execution-directory overrides and local argument deduplication. The addendum clarifies the frozen G0 interfaces without moving the lane baseline.
+
 G0 deliberately contains compiling stubs, as explicitly requested. Launch/resume, hook decoding, completion and prompt installation return explicit unfinished-operation errors; composer observation is unavailable; the fake refuses execution; allowance is genuinely unknown. G0 is not working end-to-end Grok support. Existing-provider behavior is preserved.
 
 ## Rules shared by all five lanes
