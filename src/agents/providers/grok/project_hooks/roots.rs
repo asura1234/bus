@@ -29,7 +29,7 @@ fn absolute(path: &Path, base: &Path) -> PathBuf {
     }
 }
 
-fn configured_paths(base: &Path, home: &Path) -> Result<Vec<PathBuf>, String> {
+fn configured_paths(base: &Path, home: &Path, cwd: &Path) -> Result<Vec<PathBuf>, String> {
     let file = match fs::File::open(base.join("config.toml")) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -47,37 +47,42 @@ fn configured_paths(base: &Path, home: &Path) -> Result<Vec<PathBuf>, String> {
     let Some(entries) = config.get("hooks-paths") else {
         return Ok(Vec::new());
     };
-    entries
+    let mut paths = Vec::new();
+    for entry in entries
         .as_array()
         .ok_or("Global Grok hooks-paths must be an array")?
-        .iter()
-        .map(|entry| {
-            let text = entry
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .ok_or("Invalid global Grok hooks-paths entry")?;
-            let path = if text == "~" {
-                home.to_owned()
-            } else if let Some(tail) = text.strip_prefix("~/") {
-                home.join(tail)
-            } else {
-                absolute(Path::new(text), base)
-            };
-            canonical(&path)
-        })
-        .collect()
+    {
+        let text = entry
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Invalid global Grok hooks-paths entry")?;
+        let path = if text == "~" {
+            home.to_owned()
+        } else if let Some(tail) = text.strip_prefix("~/") {
+            home.join(tail)
+        } else {
+            let path = Path::new(text);
+            if !path.is_absolute() {
+                // Native config-relative semantics are not authenticated.
+                // Protect both plausible bases, never the Bus server cwd.
+                paths.push(canonical(&cwd.join(path))?);
+            }
+            absolute(path, base)
+        };
+        paths.push(canonical(&path)?);
+    }
+    Ok(paths)
 }
 
-pub(super) fn verify(file: &Path) -> Result<(), String> {
+pub(super) fn verify(file: &Path, cwd: &Path) -> Result<(), String> {
     let home = std::env::home_dir().ok_or("HOME is required to protect global Grok hooks")?;
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let home = canonical(&absolute(&home, &cwd))?;
+    let home = canonical(&absolute(&home, cwd))?;
     let base = match std::env::var_os("GROK_HOME") {
-        Some(path) if !path.is_empty() => canonical(&absolute(Path::new(&path), &cwd))?,
+        Some(path) if !path.is_empty() => canonical(&absolute(Path::new(&path), cwd))?,
         _ => canonical(&home.join(".grok"))?,
     };
     let mut roots = vec![base.clone()];
-    let configured = configured_paths(&base, &home)?;
+    let configured = configured_paths(&base, &home, cwd)?;
     // The built-in global source is <home>/hooks. Additional configured sources
     // may name a hook directory or a root containing hooks; protect both.
     let mut folders = vec![canonical(&base.join("hooks"))?];

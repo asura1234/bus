@@ -14,6 +14,8 @@ enum Stage {
 }
 
 struct Target {
+    cwd: PathBuf,
+    cwd_dir: dirs::Dir,
     root_path: PathBuf,
     path: PathBuf,
     root: dirs::Dir,
@@ -22,6 +24,8 @@ struct Target {
 }
 
 struct PinnedRoot {
+    cwd: PathBuf,
+    cwd_dir: dirs::Dir,
     path: PathBuf,
     dir: dirs::Dir,
 }
@@ -40,7 +44,7 @@ fn nofollow_path(path: &Path) -> Result<PathBuf, String> {
 impl PinnedRoot {
     fn open(project: &Path) -> Result<Self, String> {
         let project = nofollow_path(project)?;
-        let _cwd = dirs::Dir::open(&project)?;
+        let cwd_dir = dirs::Dir::open(&project)?;
         let path = nofollow_path(&project_root(&project))?;
         if std::env::home_dir()
             .and_then(|p| p.canonicalize().ok())
@@ -49,19 +53,28 @@ impl PinnedRoot {
             return Err("Grok project hooks cannot modify HOME configuration".into());
         }
         let dir = dirs::Dir::open(&path)?;
-        roots::verify(&path.join(".grok/hooks/bus.json"))?;
-        Ok(Self { path, dir })
+        roots::verify(&path.join(".grok/hooks/bus.json"), &project)?;
+        Ok(Self {
+            cwd: project,
+            cwd_dir,
+            path,
+            dir,
+        })
     }
 
     fn target(self, mode: Mode) -> Result<Target, String> {
-        if !self.dir.same(&dirs::Dir::open(&self.path)?)? {
+        if !self.dir.same(&dirs::Dir::open(&self.path)?)?
+            || !self.cwd_dir.same(&dirs::Dir::open(&self.cwd)?)?
+        {
             return Err("Project directory changed during validation".into());
         }
         let path = self.path.join(".grok/hooks/bus.json");
-        roots::verify(&path)?;
+        roots::verify(&path, &self.cwd)?;
         let config = self.dir.child(".grok", mode == Mode::Install)?;
         let hooks = config.child("hooks", mode == Mode::Install)?;
         let target = Target {
+            cwd: self.cwd,
+            cwd_dir: self.cwd_dir,
             root_path: self.path,
             path,
             root: self.dir,
@@ -78,10 +91,14 @@ impl Target {
         let root = dirs::Dir::open(&self.root_path)?;
         let config = root.child(".grok", false)?;
         let hooks = config.child("hooks", false)?;
-        if !self.root.same(&root)? || !self.config.same(&config)? || !self.hooks.same(&hooks)? {
+        if !self.cwd_dir.same(&dirs::Dir::open(&self.cwd)?)?
+            || !self.root.same(&root)?
+            || !self.config.same(&config)?
+            || !self.hooks.same(&hooks)?
+        {
             return Err("Project hook directory identity changed; no capture authorized".into());
         }
-        roots::verify(&self.path)
+        roots::verify(&self.path, &self.cwd)
     }
 }
 

@@ -479,3 +479,62 @@ fn grok_hook_global_roots_are_enforced_for_install_and_resume() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn grok_relative_global_sources_are_resolved_in_the_provider_cwd() {
+    struct RestoreCwd(std::path::PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).unwrap();
+        }
+    }
+    for resume in [false, true] {
+        for route in ["home", "config-folder", "config-file"] {
+            let f = Fixture::new();
+            f.install();
+            f.prepare("");
+            let leaf = f.project.join(".grok/hooks/bus.json");
+            let original = std::fs::read(&leaf).unwrap();
+            let server_cwd = f.root.join("bus-cwd");
+            std::fs::create_dir_all(server_cwd.join(".grok/hooks")).unwrap();
+            let _restore = RestoreCwd(std::env::current_dir().unwrap());
+            std::env::set_current_dir(&server_cwd).unwrap();
+            if route == "home" {
+                std::env::set_var("GROK_HOME", ".grok");
+            } else {
+                let global = f.root.join("home/.grok");
+                std::fs::create_dir_all(&global).unwrap();
+                let entry = if route == "config-file" {
+                    ".grok/hooks/bus.json"
+                } else {
+                    ".grok/hooks"
+                };
+                std::fs::write(
+                    global.join("config.toml"),
+                    format!(
+                        "hooks-paths = [{}]\n",
+                        serde_json::to_string(entry).unwrap()
+                    ),
+                )
+                .unwrap();
+            }
+            let mut spec = f.spec("", true);
+            spec.hooks.binary = f.root.join("replacement-bus");
+            let initialized = std::cell::Cell::new(false);
+            let result = if resume {
+                crate::agents::providers::grok::resume::capture_args(&spec.hooks, &f.project)
+                    .map(|_| ())
+            } else {
+                common::prepare(&spec, |_| {
+                    initialized.set(true);
+                    Ok(())
+                })
+                .map(|_| ())
+            };
+            assert!(result.is_err(), "{resume}/{route}: {result:?}");
+            assert!(!initialized.get());
+            assert_eq!(std::fs::read(&leaf).unwrap(), original, "{resume}/{route}");
+        }
+    }
+}
