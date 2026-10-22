@@ -10,6 +10,7 @@ pub(crate) struct Interest {
     pub(crate) repos: Option<Vec<String>>,
     pub(crate) remembered: BTreeSet<String>,
     pub(crate) owned_branches: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) retired_branches: BTreeMap<String, BTreeSet<String>>,
     pub(crate) agents: Vec<(PathBuf, Option<String>)>,
 }
 
@@ -86,7 +87,10 @@ fn coverage(
                 }
             }
         }
-        for (repo, branches) in rooms {
+        for (repo, mut branches) in rooms {
+            if let Some(retired) = interest.retired_branches.get(&repo) {
+                branches.retain(|branch| !retired.contains(branch));
+            }
             result.entry(repo).or_default().push(Scope {
                 room: interest.room,
                 branches,
@@ -142,5 +146,19 @@ mod remembered_tests {
         assert_eq!(found["o/two"][0].branches, ["fix/b".into()].into());
         interest.repos = Some(vec![]);
         assert!(coverage(&[interest], &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn github_watch_retired_heads_do_not_reenter_scopes_from_a_current_checkout() {
+        let interest = Interest {
+            room: 7,
+            repos: Some(vec!["o/one".into(), "o/two".into()]),
+            agents: vec![(PathBuf::from("/repo"), Some("fix/shared".into()))],
+            retired_branches: [("o/one".into(), ["fix/shared".into()].into())].into(),
+            ..Default::default()
+        };
+        let found = coverage(&[interest], &BTreeMap::new());
+        assert!(found["o/one"][0].branches.is_empty());
+        assert_eq!(found["o/two"][0].branches, ["fix/shared".into()].into());
     }
 }

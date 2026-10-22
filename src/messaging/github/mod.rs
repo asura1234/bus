@@ -30,6 +30,9 @@ pub(crate) struct Watermark {
     pub(crate) observed: BTreeMap<u64, BTreeMap<u64, PrStatus>>,
     /// Known PR lifecycle per head; true means explicitly merged/closed.
     pub(crate) head_prs: BTreeMap<String, BTreeMap<u64, bool>>,
+    pub(crate) completed_open_scans: u64,
+    /// A terminal observation needs a complete open pass before retirement.
+    pub(crate) retire_after_open_scan: BTreeMap<String, u64>,
 }
 
 impl Watermark {
@@ -37,6 +40,44 @@ impl Watermark {
         self.head_prs
             .get(branch)
             .is_some_and(|prs| prs.values().all(|closed| *closed))
+    }
+
+    pub(crate) fn can_retire_head(&self, branch: &str) -> bool {
+        self.closed_head(branch)
+            && self
+                .retire_after_open_scan
+                .get(branch)
+                .is_some_and(|scan| *scan <= self.completed_open_scans)
+    }
+
+    fn observe_heads(&mut self, page: &Page) {
+        // A terminal observation partway through a pass must wait for the next
+        // full pass; its unseen open PR may be on an already-read page.
+        let retire_after = self
+            .completed_open_scans
+            .saturating_add(if self.open_cursor.is_none() { 1 } else { 2 });
+        for (prs, closed) in [
+            (&page.merged, true),
+            (&page.closed, true),
+            (&page.open, false),
+        ] {
+            for pr in prs {
+                let old = self
+                    .head_prs
+                    .entry(pr.branch.clone())
+                    .or_default()
+                    .insert(pr.number, closed);
+                if closed
+                    && (old != Some(true) || !self.retire_after_open_scan.contains_key(&pr.branch))
+                {
+                    self.retire_after_open_scan
+                        .insert(pr.branch.clone(), retire_after);
+                }
+            }
+        }
+        if page.open_cursor.is_none() {
+            self.completed_open_scans = self.completed_open_scans.saturating_add(1);
+        }
     }
 }
 

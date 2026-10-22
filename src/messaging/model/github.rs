@@ -1,7 +1,7 @@
 //! Apply observations and their dedupe cursor in the same saved state.
 use super::{BusState, ModelError, RoomId, RoomKind};
 use crate::messaging::github::{self, Interest, Update, Watermark};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 impl BusState {
     pub(crate) fn set_github_repos(
@@ -41,6 +41,7 @@ impl BusState {
                 repos: room.github_repos.clone(),
                 remembered: room.github_discovered.clone(),
                 owned_branches: room.github_branches.clone(),
+                retired_branches: room.github_retired_branches.clone(),
                 agents: self
                     .agents
                     .values()
@@ -93,6 +94,8 @@ impl BusState {
                     .collect();
                 match result {
                     Ok(page) => {
+                        self.remember_github_heads(repo, &scopes);
+                        let scopes = self.github_open_scopes(repo, &scopes, page);
                         for scope in &scopes {
                             self.github_unavailable
                                 .remove(&(RoomId(scope.room), repo.clone()));
@@ -132,6 +135,7 @@ impl BusState {
     fn remember_github_heads(&mut self, repo: &str, scopes: &[github::Scope]) {
         let mark = self.github_watch.get(repo);
         for scope in scopes {
+            let excluded = self.github_orchestrator_only_heads(RoomId(scope.room));
             let Some(room) = self.rooms.get_mut(&RoomId(scope.room)).filter(|r| {
                 !r.deletion_pending
                     && r.kind == RoomKind::Work
@@ -142,12 +146,81 @@ impl BusState {
                 continue;
             };
             let branches = room.github_branches.entry(repo.into()).or_default();
-            branches.extend(scope.branches.iter().cloned());
-            branches.retain(|branch| mark.is_none_or(|m| !m.closed_head(branch)));
+            let retired = room.github_retired_branches.entry(repo.into()).or_default();
+            retired.retain(|branch| {
+                if excluded.contains(branch) {
+                    false
+                } else if mark.is_none_or(|m| !m.closed_head(branch)) {
+                    branches.insert(branch.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            branches.extend(
+                scope
+                    .branches
+                    .iter()
+                    .filter(|branch| !retired.contains(*branch))
+                    .cloned(),
+            );
+            branches.retain(|branch| {
+                if excluded.contains(branch) {
+                    false
+                } else if mark.is_some_and(|m| m.can_retire_head(branch)) {
+                    retired.insert(branch.clone());
+                    false
+                } else {
+                    true
+                }
+            });
             if room.github_repos.is_none() {
                 room.github_discovered.insert(repo.into());
             }
         }
+    }
+
+    fn github_orchestrator_only_heads(&self, room: RoomId) -> BTreeSet<String> {
+        let members: BTreeSet<_> = self
+            .agents
+            .values()
+            .filter(|a| !a.deletion_pending && a.room_id == room)
+            .filter_map(|a| a.branch.as_ref())
+            .collect();
+        self.agents
+            .values()
+            .filter(|a| !a.deletion_pending && a.orchestrates == Some(room))
+            .filter_map(|a| a.branch.as_ref())
+            .filter(|branch| !members.contains(branch))
+            .cloned()
+            .collect()
+    }
+
+    fn github_open_scopes(
+        &self,
+        repo: &str,
+        scopes: &[github::Scope],
+        page: &github::Page,
+    ) -> Vec<github::Scope> {
+        scopes
+            .iter()
+            .filter_map(|scope| {
+                let room = self.rooms.get(&RoomId(scope.room))?;
+                let mut branches = room.github_branches.get(repo).cloned().unwrap_or_default();
+                if let Some(retired) = room.github_retired_branches.get(repo) {
+                    branches.extend(
+                        page.open
+                            .iter()
+                            .filter(|pr| retired.contains(&pr.branch))
+                            .map(|pr| pr.branch.clone()),
+                    );
+                }
+                Some(github::Scope {
+                    room: scope.room,
+                    branches,
+                })
+            })
+            .collect()
     }
 
     fn github_notice(

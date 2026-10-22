@@ -229,6 +229,9 @@ pub(crate) struct Room {
     /// Head branches observed for this room, retained after worker cleanup.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) github_branches: BTreeMap<String, BTreeSet<String>>,
+    /// Retired ownership remains recoverable when a head's PR is reopened.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) github_retired_branches: BTreeMap<String, BTreeSet<String>>,
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,

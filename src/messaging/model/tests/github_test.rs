@@ -16,6 +16,15 @@ fn github_watch_notices_and_watermarks_survive_restart_and_keep_normal_bus_deliv
         )
         .unwrap();
     state.bind_orchestrator(agent, room).unwrap();
+    state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::Codex,
+            "/repo".into(),
+            Some("fix/ours".into()),
+        )
+        .unwrap();
     let page = Page {
         default_branch: "main".into(),
         merged: vec![PullRequest {
@@ -513,4 +522,302 @@ fn github_watch_new_open_pr_can_reestablish_retired_head_ownership() {
     }
     state.apply_github(&update, 2).unwrap();
     assert!(state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"));
+}
+
+#[test]
+fn github_watch_a_closed_pr_does_not_retire_a_head_whose_open_pr_is_on_a_later_page() {
+    let (mut state, room, _) = bound_room();
+    // The worker that opened fix/ours has been deleted; only the remembered
+    // head links the room to its still-open PR #10.
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/ours".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    // The poller builds each scan's scope from the room's remembered heads.
+    let page = |state: &BusState, result: Page| Update::Repo {
+        repo: "o/r".into(),
+        scopes: vec![Scope {
+            room: room.0,
+            branches: state.room(room).unwrap().github_branches["o/r"].clone(),
+        }],
+        result: Ok(result),
+        at_ms: 2000,
+    };
+    let pr = |number| PullRequest {
+        number,
+        branch: "fix/ours".into(),
+        base: "main".into(),
+        ..Default::default()
+    };
+    // An earlier PR #9 from the same head was closed. More than one page of
+    // open PRs exists, so PR #10 has not been scanned yet.
+    let first = page(
+        &state,
+        Page {
+            default_branch: "main".into(),
+            closed: vec![pr(9)],
+            open_cursor: Some("next".into()),
+            ..Default::default()
+        },
+    );
+    state.apply_github(&first, 2).unwrap();
+    let second = page(
+        &state,
+        Page {
+            default_branch: "main".into(),
+            open: vec![pr(10)],
+            ..Default::default()
+        },
+    );
+    state.apply_github(&second, 3).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"),
+        "a closed PR seen before its head's open PR permanently disowned the open PR"
+    );
+}
+
+#[test]
+fn github_watch_an_orchestrator_head_saved_before_the_exclusion_stops_owning_prs() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/orchestrator".into());
+    // Saved by a Bus that still remembered the orchestrator's checkout branch.
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .entry("o/r".into())
+        .or_default()
+        .insert("fix/orchestrator".into());
+    let interests = state.github_interests();
+    let coverage = Update::Coverage(
+        [(
+            "o/r".into(),
+            vec![Scope {
+                room: room.0,
+                branches: interests[0]
+                    .agents
+                    .iter()
+                    .filter_map(|(_, branch)| branch.clone())
+                    .collect(),
+            }],
+        )]
+        .into(),
+    );
+    state.apply_github(&coverage, 1).unwrap();
+    assert!(
+        !state.room(room).unwrap().github_branches["o/r"].contains("fix/orchestrator"),
+        "an orchestrator head remembered by an older Bus still establishes ownership"
+    );
+}
+
+fn remembered_scope(state: &BusState, room: RoomId) -> Vec<Scope> {
+    let interest = state
+        .github_interests()
+        .into_iter()
+        .find(|interest| interest.room == room.0)
+        .unwrap();
+    vec![Scope {
+        room: room.0,
+        branches: interest
+            .owned_branches
+            .get("o/r")
+            .cloned()
+            .unwrap_or_default(),
+    }]
+}
+
+#[test]
+fn github_watch_reopened_pr_restores_ownership_after_worker_cleanup_and_restart() {
+    let (mut state, room, orchestrator) = bound_room();
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            Some("fix/ours".into()),
+        )
+        .unwrap();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/ours".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    state.delete_agent(worker, 2).unwrap();
+    let mut pr = PullRequest {
+        number: 9,
+        branch: "fix/ours".into(),
+        base: "main".into(),
+        ..Default::default()
+    };
+    state
+        .apply_github(
+            &Update::Repo {
+                repo: "o/r".into(),
+                scopes: remembered_scope(&state, room),
+                result: Ok(Page {
+                    closed: vec![pr.clone()],
+                    ..Default::default()
+                }),
+                at_ms: 3,
+            },
+            3,
+        )
+        .unwrap();
+    assert!(
+        remembered_scope(&state, room)[0].branches.is_empty(),
+        "closed head still owns PRs"
+    );
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    for at in [4, 5] {
+        pr.status.ready = at == 5;
+        state
+            .apply_github(
+                &Update::Repo {
+                    repo: "o/r".into(),
+                    scopes: remembered_scope(&state, room),
+                    result: Ok(Page {
+                        open: vec![pr.clone()],
+                        ..Default::default()
+                    }),
+                    at_ms: at,
+                },
+                at,
+            )
+            .unwrap();
+    }
+    assert!(
+        remembered_scope(&state, room)[0]
+            .branches
+            .contains("fix/ours"),
+        "reopened head lost ownership after worker cleanup"
+    );
+    assert!(
+        state
+            .requests()
+            .any(|request| request.agent_id == orchestrator
+                && request.prompt.text.contains("#9 ready for review")),
+        "reopened PR's transition did not reach its orchestrator"
+    );
+}
+
+#[test]
+fn github_watch_terminal_observation_mid_scan_waits_for_the_next_full_open_pass() {
+    let (mut state, room, _) = bound_room();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/ours".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    let pages = [
+        Page {
+            open_cursor: Some("page-2".into()),
+            ..Default::default()
+        },
+        Page {
+            closed: vec![PullRequest {
+                number: 9,
+                branch: "fix/ours".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        Page {
+            open_cursor: Some("page-2".into()),
+            ..Default::default()
+        },
+        Page::default(),
+    ];
+    for (index, page) in pages.into_iter().enumerate() {
+        state
+            .apply_github(
+                &Update::Repo {
+                    repo: "o/r".into(),
+                    scopes: remembered_scope(&state, room),
+                    result: Ok(page),
+                    at_ms: index as u64 + 2,
+                },
+                index as u64 + 2,
+            )
+            .unwrap();
+        assert_eq!(
+            remembered_scope(&state, room)[0]
+                .branches
+                .contains("fix/ours"),
+            index < 3,
+            "retirement must follow a full pass begun since the terminal observation"
+        );
+        let restarted = serde_json::to_string(&state).unwrap();
+        state = serde_json::from_str(&restarted).unwrap();
+    }
+}
+
+#[test]
+fn github_watch_orchestrator_head_shared_by_a_current_member_keeps_ownership() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::Codex,
+            "/repo".into(),
+            Some("fix/shared".into()),
+        )
+        .unwrap();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/shared".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    assert!(remembered_scope(&state, room)[0]
+        .branches
+        .contains("fix/shared"));
+    assert!(state.github_interests()[0]
+        .agents
+        .iter()
+        .any(|(_, branch)| branch.as_deref() == Some("fix/shared")));
 }

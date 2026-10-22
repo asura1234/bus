@@ -17,16 +17,24 @@ bus room github ROOM --off
 ```
 
 `bus state` includes `github_repos` (null means automatic, [] means off) and
-`github_discovered`, plus remembered `github_branches` per repository. Overrides
-are saved with the room. MASTER itself has no watch.
+`github_discovered`, plus active remembered `github_branches` per repository.
+Retired ownership history is saved with the room separately. Overrides are saved
+with the room. MASTER itself has no watch.
 
 A PR belongs to the rooms whose current or remembered agent feature branches match
 its head branch. Bus persists these branches per room and repository when discovery
 sees them, so worker cleanup or switching branches does not lose ownership. Only
-room-member branches are remembered. A remembered head is retired when its PR is
-seen merged or closed, and is not remembered again merely because a worker still
-has that checkout. Another known open PR on the same head keeps ownership active;
-reopening a PR also allows the current room members to establish ownership again.
+room-member branches are remembered. Coverage also purges previously saved heads
+matching the current orchestrator's branch unless a current member shares it.
+A remembered head is marked retired after its known PRs are all seen merged or
+closed and a full open-PR scan has finished since that terminal observation. If
+the observation occurs partway through a scan, retirement waits for the next full
+pass. Another open PR on a later page keeps ownership active. Retired history is
+kept per room and repository across restarts, but does not establish ownership
+while the head remains closed, even if a worker still has that checkout. Seeing
+any PR open on that head restores ownership automatically, including after the
+worker has been cleaned up. Its first open observation records a baseline and
+later transitions notify the orchestrator.
 An unmatched head is informational; author identity never establishes ownership. The
 repository's default branch does not establish ownership. With an explicit repo
 list, the room's current agent branches apply to each listed repository.
