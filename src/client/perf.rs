@@ -133,19 +133,33 @@ impl OverlayMeter {
         };
         drop(shown);
         let width = usize::from(frame.width);
-        let chars: Vec<char> = label.chars().collect();
-        let visible = &chars[chars.len().saturating_sub(width)..];
-        let start = width - visible.len();
+        let box_width = label
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(width);
+        let start = width - box_width;
         let fg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Black);
         let bg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Yellow);
-        for (offset, ch) in visible.iter().enumerate() {
-            if let Some(cell) = frame.cells.get_mut(start + offset) {
-                cell.symbol = ch.to_string();
-                cell.fg = fg;
-                cell.bg = bg;
-                cell.modifier = 0;
-                cell.skip = false;
-                cell.hyperlink = None;
+        for (row, line) in label.lines().take(usize::from(frame.height)).enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let visible = &chars[chars.len().saturating_sub(box_width)..];
+            let padding = box_width - visible.len();
+            for offset in 0..box_width {
+                if let Some(cell) = frame.cells.get_mut(row * width + start + offset) {
+                    let ch = if offset < padding {
+                        ' '
+                    } else {
+                        visible[offset - padding]
+                    };
+                    cell.symbol = ch.to_string();
+                    cell.fg = fg;
+                    cell.bg = bg;
+                    cell.modifier = 0;
+                    cell.skip = false;
+                    cell.hyperlink = None;
+                }
             }
         }
     }
@@ -177,7 +191,7 @@ pub(super) fn overlay_label(
         })
         .unwrap_or_else(|| "n/a".into());
     format!(
-        " CPU {} MEM {} FPS {} AGENTS {agents} ",
+        " CPU {} MEM {} FPS {} \n AGENTS {agents} ",
         cpu.map_or("n/a".into(), |cpu| format!("{}%", Field(Some(cpu)))),
         mem.map_or("n/a".into(), |mem| format!("{mem:.0}MB")),
         fps.map_or("n/a".into(), |fps| format!("{fps:.0}")),
