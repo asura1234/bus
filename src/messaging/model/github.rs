@@ -135,7 +135,13 @@ impl BusState {
     fn remember_github_heads(&mut self, repo: &str, scopes: &[github::Scope]) {
         let mark = self.github_watch.get(repo);
         for scope in scopes {
-            let excluded = self.github_orchestrator_only_heads(RoomId(scope.room));
+            let members: BTreeSet<_> = self
+                .agents
+                .values()
+                .filter(|a| !a.deletion_pending && a.room_id == RoomId(scope.room))
+                .filter_map(|a| a.branch.clone())
+                .collect();
+            let excluded = self.github_orchestrator_only_heads(RoomId(scope.room), repo, &members);
             let Some(room) = self.rooms.get_mut(&RoomId(scope.room)).filter(|r| {
                 !r.deletion_pending
                     && r.kind == RoomKind::Work
@@ -145,6 +151,10 @@ impl BusState {
             }) else {
                 continue;
             };
+            room.github_member_branches
+                .entry(repo.into())
+                .or_default()
+                .extend(scope.branches.intersection(&members).cloned());
             let branches = room.github_branches.entry(repo.into()).or_default();
             let retired = room.github_retired_branches.entry(repo.into()).or_default();
             retired.retain(|branch| {
@@ -180,18 +190,30 @@ impl BusState {
         }
     }
 
-    fn github_orchestrator_only_heads(&self, room: RoomId) -> BTreeSet<String> {
-        let members: BTreeSet<_> = self
-            .agents
-            .values()
-            .filter(|a| !a.deletion_pending && a.room_id == room)
-            .filter_map(|a| a.branch.as_ref())
-            .collect();
+    fn github_orchestrator_only_heads(
+        &self,
+        room: RoomId,
+        repo: &str,
+        members: &BTreeSet<String>,
+    ) -> BTreeSet<String> {
+        let attributed = self
+            .rooms
+            .get(&room)
+            .and_then(|r| r.github_member_branches.get(repo));
+        let mark = self.github_watch.get(repo);
         self.agents
             .values()
             .filter(|a| !a.deletion_pending && a.orchestrates == Some(room))
             .filter_map(|a| a.branch.as_ref())
-            .filter(|branch| !members.contains(branch))
+            .filter(|branch| !members.contains(*branch))
+            .filter(|branch| attributed.is_none_or(|heads| !heads.contains(*branch)))
+            .filter(|branch| {
+                !mark.is_some_and(|m| {
+                    m.head_prs
+                        .get(*branch)
+                        .is_some_and(|prs| prs.values().any(|closed| !closed))
+                })
+            })
             .cloned()
             .collect()
     }

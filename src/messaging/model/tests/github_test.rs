@@ -821,3 +821,150 @@ fn github_watch_orchestrator_head_shared_by_a_current_member_keeps_ownership() {
         .iter()
         .any(|(_, branch)| branch.as_deref() == Some("fix/shared")));
 }
+
+#[test]
+fn github_watch_a_shared_checkout_head_stays_owned_after_its_workers_are_cleaned_up() {
+    // The orchestrator and its worker share one checkout on the room's feature
+    // branch; the worker opened PR #10 from it and was then deleted.
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            Some("fix/shared".into()),
+        )
+        .unwrap();
+    let scan = |state: &BusState| {
+        let branches = state.github_interests()[0]
+            .agents
+            .iter()
+            .filter_map(|(_, branch)| branch.clone())
+            .chain(
+                state
+                    .room(room)
+                    .unwrap()
+                    .github_branches
+                    .get("o/r")
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+            .collect();
+        Update::Repo {
+            repo: "o/r".into(),
+            scopes: vec![Scope {
+                room: room.0,
+                branches,
+            }],
+            result: Ok(Page {
+                default_branch: "main".into(),
+                open: vec![PullRequest {
+                    number: 10,
+                    branch: "fix/shared".into(),
+                    base: "main".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            at_ms: 2000,
+        }
+    };
+    state.apply_github(&scan(&state), 1).unwrap();
+    assert!(state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"));
+    state.prepare_delete_agent(worker).unwrap();
+    state.apply_github(&scan(&state), 2).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"),
+        "the room's open PR head was purged as an orchestrator-only branch"
+    );
+}
+
+#[test]
+fn github_watch_member_provenance_survives_cleanup_before_a_pr_is_seen_and_stays_repo_local() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            Some("fix/shared".into()),
+        )
+        .unwrap();
+    let scope = || {
+        vec![Scope {
+            room: room.0,
+            branches: ["fix/shared".into()].into(),
+        }]
+    };
+    state
+        .apply_github(&Update::Coverage([("o/r".into(), scope())].into()), 1)
+        .unwrap();
+    state.delete_agent(worker, 2).unwrap();
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .insert("other/repo".into(), ["fix/shared".into()].into());
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state
+        .apply_github(
+            &Update::Coverage([("o/r".into(), scope()), ("other/repo".into(), scope())].into()),
+            3,
+        )
+        .unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"),
+        "member-attributed head was purged after cleanup without any PR observation"
+    );
+    assert!(
+        !state.room(room).unwrap().github_branches["other/repo"].contains("fix/shared"),
+        "member provenance leaked to an unattributed legacy head in another repository"
+    );
+}
+
+#[test]
+fn github_watch_known_open_pr_protects_an_unattributed_legacy_head_after_restart() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .insert("o/r".into(), ["fix/shared".into()].into());
+    state
+        .github_watch
+        .entry("o/r".into())
+        .or_default()
+        .head_prs
+        .insert("fix/shared".into(), [(10, false)].into());
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "o/r".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["fix/shared".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            1,
+        )
+        .unwrap();
+    assert!(
+        remembered_scope(&state, room)[0]
+            .branches
+            .contains("fix/shared"),
+        "known open PR lost ownership while legacy member provenance was unavailable"
+    );
+}

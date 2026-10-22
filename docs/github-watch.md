@@ -24,8 +24,12 @@ with the room. MASTER itself has no watch.
 A PR belongs to the rooms whose current or remembered agent feature branches match
 its head branch. Bus persists these branches per room and repository when discovery
 sees them, so worker cleanup or switching branches does not lose ownership. Only
-room-member branches are remembered. Coverage also purges previously saved heads
-matching the current orchestrator's branch unless a current member shares it.
+room-member branches are remembered. Bus saves member provenance per room,
+repository and head, so cleaning up a worker cannot turn its shared-checkout
+branch into legacy orchestrator data. Coverage purges a previously saved head
+matching the current orchestrator's branch only if it has no member provenance,
+no current member shares it, and no known PR on that head is open. Older state
+loads without attribution; a known open PR still protects its remembered head.
 A remembered head is marked retired after its known PRs are all seen merged or
 closed and a full open-PR scan has finished since that terminal observation. If
 the observation occurs partway through a scan, retirement waits for the next full
