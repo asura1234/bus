@@ -284,7 +284,7 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
                 "-p" | "--print" | "--bg" | "--background" | "--bare" | "--safe-mode"
             ),
             ProviderKind::Cursor => matches!(arg, "-p" | "--print"),
-            ProviderKind::Grok => false,
+            ProviderKind::Grok => unreachable!("Grok validates its own arguments"),
         };
         if incompatible {
             return Err(format!("{} launch argument {arg} disables the interactive terminal or observation hooks Bus needs; see docs/launch-args.md", provider_kind(provider)));
@@ -437,11 +437,12 @@ pub(crate) fn prepare(
     apply_run_permissions(spec.provider, &mut args);
     match spec.provider {
         ProviderKind::ClaudeCode => claude_code::launch::prepare(spec, cwd, args, adopted_session),
-        ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok => Ok(PreparedLaunch {
+        ProviderKind::Codex | ProviderKind::Cursor => Ok(PreparedLaunch {
             cwd,
             args,
             adopted_session,
             env: spec.hooks.env(),
         }),
+        ProviderKind::Grok => unreachable!("Grok prepares its own launch"),
     }
 }

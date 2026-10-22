@@ -1,35 +1,32 @@
 # Grok provider acceptance: synthetic fixtures and pending native evidence
 
-Lane F baseline: G0 5eee9b6f1b4a257f42dcc5c4f25a27f326845aa7.
-Only the six F-owned files change. Shared registration and integrated journeys
-belong to grok-scout (G). This checklist does not record a journey PASS.
-
 All fake turns, final-boundary records, permission/question cards and wakes
 below are **SYNTHETIC**. The observed 1.0.5 evidence establishes camelCase
 session/shutdown hooks and the ACP update envelope only. It does not establish
 native final markers, authenticated cards, or automatic background reentry.
-B/C fixture alignment and authenticated acceptance remain required.
+Authenticated native acceptance remains pending.
 
 ## Local verification
 
-Scrub inherited BUS_* / HERDR_* before every command. Run from the F worktree,
-with these process-scoped settings:
+Scrub inherited BUS_* / HERDR_* before builds and harnesses. Use an isolated
+CARGO_TARGET_DIR, CARGO_INCREMENTAL=0 and nice -n 19; limit build and test
+parallelism to fewer than half the machine's cores.
 
-    CARGO_TARGET_DIR=/Users/dylanliu/work/bus-targets/grok-f
-    CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=1
-    RUST_TEST_THREADS=1
+    nice -n 19 cargo nextest run --locked --bin bus --features dev-tools -E 'test(grok)'
+    nice -n 19 python3 -m unittest tools.tests.grok_e2e_test tools.tests.grok_probe_test tools.tests.grok_fake_test
 
-    nice -n 19 cargo test --locked --bin bus --features dev-tools grok_f_ -- --test-threads=1
-    nice -n 19 python3 -m unittest tools.tests.grok_e2e_test tools.tests.grok_probe_test
+Run synthetic integration with an explicitly isolated dev-tools binary:
 
-No full gate, real provider, Feishu message or live Bus is part of these tests.
-Delete only the lane's CARGO_TARGET_DIR when verification is finished.
+    nice -n 19 python3 tools/acceptance/grok_fake.py --binary ISOLATED_BINARY
+
+Reports bind synthetic results to the binary hash and include cleanup checks.
+Authenticated native acceptance is separate from these synthetic checks.
 
 ## Fake interface
 
 The shared driver installs the fake as the canonical alias 'grok'. It reports
 'grok 1.0.5 (bus-synthetic-fake)' for --version and Grok Build plus the
-managed runtime flags for --help. This must remain compatible with A+D's
+managed runtime flags for --help. This must remain compatible with the managed provider
 identity validation. It never invokes an actual Grok executable.
 
 It reads nested command hooks from the nearest project .grok/hooks/*.json,
@@ -41,8 +38,8 @@ the existing scratch driver supplies its own routing environment.
 
 Synthetic updates.jsonl uses method:_x.ai/session/update and params.sessionId,
 params.update.sessionUpdate and params._meta.eventId. Synthetic turn schemas
-are provisional, marked synthetic, and require B's agreement before joined
-completion acceptance. chat_history.jsonl and summary.json are companions in
+are provisional and marked synthetic; they do not attest native
+completion. chat_history.jsonl and summary.json are companions in
 the scratch project's .grok/bus-fake/SESSION directory. No ~/.grok writes.
 
 Scenarios:
@@ -59,9 +56,9 @@ Scenarios:
 - fake:wake N: timer-driven synthetic task completion and a distinct new turn;
   explicitly does not prove native wake. No shell/model is executed.
 
-## Post-join commands (G owns execution and exact joined SHA)
+## Isolated driver commands
 
-Build the joined dev binary once using G's resource limits, then drive a fresh
+Build the joined dev binary once using the resource limits above, then drive a fresh
 session through its own target path, e.g.:
 
     nice -n 19 JOINED_BINARY --dev tui start --name grok-joined-SHA
@@ -76,17 +73,17 @@ root, acceptance_existing_instance, or the real installed Grok alias.
 
 | Journey | Expected observation | Status |
 | --- | --- | --- |
-| Grok worker / Claude orchestrator | One owned full reply per request; correct room | UNRUN: joined A/B/C/E required |
-| Grok orchestrator / Claude worker | Bootstrap, ordinary authored send (no --async), return idle, durable reply wakes Grok | UNRUN: joined code |
-| Three queued prompts | Ordered distinct requests/turns/replies, no loss | UNRUN: joined code |
-| Steering | New message joins intended active turn; same final for both requests | UNRUN: joined code |
-| Dialog choose / free text | Observe card, answer once with fresh fingerprint; changed scope/parked focus rejects stale input | UNRUN: joined C |
-| Gate / error / cancel / partial JSONL | No provisional/clipped/error text published as successful final | UNRUN: joined B |
-| Long final | Exact 40,000-character transcript result, no silent clipping | UNRUN: joined B |
-| MASTER follow-up while worker runs | Earlier MASTER reply remains immutable; later worker result cannot replace it | UNRUN: joined E/G |
-| Work-room wake | One autonomous result in orchestrated room; no unrelated MASTER post | UNRUN: joined E/G |
-| Restart before wake | Pending authored work survives; one wake/result, no duplication after repeated reads | UNRUN: joined E/G |
-| Adoption / cold resume | Same session, new terminal, owned hooks/capture rebound; missing capture fails | UNRUN: joined A/G |
+| Grok worker / Claude orchestrator | One owned full reply per request; correct room | Record in the hash-bound run report |
+| Grok orchestrator / Claude worker | Bootstrap, ordinary authored send (no --async), return idle, durable reply wakes Grok | Record in the hash-bound run report |
+| Three queued prompts | Ordered distinct requests/turns/replies, no loss | Record in the hash-bound run report |
+| Steering | New message joins intended active turn; same final for both requests | Record in the hash-bound run report |
+| Dialog choose / free text | Observe card, answer once with fresh fingerprint; changed scope/parked focus rejects stale input | Record in the hash-bound run report |
+| Gate / error / cancel / partial JSONL | No provisional/clipped/error text published as successful final | Record in the hash-bound run report |
+| Long final | Exact 40,000-character transcript result, no silent clipping | Record in the hash-bound run report |
+| MASTER follow-up while worker runs | Earlier MASTER reply remains immutable; later worker result cannot replace it | Record in the hash-bound run report |
+| Work-room wake | One autonomous result in orchestrated room; no unrelated MASTER post | Record in the hash-bound run report |
+| Restart before wake | Pending authored work survives; one wake/result, no duplication after repeated reads | Record in the hash-bound run report |
+| Adoption / cold resume | Same session, new terminal, owned hooks/capture rebound; missing capture fails | Record in the hash-bound run report |
 
 Record SHA, binary hash, request/session/turn IDs, full message status,
 both room histories, diagnostics, screenshots and durable unread counts.
@@ -94,7 +91,7 @@ A history map alone cannot establish exactly-once publication. Record unread
 deltas or another independent publication counter before/after the wake;
 repeat reads/restart and require unchanged publication counts.
 
-## Authenticated acceptance (not executed by lane F)
+## Authenticated acceptance (pending sign-in)
 
 The shared real acceptance harness now delegates Grok-specific cases:
 
@@ -123,28 +120,14 @@ default; it returns PENDING_AUTH. The replay CLI:
 can return REPLAY_VALID, FAIL, TIMEOUT or PENDING_AUTH; replay never returns a
 native PASS. Normalized probe events are a tooling contract, not native Grok
 fields. Synthetic recorders must mark provenance:synthetic, synthetic:true.
-Keep the native recorder/authentication gap visible until G captures evidence.
+Keep the native recorder/authentication gap visible until authenticated evidence exists.
 
-## Integration notes
+## Integration ownership
 
-The shared Run.run_case replaces the ordinary resume callback for Grok. F's
-adapter repeats the original-session and new-terminal checks using report.resume;
-G may instead preserve the generic callback in shared code after integration.
-The F runner never independently starts/restarts Bus outside that shared Run.
+The shared acceptance runner owns Bus start/restart and the Grok cold-resume
+adapter. Check original session identity and replacement terminal identity after
+restart. Use only the isolated binary and private driver routing values.
 
-Attempted coordination: the required 'bus send --room 568 --to grok-scout'
-could not run because bus was absent from the scrubbed PATH (exit 127).
-G must align A+D identity and B/C transcript/card contracts before claiming
-joined fake success. No live installation was used to work around that gap.
-
-## Lane F verification record
-
-- Focused Rust: 13 F tests passed; G0 registration/invalid-directory checks 2 passed.
-- Python acceptance/probe: 25 tests passed. All inputs are synthetic.
-- Standalone synthetic fake PTY smoke: version identity, nested hook execution,
-  ordinary reply, coalesced free-text card answer, shutdown without promptId,
-  same-session resume, and three unique prompt IDs passed. No Bus server ran.
-- The review's fake-version/native-PASS finding was reproduced RED and fixed;
-  native identity now requires a real hexadecimal build suffix.
-- No full gate or joined scratch Bus journey was run. Authenticated model,
-  real cards, authoritative final boundaries and native wake remain pending.
+Native completion attestation, real trust/permission/question/free-text cards,
+long-paste ownership, and idle background reentry require authenticated native
+captures. No synthetic result waives these requirements.
