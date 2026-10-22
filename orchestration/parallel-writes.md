@@ -40,7 +40,7 @@ Ownership:
   <worker B>: <directory/** or exact files>
 Shared files: <X>: ask <orchestrator> before writing; wait for grant/release
   or <X>: sole owner <worker>; send proposed edits to that owner
-Checks / build outputs: <worker>: <commands and exclusive target/artifact dirs>
+Checks / build outputs: <worker>: <commands>; <worktree>/target; <build slot/artifacts>
 Integration: <agent>; <merge, stack or rebase order>; conflicts: <agent>
 Commit access: <agent or grant order>; stage only owned files
 Cleanup: <agent>; <worktrees and target dirs>; <checkpoint>
@@ -69,11 +69,15 @@ through shared outputs, profiles or a required clean tree. Have an agent use
 `worktree-new`; record each checkout, branch, immutable base and owner in the
 map. Workers still obey their ownership maps inside their own worktrees.
 
-Assign each build/check an exclusive target and artifact directory. Set
-`CARGO_TARGET_DIR` away from the live Bus repository's target directory; separate
-worktrees must not point it at the same writable outputs. Serialize checks
-that require the same resources. Final review, verification and bot review
-all use the same integrated head, with isolated outputs where needed.
+Reuse exactly one Cargo target per worktree: export
+`CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run,
+and set `CARGO_LLVM_COV_TARGET_DIR` to that same path for coverage. Never make
+per-run targets or share another worktree's writable target. Serialize conflicting
+builds within a worktree and acquire one of the room's two full-build slots;
+record the owner, expiry and liveness check. Follow the
+[resource protocol](orchestrator-guide.md#resource-leases-and-build-slots).
+Final review, verification and bot review all use the same integrated head;
+separate worktrees are available for conflicting gates or builds.
 
 ## Integrate deliberately
 
@@ -123,8 +127,9 @@ by content, and archive required evidence outside it. Preserve dirty or unpushed
 work and worktrees retained for later steps; report them instead of forcing removal.
 Keep remote branches unless the developer asked to delete them.
 
-After no build/check process uses them and evidence is archived, remove only
-the regenerable target/artifact directories assigned to this effort, including
-any external `CARGO_TARGET_DIR`. Name their absolute paths before cleanup;
-never remove the live Bus target directory or another worker's output. Log the
-worktree/branch cleanup and any retained paths in the workflow.
+Delete inactive per-run targets you created now and after each gate/E2E; retain
+only the worktree's single `target` until that worktree closes. Archive required
+evidence first and prove no build/check uses the paths. Never remove the live
+Bus target or another worker's output. Log deleted absolute paths and measured
+sizes, release the build slot on success or failure, and record retained paths
+and worktree/branch cleanup in the workflow.

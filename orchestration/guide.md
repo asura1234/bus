@@ -53,6 +53,13 @@ On your first turn:
 3. Read the agreed workflow and its authorizations (next section); resolve only
    missing goal or authority decisions before the affected work starts.
 
+After a restart, reconcile `bus state` and GitHub before any other work. Match
+each owned PR or dependency to its current head, reviews, checks, acceptance and
+merge state; read pending replies with `bus message status`. Reconstruct the
+next owners, live waits, dependencies and explicit holds in the workflow and
+room notes. A dead waiter or deleted worker is not a live wait. Treat an unrelated
+GitHub merge as informational until it matches this room's ownership or dependency.
+
 Send every message to the room's agents as yourself, so the history shows who
 asked:
 
@@ -131,6 +138,43 @@ DONE / OPEN:
 `room notes` replaces the whole field, so always send the full board. Update it
 when the state changes, not on every message.
 
+## Process every result
+
+Preserve the full stdout/stderr and result body from `bus send --async` and
+`bus wait`, including message IDs, terminal status and replies. Keep the original
+output in the tool result or a durable artifact even if you also parse it. Never
+replace it with `sent`, redirect it to `/dev/null`, or retain only lines matching
+a retry grep. A retry filter can hide a successful Ready or merge result.
+
+When a completion notification arrives, read the actual reply with
+`bus message status`; the command description describes the assignment, not its
+outcome. Immediately turn the result into an executing next step or an explicit
+disposition: Ready gets a verifier or a hold reason, and merged/done gets cleanup
+or reuse. Do independent cleanup before a new blocking verifier wait, or dispatch
+cleanup and verification separately. A cleanup loop after a long `--async` wait
+has not executed merely because you announced it.
+
+Consume coalesced result notifications item by item, matching each event to its
+message, PR/head and owner. Record the next action or reasoned hold before treating
+it as acknowledged. Transport delivery or `seen` is not evidence of action.
+Keep this ledger durable across restarts; deduplicate repeated events and re-arm
+only on new facts. Do not add blind polling loops or wake for every chat line.
+
+Before ending a turn, give **every active item** one of: a next executing owner,
+a live durable wait, a named dependency, or an explicit developer hold. Record
+the message/wait ID, dependency or hold reason, rather than just "waiting".
+For example:
+
+| Item / head | Last result | Next owner or wait/dependency/hold | Next action |
+|---|---|---|---|
+| PR / exact head | Ready for verification | verifier / dispatched message ID | Verify acceptance checklist |
+| PR / merged head | Merged | cleanup worker / dispatched message ID | Close worktree and release resources |
+| Device task / build | Prepared | named device dependency / explicit hold | Resume when access is available |
+
+Never delete a worker until every required follow-up it carried has another
+executing owner or a secured continuation of the kinds above. Update both room
+notes and the workflow log, and report milestones in MASTER.
+
 ## Coordinate parallel work
 
 Decide how agents share the repository before sending parallel work:
@@ -154,11 +198,69 @@ Decide how agents share the repository before sending parallel work:
 Write the choice in the workflow's Coordination section.
 
 Record which worktrees must remain until each checkpoint in the workflow.
-Delegate a data-volume `df` check at kickoff and each phase boundary. If free
-space falls below 30 GiB, declare a `DISK HOLD` and pause builds, benchmarks and
-large copies. Delegate cleanup under the rules in `orchestrator-rules.md`, then
-check space again before lifting the hold. Bus builds use a separate
-`CARGO_TARGET_DIR` so the running Bus binary is not replaced.
+Use the resource protocol below for disk, builds and devices. A resource hold
+blocks the operation that needs that resource; keep light reviews, investigation,
+notes and other independent work moving.
+
+## Resource leases and build slots
+
+Check data-volume free space at kickoff and every phase boundary. Below 30 GiB,
+hold builds, benchmarks and large copies, clean only owned regenerable output,
+and recheck before resuming those operations. Orchestrators coordinate shared
+disk/device status and scoped cleanup directly with each other; routine capacity
+and scheduling decisions do not need a new developer approval.
+
+Use expiring build/device leases. Record the owner, operation, process or worker
+identity, resource, checkout/device, expiry and next liveness check in the workflow.
+Renew only while the owner and operation remain live. Expiry triggers a liveness
+check; it does not authorize stealing an active build or device. Release a stale
+lease only after proving its operation has ended. If ownership is unclear,
+coordinate with the other orchestrator while unrelated work continues.
+
+Keep **one Cargo target per worktree**. For every Cargo, gate, coverage and E2E
+run, export the absolute worktree target; configure coverage to reuse it too:
+
+```sh
+export CARGO_TARGET_DIR="$worktree_path/target"
+export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR"
+```
+
+Do not create per-run targets such as `target/scratch`, `target/e2e`,
+`target/submit-budget` or `/private/tmp/*-target`. Serialize conflicting builds
+inside one worktree. Separate worktrees each reuse their own target, never a
+shared writable target or the live Bus checkout's target. After each gate/E2E,
+remove inactive per-run targets you created, retain only the worktree target,
+and report deleted paths and measured sizes. Close a merged PR's worktree with
+`worktree-close`, preserving source/evidence and checking for unpushed work first.
+
+Room 877 permits **at most two full builds** across the room. Before a full
+gate, coverage run or E2E binary build, atomically acquire one slot, recording
+which `mkdir` succeeded; if both exist, wait 60 seconds and retry:
+
+```sh
+mkdir /tmp/bus-877-build-slot-1 2>/dev/null || mkdir /tmp/bus-877-build-slot-2 2>/dev/null
+```
+
+Write owner/liveness/expiry metadata for the acquired slot before building.
+Install an exit trap that removes only your metadata and slot directory on
+success or failure. On interruption, stop and wait for the build's children
+before releasing the slot. Do not delete another live owner's slot. Keep
+non-build work moving while slots are occupied.
+
+## Preflight long or overnight device work
+
+Before dispatch, verify that target devices are connected, unlocked and trusted,
+UI Automation is enabled, and the intended app, account/environment and a
+representative fixture are available. Record any unavailable physical access as
+a dependency on that device operation, not a hold on the whole room.
+
+Ask the developer once for a bounded app relaunch/retry lease, unless one already
+covers this work. Record the app/device, allowed relaunch/retry count, permitted
+exit/recovery condition and expiry. Preserve app data and login. Use the lease
+within those bounds; stop the affected operation on expiry, developer intervention,
+an explicit pause or changed scope. It does not grant passcode access, permission
+to erase data, or acceptance waivers. A build/install is not requested device
+acceptance; the actual acceptance still has to pass on the exact head.
 
 ## Choose agents and models
 
@@ -308,6 +410,15 @@ workflow log, report status in MASTER, and keep workers busy. A new bug inside
 the agreed goal does not need a new permission question; an unrelated bug does
 not silently widen the goal.
 
+Check existing instructions, kickoff approval and workflow decisions before
+asking. Routine scheduling, reversible engineering defaults, mandatory
+verification and the next approved step belong to the orchestrator. Resolve a
+rebase conflict that preserves both sides' intent, fix a test, make a small
+in-scope refactor or choose the recommended technical option, then state the
+decision, its evidence and the next executing owner. Do not request that
+authority again. A force-push to a shared branch others build on, deletion of
+someone else's work, or a goal change still needs the developer's decision.
+
 The anti-pattern is **"found another bug, should I fix it?" at 1 am, followed
 by the room sitting idle for eight hours**. Investigate and fix an in-scope bug,
 record the decision and report its status; keep other work moving during the
@@ -323,13 +434,41 @@ Ask the developer only for:
 - A change to the goal, including dropping a requirement.
 
 [Never act on assumptions](orchestrator-rules.md#never-act-on-assumptions) still
-applies: resolve facts from instructions and evidence instead of inventing a
-resource, scope or authority. When a developer decision is needed, ask in MASTER
+applies to unknown intent: resolve facts from instructions and evidence instead
+of inventing a resource, scope or authority. It does not require re-asking for
+authority already given. Missing intent or conflicting resources block only the
+affected part. When a developer decision is needed, ask in MASTER
 with `[waiting-on-you]`, the cause and a recommended plan where there is a basis
 for one. Hold only the affected part and keep every independent piece moving.
 
-Ready, all-green PRs go through [auto-merge-pr](workflows/auto-merge-pr.md), read
-in full. Its recorded start answer supplies merge authority; carry that answer
-forward instead of asking for per-PR merge OK. Its manual-test/approval hold
-still applies when requested. An explicit instruction to leave a PR as a draft
-or not merge it is a hold, not permission to bypass it.
+Approval of the workflow at kickoff covers its whole path through review and
+[auto-merge-pr](workflows/auto-merge-pr.md), read in full. Merge only the exact
+head whose reviews are Ready, gates and requested acceptance pass, and comments
+are adjudicated, with no explicit hold. Reuse kickoff approval as the recorded
+start answer instead of adding per-PR merge OK. New commits need current-head
+evidence; authority does not waive an invariant or requested acceptance.
+Manual-test/approval holds still apply. An explicit instruction to leave a PR
+as a draft or not merge it remains a hold.
+
+## Evidence behind the result and continuation rules
+
+The **2026-10-22 wake-up RCA**, “Which fixes are actually needed”, item 4
+(`temp/orchestrator-wake-rca/README.md` in the main Bus checkout), records
+[#1602 — 项目：复制后保留画布节点顺序](https://github.com/liblib-ai/libtv-app/pull/1602):
+Ready for verification at **17:38**, its result swallowed into `sent` twice
+(the repeated reply was at 18:21), and a verifier request only at **19:01**.
+Times are Asia/Shanghai. Delivery to a shell did not produce an executing next
+step; keeping and reading the reply is essential.
+
+The companion **2026-10-22 idle audit**, “What to change in the current rules”
+and recommendations 1–5 (`temp/orchestrator-idle-audit/README.md`), records a
+required follow-up queued and then left without an owner when its worker was
+deleted. It also records a disk hold stopping light work and build-slot capacity
+being escalated instead of coordinated. Those cases motivate secured next
+owners, operation-scoped holds, expiring leases and direct resource coordination.
+
+The audit's device cases include a build ready before device access was arranged
+and an app-relaunch question left waiting overnight. Preflight and a bounded
+retry lease address those dependencies in advance. Earlier explicit phase/device
+holds were valid under their original authority; these rules do not retroactively
+waive holds or turn every observed waiting hour into preventable idle time.

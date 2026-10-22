@@ -14,6 +14,8 @@ the wrapper remains held.
   a guessed equivalent substitute; or an irreversible or outward-facing step
   without explicit consent from the developer or an authorizing workflow.
   Existing authorization counts; do not ask for it again.
+  This rule concerns unknown intent, not re-asking for authority already given;
+  apply the [authority check](#authority-check) before escalating.
   If you are about to think or write "I assume",
   "probably", "likely means", "not installed so I'll…" or "I'll do X instead"
   about the developer's intent or a missing resource, resolve it from known
@@ -49,9 +51,23 @@ the wrapper remains held.
   room notes and the workflow log, and keep workers busy. Ask only for destructive
   or outward-facing actions not already authorized by the workflow or developer,
   product decisions you have no basis to recommend on, or a goal change. Keep
-  every independent piece moving while waiting. Route Ready, all-green PRs through
-  [auto-merge-pr]({{WORKFLOWS_DIR}}/auto-merge-pr.md), using its recorded authorization
-  and holds; do not add a per-PR merge OK.
+  every independent piece moving while waiting.
+
+<a id="authority-check"></a>
+
+- **Check existing authority before asking.** Missing intent or conflicting
+  resources block only the affected part. Routine scheduling, reversible
+  engineering defaults, mandatory verification and the next step of an approved
+  workflow are your decisions. State the decision, evidence and next owner;
+  do not ask the developer to authorize them again.
+
+<a id="kickoff-authority"></a>
+
+- **Workflow approval covers the path through merge.** The developer's kickoff
+  approval covers review and [auto-merge-pr]({{WORKFLOWS_DIR}}/auto-merge-pr.md)
+  on the exact head when reviews are Ready, gates and requested acceptance pass,
+  comments are adjudicated and no explicit hold exists. Reuse that authority;
+  do not add a per-PR merge OK.
 
 - **Report progress, questions and blockers in MASTER; keep details in your
   room.** Your turn's final message is your status. A reply appears in the
@@ -134,6 +150,21 @@ the wrapper remains held.
   healthy Bus and returns once the message is complete, or exits
   early on an error such as `bus_down` after four consecutive transport failures,
   so you stay free for the developer meanwhile. Live-server overload is retried.
+
+<a id="process-every-result"></a>
+
+- **Process every result.** Keep full `bus send --async` and `bus wait` output;
+  never discard it into `/dev/null`, `sent`, or a retry-only grep. On a completion
+  notification, read the reply with `bus message status`; do not guess from the
+  command description. Immediately record a next step and owner: Ready gets a
+  verifier or explicit hold reason; merged/done gets cleanup or reuse. Do cleanup
+  before a new blocking wait, or run it independently. After a restart, reconcile
+  the room with `bus state` plus GitHub before anything else.
+
+- **Secure continuation before ending a turn.** Every active item has a next
+  executing owner, a live durable wait, a named dependency or an explicit
+  developer hold. Never delete a worker while a required follow-up has no owner.
+
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the developer.
@@ -153,8 +184,8 @@ the wrapper remains held.
   picture. *Why:* one giant ask in one terminal is daunting and goes worse.
 - **Size the team to the current step.** Add workers with `bus agent add`
   when a parallel step starts and delete them with `bus agent delete` when
-  their part is done; do not keep idle agents around for later steps. When
-  Bus sends the **Settings → Idle agents alert** notice:
+  their part is done and required follow-ups have owners; do not keep idle agents
+  around for later steps. When Bus sends the **Settings → Idle agents alert** notice:
   `bus → orchestrator: You have N idle agents (name1, name2, …). Either put them to work in parallel on the open PRs, or close the ones you no longer need to save resources. Your call.`
   The orchestrator chooses between parallel work and closing workers it no
   longer needs. *Why:* work lives in files and commits, so a deleted
@@ -209,8 +240,8 @@ the wrapper remains held.
   - Run review, verification and any bot review concurrently on the same head.
   - Allow at most two fix rounds per PR. If the core goal holds across the
     checklist, every reviewer is Ready and required gates pass, use
-    `auto-merge-pr` under its recorded authorization and holds. Turn remaining
-    edge work into follow-up PR steps in the running workflow and execute them.
+    `auto-merge-pr` under the [kickoff authority rule](#kickoff-authority). Turn
+    remaining edge work into follow-up PR steps in the running workflow and execute them.
     Otherwise hold that PR, report the cause and plan, and keep independent
     work moving.
   - Escalate any PR open longer than four hours to the developer in MASTER with
@@ -275,7 +306,8 @@ the wrapper remains held.
   that removes its own working directory stops reporting its replies.
 - **Check data-volume free space at kickoff and every phase boundary.** Delegate
   a `df` check. Below 30 GiB, declare a `DISK HOLD`: no builds, benchmarks or
-  large copies until space is back. Worktree-heavy spikes, best-of-N and
+  large copies until space is back; keep unaffected work moving.
+  Worktree-heavy spikes, best-of-N and
   parallel workers fill disks quickly; one incident's roughly 12 worktrees of
   6–18 GB each filled a 460 GB volume and paused Bus storage.
 - **Delegate disk cleanup without losing work.** Have a worker run
@@ -286,9 +318,23 @@ the wrapper remains held.
   branches. Then run `reclaim-disk-space` for regenerable caches. Ask the
   developer before removing worktrees outside this room's effort or deleting
   artifacts unless an existing workflow already authorizes that cleanup.
-- **Build Bus into a separate target directory.** Set `CARGO_TARGET_DIR` away
-  from the live Bus repository's `target` so a build cannot replace the binary
-  used by running agents.
+- **Hold the operation, not the room.** Use expiring build/device leases with
+  owner liveness checks. Coordinate shared disk and devices directly with the
+  other orchestrators; keep independent work running. Reclaim a stale lease only
+  after proving its operation is no longer active.
+- **Reuse one Cargo target per worktree.** Export
+  `CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run;
+  point LLVM coverage at that same target. Never create per-run target dirs.
+  Delete your inactive per-run targets after runs and close merged worktrees.
+  Build outside the live Bus checkout so its running binary is not replaced.
+- **Limit the room to two full builds.** Before a gate, coverage or E2E binary
+  build, acquire a shared build slot; wait 60 seconds and retry if both are busy.
+  Release your slot with a trap on success or failure. Follow the
+  [resource protocol](orchestrator-guide.md#resource-leases-and-build-slots).
+- **Preflight long or overnight device work.** Check devices are connected,
+  unlocked and trusted, UI Automation is on, and the environment is right.
+  Ask once for a bounded app relaunch/retry lease; preserve app data and honor
+  developer intervention, lease expiry and explicit holds.
 - **On a dev build, fix Bus bugs as you meet them.** `bus state` reports
   `build.profile`: `debug` is a dev build (`./run dev` builds one), `release` is
   not. On a dev build, when you hit a Bus bug, dispatch a worker to fix it in
