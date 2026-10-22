@@ -382,6 +382,10 @@ pub(crate) struct RoomAgent {
     /// different provider session rebinds this agent to it instead of being rejected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) session_reset_pending: bool,
+    /// The session replaced by the last accepted reset. Persisted with the new
+    /// identity so retained/late Grok observations cannot poison it on replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) superseded_session_id: Option<String>,
     /// `agent interrupt` pressed the provider's stop key: the next idle status
     /// closes the running turn and the queue as interrupted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

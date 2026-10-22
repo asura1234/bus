@@ -77,7 +77,7 @@ fn capture_tab(
         let terminal = terminals.get(&pane.attached_terminal_id);
         let label = terminal.and_then(|terminal| terminal.manual_label.clone());
         let (agent_name, managed_agent_kind) = terminal
-            .filter(|terminal| !terminal.managed_agent_launch_pending())
+            .filter(|terminal| !terminal.managed_agent_identity_unestablished())
             .map(|terminal| {
                 (
                     terminal.agent_name.clone(),

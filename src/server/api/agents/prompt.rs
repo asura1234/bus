@@ -7,6 +7,7 @@ use bytes::Bytes;
 use std::time::Duration;
 
 mod composer;
+mod grok;
 
 #[cfg(test)]
 pub(super) use crate::protocol::api::submission::SUBMIT_DELAY as AGENT_PROMPT_SUBMIT_DELAY;
@@ -443,7 +444,7 @@ fn queue_prompt_input(
     if !observe
         || !matches!(
             kind,
-            AgentKind::Codex | AgentKind::Claude | AgentKind::Cursor
+            AgentKind::Codex | AgentKind::Claude | AgentKind::Cursor | AgentKind::Grok
         )
     {
         return runtime.queue_user_input_submission(

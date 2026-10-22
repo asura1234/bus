@@ -4,6 +4,9 @@ use super::{block_start, is_separator, numbered_options, unboxed};
 /// Inspect the last numbered block's own frame: transcript composers must not
 /// suppress a later real permission dialog.
 pub(super) fn contains(lines: &[&str]) -> bool {
+    if super::grok::contains_composer(lines) {
+        return true;
+    }
     let Some(start) = block_start(lines) else {
         return false;
     };

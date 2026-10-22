@@ -3,6 +3,32 @@ use super::{styled_chars, StyledChar};
 use crate::agents::AgentKind;
 use crate::terminal::runtime::InputObservation;
 
+#[cfg(test)]
+mod grok_observer_tests {
+    use super::*;
+    #[test]
+    fn grok_observer_preserves_unknown_and_edited_drafts_across_owned_observations() {
+        let empty = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
+        let frame = |text: &str| empty.replace("\x1b[2mType a message...\x1b[0m", text);
+        let observe = observer(AgentKind::Grok, "owned prompt".into());
+        assert_eq!(observe(&frame("owned prompt")), InputObservation::Pending);
+        assert_eq!(
+            observe(&frame("developer edit")),
+            InputObservation::Unavailable
+        );
+        assert_eq!(
+            observe(&frame("[Pasted 12 chars]")),
+            InputObservation::Unavailable
+        );
+        assert_eq!(observe(&frame("owned prompt")), InputObservation::Pending);
+        assert_eq!(observe(empty), InputObservation::Empty);
+        assert_eq!(
+            observe(&frame("unrelated draft")),
+            InputObservation::Unavailable
+        );
+    }
+}
+
 pub(super) fn observer(
     kind: AgentKind,
     expected: String,
@@ -20,8 +46,12 @@ pub(super) fn observer(
             }
             InputObservation::Pending => {
                 let body = input(kind, screen);
-                if owned.is_some() && *owned != body {
-                    return InputObservation::Other;
+                if body.is_none() || owned.is_some() && *owned != body {
+                    return if kind == AgentKind::Grok {
+                        InputObservation::Unavailable
+                    } else {
+                        InputObservation::Other
+                    };
                 }
                 *owned = body;
                 InputObservation::Pending
@@ -32,6 +62,9 @@ pub(super) fn observer(
 }
 
 pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObservation {
+    if kind == AgentKind::Grok {
+        return super::grok::observe(screen, expected);
+    }
     let plain = screen
         .lines()
         .map(|line| {
@@ -195,6 +228,9 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
 }
 
 fn input(kind: AgentKind, screen: &str) -> Option<String> {
+    if kind == AgentKind::Grok {
+        return super::grok::input(screen);
+    }
     let styled: Vec<_> = screen.lines().map(styled_chars).collect();
     let lines: Vec<String> = styled
         .iter()

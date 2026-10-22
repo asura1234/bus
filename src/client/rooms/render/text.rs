@@ -153,6 +153,7 @@ pub(in crate::client::rooms) fn provider(provider: Provider) -> &'static str {
         Provider::Codex => "Codex",
         Provider::ClaudeCode => "Claude Code",
         Provider::Cursor => "Cursor",
+        Provider::Grok => "Grok",
     }
 }
 pub(in crate::client::rooms) fn status(status: RuntimeStatus) -> &'static str {

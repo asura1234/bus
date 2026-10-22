@@ -14,6 +14,10 @@ const WORKFLOW_CREATE: &str = include_str!("../../workflows/create.md");
 /// The docs the prompt references, written under `<BUS_DATA_DIR>/docs/`.
 const DOCS: &[(&str, &str)] = &[
     (
+        "providers/grok.md",
+        include_str!("../../orchestration/providers/grok.md"),
+    ),
+    (
         "how-to-bus-cli.md",
         include_str!("../../orchestration/how-to-bus-cli.md"),
     ),
@@ -272,6 +276,9 @@ pub(crate) fn prompt_args(
     adopted: bool,
 ) -> Result<Option<Vec<String>>, String> {
     Ok(match provider {
+        Provider::Grok => {
+            crate::agents::providers::grok::system_prompt::prompt_args(path, adopted)?
+        }
         Provider::ClaudeCode => {
             Some(crate::agents::providers::claude_code::system_prompt::prompt_args(path, adopted))
         }
@@ -305,3 +312,7 @@ pub(crate) fn prompt_message(text: &str) -> String {
 #[cfg(test)]
 #[path = "tests/orchestration_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/grok_system_prompt_test.rs"]
+mod grok_tests;

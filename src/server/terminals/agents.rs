@@ -19,6 +19,45 @@ fn valid_agent_name(name: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
 }
 
+fn agent_start_argv(
+    kind: crate::agents::AgentKind,
+    selected_executable: Option<String>,
+    grok_home: Option<String>,
+    args: &[String],
+) -> Result<Vec<String>, AgentStartError> {
+    let executable = match (kind, selected_executable) {
+        (crate::agents::AgentKind::Grok, Some(path))
+            if std::path::Path::new(&path).is_absolute()
+                && std::path::Path::new(&path)
+                    .file_name()
+                    .is_some_and(|name| name == "grok")
+                && !path.chars().any(char::is_control) =>
+        {
+            path
+        }
+        (crate::agents::AgentKind::Grok, _) | (_, Some(_)) => {
+            return Err(AgentStartError::InvalidArgument);
+        }
+        (_, None) => crate::agents::interactive_agent_executable(kind).to_string(),
+    };
+    let mut argv = vec![executable];
+    argv.extend(args.iter().cloned());
+    match (kind, grok_home) {
+        (crate::agents::AgentKind::Grok, Some(home)) => {
+            argv = crate::agents::providers::grok::launch::bind_home(
+                argv,
+                std::path::Path::new(&home),
+            )
+            .map_err(|_| AgentStartError::InvalidArgument)?;
+        }
+        (crate::agents::AgentKind::Grok, None) | (_, Some(_)) => {
+            return Err(AgentStartError::InvalidArgument)
+        }
+        (_, None) => {}
+    }
+    Ok(argv)
+}
+
 impl App {
     pub(in crate::server) fn collect_agent_infos(
         &self,
@@ -197,8 +236,7 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
         let args = params.args;
-        let mut argv = vec![crate::agents::interactive_agent_executable(kind).to_string()];
-        argv.extend(args.iter().cloned());
+        let argv = agent_start_argv(kind, params.executable, params.grok_home, &args)?;
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::server::api::input_encoding::encode_api_submission(runtime, &command);

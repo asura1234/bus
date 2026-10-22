@@ -130,6 +130,8 @@ mod tests {
             kind: "claude".into(),
             pane_id: "w1:p2".into(),
             args: vec![],
+            executable: None,
+            grok_home: None,
             timeout_ms: None,
         });
         for code in [
@@ -199,6 +201,8 @@ mod tests {
                 kind: "claude".into(),
                 pane_id: "w1:p2".into(),
                 args: vec![],
+                executable: None,
+                grok_home: None,
                 timeout_ms: None,
             },
         ));

@@ -280,8 +280,12 @@ impl App {
             }
             None => plan,
         };
-        let mut argv = plan.argv;
-        argv.extend(extras.args);
+        let argv = match resume_argv(&plan, &extras) {
+            Ok(argv) => argv,
+            Err(reason) => {
+                return self.suspend_pending_agent_resume(pane_id, &terminal_id, &reason)
+            }
+        };
         let resume_command = shell_command_from_argv(&argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
@@ -418,6 +422,51 @@ fn shell_command_from_argv(argv: &[String]) -> String {
         .map(|part| shell_quote(part))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn resume_argv(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    extras: &LaunchExtras,
+) -> Result<Vec<String>, String> {
+    let mut argv = plan.argv.clone();
+    if plan.agent == "grok" && !extras.env.is_empty() {
+        if argv.first().map(String::as_str) != Some("grok") {
+            return Err("Grok resume plan has an unexpected executable".into());
+        }
+        let env = extras.env.iter().cloned().collect();
+        argv[0] = crate::agents::providers::launch::selected_executable(
+            crate::agents::providers::ProviderKind::Grok,
+            &env,
+        )?
+        .ok_or("Grok resume has no selected executable")?;
+    }
+    argv.extend(extras.args.iter().cloned());
+    if plan.agent == "grok" && !extras.env.is_empty() {
+        let home = extras
+            .env
+            .iter()
+            .find(|(key, _)| key == "GROK_HOME")
+            .map(|(_, value)| value)
+            .ok_or("Grok resume has no validated home")?;
+        argv = crate::agents::providers::grok::launch::bind_home(argv, std::path::Path::new(home))?;
+    }
+    Ok(argv)
+}
+
+#[cfg(test)]
+fn resume_argv_for_test(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    env: Vec<(String, String)>,
+    args: Vec<String>,
+) -> Result<Vec<String>, String> {
+    resume_argv(
+        plan,
+        &LaunchExtras {
+            env,
+            args,
+            session: None,
+        },
+    )
 }
 
 fn shell_quote(value: &str) -> String {

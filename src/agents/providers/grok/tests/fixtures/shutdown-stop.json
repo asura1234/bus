@@ -1,0 +1,11 @@
+{
+  "hookEventName": "stop",
+  "sessionId": "01a162bf-5091-7c42-9b5c-47930d378acd",
+  "cwd": "/private/tmp/grok-provider-xo0961tl/workspace",
+  "workspaceRoot": "/private/tmp/grok-provider-xo0961tl/workspace",
+  "timestamp": "2026-10-22T08:34:42.708024+00:00",
+  "transcriptPath": "/private/tmp/grok-provider-xo0961tl/home/.grok/sessions/%2Fprivate%2Ftmp%2Fgrok-provider-xo0961tl%2Fworkspace/01a162bf-5091-7c42-9b5c-47930d378acd/updates.jsonl",
+  "permissionMode": "default",
+  "reason": "shutdown",
+  "stopHookActive": false
+}

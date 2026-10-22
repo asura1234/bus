@@ -13,8 +13,10 @@
 mod background;
 mod dialogs;
 mod directives;
+mod grok;
 mod input;
 mod question;
+mod resume;
 mod rollout;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
@@ -32,7 +34,7 @@ use std::time::Instant;
 
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
-const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
+const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent", "grok"];
 
 /// Links each provider name, and each effect stand-in, in `bin_dir` to the
 /// `bus` binary.
@@ -78,6 +80,9 @@ pub(super) fn stand_in(argv0: &str, names: &[&'static str]) -> Option<&'static s
 }
 
 pub(super) fn run(provider: &str, args: &[String]) -> i32 {
+    if provider == "grok" {
+        return grok::run(args);
+    }
     if args.iter().any(|a| a == "--version" || a == "-v") {
         let _ = writeln!(std::io::stdout(), "0.0.0 (bus tui fake {provider})");
         return 0;
@@ -88,7 +93,7 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .map(|settings| settings["hooks"].clone())
         .unwrap_or(Value::Null);
-    let mut agent = FakeAgent::new(provider, hooks);
+    let mut agent = FakeAgent::from_args(provider, hooks, args);
     // Codex defers SessionStart to its first prompt; Bus delivers to it unbound.
     // Claude and Cursor start theirs at launch: Bus delivers only to a bound session.
     if !agent.codex() {
@@ -308,8 +313,7 @@ impl FakeAgent {
 
     /// Answers `prompt` in one turn; the exit code when interrupted meanwhile.
     fn submit(&mut self, prompt: &str) -> Option<i32> {
-        self.turns += 1;
-        let turn = format!("{}-{}", self.session, self.turns);
+        let turn = self.next_turn();
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();

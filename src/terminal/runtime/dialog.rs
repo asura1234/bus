@@ -4,6 +4,79 @@ use bytes::Bytes;
 /// Gap between selection moves and the Enter that confirms them.
 pub(super) const DIALOG_CONFIRM_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
+#[cfg(test)]
+mod grok_tests {
+    use super::*;
+
+    const PERMISSION: &str = include_str!("../../../tests/fixtures/grok-dialog/permission.txt");
+
+    #[tokio::test]
+    async fn grok_changed_scope_is_stale_under_runtime_content_lock() {
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        let draw = |screen: &str| {
+            runtime.test_process_pty_bytes(
+                format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
+            )
+        };
+        draw(PERMISSION);
+        let (snapshot, _) = runtime.visible_ansi_snapshot_with_seq().unwrap();
+        let original = crate::agents::dialog::parse(&snapshot).expect("emulated card");
+        draw(&PERMISSION.replace("this command", "all commands"));
+        assert_eq!(
+            runtime
+                .try_choose_dialog_option(&original.digest(), 1)
+                .unwrap(),
+            crate::terminal::runtime::DialogChoice::Stale
+        );
+        assert!(writes.try_recv().is_err(), "stale approval received keys");
+    }
+
+    #[tokio::test]
+    async fn grok_dismiss_exits_free_text_before_shift_x() {
+        for kitty in [false, true] {
+            let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(120, 40, 8);
+            if kitty {
+                runtime.test_process_pty_bytes(b"\x1b[>9u");
+            }
+            runtime.test_process_pty_bytes(
+                include_str!("../../../tests/fixtures/grok-dialog/free-text.txt")
+                    .replace('\n', "\r\n")
+                    .as_bytes(),
+            );
+            let (screen, _) = runtime.visible_ansi_snapshot_with_seq().unwrap();
+            let dialog = crate::agents::dialog::parse(&screen).expect("joined Grok editor fixture");
+            while writes.try_recv().is_ok() {}
+            assert_eq!(
+                runtime
+                    .try_answer_dialog(&dialog.digest(), None, true)
+                    .unwrap(),
+                DialogChoice::Sent(vec!["esc".into(), "shift+x".into()])
+            );
+            let first = tokio::time::timeout(std::time::Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                first == b"\x1b"[..] || first == b"\x1b[27;1u"[..] || first == b"\x1b[27u"[..],
+                "{first:?}"
+            );
+            let second = tokio::time::timeout(std::time::Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                second.as_ref(),
+                if kitty {
+                    &b"\x1b[120;2u"[..]
+                } else {
+                    &b"X"[..]
+                }
+            );
+        }
+    }
+}
+
 /// The outcome of answering a choice dialog under the content lock.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum DialogChoice {
@@ -151,6 +224,25 @@ impl TerminalRuntime {
         }
         if skip && input.skip_key.is_none() {
             return Ok(DialogChoice::Unskippable);
+        }
+        if skip && input.skip_key == Some("shift+x") {
+            use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+            self.io
+                .queue_user_input_submission(
+                    Bytes::from(self.encode_terminal_key(
+                        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE).into(),
+                    )),
+                    Bytes::from(self.encode_terminal_key(
+                        KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT).into(),
+                    )),
+                    DIALOG_CONFIRM_DELAY,
+                    None,
+                )
+                .map_err(|error| error.to_string())?;
+            return Ok(DialogChoice::Sent(vec!["esc".into(), "shift+x".into()]));
+        }
+        if skip && !matches!(input.skip_key, Some("ctrl+]" | "esc")) {
+            return Ok(DialogChoice::Unreachable);
         }
         let (code, modifiers, key) = if skip && input.skip_key == Some("ctrl+]") {
             (

@@ -276,7 +276,7 @@ fn agent_cli() -> Command {
             subcommand("add")
                 .arg(option("room"))
                 .arg(option("name"))
-                .arg(option("provider").value_parser(["claude", "codex", "cursor"]))
+                .arg(option("provider").value_parser(["claude", "codex", "cursor", "grok"]))
                 .arg(option("pwd"))
                 .arg(Arg::new("args").long("args").allow_hyphen_values(true))
                 .arg(flag("consent-hooks"))
