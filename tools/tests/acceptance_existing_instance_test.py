@@ -234,7 +234,11 @@ class EndToEndArgumentTests(unittest.TestCase):
         self.assertIn("two providers", e2e.case_support("cursor", "multi", ["cursor"]))
         self.assertIsNone(e2e.case_support("cursor", "multi", ["claude", "cursor"]))
         self.assertIn("orchestrator case", e2e.case_support("codex", "adoption", ["codex"], ["adoption"]))
-        self.assertIsNone(e2e.case_support("codex", "adoption", ["codex"], ["orchestrator", "adoption"]))
+        self.assertIsNone(e2e.case_support("claude", "adoption", ["claude"], ["orchestrator", "adoption"]))
+        # Bus refuses to add a Codex orchestrator, so there is no session to adopt either.
+        for case in ("orchestrator", "adoption"):
+            self.assertIn("refuses Codex", e2e.case_support("codex", case, ["codex"], ["orchestrator", "adoption"]))
+            self.assertIsNone(e2e.case_support("cursor", case, ["cursor"], ["orchestrator", "adoption"]))
 
 
 class EndToEndEnvironmentTests(unittest.TestCase):

@@ -86,6 +86,8 @@ def case_support(provider, case, providers, cases=CASES):
         return "background shells that outlive a turn are a Claude Code feature"
     if case == "multi" and len(providers) < 2:
         return "needs at least two providers"
+    if case in ("orchestrator", "adoption") and provider == "codex":
+        return "Bus refuses Codex as an orchestrator: it does not start a turn when a background command exits"
     return None
 
 
