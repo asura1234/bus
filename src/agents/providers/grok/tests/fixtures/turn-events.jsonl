@@ -1,0 +1,4 @@
+{"hookEventName":"user_prompt_submit","sessionId":"synthetic-session","promptId":"synthetic-turn","prompt":"Synthetic task"}
+{"hookEventName":"stop","sessionId":"synthetic-session","promptId":"synthetic-turn","reason":"end_turn","stopHookActive":false,"lastAssistantMessage":"Synthetic gate attempt"}
+{"hookEventName":"stop","sessionId":"synthetic-session","promptId":"synthetic-turn","reason":"end_turn","stopHookActive":true,"lastAssistantMessage":"Synthetic second gate attempt"}
+{"hookEventName":"stop_cancelled","sessionId":"synthetic-session","promptId":"synthetic-turn","reason":"user_interrupt","cancelledBy":"user","lastAssistantMessage":"Synthetic partial answer"}

@@ -1,0 +1,9 @@
+{
+  "hookEventName": "session_start",
+  "sessionId": "01a162bf-5091-7c42-9b5c-47930d378acd",
+  "cwd": "/private/tmp/grok-provider-xo0961tl/workspace",
+  "workspaceRoot": "/private/tmp/grok-provider-xo0961tl/workspace",
+  "timestamp": "2026-10-22T08:34:28.358745+00:00",
+  "permissionMode": "default",
+  "source": "new"
+}
