@@ -814,7 +814,7 @@ fn claude_checkbox_toggle_preserves_dialog_identity_but_invalidates_digest() {
 }
 
 #[test]
-fn claude_focused_checkbox_custom_field_is_an_empty_text_question_with_stable_identity() {
+fn claude_focused_checkbox_custom_field_keeps_submit_reachable_and_tracks_edits() {
     let focused = CLAUDE_MULTI_SELECT
         .replace("❯ 1.", "  1.")
         .replace("  5. [ ] Type something", "❯ 5. [ ] Type something")
@@ -823,13 +823,18 @@ fn claude_focused_checkbox_custom_field_is_an_empty_text_question_with_stable_id
             "Enter to toggle · Tab/Arrow keys to navigate\nctrl+g to edit in Vim · Esc to cancel",
         );
     let dialog = parse(&focused).unwrap();
-    assert_eq!(dialog.kind, DialogKind::Question);
-    assert!(dialog.options.is_empty());
-    assert_eq!(dialog.text, "Which caches may be removed?");
-    assert_eq!(dialog.input.as_ref().unwrap().value, "");
-    let typed = parse(&focused.replace("[ ] Type something", "[ ] MY_TOKEN")).unwrap();
-    assert_eq!(typed.input.as_ref().unwrap().value, "MY_TOKEN");
-    assert_eq!(dialog.id(), typed.id());
+    assert_eq!(dialog.kind, DialogKind::Choice);
+    assert!(dialog.input.is_none());
+    assert_eq!(dialog.selected(), Some(5));
+    assert_eq!(dialog.free_text_summary(), Some((5, false, true)));
+    assert_eq!(dialog.free_text_keys(), Some(vec![]));
+    assert_eq!(dialog.id(), parse(CLAUDE_MULTI_SELECT).unwrap().id());
+    assert_eq!(dialog.keys_for(6).unwrap(), ["down", "enter"]);
+    // Real Claude ticks the custom entry on paste, before any Enter.
+    let typed = parse(&focused.replace("[ ] Type something", "[✔] MY_TOKEN")).unwrap();
+    assert_eq!(typed.kind, DialogKind::Choice);
+    assert_eq!(typed.options[4].label, "[✔] MY_TOKEN");
+    assert_eq!(typed.keys_for(6).unwrap(), ["down", "enter"]);
     assert_ne!(dialog.digest(), typed.digest());
 }
 
