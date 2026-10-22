@@ -220,15 +220,25 @@ fn grok_run_scoped_permissions_do_not_replace_saved_user_choices() {
 }
 
 #[test]
-fn grok_identity_probe_rejects_slow_output() {
+fn grok_identity_probe_allows_slow_bounded_startup() {
     let f = Fixture::new();
     f.install();
     let executable = f.bin.join("grok");
-    fs::write(&executable,"#!/bin/sh\n# SYNTHETIC stalled identity command; no model.\n/bin/sleep 4\nprintf '%s\\n' 'grok 1.0.5 (synthetic)'\n").unwrap();
-    assert!(
-        identity_output(&executable, "--version").is_err(),
-        "unbounded stalled probe was accepted"
+    fs::write(&executable, "#!/bin/sh\n# Synthetic cold identity startup, never a model.\n/bin/sleep 3\nprintf '%s\\n' 'grok 1.0.5 (synthetic)'\n").unwrap();
+    assert_eq!(
+        identity_output(&executable, "--version").unwrap().trim(),
+        "grok 1.0.5 (synthetic)"
     );
+}
+
+#[test]
+fn grok_identity_probe_rejects_stalled_output() {
+    let f = Fixture::new();
+    f.install();
+    let executable = f.bin.join("grok");
+    fs::write(&executable,"#!/bin/sh\n# SYNTHETIC stalled identity command; no model.\n/bin/sleep 30\nprintf '%s\\n' 'grok 1.0.5 (synthetic)'\n").unwrap();
+    let error = identity_output(&executable, "--version").unwrap_err();
+    assert!(error.contains("timed out"), "{error}");
 }
 
 #[test]

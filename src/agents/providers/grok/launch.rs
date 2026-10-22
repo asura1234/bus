@@ -69,27 +69,30 @@ fn identity_output(path: &Path, arg: &str) -> Result<String, String> {
                         .take()
                         .ok_or("Grok Build identity stdout is unavailable")?;
                     let mut bytes = Vec::new();
-                    let finished = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                        let (_, status) = tokio::try_join!(
-                            async {
-                                stdout.take(64 * 1024 + 1).read_to_end(&mut bytes).await?;
-                                if bytes.len() > 64 * 1024 {
-                                    return Err(std::io::Error::other(
-                                        "Grok Build identity output is too large",
-                                    ));
-                                }
-                                Ok(())
-                            },
-                            child.wait()
-                        )
-                        .map_err(|e| e.to_string())?;
-                        if !status.success() {
-                            return Err("Grok Build identity query failed".into());
-                        }
-                        String::from_utf8(bytes)
-                            .map_err(|_| "Invalid Grok Build identity output".into())
-                    })
-                    .await;
+                    // Cold native startup and host contention can exceed two
+                    // seconds; retain a finite per-query deadline and cleanup.
+                    let finished =
+                        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                            let (_, status) = tokio::try_join!(
+                                async {
+                                    stdout.take(64 * 1024 + 1).read_to_end(&mut bytes).await?;
+                                    if bytes.len() > 64 * 1024 {
+                                        return Err(std::io::Error::other(
+                                            "Grok Build identity output is too large",
+                                        ));
+                                    }
+                                    Ok(())
+                                },
+                                child.wait()
+                            )
+                            .map_err(|e| e.to_string())?;
+                            if !status.success() {
+                                return Err("Grok Build identity query failed".into());
+                            }
+                            String::from_utf8(bytes)
+                                .map_err(|_| "Invalid Grok Build identity output".into())
+                        })
+                        .await;
                     if !matches!(finished, Ok(Ok(_))) {
                         // A wrapper can leave a grandchild holding stdout open. Kill
                         // its private group as well as reaping the direct child.
