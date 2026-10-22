@@ -220,6 +220,10 @@ pub struct AgentStartParams {
     pub pane_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Validated absolute Grok Build alias selected during launch preparation.
+    /// Required for Grok so shell startup cannot redirect the selected binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
     /// Startup timeout in milliseconds. Values must be greater than 3000 and at most 300000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,

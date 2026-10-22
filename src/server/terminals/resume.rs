@@ -284,7 +284,26 @@ impl App {
             }
             None => plan,
         };
-        let (argv, env) = resume_launch_inputs(&plan, extras);
+        let (mut argv, env) = resume_launch_inputs(&plan, extras);
+        if plan.agent == "grok" {
+            if argv.first().map(String::as_str) != Some("grok") {
+                return self.suspend_pending_agent_resume(
+                    pane_id, &terminal_id, "Grok resume plan has an unexpected executable",
+                );
+            }
+            let selected = crate::agents::providers::launch::selected_executable(
+                crate::agents::providers::ProviderKind::Grok,
+                &env.iter().cloned().collect(),
+            );
+            match selected {
+                Ok(Some(path)) => argv[0] = path,
+                Ok(None) | Err(_) => {
+                    return self.suspend_pending_agent_resume(
+                        pane_id, &terminal_id, "Grok resume has no selected executable",
+                    );
+                }
+            }
+        }
         let resume_command = shell_command_from_argv(&argv);
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.begin_native_resume(resume_command.clone());
@@ -478,6 +497,42 @@ fn shell_command_from_argv(argv: &[String]) -> String {
         .map(|part| shell_quote(part))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn resume_argv(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    extras: &LaunchExtras,
+) -> Result<Vec<String>, String> {
+    let mut argv = plan.argv.clone();
+    if plan.agent == "grok" {
+        if argv.first().map(String::as_str) != Some("grok") {
+            return Err("Grok resume plan has an unexpected executable".into());
+        }
+        let env = extras.env.iter().cloned().collect();
+        argv[0] = crate::agents::providers::launch::selected_executable(
+            crate::agents::providers::ProviderKind::Grok,
+            &env,
+        )?
+        .ok_or("Grok resume has no selected executable")?;
+    }
+    argv.extend(extras.args.iter().cloned());
+    Ok(argv)
+}
+
+#[cfg(test)]
+fn resume_argv_for_test(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    env: Vec<(String, String)>,
+    args: Vec<String>,
+) -> Result<Vec<String>, String> {
+    resume_argv(
+        plan,
+        &LaunchExtras {
+            env,
+            args,
+            session: None,
+        },
+    )
 }
 
 fn shell_quote(value: &str) -> String {

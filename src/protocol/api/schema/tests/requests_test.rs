@@ -62,6 +62,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             kind: "pi".into(),
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],
+            executable: None,
             timeout_ms: Some(30_000),
         }),
     };

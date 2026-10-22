@@ -68,6 +68,29 @@ pub(crate) const fn executable(provider: ProviderKind) -> &'static str {
     provider.executable()
 }
 
+/// Grok preparation validates and prepends the selected alias directory. Carry
+/// that exact absolute alias into the eventual shell command, rather than
+/// allowing shell startup PATH edits or functions to choose another `grok`.
+pub(crate) fn selected_executable(
+    provider: ProviderKind,
+    env: &HashMap<String, String>,
+) -> Result<Option<String>, String> {
+    if provider != ProviderKind::Grok {
+        return Ok(None);
+    }
+    let directory = env
+        .get("PATH")
+        .and_then(|path| std::env::split_paths(path).next())
+        .filter(|path| path.is_absolute())
+        .ok_or("Grok launch is missing its selected executable directory")?;
+    let path = directory.join("grok");
+    let path = path.to_str().ok_or("Grok executable path is not UTF-8")?;
+    if path.chars().any(char::is_control) {
+        return Err("Grok executable path contains control characters".into());
+    }
+    Ok(Some(path.to_owned()))
+}
+
 pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
     match provider {
         ProviderKind::Codex => codex::launch::runtime_args(),
