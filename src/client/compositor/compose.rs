@@ -39,7 +39,7 @@ impl ClientShellState {
         }
         self.compose_deferred = false;
         let mut frame = self.compose_frame(cols, rows)?;
-        crate::client::perf::OVERLAY.stamp(&mut frame);
+        self.perf_overlay_rect = crate::client::perf::OVERLAY.stamp(&mut frame);
         Some(frame)
     }
 

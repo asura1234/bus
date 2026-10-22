@@ -305,6 +305,8 @@ pub(crate) struct ClientShellState {
     pub(in crate::client) graphics_cell_size: crate::protocol::kitty::placement::HostCellSize,
     pub(in crate::client) chrome_drag: Option<ClientChromeDrag>,
     pub(in crate::client) last_composed_size: Option<(u16, u16)>,
+    /// Rectangle stamped by the last composed frame, excluded from pane patches.
+    perf_overlay_rect: Rect,
     pub(in crate::client) hits: ShellHitMap,
     pub(in crate::client) agent_presentation:
         crate::client::connection::agent_seen::EndpointAgentPresentation,
@@ -356,6 +358,7 @@ impl ClientShellState {
             },
             chrome_drag: None,
             last_composed_size: None,
+            perf_overlay_rect: Rect::default(),
             hits: ShellHitMap::default(),
             agent_presentation:
                 crate::client::connection::agent_seen::EndpointAgentPresentation::default(),

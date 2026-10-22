@@ -3,6 +3,7 @@ use super::events::ClientLoopEvent;
 use crate::messaging::model::{BusState, RuntimeStatus};
 use crate::protocol::wire::FrameData;
 use crate::utils::perf::{ContextSample, Field, Gauge, LoopWatch, Timer};
+use ratatui::layout::Rect;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -119,12 +120,12 @@ impl OverlayMeter {
     }
 
     /// Draws the label over the frame's top-right corner.
-    pub(super) fn stamp(&self, frame: &mut FrameData) {
+    pub(super) fn stamp(&self, frame: &mut FrameData) -> Rect {
         if !self.is_on() {
-            return;
+            return Rect::default();
         }
         let Ok(shown) = self.shown.lock() else {
-            return;
+            return Rect::default();
         };
         let label = if shown.label.is_empty() {
             overlay_label(None, None, None)
@@ -140,9 +141,18 @@ impl OverlayMeter {
             .unwrap_or(0)
             .min(width);
         let start = width - box_width;
+        let area = Rect::new(
+            start as u16,
+            0,
+            box_width as u16,
+            label.lines().count().min(usize::from(frame.height)) as u16,
+        );
         let fg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Black);
         let bg = crate::protocol::wire::color_to_u32(ratatui::style::Color::Yellow);
         for (row, line) in label.lines().take(usize::from(frame.height)).enumerate() {
+            crate::protocol::ansi::clear_truncated_wide_cell(
+                &mut frame.cells[row * width..row * width + start],
+            );
             let chars: Vec<char> = line.chars().collect();
             let visible = &chars[chars.len().saturating_sub(box_width)..];
             let padding = box_width - visible.len();
@@ -162,6 +172,12 @@ impl OverlayMeter {
                 }
             }
         }
+        if let Some(cursor) = frame.cursor.as_mut() {
+            if area.contains((cursor.x, cursor.y).into()) {
+                cursor.visible = false;
+            }
+        }
+        area
     }
 }
 

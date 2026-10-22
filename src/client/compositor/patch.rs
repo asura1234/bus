@@ -93,6 +93,31 @@ fn pane_geometry_matches(
         && left.pixel_height == right.pixel_height
 }
 
+fn project_patch_row(
+    row: &crate::protocol::wire::PaneSurfacePatchRow,
+    area: Rect,
+    overlay: Rect,
+) -> Option<crate::protocol::wire::PaneSurfacePatchRow> {
+    let x = area.x.saturating_add(row.x);
+    let y = area.y.saturating_add(row.y);
+    // The overlay is anchored at the frame's right edge: only a left prefix can survive.
+    let visible = if y >= overlay.y && y < overlay.bottom() && x < overlay.right() {
+        row.cells
+            .len()
+            .min(usize::from(overlay.x.saturating_sub(x)))
+    } else {
+        row.cells.len()
+    };
+    if visible == 0 {
+        return None;
+    }
+    let mut cells = row.cells[..visible].to_vec();
+    if visible < row.cells.len() {
+        crate::protocol::ansi::clear_truncated_wide_cell(&mut cells);
+    }
+    Some(crate::protocol::wire::PaneSurfacePatchRow { x, y, cells })
+}
+
 fn patch_matches_surface(
     current: &crate::protocol::wire::PaneSurfaceFrame,
     patch: &crate::protocol::wire::PaneSurfacePatch,
@@ -175,11 +200,7 @@ impl ClientShellState {
             rows: patch
                 .rows
                 .iter()
-                .map(|row| crate::protocol::wire::PaneSurfacePatchRow {
-                    x: area.x.saturating_add(row.x),
-                    y: area.y.saturating_add(row.y),
-                    cells: row.cells.clone(),
-                })
+                .filter_map(|row| project_patch_row(row, area, self.perf_overlay_rect))
                 .collect(),
             cursor: patch
                 .cursor
@@ -187,7 +208,14 @@ impl ClientShellState {
                 .map(|cursor| crate::protocol::wire::CursorState {
                     x: area.x.saturating_add(cursor.x),
                     y: area.y.saturating_add(cursor.y),
-                    visible: cursor.visible,
+                    visible: cursor.visible
+                        && !self.perf_overlay_rect.contains(
+                            (
+                                area.x.saturating_add(cursor.x),
+                                area.y.saturating_add(cursor.y),
+                            )
+                                .into(),
+                        ),
                     shape: cursor.shape,
                 }),
         });
@@ -267,3 +295,7 @@ pub(crate) fn apply_composed_surface_patch(
     next.cursor = patch.cursor;
     Some(next)
 }
+
+#[cfg(test)]
+#[path = "tests/patch_test.rs"]
+mod tests;

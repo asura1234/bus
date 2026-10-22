@@ -350,6 +350,21 @@ pub(super) fn cell_width(cell: &CellData) -> usize {
     cell.symbol.width()
 }
 
+/// A clipped row must not emit a glyph that extends beyond its last visible cell.
+pub(crate) fn clear_truncated_wide_cell(cells: &mut [CellData]) {
+    let width = cells.len();
+    let truncated = cells
+        .iter()
+        .enumerate()
+        .find_map(|(index, cell)| (index + cell_width(cell) > width).then_some(index));
+    if let Some(start) = truncated {
+        for cell in &mut cells[start..] {
+            cell.symbol = " ".into();
+            cell.skip = false;
+        }
+    }
+}
+
 pub(super) fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
     let mut chars = symbol.chars();
     let Some(base) = chars.next() else {
