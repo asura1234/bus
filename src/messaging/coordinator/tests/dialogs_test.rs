@@ -41,6 +41,7 @@ fn dialog() -> schema::AgentDialog {
         hint: Some("Esc to cancel".into()),
         id: "dialog-id".into(),
         digest: "dialog-digest".into(),
+        tabs: Vec::new(),
     }
 }
 

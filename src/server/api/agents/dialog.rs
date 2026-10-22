@@ -84,9 +84,10 @@ impl App {
                 Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
                     (Vec::new(), Some("option_missing_or_selection_not_visible"))
                 }
-                Ok(crate::terminal::runtime::DialogChoice::NotQuestion) => {
-                    (Vec::new(), Some("not_a_free_text_question"))
-                }
+                Ok(
+                    crate::terminal::runtime::DialogChoice::NotQuestion
+                    | crate::terminal::runtime::DialogChoice::Unskippable,
+                ) => (Vec::new(), Some("not_a_free_text_question")),
                 Err(error) => return encode_error(id, "dialog_write_failed", error),
             };
         let Some(observation) = dialog_observation(&agent, runtime) else {
@@ -159,6 +160,9 @@ impl App {
             }
             Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
                 (Vec::new(), Some("question_input_unavailable"))
+            }
+            Ok(crate::terminal::runtime::DialogChoice::Unskippable) => {
+                (Vec::new(), Some("skip_would_cancel_form"))
             }
             Err(error) => return encode_error(id, "dialog_write_failed", error),
         };
@@ -235,6 +239,15 @@ fn dialog_observation(
             },
             id: dialog.id(),
             digest: dialog.digest(),
+            tabs: dialog
+                .tabs
+                .into_iter()
+                .map(|tab| crate::protocol::api::schema::AgentDialogTab {
+                    label: tab.label,
+                    answered: tab.answered,
+                    active: tab.active,
+                })
+                .collect(),
             text: dialog.text,
             options: dialog
                 .options

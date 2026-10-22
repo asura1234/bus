@@ -66,6 +66,17 @@ pub struct AgentDialog {
     pub id: String,
     /// Identifies this exact dialog, including its selected option.
     pub digest: String,
+    /// A multi-question form's question tabs, then its Submit tab.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<AgentDialogTab>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentDialogTab {
+    pub label: String,
+    pub answered: bool,
+    /// The tab whose question the dialog shows.
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

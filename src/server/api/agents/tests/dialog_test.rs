@@ -681,7 +681,7 @@ async fn claude_tabbed_custom_answer_is_observed_as_an_option_free_text_question
 }
 
 #[tokio::test]
-async fn claude_tabbed_custom_answer_writes_text_and_skip_with_a_wrapped_hint() {
+async fn claude_tabbed_custom_answer_writes_text_and_never_skips_with_esc() {
     let (mut app, mut writes) =
         app_with_dialog(CLAUDE_TABBED_CUSTOM_ANSWER.as_bytes(), Some("session"));
     let observed = observe_dialog(&mut app);
@@ -705,11 +705,13 @@ async fn claude_tabbed_custom_answer_writes_text_and_skip_with_a_wrapped_hint() 
             .unwrap(),
         Bytes::from_static(b"\r")
     );
+    // Esc declines every question of Claude's form, not just this one.
     let skipped = chosen(
         &app.handle_agent_dialog_answer("skip".into(), answer_params(&observed, None, true)),
     );
-    assert!(skipped.written);
-    assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\x1b"));
+    assert!(!skipped.written);
+    assert_eq!(skipped.reason.as_deref(), Some("skip_would_cancel_form"));
+    assert!(writes.try_recv().is_err());
 }
 
 #[test]
@@ -831,4 +833,40 @@ async fn claude_option_list_free_text_answer_leaves_a_draft_and_skips_alone() {
     assert_eq!(skipped.reason.as_deref(), Some("not_a_free_text_question"));
     assert!(writes.try_recv().is_err());
     assert!(writes_too.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn claude_tabbed_form_free_text_answer_fills_the_row_and_choose_refuses_it() {
+    let form = include_str!("../../../../../tests/fixtures/claude-option-list/tabs-q1-rest.ansi");
+    let (mut app, mut writes) = app_with_dialog_sized(form.as_bytes(), Some("session"), 92, 45);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.tabs.len(), 3);
+    assert!(dialog.tabs[0].active && !dialog.tabs[0].answered);
+    assert!(dialog.options[2].free_text);
+    let refused = chosen(&choose(
+        &mut app,
+        &observation,
+        Some("session"),
+        &dialog.digest,
+        3,
+    ));
+    assert!(!refused.written);
+    assert!(writes.try_recv().is_err());
+    let answered = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("Fresh dir per run"), false),
+    ));
+    assert!(answered.written, "{:?}", answered.reason);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from("\x1b[B\x1b[B\x1b[200~Fresh dir per run\x1b[201~")
+    );
 }

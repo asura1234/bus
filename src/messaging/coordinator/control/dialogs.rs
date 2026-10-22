@@ -425,12 +425,16 @@ impl Worker {
 }
 
 fn dialog_json(dialog: &schema::AgentDialog) -> Value {
-    json!({
+    let mut value = json!({
         "kind": dialog.kind,
         "text": dialog.text,
         "options": dialog.options,
         "hint": dialog.hint,
-    })
+    });
+    if !dialog.tabs.is_empty() {
+        value["tabs"] = json!(dialog.tabs);
+    }
+    value
 }
 
 fn encode_dialog_fingerprint(claims: &DialogFingerprintClaims) -> Result<String, String> {

@@ -4265,6 +4265,13 @@
               },
               "type": "array"
             },
+            "tabs": {
+              "description": "A multi-question form's question tabs, then its Submit tab.",
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AgentDialogTab"
+              },
+              "type": "array"
+            },
             "text": {
               "description": "The question or title above the options.",
               "type": "string"
@@ -4378,6 +4385,26 @@
             "number",
             "label",
             "selected"
+          ],
+          "type": "object"
+        },
+        "AgentDialogTab": {
+          "properties": {
+            "active": {
+              "description": "The tab whose question the dialog shows.",
+              "type": "boolean"
+            },
+            "answered": {
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "answered",
+            "active"
           ],
           "type": "object"
         },

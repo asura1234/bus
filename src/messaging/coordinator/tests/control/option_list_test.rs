@@ -19,6 +19,15 @@ fn observation(screen: &str) -> schema::AgentDialogObservation {
         },
         id: dialog.id(),
         digest: dialog.digest(),
+        tabs: dialog
+            .tabs
+            .into_iter()
+            .map(|tab| schema::AgentDialogTab {
+                label: tab.label,
+                answered: tab.answered,
+                active: tab.active,
+            })
+            .collect(),
         text: dialog.text,
         hint: dialog.hint,
         options: dialog
@@ -156,6 +165,37 @@ fn a_scrolled_option_list_offers_its_hidden_numbers_but_no_hidden_free_text() {
     assert_eq!(chosen["outcome"], "closed");
     assert_eq!(native.lock().unwrap().choices[0].option, 6);
     assert!(native.lock().unwrap().answers.is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_tabbed_form_reports_its_tabs_and_answers_its_free_text_row_with_text() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tabs-q1-rest.ansi"
+    ));
+    let (observed, fingerprint) = fingerprint(&mut worker, agent);
+    assert_eq!(
+        observed["dialog"]["tabs"],
+        json!([
+            {"label": "Fresh files", "answered": false, "active": true},
+            {"label": "Helper home", "answered": false, "active": false},
+            {"label": "Submit", "answered": false, "active": false},
+        ])
+    );
+    assert_eq!(observed["dialog"]["options"][2]["free_text"], true);
+    assert!(worker
+        .choose_dialog_option(agent, 3, &fingerprint)
+        .unwrap_err()
+        .contains("agent answer"));
+    let answered = worker
+        .answer_dialog(agent, Some("Fresh dir per run"), false, &fingerprint)
+        .unwrap();
+    assert_eq!(answered["outcome"], "closed");
+    assert_eq!(
+        native.lock().unwrap().answers[0].text.as_deref(),
+        Some("Fresh dir per run")
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

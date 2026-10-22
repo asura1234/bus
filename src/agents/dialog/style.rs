@@ -9,12 +9,19 @@ pub(super) struct Style {
     bg: Option<u32>,
 }
 
+impl Style {
+    /// Drawn on a background of its own, as a selection or active tab is.
+    pub(super) fn is_filled(&self) -> bool {
+        self.inverse || self.bg.is_some()
+    }
+}
+
 /// The option drawn unlike the others: the only inverse or filled one, or the
 /// only one styled differently from options that all agree. With two options
 /// the other one must be plain, or the highlight is ambiguous.
 pub(super) fn highlighted(styles: &[Style]) -> Option<usize> {
     let filled: Vec<usize> = (0..styles.len())
-        .filter(|&index| styles[index].inverse || styles[index].bg.is_some())
+        .filter(|&index| styles[index].is_filled())
         .collect();
     if !filled.is_empty() {
         return (filled.len() == 1).then(|| filled[0]);

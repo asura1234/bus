@@ -139,3 +139,90 @@ fn a_free_text_row_holding_a_draft_is_not_answered_over() {
     // Re-entering the field puts the cursor at an unknown place in the draft.
     assert_eq!(dialog.free_text_keys(), None);
 }
+
+const TABS_Q1_REST: &str =
+    include_str!("../../../tests/fixtures/claude-option-list/tabs-q1-rest.ansi");
+const TABS_Q1_FREETEXT_FOCUSED: &str =
+    include_str!("../../../tests/fixtures/claude-option-list/tabs-q1-freetext-focused.ansi");
+const TABS_Q1_TYPED: &str =
+    include_str!("../../../tests/fixtures/claude-option-list/tabs-q1-typed.ansi");
+const TABS_Q2_REST: &str =
+    include_str!("../../../tests/fixtures/claude-option-list/tabs-q2-rest.ansi");
+const TABS_REVIEW: &str =
+    include_str!("../../../tests/fixtures/claude-option-list/tabs-review.ansi");
+
+fn tabs(dialog: &Dialog) -> Vec<(&str, bool, bool)> {
+    dialog
+        .tabs
+        .iter()
+        .map(|tab| (tab.label.as_str(), tab.answered, tab.active))
+        .collect()
+}
+
+#[test]
+fn a_tabbed_form_reports_every_question_tab_and_marks_its_free_text_row() {
+    let first = parse(TABS_Q1_REST).unwrap();
+    assert_eq!(first.kind, DialogKind::Choice);
+    assert_eq!(
+        tabs(&first),
+        [
+            ("Fresh files", false, true),
+            ("Helper home", false, false),
+            ("Submit", false, false)
+        ]
+    );
+    assert_eq!(
+        rows(&first),
+        [
+            (1, true, false),
+            (2, false, false),
+            (3, false, true),
+            (4, false, false),
+            (5, false, false),
+            (6, false, false)
+        ]
+    );
+    // Enter on the empty field declines every question of the form.
+    assert_eq!(first.keys_for(3), None);
+    assert_eq!(first.free_text_keys(), Some(vec!["down"; 2]));
+    assert_eq!(first.keys_for(6), Some(vec!["right"]));
+
+    let second = parse(TABS_Q2_REST).unwrap();
+    assert_eq!(
+        tabs(&second),
+        [
+            ("Fresh files", true, false),
+            ("Helper home", false, true),
+            ("Submit", false, false)
+        ]
+    );
+    assert_ne!(second.id(), first.id());
+
+    let review = parse(TABS_REVIEW).unwrap();
+    assert_eq!(review.options[0].label, "Submit answers");
+    assert_eq!(
+        tabs(&review),
+        [
+            ("Fresh files", true, false),
+            ("Helper home", true, false),
+            ("Submit", false, true)
+        ]
+    );
+    assert!(parse(TALL_REST).unwrap().tabs.is_empty());
+}
+
+#[test]
+fn a_claude_free_text_question_has_no_skip_key_because_esc_cancels_the_form() {
+    let focused = parse(TABS_Q1_FREETEXT_FOCUSED).unwrap();
+    assert_eq!(focused.kind, DialogKind::Question);
+    assert_eq!(
+        focused.text,
+        "Which fresh-file strategy should the test use?"
+    );
+    assert_eq!(focused.input.as_ref().unwrap().skip_key, None);
+    assert_eq!(focused.tabs.len(), 3);
+    let typed = parse(TABS_Q1_TYPED).unwrap();
+    assert_eq!(typed.input.as_ref().unwrap().value, "Fresh dir per run");
+    let single = parse(TALL_FREETEXT_FOCUSED_EMPTY).unwrap();
+    assert_eq!(single.input.as_ref().unwrap().skip_key, None);
+}

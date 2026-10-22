@@ -15,6 +15,8 @@ pub(crate) enum DialogChoice {
     Unreachable,
     /// Text answering needs a free-text question or field.
     NotQuestion,
+    /// The question's skip key would cancel more than this question.
+    Unskippable,
 }
 
 impl TerminalRuntime {
@@ -139,7 +141,10 @@ impl TerminalRuntime {
         let Some(input) = dialog.input.as_ref() else {
             return self.answer_free_text_option(&dialog, text, skip);
         };
-        let (code, modifiers, key) = if skip && input.skip_key == "ctrl+]" {
+        if skip && input.skip_key.is_none() {
+            return Ok(DialogChoice::Unskippable);
+        }
+        let (code, modifiers, key) = if skip && input.skip_key == Some("ctrl+]") {
             (
                 crossterm::event::KeyCode::Char(']'),
                 crossterm::event::KeyModifiers::CONTROL,

@@ -39,7 +39,8 @@ pub(crate) enum DialogKind {
 pub(crate) struct QuestionInput {
     /// Included in the digest so the developer's edit invalidates an observation.
     pub(crate) value: String,
-    pub(crate) skip_key: &'static str,
+    /// `None` where the provider's skip key cancels more than this question.
+    pub(crate) skip_key: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +54,15 @@ pub(crate) struct Dialog {
     pub(crate) hint: Option<String>,
     /// Tab styling carries Claude's active question even when text is unchanged.
     fingerprint_context: String,
+    /// The questions of a Claude multi-question form, then its Submit tab.
+    pub(crate) tabs: Vec<DialogTab>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DialogTab {
+    pub(crate) label: String,
+    pub(crate) answered: bool,
+    pub(crate) active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,7 +84,7 @@ impl Dialog {
         hasher.update(self.text.as_bytes());
         hasher.update(format!("\0{:?}", self.kind));
         if let Some(input) = &self.input {
-            hasher.update(input.skip_key.as_bytes());
+            hasher.update(input.skip_key.unwrap_or_default().as_bytes());
         }
         // A short pane shows a scrolling window of a Claude question's
         // options, so only their count identifies it across moves and resizes.
@@ -268,10 +278,12 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     if composer::contains(&lines) {
         return None;
     }
-    claude::parse(&lines, &styles)
+    let mut dialog = claude::parse(&lines, &styles)
         .or_else(|| numbered(&lines, &styles))
         .or_else(|| unnumbered(&lines))
-        .or_else(|| text_question(&lines))
+        .or_else(|| text_question(&lines))?;
+    dialog.tabs = claude::tabs(&lines, &styles);
+    Some(dialog)
 }
 
 /// Only the live, collapsed queue beside an empty composer can be opened.
@@ -374,7 +386,7 @@ fn text_question(lines: &[&str]) -> Option<Dialog> {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        return question_dialog(question, hint, &value, "Type your answer", "ctrl+]");
+        return question_dialog(question, hint, &value, "Type your answer", Some("ctrl+]"));
     }
     // Cursor's Other input is editable only while that checkbox row is focused.
     if hint == "↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip"
@@ -408,7 +420,7 @@ fn text_question(lines: &[&str]) -> Option<Dialog> {
             )
             .collect::<Vec<_>>()
             .join("\n");
-        return question_dialog(question, hint, &value, "(type to answer)", "esc");
+        return question_dialog(question, hint, &value, "(type to answer)", Some("esc"));
     }
     None
 }
@@ -418,7 +430,7 @@ fn question_dialog(
     hint: &str,
     value: &str,
     placeholder: &str,
-    skip_key: &'static str,
+    skip_key: Option<&'static str>,
 ) -> Option<Dialog> {
     if text.is_empty() {
         return None;
@@ -437,6 +449,7 @@ fn question_dialog(
         options: Vec::new(),
         hint: Some(hint.to_owned()),
         fingerprint_context: String::new(),
+        tabs: Vec::new(),
     })
 }
 
@@ -502,6 +515,7 @@ fn unnumbered(lines: &[&str]) -> Option<Dialog> {
             .collect(),
         hint: Some(hint.to_owned()),
         fingerprint_context: String::new(),
+        tabs: Vec::new(),
     })
 }
 
@@ -582,7 +596,7 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                     unboxed(lines[footer]).trim(),
                     value.trim_end(),
                     "Other",
-                    "ctrl+]",
+                    Some("ctrl+]"),
                 );
             }
         }
@@ -618,6 +632,7 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
             .collect(),
         hint,
         fingerprint_context: String::new(),
+        tabs: Vec::new(),
     })
 }
 
