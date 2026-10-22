@@ -93,3 +93,49 @@ fn grok_ad_disabled_project_hooks_fail_before_files_or_initializer() {
     .is_err());
     assert_eq!(std::fs::read(path).unwrap(), bytes);
 }
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_rejects_a_symlinked_project_config_ancestor() {
+    let f = Fixture::new();
+    f.install();
+    // Model a project's .grok pointing at a shared/global configuration. Both
+    // sides remain scratch fixtures; this must never access the real HOME.
+    let external = f.root.join("external-grok-config");
+    let hooks_dir = external.join("hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    let external_bus = hooks_dir.join("bus.json");
+    let original = b"{\"custom\":\"external-config-must-stay-unchanged\"}";
+    std::fs::write(&external_bus, original).unwrap();
+    std::os::unix::fs::symlink(&external, f.project.join(".grok")).unwrap();
+    let initialized = std::cell::Cell::new(false);
+
+    let result = common::prepare(&f.spec("", true), |hooks| {
+        initialized.set(true);
+        std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+
+    assert!(result.is_err(), "project setup followed a .grok symlink: {result:?}");
+    assert!(!initialized.get(), "unsafe setup initialized a capture");
+    assert_eq!(std::fs::read(external_bus).unwrap(), original);
+}
+
+#[test]
+fn grok_project_setup_does_not_install_hooks_in_the_home_config() {
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut spec = f.spec("", true);
+    spec.cwd = "~".into();
+    let initialized = std::cell::Cell::new(false);
+
+    let result = common::prepare(&spec, |hooks| {
+        initialized.set(true);
+        std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+
+    assert!(result.is_err(), "project setup accepted HOME and wrote global hooks: {result:?}");
+    assert!(!initialized.get());
+    assert!(!home.join(".grok/hooks/bus.json").exists());
+}

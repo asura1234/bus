@@ -1640,3 +1640,39 @@ fn message_status_retains_native_withdrawal_detail_after_uncertain_settlement() 
         "{status}"
     );
 }
+
+#[test]
+fn grok_cleared_after_an_idle_turn_keeps_its_fresh_session_available() {
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    // A finished turn's gate and the session's idle ping, with no Bus request open.
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"stop","sessionId":"session","promptId":"own-turn","reason":"end_turn"}),
+    );
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"notification","notificationType":"idle_prompt","sessionId":"session"}),
+    );
+    consume(&mut worker, agent, &dir);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..3 {
+        consume(&mut worker, agent, &dir);
+    }
+    let cleared = agent_of(&worker, agent);
+    assert_eq!(
+        cleared.runtime_identity.session_id.as_deref(),
+        Some("fresh")
+    );
+    assert_ne!(cleared.status, RuntimeStatus::Unavailable, "{:?}", cleared.actionable_error);
+    assert_eq!(cleared.actionable_error, None);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

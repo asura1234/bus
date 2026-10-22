@@ -1,5 +1,39 @@
 use super::*;
 
+#[tokio::test]
+async fn grok_login_heading_above_composer_padding_receives_no_input() {
+    use std::time::{Duration, Instant};
+
+    let empty = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
+    for gap in [0, 13] {
+        let screen = format!("Log in to Grok\n{}{empty}", "\n".repeat(gap));
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 30, 16);
+        runtime.test_process_pty_bytes(
+            format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
+        );
+        let completion = runtime
+            .queue_observed_input_submission(
+                bytes::Bytes::from_static(b"from bus"),
+                bytes::Bytes::from_static(b"\r"),
+                vec![bytes::Bytes::from_static(b"\x01")],
+                Duration::ZERO,
+                Some(Instant::now() + Duration::from_millis(200)),
+                observer(AgentKind::Grok, "from bus".into()),
+            )
+            .unwrap();
+        let error = completion
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            writes.try_recv().is_err(),
+            "login composer with {gap} padding lines received editing keys, paste or Enter"
+        );
+        assert!(crate::terminal::runtime::PromptNotShown::is(&error), "{error}");
+    }
+}
+
 #[test]
 fn captured_claude_subagent_footer_is_an_empty_composer() {
     let captured = include_str!("fixtures/claude_subagent_footer.txt");

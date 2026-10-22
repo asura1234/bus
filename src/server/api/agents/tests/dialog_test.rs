@@ -1,5 +1,28 @@
 use super::*;
 
+#[tokio::test]
+async fn grok_unreadable_card_does_not_reactivate_a_historical_numbered_dialog() {
+    let history = "Previous question\n❯ 1. Allow once\n  2. Reject\nEnter to confirm\n";
+    let permission = include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt")
+        .replace("┃   3 (○) No, reject\n", "")
+        .replace("❯ 1 (○) Yes, proceed", "  1 (○) \x1b[7mYes, proceed\x1b[0m");
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 30, 16);
+    runtime.test_process_pty_bytes(history.replace('\n', "\r\n").as_bytes());
+    let prior = crate::agents::dialog::parse(&runtime.visible_ansi()).unwrap();
+    runtime.test_process_pty_bytes(
+        format!("\x1b[2J\x1b[H{history}\n{permission}")
+            .replace('\n', "\r\n")
+            .as_bytes(),
+    );
+    let outcome = runtime.try_choose_dialog_option(&prior.digest(), 1).unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "historical approval sent keys to an unreadable current Grok permission card: {outcome:?}"
+    );
+    assert_eq!(outcome, crate::terminal::runtime::DialogChoice::Stale);
+}
+
 // Minimized from a captured Codex permission screen:
 // a wrapped option followed by an indented shell redirection continuation.
 const CODEX_SOFT_WRAPPED_PERMISSION: &str =

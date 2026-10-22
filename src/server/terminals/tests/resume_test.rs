@@ -1155,3 +1155,87 @@ async fn native_resume_evidence_is_retired_when_ownership_changes() {
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_native_grok_resume_does_not_require_bus_capture_environment() {
+    use std::os::unix::fs::PermissionsExt;
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("native-grok-restore");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 30));
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    // This shell consumes the launch text without evaluating it. Even if the
+    // restore succeeds, no installed Grok or other model process can run.
+    let dir = crate::utils::test_temp::unique_temp_path("bus-native-grok-swallowing-shell");
+    std::fs::create_dir_all(&dir).unwrap();
+    let shell = dir.join("sh");
+    std::fs::write(&shell, "#!/bin/sh\nexec /bin/cat >/dev/null\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+    app.state.default_shell = shell.to_string_lossy().into_owned();
+    app.state.shell_mode = crate::utils::config::ShellModeConfig::NonLogin;
+    let session = crate::agents::resume::catalog::PersistedAgentSession {
+        source: "herdr:grok".into(),
+        agent: "grok".into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("native-saved-session")
+            .unwrap(),
+    };
+    let plan =
+        crate::agents::resume::catalog::plan(&session.source, &session.agent, &session.session_ref)
+            .unwrap();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("saved-grok".into(), crate::agents::AgentKind::Grok);
+    terminal.set_persisted_agent_session(session.clone());
+    terminal.pending_agent_resume_plan = Some(plan);
+
+    app.start_pending_agent_resumes(true);
+    let launched = app.terminal_runtimes.get(&terminal_id).is_some();
+    let saved_session = app.state.terminals[&terminal_id].persisted_agent_session.clone();
+    for (_, runtime) in app.terminal_runtimes.drain() {
+        runtime.shutdown();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(launched, "ordinary native Grok resume was suspended because it has no Bus capture PATH");
+    assert_eq!(saved_session, Some(session));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_saved_bus_agent_awaiting_its_deferred_resume_keeps_its_identity_in_the_session_snapshot() {
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("pending-resume-snapshot");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    let session = crate::agents::resume::catalog::PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("saved-session").unwrap(),
+    };
+    let plan =
+        crate::agents::resume::catalog::plan(&session.source, &session.agent, &session.session_ref)
+            .unwrap();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("bus-r1-a2".into(), crate::agents::AgentKind::Codex);
+    terminal.set_persisted_agent_session(session);
+    // Restored but not started yet (e.g. no client has attached a viewport).
+    terminal.pending_agent_resume_plan = Some(plan);
+
+    let snapshot = crate::server::persistence::capture(
+        &app.state.workspaces,
+        &app.state.terminals,
+        &app.terminal_runtimes,
+        app.state.active,
+        app.state.selected,
+    );
+    let pane = &snapshot.workspaces[0].tabs[0].panes[&pane_id.raw()];
+    assert_eq!(pane.agent_name.as_deref(), Some("bus-r1-a2"));
+    assert_eq!(pane.managed_agent_kind.as_deref(), Some("codex"));
+}

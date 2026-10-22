@@ -143,3 +143,153 @@ mod codex_self_update_listing {
         assert!(info.dialog_id.is_some());
     }
 }
+
+#[test]
+fn session_capture_keeps_restored_claude_name_while_its_resume_has_not_started() {
+    let mut state = app_with_workspaces(&["ws"]);
+    let terminal_id = state.workspaces[0].tabs[0]
+        .panes
+        .values()
+        .next()
+        .unwrap()
+        .attached_terminal_id
+        .clone();
+    let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("ally".into(), AgentKind::Claude);
+    terminal.pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
+        agent: "claude".into(),
+        argv: vec!["claude".into(), "--resume".into(), "saved".into()],
+        dedupe_key: "saved".into(),
+    });
+    let snapshot = crate::server::persistence::capture(
+        &state.workspaces,
+        &state.terminals,
+        &crate::terminal::TerminalRuntimeRegistry::new(),
+        state.active,
+        0,
+    );
+    let pane = snapshot.workspaces[0].tabs[0].panes.values().next().unwrap();
+    assert_eq!(pane.agent_name.as_deref(), Some("ally"));
+    assert_eq!(pane.managed_agent_kind.as_deref(), Some("claude"));
+}
+
+mod grok_captured_composer_prompt {
+    use crate::agents::{AgentKind, AgentState};
+    use crate::protocol::api::schema::{AgentPromptIfIdleParams, Method, Request};
+    use crate::server::app::App;
+    use crate::server::workspaces::Workspace;
+    use std::time::Duration;
+
+    /// The idle Grok Build 1.0.5 fullscreen frame rendered from the offline
+    /// capture: the model label is drawn inside the composer's bottom border.
+    fn captured_idle_frame() -> String {
+        captured_layout(" Grok 4.6 (high) ─╯")
+    }
+
+    fn captured_layout(label: &str) -> String {
+        let width = 116;
+        let top = format!("  ╭{}╮", "─".repeat(width));
+        let row = format!("  │ ❯{}│", " ".repeat(width - 2));
+        let bottom = format!(
+            "  ╰{}{label}",
+            "─".repeat(width + 1 - label.chars().count())
+        );
+        format!(
+            "\x1b[2J\x1b[H\r\n  /private/tmp/workspace\r\n\r\n     ◆ session_start  [hooks: 1]\r\n\r\n{top}\r\n{row}\r\n{bottom}\r\n\r\n  Shift+Tab:mode  │  Ctrl+x:shortcuts"
+        )
+    }
+
+    fn synthetic_idle_frame() -> String {
+        include_str!("../../../../tests/fixtures/grok-composer/empty.txt").replace('\n', "\r\n")
+    }
+
+    async fn first_write_for(frame: String) -> Option<bytes::Bytes> {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::utils::config::Config::default(),
+            crate::server::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::server::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("grok")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let now = std::time::Instant::now();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.begin_managed_agent(
+            "grok-worker".into(),
+            AgentKind::Grok,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(10),
+        );
+        terminal.set_detected_state(Some(AgentKind::Grok), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+        terminal.set_agent_session_ref_for_session_start(
+            "bus".into(),
+            "grok".into(),
+            crate::agents::resume::catalog::AgentSessionRef::id("grok-session"),
+            Some(1),
+            None,
+            &[],
+        );
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 32);
+        runtime.test_process_pty_bytes(b"\x1b[?2004h");
+        runtime.test_process_pty_bytes(frame.as_bytes());
+        app.state.insert_test_runtime(pane, runtime);
+        let info = app.agent_info(0, pane).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let _ = app.handle_deferred_agent_api_request(
+            Request {
+                id: "grok-prompt".into(),
+                method: Method::AgentPromptIfIdle(AgentPromptIfIdleParams {
+                    target: info.pane_id.clone(),
+                    text: "hello grok".into(),
+                    expected_terminal_id: info.terminal_id,
+                    expected_pane_id: info.pane_id,
+                    expected_agent: "grok".into(),
+                    expected_session_id: "grok-session".into(),
+                    steer: false,
+                }),
+            },
+            tx,
+        );
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    #[tokio::test]
+    async fn bus_prompt_is_pasted_into_the_synthetic_empty_grok_composer() {
+        let write = first_write_for(synthetic_idle_frame()).await;
+        assert!(
+            write.is_some_and(|w| w.as_ref().starts_with(b"\x1b[200~hello grok")),
+            "synthetic composer should receive the paste"
+        );
+    }
+
+    #[tokio::test]
+    async fn bus_prompt_is_pasted_into_the_captured_grok_layout_when_its_border_has_no_label() {
+        let write = first_write_for(captured_layout("──╯")).await;
+        assert!(
+            write.is_some_and(|w| w.as_ref().starts_with(b"\x1b[200~hello grok")),
+            "the captured layout without a border label should receive the paste"
+        );
+    }
+
+    #[tokio::test]
+    async fn bus_prompt_is_pasted_into_the_captured_grok_1_0_5_composer_with_model_label_border() {
+        let write = first_write_for(captured_idle_frame()).await;
+        assert!(
+            write.is_some_and(|w| w.as_ref().starts_with(b"\x1b[200~hello grok")),
+            "the captured empty Grok 1.0.5 composer must receive the Bus prompt"
+        );
+    }
+}
