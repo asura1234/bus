@@ -1086,3 +1086,20 @@ async fn scrolled_tabbed_question_rejects_a_choice_observed_on_another_tab() {
     );
     assert!(writes.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn codex_other_answer_over_a_typed_draft_is_refused() {
+    let typed = include_str!("../../../../../tests/fixtures/codex-question/other-typed.txt")
+        .replace('\n', "\r\n");
+    let (mut app, mut writes) = app_with_dialog(typed.as_bytes(), Some("session"));
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.clone().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Question);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("more"), false),
+    ));
+    assert!(!result.written);
+    assert_eq!(result.reason.as_deref(), Some("free_text_holds_draft"));
+    assert!(writes.try_recv().is_err());
+}
