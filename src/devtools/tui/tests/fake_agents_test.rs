@@ -950,3 +950,12 @@ fn grok_g_mixed_provider_resume_reuses_identity_in_session_start_hook() {
         assert_eq!(hook[key], "saved-session", "{provider}");
     }
 }
+
+#[test]
+fn grok_g_mixed_provider_turn_ids_do_not_repeat_after_resume() {
+    let args = ["--resume".into(), "same-session".into()];
+    let mut previous = FakeAgent::from_args("claude", json!({}), &args);
+    let mut resumed = FakeAgent::from_args("claude", json!({}), &args);
+    assert_eq!(previous.session, resumed.session);
+    assert_ne!(previous.next_turn(), resumed.next_turn());
+}

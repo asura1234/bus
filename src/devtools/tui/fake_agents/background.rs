@@ -63,8 +63,7 @@ impl FakeAgent {
             return;
         };
         self.shells.retain(|running| *running != shell);
-        self.turns += 1;
-        let turn = format!("{}-{}", self.session, self.turns);
+        let turn = self.next_turn();
         let prompt =
             format!("<task-notification><task-id>{shell}</task-id>completed</task-notification>");
         let mut out = std::io::stdout();
