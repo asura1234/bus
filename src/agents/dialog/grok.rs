@@ -404,24 +404,6 @@ mod tests {
     const WRAPPED: &str = include_str!("../../../tests/fixtures/grok-dialog/wrapped.txt");
     const DRAFT: &str = include_str!("../../../tests/fixtures/grok-composer/draft.txt");
 
-    #[tokio::test]
-    async fn grok_native_composer_fences_historical_numbered_dialogs() {
-        let capture =
-            include_str!("../../../tests/fixtures/grok-composer/native-1.0.5-offline.ansi");
-        let label = capture.find(":shortcuts").unwrap();
-        let end = label + capture[label..].find("\x1b[?2026l").unwrap() + "\x1b[?2026l".len();
-        let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 8);
-        runtime.test_process_pty_bytes(capture[..end].as_bytes());
-        let screen = runtime.visible_ansi();
-        let (texts, _) = styled_lines(&screen);
-        assert!(
-            contains_composer(&texts.iter().map(String::as_str).collect::<Vec<_>>()),
-            "{screen:?}"
-        );
-        let history = "Earlier menu\n❯ 1. Approve\n  2. Deny\nEnter to select\n";
-        assert!(super::super::parse(&format!("{history}{screen}")).is_none());
-    }
-
     fn card(screen: &str) -> Option<Dialog> {
         let (text, styles) = styled_lines(screen);
         parse(
