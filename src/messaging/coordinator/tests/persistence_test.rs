@@ -513,3 +513,85 @@ fn changed(worker: &Worker) -> BusState {
     state.create_room("pending").unwrap();
     state
 }
+
+#[test]
+fn upgrade_onboarding_write_failure_logs_and_keeps_coordinator_starting() {
+    for failure in ["docs-directory", "doc-write"] {
+        let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+        let waiting = queue(
+            &mut worker,
+            room,
+            agent,
+            "work must survive onboarding failure",
+        );
+        let mut document = serde_json::to_value(&worker.state).unwrap();
+        document["agents"][agent.0.to_string()]["messaging_rules_version"] = json!(0);
+        let legacy = serde_json::from_value(document).unwrap();
+        worker.store.save(&legacy).unwrap();
+        drop(worker);
+        let blocked = if failure == "docs-directory" {
+            let path = dir.join("docs");
+            std::fs::write(&path, "not a directory").unwrap();
+            path
+        } else {
+            let path = dir.join("docs/how-to-bus-cli.md");
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        };
+        let log = Arc::new(Mutex::new(Vec::<u8>::new()));
+        #[derive(Clone)]
+        struct Writer(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let writer = Writer(Arc::clone(&log));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || writer.clone())
+            .finish();
+        let transport = || FakeTransport {
+            replies: VecDeque::new(),
+            calls: Arc::clone(&calls),
+            state_path: dir.join("state.json"),
+        };
+        let resumed = tracing::subscriber::with_default(subscriber, || {
+            Worker::open(dir.clone(), Box::new(transport()))
+        })
+        .expect("onboarding failure must not prevent coordinator start");
+        assert!(resumed.state.agent(agent).is_some());
+        assert_eq!(resumed.state.queued_requests(agent), &[waiting]);
+        assert_eq!(
+            resumed.state.request(waiting).unwrap().prompt.text,
+            "work must survive onboarding failure"
+        );
+        let captured = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+        assert!(
+            captured.contains("WARN") && captured.contains("bus.onboarding.upgrade_skipped"),
+            "{captured}"
+        );
+        drop(resumed);
+        if blocked.is_file() {
+            std::fs::remove_file(&blocked).unwrap();
+        } else {
+            std::fs::remove_dir(&blocked).unwrap();
+        }
+        // Skipping must not mark the failed refresh as delivered: recovery retries it.
+        let repaired = Worker::open(dir.clone(), Box::new(transport())).unwrap();
+        let pending = repaired.state.queued_requests(agent);
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[1], waiting);
+        assert_eq!(
+            repaired.state.request(pending[0]).unwrap().prompt.author,
+            Author::Bus
+        );
+        drop(repaired);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
