@@ -3,18 +3,24 @@
 //! Choices that are not tied to one room live here, so a change made in any
 //! Bus is what every Bus launched afterwards starts with: color blind mode,
 //! MASTER's sound (every session has MASTER), the last All rooms sound, and
-//! the worker compaction and idle-agents limits. A room's own sound stays in
+//! the worker compaction, idle-agents and disk alert limits. A room's own sound stays in
 //! its session. Sounds are read at launch and room creation; the coordinator
-//! reads both limits each tick so settings changes can re-arm notices.
+//! reads notice limits each tick and disk thresholds when a sample completes.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::messaging::storage::{io, sessions as local_sessions};
 
+#[cfg(test)]
+#[path = "tests/disk_settings_test.rs"]
+mod disk_settings_tests;
+
 pub(crate) const MIN_COMPACTIONS_PER_AGENT: u32 = 1;
 pub(crate) const MAX_COMPACTIONS_PER_AGENT: u32 = 100;
 pub(crate) const MIN_IDLE_AGENTS_ALERT: u32 = 1;
 pub(crate) const MAX_IDLE_AGENTS_ALERT: u32 = 10;
+pub(crate) const MIN_DISK_FREE_GB: u32 = 1;
+pub(crate) const MAX_DISK_FREE_GB: u32 = 10_000;
 pub(crate) const MAX_BACKGROUND_SHELL_HOLD_MINUTES: u32 = 24 * 60;
 /// The sidebar width before it was adjustable, so unchanged settings look
 /// the same as before.
@@ -48,6 +54,10 @@ pub(crate) struct BusSettings {
     /// Notify the room when more than this many of its workers sit idle.
     #[serde(deserialize_with = "deserialize_idle_agents_alert")]
     pub(crate) idle_agents_alert: u32,
+    #[serde(deserialize_with = "deserialize_disk_free_gb")]
+    pub(crate) disk_warning_gb: u32,
+    #[serde(deserialize_with = "deserialize_disk_free_gb")]
+    pub(crate) disk_critical_gb: u32,
     /// How long a Claude reply waits for background shells its own turn
     /// started; then the latest interim text is delivered as the reply.
     #[serde(deserialize_with = "deserialize_shell_hold_minutes")]
@@ -73,6 +83,8 @@ impl Default for BusSettings {
             room_sound: SoundPref::default(),
             max_compactions_per_agent: 5,
             idle_agents_alert: 7,
+            disk_warning_gb: 20,
+            disk_critical_gb: 5,
             background_shell_hold_minutes: 15,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         }
@@ -129,6 +141,30 @@ where
     Ok(value)
 }
 
+fn deserialize_disk_free_gb<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    if !(MIN_DISK_FREE_GB..=MAX_DISK_FREE_GB).contains(&value) {
+        return Err(serde::de::Error::custom(
+            "Disk thresholds must be between 1 and 10000 GB.",
+        ));
+    }
+    Ok(value)
+}
+
+pub(crate) fn validate_disk_thresholds(warning: u32, critical: u32) -> Result<(), String> {
+    if !(MIN_DISK_FREE_GB..=MAX_DISK_FREE_GB).contains(&warning)
+        || !(MIN_DISK_FREE_GB..=MAX_DISK_FREE_GB).contains(&critical)
+        || critical >= warning
+    {
+        Err("Disk thresholds must be between 1 and 10000 GB, with critical below warning.".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn deserialize_shell_hold_minutes<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -166,12 +202,17 @@ pub(crate) fn path() -> Option<PathBuf> {
 
 pub(crate) fn load(path: &Path) -> Result<BusSettings, String> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
-            format!(
-                "Bus settings at {} are unreadable; using defaults: {error}",
-                path.display()
-            )
-        }),
+        Ok(bytes) => serde_json::from_slice::<BusSettings>(&bytes)
+            .map_err(|error| {
+                format!(
+                    "Bus settings at {} are unreadable; using defaults: {error}",
+                    path.display()
+                )
+            })
+            .and_then(|settings| {
+                validate_disk_thresholds(settings.disk_warning_gb, settings.disk_critical_gb)?;
+                Ok(settings)
+            }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BusSettings::default()),
         Err(error) => Err(format!(
             "Bus settings at {} are unreadable; using defaults: {error}",
@@ -203,6 +244,7 @@ pub(crate) fn update(
 pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
     validate_compaction_limit(settings.max_compactions_per_agent)?;
     validate_idle_agents_alert(settings.idle_agents_alert)?;
+    validate_disk_thresholds(settings.disk_warning_gb, settings.disk_critical_gb)?;
     let failed = |error: &dyn std::fmt::Display| {
         format!("Could not save Bus settings to {}: {error}", path.display())
     };

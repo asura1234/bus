@@ -292,9 +292,17 @@ impl BusUi {
         self.compaction_field() + 1
     }
 
-    /// The sidebar width's Settings focus index, after the idle agents alert.
-    pub(super) fn sidebar_width_field(&self) -> usize {
+    pub(super) fn disk_warning_field(&self) -> usize {
         self.idle_agents_field() + 1
+    }
+
+    pub(super) fn disk_critical_field(&self) -> usize {
+        self.disk_warning_field() + 1
+    }
+
+    /// The sidebar width's Settings focus index, after the disk thresholds.
+    pub(super) fn sidebar_width_field(&self) -> usize {
+        self.disk_critical_field() + 1
     }
 
     /// The overlay row's Settings focus index, after notification settings.

@@ -1,6 +1,6 @@
 //! Single-writer command dispatch.
 use super::{
-    mpsc, schema, AgentId, BusCommand, BusEvent, BusState, Method, Provider, ResponseResult,
+    mpsc, schema, AgentId, BusCommand as C, BusEvent, BusState, Method, Provider, ResponseResult,
     RoomId, Worker,
 };
 use crate::messaging::storage::state_store::JournalOp;
@@ -8,82 +8,78 @@ use crate::messaging::storage::state_store::JournalOp;
 impl Worker {
     pub(super) fn command(
         &mut self,
-        command: BusCommand,
+        command: C,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let mut state = self.state.clone();
-        let queued = matches!(command, BusCommand::SubmitQueued(_));
+        let queued = matches!(command, C::SubmitQueued(_));
         let result = match command {
-            BusCommand::CreateRoom(name) => return self.persist_new_room(state, &name, events),
-            BusCommand::RenameRoom(id, name) => state.rename_room(id, &name),
-            BusCommand::RenameAgent(id, name) => state.rename_agent(id, &name),
-            BusCommand::DeleteRoom(id) => return self.delete_room(id, events),
-            BusCommand::DeleteAgent(id) => return self.delete_agent(id, events),
-            BusCommand::SelectRoom(id) => state.select_room(id),
-            BusCommand::LeaveRoom => {
+            C::CreateRoom(name) => return self.persist_new_room(state, &name, events),
+            C::RenameRoom(id, name) => state.rename_room(id, &name),
+            C::RenameAgent(id, name) => state.rename_agent(id, &name),
+            C::DeleteRoom(id) => return self.delete_room(id, events),
+            C::DeleteAgent(id) => return self.delete_agent(id, events),
+            C::SelectRoom(id) => state.select_room(id),
+            C::LeaveRoom => {
                 state.leave_room_view();
                 Ok(())
             }
-            BusCommand::MarkRoomSeen(id) => state.mark_room_seen(id),
-            BusCommand::SetRoomSound(id, on) => {
+            C::MarkRoomSeen(id) => state.mark_room_seen(id),
+            C::SetRoomSound(id, on) => {
                 state.set_room_sound(id, on).map_err(|e| e.to_string())?;
                 self.record_master_sound(&state, id)?;
                 Ok(())
             }
-            BusCommand::SetRoomSoundName(id, name) => {
+            C::SetRoomSoundName(id, name) => {
                 state
                     .set_room_sound_name(id, name)
                     .map_err(|e| e.to_string())?;
                 self.record_master_sound(&state, id)?;
                 Ok(())
             }
-            BusCommand::SetAllRoomsSound(on) => {
+            C::SetAllRoomsSound(on) => {
                 self.set_all_rooms_sound(Some(on), None, events)?;
                 return Ok(());
             }
-            BusCommand::SetAllRoomsSoundName(name) => {
+            C::SetAllRoomsSoundName(name) => {
                 self.set_all_rooms_sound(None, Some(name), events)?;
                 return Ok(());
             }
-            BusCommand::SetMaxCompactionsPerAgent(limit) => {
+            C::SetMaxCompactionsPerAgent(limit) => {
                 return self.set_max_compactions_per_agent(limit, events);
             }
-            BusCommand::SetIdleAgentsAlert(limit) => {
-                return self.set_idle_agents_alert(limit, events)
-            }
-            BusCommand::SetFeishuRecipient(recipient) => {
+            C::SetIdleAgentsAlert(limit) => return self.set_idle_agents_alert(limit, events),
+            C::SetDiskWarningGb(value) => return self.set_disk_threshold(true, value, events),
+            C::SetDiskCriticalGb(value) => return self.set_disk_threshold(false, value, events),
+            C::SetFeishuRecipient(recipient) => {
                 return self.set_feishu_recipient(recipient, events);
             }
-            BusCommand::SetFeishuCliPath(path) => return self.set_feishu_cli_path(path, events),
-            BusCommand::SetFreezeNotifications(on) => {
-                return self.set_freeze_notifications(on, events)
-            }
-            BusCommand::SetSidebarWidth(width) => return self.set_sidebar_width(width, events),
-            BusCommand::SetFeishuNotifications(on) => {
-                return self.set_feishu_notifications(on, events)
-            }
-            BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
-            BusCommand::SetDraftText(id, text) => {
+            C::SetFeishuCliPath(path) => return self.set_feishu_cli_path(path, events),
+            C::SetFreezeNotifications(on) => return self.set_freeze_notifications(on, events),
+            C::SetSidebarWidth(width) => return self.set_sidebar_width(width, events),
+            C::SetFeishuNotifications(on) => return self.set_feishu_notifications(on, events),
+            C::SetNotes(id, text) => state.set_room_notes(id, &text),
+            C::SetDraftText(id, text) => {
                 state.set_draft_text(id, &text).map_err(|e| e.to_string())?;
                 return self.journal(state, JournalOp::DraftText { room: id, text });
             }
-            BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),
-            BusCommand::AttachFile(room, path) => {
+            C::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),
+            C::AttachFile(room, path) => {
                 let home = std::env::home_dir().ok_or("Home directory unavailable")?;
                 let path = crate::messaging::attachments::validate_attachment(&path, &home)
                     .map_err(|e| e.to_string())?;
                 state.attach_file(room, path)
             }
-            BusCommand::RemoveFile(room, path) => state.remove_file(room, &path),
-            BusCommand::Submit(room) | BusCommand::SubmitQueued(room) => {
+            C::RemoveFile(room, path) => state.remove_file(room, &path),
+            C::Submit(room) | C::SubmitQueued(room) => {
                 return self.persist_draft_submission(state, room, queued);
             }
-            BusCommand::SetDetails(id, expanded) => state.set_agent_details_disclosed(id, expanded),
-            BusCommand::CompleteHookSetup(id) => {
+            C::SetDetails(id, expanded) => state.set_agent_details_disclosed(id, expanded),
+            C::CompleteHookSetup(id) => {
                 complete_hook_setup(&mut state, id)?;
                 Ok(())
             }
-            BusCommand::Suggestions {
+            C::Suggestions {
                 query_id,
                 input,
                 directories_only,
@@ -97,15 +93,13 @@ impl Worker {
                 });
                 return Ok(());
             }
-            BusCommand::AddAgent(input) => return self.add_agent(input, None, events),
-            BusCommand::AddOrchestrator(input, spec) => {
-                return self.add_agent(input, Some(spec), events)
-            }
-            BusCommand::FocusTerminal(id) => {
+            C::AddAgent(input) => return self.add_agent(input, None, events),
+            C::AddOrchestrator(input, spec) => return self.add_agent(input, Some(spec), events),
+            C::FocusTerminal(id) => {
                 self.focus_terminal(&mut state, id, events)?;
                 Ok(())
             }
-            BusCommand::Control(_) | BusCommand::Shutdown => return Ok(()),
+            C::Control(_) | C::Shutdown => return Ok(()),
         };
         result.map_err(|e| e.to_string())?;
         self.save(state)

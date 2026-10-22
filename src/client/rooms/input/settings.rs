@@ -47,6 +47,42 @@ impl BusUi {
         }
     }
 
+    pub(super) fn adjust_disk_threshold(&mut self, warning: bool, up: bool) {
+        use crate::messaging::prefs::settings::{MAX_DISK_FREE_GB, MIN_DISK_FREE_GB};
+        let (field, current, min, max) = if warning {
+            (
+                self.disk_warning_field(),
+                self.settings.disk_warning_gb,
+                self.settings.disk_critical_gb + 1,
+                MAX_DISK_FREE_GB,
+            )
+        } else {
+            (
+                self.disk_critical_field(),
+                self.settings.disk_critical_gb,
+                MIN_DISK_FREE_GB,
+                self.settings.disk_warning_gb - 1,
+            )
+        };
+        self.settings_field = field;
+        let next = if up {
+            current.saturating_add(1).min(max)
+        } else {
+            current.saturating_sub(1).max(min)
+        };
+        if next == current {
+            return;
+        }
+        let command = if warning {
+            self.settings.disk_warning_gb = next;
+            BusCommand::SetDiskWarningGb(next)
+        } else {
+            self.settings.disk_critical_gb = next;
+            BusCommand::SetDiskCriticalGb(next)
+        };
+        self.queue(command, Effect::None);
+    }
+
     /// Shown at the new width on the next frame; the coordinator saves it
     /// and every Bus session reads it back from `SettingsChanged`.
     pub(super) fn adjust_sidebar_width(&mut self, wider: bool) {

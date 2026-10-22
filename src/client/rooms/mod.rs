@@ -318,6 +318,7 @@ mod tests {
 
     include!("tests/composer_test.rs");
     include!("tests/forms_test.rs");
+    include!("tests/disk_settings_test.rs");
     include!("tests/layout_test.rs");
     include!("tests/attachments_test.rs");
     include!("tests/selection_test.rs");
