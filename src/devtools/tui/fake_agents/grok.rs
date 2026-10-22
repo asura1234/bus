@@ -109,7 +109,7 @@ fn discover_hooks(cwd: &Path) -> io::Result<Value> {
                         .entry(event.clone())
                         .or_insert_with(|| json!([]))
                         .as_array_mut()
-                        .unwrap()
+                        .ok_or_else(|| invalid("synthetic hook entries must be arrays"))?
                         .extend(entries.iter().cloned());
                 }
             }
@@ -379,7 +379,9 @@ impl Grok {
         if self.card.is_some() || self.active.as_ref().is_none_or(|active| now < active.due) {
             return Ok(());
         }
-        let active = self.active.take().unwrap();
+        let Some(active) = self.active.take() else {
+            return Ok(());
+        };
         let prompt = active.prompts.join("\n");
         if prompt.contains("fake:cancel") || prompt.contains("fake:gate-cancel") {
             self.active = Some(active);

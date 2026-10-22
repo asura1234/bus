@@ -8,6 +8,30 @@ pub(super) const DIALOG_CONFIRM_DELAY: std::time::Duration = std::time::Duration
 mod grok_tests {
     use super::*;
 
+    const PERMISSION: &str = include_str!("../../../tests/fixtures/grok-dialog/permission.txt");
+
+    #[tokio::test]
+    async fn grok_c_changed_scope_is_stale_under_runtime_content_lock() {
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        let draw = |screen: &str| {
+            runtime.test_process_pty_bytes(
+                format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
+            )
+        };
+        draw(PERMISSION);
+        let (snapshot, _) = runtime.visible_ansi_snapshot_with_seq().unwrap();
+        let original = crate::agents::dialog::parse(&snapshot).expect("emulated card");
+        draw(&PERMISSION.replace("this command", "all commands"));
+        assert_eq!(
+            runtime
+                .try_choose_dialog_option(&original.digest(), 1)
+                .unwrap(),
+            crate::terminal::runtime::DialogChoice::Stale
+        );
+        assert!(writes.try_recv().is_err(), "stale approval received keys");
+    }
+
     #[tokio::test]
     async fn grok_g_dismiss_exits_free_text_before_shift_x() {
         for kitty in [false, true] {

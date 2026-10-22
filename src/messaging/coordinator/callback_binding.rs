@@ -30,3 +30,19 @@ pub(super) fn span(state: &BusState, callback: &ProviderCallback) -> tracing::Sp
         compactions = agent.map_or(0, |agent| agent.compactions.count),
     )
 }
+
+impl super::Worker {
+    /// The provider session the native server attributes to `pane`.
+    pub(super) fn native_session(&mut self, pane: &str) -> Result<Option<String>, String> {
+        match self
+            .transport
+            .request(super::Method::AgentGet(super::schema::AgentTarget {
+                target: pane.to_owned(),
+            }))
+            .map_err(|e| e.message)?
+        {
+            super::ResponseResult::AgentInfo { agent } => Ok(agent.agent_session.map(|s| s.value)),
+            _ => Err("Unexpected native agent response".into()),
+        }
+    }
+}
