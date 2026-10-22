@@ -1,36 +1,12 @@
 //! Global settings the coordinator applies to its session: MASTER's sound, the
 //! All rooms sound, which new work rooms start with, and the compaction and
 //! idle-agents limits behind Bus's notices (see `bus::settings`).
-use super::BusCommand;
 use super::{mpsc, BusEvent, BusState, Room, RoomId, RoomKind, Worker};
 #[cfg(test)]
-use super::{Method, Path, PathBuf, ResponseResult, Transport};
+use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
 use crate::messaging::prefs::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
-    /// A change to a shared `settings.json` setting; each one saves the file
-    /// and publishes `SettingsChanged` to every Bus UI.
-    pub(super) fn global_setting_command(
-        &mut self,
-        command: BusCommand,
-        events: &mpsc::Sender<BusEvent>,
-    ) -> Result<(), String> {
-        match command {
-            BusCommand::SetMaxCompactionsPerAgent(limit) => {
-                self.set_max_compactions_per_agent(limit, events)
-            }
-            BusCommand::SetIdleAgentsAlert(limit) => self.set_idle_agents_alert(limit, events),
-            BusCommand::SetFeishuRecipient(recipient) => {
-                self.set_feishu_recipient(recipient, events)
-            }
-            BusCommand::SetFeishuCliPath(path) => self.set_feishu_cli_path(path, events),
-            BusCommand::SetFreezeNotifications(on) => self.set_freeze_notifications(on, events),
-            BusCommand::SetSidebarWidth(width) => self.set_sidebar_width(width, events),
-            BusCommand::SetFeishuNotifications(on) => self.set_feishu_notifications(on, events),
-            _ => Err("Not a global setting".into()),
-        }
-    }
-
     /// Each tick re-reads the limits, so a change made in any Bus applies here.
     pub(super) fn refresh_setting_notices(&mut self) -> Result<(), String> {
         let saved = self
@@ -38,8 +14,18 @@ impl Worker {
             .as_deref()
             .and_then(|path| settings::load(path).ok())
             .unwrap_or_default();
-        self.apply_compaction_limit(saved.max_compactions_per_agent)?;
-        self.apply_idle_agents_alert(saved.idle_agents_alert)
+        let mut state = self.state.clone();
+        let now = crate::messaging::storage::io::now_ms();
+        let compactions = state
+            .notify_compaction_limits(saved.max_compactions_per_agent, now)
+            .map_err(|error| error.to_string())?;
+        let idle = state
+            .notify_idle_agents(saved.idle_agents_alert, now)
+            .map_err(|error| error.to_string())?;
+        if compactions || idle {
+            self.save(state)?;
+        }
+        Ok(())
     }
 
     fn apply_idle_agents_alert(&mut self, limit: u32) -> Result<(), String> {

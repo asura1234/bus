@@ -137,6 +137,74 @@ fn cleanup(room: Fixture) {
 }
 
 #[test]
+fn one_refresh_persists_both_setting_notices_and_rearms_both_latches() {
+    let mut r = setup(false, 2);
+    limit(&mut r.worker, 1);
+    idle(&mut r.worker, &r.workers);
+    let agent = r.workers[0];
+    let mut state = r.worker.state.clone();
+    for _ in 0..5 {
+        state.record_compaction(agent, io::now_ms()).unwrap();
+    }
+    r.worker.save(state).unwrap();
+
+    refresh(&mut r.worker);
+    let notices = &r.worker.state.room(r.room).unwrap().notices;
+    assert_eq!(notices.len(), 2);
+    assert!(notices[0].text.starts_with("w0 reached 5 compactions;"));
+    assert!(notices[1]
+        .text
+        .starts_with("You have 2 idle agents (w0, w1)."));
+    assert!(notices.iter().all(|notice| notice.author == Author::Bus));
+    assert!(
+        r.worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .compactions
+            .limit_notice_sent
+    );
+    assert!(r.worker.state.room(r.room).unwrap().idle_alert_sent);
+
+    let revision = r.worker.revision;
+    refresh(&mut r.worker);
+    assert_eq!(
+        r.worker.revision, revision,
+        "an unchanged tick does not save"
+    );
+    r = reopen(r);
+    assert_eq!(r.worker.state.room(r.room).unwrap().notices.len(), 2);
+    assert!(
+        r.worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .compactions
+            .limit_notice_sent
+    );
+    assert!(r.worker.state.room(r.room).unwrap().idle_alert_sent);
+
+    std::fs::write(
+        r.worker.settings_path.as_ref().unwrap(),
+        json!({"max_compactions_per_agent": 6, "idle_agents_alert": 2}).to_string(),
+    )
+    .unwrap();
+    refresh(&mut r.worker);
+    r = reopen(r);
+    assert!(
+        !r.worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .compactions
+            .limit_notice_sent
+    );
+    assert!(!r.worker.state.room(r.room).unwrap().idle_alert_sent);
+    assert_eq!(r.worker.state.room(r.room).unwrap().notices.len(), 2);
+    cleanup(r);
+}
+
+#[test]
 fn more_idle_workers_than_the_default_posts_one_bus_alert_to_the_orchestrator() {
     let mut r = setup(true, 8);
     idle(&mut r.worker, &r.workers[..7]);

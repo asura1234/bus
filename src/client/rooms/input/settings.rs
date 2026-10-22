@@ -148,9 +148,7 @@ impl BusUi {
         let Some(line) = lines.iter().position(|line| {
             matches!(line,
                 super::super::render::SoundSettingsLine::Sound { field, .. }
-                | super::super::render::SoundSettingsLine::Compactions { field }
-                | super::super::render::SoundSettingsLine::IdleAgents { field }
-                | super::super::render::SoundSettingsLine::SidebarWidth { field }
+                | super::super::render::SoundSettingsLine::Stepper { field, .. }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
                 | super::super::render::SoundSettingsLine::Freeze { field }
                 | super::super::render::SoundSettingsLine::FeishuRecipient { field }

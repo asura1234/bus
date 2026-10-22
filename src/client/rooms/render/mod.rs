@@ -179,14 +179,11 @@ pub(super) enum SoundSettingsLine {
         target: SoundTarget,
         field: usize,
     },
-    Compactions {
+    Stepper {
         field: usize,
-    },
-    IdleAgents {
-        field: usize,
-    },
-    SidebarWidth {
-        field: usize,
+        label: &'static str,
+        value: String,
+        adjust: fn(bool) -> Action,
     },
     /// Dev builds only.
     PerfOverlay {
