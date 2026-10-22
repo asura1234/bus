@@ -260,3 +260,15 @@ fn grok_launch_from_home_never_installs_a_global_grok_hook() {
         prepared.is_ok()
     );
 }
+
+#[test]
+fn grok_installed_identity_rejection_reports_why_without_captured_output() {
+    let f = Fixture::new();
+    f.executable(&f.bin.join("grok"), "PRIVATE_INVALID_IDENTITY");
+    let error = resolve_executable().unwrap_err();
+    assert!(
+        error.contains("rejected") && error.contains("not Grok Build"),
+        "{error}"
+    );
+    assert!(!error.contains("PRIVATE_INVALID_IDENTITY"));
+}

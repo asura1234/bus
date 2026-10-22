@@ -115,7 +115,10 @@ fn grok_setup_rejects_a_symlinked_project_config_ancestor() {
         std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
     });
 
-    assert!(result.is_err(), "project setup followed a .grok symlink: {result:?}");
+    assert!(
+        result.is_err(),
+        "project setup followed a .grok symlink: {result:?}"
+    );
     assert!(!initialized.get(), "unsafe setup initialized a capture");
     assert_eq!(std::fs::read(external_bus).unwrap(), original);
 }
@@ -135,7 +138,35 @@ fn grok_project_setup_does_not_install_hooks_in_the_home_config() {
         std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
     });
 
-    assert!(result.is_err(), "project setup accepted HOME and wrote global hooks: {result:?}");
+    assert!(
+        result.is_err(),
+        "project setup accepted HOME and wrote global hooks: {result:?}"
+    );
     assert!(!initialized.get());
     assert!(!home.join(".grok/hooks/bus.json").exists());
+}
+
+#[test]
+fn grok_home_dotfiles_repository_never_receives_project_hooks() {
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    let nested = home.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    assert!(std::process::Command::new("/usr/bin/git")
+        .args(["init", "-q"])
+        .arg(&home)
+        .status()
+        .unwrap()
+        .success());
+    let mut spec = f.spec("", true);
+    spec.cwd = nested.display().to_string();
+    let initialized = std::cell::Cell::new(false);
+    assert!(common::prepare(&spec, |_| {
+        initialized.set(true);
+        Ok(())
+    })
+    .is_err());
+    assert!(!initialized.get());
+    assert!(!home.join(".grok").exists());
 }
