@@ -1,0 +1,154 @@
+//! Synthetic cold-capture cases; ownership attestation remains in the coordinator.
+use super::*;
+use crate::agents::providers::{
+    grok::launch::{self, launch_test::Fixture},
+    launch as common,
+};
+use serde_json::json;
+#[test]
+fn grok_ad_resume_requires_existing_capture_without_silent_repair() {
+    let f = Fixture::new();
+    f.install();
+    let spec = f.spec("", true);
+    assert!(capture_args(&spec.hooks, &f.project).is_err());
+    assert!(!f.project.join(".grok").exists());
+    f.prepare("--permission-mode default");
+    let path = f.project.join(".grok/hooks/bus.json");
+    let original = std::fs::read(&path).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    doc["hooks"]["Stop"][0]["hooks"][0]["timeout"] = json!(999);
+    let mutated = serde_json::to_vec(&doc).unwrap();
+    std::fs::write(&path, &mutated).unwrap();
+    assert!(capture_args(&spec.hooks, &f.project).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), mutated);
+    std::fs::write(&path, &original).unwrap();
+    std::fs::remove_file(spec.hooks.spool.join("launch-options.json")).unwrap();
+    assert!(capture_args(&spec.hooks, &f.project).is_err());
+}
+#[test]
+fn grok_ad_resume_rebinds_exact_owned_hooks_and_restores_saved_options() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("--session-id 160d1f8b-9023-44b8-9bc7-24333effb185 --permission-mode default --allow 'Bash(ls*)' initial");
+    let mut spec = f.spec("", true);
+    spec.hooks.binary = f.root.join("new bus synthetic");
+    let (path, args, rebound) = capture_args(&spec.hooks, &f.project).unwrap();
+    assert!(rebound);
+    assert_eq!(args, ["--no-leader", "--fullscreen", "--no-auto-update"]);
+    crate::agents::providers::hook_json::validate_resume_hooks(
+        &path,
+        crate::agents::providers::grok::HOOK_CONTRACT,
+        &spec.hooks.binary,
+    )
+    .unwrap();
+    assert!(!capture_args(&spec.hooks, &f.project).unwrap().2);
+    let options = common::saved_options(
+        crate::agents::providers::ProviderKind::Grok,
+        &spec.hooks.spool,
+    )
+    .unwrap();
+    assert_eq!(
+        common::resumable_options(crate::agents::providers::ProviderKind::Grok, &options),
+        ["--permission-mode", "default", "--allow", "Bash(ls*)"]
+    );
+    assert_eq!(
+        launch::environment(&spec.hooks).unwrap()["BUS_LAUNCH_ID"],
+        "synthetic-launch"
+    );
+}
+#[test]
+fn grok_ad_resume_revalidates_the_saved_executable_instead_of_switching_path() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("");
+    let spec = f.spec("", true);
+    let preferred = f.root.join("home/.grok/bin/grok");
+    f.executable(&preferred, "grok 1.0.5 (synthetic)");
+    assert_eq!(
+        std::env::split_paths(&launch::environment(&spec.hooks).unwrap()["PATH"])
+            .next()
+            .unwrap(),
+        f.bin
+    );
+    f.executable(&f.bin.join("grok"), "regex grok 1.0");
+    assert!(capture_args(&spec.hooks, &f.project).is_err());
+    assert!(launch::environment(&spec.hooks).is_err());
+}
+#[test]
+fn grok_ad_resume_disabled_hooks_are_kept_unchanged() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("");
+    let mut spec = f.spec("", true);
+    spec.hooks.binary = f.root.join("new-bus");
+    let path = f.project.join(".grok/hooks/bus.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["disableAllHooks"] = json!(true);
+    let bytes = serde_json::to_vec(&doc).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(capture_args(&spec.hooks, &f.project).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+#[test]
+fn grok_ad_resume_does_not_duplicate_explicit_runtime_flags() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("--no-leader --fullscreen --no-auto-update");
+    let spec = f.spec("", true);
+    assert!(capture_args(&spec.hooks, &f.project).unwrap().1.is_empty());
+}
+
+#[test]
+fn grok_ad_cold_resume_preserves_explicit_runtime_with_literal_startup_tail() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("--resume=160d1f8b-9023-44b8-9bc7-24333effb185 --no-leader --fullscreen --no-auto-update --permission-mode default -- '--cwd=/tmp --single literal'");
+    let spec = f.spec("", true);
+    let (_, capture, _) = capture_args(&spec.hooks, &f.project).unwrap();
+    let options = common::saved_options(
+        crate::agents::providers::ProviderKind::Grok,
+        &spec.hooks.spool,
+    )
+    .unwrap();
+    let mut restored =
+        common::resumable_options(crate::agents::providers::ProviderKind::Grok, &options);
+    common::extend_generated_args(
+        crate::agents::providers::ProviderKind::Grok,
+        &mut restored,
+        capture,
+    );
+    assert_eq!(
+        restored,
+        [
+            "--no-leader",
+            "--fullscreen",
+            "--no-auto-update",
+            "--permission-mode",
+            "default"
+        ]
+    );
+    assert_eq!(
+        std::fs::read_to_string(spec.hooks.spool.join("adopted-session")).unwrap(),
+        "160d1f8b-9023-44b8-9bc7-24333effb185"
+    );
+}
+#[test]
+fn grok_ad_cold_resume_rejects_relocating_saved_options_without_changing_hooks() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("");
+    let spec = f.spec("", true);
+    let path = f.project.join(".grok/hooks/bus.json");
+    let bytes = std::fs::read(&path).unwrap();
+    for options in [["--cwd=/tmp"], ["-wsynthetic"]] {
+        std::fs::write(
+            spec.hooks.spool.join("launch-options.json"),
+            serde_json::to_vec(&options).unwrap(),
+        )
+        .unwrap();
+        assert!(capture_args(&spec.hooks, &f.project).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
