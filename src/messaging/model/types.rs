@@ -173,6 +173,11 @@ pub(crate) struct Prompt {
     pub(crate) submitted_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) broadcast: bool,
+    /// Subjects of a Bus notice; generic notices already have their own turn.
+    #[serde(default, skip_serializing_if = "AgentRecipients::is_empty")]
+    pub(crate) digest_notice_agents: AgentRecipients,
 }
 
 fn developer_author() -> Author {
@@ -349,6 +354,9 @@ pub(crate) struct RoomAgent {
     /// idle, without relying on reply capture.
     #[serde(default)]
     pub(crate) busy_revision: u64,
+    /// A tagged final already represents availability for this completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) digest_tagged_idle_revision: Option<u64>,
     /// A numbered choice dialog is visible; answer it with `agent choose`.
     #[serde(default)]
     pub(crate) dialog: bool,

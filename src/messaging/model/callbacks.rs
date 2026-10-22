@@ -17,9 +17,6 @@ impl BusState {
         let final_event =
             matches!(callback.kind, CallbackEventKind::Final { .. }).then(|| callback.clone());
         let disposition = self.accept_callback_unrecorded(callback);
-        if let Some(callback) = final_event {
-            self.record_worker_final(&callback, &disposition);
-        }
         if !matches!(disposition, CallbackDisposition::Rejected(_)) {
             if let Some(request) = current.and_then(|id| self.requests.get_mut(&id)) {
                 let progress = request.progress_at_ms.get_or_insert(occurred_at_ms);
@@ -39,6 +36,14 @@ impl BusState {
                 | CallbackDisposition::AcceptedPendingSettlement
         ) {
             self.record_busy_edge(agent);
+        }
+        if let Some(id) =
+            current.filter(|id| self.request(*id).is_some_and(|r| r.trusted_start_bound))
+        {
+            self.mark_digest_delivered(id);
+        }
+        if let Some(callback) = final_event {
+            self.record_worker_final(&callback, &disposition);
         }
         disposition
     }
@@ -594,7 +599,7 @@ impl BusState {
         self.record_digest_final(
             agent_id,
             room,
-            format!("final:{}", request_id.0),
+            super::digests::DigestSource::new(format!("final:{}", request_id.0), request_id.0),
             &pending.text,
             completed_at_ms,
         );

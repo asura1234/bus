@@ -301,9 +301,12 @@ To obtain a message ID before waiting, use plain `send`, then `wait --async`.
 
 Start a worker milestone final's first line with `READY FOR VERIFY`,
 `REVIEW READY`, `MERGED`, `DONE` or `BLOCKED`, followed by the task/PR and head
-where relevant. A tag mentioned later in the reply is ordinary prose. Bus also
+where relevant. Any non-alphanumeric boundary is valid (`DONE.`, `MERGED, #1607`);
+a tag mentioned later in the reply is ordinary prose. Bus also
 records abandoned/stalled requests, idle workers with no next task, actionable
-GitHub watch notices and Bus alerts. These facts belong to the bound
+agent-specific Bus alerts. Generic GitHub/Bus notices already have their own
+delivery and do not also become facts. Notices about several workers record
+each subject, so retasking those workers handles the notice. These facts belong to the bound
 orchestrator and are independent of a waiter's transport `seen` state.
 Healthy background requests that still have an owner and live wait do not
 produce an action digest. Alerts about the orchestrator's own provider/dialog
@@ -315,8 +318,15 @@ facts, each fact ID, age and next owner/action. It cannot steer into a running
 MASTER or notification turn. Bursts coalesce until that idle boundary, and an
 older pending message takes priority.
 
-A fact is acknowledged only when its orchestrator sends a message to that
-worker, the worker is deleted, or someone explicitly dismisses that fact:
+A direct, single-recipient message from the fact's orchestrator acknowledges it
+when the recipient is its worker, or the body references its PR number, worker
+name or head SHA prefix (at least seven hex characters). For example, briefing a
+separate verifier with `verify #1602 at 870112624` handles that READY fact.
+`--to all` and multi-recipient messages never acknowledge facts, including an
+All broadcast that expands to just one worker. A tagged completion has no
+separate idle-with-no-next-task fact for that same completion.
+
+Deleting its worker acknowledges a fact too, or explicitly dismiss it:
 
 ```sh
 bus digest ack FACT_ID
@@ -324,12 +334,16 @@ bus digest ack FACT_ID
 
 Record the next owner or hold/disposition before dismissing. Reading the
 digest, returning `noted`, receiving a worker final or consuming an async wait
-does not acknowledge anything. Acknowledgment and worker deletion retain the
-fact's snapshot, including the worker name/ID, even when its request history is
-removed. The per-orchestrator ledger, acknowledgment timestamps and digest
-watermark survive server and waiter restarts. An upgrade recovers retained
-facts and reconciles later dispatches; history erased before this feature
-cannot be reconstructed.
+does not acknowledge anything. Pending fact text is capped at 600 characters.
+Acknowledgment discards that payload and retains only an ID/source-key/agent-ID/
+ack-time tombstone for dedupe, even if the worker and its request history are
+deleted. Tombstones expire after seven days through ordinary history cleanup.
+
+The ledger and watermarks survive server and waiter restarts. The delivery
+watermark advances only when the digest is delivered; abandonment restores its
+previous value so undelivered work can be retried. Startup replays only runtime
+fact sources, treating sources at or below covered watermarks as already covered.
+Upgrades reconcile retained direct actions; erased history cannot be reconstructed.
 
 Only new facts re-arm the digest. Unacknowledged older facts are included with
 the new facts in the next digest. An unchanged digest is never periodically

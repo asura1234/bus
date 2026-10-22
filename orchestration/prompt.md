@@ -145,9 +145,11 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   [Full rule]({{DOCS}}/orchestrator-rules.md#process-every-result).
 - Handle every `Room digest:` as a new clean turn. Bus keeps durable room facts
   even when a shell wrapper consumed the worker result or its agent was deleted.
-  For each fact, dispatch its next action to the worker, close the worker, or
+  For each fact, directly dispatch to its worker or brief another agent referencing
+  its PR/name/head, close the worker, or
   record a disposition and run `bus digest ack FACT_ID`. Delivery and a reply
-  such as "noted" do not acknowledge it. Only new facts re-arm the digest;
+  such as "noted" do not acknowledge it; broadcasts never acknowledge facts.
+  Only new facts re-arm the digest;
   there is no periodic wake. [Guide]({{DOCS}}/how-to-bus-cli.md#durable-room-digests).
 - Resource holds affect operations, not the room. Coordinate shared disk/devices
   directly with other orchestrators using expiring leases and liveness checks.

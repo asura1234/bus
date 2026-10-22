@@ -140,6 +140,7 @@ impl Worker {
         if to_developer {
             return self.control_send_to_developer(p, room, author, selectors.len(), files);
         }
+        let broadcast = selectors == ["all"] || selectors.len() > 1;
         let recipients: AgentRecipients = if selectors == ["all"] {
             // An agent's broadcast goes to everyone else in the room.
             let recipients: AgentRecipients = self
@@ -171,7 +172,7 @@ impl Worker {
         };
         let mut state = self.state.clone();
         let ids = state
-            .submit_message_with(
+            .submit_message_with_broadcast(
                 room,
                 Draft {
                     text: optional_text(p, "text")?.unwrap_or_default().into(),
@@ -181,6 +182,7 @@ impl Worker {
                 author.map_or(Author::Developer, Author::Agent),
                 crate::messaging::storage::io::now_ms(),
                 p.get("queue").and_then(Value::as_bool).unwrap_or(false),
+                broadcast,
             )
             .map_err(|e| e.to_string())?;
         let message = state

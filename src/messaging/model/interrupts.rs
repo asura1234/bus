@@ -106,6 +106,8 @@ impl BusState {
                 recipient_ids: Default::default(),
                 submitted_at_ms: now_ms,
                 attention_origin: None,
+                broadcast: false,
+                digest_notice_agents: Default::default(),
             });
         Ok(id)
     }

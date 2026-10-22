@@ -1,6 +1,9 @@
 use super::*;
 use serde_json::{json, Value};
 
+#[path = "room_digest_round_one_test.rs"]
+mod round_one;
+
 fn fixture() -> (BusState, RoomId, AgentId, AgentId) {
     let mut s = BusState::new();
     let master = s.ensure_master_room();
@@ -136,7 +139,7 @@ fn room_digest_a_new_idle_worker_without_an_assignment_is_actionable() {
 }
 
 #[test]
-fn room_digest_keeps_actionable_github_watch_edges_and_bus_alerts() {
+fn room_digest_generic_github_and_disk_notices_keep_their_own_delivery() {
     use crate::messaging::github::{Page, PullRequest, Scope, Update};
     let (mut s, room, orch, _) = fixture();
     let update = Update::Repo {
@@ -159,16 +162,21 @@ fn room_digest_keeps_actionable_github_watch_edges_and_bus_alerts() {
         at_ms: 2000,
     };
     s.apply_github(&update, 2000).unwrap();
-    assert!(facts(&s, orch)
-        .iter()
-        .any(|v| v["text"].as_str().unwrap().contains("#1607")));
+    assert!(s
+        .requests()
+        .any(|r| r.agent_id == orch && r.prompt.text.contains("#1607")));
+    assert!(
+        facts(&s, orch).is_empty(),
+        "standalone notice is not a duplicate action fact"
+    );
     let before = facts(&s, orch).len();
     s.apply_github(&update, 3000).unwrap();
     assert_eq!(facts(&s, orch).len(), before);
     s.notify_disk_space(1, 20, 5, 4000).unwrap();
-    assert!(facts(&s, orch)
-        .iter()
-        .any(|v| v["text"].as_str().unwrap().contains("URGENT")));
+    assert!(s
+        .requests()
+        .any(|r| r.agent_id == orch && r.prompt.text.contains("URGENT")));
+    assert!(facts(&s, orch).is_empty());
     let saved: BusState = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
     assert_eq!(facts(&saved, orch), facts(&s, orch));
 }
@@ -263,11 +271,18 @@ fn room_digest_recovery_reconciles_a_legacy_followup_action() {
     )
     .unwrap();
     s.recover_room_digest_facts();
-    assert_eq!(facts(&s, orch).len(), 1);
-    assert_eq!(
-        facts(&s, orch)[0]["acknowledged_at_ms"],
-        json!(30),
+    assert!(
+        facts(&s, orch).is_empty(),
         "an upgrade must not resurrect already handled work"
+    );
+    let saved = serde_json::to_value(&s).unwrap();
+    let tombstones = saved["room_digests"][orch.0.to_string()]["tombstones"]
+        .as_object()
+        .unwrap();
+    assert_eq!(tombstones.len(), 1);
+    assert_eq!(
+        tombstones.values().next().unwrap()["acknowledged_at_ms"],
+        json!(30)
     );
 }
 
@@ -350,16 +365,39 @@ fn room_digest_only_new_facts_rearm_and_a_burst_coalesces_with_older_unacknowled
         .find(|r| r.prompt.text.starts_with("Room digest:"))
         .unwrap()
         .id;
+    s.set_agent_runtime_identity(
+        orch,
+        AgentRuntimeIdentity {
+            launch_id: Some("orch".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.begin_submission(digest, "orch", 0).unwrap();
+    s.record_submission(
+        digest,
+        SubmissionOutcome::Confirmed {
+            provider_session_id: None,
+            provider_turn_id: None,
+        },
+    )
+    .unwrap();
     s.finish_for_test(digest, "noted", 21);
     assert!(
         !s.queue_room_digest(orch, 3_600_020).unwrap(),
         "time alone cannot re-arm"
     );
-    s.record_digest_final(worker, room, "new:merged".into(), "MERGED #1607", 3_600_020);
     s.record_digest_final(
         worker,
         room,
-        "new:blocked".into(),
+        super::digests::DigestSource::new("new:merged".into(), worker.0),
+        "MERGED #1607",
+        3_600_020,
+    );
+    s.record_digest_final(
+        worker,
+        room,
+        super::digests::DigestSource::new("new:blocked".into(), worker.0),
         "BLOCKED next item",
         3_600_021,
     );
@@ -442,5 +480,70 @@ fn room_digest_a_healthy_background_idle_notice_is_not_actionable() {
     assert!(
         facts(&s, orch).is_empty(),
         "healthy work already has an owner and a live wait; do not create an action digest"
+    );
+}
+
+#[test]
+fn room_digest_restart_does_not_turn_a_delivered_bus_dialog_notice_into_a_new_wake() {
+    // The coordinator's dialog notice to an orchestrator is a plain Bus-authored
+    // message (coordinator/dialogs.rs) and records no fact at runtime.
+    let (mut s, room, orch, _) = fixture();
+    s.submit_message_from(
+        room,
+        Draft {
+            text: "impl is showing a dialog: choose an option".into(),
+            files: vec![],
+            recipient_ids: [orch].into(),
+        },
+        Author::Bus,
+        10,
+    )
+    .unwrap();
+    let before = facts(&s, orch);
+    let armed = s.room_digest_armed(orch);
+    s.recover_room_digest_facts();
+    assert_eq!(
+        facts(&s, orch),
+        before,
+        "a restart must not create facts the running Bus never recorded"
+    );
+    assert_eq!(
+        s.room_digest_armed(orch),
+        armed,
+        "a restart alone must not re-arm"
+    );
+}
+
+#[test]
+fn room_digest_status_tag_followed_by_sentence_punctuation_is_captured() {
+    for text in ["DONE.", "BLOCKED.\nwaiting on creds", "MERGED, #1607"] {
+        let (mut s, room, orch, worker) = fixture();
+        complete(&mut s, room, orch, worker, text);
+        assert_eq!(
+            facts(&s, orch).len(),
+            1,
+            "first line starts with a tag: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn room_digest_an_abandoned_digest_leaves_its_unacknowledged_facts_deliverable() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(&mut s, room, orch, worker, "READY FOR VERIFY #1602");
+    s.observe_status(orch, RuntimeStatus::Idle, 20).unwrap();
+    let source = s.requests().find(|r| r.agent_id == worker).unwrap().id;
+    s.see_worker_reply(source, orch, 20).unwrap();
+    assert!(s.queue_room_digest(orch, 20).unwrap());
+    let digest = s
+        .requests()
+        .find(|r| r.prompt.text.starts_with("Room digest:"))
+        .unwrap()
+        .id;
+    s.recover_idle_request(digest, 30).unwrap();
+    assert_eq!(s.request(digest).unwrap().phase, RequestPhase::Abandoned);
+    assert!(
+        s.queue_room_digest(orch, 40).unwrap(),
+        "the READY fact was never shown; an abandoned digest must not swallow it"
     );
 }

@@ -14,7 +14,7 @@ use {
 /// Why a request closed when its agent was deleted before it settled.
 pub(crate) const AGENT_DELETED: &str = "agent_deleted";
 /// Current Bus messaging instructions, delivered at launch or once after an upgrade.
-pub(crate) const MESSAGING_RULES_VERSION: u32 = 2;
+pub(crate) const MESSAGING_RULES_VERSION: u32 = 3;
 
 impl BusState {
     /// Upgrade instructions are a separate first pending turn. Persist the
@@ -92,6 +92,7 @@ impl BusState {
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
                 busy_revision: 0,
+                digest_tagged_idle_revision: None,
                 dialog: false,
                 dialog_notice: None,
                 dialog_answered: false,

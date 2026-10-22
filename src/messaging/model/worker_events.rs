@@ -120,18 +120,18 @@ impl BusState {
             },
         );
         let (room, worker) = (agent.room_id, agent.id);
-        self.record_digest_final(
-            worker,
-            room,
-            format!("event:{key}"),
-            text,
-            callback.occurred_at_ms,
-        );
         let Ok(message) =
             self.post_to_developer(room, worker, text.clone(), vec![], callback.occurred_at_ms)
         else {
             return;
         };
+        self.record_digest_final(
+            worker,
+            room,
+            super::digests::DigestSource::new(format!("event:{key}"), message.0),
+            text,
+            callback.occurred_at_ms,
+        );
         let summary = format!(
             "{label}; message {}.\n{}",
             message.0,

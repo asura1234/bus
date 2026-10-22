@@ -384,6 +384,17 @@ impl BusState {
         text: String,
         now_ms: u64,
     ) -> Result<PromptId, ModelError> {
+        self.post_bus_notice_about(room, orchestrator, Default::default(), text, now_ms)
+    }
+
+    pub(super) fn post_bus_notice_about(
+        &mut self,
+        room: RoomId,
+        orchestrator: Option<AgentId>,
+        about: super::AgentRecipients,
+        text: String,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
         let Some(orchestrator) = orchestrator else {
             return self.record_developer_notice(room, Author::Bus, text, Vec::new(), now_ms);
         };
@@ -403,7 +414,22 @@ impl BusState {
             .and_then(|id| self.requests.get(id))
             .map(|request| request.prompt.id)
             .ok_or(ModelError::InvalidTransition)?;
-        self.record_digest_notice(room, None, prompt, &fact_text, now_ms);
+        for request in requests {
+            if let Some(request) = self.requests.get_mut(&request) {
+                request.prompt.digest_notice_agents = about.clone();
+            }
+        }
+        if let Some(latest) = self
+            .rooms
+            .get_mut(&room)
+            .and_then(|r| r.latest_prompt.as_mut())
+            .filter(|p| p.id == prompt)
+        {
+            latest.digest_notice_agents = about.clone();
+        }
+        for agent in about {
+            self.record_digest_notice(room, Some(agent), prompt, &fact_text, now_ms);
+        }
         Ok(prompt)
     }
 
@@ -459,6 +485,8 @@ impl BusState {
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: now_ms,
             attention_origin: None,
+            broadcast: false,
+            digest_notice_agents: Default::default(),
         };
         // The latest prompt is what rings and what the composer recalls, as
         // for an agent's `send --as` to other agents.

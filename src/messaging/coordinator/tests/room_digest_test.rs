@@ -277,12 +277,81 @@ async fn room_digest_explicit_ack_is_durable_and_deleted_agent_facts_are_retaine
     );
     f.reopen();
     assert!(f.state().agent(worker).is_none());
-    let saved = facts(&f, orchestrator);
-    assert!(saved.iter().any(|v| v["id"] == json!(id)
-        && v["agent_name"] == "agent-0"
+    let saved = serde_json::to_value(f.state()).unwrap();
+    let tombstones = saved["room_digests"][orchestrator.0.to_string()]["tombstones"]
+        .as_object()
+        .unwrap();
+    assert!(tombstones.values().any(|v| v["id"] == json!(id)
+        && v["agent"] == json!(worker)
         && v["acknowledged_at_ms"].is_u64()));
+    assert!(
+        facts(&f, orchestrator).is_empty(),
+        "acked payloads are discarded"
+    );
     assert!(
         !f.state().requests().any(|r| r.agent_id == worker),
         "original request history was deleted"
     );
+}
+
+#[tokio::test]
+async fn room_digest_does_not_rewake_after_the_orchestrator_assigned_a_verifier_for_ready() {
+    let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+    let orchestrator = f.add_orchestrator();
+    ready_while_orchestrator_busy(&mut f, orchestrator);
+    // While still in its turn, the orchestrator handles READY the normal way:
+    // it briefs a separate verifier rather than messaging the author again.
+    let verifier = f.agents[1];
+    f.send(
+        verifier,
+        f.work,
+        "verify #1602 at 870112624",
+        false,
+        Some(orchestrator),
+    );
+    f.tick();
+    f.status(orchestrator, AgentState::Idle);
+    f.tick();
+    assert_eq!(
+        digests(&f, orchestrator),
+        Vec::<String>::new(),
+        "orchestrator re-woken for a READY it already dispatched"
+    );
+}
+
+#[tokio::test]
+async fn room_digest_broadcast_rule_does_not_acknowledge_a_ready_for_verify() {
+    let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+    let orchestrator = f.add_orchestrator();
+    ready_while_orchestrator_busy(&mut f, orchestrator);
+    // The #1602 case: a rules broadcast is not verification action.
+    f.call(
+        "message.send",
+        json!({"room":f.work.0.to_string(),"as":orchestrator.0.to_string(),
+            "to":["all"],"text":"Never automate the real desktop.","queue":true}),
+    );
+    f.tick();
+    let ready_unacked = facts(&f, orchestrator).iter().any(|fact| {
+        fact["text"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("READY FOR VERIFY"))
+            && fact["acknowledged_at_ms"].is_null()
+    });
+    assert!(
+        ready_unacked,
+        "broadcast acknowledged READY: {:?}",
+        facts(&f, orchestrator)
+    );
+}
+
+#[tokio::test]
+async fn room_digest_all_with_one_member_still_does_not_acknowledge_ready() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let orchestrator = f.add_orchestrator();
+    ready_while_orchestrator_busy(&mut f, orchestrator);
+    f.call("message.send", json!({"room":f.work.0.to_string(),"as":orchestrator.0.to_string(),"to":["all"],"text":"verify #1602","queue":true}));
+    assert!(facts(&f, orchestrator).iter().any(|v| v["text"]
+        .as_str()
+        .is_some_and(|t| t.starts_with("READY"))
+        && v["acknowledged_at_ms"].is_null()));
 }

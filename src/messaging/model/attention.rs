@@ -121,6 +121,8 @@ impl BusState {
             recipient_ids: Default::default(),
             submitted_at_ms: now_ms,
             attention_origin: Some(origin.clone()),
+            broadcast: false,
+            digest_notice_agents: Default::default(),
         };
         room.latest_prompt = Some(prompt.clone());
         room.notices.push(prompt);
