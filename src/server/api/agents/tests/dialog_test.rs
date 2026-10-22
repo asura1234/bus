@@ -855,6 +855,82 @@ async fn claude_focused_free_text_draft_refuses_an_answer_without_writing() {
 }
 
 #[tokio::test]
+async fn claude_multi_select_custom_answer_pastes_without_unticking_it_with_enter() {
+    // Real Claude 2.1.308: paste ticks the custom entry; Enter unticks it.
+    let before =
+        include_str!("../../../../../tests/fixtures/claude-option-list/multi-select-rest.ansi");
+    let checked = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/multi-select-custom-checked.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(before.as_bytes(), Some("session"), 92, 45);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2004h");
+    let observation = observe_dialog(&mut app);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("CX paste without Enter"), false),
+    ));
+    assert!(result.written, "{:?}", result.reason);
+    assert_eq!(result.keys, ["down", "down"]);
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"\x1b[B\x1b[B\x1b[200~CX paste without Enter\x1b[201~")
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), writes.recv())
+            .await
+            .is_err(),
+        "a delayed Enter would clear the custom checkbox"
+    );
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{checked}").as_bytes());
+    let after = observe_dialog(&mut app);
+    let dialog = after.dialog.as_ref().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert_eq!(dialog.options[2].label, "[✔] CX paste without Enter");
+    assert_eq!(dialog.options[3].label, "Next");
+    let next = chosen(&choose(
+        &mut app,
+        &after,
+        Some("session"),
+        &dialog.digest,
+        4,
+    ));
+    assert!(next.written, "{:?}", next.reason);
+    assert_eq!(next.keys, ["down", "enter"]);
+}
+
+#[tokio::test]
+async fn claude_focused_empty_multi_select_row_takes_text_without_enter() {
+    let focused = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/multi-select-empty-focused.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(focused.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.as_ref().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Choice);
+    assert!(dialog.free_text.unwrap().checkbox);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "answer".into(),
+        answer_params(&observation, Some("keep this custom answer"), false),
+    ));
+    assert!(result.written, "{:?}", result.reason);
+    assert!(result.keys.is_empty());
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"keep this custom answer")
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), writes.recv())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn claude_tabbed_form_free_text_answer_fills_the_row_and_choose_refuses_it() {
     let form = include_str!("../../../../../tests/fixtures/claude-option-list/tabs-q1-rest.ansi");
     let (mut app, mut writes) = app_with_dialog_sized(form.as_bytes(), Some("session"), 92, 45);

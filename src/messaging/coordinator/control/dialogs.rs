@@ -369,9 +369,16 @@ impl Worker {
             if let Ok(observation) =
                 self.native_dialog_checked(pane_id, terminal_id, session_id, false)
             {
-                field = observation
-                    .dialog
-                    .filter(|dialog| dialog.kind == schema::AgentDialogKind::Question);
+                field = observation.dialog.filter(|dialog| {
+                    dialog.kind == schema::AgentDialogKind::Question
+                        || dialog.free_text.is_some_and(|field| {
+                            field.checkbox
+                                && dialog
+                                    .options
+                                    .iter()
+                                    .any(|row| row.number == field.option && row.selected)
+                        })
+                });
                 if field.is_some() {
                     break;
                 }

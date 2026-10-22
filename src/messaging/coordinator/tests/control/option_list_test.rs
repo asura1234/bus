@@ -421,3 +421,21 @@ fn a_ticked_multi_select_field_offers_next_as_a_choice() {
         .unwrap_or_else(|| panic!("no Next option: {labels:?}"));
     assert!(dialog.keys_for(next.number).is_some(), "{labels:?}");
 }
+
+#[test]
+fn a_free_text_focus_step_can_fill_a_focused_checkbox() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/multi-select-rest.ansi"
+    ));
+    let (_, first) = fingerprint(&mut worker, agent);
+    native.lock().unwrap().focus_shows = Some(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/multi-select-empty-focused.ansi"
+    ));
+    let answered = worker.answer_dialog(agent, Some("custom checkbox answer"), false, &first);
+    assert!(answered.is_ok(), "{answered:?}");
+    let answers = &native.lock().unwrap().answers;
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[1].text.as_deref(), Some("custom checkbox answer"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

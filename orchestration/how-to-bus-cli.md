@@ -935,8 +935,10 @@ which `agent dialog` marks `"free_text": true` (multi-select forms: the
 `[ ] Type something` checkbox) and summarizes as `free_text` (`option`,
 `draft`, `checkbox`). Answer it in one step with
 `agent answer --text` on the choice dialog's fingerprint: Bus moves to the row,
-types the text and presses Enter. `agent choose` refuses that row, because
-Enter on the empty field declines the whole question. If someone left a draft
+types the text and presses Enter for a single-select field. On a multi-select
+field, typing ticks the checkbox; Bus sends no Enter, which would untick it.
+`agent choose` refuses an empty single-select field, because Enter there declines
+the whole question. If someone left a draft
 in the row, `agent answer` refuses (`free_text_holds_draft`) and `agent choose`
 on the row submits the draft; replacing a draft needs the agent's pane. A focused
 draft also refuses `answer --text`; edit or submit it in the agent's pane. In a

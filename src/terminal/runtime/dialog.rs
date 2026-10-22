@@ -195,8 +195,8 @@ impl TerminalRuntime {
     }
 
     /// Claude's option lists end with an inline text field. Arrows focus it
-    /// and the text fills it in one write, then Enter submits it: sent alone,
-    /// Enter on the empty field would decline the question.
+    /// and the text fills it in one write. Single-select fields need Enter;
+    /// checkbox fields tick themselves on paste, so Enter would untick them.
     fn answer_free_text_option(
         &self,
         dialog: &crate::agents::dialog::Dialog,
@@ -236,6 +236,16 @@ impl TerminalRuntime {
             .flat_map(|key| self.encode_dialog_key(key))
             .collect();
         input.extend_from_slice(&self.paste_payload(text));
+        let mut keys: Vec<String> = moves.into_iter().map(str::to_owned).collect();
+        if dialog
+            .free_text_summary()
+            .is_some_and(|(_, _, checkbox)| checkbox)
+        {
+            self.io
+                .try_send_bytes(Bytes::from(input))
+                .map_err(|error| error.to_string())?;
+            return Ok(DialogChoice::Sent(keys));
+        }
         self.io
             .queue_user_input_submission(
                 Bytes::from(input),
@@ -244,7 +254,6 @@ impl TerminalRuntime {
                 None,
             )
             .map_err(|error| error.to_string())?;
-        let mut keys: Vec<String> = moves.into_iter().map(str::to_owned).collect();
         keys.push("enter".into());
         Ok(DialogChoice::Sent(keys))
     }

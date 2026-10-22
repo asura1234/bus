@@ -50,9 +50,9 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         return None;
     }
     let selected = rows.iter().find(|row| row.selected)?;
-    // A ticked multi-select field keeps focus after its answer; the form
-    // still waits for Next or Submit, so it stays a choice.
-    if hint.contains("ctrl+g to edit") && !selected.label.starts_with("[✔]") {
+    // Checkbox fields tick themselves when typed into and still need Next
+    // or Submit. Keep empty focused checkboxes on that same choice path.
+    if hint.contains("ctrl+g to edit") && checkbox_label(&selected.label).is_none() {
         let mut dialog = text_question(&lines[header..start], &hint, &selected.label)?;
         dialog.fingerprint_context = format!("{:?}", styles[header]);
         return Some(dialog);
