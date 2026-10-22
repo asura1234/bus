@@ -968,3 +968,43 @@ fn github_watch_known_open_pr_protects_an_unattributed_legacy_head_after_restart
         "known open PR lost ownership while legacy member provenance was unavailable"
     );
 }
+
+#[test]
+fn github_watch_an_upgraded_room_keeps_its_open_pr_head_after_worker_cleanup() {
+    // State saved by the previous Bus: the shared-checkout head is remembered
+    // without member attribution or PR lifecycle history, and the worker that
+    // opened PR #10 from it is already gone.
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/shared".into());
+    state
+        .rooms
+        .get_mut(&room)
+        .unwrap()
+        .github_branches
+        .entry("o/r".into())
+        .or_default()
+        .insert("fix/shared".into());
+    let update = Update::Repo {
+        repo: "o/r".into(),
+        scopes: vec![Scope {
+            room: room.0,
+            branches: ["fix/shared".into()].into(),
+        }],
+        result: Ok(Page {
+            default_branch: "main".into(),
+            open: vec![PullRequest {
+                number: 10,
+                branch: "fix/shared".into(),
+                base: "main".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        at_ms: 2000,
+    };
+    state.apply_github(&update, 1).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"),
+        "the first scan after upgrade purged the head of a PR it was reporting as open"
+    );
+}

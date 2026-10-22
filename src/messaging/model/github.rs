@@ -94,6 +94,13 @@ impl BusState {
                     .collect();
                 match result {
                     Ok(page) => {
+                        let mark = self.github_watch.entry(repo.clone()).or_default();
+                        for pr in &page.open {
+                            mark.head_prs
+                                .entry(pr.branch.clone())
+                                .or_default()
+                                .insert(pr.number, false);
+                        }
                         self.remember_github_heads(repo, &scopes);
                         let scopes = self.github_open_scopes(repo, &scopes, page);
                         for scope in &scopes {
