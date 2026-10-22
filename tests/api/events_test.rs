@@ -442,23 +442,15 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let socket_path = runtime_dir.join("herdr.sock");
     let bin_dir = base.join("bin");
 
-    fs::create_dir_all(&bin_dir).unwrap();
-    let fake_pi = bin_dir.join("pi");
-    let stop_file = base.join("pi-stop");
-    fs::write(
-        &fake_pi,
-        format!(
-            "#!/bin/sh\nprintf 'starting\\n'\nsleep 4\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\n",
-            stop_file.display()
-        ),
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_pi, perms).unwrap();
-    }
+    // Hold each screen until the test observes it. Initial idle must finish
+    // process acquisition before a working -> idle transition can mean done.
+    // Fixed sleeps race startup grace / cold detection under coverage load.
+    // Reading the PTY also exits on teardown instead of leaving a polling shell.
+    write_fake_agent(
+        &bin_dir,
+        "pi",
+        "printf 'ready\\n'\nread -r start\nprintf 'Working...\\n'\nread -r finish\nprintf '\\033[2J\\033[Hdone\\n'\nread -r stop\n",
+    );
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
@@ -523,6 +515,23 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     );
     assert_eq!(send_enter["result"]["type"], "ok");
 
+    let advance_pi = || {
+        let sent = send_request(
+            &socket_path,
+            &serde_json::json!({
+                "id": "req_status_advance",
+                "method": "pane.send_keys",
+                "params": { "pane_id": background_pane_id, "keys": ["Enter"] },
+            })
+            .to_string(),
+        );
+        assert_eq!(sent["result"]["type"], "ok");
+    };
+    wait_for_pane_agent(&socket_path, &background_pane_id, "pi", "idle");
+    advance_pi();
+    wait_for_pane_agent(&socket_path, &background_pane_id, "pi", "working");
+    advance_pi();
+
     let status_event = reader.read_json_line(Duration::from_secs(12));
     assert_eq!(status_event["event"], "pane.agent_status_changed");
     assert_eq!(status_event["data"]["pane_id"], background_pane_id);
@@ -576,8 +585,6 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
         ),
     );
     assert_eq!(pane_after_focus["result"]["pane"]["agent_status"], "idle");
-
-    fs::write(&stop_file, "stop").unwrap();
 
     cleanup_spawned_bus(child, base);
 }

@@ -140,7 +140,9 @@ pub fn start_pane_command(socket_path: &Path, pane_id: &str, command: &str) {
 }
 
 pub fn wait_for_pane_agent(socket_path: &Path, pane_id: &str, agent: &str, status: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Initial detection includes a 3 s startup grace and cold manifest compilation.
+    // Instrumented scratch servers took 9-10 s under concurrent host load.
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let pane = send_request(
             socket_path,
