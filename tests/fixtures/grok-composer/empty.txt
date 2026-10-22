@@ -1,0 +1,5 @@
+Synthetic session
+╭────────────────────────────────────╮
+│ ❯ [2mType a message...[0m                │
+╰────────────────────────────────────╯
+Shift+Tab:mode │ Ctrl+x:shortcuts

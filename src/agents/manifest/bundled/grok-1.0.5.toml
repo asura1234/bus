@@ -1,8 +1,13 @@
-# G0 copy of the legacy 0.2.101 rules; lane C validates changes against Grok 1.0.5.
+# Version-scoped Grok 1.0.5 adaptation of the legacy 0.2.101 manifest.
+# Historical rules below retain their original provenance; they are not verified
+# 1.0.5 permission/question evidence. Lane C's changed card/frame rules are
+# exercised by SYNTHETIC fixtures in tests/fixtures/grok-{dialog,composer}.
+# Offline 1.0.5 evidence confirms boxed composer and Ctrl+X footer; authenticated
+# permission/trust/question cards, long-paste chips and native wakes remain pending.
 id = "grok"
-version = "2026.07.16.2"
+version = "2026.10.22.1"
 min_engine_version = 3
-updated_at = "2026-07-16T00:00:00Z"
+updated_at = "2026-10-22T00:00:00Z"
 aliases = ["grok-build"]
 
 # Evidence: Grok Build 0.2.101 source and live pane reads.
@@ -30,6 +35,17 @@ aliases = ["grok-build"]
 # The startup splash draws its logo with braille characters, so working
 # rules must anchor on the [stop] chip, not on a bare spinner glyph.
 
+# A login is never composer readiness, even with an idle OSC title.
+# Synthetic normalized login text; unknown login layouts remain unavailable to
+# the guarded composer observer.
+[[rules]]
+id = "login_unavailable"
+state = "blocked"
+priority = 1400
+region = "whole_recent"
+visible_blocker = true
+line_regex = ['(?i)^\s*(?:Log in to Grok|Sign in to Grok|Login required)\s*$']
+
 [[rules]]
 id = "osc_title_blocked"
 state = "blocked"
@@ -42,9 +58,9 @@ contains = ["Action Required"]
 id = "option_dialog_blocked"
 state = "blocked"
 priority = 1200
-region = "whole_recent"
+region = "bottom_non_empty_lines(3)"
 visible_blocker = true
-line_regex = ['^\s*┃\s+[0-9a-z]+\s+\([●○]\)\s']
+line_regex = ['^\s*┃\s+(?:❯\s+)?[1-9a-fz]\s+(?:\([●○]\)|\[[ ✓✔x]\])\s']
 
 [[rules]]
 id = "permission_hints_blocked"
@@ -52,7 +68,7 @@ state = "blocked"
 priority = 1190
 region = "bottom_non_empty_lines(2)"
 visible_blocker = true
-contains = [":select", "ctrl+o:yolo", "ctrl+c:cancel"]
+contains = [":select", "ctrl+c:cancel"]
 
 [[rules]]
 id = "question_dialog_hints_blocked"
@@ -60,20 +76,27 @@ state = "blocked"
 priority = 1185
 region = "bottom_non_empty_lines(2)"
 visible_blocker = true
-contains = ["tab:scrollback", "shift+x:dismiss"]
+contains = ["shift+x:dismiss"]
 
-# Pre-0.2.x permission UI kept for older Grok Build releases.
+# Parked cards keep their blocker even when no selected row is visible.
 [[rules]]
-id = "permission_scope_selector"
+id = "parked_card_blocked"
 state = "blocked"
 priority = 1180
-region = "whole_recent"
+region = "bottom_non_empty_lines(2)"
 visible_blocker = true
-contains = ["yes, proceed", "no, reject"]
 any = [
-  { contains = ["use ← → to choose permission whitelist scope"] },
-  { contains = ["←/→:scope"] },
+  { contains = ["tab/space: question"] },
+  { contains = ["tab/space: permission"] },
 ]
+
+[[rules]]
+id = "question_editor_blocked"
+state = "blocked"
+priority = 1180
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["enter:submit", "esc:back"]
 
 # Grok clears its OSC busy signals while background work runs. The first
 # non-empty row is pinned application chrome, where this animated chip shows
@@ -138,7 +161,11 @@ state = "working"
 priority = 190
 region = "bottom_non_empty_lines(2)"
 visible_working = true
-contains = ["esc:cancel", "ctrl+.:shortcuts"]
+contains = ["esc:cancel"]
+any = [
+  { contains = ["ctrl+.:shortcuts"] },
+  { contains = ["ctrl+x:shortcuts"] },
+]
 
 # Pre-0.2.x working chrome kept for older Grok Build releases.
 [[rules]]
@@ -152,14 +179,12 @@ any = [
   { line_regex = ['^\s*[\x{2801}-\x{28FF}]\s+(Run|Read|Search|List)\b'] },
 ]
 
+# Offline 1.0.5 shows Ctrl+X on non-Kitty terminals. A normal-mode
+# footer and complete box are required; a bare hint is not a ready composer.
 [[rules]]
 id = "prompt_hints_idle"
 state = "idle"
 priority = 100
-region = "bottom_non_empty_lines(2)"
+region = "whole_recent"
 visible_idle = true
-contains = ["ctrl+.:shortcuts"]
-not = [
-  { contains = ["esc:cancel"] },
-  { contains = ["ctrl+c:cancel"] },
-]
+regex = ['(?ms)^\s*[╭┌]─+[╮┐]\s*\n\s*│\s*❯[^\n]*\n(?:[^\n]*\n)*?\s*[╰└]─+[╯┘]\s*\n[^\n]*Shift\+Tab:mode[^\n]*Ctrl\+[x.]:shortcuts\s*$']

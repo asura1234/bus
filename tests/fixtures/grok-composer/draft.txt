@@ -1,0 +1,6 @@
+Synthetic session
+╭────────────────────────────────────╮
+│ ❯ 1. inspect the scratch project   │
+│   2. report results                │
+╰────────────────────────────────────╯
+Shift+Tab:mode │ Ctrl+x:shortcuts
