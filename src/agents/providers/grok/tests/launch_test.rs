@@ -272,3 +272,24 @@ fn grok_installed_identity_rejection_reports_why_without_captured_output() {
     );
     assert!(!error.contains("PRIVATE_INVALID_IDENTITY"));
 }
+#[cfg(unix)]
+#[test]
+fn grok_launch_never_writes_through_a_symlinked_global_grok_directory() {
+    // A dotfiles-managed `~/.grok` may be a symlink to the project's `.grok`;
+    // the project file is then Grok's always-trusted global hook source.
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    fs::create_dir_all(f.project.join(".grok/hooks")).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    std::os::unix::fs::symlink(f.project.join(".grok"), home.join(".grok")).unwrap();
+    let prepared = common::prepare(&f.spec("", true), |hooks| {
+        fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+    let global = home.join(".grok/hooks/bus.json");
+    assert!(
+        !global.exists(),
+        "a project launch wrote the global Grok hook through the ~/.grok alias (prepare ok: {})",
+        prepared.is_ok()
+    );
+}

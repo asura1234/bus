@@ -184,3 +184,48 @@ fn grok_resume_refuses_home_and_external_hook_ancestors_without_rebinding() {
         assert_eq!(std::fs::read(external_file).unwrap(), original);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn grok_resume_preserves_global_hooks_aliased_to_project_configuration() {
+    let mut mutated = Vec::new();
+    let mut accepted = Vec::new();
+    for alias in [".grok", ".grok/hooks", ".grok/hooks/bus.json"] {
+        let f = Fixture::new();
+        f.install();
+        f.prepare("");
+        let home = f.root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        if alias == ".grok" {
+            std::os::unix::fs::symlink(f.project.join(".grok"), home.join(alias)).unwrap();
+        } else if alias == ".grok/hooks/bus.json" {
+            std::fs::create_dir_all(home.join(".grok/hooks")).unwrap();
+            std::os::unix::fs::symlink(f.project.join(".grok/hooks/bus.json"), home.join(alias))
+                .unwrap();
+        } else {
+            std::fs::create_dir_all(home.join(".grok")).unwrap();
+            std::os::unix::fs::symlink(f.project.join(".grok/hooks"), home.join(alias)).unwrap();
+        }
+        let global_hooks = home.join(".grok/hooks/bus.json");
+        let original = std::fs::read(&global_hooks).unwrap();
+        let mut spec = f.spec("", true);
+        spec.hooks.binary = f.root.join("replacement-bus");
+
+        let result = capture_args(&spec.hooks, &f.project);
+
+        if std::fs::read(&global_hooks).unwrap() != original {
+            mutated.push(alias);
+        }
+        if result.is_ok() {
+            accepted.push(alias);
+        }
+    }
+    assert!(
+        mutated.is_empty(),
+        "resume changed global hook bytes through {mutated:?}"
+    );
+    assert!(
+        accepted.is_empty(),
+        "global hook aliases were accepted: {accepted:?}"
+    );
+}
