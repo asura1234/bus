@@ -159,7 +159,7 @@ impl Worker {
         } else {
             let recipients = selectors
                 .into_iter()
-                .map(|s| self.control_agent(s, Some(room)))
+                .map(|s| self.control_recipient(room, s))
                 .collect::<Result<AgentRecipients, _>>()?;
             if author.is_some_and(|author| recipients.contains(&author)) {
                 return Err("An agent cannot send a message to itself".into());
@@ -195,6 +195,28 @@ impl Worker {
             );
         }
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
+    }
+
+    /// Explicit recipients can reach the room's bound MASTER orchestrator.
+    /// Members (including ambiguous names) keep precedence over that fallback.
+    fn control_recipient(&self, room: RoomId, selector: &str) -> Result<AgentId, String> {
+        if self
+            .state
+            .agents()
+            .any(|a| a.room_id == room && (selector == a.id.0.to_string() || selector == a.name))
+        {
+            return self.control_agent(selector, Some(room));
+        }
+        let orchestrator = self.state.orchestrator_of(room);
+        if selector == "orchestrator" {
+            return orchestrator
+                .map(|agent| agent.id)
+                .ok_or_else(|| "This room has no bound orchestrator".into());
+        }
+        orchestrator
+            .filter(|agent| selector == agent.id.0.to_string() || selector == agent.name)
+            .map(|agent| agent.id)
+            .ok_or_else(|| "No matching room or agent".into())
     }
 
     /// The agent `--as` names in `room`: one of its agents, or its MASTER

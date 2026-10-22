@@ -277,7 +277,7 @@ impl BusState {
                 .agents
                 .get(agent_id)
                 .ok_or(ModelError::UnknownAgent(*agent_id))?;
-            if agent.room_id != id {
+            if agent.room_id != id && agent.orchestrates != Some(id) {
                 return Err(ModelError::AgentOutsideRoom(*agent_id));
             }
         }

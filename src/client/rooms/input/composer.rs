@@ -62,7 +62,7 @@ impl BusUi {
             .snapshot
             .state
             .agents()
-            .filter(|a| a.room_id == room)
+            .filter(|a| a.room_id == room || a.orchestrates == Some(room))
             .map(|a| a.id)
             .collect();
         if let Some(local) = self.locals.get_mut(&room) {
@@ -188,7 +188,9 @@ impl BusUi {
             .snapshot
             .state
             .agents()
-            .filter(|a| Some(a.room_id) == self.room)
+            .filter(|a| {
+                Some(a.room_id) == self.room || a.orchestrates.is_some_and(|r| Some(r) == self.room)
+            })
             .map(|a| a.id)
             .collect();
         match code {

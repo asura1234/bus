@@ -621,7 +621,7 @@ impl BusUi {
                 .snapshot
                 .state
                 .agents()
-                .filter(|a| a.room_id == room.id)
+                .filter(|a| a.room_id == room.id || a.orchestrates == Some(room.id))
                 .collect();
             let available_above = composer_y.saturating_sub(2);
             // At full height the picker overlays the draft, not an empty area

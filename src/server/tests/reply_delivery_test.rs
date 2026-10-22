@@ -6,6 +6,68 @@ use crate::messaging::model::{Provider, RequestPhase};
 use serde_json::json;
 
 #[tokio::test]
+async fn worker_to_orchestrator_delivers_queued_message_into_its_session_and_settles() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let worker = f.agents[0];
+    let orchestrator = f.add_orchestrator();
+    assert_eq!(f.state().requests().count(), 0);
+    f.status(orchestrator, AgentState::Working);
+    f.tick();
+    let sent = f.call(
+        "message.send",
+        json!({"room":f.work.0.to_string(),
+        "as":worker.0.to_string(),"to":["orchestrator"],"text":"I am blocked","queue":true}),
+    );
+    let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
+    f.tick();
+    assert_eq!(
+        f.state().request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert!(f.typed(orchestrator).is_empty());
+    f.reopen();
+    f.status(orchestrator, AgentState::Idle);
+    f.tick();
+    let payload = f.typed(orchestrator).last().unwrap().clone();
+    assert!(payload.contains("I am blocked"), "{payload}");
+    f.start(orchestrator, "worker-blocker", &payload);
+    let delivered = f.state().request(request).unwrap();
+    assert_eq!(delivered.agent_id, orchestrator);
+    assert_eq!(delivered.room_id, f.work);
+    assert_eq!(
+        delivered.provider_session_id.as_deref(),
+        Some(format!("session-{}", orchestrator.0).as_str())
+    );
+    assert!(delivered.trusted_start_bound);
+    f.stop(
+        orchestrator,
+        "worker-blocker",
+        "Try the fallback",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(6_000);
+    f.assert_reply(request, "Try the fallback");
+    let history = f.call("room.history", json!({"room":f.work.0.to_string()}));
+    assert_eq!(
+        history["messages"][0]["prompt"]["author"],
+        json!({"agent":worker})
+    );
+    assert_eq!(
+        history["messages"][0]["delivery"]["requests"][0]["stage"],
+        "replied"
+    );
+    assert_eq!(
+        history["messages"][0]["delivery"]["requests"][0]["reply"]["text"],
+        "Try the fallback"
+    );
+    assert!(f.call("room.history", json!({"room":"master"}))["messages"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn numbered_native_draft_edits_never_publish_blocked_or_resolved_notices() {
     for in_master in [false, true] {
         let mut f = Delivery::new(&[Provider::ClaudeCode], in_master);
