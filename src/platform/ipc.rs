@@ -188,6 +188,18 @@ pub(crate) fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
     {
         use interprocess::local_socket::{prelude::*, GenericFilePath, ListenerOptions};
 
+        // sun_path is 104 bytes on macOS and 108 on Linux; past it the bind
+        // fails with an error that names neither the path nor the fix.
+        if std::os::unix::net::SocketAddr::from_pathname(path).is_err() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "cannot listen on {}: the path is {} bytes, past the Unix socket limit; use a shorter BUS_DATA_DIR",
+                    path.display(),
+                    path.as_os_str().len()
+                ),
+            ));
+        }
         let name = path.to_fs_name::<GenericFilePath>()?;
         ListenerOptions::new()
             .name(name)

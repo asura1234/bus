@@ -67,6 +67,12 @@ pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
     data_dir_for(name).join("herdr-client.sock")
 }
 
+/// Where a detached server that could not start leaves its error. Its stdio is
+/// /dev/null, so this is how the client waiting for it learns why.
+pub fn server_startup_error_path() -> PathBuf {
+    data_dir().join("herdr-server-startup-error")
+}
+
 pub fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("session name cannot be empty".to_string());

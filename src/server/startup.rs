@@ -53,7 +53,7 @@ pub fn run_server(
             );
             crate::utils::perf::exit(1);
         }
-        Err(err) => return Err(err),
+        Err(err) => return Err(startup_failed(err)),
     };
 
     // Pane output runs on the runtime's workers; agents' builds must not
@@ -93,7 +93,7 @@ pub fn run_server(
                 eprintln!("client socket: {}", client_socket_path().display());
                 crate::utils::perf::exit(1);
             }
-            Err(err) => return Err(err),
+            Err(err) => return Err(startup_failed(err)),
         };
 
         info!(
@@ -111,6 +111,21 @@ pub fn run_server(
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::utils::logging::shutdown("server");
     result
+}
+
+/// A detached server's stderr is /dev/null: record why it could not start in
+/// its log and where the waiting client reads it.
+fn startup_failed(err: io::Error) -> io::Error {
+    tracing::error!(
+        event = "bus.server.startup_failed",
+        error = %err,
+        "Bus server could not start"
+    );
+    let path = crate::utils::paths::server_startup_error_path();
+    if let Err(write_err) = std::fs::write(&path, err.to_string()) {
+        warn!(path = %path.display(), error = %write_err, "Could not record the startup error");
+    }
+    err
 }
 
 fn seed_startup_workspace_if_empty(app: &mut app::App) {
