@@ -162,7 +162,7 @@ impl Worker {
                 .map_or(room, |agent| agent.room_id);
             let recipients = selectors
                 .into_iter()
-                .map(|s| self.control_message_agent(sender_room, s, true))
+                .map(|s| self.control_message_agent(room, sender_room, s, true))
                 .collect::<Result<AgentRecipients, _>>()?;
             if author.is_some_and(|author| recipients.contains(&author)) {
                 return Err("An agent cannot send a message to itself".into());
@@ -200,11 +200,12 @@ impl Worker {
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
     }
 
-    /// Exact IDs are global; names prefer the sender's room. The reserved
+    /// Exact IDs are global; names prefer the conversation, then sender's room. The reserved
     /// alias belongs only to `--to`, after real local names have had precedence.
     fn control_message_agent(
         &self,
         room: RoomId,
+        sender_room: RoomId,
         selector: &str,
         recipient_alias: bool,
     ) -> Result<AgentId, String> {
@@ -216,12 +217,15 @@ impl Worker {
             return Ok(agent.id);
         }
         let mut candidates: Vec<_> = self.state.agents().filter(|a| a.name == selector).collect();
-        if candidates.iter().any(|a| a.room_id == room) {
-            candidates.retain(|a| a.room_id == room);
+        if let Some(scope) = [room, sender_room]
+            .into_iter()
+            .find(|scope| candidates.iter().any(|a| a.room_id == *scope))
+        {
+            candidates.retain(|a| a.room_id == scope);
         } else if recipient_alias && selector.eq_ignore_ascii_case("orchestrator") {
             return self
                 .state
-                .orchestrator_of(room)
+                .orchestrator_of(sender_room)
                 .map(|a| a.id)
                 .ok_or_else(|| "This room has no bound orchestrator".into());
         }
@@ -244,7 +248,7 @@ impl Worker {
         room: RoomId,
         selector: &str,
     ) -> Result<AgentId, String> {
-        let id = self.control_message_agent(room, selector, false)?;
+        let id = self.control_message_agent(room, room, selector, false)?;
         if self.state.agent(id).is_some_and(|a| a.deletion_pending) {
             return Err("Author agent is being deleted".into());
         }

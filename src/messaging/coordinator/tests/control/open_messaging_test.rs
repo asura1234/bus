@@ -160,18 +160,27 @@ fn open_messaging_a_different_or_embedded_identity_does_not_hide_the_sender() {
 }
 
 #[test]
-fn open_messaging_alias_and_names_follow_the_senders_home_room() {
+fn open_messaging_names_prefer_the_conversation_but_alias_uses_home_binding() {
     let (mut w, home, author, dir) = fixture();
     let conversation = w.state.create_room("conversation").unwrap();
     let master = w.state.master_room().unwrap().id;
     let orch = add(&mut w, master, &dir, "own-orch");
     w.state.bind_orchestrator(orch, home).unwrap();
-    let peer = add(&mut w, home, &dir, "peer");
-    add(&mut w, conversation, &dir, "peer");
+    let home_peer = add(&mut w, home, &dir, "peer");
+    let conversation_peer = add(&mut w, conversation, &dir, "peer");
     assert!(send(&mut w, conversation, author, "ORCHESTRATOR", "blocker").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, orch);
-    assert!(send(&mut w, conversation, author, "peer", "home name").ok);
-    assert_eq!(w.state.requests().last().unwrap().agent_id, peer);
+    assert!(send(&mut w, conversation, author, "peer", "conversation name").ok);
+    assert_eq!(
+        w.state.requests().last().unwrap().agent_id,
+        conversation_peer
+    );
+    w.state
+        .rename_agent(conversation_peer, "elsewhere")
+        .unwrap();
+    add(&mut w, master, &dir, "peer");
+    assert!(send(&mut w, conversation, author, "peer", "home fallback").ok);
+    assert_eq!(w.state.requests().last().unwrap().agent_id, home_peer);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -293,4 +302,52 @@ fn open_messaging_an_existing_header_matches_names_that_begin_with_from() {
         drop(w);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn open_messaging_orchestrator_names_its_bound_rooms_worker_despite_a_same_named_worker_elsewhere()
+{
+    let (mut w, room, _, dir) = fixture();
+    let other = w.state.create_room("other").unwrap();
+    let master = w.state.master_room().unwrap().id;
+    let orch = add(&mut w, master, &dir, "room-orch");
+    w.state.bind_orchestrator(orch, room).unwrap();
+    let own = add(&mut w, room, &dir, "impl");
+    add(&mut w, other, &dir, "impl");
+    let response = send(&mut w, room, orch, "impl", "start the task");
+    assert!(
+        response.ok,
+        "orchestrator could not name its own room's worker: {response:?}"
+    );
+    assert_eq!(w.state.requests().last().unwrap().agent_id, own);
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn open_messaging_conversation_member_wins_over_master_name_and_ambiguity_stays_local() {
+    let (mut w, room, _, dir) = fixture();
+    let master = w.state.master_room().unwrap().id;
+    let orch = add(&mut w, master, &dir, "orch");
+    w.state.bind_orchestrator(orch, room).unwrap();
+    let local = add(&mut w, room, &dir, "impl");
+    let remote = add(&mut w, master, &dir, "impl");
+    assert!(send(&mut w, room, orch, "impl", "local dispatch").ok);
+    assert_eq!(w.state.requests().last().unwrap().agent_id, local);
+    let second = add(&mut w, room, &dir, "impl");
+    let response = send(&mut w, room, orch, "impl", "ambiguous");
+    let error = error_message(&response);
+    assert!(error.contains("Ambiguous"), "{error}");
+    for id in [local, second] {
+        assert!(
+            error.contains(&format!("agent {}, room {}", id.0, room.0)),
+            "{error}"
+        );
+    }
+    assert!(
+        !error.contains(&format!("agent {}, room {}", remote.0, master.0)),
+        "wrong scope: {error}"
+    );
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
 }
