@@ -128,9 +128,9 @@ impl Worker {
                 && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
                 && (agent.status == RuntimeStatus::Working || own_turn)
                 && self.state.next_queued_request(agent.id).is_some_and(|id| {
-                    self.state
-                        .request(id)
-                        .is_some_and(|request| !request.queue_only)
+                    self.state.request(id).is_some_and(|request| {
+                        !request.queue_only && request.room_id == agent.room_id
+                    })
                 });
             // The native status lags a turn the agent just began on its own (a
             // task notification, say); text typed then joins that turn and is

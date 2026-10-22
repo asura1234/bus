@@ -307,6 +307,55 @@ async fn worker_message_typed_into_orchestrator_names_its_worker_and_room() {
 }
 
 #[tokio::test]
+async fn work_room_message_never_types_into_orchestrators_own_running_turn() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let worker = f.agents[0];
+    let orchestrator = f.add_orchestrator();
+    // The orchestrator is in a turn it started itself (no Bus request bound).
+    f.status(orchestrator, AgentState::Working);
+    f.tick();
+    let before = f.typed(orchestrator).len();
+    let sent = f.call(
+        "message.send",
+        json!({"room":f.work.0.to_string(),"as":worker.0.to_string(),
+            "to":["orchestrator"],"text":"I am blocked"}),
+    );
+    f.tick();
+    f.tick();
+    assert_eq!(
+        f.typed(orchestrator)[before..].to_vec(),
+        Vec::<String>::new(),
+        "work-room message typed into the orchestrator's running MASTER turn"
+    );
+    let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
+    assert_eq!(
+        f.state().request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert_eq!(f.state().request(request).unwrap().group, None);
+    f.status(orchestrator, AgentState::Idle);
+    f.tick();
+    let payload = f.typed(orchestrator).last().unwrap().clone();
+    assert_eq!(
+        payload,
+        format!(
+            "agent-0 (agent {}, room {}):\nI am blocked",
+            worker.0, f.work.0
+        )
+    );
+    f.start(orchestrator, "independent-worker-turn", &payload);
+    f.stop(
+        orchestrator,
+        "independent-worker-turn",
+        "worker answer",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(31_000);
+    f.assert_reply(request, "worker answer");
+}
+
+#[tokio::test]
 async fn numbered_native_draft_edits_never_publish_blocked_or_resolved_notices() {
     for in_master in [false, true] {
         let mut f = Delivery::new(&[Provider::ClaudeCode], in_master);
