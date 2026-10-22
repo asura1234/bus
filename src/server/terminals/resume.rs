@@ -429,7 +429,7 @@ fn resume_argv(
     extras: &LaunchExtras,
 ) -> Result<Vec<String>, String> {
     let mut argv = plan.argv.clone();
-    if plan.agent == "grok" {
+    if plan.agent == "grok" && !extras.env.is_empty() {
         if argv.first().map(String::as_str) != Some("grok") {
             return Err("Grok resume plan has an unexpected executable".into());
         }

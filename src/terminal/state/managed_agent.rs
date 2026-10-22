@@ -60,13 +60,18 @@ impl TerminalState {
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.pending_agent_resume_plan.is_some()
-            || self.managed_agent.is_some_and(|managed| {
-                matches!(
-                    managed.phase,
-                    ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
-                )
-            })
+        self.pending_agent_resume_plan.is_some() || self.managed_agent_identity_unestablished()
+    }
+
+    /// A restored identity already belongs in snapshots, even while its process
+    /// waits for viewport/theme. Initial launches have no established identity.
+    pub fn managed_agent_identity_unestablished(&self) -> bool {
+        self.managed_agent.is_some_and(|managed| {
+            matches!(
+                managed.phase,
+                ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
+            )
+        })
     }
 
     /// Ends a managed launch that stopped at the agent's own update chooser
