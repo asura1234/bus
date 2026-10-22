@@ -174,7 +174,9 @@ fn overlay_counts_shown_status_across_all_rooms_and_refreshes_after_turns() {
             .unwrap();
         state.observe_status(id, status, 1).unwrap();
         if name == "dialog" {
-            state.observe_dialog(id, true).unwrap();
+            state
+                .observe_dialog(id, true, state.agent(id).unwrap().observed_at_ms)
+                .unwrap();
         } else if status == RuntimeStatus::Working {
             working.push(id);
         }

@@ -330,15 +330,20 @@ impl BusState {
         Ok(())
     }
 
+    /// Closing a visible dialog starts a fresh idle interval at this observation.
     pub(crate) fn observe_dialog(
         &mut self,
         agent: AgentId,
         dialog: bool,
+        now_ms: u64,
     ) -> Result<(), ModelError> {
         let agent_state = self
             .agents
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?;
+        if agent_state.dialog && !dialog && agent_state.status == RuntimeStatus::Idle {
+            agent_state.status_since_ms = now_ms;
+        }
         agent_state.dialog = dialog;
         if dialog {
             if let Some(request) = agent_state

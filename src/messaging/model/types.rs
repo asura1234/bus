@@ -378,8 +378,8 @@ pub(crate) struct RoomAgent {
     /// closes the running turn and the queue as interrupted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_pending: bool,
-    /// When the agent entered its current `status`, from status polls. Stall
-    /// detection measures how long an agent has sat idle on a request.
+    /// When the agent entered its current `status`, or its visible dialog
+    /// last closed while Idle. Stall detection counts usable idle time.
     #[serde(default)]
     pub(crate) status_since_ms: u64,
     /// When the agent's status was last polled. The model has no clock of its

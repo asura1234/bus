@@ -226,7 +226,14 @@ fn room_rows_show_status_and_truncate_long_names() {
         .state
         .observe_status(orchestrator, RuntimeStatus::Working, 1)
         .unwrap();
-    snapshot.state.observe_dialog(worker, true).unwrap();
+    snapshot
+        .state
+        .observe_dialog(
+            worker,
+            true,
+            snapshot.state.agent(worker).unwrap().observed_at_ms,
+        )
+        .unwrap();
     let mut value = serde_json::to_value(&snapshot.state).unwrap();
     value["rooms"][pr.0.to_string()]["name"] = serde_json::json!("a-very-long-room-name");
     // Neither the orchestrated-room marker nor an unread count is drawn.
@@ -700,7 +707,14 @@ fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
         .state
         .observe_status(codex, RuntimeStatus::Idle, 1)
         .unwrap();
-    snapshot.state.observe_dialog(codex, true).unwrap();
+    snapshot
+        .state
+        .observe_dialog(
+            codex,
+            true,
+            snapshot.state.agent(codex).unwrap().observed_at_ms,
+        )
+        .unwrap();
     let mut ui = BusUi::new(Arc::new(snapshot));
     ui.open_room(pr);
     let rows = sidebar_rows(&mut ui);
@@ -715,7 +729,14 @@ fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
 
     // The dialog closes: both rows follow the same state change.
     let mut snapshot = (*ui.snapshot).clone();
-    snapshot.state.observe_dialog(codex, false).unwrap();
+    snapshot
+        .state
+        .observe_dialog(
+            codex,
+            false,
+            snapshot.state.agent(codex).unwrap().observed_at_ms,
+        )
+        .unwrap();
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));
     let rows = sidebar_rows(&mut ui);

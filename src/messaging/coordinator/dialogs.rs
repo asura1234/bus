@@ -39,7 +39,7 @@ impl Worker {
             .set_dialog_notice_to(id, None)
             .map_err(|error| error.to_string())?;
         state
-            .observe_dialog(id, false)
+            .observe_dialog(id, false, crate::messaging::storage::io::now_ms())
             .map_err(|error| error.to_string())?;
         state
             .set_dialog_notice(id, None)

@@ -110,7 +110,9 @@ mod tests {
         state
             .observe_status(second, RuntimeStatus::Working, 1)
             .unwrap();
-        state.observe_dialog(second, true).unwrap();
+        state
+            .observe_dialog(second, true, state.agent(second).unwrap().observed_at_ms)
+            .unwrap();
         assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
 
         // MASTER follows its own orchestrator agents only.
@@ -138,7 +140,9 @@ mod tests {
 
         // Codex reports Idle while its approval dialog is on screen.
         state.observe_status(codex, RuntimeStatus::Idle, 1).unwrap();
-        state.observe_dialog(codex, true).unwrap();
+        state
+            .observe_dialog(codex, true, state.agent(codex).unwrap().observed_at_ms)
+            .unwrap();
         assert_eq!(
             state.agent(codex).unwrap().shown_status(),
             RuntimeStatus::Blocked
@@ -146,7 +150,9 @@ mod tests {
         assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
 
         // The dialog closes: row and room follow on the same state change.
-        state.observe_dialog(codex, false).unwrap();
+        state
+            .observe_dialog(codex, false, state.agent(codex).unwrap().observed_at_ms)
+            .unwrap();
         assert_eq!(
             state.agent(codex).unwrap().shown_status(),
             RuntimeStatus::Idle

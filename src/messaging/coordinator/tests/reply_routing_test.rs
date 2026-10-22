@@ -703,7 +703,9 @@ fn reply_routing_stalled_delivery_resumes_on_fresh_evidence_or_restart() {
                     .observe_status(f.orch, RuntimeStatus::Working, io::now_ms())
                     .unwrap();
             } else if recovery == "dialog" {
-                state.observe_dialog(f.orch, true).unwrap();
+                state
+                    .observe_dialog(f.orch, true, state.agent(f.orch).unwrap().observed_at_ms)
+                    .unwrap();
             } else {
                 let mut identity = state.agent(f.orch).unwrap().runtime_identity.clone();
                 identity.session_id = Some("new-session".into());
@@ -715,7 +717,9 @@ fn reply_routing_stalled_delivery_resumes_on_fresh_evidence_or_restart() {
             state
                 .observe_status(f.orch, RuntimeStatus::Idle, io::now_ms())
                 .unwrap();
-            state.observe_dialog(f.orch, false).unwrap();
+            state
+                .observe_dialog(f.orch, false, state.agent(f.orch).unwrap().observed_at_ms)
+                .unwrap();
             f.worker.save(state).unwrap();
         }
         f.worker.transport = Box::new(Accepting(f.calls.clone()));

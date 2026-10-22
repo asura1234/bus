@@ -165,7 +165,14 @@ fn codex_idle_under_a_visible_dialog_keeps_its_message_queued() {
         .state
         .set_agent_runtime_identity(agent, identity)
         .unwrap();
-    worker.state.observe_dialog(agent, true).unwrap();
+    worker
+        .state
+        .observe_dialog(
+            agent,
+            true,
+            worker.state.agent(agent).unwrap().observed_at_ms,
+        )
+        .unwrap();
     worker.save(worker.state.clone()).unwrap();
     let request = queue(&mut worker, room, agent, "brief");
     worker.submit_ready().unwrap();
@@ -174,7 +181,14 @@ fn codex_idle_under_a_visible_dialog_keeps_its_message_queued() {
         worker.state.request(request).unwrap().phase,
         RequestPhase::Queued
     );
-    worker.state.observe_dialog(agent, false).unwrap();
+    worker
+        .state
+        .observe_dialog(
+            agent,
+            false,
+            worker.state.agent(agent).unwrap().observed_at_ms,
+        )
+        .unwrap();
     worker.submit_ready().unwrap();
     assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_unbound"]);
     drop(worker);
@@ -343,7 +357,7 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
     assert!(worker.state.request(lost).unwrap().uncertain_outcome);
     let bound = worker.state.request(lost).unwrap().progress_at_ms.unwrap()
         + crate::messaging::model::DELIVERED_STALL_MS;
-    worker.expire_queued_requests(bound).unwrap();
+    worker.expire_unconfirmed_submissions(bound).unwrap();
     let failed = worker.state.request(lost).unwrap();
     assert_eq!(failed.phase, RequestPhase::Abandoned);
     assert_eq!(
@@ -383,8 +397,8 @@ fn an_unconfirmed_write_failed_at_its_bound_tells_the_developer() {
         .notices(master.id)
         .any(|notice| notice.text.contains("submission_unconfirmed"))));
     // The live tick runs every 500 ms: one just before the bound, one at it.
-    worker.expire_queued_requests(bound - 1).unwrap();
-    worker.expire_queued_requests(bound).unwrap();
+    worker.expire_unconfirmed_submissions(bound - 1).unwrap();
+    worker.expire_unconfirmed_submissions(bound).unwrap();
     assert_eq!(
         worker.state.request(lost).unwrap().phase,
         RequestPhase::Abandoned
@@ -1247,6 +1261,158 @@ fn a_paste_the_provider_never_showed_is_requeued_and_retried_after_a_pause() {
     }
     worker.submit_ready().unwrap();
     assert_eq!(prompts(&calls), 2);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn aged_unconfirmed_submission(worker: &mut Worker, room: RoomId, agent: AgentId) -> RequestId {
+    let sent = io::now_ms() - crate::messaging::model::DELIVERED_STALL_MS - 5_000;
+    let mut state = worker.state.clone();
+    state
+        .observe_status(agent, RuntimeStatus::Working, sent - 1)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, sent)
+        .unwrap();
+    state.set_draft_text(room, "finish the task").unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let request = state.submit_draft(room, sent).unwrap()[0];
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Uncertain {
+                message: "Submit outcome unknown; no automatic retry: timeout".into(),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    request
+}
+
+#[test]
+fn unconfirmed_submission_with_spooled_final_is_completed_before_expiry() {
+    // A delayed coordinator resumes with the provider's start and final already on disk.
+    // Consuming those same records before the tick is the control for hook attribution.
+    for consume_before_tick in [true, false] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let request = aged_unconfirmed_submission(&mut worker, room, agent);
+        let mut info = native_info("pane", "claude", "session");
+        info.interactive_ready = true;
+        worker.transport = Box::new(FakeTransport {
+            replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+            calls: Arc::new(Mutex::new(Vec::new())),
+            state_path: dir.join("state.json"),
+        });
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_start("landed", "finish the task"),
+        );
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_stop("landed", "Task finished", json!([])),
+        );
+        if consume_before_tick {
+            consume(&mut worker, agent, &dir);
+        }
+        worker.tick().unwrap();
+        let phase = worker.state.request(request).unwrap().phase;
+        let final_text = worker
+            .state
+            .room(room)
+            .unwrap()
+            .latest_replies
+            .get(&agent)
+            .map(|reply| reply.text.clone());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(phase, RequestPhase::Completed,
+            "matching hooks already in the spool must win over expiry; consume_before_tick={consume_before_tick}");
+        assert_eq!(final_text.as_deref(), Some("Task finished"));
+    }
+}
+
+#[test]
+fn unconfirmed_submission_uses_the_current_working_poll_before_expiry() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = aged_unconfirmed_submission(&mut worker, room, agent);
+    let mut info = native_info("pane", "claude", "session");
+    info.interactive_ready = true;
+    info.agent_status = schema::AgentStatus::Working;
+    worker.transport = Box::new(FakeTransport {
+        replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+        calls: Arc::new(Mutex::new(Vec::new())),
+        state_path: dir.join("state.json"),
+    });
+    worker.tick().unwrap();
+    let phase = worker.state.request(request).unwrap().phase;
+    let status = worker.state.agent(agent).unwrap().status;
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(status, RuntimeStatus::Working);
+    assert_eq!(phase, RequestPhase::Submitting,
+        "a current Working poll must protect the unconfirmed write from a preceding Idle observation");
+}
+
+#[test]
+fn unconfirmed_submission_survives_failed_native_poll() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = aged_unconfirmed_submission(&mut worker, room, agent);
+    worker.transport = Box::new(FakeTransport {
+        replies: vec![Err(TransportError {
+            message: "native poll failed".into(),
+            code: Some("timeout".into()),
+            definitely_rejected: false,
+        })]
+        .into(),
+        calls: Arc::new(Mutex::new(Vec::new())),
+        state_path: dir.join("state.json"),
+    });
+    worker.tick().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unconfirmed_submission_survives_failed_callback_reconciliation() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = aged_unconfirmed_submission(&mut worker, room, agent);
+    let mut info = native_info("pane", "claude", "session");
+    info.interactive_ready = true;
+    worker.transport = Box::new(FakeTransport {
+        replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+        calls: Arc::new(Mutex::new(Vec::new())),
+        state_path: dir.join("state.json"),
+    });
+    std::fs::rename(
+        dir.join("callbacks/launch"),
+        dir.join("callbacks/launch.saved"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("callbacks/launch"),
+        b"not a readable spool directory",
+    )
+    .unwrap();
+    assert!(worker.tick().is_err());
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

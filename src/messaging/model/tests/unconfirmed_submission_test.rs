@@ -167,3 +167,149 @@ fn an_unconfirmed_write_waits_its_full_bound_after_the_agent_flaps_idle() {
     assert_eq!(state.next_queued_request(agent), Some(behind));
     assert_unknown_outcome_notice(&state);
 }
+
+#[test]
+fn an_unconfirmed_write_waits_after_its_idle_dialog_closes() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let (typed, behind, bound) = uncertain_write(&mut state, room, agent);
+    // Codex reports Idle while an approval dialog blocks its work.
+    state
+        .observe_dialog(agent, true, state.agent(agent).unwrap().observed_at_ms)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, bound)
+        .unwrap();
+    state.fail_unconfirmed_submissions(bound).unwrap();
+    assert_eq!(
+        state.request(typed).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        state.agent(agent).unwrap().shown_status(),
+        RuntimeStatus::Blocked
+    );
+
+    // Closing that block begins the agent's usable idle period; time spent
+    // waiting for the developer must not consume its entire idle grace.
+    let resumed_at = bound + 1_000;
+    state.observe_dialog(agent, false, resumed_at).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, resumed_at)
+        .unwrap();
+    state.fail_unconfirmed_submissions(resumed_at).unwrap();
+    assert_eq!(
+        state.request(typed).unwrap().phase,
+        RequestPhase::Submitting,
+        "a dialog-blocked agent must receive the same fresh idle grace as a status-blocked one"
+    );
+    assert_eq!(state.request(behind).unwrap().phase, RequestPhase::Queued);
+    state
+        .fail_unconfirmed_submissions(resumed_at + DELIVERED_STALL_MS - 1)
+        .unwrap();
+    assert_eq!(
+        state.request(typed).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    state
+        .fail_unconfirmed_submissions(resumed_at + DELIVERED_STALL_MS)
+        .unwrap();
+    assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Abandoned);
+}
+
+#[test]
+fn unconfirmed_submission_idle_dialog_bound_uses_the_closure_observation() {
+    for status_first in [false, true] {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let (typed, _, bound) = uncertain_write(&mut state, room, agent);
+        state
+            .observe_dialog(agent, true, state.agent(agent).unwrap().observed_at_ms)
+            .unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, bound)
+            .unwrap();
+        let closed_at = bound + 1_000;
+        if status_first {
+            state
+                .observe_status(agent, RuntimeStatus::Idle, closed_at)
+                .unwrap();
+        }
+        state.observe_dialog(agent, false, closed_at).unwrap();
+        if !status_first {
+            state
+                .observe_status(agent, RuntimeStatus::Idle, closed_at)
+                .unwrap();
+        }
+        state.fail_unconfirmed_submissions(closed_at).unwrap();
+        assert_eq!(
+            state.request(typed).unwrap().phase,
+            RequestPhase::Submitting
+        );
+        // Repeated closed observations must not keep extending the grace.
+        state
+            .observe_dialog(agent, false, closed_at + 1_000)
+            .unwrap();
+        state
+            .fail_unconfirmed_submissions(closed_at + DELIVERED_STALL_MS - 1)
+            .unwrap();
+        assert_eq!(
+            state.request(typed).unwrap().phase,
+            RequestPhase::Submitting
+        );
+        state
+            .fail_unconfirmed_submissions(closed_at + DELIVERED_STALL_MS)
+            .unwrap();
+        assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Abandoned);
+    }
+}
+
+#[test]
+fn restored_unconfirmed_write_waits_for_fresh_idle_observation_and_bound() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let (typed, behind, bound) = uncertain_write(&mut state, room, agent);
+    let encoded = serde_json::to_vec(&state).unwrap();
+    let mut restored: BusState = serde_json::from_slice(&encoded).unwrap();
+    // Worker::open invalidates all restored runtime observations in this way.
+    let restarted_at = bound + 60_000;
+    restored
+        .observe_status(agent, RuntimeStatus::Unavailable, restarted_at)
+        .unwrap();
+    restored
+        .fail_unconfirmed_submissions(restarted_at + DELIVERED_STALL_MS)
+        .unwrap();
+    assert_eq!(
+        restored.request(typed).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    let idle_at = restarted_at + DELIVERED_STALL_MS + 1;
+    restored
+        .observe_status(agent, RuntimeStatus::Idle, idle_at)
+        .unwrap();
+    restored
+        .fail_unconfirmed_submissions(idle_at + DELIVERED_STALL_MS - 1)
+        .unwrap();
+    assert_eq!(
+        restored.request(typed).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        restored.request(behind).unwrap().phase,
+        RequestPhase::Queued
+    );
+    restored
+        .fail_unconfirmed_submissions(idle_at + DELIVERED_STALL_MS)
+        .unwrap();
+    assert_eq!(
+        restored.request(typed).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(restored.next_queued_request(agent), Some(behind));
+    assert_eq!(tagged_master_notices(&mut restored), 1);
+
+    let encoded = serde_json::to_vec(&restored).unwrap();
+    let mut restored_again: BusState = serde_json::from_slice(&encoded).unwrap();
+    restored_again
+        .fail_unconfirmed_submissions(idle_at + DELIVERED_STALL_MS + 1)
+        .unwrap();
+    assert_eq!(restored_again.next_queued_request(agent), Some(behind));
+    assert_eq!(tagged_master_notices(&mut restored_again), 1);
+}

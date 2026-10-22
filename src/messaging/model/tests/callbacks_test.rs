@@ -787,7 +787,9 @@ fn an_idle_codex_approval_dialog_keeps_the_recipient_turn_unfinished() {
     state
         .observe_status(agent, RuntimeStatus::Working, 12)
         .unwrap();
-    state.observe_dialog(agent, true).unwrap();
+    state
+        .observe_dialog(agent, true, state.agent(agent).unwrap().observed_at_ms)
+        .unwrap();
     // Codex reports Idle while its approval dialog remains open.
     state
         .observe_status(agent, RuntimeStatus::Idle, 13)

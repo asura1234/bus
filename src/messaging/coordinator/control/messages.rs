@@ -312,6 +312,7 @@ impl Worker {
                 .observe_dialog(
                     agent,
                     observation.dialog.is_some() || observation.pending_question,
+                    crate::messaging::storage::io::now_ms(),
                 )
                 .map_err(|error| error.to_string())?;
         }

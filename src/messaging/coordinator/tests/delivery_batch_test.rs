@@ -65,7 +65,16 @@ fn an_own_turn_does_not_bypass_blocked_unavailable_or_dialog_readiness() {
     fixture
         .worker
         .state
-        .observe_dialog(fixture.agent, true)
+        .observe_dialog(
+            fixture.agent,
+            true,
+            fixture
+                .worker
+                .state
+                .agent(fixture.agent)
+                .unwrap()
+                .observed_at_ms,
+        )
         .unwrap();
     fixture.send("developer correction", false);
     fixture.deliver();

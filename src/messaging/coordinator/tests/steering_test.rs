@@ -439,7 +439,13 @@ fn blocked_agents_dialogs_and_queue_only_messages_are_never_typed_into_a_turn() 
     state
         .observe_status(fixture.agent, RuntimeStatus::Working, 99)
         .unwrap();
-    state.observe_dialog(fixture.agent, true).unwrap();
+    state
+        .observe_dialog(
+            fixture.agent,
+            true,
+            state.agent(fixture.agent).unwrap().observed_at_ms,
+        )
+        .unwrap();
     fixture.worker.save(state).unwrap();
     fixture.deliver();
     assert_eq!(fixture.typed().len(), 1, "only the task itself was typed");
@@ -450,7 +456,13 @@ fn blocked_agents_dialogs_and_queue_only_messages_are_never_typed_into_a_turn() 
 
     // The --queue message gets its own turn once the agent is idle again.
     let mut state = fixture.worker.state.clone();
-    state.observe_dialog(fixture.agent, false).unwrap();
+    state
+        .observe_dialog(
+            fixture.agent,
+            false,
+            state.agent(fixture.agent).unwrap().observed_at_ms,
+        )
+        .unwrap();
     fixture.worker.save(state).unwrap();
     fixture.stopped("turn-1", "parser written");
     fixture.consume();

@@ -805,7 +805,14 @@ fn state_reports_dialog_blocked_status_instead_of_raw_idle_status() {
         .state
         .observe_status(agent, RuntimeStatus::Idle, 10)
         .unwrap();
-    worker.state.observe_dialog(agent, true).unwrap();
+    worker
+        .state
+        .observe_dialog(
+            agent,
+            true,
+            worker.state.agent(agent).unwrap().observed_at_ms,
+        )
+        .unwrap();
     let shown = call(&mut worker, "dialog-state", "state", json!({}));
     assert!(shown.ok);
     let entry = shown.result["agents"]
@@ -817,7 +824,14 @@ fn state_reports_dialog_blocked_status_instead_of_raw_idle_status() {
     assert_eq!(entry["dialog"], true);
     assert_eq!(entry["status"], "blocked");
     // Clearing the dialog restores the provider status without a new callback.
-    worker.state.observe_dialog(agent, false).unwrap();
+    worker
+        .state
+        .observe_dialog(
+            agent,
+            false,
+            worker.state.agent(agent).unwrap().observed_at_ms,
+        )
+        .unwrap();
     let cleared = call(&mut worker, "cleared-state", "state", json!({}));
     let entry = cleared.result["agents"]
         .as_array()

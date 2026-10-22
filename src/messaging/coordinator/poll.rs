@@ -77,12 +77,13 @@ impl Worker {
             let status = polled_status(agent, info);
             observe_exit(self.transport.as_mut(), dir, &mut state, agent, info)?;
             confirm_interactive_agent(&mut state, agent, info)?;
+            let observed_at_ms = io::now_ms();
             state
-                .observe_status(agent.id, status, io::now_ms())
+                .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;
             let dialog_id = info.and_then(|info| info.dialog_id.clone());
             state
-                .observe_dialog(agent.id, dialog_id.is_some())
+                .observe_dialog(agent.id, dialog_id.is_some(), observed_at_ms)
                 .map_err(|e| e.to_string())?;
             if info.is_some() {
                 waits.push((
