@@ -13,6 +13,8 @@ const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 
 pub(super) struct Worker {
     pub(super) disk_space: super::disk_space::DiskSpace,
+    pub(super) github: crate::messaging::github::Runtime,
+    pub(super) github_pending: Vec<crate::messaging::github::Update>,
     pub(super) attention: super::attention::Runtime,
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
@@ -106,6 +108,8 @@ impl Worker {
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
             disk_space: super::disk_space::DiskSpace::default(),
+            github: crate::messaging::github::Runtime::for_session(&data_dir),
+            github_pending: Vec::new(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
             state,
@@ -461,6 +465,7 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         self.refresh_disk_space_at(std::time::Instant::now())?;
+        self.refresh_github()?;
         self.expire_queued_now()?;
         let Some(infos) = self.poll().inspect_err(|_| {
             tracing::warn!(

@@ -4,6 +4,7 @@ mod attention;
 mod callbacks;
 mod compactions;
 mod disk_space;
+mod github;
 mod history;
 mod idle_agents;
 mod interrupts;

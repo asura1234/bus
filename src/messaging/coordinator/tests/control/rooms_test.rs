@@ -460,3 +460,61 @@ fn a_long_session_of_mutations_never_hits_a_permanent_receipt_limit() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn github_watch_room_settings_control_is_atomic_and_persisted() {
+    let (mut worker, room, _, dir) = fixture();
+    let result = call(
+        &mut worker,
+        "github-auto",
+        "room.github",
+        json!({"room":"test","repos":null}),
+    );
+    assert!(result.ok, "{result:?}");
+    let result = call(
+        &mut worker,
+        "github-list",
+        "room.github",
+        json!({"room":"test","repos":["https://github.com/Owner/Repo.git","owner/repo"]}),
+    );
+    assert!(result.ok, "{result:?}");
+    assert_eq!(
+        worker.state.room(room).unwrap().github_repos,
+        Some(vec!["owner/repo".into()])
+    );
+    let saved = worker.store.load().unwrap().unwrap();
+    assert_eq!(
+        saved.room(room).unwrap().github_repos,
+        worker.state.room(room).unwrap().github_repos
+    );
+    for (id, params) in [
+        (
+            "github-invalid",
+            json!({"room":"test","repos":["https://gitlab.com/o/r"]}),
+        ),
+        ("github-type", json!({"room":"test","repos":"o/r"})),
+        ("github-master", json!({"room":"MASTER","repos":[]})),
+        ("github-missing", json!({"room":"test"})),
+    ] {
+        assert!(!call(&mut worker, id, "room.github", params).ok);
+    }
+    let state = call(&mut worker, "github-state", "state", json!({}));
+    let r = state.result["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == room.0)
+        .unwrap();
+    assert_eq!(r["github_repos"], json!(["owner/repo"]));
+    assert!(
+        call(
+            &mut worker,
+            "github-off",
+            "room.github",
+            json!({"room":"test","repos":[]})
+        )
+        .ok
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

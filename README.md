@@ -11,6 +11,10 @@ normal permissions. For this run, bypass overrides Codex's conflicting approval
 options; the original `--args` remain saved for later normal runs.
 See [agent launch arguments](docs/launch-args.md) for provider flags and details.
 
+Bus also [watches each work room’s GitHub repositories](docs/github-watch.md) for
+merges and owned-PR review, CI, and conflict updates. It uses your existing `gh`
+authentication; `bus room github ROOM` selects automatic discovery, a repo list, or off.
+
 Feishu notifications are on by default. Install `lark-cli` on PATH and configure
 its bot identity. In **Settings → Feishu notifications**, choose the recipient
 user open_id and optionally override the CLI path. No credentials are stored by

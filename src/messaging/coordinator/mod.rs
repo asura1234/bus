@@ -5,6 +5,7 @@ mod delivery;
 mod disk_space;
 mod exit_snapshot;
 mod expiry;
+mod github;
 mod poll;
 #[cfg(test)]
 #[path = "tests/reply_delivery_support_test.rs"]

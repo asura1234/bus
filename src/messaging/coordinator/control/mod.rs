@@ -225,7 +225,7 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "agent.focus" | "room.focus" | "room.create" | "room.rename" | "room.notes"
-            | "room.seen" | "room.sound" | "room.delete" | "room.history" => {
+            | "room.seen" | "room.sound" | "room.delete" | "room.history" | "room.github" => {
                 self.execute_rooms(method, p, events)
             }
             "state"
@@ -356,6 +356,13 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         "settings.feishu_notifications",
         "settings feishu-notifications",
         &["on"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "room.github",
+        "room github",
+        &["room", "repos"],
         true,
         Tier::Agent,
     ),
