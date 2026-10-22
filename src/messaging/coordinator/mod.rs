@@ -13,6 +13,9 @@ pub(crate) mod reply_delivery_support;
 #[cfg(test)]
 #[path = "tests/reply_routing_test.rs"]
 mod reply_routing_tests;
+#[cfg(test)]
+#[path = "tests/room_digest_test.rs"]
+mod room_digest_tests;
 mod startup;
 mod storage;
 mod worker;
