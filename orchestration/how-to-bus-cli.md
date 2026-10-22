@@ -939,7 +939,14 @@ scrolled out of a short pane, makes the answer fail with no keys sent. In a
 short pane Claude shows only part of the list; `agent dialog` returns the
 visible options with their real numbers, which `choose` still accepts.
 When the cursor is already on the row, `agent dialog` shows it as a focused
-text question, as it does for Cursor's `Other` row. Cursor's checkbox chooser
+text question, as it does for Cursor's `Other` row.
+A multi-question form (`←  ☐ Fresh files  ☐ Helper home  ✔ Submit  →`) shows
+one question at a time; `agent dialog` adds `tabs`, each with `label`,
+`answered` and `active`. Answer the active question with `choose` or, for its
+free-text row, `answer --text`; Claude then moves to the next question. When
+every question is answered, the Submit tab offers `Submit answers` and
+`Cancel`; choose `Submit answers`. `--skip` is refused for Claude questions
+(`skip_would_cancel_form`): Esc declines the whole form, not one question. Cursor's checkbox chooser
 still needs its own navigation adapter.
 
 ## Build reliable automation
