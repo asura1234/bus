@@ -5,8 +5,13 @@ use std::time::Duration;
 pub(crate) const SUBMIT_DELAY: Duration = Duration::from_millis(300);
 const CONFIRMATION_GRACE: Duration = Duration::from_secs(2);
 pub(crate) const WITHDRAW_GRACE: Duration = Duration::from_secs(1);
-/// Allow dispatch, response delivery and scheduling beyond the native bound.
+/// Allow response delivery and scheduling beyond the native writer bound.
+/// Dispatch consumes the native budget, measured from socket receipt.
 pub(crate) const RPC_MARGIN: Duration = Duration::from_secs(1);
+/// Let a writer publish its last withdrawal result before timing out the
+/// response. The rest of RPC_MARGIN remains available for socket delivery.
+pub(crate) const RESPONSE_GRACE: Duration =
+    Duration::from_millis(RPC_MARGIN.as_millis() as u64 / 10);
 
 pub(crate) fn submit_delay(codex: bool, prompt_bytes: usize) -> Duration {
     #[cfg(windows)]

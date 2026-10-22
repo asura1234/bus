@@ -289,6 +289,7 @@ impl HeadlessServer {
             | self.handle_client_shell_api_request(
                 client_id,
                 crate::server::api::ApiRequestMessage {
+                    received_at: std::time::Instant::now(),
                     request,
                     respond_to,
                 },

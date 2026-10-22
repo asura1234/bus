@@ -176,6 +176,18 @@ pub(super) fn agent_prompt_submit_delay(
 }
 
 impl App {
+    pub(in crate::server) fn handle_deferred_agent_api_message(
+        &mut self,
+        message: crate::server::api::ApiRequestMessage,
+    ) -> bool {
+        self.handle_deferred_agent_api_request_at(
+            message.request,
+            message.respond_to,
+            message.received_at,
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn handle_deferred_agent_api_request(
         &mut self,
         request: crate::protocol::api::schema::Request,
@@ -194,6 +206,16 @@ impl App {
             return false;
         };
         let hard_deadline = started + budget;
+        if std::time::Instant::now() >= hard_deadline {
+            // No lookup, paste or Enter has run. Queue latency cannot turn
+            // definite non-delivery into a fresh native submission window.
+            let _ = respond_to.send(encode_error(
+                request.id,
+                crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
+                crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE,
+            ));
+            return true;
+        }
         let api_request_id = request.id.clone();
         let queued = match request.method {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
@@ -215,43 +237,14 @@ impl App {
                 std::thread::spawn(move || {
                     // A blocked native writer must not extend the RPC forever.
                     // Timeout stays uncertain: Enter may already have been sent.
-                    let completed = completion.recv_timeout(
-                        hard_deadline.saturating_duration_since(std::time::Instant::now()),
+                    let response = complete_agent_prompt(
+                        id,
+                        agent,
+                        hard_deadline,
+                        started,
+                        std::time::Instant::now(),
+                        |timeout| completion.recv_timeout(timeout),
                     );
-                    let not_shown =
-                        |err: &std::io::Error| crate::terminal::runtime::PromptNotShown::is(err);
-                    let outcome = match &completed {
-                        Ok(Ok(())) => "written",
-                        Ok(Err(err)) if not_shown(err) => "not_shown",
-                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => "timeout",
-                        Ok(Err(_)) => "write_failed",
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => "timeout",
-                        Err(_) => "writer_closed",
-                    };
-                    tracing::info!(target: "bus::server::api::agents", event = "bus.terminal.result", api_request_id = %id,
-                        pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
-                        elapsed_ms = started.elapsed().as_millis() as u64,
-                        "Native prompt and Enter submission completed; this is not model acceptance");
-                    let response = match completed {
-                        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
-                        Ok(Err(err)) if not_shown(&err) => encode_error(
-                            id,
-                            crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
-                            err.to_string(),
-                        ),
-                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
-                            encode_error(id, "timeout", err.to_string())
-                        }
-                        Ok(Err(err)) => encode_error(id, "agent_prompt_failed", err.to_string()),
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => encode_error(
-                            id,
-                            "timeout",
-                            "Native prompt submission exceeded its hard deadline",
-                        ),
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                            encode_error(id, "agent_prompt_failed", "pty actor closed")
-                        }
-                    };
                     let _ = respond_to.send(response);
                 });
             }
@@ -473,4 +466,50 @@ fn queue_prompt_input(
         deadline,
         composer::observer(kind, text),
     )
+}
+
+// The waiter is injectable so boundary races use a virtual response timeline.
+pub(super) fn complete_agent_prompt(
+    id: String,
+    agent: crate::protocol::api::schema::AgentInfo,
+    hard_deadline: std::time::Instant,
+    started: std::time::Instant,
+    now: std::time::Instant,
+    receive: impl FnOnce(Duration) -> Result<std::io::Result<()>, std::sync::mpsc::RecvTimeoutError>,
+) -> String {
+    let response_deadline = hard_deadline + crate::protocol::api::submission::RESPONSE_GRACE;
+    let completed = receive(response_deadline.saturating_duration_since(now));
+    let not_shown = |err: &std::io::Error| crate::terminal::runtime::PromptNotShown::is(err);
+    let outcome = match &completed {
+        Ok(Ok(())) => "written",
+        Ok(Err(err)) if not_shown(err) => "not_shown",
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => "timeout",
+        Ok(Err(_)) => "write_failed",
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => "timeout",
+        Err(_) => "writer_closed",
+    };
+    tracing::info!(target: "bus::server::api::agents", event = "bus.terminal.result", api_request_id = %id,
+        pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "Native prompt and Enter submission completed; this is not model acceptance");
+    match completed {
+        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
+        Ok(Err(err)) if not_shown(&err) => encode_error(
+            id,
+            crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
+            err.to_string(),
+        ),
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
+            encode_error(id, "timeout", err.to_string())
+        }
+        Ok(Err(err)) => encode_error(id, "agent_prompt_failed", err.to_string()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => encode_error(
+            id,
+            "timeout",
+            "Native prompt submission exceeded its hard deadline",
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            encode_error(id, "agent_prompt_failed", "pty actor closed")
+        }
+    }
 }

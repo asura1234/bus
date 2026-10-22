@@ -86,6 +86,7 @@ async fn repeated_layout_action_reapplies_controller_geometry() {
     assert!(server.handle_client_shell_api_request(
         65,
         crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: crate::protocol::api::schema::Request {
                 id: "resize-layout".into(),
                 method: crate::protocol::api::schema::Method::LayoutSetSplitRatio(
@@ -180,19 +181,22 @@ fn room_orchestrator_core_headless_working_agent_history_read_returns_visible_li
             );
             let read = |server: &mut HeadlessServer, source, lines| {
                 let (respond_to, response_rx) = std::sync::mpsc::channel();
-                server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
-                    request: api::schema::Request {
-                        id: "read".into(),
-                        method: api::schema::Method::AgentRead(api::schema::AgentReadParams {
-                            target: public_pane_id.clone(),
-                            source,
-                            lines,
-                            format: api::schema::ReadFormat::Text,
-                            strip_ansi: true,
-                        }),
+                server.handle_api_request_with_shutdown_check(
+                    crate::server::api::ApiRequestMessage {
+                        received_at: std::time::Instant::now(),
+                        request: api::schema::Request {
+                            id: "read".into(),
+                            method: api::schema::Method::AgentRead(api::schema::AgentReadParams {
+                                target: public_pane_id.clone(),
+                                source,
+                                lines,
+                                format: api::schema::ReadFormat::Text,
+                                strip_ansi: true,
+                            }),
+                        },
+                        respond_to,
                     },
-                    respond_to,
-                });
+                );
                 let response = response_rx
                     .recv_timeout(Duration::from_millis(100))
                     .expect("read response");
@@ -202,7 +206,10 @@ fn room_orchestrator_core_headless_working_agent_history_read_returns_visible_li
             let response = read(server, api::schema::ReadSource::Recent, Some(200));
             assert!(response["error"].is_null(), "{response}");
             let capture = &response["result"]["read"];
-            assert!(capture["text"].as_str().unwrap().contains("working"), "{response}");
+            assert!(
+                capture["text"].as_str().unwrap().contains("working"),
+                "{response}"
+            );
             assert_eq!(capture["exhausted"], false, "{response}");
             assert_eq!(
                 capture["note"],

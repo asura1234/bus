@@ -49,6 +49,8 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
 }
 
 pub struct ApiRequestMessage {
+    /// Monotonic receipt clock: queueing and event draining spend this budget.
+    pub received_at: std::time::Instant,
     pub request: Request,
     pub respond_to: std::sync::mpsc::Sender<String>,
 }

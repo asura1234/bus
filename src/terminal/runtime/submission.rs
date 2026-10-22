@@ -78,7 +78,10 @@ impl TerminalRuntime {
             inspect: Box::new(inspect),
             enter,
             clear,
-            deadline: std::cell::Cell::new((now + confirmation_budget(delay)).min(hard_deadline)),
+            // Queue/dispatch time must not consume the withdrawal reserve.
+            deadline: std::cell::Cell::new(
+                (now + confirmation_budget(delay)).min(hard_deadline - WITHDRAW_GRACE),
+            ),
             hard_deadline,
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -215,13 +218,11 @@ impl ObservedSubmission {
         }
         let mut last_enter = None;
         loop {
-            self.check_deadline()?;
             let guard = self
                 .content_lock
                 .lock()
                 .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
             let observation = self.observe();
-            self.check_deadline()?;
             if last_enter.is_some()
                 && matches!(
                     observation,
@@ -230,6 +231,9 @@ impl ObservedSubmission {
             {
                 return Ok(());
             }
+            // An observation can cross the deadline while waiting for the
+            // content lock. Confirm acceptance first; only further input expires.
+            self.check_deadline()?;
             let retry = observation == InputObservation::Pending
                 && last_enter.is_none_or(|at: Instant| at.elapsed() >= Duration::from_millis(250));
             let completion = if retry {

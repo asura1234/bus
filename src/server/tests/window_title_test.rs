@@ -281,6 +281,7 @@ async fn foreground_window_title_uses_that_clients_remembered_tab() {
     assert!(server.handle_client_shell_api_request(
         92,
         crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: api::schema::Request {
                 id: "navigate-second-client".into(),
                 method: api::schema::Method::TabFocus(api::schema::TabTarget {
