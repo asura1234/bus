@@ -65,7 +65,13 @@ pub(super) fn input(screen: &str) -> Option<String> {
     };
     for line in &lines[top + 2..bottom] {
         body.push('\n');
-        body.push_str(content(line)?.strip_prefix(indent)?);
+        let text = content(line)?;
+        // A blank framed row loses its fixed indentation when frame padding
+        // is trimmed. Preserve the logical newline; never merge it away.
+        body.push_str(
+            text.strip_prefix(indent)
+                .or_else(|| text.is_empty().then_some(""))?,
+        );
     }
     let placeholder = matches!(body.as_str(), "Type a message..." | "Type a message…")
         && styled[top + 1]
@@ -102,6 +108,21 @@ mod tests {
     const EMPTY: &str = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
     const DRAFT: &str = include_str!("../../../../../tests/fixtures/grok-composer/draft.txt");
     const PASTED: &str = include_str!("../../../../../tests/fixtures/grok-composer/pasted.txt");
+
+    #[test]
+    fn grok_g_visible_blank_lines_in_bootstrap_remain_exact() {
+        let expected = "line one\n\n  line two\n";
+        let screen = format!(
+            "╭────────╮\n│ ❯ {} │\n╰────────╯\nShift+Tab:mode │ Ctrl+x:shortcuts\n",
+            expected.replace('\n', " │\n│   ")
+        );
+        assert_eq!(input(&screen).as_deref(), Some(expected));
+        assert_eq!(observe(&screen, expected), InputObservation::Pending);
+        assert_eq!(
+            observe(&screen, "line one line two"),
+            InputObservation::Unavailable
+        );
+    }
 
     #[test]
     fn grok_c_exact_body_never_merges_commands_or_trims_user_indent() {
