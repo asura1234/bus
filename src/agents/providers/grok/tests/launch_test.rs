@@ -451,3 +451,86 @@ fn grok_launch_and_resume_environment_bind_the_validated_home() {
         Some(&expected)
     );
 }
+#[test]
+fn grok_launch_with_ordinary_global_hooks_and_registry_installs_only_the_project_hook() {
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    let global = home.join(".grok");
+    let shared = f.root.join("shared-hooks");
+    fs::create_dir_all(global.join("hooks")).unwrap();
+    fs::create_dir_all(&shared).unwrap();
+    let user_hook = br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}"#;
+    fs::write(global.join("hooks/user.json"), user_hook).unwrap();
+    fs::write(shared.join("team.json"), user_hook).unwrap();
+    let registry = format!(
+        "{}\nrelative/ignored\n",
+        shared.canonicalize().unwrap().display()
+    );
+    fs::write(global.join("hooks-paths"), &registry).unwrap();
+    let prepared = f.prepare("");
+    assert!(f.project.join(".grok/hooks/bus.json").is_file());
+    assert_eq!(fs::read(global.join("hooks/user.json")).unwrap(), user_hook);
+    assert_eq!(fs::read(shared.join("team.json")).unwrap(), user_hook);
+    assert_eq!(
+        fs::read_to_string(global.join("hooks-paths")).unwrap(),
+        registry
+    );
+    assert_eq!(
+        fs::read_dir(global.join("hooks")).unwrap().count(),
+        1,
+        "Bus added a file to the global hooks directory"
+    );
+    assert_eq!(
+        prepared.env.get("GROK_HOME").map(PathBuf::from),
+        Some(global.canonicalize().unwrap())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_ordinary_relocated_home_launch_and_resume_keep_global_hooks_unchanged() {
+    for route in ["absolute", "relative", "symlinked"] {
+        let f = Fixture::new();
+        f.install();
+        let global = f.root.join("relocated-global");
+        fs::create_dir_all(global.join("hooks")).unwrap();
+        let sentinel = br#"{"user":"preserved"}"#;
+        fs::write(global.join("hooks/user.json"), sentinel).unwrap();
+        let configured = match route {
+            "relative" => PathBuf::from("../relocated-global"),
+            "symlinked" => {
+                let alias = f.root.join("global-alias");
+                std::os::unix::fs::symlink(&global, &alias).unwrap();
+                alias
+            }
+            _ => global.clone(),
+        };
+        std::env::set_var("GROK_HOME", &configured);
+        let prepared = f.prepare("");
+        let expected = global.canonicalize().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(prepared.env.get("GROK_HOME"), Some(&expected), "{route}");
+        assert!(f.project.join(".grok/hooks/bus.json").is_file(), "{route}");
+        // Restart under a changed server environment must retain the selected
+        // global home while rebinding only the existing project hook.
+        std::env::set_var("GROK_HOME", f.project.join(".grok"));
+        let mut spec = f.spec("", true);
+        spec.hooks.binary = f.root.join("replacement-bus");
+        crate::agents::providers::grok::resume::capture_args(&spec.hooks, &f.project).unwrap();
+        assert_eq!(
+            environment(&spec.hooks).unwrap().get("GROK_HOME"),
+            Some(&expected)
+        );
+        assert_eq!(
+            fs::read(global.join("hooks/user.json")).unwrap(),
+            sentinel,
+            "{route}"
+        );
+        assert_eq!(
+            fs::read_dir(global.join("hooks")).unwrap().count(),
+            1,
+            "{route}"
+        );
+        assert!(!global.join("hooks/bus.json").exists(), "{route}");
+    }
+}
