@@ -121,3 +121,9 @@ weekly allowance falls below about 25%.
 <!-- Newest first. One line per change to this workflow, with the reason. -->
 
 - <date>: Drafted with the developer.
+
+## Worker brief messaging rule
+
+Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
+room's bound orchestrator, and names or IDs can reach agents in any room.

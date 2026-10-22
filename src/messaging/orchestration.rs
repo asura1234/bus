@@ -1,4 +1,4 @@
-//! A MASTER orchestrator's system prompt and the Bus docs it references. The
+//! Agent messaging onboarding, orchestrator system prompts and Bus docs. The
 //! prompt is a Bus-owned file in the launch's callback folder, delivered with
 //! each provider's own launch option; nothing is written into the agent's PWD.
 use std::path::{Path, PathBuf};
@@ -135,6 +135,26 @@ pub(crate) struct PromptValues {
     pub room: Option<(String, RoomId)>,
     pub agent: String,
     pub docs: PathBuf,
+}
+
+/// Launch instructions apply to workers and orchestrators, including custom prompts.
+pub(crate) fn agent_onboarding(
+    name: &str,
+    id: super::model::AgentId,
+    room: RoomId,
+    docs: &Path,
+) -> String {
+    format!(
+        "Bus messaging: you are {name} (agent {}, room {}). Read {}/how-to-bus-cli.md. \
+         Use --as {} when sending messages. Any agent can message any agent by name or ID; \
+         --to orchestrator names your home room's bound orchestrator. \
+         Bus automatically adds 'name (agent id, room R):' to agent-authored messages. \
+         Send only the body; do not add a 'from X', 'X here' or signature line.",
+        id.0,
+        room.0,
+        docs.display(),
+        id.0
+    )
 }
 
 pub(crate) fn docs_dir(data_dir: &Path) -> PathBuf {

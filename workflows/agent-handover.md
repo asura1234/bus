@@ -59,7 +59,8 @@ do not assume an omitted worktree is clean or automatically stash anything.
 
 Use `bus agent add --room ROOM --name NEW --provider PROVIDER --pwd PWD`
 with the old agent's provider and exact PWD, preserving its task role in the
-brief. Start a fresh session; do not resume the old context. Brief it with the
+brief. Include the worker brief messaging rule from the handover template.
+Start a fresh session; do not resume the old context. Brief it with the
 note's absolute path, the task goal and boundaries, and this instruction:
 "Read the handover note and ask questions about anything unclear before
 continuing. Wait for ownership transfer before changing files or running task

@@ -398,9 +398,14 @@ impl Worker {
             }
         }
         let (mut prepared, hooks) = self.prepare_provider_launch(&input, id)?;
-        if let Some(spec) = &orchestrator {
-            self.prepare_orchestrator_prompt(&input, id, &mut state, spec, &mut prepared, &hooks)?;
-        }
+        self.prepare_agent_prompt(
+            &input,
+            id,
+            &mut state,
+            orchestrator.as_ref(),
+            &mut prepared,
+            &hooks,
+        )?;
         let identity = self.persist_agent_launch(
             state,
             id,
@@ -465,7 +470,7 @@ impl Worker {
         }
     }
 
-    /// Routing stays at the room boundary; providers only receive capture facts.
+    /// Bus owns messaging identity and routing; providers receive capture facts.
     fn prepare_provider_launch(
         &self,
         input: &AddAgent,
@@ -579,27 +584,34 @@ impl Worker {
         }
     }
 
-    fn prepare_orchestrator_prompt(
+    fn prepare_agent_prompt(
         &self,
         input: &AddAgent,
         id: AgentId,
         state: &mut super::BusState,
-        spec: &OrchestratorSpec,
+        spec: Option<&OrchestratorSpec>,
         prepared: &mut launch::PreparedLaunch,
         hooks: &HookContext,
     ) -> Result<(), String> {
-        let values = orchestrator::PromptValues {
-            room: state
-                .room(spec.room)
-                .map(|room| (room.name.clone(), room.id)),
-            agent: state.agent(id).map(|a| a.name.clone()).unwrap_or_default(),
-            docs: orchestrator::write_docs(&self.data_dir)?,
+        let docs = orchestrator::write_docs(&self.data_dir)?;
+        let name = state.agent(id).map(|a| a.name.as_str()).unwrap_or_default();
+        let onboarding = orchestrator::agent_onboarding(name, id, input.room, &docs);
+        let text = if let Some(spec) = spec {
+            let values = orchestrator::PromptValues {
+                room: state
+                    .room(spec.room)
+                    .map(|room| (room.name.clone(), room.id)),
+                agent: name.into(),
+                docs,
+            };
+            let template = spec
+                .system_prompt
+                .as_deref()
+                .unwrap_or(orchestrator::DEFAULT_PROMPT);
+            format!("{onboarding}\n\n{}", orchestrator::fill(template, &values))
+        } else {
+            onboarding
         };
-        let template = spec
-            .system_prompt
-            .as_deref()
-            .unwrap_or(orchestrator::DEFAULT_PROMPT);
-        let text = orchestrator::fill(template, &values);
         let adopted = prepared.adopted_session.is_some();
         let path = orchestrator::write_prompt(&hooks.spool, &text)?;
         match orchestrator::prompt_args(input.provider, &path, adopted)? {

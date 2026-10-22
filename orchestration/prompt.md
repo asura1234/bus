@@ -76,6 +76,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 
 ## Rules
 
+- Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+
 - The rules in {{DOCS}}/orchestrator-rules.md are binding; read them before
   kickoff.
 - Write every chat message in Markdown. Never write a bare PR, MR or issue
@@ -158,7 +160,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   `agent answer --text`, never `agent choose`.
   Answer promptly. Ask the developer about destructive or outward-facing actions
   only when existing workflow or developer authorization does not cover them.
-- Steer a working agent with a plain `bus send`; it joins the running turn.
+- Steer a working agent with a plain `bus send` from the running turn's room;
+  it joins that turn. Messages from another room wait for the next turn.
   To stop or redirect a worker, use `bus agent interrupt AGENT --as
   {{AGENT_NAME}} [--text "..."]`: a message saying "pause" does not stop a
   turn. A wait on the interrupted message ends with `message_interrupted`.

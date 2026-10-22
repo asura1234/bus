@@ -671,3 +671,44 @@ fn agent_clear_keeps_reset_intent_only_while_the_reset_may_have_been_typed() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[test]
+fn workers_launch_with_messaging_and_no_signature_instructions_for_every_provider() {
+    let (mut worker, room, _, dir) = fixture();
+    worker.transport = Box::new(NoTabs);
+    for provider in ["claude", "codex", "cursor"] {
+        let name = format!("no-sign-{provider}");
+        let response = call(
+            &mut worker,
+            &name,
+            "agent.add",
+            json!({
+                "room":"test", "name":name, "provider":provider,
+                "cwd":dir.to_string_lossy(), "consent_project_hooks":true
+            }),
+        );
+        assert!(
+            error_message(&response).contains("no tabs in tests"),
+            "{response:?}"
+        );
+        let agent = worker.state.agents().find(|a| a.name == name).unwrap();
+        let prompt =
+            std::fs::read_to_string(launch_spool(&worker, agent.id).join("system-prompt.md"))
+                .unwrap();
+        assert!(
+            prompt.contains(&format!("{name} (agent {}, room {})", agent.id.0, room.0)),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Bus automatically adds 'name (agent id, room R):'"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("do not add a 'from X', 'X here' or signature line"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Any agent can message any agent"));
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
