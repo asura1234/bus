@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end Bus message round trips with real Claude Code, Codex and Cursor.
 
-Starts a throwaway Bus (fresh BUS_DATA_DIR under temp/e2e/) in a pseudo-terminal,
+Starts a throwaway Bus (fresh BUS_DATA_DIR under /tmp) in a pseudo-terminal,
 drives it only through the dev CLI, and shuts it down at the end. Agents work in
 a scratch git repository under temp/e2e/workspace. Spends real model usage, so
 --allow-live-models is required. Writes temp/e2e/<timestamp>/report.json.
@@ -16,6 +16,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zlib
@@ -85,7 +86,17 @@ def case_support(provider, case, providers, cases=CASES):
         return "background shells that outlive a turn are a Claude Code feature"
     if case == "multi" and len(providers) < 2:
         return "needs at least two providers"
+    if case in ("orchestrator", "adoption") and provider == "codex":
+        return "Bus refuses Codex as an orchestrator: it does not start a turn when a background command exits"
     return None
+
+
+def short_data_dir():
+    """A private BUS_DATA_DIR whose session sockets fit sun_path (104 bytes on macOS).
+
+    Under temp/e2e/ a worktree's longer checkout path pushed herdr-client.sock past it.
+    """
+    return Path(tempfile.mkdtemp(prefix="bus-e2e-", dir="/tmp")).resolve()
 
 
 def pick_option(dialog, purpose):
@@ -200,8 +211,7 @@ class Run:
         self.binary = find_binary(args.binary)
         self.run_dir = E2E / time.strftime("%Y%m%d-%H%M%S")
         self.run_dir.mkdir(parents=True, mode=0o700)
-        self.data = self.run_dir / "data"
-        self.data.mkdir(mode=0o700)
+        self.data = short_data_dir()
         self.env = scrubbed_env(os.environ, self.data)
         self.lock = threading.Lock()
         self.rows = []

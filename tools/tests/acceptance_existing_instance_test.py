@@ -234,7 +234,11 @@ class EndToEndArgumentTests(unittest.TestCase):
         self.assertIn("two providers", e2e.case_support("cursor", "multi", ["cursor"]))
         self.assertIsNone(e2e.case_support("cursor", "multi", ["claude", "cursor"]))
         self.assertIn("orchestrator case", e2e.case_support("codex", "adoption", ["codex"], ["adoption"]))
-        self.assertIsNone(e2e.case_support("codex", "adoption", ["codex"], ["orchestrator", "adoption"]))
+        self.assertIsNone(e2e.case_support("claude", "adoption", ["claude"], ["orchestrator", "adoption"]))
+        # Bus refuses to add a Codex orchestrator, so there is no session to adopt either.
+        for case in ("orchestrator", "adoption"):
+            self.assertIn("refuses Codex", e2e.case_support("codex", case, ["codex"], ["orchestrator", "adoption"]))
+            self.assertIsNone(e2e.case_support("cursor", case, ["cursor"], ["orchestrator", "adoption"]))
 
 
 class EndToEndEnvironmentTests(unittest.TestCase):
@@ -260,6 +264,25 @@ class EndToEndEnvironmentTests(unittest.TestCase):
             (debug / "bus").chmod(0o644)
             with self.assertRaises(SystemExit):
                 e2e.find_binary(root=root)
+
+    def test_run_data_dir_keeps_session_sockets_under_the_unix_limit_from_any_checkout(self):
+        with tempfile.TemporaryDirectory() as root:
+            checkout = Path(root) / ("worktree-" + "x" * 80)
+            args = mock.Mock(binary="stub-bus", providers=["claude"], cases=["single"])
+            with mock.patch.object(e2e, "ROOT", checkout), \
+                    mock.patch.object(e2e, "E2E", checkout / "temp/e2e"), \
+                    mock.patch.object(e2e, "find_binary", return_value=Path("/stub/bus")):
+                run = e2e.Run(args)
+                data = Path(run.bus.env["BUS_DATA_DIR"])
+                try:
+                    for name in ("herdr-client.sock", "herdr.sock"):
+                        socket = data / "herdr-config/sessions/bus" / name
+                        self.assertLess(len(str(socket).encode()), 104, str(socket))
+                    self.assertFalse(data.is_relative_to(e2e.ROOT), str(data))
+                    self.assertEqual(data.stat().st_mode & 0o777, 0o700)
+                finally:
+                    if data.exists():
+                        data.rmdir()
 
     def test_bus_launches_in_dev_mode(self):
         self.assertEqual(e2e.bus_argv(Path("/x/bus")), ["/x/bus", "--dev"])

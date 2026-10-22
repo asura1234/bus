@@ -439,3 +439,79 @@ fn no_hello_client_closed_within_five_seconds() {
 
     cleanup_spawned_bus(spawned, base);
 }
+
+#[test]
+fn a_socket_path_over_the_unix_limit_fails_fast_with_its_cause() {
+    use std::os::unix::fs::PermissionsExt;
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    // The root itself stays short enough for its control socket, but the
+    // session's sockets under herdr-config/sessions/bus/ pass both macOS's
+    // 104-byte and Linux's 108-byte sun_path (live: `just e2e` run from a
+    // worktree waited 15s and blamed a slow start).
+    let data = base.join("d".repeat(75 - base.as_os_str().len().min(74)));
+    fs::create_dir_all(&data).unwrap();
+    fs::set_permissions(&base, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 200,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
+    cmd.env("BUS_DATA_DIR", &data);
+    cmd.env("SHELL", "/bin/sh");
+    for key in [
+        "BUS_SESSION_ID",
+        "HERDR_ENV",
+        "HERDR_SESSION",
+        "HERDR_SOCKET_PATH",
+        "HERDR_CLIENT_SOCKET_PATH",
+    ] {
+        cmd.env_remove(key);
+    }
+    let started = Instant::now();
+    let mut child = pair.slave.spawn_command(cmd).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let output = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
+    while child.try_wait().unwrap().is_none() && started.elapsed() < Duration::from_secs(30) {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let elapsed = started.elapsed();
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(pair.master);
+    let output = output.join().unwrap();
+    let server_log = fs::read_to_string(data.join("herdr-config/sessions/bus/herdr-server.log"))
+        .unwrap_or_default();
+    let _ = std::process::Command::new(env!("CARGO_BIN_EXE_bus"))
+        .arg("stop")
+        .env("BUS_DATA_DIR", &data)
+        .output();
+    cleanup_test_base(&base);
+
+    assert!(
+        output.contains("Unix socket limit") && output.contains("BUS_DATA_DIR"),
+        "the client must name the too-long socket path: {output}"
+    );
+    assert!(
+        !output.contains("may still be starting"),
+        "a server that cannot bind is not slow to start: {output}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "the client waited out its readiness timeout: {elapsed:?}"
+    );
+    assert!(
+        server_log.contains("Unix socket limit"),
+        "the server log must record the bind failure: {server_log:?}"
+    );
+}
