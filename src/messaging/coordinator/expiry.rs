@@ -5,6 +5,10 @@ impl Worker {
     pub(super) fn expire_queued_requests(&mut self, now_ms: u64) -> Result<(), String> {
         self.pause_stalled_reply_deliveries(now_ms);
         let mut state = self.state.clone();
+        // Live statuses only: the restored ones `open` reads are stale.
+        state
+            .fail_unconfirmed_submissions(now_ms)
+            .map_err(|e| e.to_string())?;
         let expired = state
             .expire_stalled_queued_requests(now_ms)
             .map_err(|e| e.to_string())?;

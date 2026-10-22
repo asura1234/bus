@@ -122,6 +122,7 @@ fn codex_first_room_prompt_does_not_wait_for_its_deferred_session_start() {
         .set_agent_runtime_identity(agent, identity)
         .unwrap();
     worker.save(worker.state.clone()).unwrap();
+    fresh_idle_poll(&mut worker, agent);
     queue(&mut worker, room, agent, "first real prompt");
     worker.submit_ready().unwrap();
     assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_unbound"]);
@@ -306,6 +307,59 @@ fn session_start_reports_bind_through_native_provider_session_adapter() {
     }
 }
 
+/// The fixture polled at 1 ms. Bus fails a write it could not confirm once
+/// its agent sits idle past `DELIVERED_STALL_MS`, so typing starts on the real clock.
+fn fresh_idle_poll(worker: &mut Worker, agent: AgentId) {
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+}
+
+#[test]
+fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::ClaudeCode,
+        vec![
+            Err(TransportError {
+                message: "Provider did not accept prompt before submission deadline".into(),
+                code: Some("timeout".into()),
+                definitely_rejected: false,
+            }),
+            Ok(ResponseResult::AgentPrompted {
+                agent: serde_json::from_value(json!({
+                    "terminal_id":"terminal", "pane_id":"pane", "agent":"claude",
+                    "agent_status":"idle", "workspace_id":"workspace", "tab_id":"tab",
+                    "focused":false, "revision":1
+                }))
+                .unwrap(),
+            }),
+        ],
+    );
+    fresh_idle_poll(&mut worker, agent);
+    let lost = queue(&mut worker, room, agent, "worker final");
+    let next = queue(&mut worker, room, agent, "blocked notice");
+    worker.submit_ready().unwrap();
+    assert!(worker.state.request(lost).unwrap().uncertain_outcome);
+    let bound = worker.state.request(lost).unwrap().progress_at_ms.unwrap()
+        + crate::messaging::model::DELIVERED_STALL_MS;
+    worker.expire_queued_requests(bound).unwrap();
+    let failed = worker.state.request(lost).unwrap();
+    assert_eq!(failed.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        failed.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    worker.submit_ready().unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(next)
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn uncertain_submission_survives_restart_and_never_retries() {
     let (mut worker, agent, room, dir, calls) = fixture(
@@ -316,6 +370,7 @@ fn uncertain_submission_survives_restart_and_never_retries() {
             definitely_rejected: false,
         })],
     );
+    fresh_idle_poll(&mut worker, agent);
     let request = queue(&mut worker, room, agent, "same");
     let next = queue(&mut worker, room, agent, "next");
     worker.submit_ready().unwrap();
@@ -953,6 +1008,7 @@ fn text_typed_into_a_turn_the_agent_began_itself_binds_to_that_turn() {
         ),
     );
     consume(&mut worker, agent, &dir);
+    fresh_idle_poll(&mut worker, agent);
     let request = queue(&mut worker, room, agent, "Answer the dialog");
     worker.submit_ready().unwrap();
     assert_eq!(
