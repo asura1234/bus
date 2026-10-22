@@ -4,6 +4,9 @@ use super::{is_separator, numbered_options, option_line, unboxed};
 /// Inspect the last numbered block's own frame: transcript composers must not
 /// suppress a later real permission dialog.
 pub(super) fn contains(lines: &[&str]) -> bool {
+    if super::grok::contains_composer(lines) {
+        return true;
+    }
     let Some(start) = lines
         .iter()
         .rposition(|line| option_line(line).is_some_and(|option| option.number == 1))

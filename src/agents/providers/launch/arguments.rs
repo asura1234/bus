@@ -109,11 +109,12 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
                 "--resume" | "-r" | "--session-id" | "--continue" | "-c" | "--fork-session"
             ),
             ProviderKind::Cursor => matches!(name, "--resume" | "--continue"),
+            ProviderKind::Grok => super::super::grok::launch::is_session_selector(name),
         };
         if selector {
             index += 1;
             if !arg.contains('=')
-                && matches!(name, "--resume" | "-r" | "--session-id")
+                && matches!(name, "--resume" | "-r" | "--session-id" | "-s")
                 && args.get(index).is_some_and(|value| !value.starts_with('-'))
             {
                 index += 1;
@@ -161,6 +162,7 @@ fn arity(provider: ProviderKind, name: &str) -> Option<usize> {
         ProviderKind::Codex => codex_arity(name),
         ProviderKind::ClaudeCode => claude_arity(name),
         ProviderKind::Cursor => cursor_arity(name),
+        ProviderKind::Grok => super::super::grok::launch::option_arity(name),
     }
 }
 

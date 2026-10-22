@@ -7,6 +7,7 @@ use bytes::Bytes;
 use std::time::Duration;
 
 mod composer;
+mod grok;
 
 pub(super) const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
@@ -420,7 +421,7 @@ fn queue_prompt_input(
     if !observe
         || !matches!(
             kind,
-            AgentKind::Codex | AgentKind::Claude | AgentKind::Cursor
+            AgentKind::Codex | AgentKind::Claude | AgentKind::Cursor | AgentKind::Grok
         )
     {
         return runtime.queue_user_input_submission(

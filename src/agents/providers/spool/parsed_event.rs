@@ -16,6 +16,9 @@ pub(crate) enum Parsed {
         turn: String,
         prompt: String,
     },
+    /// A stop-gate observation requiring committed completion evidence.
+    #[allow(dead_code)] // Lane B supplies candidate observations after G0.
+    CompletionCandidate { session: String, turn: String },
     /// A final reply carried by the completion hook itself.
     Final {
         session: String,
@@ -53,6 +56,7 @@ impl Parsed {
             Self::Session { .. } => "session",
             Self::Started { .. } => "started",
             Self::Final { .. } => "final",
+            Self::CompletionCandidate { .. } => "completion_candidate",
             Self::BackgroundPending { .. } => "background_pending",
             Self::Response { .. } => "cursor_response",
             Self::Completed { .. } => "cursor_stop",

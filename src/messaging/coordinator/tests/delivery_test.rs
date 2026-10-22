@@ -33,6 +33,9 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
         let request = queue(&mut worker, room, agent, "round trip payload ");
         worker.submit_ready().unwrap();
         let callback = match provider {
+            crate::agents::providers::ProviderKind::Grok => {
+                panic!("This fixture covers the original providers; use dedicated Grok lane tests")
+            }
             Provider::ClaudeCode => json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "session",

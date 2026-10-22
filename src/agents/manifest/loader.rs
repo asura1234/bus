@@ -28,7 +28,7 @@ pub(super) const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     ("devin", include_str!("bundled/devin.toml")),
     ("droid", include_str!("bundled/droid.toml")),
     ("gemini", include_str!("bundled/gemini.toml")),
-    ("grok", include_str!("bundled/grok.toml")),
+    ("grok", include_str!("bundled/grok-1.0.5.toml")),
     ("hermes", include_str!("bundled/hermes.toml")),
     ("kilo", include_str!("bundled/kilo.toml")),
     ("kimi", include_str!("bundled/kimi.toml")),

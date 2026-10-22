@@ -11,6 +11,7 @@
 use sha2::{Digest, Sha256};
 mod claude;
 mod composer;
+mod grok;
 
 pub(crate) const CODEX_PENDING_QUESTION_ID: &str = "codex:pending_question";
 
@@ -217,7 +218,8 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     if composer::contains(&lines) {
         return None;
     }
-    claude::parse(&lines, &styles)
+    grok::parse(&lines, &styles)
+        .or_else(|| claude::parse(&lines, &styles))
         .or_else(|| numbered(&lines, &styles))
         .or_else(|| unnumbered(&lines))
         .or_else(|| text_question(&lines))
