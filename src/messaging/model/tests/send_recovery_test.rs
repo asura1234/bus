@@ -140,7 +140,9 @@ fn queued_expiry_preserves_messages_behind_an_idle_codex_approval_dialog() {
     state
         .observe_status(agent, RuntimeStatus::Working, 12)
         .unwrap();
-    state.observe_dialog(agent, true).unwrap();
+    state
+        .observe_dialog(agent, true, state.agent(agent).unwrap().observed_at_ms)
+        .unwrap();
     state
         .observe_status(agent, RuntimeStatus::Idle, 13)
         .unwrap();
@@ -333,4 +335,81 @@ fn feishu_queued_request_that_stalled_while_bus_was_down_still_tells_the_develop
         tagged, 1,
         "a queued message Bus closed as stalled needs the developer to resend it"
     );
+}
+
+#[test]
+fn an_uncertain_write_the_idle_agent_never_took_fails_and_frees_its_queue() {
+    // 17582: a write timeout left the request uncertain, the agent stayed
+    // idle with no start hook, and every message behind it expired.
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    let typed = submit_text(&mut state, room, agent, "worker final");
+    state.begin_submission(typed, "launch-codex", 5).unwrap();
+    state
+        .record_submission(
+            typed,
+            SubmissionOutcome::Uncertain {
+                message: "Submit outcome unknown; no automatic retry: timeout".into(),
+            },
+        )
+        .unwrap();
+    let behind = submit_text(&mut state, room, agent, "blocked notice");
+
+    // Within its bound the uncertain write holds the agent, and the message
+    // behind it waits rather than expiring as prior_request_active.
+    let bound = 1_000 + DELIVERED_STALL_MS;
+    state.fail_unconfirmed_submissions(bound - 1).unwrap();
+    assert!(state
+        .expire_stalled_queued_requests(bound - 1)
+        .unwrap()
+        .is_empty());
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(typed));
+    assert_eq!(state.queued_requests(agent), &[behind]);
+
+    // At the bound it is declared failed, and the queue moves on.
+    state.fail_unconfirmed_submissions(bound).unwrap();
+    assert!(state
+        .expire_stalled_queued_requests(bound)
+        .unwrap()
+        .is_empty());
+    let failed = state.request(typed).unwrap();
+    assert_eq!(failed.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        failed.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert_eq!(failed.completed_at_ms, Some(bound));
+    assert_eq!(state.agent(agent).unwrap().current_request, None);
+    assert_eq!(state.next_queued_request(agent), Some(behind));
+    assert_eq!(state.request(behind).unwrap().phase, RequestPhase::Queued);
+}
+
+#[test]
+fn an_uncertain_write_is_kept_while_the_agent_works_on_it() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    let typed = submit_text(&mut state, room, agent, "go");
+    state.begin_submission(typed, "launch-codex", 5).unwrap();
+    state
+        .record_submission(
+            typed,
+            SubmissionOutcome::Uncertain {
+                message: "timeout".into(),
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Working, 2_000)
+        .unwrap();
+    let hour = 60 * 60 * 1000;
+    state.fail_unconfirmed_submissions(2_000 + hour).unwrap();
+    assert_eq!(
+        state.request(typed).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(typed));
 }

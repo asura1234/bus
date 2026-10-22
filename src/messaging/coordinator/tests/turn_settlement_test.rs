@@ -162,7 +162,13 @@ fn a_visible_choice_panel_does_not_close_an_idle_codex_request() {
     let lead = running(&mut fixture, "implement the change", "turn-1");
     fixture.status(RuntimeStatus::Idle);
     let mut state = fixture.worker.state.clone();
-    state.observe_dialog(fixture.agent, true).unwrap();
+    state
+        .observe_dialog(
+            fixture.agent,
+            true,
+            state.agent(fixture.agent).unwrap().observed_at_ms,
+        )
+        .unwrap();
     fixture.worker.save(state).unwrap();
     fixture.now += CALLBACK_GRACE_MS;
     fixture.status(RuntimeStatus::Idle);

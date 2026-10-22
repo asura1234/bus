@@ -1,4 +1,4 @@
-//! Close untyped, stalled work before any delivery attempt or status response.
+//! Close queued stalls before delivery/status, and unconfirmed writes only after reconciliation.
 use super::{diagnostics, io, Worker};
 
 impl Worker {
@@ -20,5 +20,19 @@ impl Worker {
 
     pub(super) fn expire_queued_now(&mut self) -> Result<(), String> {
         self.expire_queued_requests(io::now_ms())
+    }
+
+    /// Call only after a fresh poll and durable callback reconciliation, so
+    /// already-spooled replies and current Working status win over expiry.
+    pub(super) fn expire_unconfirmed_submissions(&mut self, now_ms: u64) -> Result<(), String> {
+        let mut state = self.state.clone();
+        state
+            .fail_unconfirmed_submissions(now_ms)
+            .map_err(|e| e.to_string())?;
+        state.retain_worker_outcomes(now_ms);
+        if state != self.state {
+            self.save(state)?;
+        }
+        Ok(())
     }
 }

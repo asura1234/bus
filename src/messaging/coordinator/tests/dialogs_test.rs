@@ -1151,8 +1151,12 @@ fn message_status_saves_once_when_several_recipients_dialogs_closed() {
     let message = PromptId(receipt["message_id"].as_u64().unwrap());
     // Both were last seen blocked on a dialog; the screens have since cleared.
     let mut state = worker.state.clone();
-    state.observe_dialog(agent, true).unwrap();
-    state.observe_dialog(other, true).unwrap();
+    state
+        .observe_dialog(agent, true, state.agent(agent).unwrap().observed_at_ms)
+        .unwrap();
+    state
+        .observe_dialog(other, true, state.agent(other).unwrap().observed_at_ms)
+        .unwrap();
     worker.save(state).unwrap();
     let writes = worker.store.writes();
     let status = worker.control_message(message).unwrap();

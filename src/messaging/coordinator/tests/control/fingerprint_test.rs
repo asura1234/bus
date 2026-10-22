@@ -143,7 +143,9 @@ fn unavailable_dialog_snapshots_do_not_resolve_an_existing_help_notice() {
     let (mut worker, agent, dir) = launched_worker();
     worker.transport = Box::new(RedrawServer);
     let mut state = worker.state.clone();
-    state.observe_dialog(agent, true).unwrap();
+    state
+        .observe_dialog(agent, true, state.agent(agent).unwrap().observed_at_ms)
+        .unwrap();
     state
         .set_dialog_notice(agent, Some("still-open-dialog".into()))
         .unwrap();

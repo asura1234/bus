@@ -349,6 +349,17 @@ impl BusState {
             {
                 None
             }
+            // An unconfirmed write ahead of it is failed at its own bound
+            // (`fail_unconfirmed_submissions`); until then nothing refuses it.
+            RequestPhase::Queued
+                if agent.status == RuntimeStatus::Idle
+                    && agent
+                        .current_request
+                        .and_then(|id| self.requests.get(&id))
+                        .is_some_and(|current| current.phase == RequestPhase::Submitting) =>
+            {
+                None
+            }
             RequestPhase::Queued => since(
                 QUEUED_STALL_MS,
                 lead.prompt
@@ -496,6 +507,45 @@ impl BusState {
             "Unstarted request released"
         );
         Some(request)
+    }
+
+    /// Bounds waiting for an unconfirmed write with no observed start hook:
+    /// fail it after `DELIVERED_STALL_MS` from its latest progress or idle
+    /// start, while its agent remains idle. This does not prove the provider
+    /// never ran it. Tell the developer its outcome is unknown, never retype
+    /// it, and let the queue move on. Any text still in the composer is
+    /// cleared by the next delivery.
+    pub(crate) fn fail_unconfirmed_submissions(&mut self, now_ms: u64) -> Result<(), ModelError> {
+        let unconfirmed: Vec<_> = self
+            .agents
+            .keys()
+            .filter_map(|agent| self.unbound_request(*agent))
+            .filter(|request| request.phase == RequestPhase::Submitting)
+            .filter(|request| {
+                self.stall_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
+            })
+            .map(|request| (request.id, request.agent_id, request.prompt.id))
+            .collect();
+        for (request, agent, prompt) in unconfirmed {
+            let message = Self::unconfirmed_submission_message(prompt);
+            self.attention_episode(
+                format!("stall:{}", request.0),
+                Some(true),
+                agent,
+                &message,
+                now_ms,
+            )?;
+            self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
+            self.set_agent_error(agent, Some(message))?;
+            tracing::info!(
+                event = "bus.message.recovered",
+                request_id = request.0,
+                agent_id = agent.0,
+                reason = "submission_unconfirmed",
+                "Unconfirmed submission failed"
+            );
+        }
+        Ok(())
     }
 
     /// The request a message may steer into: the agent's current request while

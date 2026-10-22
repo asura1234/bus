@@ -180,7 +180,9 @@ fn polled_worker() -> (
     let request = queue(&mut worker, room, agent, "build it");
     let message = worker.state.request(request).unwrap().prompt.id;
     let mut state = worker.state.clone();
-    state.observe_dialog(agent, true).unwrap();
+    state
+        .observe_dialog(agent, true, state.agent(agent).unwrap().observed_at_ms)
+        .unwrap();
     worker.save(state).unwrap();
     calls.lock().unwrap().clear();
     (worker, agent, message, dir, calls)
