@@ -98,6 +98,7 @@ fn grok_hook_transaction_refuses_a_symlinked_lock() {
         &f.project,
         &f.root.join("replacement-bus"),
         Mode::Resume,
+        None,
         || Ok(())
     )
     .is_err());
@@ -118,15 +119,17 @@ fn grok_global_aliases_to_a_missing_hook_fail_closed_before_creation() {
             fs::create_dir_all(&additional).unwrap();
             fs::rename(folder.join("shared.json"), additional.join("shared.json")).unwrap();
             fs::write(
-                f.root.join("home/.grok/config.toml"),
-                format!(
-                    "hooks-paths = [{}]\n",
-                    serde_json::to_string(&additional.to_string_lossy()).unwrap()
-                ),
+                f.root.join("home/.grok/hooks-paths"),
+                format!("{}\n", additional.display()),
             )
             .unwrap();
         }
-        assert!(super::update(&f.project, &f.root.join("bus"), Mode::Install, || Ok(())).is_err());
+        assert!(
+            super::update(&f.project, &f.root.join("bus"), Mode::Install, None, || Ok(
+                ()
+            ))
+            .is_err()
+        );
         assert!(!f.project.join(".grok").exists());
     }
 }
@@ -154,7 +157,7 @@ fn grok_hook_post_write_identity_rejects_regular_leaf_replacement() {
 }
 
 #[test]
-fn grok_hook_atomic_replacement_keeps_a_global_hard_link_unchanged() {
+fn grok_hook_transaction_refuses_a_global_hard_link() {
     let f = Fixture::new();
     f.install();
     f.prepare("");
@@ -167,27 +170,34 @@ fn grok_hook_atomic_replacement_keeps_a_global_hard_link_unchanged() {
         &f.project,
         &f.root.join("replacement-bus"),
         Mode::Resume,
+        None,
         || Ok(()),
     )
-    .unwrap();
+    .unwrap_err();
     assert_eq!(fs::read(&global).unwrap(), original);
-    assert_ne!(fs::read(&leaf).unwrap(), original);
+    assert_eq!(fs::read(&leaf).unwrap(), original);
 }
 
 #[test]
-fn grok_unreadable_global_root_configuration_does_not_authorize_setup() {
-    for contents in [
-        "[bad toml",
-        "hooks-paths = 'not-an-array'",
-        "hooks-paths = [42]",
-    ] {
+fn grok_invalid_global_registry_does_not_authorize_setup() {
+    for route in ["directory", "non-utf8", "oversize", "missing-target"] {
         let f = Fixture::new();
         f.install();
-        let global = f.root.join("home/.grok/config.toml");
+        let global = f.root.join("home/.grok/hooks-paths");
         fs::create_dir_all(global.parent().unwrap()).unwrap();
-        fs::write(&global, contents).unwrap();
-        assert!(super::update(&f.project, &f.root.join("bus"), Mode::Install, || Ok(())).is_err());
-        assert!(!f.project.join(".grok").exists());
-        assert_eq!(fs::read_to_string(&global).unwrap(), contents);
+        match route {
+            "directory" => fs::create_dir(&global).unwrap(),
+            "non-utf8" => fs::write(&global, [255]).unwrap(),
+            "oversize" => fs::write(&global, vec![b'a'; 2 * 1024 * 1024 + 1]).unwrap(),
+            _ => fs::write(&global, f.root.join("missing-target").to_str().unwrap()).unwrap(),
+        }
+        assert!(
+            super::update(&f.project, &f.root.join("bus"), Mode::Install, None, || Ok(
+                ()
+            ))
+            .is_err(),
+            "{route}"
+        );
+        assert!(!f.project.join(".grok").exists(), "{route}");
     }
 }

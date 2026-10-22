@@ -516,6 +516,15 @@ fn resume_argv(
         .ok_or("Grok resume has no selected executable")?;
     }
     argv.extend(extras.args.iter().cloned());
+    if plan.agent == "grok" && !extras.env.is_empty() {
+        let home = extras
+            .env
+            .iter()
+            .find(|(key, _)| key == "GROK_HOME")
+            .map(|(_, value)| value)
+            .ok_or("Grok resume has no validated home")?;
+        argv = crate::agents::providers::grok::launch::bind_home(argv, std::path::Path::new(home))?;
+    }
     Ok(argv)
 }
 

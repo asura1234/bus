@@ -414,6 +414,11 @@ impl Worker {
         let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
         crate::messaging::skills::post_warnings(&mut state, &skill_agent)?;
         let selected_executable = launch::selected_executable(input.provider, &prepared.env)?;
+        let grok_home = prepared
+            .env
+            .get("GROK_HOME")
+            .cloned()
+            .filter(|_| selected_executable.is_some());
         let identity = self.persist_agent_launch(
             state,
             id,
@@ -467,6 +472,7 @@ impl Worker {
                 pane_id: pane.clone(),
                 args: prepared.args.clone(),
                 executable: selected_executable,
+                grok_home,
                 timeout_ms: None,
             }));
         match started {

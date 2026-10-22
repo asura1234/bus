@@ -10,7 +10,34 @@ use std::{
     path::{Component, Path},
 };
 
-pub(super) struct Dir(File);
+pub(super) struct Dir {
+    file: File,
+    created: Option<(File, CString)>,
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        if let Some((parent, name)) = &self.created {
+            // Remove only our still-identical, empty directory. Never recurse.
+            // SAFETY: owned parent descriptor and NUL-terminated child name.
+            let fd = unsafe {
+                libc::openat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if let Ok(current) = opened(fd) {
+                if same(&self.file, &current).unwrap_or(false) {
+                    // SAFETY: AT_REMOVEDIR refuses nonempty directories.
+                    unsafe {
+                        libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR);
+                    }
+                }
+            }
+        }
+    }
+}
 
 fn name(value: &OsStr) -> Result<CString, String> {
     CString::new(value.as_bytes()).map_err(|_| "Invalid hook path component".into())
@@ -26,7 +53,10 @@ fn opened(fd: libc::c_int) -> Result<File, String> {
 
 impl Dir {
     pub(super) fn open(path: &Path) -> Result<Self, String> {
-        let mut dir = Self(File::open("/").map_err(|e| e.to_string())?);
+        let mut dir = Self {
+            file: File::open("/").map_err(|e| e.to_string())?,
+            created: None,
+        };
         for component in path.components() {
             match component {
                 Component::RootDir => {}
@@ -43,7 +73,7 @@ impl Dir {
         // and mode supplied for O_CREAT. Returned descriptor is uniquely owned.
         opened(unsafe {
             libc::openat(
-                self.0.as_raw_fd(),
+                self.file.as_raw_fd(),
                 component.as_ptr(),
                 flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
                 0o600,
@@ -53,22 +83,55 @@ impl Dir {
 
     pub(super) fn child(&self, component: impl AsRef<OsStr>, create: bool) -> Result<Self, String> {
         let component = component.as_ref();
+        let mut created = false;
         if create {
             let component = name(component)?;
             // SAFETY: live parent descriptor and a single NUL-terminated name.
-            let result = unsafe { libc::mkdirat(self.0.as_raw_fd(), component.as_ptr(), 0o700) };
+            let result = unsafe { libc::mkdirat(self.file.as_raw_fd(), component.as_ptr(), 0o700) };
+            created = result == 0;
             if result < 0
                 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
             {
                 return Err(std::io::Error::last_os_error().to_string());
             }
         }
-        self.open_at(component, libc::O_RDONLY | libc::O_DIRECTORY)
-            .map(Self)
+        Ok(Self {
+            file: self.open_at(component, libc::O_RDONLY | libc::O_DIRECTORY)?,
+            created: if created {
+                Some((
+                    self.file.try_clone().map_err(|e| e.to_string())?,
+                    name(component)?,
+                ))
+            } else {
+                None
+            },
+        })
+    }
+
+    pub(super) fn keep(&mut self) {
+        self.created = None;
+    }
+
+    // Containment is an identity relation, including APFS firmlink spellings.
+    pub(super) fn within(&self, root: &Self) -> Result<bool, String> {
+        let mut current = Self {
+            file: self.file.try_clone().map_err(|e| e.to_string())?,
+            created: None,
+        };
+        loop {
+            if current.same(root)? {
+                return Ok(true);
+            }
+            let parent = current.child("..", false)?;
+            if current.same(&parent)? {
+                return Ok(false);
+            }
+            current = parent;
+        }
     }
 
     pub(super) fn same(&self, other: &Self) -> Result<bool, String> {
-        same(&self.0, &other.0)
+        same(&self.file, &other.file)
     }
 
     pub(super) fn lock(&self) -> Result<File, String> {
@@ -87,12 +150,12 @@ impl Dir {
         Ok(file)
     }
 
-    pub(super) fn read(&self) -> Result<Option<(File, Vec<u8>)>, String> {
+    pub(super) fn leaf(&self) -> Result<Option<File>, String> {
         let component = name(OsStr::new("bus.json"))?;
         // SAFETY: live directory descriptor and static single-component name.
         let fd = unsafe {
             libc::openat(
-                self.0.as_raw_fd(),
+                self.file.as_raw_fd(),
                 component.as_ptr(),
                 libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
             )
@@ -100,10 +163,17 @@ impl Dir {
         if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
             return Ok(None);
         }
-        let mut file = opened(fd)?;
+        let file = opened(fd)?;
         if !file.metadata().map_err(|e| e.to_string())?.is_file() {
             return Err("Project hook is not a regular file".into());
         }
+        Ok(Some(file))
+    }
+
+    pub(super) fn read(&self) -> Result<Option<(File, Vec<u8>)>, String> {
+        let Some(mut file) = self.leaf()? else {
+            return Ok(None);
+        };
         let mut bytes = Vec::new();
         (&mut file)
             .take(2 * 1024 * 1024 + 1)
@@ -138,9 +208,9 @@ impl Dir {
             // renameat replaces the directory entry, never follows a leaf link.
             if unsafe {
                 libc::renameat(
-                    self.0.as_raw_fd(),
+                    self.file.as_raw_fd(),
                     source.as_ptr(),
-                    self.0.as_raw_fd(),
+                    self.file.as_raw_fd(),
                     target.as_ptr(),
                 )
             } < 0
@@ -148,13 +218,13 @@ impl Dir {
                 return Err(std::io::Error::last_os_error().to_string());
             }
             checkpoint(super::Stage::AfterRename);
-            self.0.sync_all().map_err(|e| e.to_string())?;
+            self.file.sync_all().map_err(|e| e.to_string())?;
             Ok(())
         })();
         // SAFETY: remove only our unique temporary name from the pinned folder;
         // after rename the name is absent and unlinkat harmlessly fails.
         unsafe {
-            libc::unlinkat(self.0.as_raw_fd(), source.as_ptr(), 0);
+            libc::unlinkat(self.file.as_raw_fd(), source.as_ptr(), 0);
         }
         result?;
         Ok(file)

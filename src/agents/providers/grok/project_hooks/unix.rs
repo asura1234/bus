@@ -19,8 +19,9 @@ struct Target {
     root_path: PathBuf,
     path: PathBuf,
     root: dirs::Dir,
-    config: dirs::Dir,
     hooks: dirs::Dir,
+    config: dirs::Dir,
+    home: PathBuf,
 }
 
 struct PinnedRoot {
@@ -28,6 +29,7 @@ struct PinnedRoot {
     cwd_dir: dirs::Dir,
     path: PathBuf,
     dir: dirs::Dir,
+    home: PathBuf,
 }
 
 // Resolve the parent (e.g. macOS /var -> /private/var), but never follow the
@@ -42,23 +44,19 @@ fn nofollow_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 impl PinnedRoot {
-    fn open(project: &Path) -> Result<Self, String> {
+    fn open(project: &Path, saved_home: Option<&Path>) -> Result<Self, String> {
         let project = nofollow_path(project)?;
         let cwd_dir = dirs::Dir::open(&project)?;
         let path = nofollow_path(&project_root(&project))?;
-        if std::env::home_dir()
-            .and_then(|p| p.canonicalize().ok())
-            .is_some_and(|p| p == path)
-        {
-            return Err("Grok project hooks cannot modify HOME configuration".into());
-        }
         let dir = dirs::Dir::open(&path)?;
-        roots::verify(&path.join(".grok/hooks/bus.json"), &project)?;
+        let home = roots::home(&project, saved_home)?;
+        roots::verify(&dir, None, &home)?;
         Ok(Self {
             cwd: project,
             cwd_dir,
             path,
             dir,
+            home,
         })
     }
 
@@ -69,7 +67,7 @@ impl PinnedRoot {
             return Err("Project directory changed during validation".into());
         }
         let path = self.path.join(".grok/hooks/bus.json");
-        roots::verify(&path, &self.cwd)?;
+        roots::verify(&self.dir, None, &self.home)?;
         let config = self.dir.child(".grok", mode == Mode::Install)?;
         let hooks = config.child("hooks", mode == Mode::Install)?;
         let target = Target {
@@ -80,6 +78,7 @@ impl PinnedRoot {
             root: self.dir,
             config,
             hooks,
+            home: self.home,
         };
         target.verify()?;
         Ok(target)
@@ -98,7 +97,7 @@ impl Target {
         {
             return Err("Project hook directory identity changed; no capture authorized".into());
         }
-        roots::verify(&self.path, &self.cwd)
+        roots::verify(&self.root, Some(&self.hooks), &self.home)
     }
 }
 
@@ -106,23 +105,36 @@ pub(super) fn update<T>(
     project: &Path,
     binary: &Path,
     mode: Mode,
+    home: Option<&Path>,
     validate: impl FnOnce() -> Result<T, String>,
-) -> Result<(PathBuf, bool, T), String> {
-    transact(project, binary, mode, validate, |_| {})
+) -> Result<(PathBuf, bool, T, PathBuf), String> {
+    transact_with_home(project, binary, mode, home, validate, |_| {})
 }
 
 // The callback lets tests replace directories at the exact syscall boundary;
 // production always supplies a no-op, with the identical descriptor I/O.
+#[cfg(test)]
 fn transact<T>(
     project: &Path,
     binary: &Path,
     mode: Mode,
     validate: impl FnOnce() -> Result<T, String>,
     checkpoint: impl FnMut(Stage),
-) -> Result<(PathBuf, bool, T), String> {
-    let root = PinnedRoot::open(project)?;
+) -> Result<(PathBuf, bool, T, PathBuf), String> {
+    transact_with_home(project, binary, mode, None, validate, checkpoint)
+}
+
+fn transact_with_home<T>(
+    project: &Path,
+    binary: &Path,
+    mode: Mode,
+    home: Option<&Path>,
+    validate: impl FnOnce() -> Result<T, String>,
+    checkpoint: impl FnMut(Stage),
+) -> Result<(PathBuf, bool, T, PathBuf), String> {
+    let root = PinnedRoot::open(project, home)?;
     let validated = validate()?;
-    let target = root.target(mode)?;
+    let mut target = root.target(mode)?;
     let _lease = target.hooks.lock()?;
     target.verify()?;
     let previous = target.hooks.read()?;
@@ -145,7 +157,9 @@ fn transact<T>(
     let merged = hook_json::merge_hooks(document.clone(), contract, binary)?;
     if mode == Mode::Resume && document == merged {
         target.verify()?;
-        return Ok((target.path, false, validated));
+        target.hooks.keep();
+        target.config.keep();
+        return Ok((target.path, false, validated, target.home));
     }
     let bytes = serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?;
     let current = target.hooks.read()?;
@@ -169,7 +183,9 @@ fn transact<T>(
     if !dirs::same(&written, &current)? || contents != bytes {
         return Err("Project hook identity changed after write; no capture authorized".into());
     }
-    Ok((target.path, mode == Mode::Resume, validated))
+    target.hooks.keep();
+    target.config.keep();
+    Ok((target.path, mode == Mode::Resume, validated, target.home))
 }
 
 #[cfg(test)]

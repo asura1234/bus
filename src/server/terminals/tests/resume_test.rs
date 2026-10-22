@@ -12,7 +12,7 @@ fn grok_resume_binds_selected_alias_after_shell_startup() {
     let selected = scratch.join("grok");
     std::fs::write(
         &selected,
-        "#!/bin/sh\nprintf 'selected|'; printf '%s\\n' \"$@\"\n",
+        "#!/bin/sh\nprintf 'selected|%s|' \"$GROK_HOME\"; printf '%s\\n' \"$@\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -23,18 +23,25 @@ fn grok_resume_binds_selected_alias_after_shell_startup() {
     };
     let argv = resume_argv_for_test(
         &plan,
-        vec![("PATH".into(), scratch.to_str().unwrap().into())],
+        vec![
+            ("PATH".into(), scratch.to_str().unwrap().into()),
+            (
+                "GROK_HOME".into(),
+                scratch.join("validated home").to_str().unwrap().into(),
+            ),
+        ],
         vec!["--fullscreen".into(), "literal $() argument".into()],
     )
     .unwrap();
-    assert_eq!(argv[0], selected.to_str().unwrap());
+    assert_eq!(argv[0], "/usr/bin/env");
+    assert_eq!(argv[2], selected.to_str().unwrap());
     assert_eq!(plan.argv[0], "grok");
     let command = shell_command_from_argv(&argv);
     let output = std::process::Command::new("/bin/zsh")
         .args([
             "-f",
             "-c",
-            &format!("grok() {{ print shell-function-shadow; }}\n{command}"),
+            &format!("export GROK_HOME=/shell/override\ngrok() {{ print shell-function-shadow; }}\n{command}"),
         ])
         .env("PATH", &scratch)
         .output()
@@ -46,7 +53,10 @@ fn grok_resume_binds_selected_alias_after_shell_startup() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "selected|--resume\nsaved-session\n--fullscreen\nliteral $() argument\n"
+        format!(
+            "selected|{}|--resume\nsaved-session\n--fullscreen\nliteral $() argument\n",
+            scratch.join("validated home").display()
+        )
     );
     std::fs::remove_dir_all(scratch).unwrap();
 }
@@ -64,11 +74,14 @@ fn grok_resume_refuses_missing_or_relative_selected_executable() {
         Vec::new()
     )
     .is_err());
-    let mut env = vec![("PATH".into(), "relative:/bin".into())];
+    let mut env = vec![
+        ("PATH".into(), "relative:/bin".into()),
+        ("GROK_HOME".into(), "/selected/home".into()),
+    ];
     assert!(resume_argv_for_test(&plan, env.clone(), Vec::new()).is_err());
     env[0].1 = "/selected/bin:/bin".into();
     assert_eq!(
-        resume_argv_for_test(&plan, env.clone(), Vec::new()).unwrap()[0],
+        resume_argv_for_test(&plan, env.clone(), Vec::new()).unwrap()[2],
         "/selected/bin/grok"
     );
     plan.argv[0] = "/unexpected/grok".into();
