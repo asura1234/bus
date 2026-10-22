@@ -18,7 +18,7 @@ import tempfile
 import time
 import uuid
 
-from tools.acceptance.harness_test import Bus
+from tools.acceptance.harness_test import Bus, CliError
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -112,6 +112,16 @@ class Run:
             args += ["--queue"]
         return self.cli(*args)["message_id"]
 
+    def dialog_action(self, *args):
+        try:
+            return self.cli(*args)
+        except CliError as error:
+            if "Dialog answer outcome is uncertain" not in str(error):
+                raise
+            # Never repeat an uncertain keypress. Settlement below supplies
+            # evidence that this scripted answer was actually accepted.
+            return {"outcome": "uncertain", "error": str(error), "retried": False}
+
     def settle(self, message, success=True):
         status = poll(lambda: self.cli("message", "status", message), lambda s: s["complete"])
         if success:
@@ -179,9 +189,9 @@ class Run:
                 message = self.send(self.room, self.worker, prompt)
                 found = poll(lambda: self.cli("agent", "dialog", self.worker), lambda r: r.get("dialog"))
                 if skip:
-                    outcome = self.cli("agent", "answer", self.worker, "--skip", "--fingerprint", found["fingerprint"])
+                    outcome = self.dialog_action("agent", "answer", self.worker, "--skip", "--fingerprint", found["fingerprint"])
                 else:
-                    outcome = self.cli("agent", "choose", self.worker, "--option", 1, "--fingerprint", found["fingerprint"])
+                    outcome = self.dialog_action("agent", "choose", self.worker, "--option", 1, "--fingerprint", found["fingerprint"])
                 records.append({"observed": found, "answer": outcome, "settled": self.settle(message)})
             return records
         self.case("question-and-dismissal", dialogs)
@@ -253,7 +263,7 @@ class Run:
             found = poll(lambda: self.cli("agent", "dialog", self.peer), lambda r: r.get("dialog"))
             notice = poll(lambda: self.cli("agent", "read", self.orch, "--source", "recent", "--lines", 200),
                           lambda r: "Blocked, needs help to continue." in r.get("text", ""))
-            outcome = self.cli("agent", "choose", self.peer, "--option", 1, "--fingerprint", found["fingerprint"])
+            outcome = self.dialog_action("agent", "choose", self.peer, "--option", 1, "--fingerprint", found["fingerprint"])
             return {"blocker_wake": notice, "scripted_orchestrator_answer": outcome, "settled": self.settle(job)}
         self.case("worker-blocker-wake-and-answer", blocker)
 
