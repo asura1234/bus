@@ -305,10 +305,10 @@ form is `send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
 conversation room chosen by `--room`.
 
 An exact numeric agent ID always resolves globally, even if a local agent has
-that ID as its name. A name first resolves among agents in the sender's home
-room, then among all agents. If several agents match at the chosen level, Bus
-errors and lists each candidate's name, ID and room; select an ID to disambiguate.
-Without `--as`, the selected conversation room supplies the local-name scope.
+that ID as its name. A name first resolves among agents in the selected
+conversation room (`--room`), then in the sender's home room, then among all
+agents. If several agents match at the chosen level, Bus errors and lists each candidate's name, ID and room; select an ID to disambiguate.
+Without `--as`, the selected conversation room supplies both local scopes.
 `--as` uses the same ID/name resolver, with the selected room as its local scope.
 
 A worker can message its orchestrator before being assigned any work:
@@ -320,17 +320,23 @@ bus send --room "$room_id" --as "$agent_id" --to orchestrator \
 
 The case-insensitive reserved `orchestrator` alias resolves to the orchestrator
 bound to the sender's own home room, even when `--room` chooses another
-conversation room. A real member of that home room named `orchestrator` takes
-precedence. With no matching member and no binding, Bus reports `This room has
-no bound orchestrator`. Other orchestrators, MASTER peers and workers in any
+conversation room. A real member of the conversation room, then the home room,
+named `orchestrator` takes precedence. With no matching member and no binding,
+Bus reports `This room has no bound orchestrator`. Other orchestrators, MASTER peers and workers in any
 room are reachable by name or ID.
 
 Bus automatically prepends `name (agent id, room R):` to every agent-authored
 payload it delivers, using the sender's home room ID. Send only the message
-body: do not add a "from X", "X here" or signature line. If the first line
-already names the same sender by name or agent ID, Bus keeps that identity
-without adding a duplicate header. The stored chat text stays as authored;
+body: do not add a "from X", "X here" or signature line. Bus suppresses a duplicate
+header only when the first line is the exact Bus header with this sender's own name, ID and home room, or a short identity-only
+line: the sender's name or `agent ID` followed by `:` or ` here —` and nothing
+else. An ordinary sentence or a header with a forged ID or room always gets
+the genuine sender header. The stored chat text stays as authored;
 the delivered payload and callback matching use the same rendered text.
+
+After an upgrade, existing agents receive these current messaging rules once
+as their first pending message, before waiting work; saved custom prompts are
+preserved. New agents receive the rules at launch.
 
 A message from another conversation room waits for the recipient's running
 turn to finish, then gets its own turn and reply. Same-room steering,

@@ -168,3 +168,9 @@ You handle these yourself:
 
 All agents for one PR share its worktree (any worktree, not necessarily the
 main checkout); the author is the only one who commits.
+
+## Worker brief messaging rule
+
+Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
+room's bound orchestrator, and names or IDs can reach agents in any room.
