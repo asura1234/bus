@@ -1,8 +1,10 @@
-//! Grok provider lane contracts; G0 is an explicitly incomplete scaffold.
+//! Grok Build integration; native completion acceptance awaits signed-in evidence.
 pub(crate) mod completion;
 pub(crate) mod hooks;
 pub(crate) mod launch;
 pub(crate) mod resume;
+#[cfg(feature = "dev-tools")]
+pub(crate) mod synthetic;
 pub(crate) mod system_prompt;
 pub(crate) mod usage;
 use super::hook_json::{HookContract, HookEntryShape};

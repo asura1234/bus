@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn grok_g_idle_notification_requests_reconciliation_without_minting_a_turn() {
+    let value = serde_json::json!({"hookEventName":"notification", "sessionId":"known", "notificationType":"idle_prompt"});
+    let observed = parse(ProviderKind::Grok, &value).unwrap();
+    assert_eq!(
+        format!("{observed:?}"),
+        "ReconcileSession { session: \"known\" }"
+    );
+}
+
+#[test]
+fn grok_g_shared_resume_delegates_clustered_selectors() {
+    assert_eq!(
+        launch::resumable_options(ProviderKind::Grok, &["-cmgrok-build".into()]),
+        ["--model", "grok-build"]
+    );
+}
+
+#[test]
 fn grok_registration_has_stable_identity_and_observation_contract() {
     let provider: ProviderKind =
         serde_json::from_str("\"grok\"").expect("Grok provider registration");

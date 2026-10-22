@@ -193,6 +193,7 @@ fn embedded_docs_match_the_repository_copies() {
             "bus-communication-guide.md",
             "orchestration/bus-communication-guide.md",
         ),
+        ("providers/grok.md", "orchestration/providers/grok.md"),
         ("how-to-bus-cli.md", "orchestration/how-to-bus-cli.md"),
         ("orchestrator-guide.md", "orchestration/guide.md"),
         ("orchestrator-rules.md", "orchestration/rules.md"),

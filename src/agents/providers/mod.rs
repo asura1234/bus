@@ -53,6 +53,23 @@ pub(crate) fn parse(
     provider: ProviderKind,
     value: &serde_json::Value,
 ) -> Result<spool::Parsed, String> {
+    if provider == ProviderKind::Grok
+        && value
+            .get("hookEventName")
+            .and_then(serde_json::Value::as_str)
+            == Some("notification")
+        && value
+            .get("notificationType")
+            .and_then(serde_json::Value::as_str)
+            == Some("idle_prompt")
+        && value
+            .get("subagentType")
+            .is_none_or(serde_json::Value::is_null)
+    {
+        return Ok(spool::Parsed::ReconcileSession {
+            session: spool::field(value, "sessionId")?,
+        });
+    }
     match provider {
         ProviderKind::Codex => codex::hooks::parse(value),
         ProviderKind::ClaudeCode => claude_code::hooks::parse(value),
