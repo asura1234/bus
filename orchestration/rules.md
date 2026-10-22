@@ -122,9 +122,17 @@ the wrapper remains held.
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the developer.
-- **Parallelism is king.** Split work into independent pieces and run them on
-  several agents at once whenever they do not depend on each other. *Why:*
-  work gets done faster.
+- **Parallelism is king.** Whenever a change must land in several places,
+  split it across agents running in parallel; order only dependent steps.
+  *Why:* finding and fixing one place at a time creates repeated review loops.
+- **Assign write ownership before parallel work.** Give each agent a directory
+  or file area in its brief; agents write only there. Lock shared files to one
+  writer at a time, or give them one owner. Use separate worktrees and branches
+  for heavy overlap or conflicting gates/builds; control their integration.
+  Follow [Parallel writes](parallel-writes.md).
+- **Give every parallel worker the installed write guide.** Each brief tells
+  the worker to read the absolute session `docs/parallel-writes.md` path and
+  includes its ownership map; resolve the path before sending the brief.
 - **Compartmentalize, within reason.** Break big work into manageable pieces;
   give each agent one piece plus limited context on how it fits the bigger
   picture. *Why:* one giant ask in one terminal is daunting and goes worse.
@@ -177,6 +185,30 @@ the wrapper remains held.
   *Why:* a PR grew from three bug fixes to 130 files because its goal was
   written after the work grew; every review check passed against that wrong
   goal, and nothing compared it with the request or the size.
+
+<a id="review-loop-convergence"></a>
+
+- **Prevent review-loop whack-a-mole on every task.**
+  - Before a worker starts implementation, have an investigator enumerate every
+    place the change must hold: entry points, screens, callers, platforms,
+    providers and states, with `file:line` and a check for each. Put this
+    acceptance checklist in the brief and PR; reviewers and verifiers check
+    against it.
+  - Strongly encourage workers to use parallel subagents per checklist item or
+    group for both investigation and fixes, under the write-ownership rules.
+  - Run review, verification and any bot review concurrently on the same head.
+  - Allow at most two fix rounds per PR. If the core goal holds across the
+    checklist and required gates pass, merge only with the developer's OK;
+    turn remaining edge work into follow-up PR steps in the running workflow
+    and execute them. Otherwise stop and ask the developer for a plan.
+  - Escalate any PR open longer than four hours to the developer in MASTER with
+    `[waiting-on-you]`, the cause and a plan.
+  - A review finding outside the checklist means enumeration was incomplete:
+    update it and recheck the whole category, not just that instance.
+
+  *Why:* a complete checklist and bounded, parallel checks prevent each missed
+  place from costing another full review loop.
+
 - **Brief workers directly.** You act on the developer's behalf: state the task,
   constraints and decisions plainly, with concrete reasons. Never say who asked
   or approved it ("the human/developer wants", 人类, 开发者要求), or frame anyone
@@ -222,10 +254,6 @@ the wrapper remains held.
   outward-facing. The notice is signed `bus`; a blocked orchestrator instead
   gets a Bus developer-attention notice in MASTER. *Why:* the
   blocked terminal is the source of truth.
-- **Use `worktree-new` only when it is a must.** By default all workers share
-  one branch: give each worker its file boundaries and grant shared files one
-  agent at a time. *Why:* one branch avoids merge work and keeps everyone on the
-  same code.
 - **Always run `worktree-close` after a merge.** Have an agent run it when a PR
   is merged, or when a temporary worktree is merged into the local feature
   branch. *Why:* stale worktrees and branches pile up and get edited by mistake.

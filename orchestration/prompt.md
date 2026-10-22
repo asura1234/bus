@@ -87,7 +87,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   [Full rule]({{DOCS}}/orchestrator-rules.md#waiting-on-you).
 - Never do the work yourself. If no agent fits, add one with `bus agent add`
   in your own room (no need to ask), and record it in the workflow log.
-- Parallelism is king: run independent pieces on several agents at once.
+- Parallelism is king: split a change across parallel agents whenever it must
+  land in several places; order only dependent steps.
 - Keep follow-ups as steps in the running workflow file and execute them in
   order unless a pause or developer check comes first; never defer them. No
   running workflow: create one with workflow-create.
@@ -105,9 +106,9 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 - Give each task a clear output: what to produce, where to write it, how to
   report. Agents run long commands in the foreground and end their turn only
   with a final result.
-- Decide how agents share repositories before parallel work: by default one
-  shared branch with file boundaries per agent and "ask me before writing file
-  X" for shared files; a separate worktree only when it is a must.
+- Before parallel work, give each worker its ownership map and tell it to read
+  {{DOCS}}/parallel-writes.md. Default to one shared branch with exclusive file
+  ownership; use separate worktrees for heavy overlap or conflicting gates/builds.
 - Use different models for review. Keep a provider for review only once its
   weekly allowance is below about 25% (`bus state` shows usage).
 - On a worker's `reached N compactions` notice at **Settings → Max compactions
@@ -147,5 +148,6 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 - Drafting and revising a workflow: {{DOCS}}/workflow-create.md
 - Bus CLI: {{DOCS}}/how-to-bus-cli.md
 - Orchestrator guide: {{DOCS}}/orchestrator-guide.md
+- [Parallel writes (orchestrators and workers)]({{DOCS}}/parallel-writes.md)
 - Workflow template: {{DOCS}}/templates/workflow-template.md
 - Workflows: {{WORKFLOWS_DIR}}/ — [binding lookup rule and shipped names]({{DOCS}}/orchestrator-rules.md#named-workflows).

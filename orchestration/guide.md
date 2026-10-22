@@ -121,7 +121,7 @@ DONE / OPEN:
 [x] Spec agreed
 [x] Implement gallery (claude-dev)
 [x] CI green
-[ ] Review until all ready (round 2 of 4)
+[ ] Review, verification and bots (fix round 2 of 2)
 [ ] Developer regression test
 [ ] Merge (developer)"
 ```
@@ -133,13 +133,21 @@ when the state changes, not on every message.
 
 Decide how agents share the repository before sending parallel work:
 
-- **Default: one shared branch.** Give each agent its file boundaries. For a
-  few shared files, tell each agent involved: "When you need to modify file X,
-  ask me first and wait." Grant one agent at a time.
-- **Only when it is a must:** give an agent its own worktree and branch. Ask an
-  agent to create it with the `worktree-new` skill, merge the branches in a
-  planned order, and have an agent run `worktree-close` as soon as each one is
-  merged.
+- Whenever a change spans several places, split it across parallel agents.
+  Order dependencies explicitly. Strongly encourage workers to use subagents
+  per acceptance item or group for both investigation and fixes.
+- Follow [Parallel writes](parallel-writes.md), the shared guide for
+  orchestrators and workers, for ownership maps, shared-file locks, worktrees,
+  integration and cleanup. Default to one shared branch; switch to separate
+  worktrees for heavy overlap or conflicting gates/builds.
+- In **every parallel worker's brief**, include its ownership map and tell it
+  to read the installed guide by its **absolute path**. Resolve the session
+  docs directory from your prompt's References, then append `parallel-writes.md`.
+  For example, session `s42` at the default Linux data root uses
+  `/home/alex/.local/share/bus/sessions/s42/docs/parallel-writes.md`.
+  Send the actual resolved path, not this example, a relative checkout path,
+  `~`, or an unexpanded variable. Workers can open that file directly without
+  access to your prompt.
 
 Write the choice in the workflow's Coordination section.
 
@@ -170,11 +178,43 @@ check space again before lifting the hold. Bus builds use a separate
 
 ## The review loop
 
-A typical PR review loop, run by the orchestrator:
+Apply the [binding rule against review-loop whack-a-mole](orchestrator-rules.md#review-loop-convergence)
+to every task, including a change that appears to have only one affected place.
+Before implementation starts, have an investigator enumerate everywhere the
+goal must hold: entry points, screens, callers, platforms, providers and states.
+Each acceptance-checklist row names `file:line`, the scenario, and a reproduction,
+test or other concrete way to check it. Put the same checklist in the worker's
+brief and the PR. Keep it within the locked goal; a new requirement still needs
+the developer's agreement. Bug-fix briefs still require evidence of the root
+cause before behavior changes; enumeration does not replace that investigation.
 
-1. Ask two or more reviewers on different providers to run `review-pr` on the
-   branch.
-2. Send their findings to the author agent to run `address-review-comments`.
+For example:
+
+- **Reference audio limit:** "refuse reference audio over 30 s everywhere" had
+  about six entry points in another project. Each review or verification round
+  found another one, costing a full fix → gate → review → verify loop; PRs stayed
+  open for seven and twenty hours. Enumerate every picker, upload, reuse and
+  provider route before coding, with a way to try an over-limit clip on each.
+- **UI treatment:** list every affected screen and its loading, empty, error
+  and populated states, including platform variants; check each treatment there.
+- **Delivery fix:** list every provider and caller, including reconnect, retry
+  and failure states; reproduce the delivery behavior for each. Evidence of the
+  root cause must explain the bug before the fix is dispatched.
+
+Run checks and remediation as a bounded loop:
+
+1. Pin one head and give the checklist to two or more `review-pr` reviewers on
+   different providers and to the verifier. Launch their work and any bot review
+   (for example Copilot) concurrently. For delivery, callbacks or launch, the
+   verifier also runs `just e2e` (live round trips with every provider) and reports
+   its table in this same round, rather than waiting for review to finish.
+   Keep the head unchanged while the checks run. Results for an older head do
+   not prove a later fix.
+2. Collect all findings before sending one consolidated fix brief to the author
+   to run `address-review-comments`. A finding outside the checklist exposes an
+   enumeration miss: have the investigator expand the list and recheck that
+   entire category, then give the updated list to the author, reviewers and
+   verifier. Do not fix only the reported instance.
 3. For each open or flagged issue, poll the author and every reviewer for a
    recommendation. Forward all recommendations to the author to run the
    `best-of-n` skill. A clear winner (`universal` or `clear`) is applied by the
@@ -184,12 +224,25 @@ A typical PR review loop, run by the orchestrator:
    MASTER at the next developer checkpoint. The round continues unblocked. For a
    blocking issue without a clear winner, halt progress and ask the developer in
    MASTER; resume only after their decision.
-4. Repeat until every reviewer says ready.
-5. If the branch touches delivery, callbacks or launch, have an agent run
-   `just e2e` (live round trips with every provider) and report its table.
-6. Ask the developer in MASTER about any deferred issues, then tell them the branch
-   is ready for their regression test before merge. If a deferred decision
-   requires a fix, send it to the author and repeat the review loop first.
+4. Count one fix round as one consolidated set of fixes followed by gates and
+   concurrent review, verification and bot review of its new head. Allow at most
+   **two fix rounds per PR** after the initial checks; record the count in the
+   workflow. Do not start a third round automatically. If the core goal still
+   fails or a required gate or blocking issue remains, stop and ask the developer
+   in MASTER for a plan.
+5. Once the core goal holds on the enumerated checklist and required gates pass,
+   present the evidence, any deferred decisions and remaining edge work to the
+   developer for their regression test and merge OK. The time-box never grants
+   merge permission or drops a core requirement. Turn remaining edge work into
+   follow-up PR steps in the running workflow, with an owner, dependencies and
+   acceptance checks. Execute them in order unless a recorded pause or developer
+   checkpoint comes first; a deferred note alone is not a follow-up step.
+
+Track PR age from its creation, including time spent as a draft. Any PR open
+longer than **four hours** is escalated in MASTER as `[waiting-on-you]`: link the
+PR, state the cause, show the fix-round count, and propose a concrete plan and
+the decision needed. Escalate even while checks are running or the two-round
+limit has not been reached. Update the workflow after the developer's decision.
 
 ## Steer agents without waiting
 

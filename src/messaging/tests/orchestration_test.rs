@@ -198,6 +198,7 @@ fn embedded_docs_match_the_repository_copies() {
         ("how-to-bus-cli.md", "orchestration/how-to-bus-cli.md"),
         ("orchestrator-guide.md", "orchestration/guide.md"),
         ("orchestrator-rules.md", "orchestration/rules.md"),
+        ("parallel-writes.md", "orchestration/parallel-writes.md"),
         ("templates/workflow-template.md", "workflows/template.md"),
         (
             "templates/investigation-report.md",
@@ -217,6 +218,30 @@ fn embedded_docs_match_the_repository_copies() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn parallel_writes_doc_is_installed_and_referenced_at_its_absolute_session_path() {
+    let root = temp_root("parallel-writes");
+    let session = root.join("sessions/scratch");
+    let docs = write_docs(&session).unwrap();
+    let installed = docs.join("parallel-writes.md");
+    assert!(installed.is_absolute(), "{installed:?}");
+    let written = std::fs::read(&installed)
+        .unwrap_or_else(|error| panic!("missing installed doc {installed:?}: {error}"));
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("orchestration/parallel-writes.md");
+    let expected = std::fs::read(source).unwrap();
+    assert_eq!(written, expected);
+    let prompt = fill(DEFAULT_PROMPT, &values(Some(("scratch", 7)), &session));
+    let references = prompt.split("## References").nth(1).unwrap();
+    assert!(
+        references.contains(installed.to_str().unwrap()),
+        "{references}"
+    );
+    std::fs::write(&installed, "old installation").unwrap();
+    write_docs(&session).unwrap();
+    assert_eq!(std::fs::read(&installed).unwrap(), expected);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

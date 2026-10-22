@@ -24,6 +24,7 @@ content, not another editable source layer.
 | `orchestration/how-to-bus-cli.md` | `<BUS_DATA_DIR>/docs/how-to-bus-cli.md` |
 | `orchestration/guide.md` | `<BUS_DATA_DIR>/docs/orchestrator-guide.md` |
 | `orchestration/rules.md` | `<BUS_DATA_DIR>/docs/orchestrator-rules.md`, with the workflow directory filled in |
+| `orchestration/parallel-writes.md` | `<BUS_DATA_DIR>/docs/parallel-writes.md`, for orchestrators and workers |
 | `workflows/create.md` | `<BUS_DATA_DIR>/docs/workflow-create.md` |
 | `workflows/template.md` | `<BUS_DATA_DIR>/docs/templates/workflow-template.md` |
 | `workflows/investigation-report-template.md` | `<BUS_DATA_DIR>/docs/templates/investigation-report.md` |
