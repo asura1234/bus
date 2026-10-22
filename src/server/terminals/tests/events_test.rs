@@ -213,12 +213,12 @@ mod grok_captured_composer_prompt {
     /// The idle Grok Build 1.0.5 fullscreen frame rendered from the offline
     /// capture: the model label is drawn inside the composer's bottom border.
     fn captured_idle_frame() -> String {
-        // Byte-identical offline capture; use its first completed normal frame,
-        // before later /hooks and /session built-in modal interactions.
+        // Byte-identical offline capture; replay through its first complete
+        // normal-mode shortcut footer, retaining the native labelled border.
         let capture =
             include_str!("../../../../tests/fixtures/grok-composer/native-1.0.5-offline.ansi");
-        let label = capture.find(":shortcuts").unwrap();
-        let end = label + capture[label..].find("\x1b[?2026l").unwrap() + "\x1b[?2026l".len();
+        let footer = capture.find(":shortcuts").unwrap();
+        let end = footer + capture[footer..].find("\x1b[?2026l").unwrap() + "\x1b[?2026l".len();
         capture[..end].to_owned()
     }
 

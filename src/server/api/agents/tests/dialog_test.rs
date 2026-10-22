@@ -1,6 +1,20 @@
 use super::*;
 
 #[tokio::test]
+async fn grok_native_composer_fences_historical_numbered_dialogs() {
+    let capture =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.5-offline.ansi");
+    let footer = capture.find(":shortcuts").unwrap();
+    let end = footer + capture[footer..].find("\x1b[?2026l").unwrap() + "\x1b[?2026l".len();
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 8);
+    runtime.test_process_pty_bytes(&capture.as_bytes()[..end]);
+    let screen = runtime.visible_ansi();
+    let history = "Earlier menu\n❯ 1. Approve\n  2. Deny\nEnter to select\n";
+    assert!(crate::agents::dialog::parse(history).is_some());
+    assert!(crate::agents::dialog::parse(&format!("{history}{screen}")).is_none());
+}
+
+#[tokio::test]
 async fn grok_unreadable_card_does_not_reactivate_a_historical_numbered_dialog() {
     let history = "Previous question\n❯ 1. Allow once\n  2. Reject\nEnter to confirm\n";
     let permission = include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt")
@@ -15,7 +29,9 @@ async fn grok_unreadable_card_does_not_reactivate_a_historical_numbered_dialog()
             .replace('\n', "\r\n")
             .as_bytes(),
     );
-    let outcome = runtime.try_choose_dialog_option(&prior.digest(), 1).unwrap();
+    let outcome = runtime
+        .try_choose_dialog_option(&prior.digest(), 1)
+        .unwrap();
     assert!(
         writes.try_recv().is_err(),
         "historical approval sent keys to an unreadable current Grok permission card: {outcome:?}"
