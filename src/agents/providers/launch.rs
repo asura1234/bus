@@ -1,7 +1,7 @@
 //! Room-free inputs and outputs shared by provider launch adapters.
 
 use super::{
-    claude_code, codex, cursor,
+    claude_code, codex, cursor, grok,
     hook_json::{self, HookContext, HookContract},
     ProviderKind,
 };
@@ -73,6 +73,7 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
         ProviderKind::Codex => codex::launch::runtime_args(),
         ProviderKind::ClaudeCode => claude_code::launch::runtime_args(),
         ProviderKind::Cursor => cursor::launch::runtime_args(),
+        ProviderKind::Grok => grok::launch::runtime_args(),
     }
 }
 
@@ -96,6 +97,7 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
             &["--yolo", "--dangerously-bypass-approvals-and-sandbox"],
         ),
         ProviderKind::Cursor => ("--force", &["--force", "--yolo", "-f"]),
+        ProviderKind::Grok => ("--always-approve", &["--always-approve", "--yolo"]),
     };
     if !arguments::contains_flag(provider, args, aliases) {
         // Prefix rather than append: the provider must see it before any
@@ -112,6 +114,7 @@ pub(crate) fn take_adopted_session(
         ProviderKind::Codex => codex::launch::take_adopted_session(args),
         ProviderKind::ClaudeCode => claude_code::launch::take_adopted_session(args),
         ProviderKind::Cursor => cursor::launch::take_adopted_session(args),
+        ProviderKind::Grok => grok::launch::take_adopted_session(args),
     }
 }
 
@@ -120,6 +123,7 @@ fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
         ProviderKind::Codex => codex::launch::resume_args(session),
         ProviderKind::ClaudeCode => claude_code::launch::resume_args(session),
         ProviderKind::Cursor => cursor::launch::resume_args(session),
+        ProviderKind::Grok => grok::launch::resume_args(session),
     }
 }
 
@@ -198,6 +202,9 @@ pub(crate) fn extend_generated_args(
 }
 
 pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(), String> {
+    if provider == ProviderKind::Grok {
+        return grok::launch::validate_args(args);
+    }
     if args.iter().any(|arg| arg.contains('\0')) {
         return Err("Launch arguments cannot contain NUL".into());
     }
@@ -210,6 +217,7 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
                 "-p" | "--print" | "--bg" | "--background" | "--bare" | "--safe-mode"
             ),
             ProviderKind::Cursor => matches!(arg, "-p" | "--print"),
+            ProviderKind::Grok => false,
         };
         if incompatible {
             return Err(format!("{} launch argument {arg} disables the interactive terminal or observation hooks Bus needs; see docs/launch-args.md", provider_kind(provider)));
@@ -226,7 +234,8 @@ pub(crate) fn take_resume_option(provider: ProviderKind, args: &mut Vec<String>)
         .filter(|&index| {
             args[index] == "--resume"
                 || args[index].starts_with("--resume=")
-                || (provider == ProviderKind::ClaudeCode && args[index] == "-r")
+                || (matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Grok)
+                    && args[index] == "-r")
         })
         .collect();
     let [index] = selectors.as_slice() else {
@@ -290,6 +299,7 @@ pub(crate) fn setup_notice(provider: ProviderKind, cwd: &Path) -> Option<SetupNo
         ProviderKind::Codex => Some(codex::launch::setup_notice(&root)),
         ProviderKind::ClaudeCode => None,
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
+        ProviderKind::Grok => Some(grok::launch::setup_notice(&root)),
     }
 }
 
@@ -299,6 +309,9 @@ pub(crate) fn prepare(
     spec: &LaunchSpec,
     initialize: impl FnOnce(&HookContext) -> Result<(), String>,
 ) -> Result<PreparedLaunch, String> {
+    if spec.provider == ProviderKind::Grok {
+        return grok::launch::prepare(spec, initialize);
+    }
     let cwd = canonical_directory(&spec.cwd)?;
     let (mut args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
     let available = std::env::var_os("PATH").is_some_and(|path| {
@@ -342,7 +355,7 @@ pub(crate) fn prepare(
     apply_run_permissions(spec.provider, &mut args);
     match spec.provider {
         ProviderKind::ClaudeCode => claude_code::launch::prepare(spec, cwd, args, adopted_session),
-        ProviderKind::Codex | ProviderKind::Cursor => Ok(PreparedLaunch {
+        ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok => Ok(PreparedLaunch {
             cwd,
             args,
             adopted_session,
