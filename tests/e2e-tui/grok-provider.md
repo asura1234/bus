@@ -17,7 +17,7 @@ parallelism to fewer than half the machine's cores.
 
 Run synthetic integration with an explicitly isolated dev-tools binary:
 
-    nice -n 19 python3 tools/acceptance/grok_fake.py --binary ISOLATED_BINARY
+    nice -n 19 python3 -m tools.acceptance.grok_fake --binary ISOLATED_BINARY
 
 Reports bind synthetic results to the binary hash and include cleanup checks.
 Authenticated native acceptance is separate from these synthetic checks.
