@@ -423,7 +423,7 @@ async fn independently_answered_turns_keep_five_distinct_replies_while_shells_li
 }
 
 #[tokio::test]
-async fn followup_to_held_master_turn_reaches_work_room_and_master_once() {
+async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_master_once() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let agent = f.agents[0];
     let first = f.send(agent, f.master, "start work", false, None);
@@ -442,14 +442,13 @@ async fn followup_to_held_master_turn_reaches_work_room_and_master_once() {
     );
     let follow = f.blocked_worker_notice(agent);
     f.tick();
-    assert!(f
-        .typed(agent)
-        .last()
-        .unwrap()
-        .contains("Blocked, needs help to continue"));
+    assert_eq!(
+        f.state().request(follow).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert_eq!(f.state().request(follow).unwrap().group, None);
+    assert_eq!(f.typed(agent).last().unwrap(), "start work");
     let before_work = f.state().room(f.work).unwrap().unread_count;
-    // This provider folds the follow-up into the original generation and emits
-    // no additional submit hook, a distinct path from separate answered turns.
     f.stop(
         agent,
         "one",
@@ -459,7 +458,19 @@ async fn followup_to_held_master_turn_reaches_work_room_and_master_once() {
     );
     f.elapse(6_000);
     f.assert_reply(first, "work and tests complete");
-    f.assert_reply(follow, "work and tests complete");
+    let typed = f.typed(agent).last().unwrap().clone();
+    assert!(typed.contains("Blocked, needs help to continue"), "{typed}");
+    f.start(agent, "worker-notice", &typed);
+    f.stop(
+        agent,
+        "worker-notice",
+        "worker notice acknowledged",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(6_000);
+    f.assert_reply(follow, "worker notice acknowledged");
+    f.assert_reply(first, "work and tests complete");
     assert_eq!(f.state().room(f.master).unwrap().unread_count, 1);
     assert_eq!(
         f.state().room(f.work).unwrap().unread_count,

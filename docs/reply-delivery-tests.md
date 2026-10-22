@@ -110,7 +110,7 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 | `captured_reply_reaches_its_source_room_once_for_both_providers_and_authors` | Claude, Codex and Cursor; MASTER/work; identical developer/agent messages; completion, publication counters and no mirrored notice after restart. |
 | `cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final` | Injected user rows, omitted commentary suffixes and a newer transcript turn cannot replace the owned Cursor final (0dcc4bd2/44e94f38). |
 | `independently_answered_turns_keep_five_distinct_replies_while_shells_live` | Five answered turns with shells persisting across turns must keep five distinct answers (#96). |
-| `followup_to_held_master_turn_reaches_work_room_and_master_once` | An automatically routed blocked-worker notice reaches a held turn and shares its reply across two source rooms (#52/#60). |
+| `queued_worker_notice_after_held_master_turn_reaches_work_room_and_master_once` | An automatically routed work-room blocked-worker notice waits for a held MASTER turn, then gets its own reply; each source room publishes once. Same-room held follow-ups retain the #52/#60 steering behavior. |
 | `held_interim_survives_no_stop_wake_restart_and_releases_queued_request` | Captured text survives wake without Stop and coordinator restart; queue-only work then gets its own answer (#82). |
 | `coalesced_sends_share_one_answer_and_one_history_publication` | Three queued messages become one native paste and one shared reply; atomic Claude paste, Codex and unread dedupe. |
 | `direct_bus_control_shells_publish_equally_for_developer_and_agent` | Direct control verbs and quoted executable paths do not hold either sender's final (#103). |

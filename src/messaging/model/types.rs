@@ -78,10 +78,6 @@ impl AgentRecipients {
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&AgentId) -> bool) {
         self.0.retain(|id| keep(id));
     }
-
-    pub(crate) fn clear(&mut self) {
-        self.0.clear();
-    }
 }
 
 impl<'de> Deserialize<'de> for AgentRecipients {
