@@ -89,12 +89,14 @@ order and strategy in the workflow:
 
 The orchestrator coordinates; the integration agent performs Git operations and
 owns conflict resolution. It consults the affected file owners before resolving
-behavioral conflicts, stops for an unclear requirement, and asks the orchestrator
-to escalate it to the developer. Workers report conflicts rather than independently
+behavioral conflicts and investigates technical uncertainty. Goal changes and
+product decisions without a basis for a recommendation go to the orchestrator's
+developer decision boundary. Workers report conflicts rather than independently
 rewriting other branches. Preserve each worker's changes, then run required
 gates and concurrent review/verification/bot review on the integrated head.
 Any further integration or fix changes the head and needs fresh evidence.
-Merge permission still comes from the developer.
+Use `auto-merge-pr` with its recorded workflow authorization and explicit holds;
+do not add a new per-PR merge OK.
 
 ## For workers
 

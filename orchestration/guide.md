@@ -50,7 +50,8 @@ On your first turn:
 
 1. Run `bus state` and find your room, its agents, and your own agent ID.
 2. Read the room's notes and history: `bus history --room "$room_id"`.
-3. Agree on the workflow with the developer before kicking off (next section).
+3. Read the agreed workflow and its authorizations (next section); resolve only
+   missing goal or authority decisions before the affected work starts.
 
 Send every message to the room's agents as yourself, so the history shows who
 asked:
@@ -78,8 +79,9 @@ rules, decision rules, and a log. Follow
 the resolved directory and shipped names, follow the
 [binding named-workflows rule](orchestrator-rules.md#named-workflows).
 
-- **Draft it with the developer** before work starts. The graph is a reference, not
-  a script.
+- **Draft from the agreed goal and authorizations.** Reuse existing decisions;
+  take goal changes and unresolved product decisions to the developer. The graph
+  is a reference, not a script, and its recorded checkpoints still apply.
 - **Keep it where the developer can open it.** Put its path on the first line of the
   room notes.
 - **Rewrite it whenever it stops matching reality.** The usual reasons are a
@@ -122,8 +124,8 @@ DONE / OPEN:
 [x] Implement gallery (claude-dev)
 [x] CI green
 [ ] Review, verification and bots (fix round 2 of 2)
-[ ] Developer regression test
-[ ] Merge (developer)"
+[ ] Manual test (if the workflow holds for it)
+[ ] Merge (auto-merge-pr / recorded hold)"
 ```
 
 `room notes` replaces the whole field, so always send the full board. Update it
@@ -217,24 +219,25 @@ Run checks and remediation as a bounded loop:
    verifier. Do not fix only the reported instance.
 3. For each open or flagged issue, poll the author and every reviewer for a
    recommendation. Forward all recommendations to the author to run the
-   `best-of-n` skill. A clear winner (`universal` or `clear`) is applied by the
-   author, and the round continues unblocked. With no clear winner, defer a
-   nonblocking issue: record it in the workflow's deferred list, with its
-   recommendations and why it does not block, and ask the developer later in
-   MASTER at the next developer checkpoint. The round continues unblocked. For a
-   blocking issue without a clear winner, halt progress and ask the developer in
-   MASTER; resume only after their decision.
+   `best-of-n` skill and apply its top-ranked recommendation. Technical
+   disagreement alone does not call for permission. If an issue reaches the
+   developer decision boundary below, hold that part and ask in MASTER while
+   independent work continues. Turn remaining nonblocking work into follow-up
+   steps with its recommendations and acceptance checks.
 4. Count one fix round as one consolidated set of fixes followed by gates and
    concurrent review, verification and bot review of its new head. Allow at most
    **two fix rounds per PR** after the initial checks; record the count in the
    workflow. Do not start a third round automatically. If the core goal still
-   fails or a required gate or blocking issue remains, stop and ask the developer
-   in MASTER for a plan.
+   fails or a required gate or blocking issue remains, hold that PR and report
+   the cause and recovery plan. Keep independent work moving; ask only when
+   recovery needs a developer decision under the boundary below.
 5. Once the core goal holds on the enumerated checklist and required gates pass,
-   present the evidence, any deferred decisions and remaining edge work to the
-   developer for their regression test and merge OK. The time-box never grants
-   merge permission or drops a core requirement. Turn remaining edge work into
-   follow-up PR steps in the running workflow, with an owner, dependencies and
+   report the evidence and route the PR, once every reviewer is Ready, through
+   [auto-merge-pr](workflows/auto-merge-pr.md). Reuse its recorded start answer;
+   honor an explicit manual-test or approval hold without adding a new per-PR
+   merge-OK gate. The time-box does not drop a core requirement or override a
+   hold. Turn remaining edge work into follow-up PR steps in the running
+   workflow, with an owner, dependencies and
    acceptance checks. Execute them in order unless a recorded pause or developer
    checkpoint comes first; a deferred note alone is not a follow-up step.
 
@@ -283,28 +286,50 @@ its context.
   `--text`, except on Claude questions, where Esc cancels the form); `--text`
   also answers a choice's `free_text` option. Decide, answer, and check the reported `outcome`; nothing follows
   when the dialog closes.
-  Ask the developer before approving anything destructive or outward-facing.
+  Ask the developer about destructive or outward-facing actions only when
+  existing workflow or developer authorization does not cover them.
 - **Stuck requests:** check `bus message status` (each request's `stage` and
   `reason`), the agent's `wait_reason` in `bus state`, and `bus agent read`
   before `bus request recover`.
 - **Delivery is not completion.** Wait for `complete: true` from `bus wait` or
   `bus message status`.
 
-## When to ask the developer
+## Keep working; report status, don't ask permission
 
-Apply [Never act on assumptions; ask the developer](orchestrator-rules.md#never-act-on-assumptions)
-first. The following decision boundaries also apply.
+Follow the [binding keep-working rule](orchestrator-rules.md#keep-working).
+The developer needs status: what is running, its state, and what comes next.
+Routine permission questions transfer the orchestrator's job back to the
+developer and leave workers idle while a reply is unavailable.
 
-Ask before anything outside the room's goal or the workflow's decision rules:
+Advance in-scope work yourself: assign a newly found bug for evidence-based
+root-cause analysis and a fix, start the next workflow step, dispatch review
+fixes, and execute follow-ups. Log your decision in both room notes and the
+workflow log, report status in MASTER, and keep workers busy. A new bug inside
+the agreed goal does not need a new permission question; an unrelated bug does
+not silently widen the goal.
 
-- Publishing, merging, pushing to shared branches, or deleting work. Adding
-  and deleting agents in your own room is not on this list: do it as the
-  workflow needs and log it.
-- Changing the goal or dropping a requirement.
-- A blocking review issue with no clear winner after the author runs
-  `best-of-n`. Nonblocking issues without a clear winner stay in the workflow's
-  deferred list for the next developer checkpoint and do not halt the round.
-- A hard gate that no option can meet.
+The anti-pattern is **"found another bug, should I fix it?" at 1 am, followed
+by the room sitting idle for eight hours**. Investigate and fix an in-scope bug,
+record the decision and report its status; keep other work moving during the
+investigation.
 
-If the developer gave you full control for a decision, decide, record it in the
-workflow log, and tell the developer in MASTER what you decided.
+Ask the developer only for:
+
+- A destructive or outward-facing action outside existing workflow or developer
+  authorization, such as publishing or deleting work not covered by that authority.
+- A product decision you have no basis to recommend on. Technical uncertainty
+  calls for investigation and author-led adjudication, not a routine permission
+  question.
+- A change to the goal, including dropping a requirement.
+
+[Never act on assumptions](orchestrator-rules.md#never-act-on-assumptions) still
+applies: resolve facts from instructions and evidence instead of inventing a
+resource, scope or authority. When a developer decision is needed, ask in MASTER
+with `[waiting-on-you]`, the cause and a recommended plan where there is a basis
+for one. Hold only the affected part and keep every independent piece moving.
+
+Ready, all-green PRs go through [auto-merge-pr](workflows/auto-merge-pr.md), read
+in full. Its recorded start answer supplies merge authority; carry that answer
+forward instead of asking for per-PR merge OK. Its manual-test/approval hold
+still applies when requested. An explicit instruction to leave a PR as a draft
+or not merge it is a hold, not permission to bypass it.
