@@ -14,15 +14,16 @@ pub(super) fn update<T>(
     project: &Path,
     binary: &Path,
     mode: Mode,
+    home: Option<&Path>,
     validate: impl FnOnce() -> Result<T, String>,
-) -> Result<(PathBuf, bool, T), String> {
+) -> Result<(PathBuf, bool, T, PathBuf), String> {
     #[cfg(unix)]
     {
-        unix::update(project, binary, mode, validate)
+        unix::update(project, binary, mode, home, validate)
     }
     #[cfg(not(unix))]
     {
-        let _ = (project, binary, mode, validate);
+        let _ = (project, binary, mode, home, validate);
         Err("Grok project hooks require no-follow directory-relative I/O on this platform".into())
     }
 }

@@ -367,6 +367,96 @@ fn grok_setup_preserves_global_hooks_with_a_different_filename() {
 
 #[cfg(unix)]
 #[test]
+fn grok_setup_preserves_global_aliases_with_case_variant_targets() {
+    use std::os::unix::fs::MetadataExt;
+    for alias in ["config", "hooks", "file"] {
+        let f = Fixture::new();
+        f.install();
+        let home = f.root.join("home");
+        let config = f.project.join(".grok");
+        let hooks = config.join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let original = b"{\"custom\":\"case-aliased-global-hook\"}";
+        std::fs::write(hooks.join("bus.json"), original).unwrap();
+        let (actual, cased) = match alias {
+            "config" => (config.clone(), f.project.join(".GROK")),
+            "hooks" => (hooks.clone(), config.join("HOOKS")),
+            _ => (hooks.join("bus.json"), hooks.join("BUS.JSON")),
+        };
+        let Ok(cased_metadata) = std::fs::metadata(&cased) else {
+            // Case-sensitive filesystems do not have this physical alias.
+            return;
+        };
+        let actual_metadata = std::fs::metadata(&actual).unwrap();
+        assert_eq!(
+            (actual_metadata.dev(), actual_metadata.ino()),
+            (cased_metadata.dev(), cased_metadata.ino())
+        );
+        let global_file = match alias {
+            "config" => {
+                std::os::unix::fs::symlink(&cased, home.join(".grok")).unwrap();
+                home.join(".grok/hooks/bus.json")
+            }
+            "hooks" => {
+                std::fs::create_dir_all(home.join(".grok")).unwrap();
+                std::os::unix::fs::symlink(&cased, home.join(".grok/hooks")).unwrap();
+                home.join(".grok/hooks/bus.json")
+            }
+            _ => {
+                std::fs::create_dir_all(home.join(".grok/hooks")).unwrap();
+                let global_file = home.join(".grok/hooks/shared.json");
+                std::os::unix::fs::symlink(&cased, &global_file).unwrap();
+                global_file
+            }
+        };
+        let result = common::prepare(&f.spec("", true), |hooks| {
+            std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+        });
+        assert_eq!(std::fs::read(global_file).unwrap(), original, "{alias}");
+        assert!(
+            result.is_err(),
+            "case-variant global {alias} alias was accepted"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_does_not_create_a_case_variant_global_hook_source() {
+    use std::os::unix::fs::MetadataExt;
+    let f = Fixture::new();
+    f.install();
+    let hooks = f.project.join(".grok/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let Ok(cased_parent) = std::fs::metadata(f.project.join(".GROK/HOOKS")) else {
+        return;
+    };
+    let actual_parent = std::fs::metadata(&hooks).unwrap();
+    assert_eq!(
+        (actual_parent.dev(), actual_parent.ino()),
+        (cased_parent.dev(), cased_parent.ino())
+    );
+    let global_source = hooks.join("BUS.JSON");
+    assert!(!global_source.exists());
+    let config = f.root.join("home/.grok/hooks-paths");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, format!("{}\n", global_source.display())).unwrap();
+    let initialized = std::cell::Cell::new(false);
+    let result = common::prepare(&f.spec("", true), |hooks| {
+        initialized.set(true);
+        std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+    assert!(
+        !global_source.exists(),
+        "setup created the globally configured BUS.JSON source before refusing capture: {result:?}"
+    );
+    assert!(result.is_err());
+    assert!(!initialized.get());
+}
+
+#[cfg(unix)]
+#[test]
 fn grok_hook_global_roots_are_enforced_for_install_and_resume() {
     for resume in [false, true] {
         for route in [
@@ -403,7 +493,14 @@ fn grok_hook_global_roots_are_enforced_for_install_and_resume() {
                     "independent-home" => f.root.join("separate-home"),
                     _ => f.project.join(".grok"),
                 };
-                std::env::set_var("GROK_HOME", root);
+                std::env::set_var("GROK_HOME", &root);
+                if resume {
+                    std::fs::write(
+                        f.spec("", true).hooks.spool.join("grok-home.json"),
+                        serde_json::to_vec(&root).unwrap(),
+                    )
+                    .unwrap();
+                }
             } else {
                 let entry = match route {
                     "config-parent" => f.project.clone(),
@@ -434,23 +531,15 @@ fn grok_hook_global_roots_are_enforced_for_install_and_resume() {
                     };
                     std::os::unix::fs::symlink(target, folder.join("shared.json")).unwrap();
                 }
+                let mut entries = vec![entry.to_string_lossy().into_owned()];
+                if route == "config-second" {
+                    let first = f.root.join("independent-first");
+                    std::fs::create_dir(&first).unwrap();
+                    entries.insert(0, first.to_string_lossy().into_owned());
+                }
                 std::fs::write(
-                    global.join("config.toml"),
-                    format!(
-                        "hooks-paths = [{}{}]\n",
-                        if route == "config-second" {
-                            format!(
-                                "{}, ",
-                                serde_json::to_string(
-                                    &f.root.join("independent-first").to_string_lossy()
-                                )
-                                .unwrap()
-                            )
-                        } else {
-                            String::new()
-                        },
-                        serde_json::to_string(&entry.to_string_lossy()).unwrap()
-                    ),
+                    global.join("hooks-paths"),
+                    format!("{}\n", entries.join("\n")),
                 )
                 .unwrap();
             }
@@ -469,10 +558,13 @@ fn grok_hook_global_roots_are_enforced_for_install_and_resume() {
             };
             assert_eq!(
                 result.is_ok(),
-                route.starts_with("independent"),
+                route.starts_with("independent")
+                    || matches!(route, "config-relative" | "config-tilde"),
                 "{resume}/{route}: {result:?}"
             );
-            if !route.starts_with("independent") {
+            if !route.starts_with("independent")
+                && !matches!(route, "config-relative" | "config-tilde")
+            {
                 assert!(!initialized.get(), "{resume}/{route}");
                 assert_eq!(std::fs::read(&file).unwrap(), original, "{resume}/{route}");
             }
@@ -482,7 +574,7 @@ fn grok_hook_global_roots_are_enforced_for_install_and_resume() {
 
 #[cfg(unix)]
 #[test]
-fn grok_relative_global_sources_are_resolved_in_the_provider_cwd() {
+fn grok_relative_home_uses_provider_cwd_and_registry_ignores_relative_lines() {
     struct RestoreCwd(std::path::PathBuf);
     impl Drop for RestoreCwd {
         fn drop(&mut self) {
@@ -510,14 +602,7 @@ fn grok_relative_global_sources_are_resolved_in_the_provider_cwd() {
                 } else {
                     ".grok/hooks"
                 };
-                std::fs::write(
-                    global.join("config.toml"),
-                    format!(
-                        "hooks-paths = [{}]\n",
-                        serde_json::to_string(entry).unwrap()
-                    ),
-                )
-                .unwrap();
+                std::fs::write(global.join("hooks-paths"), format!("{entry}\n")).unwrap();
             }
             let mut spec = f.spec("", true);
             spec.hooks.binary = f.root.join("replacement-bus");
@@ -532,8 +617,114 @@ fn grok_relative_global_sources_are_resolved_in_the_provider_cwd() {
                 })
                 .map(|_| ())
             };
+            let refused = !resume && route == "home";
+            assert_eq!(result.is_err(), refused, "{resume}/{route}: {result:?}");
+            if refused {
+                assert!(!initialized.get());
+                assert_eq!(std::fs::read(&leaf).unwrap(), original, "{resume}/{route}");
+            }
+        }
+    }
+}
+
+#[test]
+fn grok_refused_case_variant_home_removes_only_new_empty_directories() {
+    for existing_config in [false, true] {
+        let f = Fixture::new();
+        f.install();
+        let probe = f.project.join("case-probe");
+        std::fs::write(&probe, b"case sensitivity").unwrap();
+        let insensitive = f.project.join("CASE-PROBE").exists();
+        std::fs::remove_file(probe).unwrap();
+        if !insensitive {
+            return;
+        }
+        let config = f.project.join(".grok");
+        if existing_config {
+            std::fs::create_dir(&config).unwrap();
+            std::fs::write(config.join("keep-user-file"), b"unchanged").unwrap();
+        }
+        let global = if existing_config {
+            config.join("HOOKS")
+        } else {
+            f.project.join(".GROK")
+        };
+        std::env::set_var("GROK_HOME", global);
+        let initialized = std::cell::Cell::new(false);
+        let result = common::prepare(&f.spec("", true), |_| {
+            initialized.set(true);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(!initialized.get());
+        assert!(
+            !config.join("hooks").exists(),
+            "refusal left a new hooks directory"
+        );
+        assert_eq!(
+            config.exists(),
+            existing_config,
+            "refusal changed a pre-existing directory"
+        );
+        if existing_config {
+            assert_eq!(
+                std::fs::read(config.join("keep-user-file")).unwrap(),
+                b"unchanged"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn grok_global_identity_survives_firmlink_spellings_on_install_and_resume() {
+    for resume in [false, true] {
+        for route in ["home", "registry-folder", "registry-file", "global-alias"] {
+            let f = Fixture::new();
+            f.install();
+            f.prepare("");
+            let leaf = f.project.join(".grok/hooks/bus.json");
+            let original = std::fs::read(&leaf).unwrap();
+            let actual = if route == "home" {
+                f.project.join(".grok")
+            } else if route == "registry-folder" {
+                leaf.parent().unwrap().to_owned()
+            } else {
+                leaf.clone()
+            };
+            let alias = std::path::PathBuf::from(format!(
+                "/System/Volumes/Data{}",
+                actual.canonicalize().unwrap().display()
+            ));
+            assert!(alias.exists(), "firmlink fixture is unavailable");
+            let mut spec = f.spec("", true);
+            spec.hooks.binary = f.root.join("replacement-bus");
+            if route == "home" {
+                std::env::set_var("GROK_HOME", &alias);
+                if resume {
+                    std::fs::write(
+                        spec.hooks.spool.join("grok-home.json"),
+                        serde_json::to_vec(&alias).unwrap(),
+                    )
+                    .unwrap();
+                }
+            } else {
+                let global = f.root.join("home/.grok");
+                std::fs::create_dir_all(global.join("hooks")).unwrap();
+                if route == "global-alias" {
+                    std::os::unix::fs::symlink(&alias, global.join("hooks/shared.json")).unwrap();
+                } else {
+                    std::fs::write(global.join("hooks-paths"), format!("{}\n", alias.display()))
+                        .unwrap();
+                }
+            }
+            let result = if resume {
+                crate::agents::providers::grok::resume::capture_args(&spec.hooks, &f.project)
+                    .map(|_| ())
+            } else {
+                common::prepare(&spec, |_| panic!("global capture was initialized")).map(|_| ())
+            };
             assert!(result.is_err(), "{resume}/{route}: {result:?}");
-            assert!(!initialized.get());
             assert_eq!(std::fs::read(&leaf).unwrap(), original, "{resume}/{route}");
         }
     }

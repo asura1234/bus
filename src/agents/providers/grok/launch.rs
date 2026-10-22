@@ -218,6 +218,31 @@ fn resolve_identity() -> Result<identity::SavedExecutable, String> {
 }
 
 const EXECUTABLE_FILE: &str = "grok-executable.json";
+const HOME_FILE: &str = "grok-home.json";
+
+pub(super) fn saved_home(hooks: &HookContext) -> Result<PathBuf, String> {
+    let path: PathBuf =
+        serde_json::from_value(hook_json::read_resume_json(&hooks.spool.join(HOME_FILE))?)
+            .map_err(|_| "Saved Grok home is invalid; relaunch required")?;
+    validate_home(&path)?;
+    Ok(path)
+}
+
+fn validate_home(path: &Path) -> Result<&str, String> {
+    path.to_str()
+        .filter(|s| path.is_absolute() && !s.chars().any(char::is_control))
+        .ok_or_else(|| "Grok home must be an absolute UTF-8 path without control characters".into())
+}
+
+// Apply after interactive shell startup, which may otherwise override GROK_HOME.
+pub(crate) fn bind_home(argv: Vec<String>, home: &Path) -> Result<Vec<String>, String> {
+    let mut bound = vec![
+        "/usr/bin/env".into(),
+        format!("GROK_HOME={}", validate_home(home)?),
+    ];
+    bound.extend(argv);
+    Ok(bound)
+}
 
 #[cfg(test)]
 pub(crate) fn resolve_executable() -> Result<PathBuf, String> {
@@ -231,6 +256,7 @@ pub(super) fn saved_executable(hooks: &HookContext) -> Result<PathBuf, String> {
 fn environment_for(
     hooks: &HookContext,
     executable: &Path,
+    home: &Path,
 ) -> Result<HashMap<String, String>, String> {
     let directory = executable
         .parent()
@@ -245,12 +271,13 @@ fn environment_for(
         .map_err(|_| "Grok launch PATH is not UTF-8")?;
     let mut env = hooks.env();
     env.insert("PATH".into(), path);
+    env.insert("GROK_HOME".into(), validate_home(home)?.into());
     Ok(env)
 }
 
 pub(crate) fn environment(hooks: &HookContext) -> Result<HashMap<String, String>, String> {
     let executable = saved_executable(hooks)?;
-    environment_for(hooks, &executable)
+    environment_for(hooks, &executable, &saved_home(hooks)?)
 }
 
 pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
@@ -282,19 +309,24 @@ pub(crate) fn prepare(
             notice.message
         ));
     }
-    let (_, _, selected) = super::project_hooks::update(
+    let (_, _, selected, home) = super::project_hooks::update(
         &cwd,
         &spec.hooks.binary,
         super::project_hooks::Mode::Install,
+        None,
         resolve_identity,
     )?;
-    let env = environment_for(&spec.hooks, &selected.alias)?;
+    let env = environment_for(&spec.hooks, &selected.alias, &home)?;
     selected.verify()?;
     initialize(&spec.hooks)?;
     for (name, bytes) in [
         (
             "launch-options.json",
             serde_json::to_vec(&original).map_err(|e| e.to_string())?,
+        ),
+        (
+            HOME_FILE,
+            serde_json::to_vec(&home).map_err(|e| e.to_string())?,
         ),
         (
             EXECUTABLE_FILE,

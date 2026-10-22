@@ -156,7 +156,7 @@ fn grok_prepare_persists_original_argv_and_private_environment() {
         std::env::split_paths(&prepared.env["PATH"]).next().unwrap(),
         f.bin
     );
-    assert_eq!(prepared.env.len(), 3);
+    assert_eq!(prepared.env.len(), 4);
     assert!(!f.root.join("home/.grok/config.toml").exists());
 }
 #[test]
@@ -372,5 +372,82 @@ fn grok_setup_rechecks_project_ancestors_after_identity_queries() {
     assert!(
         !initialized.get(),
         "unsafe project ancestor initialized capture"
+    );
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn grok_launch_from_a_firmlink_spelling_of_home_never_installs_a_global_grok_hook() {
+    // APFS firmlinks expose the same directory under /System/Volumes/Data;
+    // realpath keeps that spelling, so path prefixes cannot prove separation.
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let firmlink = PathBuf::from(format!(
+        "/System/Volumes/Data{}",
+        home.canonicalize().unwrap().display()
+    ));
+    assert!(
+        firmlink.is_dir(),
+        "{} is not a firmlink alias",
+        firmlink.display()
+    );
+    let mut spec = f.spec("", true);
+    spec.cwd = firmlink.display().to_string();
+    let prepared = common::prepare(&spec, |hooks| {
+        fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+    let global = home.join(".grok/hooks/bus.json");
+    assert!(
+        !global.exists(),
+        "a launch from the firmlink spelling of HOME wrote {} (prepare ok: {})",
+        global.display(),
+        prepared.is_ok()
+    );
+}
+#[test]
+fn grok_launch_never_writes_into_a_directory_registered_in_the_global_hooks_paths_file() {
+    // Grok's `$GROK_HOME/hooks-paths` registry lists absolute global hook
+    // sources one per line; a registered project hooks directory is global.
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    let hooks = f.project.join(".grok/hooks");
+    fs::create_dir_all(home.join(".grok")).unwrap();
+    fs::create_dir_all(&hooks).unwrap();
+    fs::write(
+        home.join(".grok/hooks-paths"),
+        format!("{}\n", hooks.canonicalize().unwrap().display()),
+    )
+    .unwrap();
+    let prepared = common::prepare(&f.spec("", true), |hooks| {
+        fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+    assert!(
+        !hooks.join("bus.json").exists(),
+        "a project launch wrote into a hooks-paths registered directory (prepare ok: {})",
+        prepared.is_ok()
+    );
+}
+
+#[test]
+fn grok_launch_and_resume_environment_bind_the_validated_home() {
+    let f = Fixture::new();
+    f.install();
+    let prepared = f.prepare("");
+    let expected = f
+        .root
+        .canonicalize()
+        .unwrap()
+        .join("home/.grok")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(prepared.env.get("GROK_HOME"), Some(&expected));
+    std::env::set_var("GROK_HOME", f.project.join(".grok"));
+    let spec = f.spec("", true);
+    crate::agents::providers::grok::resume::capture_args(&spec.hooks, &f.project).unwrap();
+    assert_eq!(
+        environment(&spec.hooks).unwrap().get("GROK_HOME"),
+        Some(&expected)
     );
 }

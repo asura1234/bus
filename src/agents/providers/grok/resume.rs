@@ -12,10 +12,12 @@ pub(crate) fn capture_args(
     )?)
     .map_err(|_| "Saved Grok launch options are invalid")?;
     super::launch::validate_args(&options)?;
-    let (path, rebound, _) = super::project_hooks::update(
+    let home = super::launch::saved_home(hooks)?;
+    let (path, rebound, _, _) = super::project_hooks::update(
         project,
         &hooks.binary,
         super::project_hooks::Mode::Resume,
+        Some(&home),
         || super::launch::saved_executable(hooks),
     )?;
     // Options are loaded separately by the shared resume owner. Return only

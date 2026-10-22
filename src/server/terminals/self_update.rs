@@ -234,6 +234,7 @@ impl App {
             pane_id: public_pane_id,
             args: update.args.clone(),
             executable: None,
+            grok_home: None,
             timeout_ms: None,
         });
         Some(match started {

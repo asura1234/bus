@@ -288,6 +288,60 @@ fn grok_resume_preserves_global_hooks_with_a_different_filename() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn grok_resume_preserves_global_aliases_with_case_variant_targets() {
+    use std::os::unix::fs::MetadataExt;
+    for alias in ["config", "hooks", "file"] {
+        let f = Fixture::new();
+        f.install();
+        f.prepare("");
+        let home = f.root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let config = f.project.join(".grok");
+        let hooks = config.join("hooks");
+        let original = std::fs::read(hooks.join("bus.json")).unwrap();
+        let (actual, cased) = match alias {
+            "config" => (config.clone(), f.project.join(".GROK")),
+            "hooks" => (hooks.clone(), config.join("HOOKS")),
+            _ => (hooks.join("bus.json"), hooks.join("BUS.JSON")),
+        };
+        let Ok(cased_metadata) = std::fs::metadata(&cased) else {
+            return;
+        };
+        let actual_metadata = std::fs::metadata(&actual).unwrap();
+        assert_eq!(
+            (actual_metadata.dev(), actual_metadata.ino()),
+            (cased_metadata.dev(), cased_metadata.ino())
+        );
+        let global_file = match alias {
+            "config" => {
+                std::os::unix::fs::symlink(&cased, home.join(".grok")).unwrap();
+                home.join(".grok/hooks/bus.json")
+            }
+            "hooks" => {
+                std::fs::create_dir_all(home.join(".grok")).unwrap();
+                std::os::unix::fs::symlink(&cased, home.join(".grok/hooks")).unwrap();
+                home.join(".grok/hooks/bus.json")
+            }
+            _ => {
+                std::fs::create_dir_all(home.join(".grok/hooks")).unwrap();
+                let global_file = home.join(".grok/hooks/shared.json");
+                std::os::unix::fs::symlink(&cased, &global_file).unwrap();
+                global_file
+            }
+        };
+        let mut spec = f.spec("", true);
+        spec.hooks.binary = f.root.join("replacement-bus");
+        let result = capture_args(&spec.hooks, &f.project);
+        assert_eq!(std::fs::read(global_file).unwrap(), original, "{alias}");
+        assert!(
+            result.is_err(),
+            "case-variant global {alias} alias was accepted"
+        );
+    }
+}
+
 #[test]
 fn grok_resume_never_executes_an_unchanged_saved_binary() {
     let f = Fixture::new();
@@ -379,5 +433,39 @@ fn grok_resume_rejects_changed_or_obsolete_binary_stamps_without_discovery() {
             change == "unchanged",
             "{change}"
         );
+    }
+}
+
+#[test]
+fn grok_resume_requires_a_valid_saved_home_before_rebinding() {
+    for value in [
+        None,
+        Some("relative-home"),
+        Some("/bad\nhome"),
+        Some("/valid/saved/home"),
+    ] {
+        let f = Fixture::new();
+        f.install();
+        f.prepare("");
+        let mut spec = f.spec("", true);
+        spec.hooks.binary = f.root.join("replacement-bus");
+        let leaf = f.project.join(".grok/hooks/bus.json");
+        let original = std::fs::read(&leaf).unwrap();
+        let stamp = spec.hooks.spool.join("grok-home.json");
+        if let Some(value) = value {
+            std::fs::write(stamp, serde_json::to_vec(value).unwrap()).unwrap();
+        } else {
+            std::fs::remove_file(stamp).unwrap();
+        }
+        let valid = value == Some("/valid/saved/home");
+        assert_eq!(
+            capture_args(&spec.hooks, &f.project).is_ok(),
+            valid,
+            "{value:?}"
+        );
+        assert_eq!(launch::environment(&spec.hooks).is_ok(), valid, "{value:?}");
+        if !valid {
+            assert_eq!(std::fs::read(&leaf).unwrap(), original);
+        }
     }
 }

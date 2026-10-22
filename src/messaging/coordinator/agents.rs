@@ -402,6 +402,11 @@ impl Worker {
             self.prepare_orchestrator_prompt(&input, id, &mut state, spec, &mut prepared, &hooks)?;
         }
         let selected_executable = launch::selected_executable(input.provider, &prepared.env)?;
+        let grok_home = prepared
+            .env
+            .get("GROK_HOME")
+            .cloned()
+            .filter(|_| selected_executable.is_some());
         let identity = self.persist_agent_launch(
             state,
             id,
@@ -455,6 +460,7 @@ impl Worker {
                 pane_id: pane.clone(),
                 args: prepared.args,
                 executable: selected_executable,
+                grok_home,
                 timeout_ms: None,
             }));
         match started {

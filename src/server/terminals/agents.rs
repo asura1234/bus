@@ -214,6 +214,19 @@ impl App {
         };
         let mut argv = vec![executable];
         argv.extend(args.iter().cloned());
+        match (kind, params.grok_home) {
+            (crate::agents::AgentKind::Grok, Some(home)) => {
+                argv = crate::agents::providers::grok::launch::bind_home(
+                    argv,
+                    std::path::Path::new(&home),
+                )
+                .map_err(|_| AgentStartError::InvalidArgument)?;
+            }
+            (crate::agents::AgentKind::Grok, None) | (_, Some(_)) => {
+                return Err(AgentStartError::InvalidArgument)
+            }
+            (_, None) => {}
+        }
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::server::api::input_encoding::encode_api_submission(runtime, &command);
