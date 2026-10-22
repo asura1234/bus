@@ -119,6 +119,8 @@ mod callback_binding_tests;
 mod delivery_tests;
 #[path = "queue_test.rs"]
 mod queue_tests;
+#[path = "submit_budget_test.rs"]
+mod submit_budget_tests;
 
 #[path = "resume_test.rs"]
 mod resume_tests;

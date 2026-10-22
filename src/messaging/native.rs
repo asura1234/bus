@@ -32,6 +32,20 @@ impl BusTransport {
 
 impl Transport for BusTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        self.request_using(method, ApiClient::request_value_with_timeout)
+    }
+}
+
+impl BusTransport {
+    pub(super) fn request_using(
+        &mut self,
+        method: Method,
+        mut send: impl FnMut(
+            &ApiClient,
+            &Request,
+            Duration,
+        ) -> Result<serde_json::Value, ApiClientError>,
+    ) -> Result<ResponseResult, TransportError> {
         self.next_id += 1;
         let request = Request {
             id: format!("bus:{}:{}", std::process::id(), self.next_id),
@@ -46,9 +60,10 @@ impl Transport for BusTransport {
         tracing::debug!(event = "bus.api.start", api_request_id = %request.id,
             method = method_name, "Bus native API call");
         loop {
-            let response = self
-                .client
-                .request_value_with_timeout(&request, Duration::from_secs(3))
+            let timeout = crate::protocol::api::submission::method_budget(&request.method)
+                .map(|budget| budget + crate::protocol::api::submission::RPC_MARGIN)
+                .unwrap_or(Duration::from_secs(3));
+            let response = send(&self.client, &request, timeout)
                 .and_then(crate::protocol::api::client::parse_response_value);
             // AgentStart can be rejected while the login shell is running startup
             // children. This precise rejection occurs before any PTY input or

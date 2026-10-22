@@ -3,6 +3,7 @@
 pub mod client;
 pub mod schema;
 mod status;
+pub(crate) mod submission;
 
 pub(crate) use schema::methods::api_method_name;
 pub use status::{read_runtime_status_at, RuntimeStatus};

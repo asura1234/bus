@@ -75,6 +75,40 @@ fn screen(kind: AgentKind, draft: &str) -> String {
 }
 
 #[tokio::test]
+async fn an_expired_native_budget_answers_without_typing_or_waiting_for_a_new_deadline() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let budget = crate::protocol::api::submission::method_budget(&method).unwrap();
+    let started = std::time::Instant::now() - budget - Duration::from_secs(1);
+    let (tx, rx) = std::sync::mpsc::channel();
+    assert!(app.handle_deferred_agent_api_request_at(
+        Request {
+            id: "expired".into(),
+            method
+        },
+        tx,
+        started,
+    ));
+    let response: serde_json::Value = serde_json::from_str(
+        &rx.recv_timeout(Duration::from_secs(5))
+            .expect("native response must be bounded"),
+    )
+    .unwrap();
+    // Either the writer proves that nothing was typed, or the response
+    // watchdog expires first. Neither can report acceptance or extend time.
+    assert!(
+        matches!(
+            response["error"]["code"].as_str(),
+            Some("timeout" | "agent_prompt_not_shown")
+        ),
+        "{response}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "expired work must not type or press Enter"
+    );
+}
+
+#[tokio::test]
 async fn guarded_submission_rejects_unavailable_composer_before_any_write() {
     let (app, _, mut writes) = provider_fixture(AgentKind::Codex, false, "");
     let pane = app.state.workspaces[0].tabs[0].root_pane;
