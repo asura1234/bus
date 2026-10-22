@@ -68,6 +68,157 @@ async fn worker_to_orchestrator_delivers_queued_message_into_its_session_and_set
 }
 
 #[tokio::test]
+async fn worker_message_during_orchestrator_background_hold_keeps_the_held_master_reply() {
+    // `from_worker` = a worker-initiated work-room message; otherwise the
+    // developer's own follow-up in MASTER, the pre-existing steering path.
+    for from_worker in [true, false] {
+        let mut f = Delivery::new(&[Provider::Codex], false);
+        let worker = f.agents[0];
+        let orchestrator = f.add_orchestrator();
+        let master = f.master;
+        let held = f.send(orchestrator, master, "status", false, None);
+        f.tick();
+        let payload = f.typed(orchestrator).last().unwrap().clone();
+        f.start(orchestrator, "one", &payload);
+        f.stop(
+            orchestrator,
+            "one",
+            "captured master status",
+            json!([{"id":"shell","type":"shell","status":"running","command":"sleep 600"}]),
+            json!([]),
+        );
+        let follow_up = if from_worker {
+            let sent = f.call(
+                "message.send",
+                json!({"room":f.work.0.to_string(),"as":worker.0.to_string(),
+                    "to":["orchestrator"],"text":"I am blocked","queue":false}),
+            );
+            f.request_for_message(sent["message_id"].as_u64().unwrap())
+        } else {
+            f.send(orchestrator, master, "I am blocked", false, None)
+        };
+        f.tick();
+        if from_worker {
+            // Cross-room input now waits even during a held background reply.
+            assert_eq!(
+                f.state().request(follow_up).unwrap().phase,
+                RequestPhase::Queued
+            );
+            assert_eq!(f.state().request(follow_up).unwrap().group, None);
+            assert_eq!(f.typed(orchestrator).last().unwrap(), &payload);
+            f.stop(
+                orchestrator,
+                "one",
+                "captured master status",
+                json!([]),
+                json!([]),
+            );
+            f.elapse(31_000);
+        }
+        let typed = f.typed(orchestrator).last().unwrap().clone();
+        assert!(
+            typed.contains("I am blocked"),
+            "from_worker={from_worker}: {typed}"
+        );
+        f.start(orchestrator, "two", &typed);
+        f.stop(
+            orchestrator,
+            "two",
+            "answer to blocker",
+            json!([]),
+            json!([]),
+        );
+        f.elapse(31_000);
+        f.assert_reply(follow_up, "answer to blocker");
+        f.assert_reply(held, "captured master status");
+    }
+}
+
+#[tokio::test]
+async fn worker_message_to_orchestrator_busy_with_a_master_turn_gets_its_own_reply() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let worker = f.agents[0];
+    let orchestrator = f.add_orchestrator();
+    let master = f.master;
+    let developer = f.send(orchestrator, master, "status", false, None);
+    f.tick();
+    let payload = f.typed(orchestrator).last().unwrap().clone();
+    f.start(orchestrator, "one", &payload);
+    let sent = f.call(
+        "message.send",
+        json!({"room":f.work.0.to_string(),"as":worker.0.to_string(),
+            "to":["orchestrator"],"text":"I am blocked"}),
+    );
+    let blocker = f.request_for_message(sent["message_id"].as_u64().unwrap());
+    f.tick();
+    f.stop(
+        orchestrator,
+        "one",
+        "report for the developer",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(31_000);
+    f.assert_reply(developer, "report for the developer");
+    assert_eq!(
+        f.state().request(blocker).unwrap().group,
+        None,
+        "a work-room message joined the orchestrator's MASTER turn: {:?}",
+        f.state().request(blocker).unwrap()
+    );
+    let typed = f.typed(orchestrator).last().unwrap().clone();
+    assert!(typed.contains("I am blocked"), "{typed}");
+    f.start(orchestrator, "worker-turn", &typed);
+    assert!(f.state().request(blocker).unwrap().trusted_start_bound);
+    f.stop(
+        orchestrator,
+        "worker-turn",
+        "answer for the worker",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(31_000);
+    f.assert_reply(blocker, "answer for the worker");
+    f.assert_reply(developer, "report for the developer");
+}
+
+#[tokio::test]
+async fn worker_message_typed_into_orchestrator_names_its_worker_and_room() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let worker = f.agents[0];
+    let orchestrator = f.add_orchestrator();
+    f.call(
+        "message.send",
+        json!({"room":f.work.0.to_string(),"as":worker.0.to_string(),
+            "to":["orchestrator"],"text":"I am blocked"}),
+    );
+    f.tick();
+    let typed = f.typed(orchestrator).last().unwrap().clone();
+    let name = f.state().agent(worker).unwrap().name.clone();
+    assert!(
+        typed
+            == format!(
+                "{name} (agent {}) in room {}:\nI am blocked",
+                worker.0, f.work.0
+            ),
+        "the orchestrator cannot tell this worker message from a developer prompt: {typed:?}"
+    );
+    let request = f.state().requests().next().unwrap().id;
+    f.reopen();
+    f.start(orchestrator, "attributed-worker", &typed);
+    assert!(f.state().request(request).unwrap().trusted_start_bound);
+    f.stop(
+        orchestrator,
+        "attributed-worker",
+        "worker answer",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(31_000);
+    f.assert_reply(request, "worker answer");
+}
+
+#[tokio::test]
 async fn numbered_native_draft_edits_never_publish_blocked_or_resolved_notices() {
     for in_master in [false, true] {
         let mut f = Delivery::new(&[Provider::ClaudeCode], in_master);

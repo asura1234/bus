@@ -178,10 +178,8 @@ impl Worker {
         let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
             Some(text) => text,
             None => state
-                .request(request)
-                .ok_or("Missing queued request")?
-                .prompt
-                .rendered_payload(),
+                .render_request_payload(request)
+                .ok_or("Missing queued request")?,
         };
         let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
             .map_err(|e| e.to_string())?;
@@ -288,10 +286,8 @@ impl Worker {
         };
         let mut state = self.state.clone();
         let text = state
-            .request(request)
-            .ok_or("Missing queued request")?
-            .prompt
-            .rendered_payload();
+            .render_request_payload(request)
+            .ok_or("Missing queued request")?;
         state
             .begin_steering(request, lead)
             .map_err(|e| e.to_string())?;

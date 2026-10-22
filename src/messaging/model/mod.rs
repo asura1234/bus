@@ -8,6 +8,7 @@ mod github;
 mod history;
 mod idle_agents;
 mod interrupts;
+mod payload;
 mod recovery;
 mod reply_routing;
 mod requests;

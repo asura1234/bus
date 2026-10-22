@@ -61,8 +61,8 @@ impl BusUi {
         let all: AgentRecipients = self
             .snapshot
             .state
-            .agents()
-            .filter(|a| a.room_id == room || a.orchestrates == Some(room))
+            .room_recipients(room)
+            .filter(|a| a.room_id == room)
             .map(|a| a.id)
             .collect();
         if let Some(local) = self.locals.get_mut(&room) {
@@ -70,12 +70,14 @@ impl BusUi {
                 if !local.recipients.remove(&id) {
                     local.recipients.insert(id);
                 }
-            } else if local.recipients.len() == all.len()
-                && all.iter().all(|id| local.recipients.contains(id))
-            {
-                local.recipients.clear();
+            } else if all.iter().all(|id| local.recipients.contains(id)) {
+                for id in all.iter() {
+                    local.recipients.remove(id);
+                }
             } else {
-                local.recipients = all;
+                for id in all {
+                    local.recipients.insert(id);
+                }
             }
         }
         self.recipients_changed(room);
@@ -185,12 +187,9 @@ impl BusUi {
 
     fn recipient_menu_key(&mut self, code: KeyCode) {
         let ids: Vec<_> = self
-            .snapshot
-            .state
-            .agents()
-            .filter(|a| {
-                Some(a.room_id) == self.room || a.orchestrates.is_some_and(|r| Some(r) == self.room)
-            })
+            .room
+            .into_iter()
+            .flat_map(|room| self.snapshot.state.room_recipients(room))
             .map(|a| a.id)
             .collect();
         match code {

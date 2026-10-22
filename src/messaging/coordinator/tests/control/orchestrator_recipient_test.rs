@@ -172,3 +172,88 @@ fn worker_to_orchestrator_member_names_and_ambiguity_take_precedence() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[test]
+fn worker_to_orchestrator_alias_with_a_member_reaches_both_in_one_message() {
+    let (mut worker, room, _, dir) = fixture();
+    let orchestrator = bound(&mut worker, room, &dir, "own-orch");
+    let peer = worker
+        .state
+        .create_agent(room, "peer", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let sent = call(
+        &mut worker,
+        "mixed",
+        "message.send",
+        json!({"room":"test","as":"codex1","to":["peer","orchestrator","own-orch"],"text":"both"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    let mut agents = worker
+        .state
+        .requests()
+        .map(|r| r.agent_id)
+        .collect::<Vec<_>>();
+    agents.sort();
+    let mut expected = vec![orchestrator, peer];
+    expected.sort();
+    assert_eq!(agents, expected);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn orchestrator_writing_as_itself_to_the_alias_is_rejected_as_a_self_message() {
+    let (mut worker, room, _, dir) = fixture();
+    let orchestrator = bound(&mut worker, room, &dir, "own-orch");
+    let sent = call(
+        &mut worker,
+        "self",
+        "message.send",
+        json!({"room":"test","as":orchestrator.0.to_string(),"to":["orchestrator"],"text":"me"}),
+    );
+    assert_eq!(
+        error_message(&sent),
+        "An agent cannot send a message to itself"
+    );
+    assert_eq!(worker.state.requests().count(), 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn worker_to_orchestrator_being_deleted_is_refused_without_a_request() {
+    let (mut worker, room, _, dir) = fixture();
+    let orchestrator = bound(&mut worker, room, &dir, "own-orch");
+    worker.state.prepare_delete_agent(orchestrator).unwrap();
+    for selector in ["orchestrator", "own-orch"] {
+        let sent = call(
+            &mut worker,
+            selector,
+            "message.send",
+            json!({"room":"test","as":"codex1","to":[selector],"text":"gone"}),
+        );
+        assert!(!sent.ok, "{sent:?}");
+    }
+    assert_eq!(worker.state.requests().count(), 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn worker_to_orchestrator_alias_ignores_case_like_the_human_alias() {
+    let (mut worker, room, _, dir) = fixture();
+    let orchestrator = bound(&mut worker, room, &dir, "own-orch");
+    let sent = call(
+        &mut worker,
+        "case",
+        "message.send",
+        json!({"room":"test","as":"codex1","to":["Orchestrator"],"text":"hi"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    assert_eq!(
+        worker.state.requests().next().unwrap().agent_id,
+        orchestrator
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

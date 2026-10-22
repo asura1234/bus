@@ -197,52 +197,45 @@ impl Worker {
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
     }
 
-    /// Explicit recipients can reach the room's bound MASTER orchestrator.
-    /// Members (including ambiguous names) keep precedence over that fallback.
-    fn control_recipient(&self, room: RoomId, selector: &str) -> Result<AgentId, String> {
+    /// Members (including ambiguous names) precede the bound orchestrator.
+    fn control_room_agent(&self, room: RoomId, selector: &str) -> Result<Option<AgentId>, String> {
         if self
             .state
             .agents()
             .any(|a| a.room_id == room && (selector == a.id.0.to_string() || selector == a.name))
         {
-            return self.control_agent(selector, Some(room));
+            return self.control_agent(selector, Some(room)).map(Some);
         }
-        let orchestrator = self.state.orchestrator_of(room);
-        if selector == "orchestrator" {
-            return orchestrator
-                .map(|agent| agent.id)
-                .ok_or_else(|| "This room has no bound orchestrator".into());
-        }
-        orchestrator
-            .filter(|agent| selector == agent.id.0.to_string() || selector == agent.name)
-            .map(|agent| agent.id)
-            .ok_or_else(|| "No matching room or agent".into())
+        Ok(self
+            .state
+            .orchestrator_of(room)
+            .filter(|a| selector == a.id.0.to_string() || selector == a.name)
+            .map(|a| a.id))
     }
 
-    /// The agent `--as` names in `room`: one of its agents, or its MASTER
-    /// orchestrator, which writes into the room without being a member.
+    fn control_recipient(&self, room: RoomId, selector: &str) -> Result<AgentId, String> {
+        if let Some(id) = self.control_room_agent(room, selector)? {
+            return Ok(id);
+        }
+        if selector.eq_ignore_ascii_case("orchestrator") {
+            return self
+                .state
+                .orchestrator_of(room)
+                .map(|a| a.id)
+                .ok_or_else(|| "This room has no bound orchestrator".into());
+        }
+        Err("No matching room or agent".into())
+    }
+
+    /// `--as` names a member or the MASTER orchestrator writing into its room.
     pub(in crate::messaging::coordinator) fn control_author(
         &self,
         room: RoomId,
         selector: &str,
     ) -> Result<AgentId, String> {
-        // Fall back only when nothing in the room matches; an ambiguous
-        // in-room name must fail rather than resolve to the orchestrator.
-        let in_room = self
-            .state
-            .agents()
-            .any(|a| a.room_id == room && (selector == a.id.0.to_string() || selector == a.name));
-        let id = if in_room {
-            self.control_agent(selector, Some(room))?
-        } else {
-            self.state
-                .orchestrator_of(room)
-                .filter(|o| selector == o.id.0.to_string() || selector == o.name)
-                .map(|o| o.id)
-                .ok_or(
-                    "No matching room or agent: --as must name an agent in this room or its orchestrator",
-                )?
-        };
+        let id = self.control_room_agent(room, selector)?.ok_or(
+            "No matching room or agent: --as must name an agent in this room or its orchestrator",
+        )?;
         if self.state.agent(id).is_some_and(|a| a.deletion_pending) {
             return Err("Author agent is being deleted".into());
         }

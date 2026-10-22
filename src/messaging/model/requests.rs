@@ -548,10 +548,8 @@ impl BusState {
     /// The request a message may steer into: the agent's current request while
     /// its turn visibly runs, or while the idle agent holds its reply for
     /// background work that turn started (shells, agents, session crons),
-    /// bound by its submit hook, with no final reply yet. The idle agent takes
-    /// typed input, so the message reaches it rather than waiting on the hold.
-    /// Returns the first queued request and that lead, unless the queued one
-    /// asked to wait (`--queue`).
+    /// bound by its submit hook, with no final reply yet. Only the lead's own
+    /// room can steer; other rooms and `--queue` wait for their own turn.
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
         if !matches!(
@@ -574,7 +572,8 @@ impl BusState {
             return None;
         }
         let first = *self.queues.get(&agent)?.first()?;
-        (!self.requests.get(&first)?.queue_only).then_some((first, lead.id))
+        let queued = self.requests.get(&first)?;
+        (!queued.queue_only && queued.room_id == lead.room_id).then_some((first, lead.id))
     }
 
     /// Moves `request` from the queue into `lead`'s group before Bus types it
@@ -693,13 +692,14 @@ impl BusState {
             .iter()
             .enumerate()
             .filter_map(|(index, id)| {
+                let payload = self.render_request_payload(*id)?;
                 let prompt = &self.requests.get(id)?.prompt;
                 Some(format!(
                     "[{}/{count} from {} at {}]\n{}",
                     index + 1,
                     self.sender_name(&prompt.author),
                     clock(prompt.submitted_at_ms),
-                    prompt.rendered_payload()
+                    payload
                 ))
             })
             .collect::<Vec<_>>()

@@ -170,14 +170,16 @@ impl BusState {
         Ok(())
     }
 
-    /// The agents a room's deletion removes: its members and its orchestrator,
-    /// which exists only for that room.
-    pub(crate) fn agents_deleted_with_room(&self, id: RoomId) -> Vec<AgentId> {
+    /// Picker order: room members and the bound MASTER orchestrator, by agent ID.
+    pub(crate) fn room_recipients(&self, room: RoomId) -> impl Iterator<Item = &RoomAgent> {
         self.agents
             .values()
-            .filter(|agent| agent.room_id == id || agent.orchestrates == Some(id))
-            .map(|agent| agent.id)
-            .collect()
+            .filter(move |a| a.room_id == room || a.orchestrates == Some(room))
+    }
+
+    /// Deleting a room removes its members and its dedicated orchestrator.
+    pub(crate) fn agents_deleted_with_room(&self, id: RoomId) -> Vec<AgentId> {
+        self.room_recipients(id).map(|a| a.id).collect()
     }
 
     pub(crate) fn set_room_sound(&mut self, id: RoomId, on: bool) -> Result<(), ModelError> {
