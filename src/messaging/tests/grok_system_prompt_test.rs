@@ -1,5 +1,7 @@
 //! Synthetic prompt/installation contracts; no Grok process or Bus session is started.
-use super::{orchestrator_prompt, prompt_args, prompt_message};
+use crate::agents::providers::grok::system_prompt::{
+    orchestrator_prompt, prompt_args, prompt_message,
+};
 use crate::messaging::{
     model::{Provider, RoomId},
     orchestration::{self, PromptValues},

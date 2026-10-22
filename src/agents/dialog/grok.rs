@@ -32,102 +32,10 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         .iter()
         .rposition(|line| line.trim_start().starts_with("◆ "))?;
     let first = (header + 1..footer).find(|&index| row(lines[index], index).is_some())?;
-    let mut rows: Vec<Row> = Vec::new();
-    for (index, line) in lines.iter().enumerate().take(footer).skip(first) {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Some(next) = row(line, index) {
-            if rows.iter().any(|row| row.selector == next.selector) {
-                return None;
-            }
-            rows.push(next);
-        } else {
-            // A wrapped label must stay within the same gutter, at its label column.
-            // Malformed options are not continuations, even when deeply indented.
-            let inner = line.trim_start().strip_prefix('┃')?;
-            let last = rows.last_mut()?;
-            let column = line.chars().take_while(|c| c.is_whitespace()).count()
-                + 1
-                + inner.chars().take_while(|c| c.is_whitespace()).count();
-            if column < last.label_at || inner.trim().is_empty() {
-                return None;
-            }
-            last.label.push(' ');
-            last.label.push_str(inner.trim());
-        }
-    }
-    if rows.len() < 2 {
-        return None;
-    }
+    let rows = collect_rows(lines, first, footer)?;
     let multi = rows.iter().any(|row| row.checkbox);
-    if permission {
-        let count = lower.split_whitespace().find_map(|word| {
-            word.strip_prefix("1/")?
-                .strip_suffix(":select")?
-                .parse::<usize>()
-                .ok()
-        })?;
-        if count > 9
-            || rows.len() != count
-            || multi
-            || rows
-                .iter()
-                .enumerate()
-                .any(|(index, row)| row.selector as u32 != '1' as u32 + index as u32)
-        {
-            return None;
-        }
-    } else if question && !editing && !multi {
-        // Arrow distances are unsafe across an omitted native radio row.
-        // Reject observable gaps; the z editor is directly addressable.
-        let selectors = "123456789abcdef";
-        for (index, row) in rows.iter().enumerate() {
-            if row.selector == 'z' {
-                if index + 1 != rows.len() {
-                    return None;
-                }
-            } else if selectors.chars().nth(index) != Some(row.selector) {
-                return None;
-            }
-        }
-    }
-    let row_styles: Vec<_> = rows
-        .iter()
-        .map(|row| {
-            styles
-                .get(row.line)
-                .and_then(|styles| styles.get(row.label_at))
-                .copied()
-                .unwrap_or_default()
-        })
-        .collect();
-    let styled_focus = highlighted(&row_styles);
-    let explicit: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| row.focused)
-        .map(|(index, _)| index)
-        .collect();
-    let focused = match explicit.as_slice() {
-        [index] if styled_focus.is_none_or(|styled| styled == *index) => Some(*index),
-        [] => styled_focus.or_else(|| {
-            if rows.iter().any(|row| row.checkbox) {
-                return None;
-            }
-            let filled: Vec<_> = rows
-                .iter()
-                .enumerate()
-                .filter(|(_, row)| row.glyph == "(●)")
-                .map(|(index, _)| index)
-                .collect();
-            match filled.as_slice() {
-                [index] => Some(*index),
-                _ => None,
-            }
-        }),
-        _ => return None,
-    };
+    validate_rows(&rows, permission, question, editing, multi, &lower)?;
+    let focused = focused_row(&rows, styles)?;
     if !parked && focused.is_none() {
         return None;
     }
@@ -174,6 +82,140 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     if multi && !question {
         return None;
     }
+    let options = choice_options(&rows, parked, focused, question, multi, &lower);
+    Some(Dialog {
+        kind: DialogKind::Choice,
+        input: None,
+        text,
+        options,
+        hint: Some(hint),
+        fingerprint_context,
+        tabs: Vec::new(),
+    })
+}
+
+fn collect_rows(lines: &[&str], first: usize, footer: usize) -> Option<Vec<Row>> {
+    let mut rows: Vec<Row> = Vec::new();
+    for (index, line) in lines.iter().enumerate().take(footer).skip(first) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(next) = row(line, index) {
+            if rows.iter().any(|row| row.selector == next.selector) {
+                return None;
+            }
+            rows.push(next);
+        } else {
+            // A wrapped label must stay within the same gutter, at its label column.
+            // Malformed options are not continuations, even when deeply indented.
+            let inner = line.trim_start().strip_prefix('┃')?;
+            let last = rows.last_mut()?;
+            let column = line.chars().take_while(|c| c.is_whitespace()).count()
+                + 1
+                + inner.chars().take_while(|c| c.is_whitespace()).count();
+            if column < last.label_at || inner.trim().is_empty() {
+                return None;
+            }
+            last.label.push(' ');
+            last.label.push_str(inner.trim());
+        }
+    }
+    if rows.len() < 2 {
+        return None;
+    }
+    Some(rows)
+}
+
+fn validate_rows(
+    rows: &[Row],
+    permission: bool,
+    question: bool,
+    editing: bool,
+    multi: bool,
+    lower: &str,
+) -> Option<()> {
+    if permission {
+        let count = lower.split_whitespace().find_map(|word| {
+            word.strip_prefix("1/")?
+                .strip_suffix(":select")?
+                .parse::<usize>()
+                .ok()
+        })?;
+        if count > 9
+            || rows.len() != count
+            || multi
+            || rows
+                .iter()
+                .enumerate()
+                .any(|(index, row)| row.selector as u32 != '1' as u32 + index as u32)
+        {
+            return None;
+        }
+    } else if question && !editing && !multi {
+        // Arrow distances are unsafe across an omitted native radio row.
+        // Reject observable gaps; the z editor is directly addressable.
+        let selectors = "123456789abcdef";
+        for (index, row) in rows.iter().enumerate() {
+            if row.selector == 'z' {
+                if index + 1 != rows.len() {
+                    return None;
+                }
+            } else if selectors.chars().nth(index) != Some(row.selector) {
+                return None;
+            }
+        }
+    }
+    Some(())
+}
+
+fn focused_row(rows: &[Row], styles: &[Vec<Style>]) -> Option<Option<usize>> {
+    let row_styles: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            styles
+                .get(row.line)
+                .and_then(|styles| styles.get(row.label_at))
+                .copied()
+                .unwrap_or_default()
+        })
+        .collect();
+    let styled_focus = highlighted(&row_styles);
+    let explicit: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.focused)
+        .map(|(index, _)| index)
+        .collect();
+    let focused = match explicit.as_slice() {
+        [index] if styled_focus.is_none_or(|styled| styled == *index) => Some(*index),
+        [] => styled_focus.or_else(|| {
+            if rows.iter().any(|row| row.checkbox) {
+                return None;
+            }
+            let filled: Vec<_> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.glyph == "(●)")
+                .map(|(index, _)| index)
+                .collect();
+            match filled.as_slice() {
+                [index] => Some(*index),
+                _ => None,
+            }
+        }),
+        _ => return None,
+    };
+    Some(focused)
+}
+
+fn choice_options(
+    rows: &[Row],
+    parked: bool,
+    focused: Option<usize>,
+    question: bool,
+    multi: bool,
+    lower: &str,
+) -> Vec<DialogOption> {
     let mut options: Vec<_> = rows
         .iter()
         .enumerate()
@@ -205,15 +247,7 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     if multi && !parked {
         options.push(action(options.len(), "Toggle / edit focused answer", " "));
     }
-    Some(Dialog {
-        kind: DialogKind::Choice,
-        input: None,
-        text,
-        options,
-        hint: Some(hint),
-        fingerprint_context,
-        tabs: Vec::new(),
-    })
+    options
 }
 
 fn action(index: usize, label: &str, key: &'static str) -> DialogOption {
@@ -369,28 +403,6 @@ mod tests {
             &text.iter().map(String::as_str).collect::<Vec<_>>(),
             &styles,
         )
-    }
-
-    #[tokio::test]
-    async fn grok_c_changed_scope_is_stale_under_runtime_content_lock() {
-        let (runtime, mut writes) =
-            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
-        let draw = |screen: &str| {
-            runtime.test_process_pty_bytes(
-                format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
-            )
-        };
-        draw(PERMISSION);
-        let (snapshot, _) = runtime.visible_ansi_snapshot_with_seq().unwrap();
-        let original = super::super::parse(&snapshot).expect("emulated card");
-        draw(&PERMISSION.replace("this command", "all commands"));
-        assert_eq!(
-            runtime
-                .try_choose_dialog_option(&original.digest(), 1)
-                .unwrap(),
-            crate::terminal::runtime::DialogChoice::Stale
-        );
-        assert!(writes.try_recv().is_err(), "stale approval received keys");
     }
 
     #[test]

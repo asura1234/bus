@@ -88,20 +88,6 @@ impl Worker {
         Ok(true)
     }
 
-    /// The provider session the native server attributes to `pane`.
-    pub(super) fn native_session(&mut self, pane: &str) -> Result<Option<String>, String> {
-        match self
-            .transport
-            .request(Method::AgentGet(schema::AgentTarget {
-                target: pane.to_owned(),
-            }))
-            .map_err(|e| e.message)?
-        {
-            ResponseResult::AgentInfo { agent } => Ok(agent.agent_session.map(|s| s.value)),
-            _ => Err("Unexpected native agent response".into()),
-        }
-    }
-
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
         let mut rollout = None;
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;

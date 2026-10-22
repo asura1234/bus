@@ -358,3 +358,7 @@ pub(crate) fn prompt_message(text: &str) -> String {
 #[cfg(test)]
 #[path = "tests/orchestration_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/grok_system_prompt_test.rs"]
+mod grok_tests;
