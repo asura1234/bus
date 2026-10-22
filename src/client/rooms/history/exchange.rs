@@ -345,7 +345,7 @@ fn wrap_header(
 /// then notices and any saved latest-only prompt.
 fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
     let mut exchanges = BTreeMap::new();
-    // Dialog notices to orchestrators are delivery-only, never history.
+    // Room messages, including Bus notices, share prompt/reply history.
     for request in state.requests().filter(|r| r.room_id == room.id) {
         let prompt = &request.prompt;
         exchanges

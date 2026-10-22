@@ -186,10 +186,11 @@ Files are split by ownership, not by helper.
   - `model/`: the round-trip rules, no I/O
     - `mod.rs`, `types.rs` (ids, `Author`, `Room` and its MASTER kind, `RoomAgent`, `Prompt`, `Reply`), `state.rs` (`BusState`)
     - `rooms.rs`, `agents.rs` (participants, `orchestrates` link), `requests.rs` (queue, coalesce, steer, settle)
-    - `callbacks.rs` (match neutral provider events to requests), `status.rs` (room rollup),
-    - `compactions.rs`, `idle_agents.rs` (per-tick limit notices with saved latches); every Bus-generated notice is
-      `Author::Bus`, shown as the grey sender `bus`, via `post_bus_notice` (work room to its orchestrator, else the developer)
-      `tests/{rooms_test,agents_test,requests_test,callbacks_test}.rs`
+    - `callbacks.rs` (match neutral provider events to requests), `status.rs` (room rollup)
+    - `compactions.rs`, `idle_agents.rs` (per-tick limit notices with saved latches, via `rooms::post_bus_notice`)
+    - `attention.rs` (MASTER developer-attention notices via `post_developer_attention`); both notice paths use
+      `Author::Bus`, shown as the grey sender `bus`
+    - `tests/{rooms_test,agents_test,requests_test,callbacks_test}.rs`
   - `coordinator/`: the single-writer worker that runs the round trip
     - `mod.rs` (`BusHandle`, `BusCommand`, `BusEvent`, `BusSnapshot`), `worker.rs`, `poll.rs` (agent status), `delivery.rs`
     - `commands.rs`, `agents.rs` (`AddAgent` to `LaunchSpec`, delete, guarded terminal close), `callbacks.rs` (consume the hook spool)
