@@ -120,6 +120,13 @@ impl BusState {
             },
         );
         let (room, worker) = (agent.room_id, agent.id);
+        self.record_digest_final(
+            worker,
+            room,
+            format!("event:{key}"),
+            text,
+            callback.occurred_at_ms,
+        );
         let Ok(message) =
             self.post_to_developer(room, worker, text.clone(), vec![], callback.occurred_at_ms)
         else {
@@ -363,28 +370,31 @@ impl BusState {
             Some(episode) => format!("{class}:{}:{episode}", group.0),
             None => format!("{class}:{}", group.0),
         };
-        self.worker_events
-            .entry(key)
-            .or_insert_with(|| WorkerEvent {
-                agent: request.agent_id,
-                room: request.room_id,
-                group: Some(group),
-                message: request.prompt.id,
-                at_ms,
-                episode,
-                kind,
-                text: format!(
-                    "{}; message {} (request {}).\nInspect: bus message status {}{}",
-                    preview(text, &format!("bus message status {}", request.prompt.id.0)),
-                    request.prompt.id.0,
-                    request.id.0,
-                    request.prompt.id.0,
-                    detail
-                        .map(|detail| format!("\n{detail}"))
-                        .unwrap_or_default()
-                ),
-                route: ReplyRoute::Pending,
-            });
+        if self.worker_events.contains_key(&key) {
+            return;
+        }
+        let event = WorkerEvent {
+            agent: request.agent_id,
+            room: request.room_id,
+            group: Some(group),
+            message: request.prompt.id,
+            at_ms,
+            episode,
+            kind,
+            text: format!(
+                "{}; message {} (request {}).\nInspect: bus message status {}{}",
+                preview(text, &format!("bus message status {}", request.prompt.id.0)),
+                request.prompt.id.0,
+                request.id.0,
+                request.prompt.id.0,
+                detail
+                    .map(|detail| format!("\n{detail}"))
+                    .unwrap_or_default()
+            ),
+            route: ReplyRoute::Pending,
+        };
+        self.record_digest_event(&key, &event);
+        self.worker_events.insert(key, event);
     }
 
     /// Build retention indexes once per archive/load, without copying bodies.

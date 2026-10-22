@@ -57,9 +57,11 @@ impl BusState {
     }
 
     pub(crate) fn is_reply_notification(&self, request: RequestId) -> bool {
-        self.reply_routes
-            .values()
-            .any(|route| route.notification() == Some(request))
+        self.is_room_digest(request)
+            || self
+                .reply_routes
+                .values()
+                .any(|route| route.notification() == Some(request))
             || self
                 .worker_events
                 .values()

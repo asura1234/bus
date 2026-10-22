@@ -551,6 +551,7 @@ impl BusState {
         let Some(pending) = request.pending_final.clone() else {
             return Ok(false);
         };
+        let room = request.room_id;
         let members = self.group_members(request_id);
         let unseen_steering = members.iter().any(|member| {
             self.requests
@@ -590,6 +591,14 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
         agent.actionable_error = None;
+        self.record_digest_final(
+            agent_id,
+            room,
+            format!("final:{}", request_id.0),
+            &pending.text,
+            completed_at_ms,
+        );
+        self.record_digest_idle(agent_id, completed_at_ms);
         Ok(true)
     }
 

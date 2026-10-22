@@ -14,7 +14,7 @@ use {
 /// Why a request closed when its agent was deleted before it settled.
 pub(crate) const AGENT_DELETED: &str = "agent_deleted";
 /// Current Bus messaging instructions, delivered at launch or once after an upgrade.
-pub(crate) const MESSAGING_RULES_VERSION: u32 = 1;
+pub(crate) const MESSAGING_RULES_VERSION: u32 = 2;
 
 impl BusState {
     /// Upgrade instructions are a separate first pending turn. Persist the
@@ -181,6 +181,7 @@ impl BusState {
         self.agents
             .remove(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
+        self.ack_digest_deletion(id, now_ms);
         self.queues.remove(&id);
         let shared: std::collections::BTreeSet<_> = self
             .requests()
@@ -492,6 +493,7 @@ impl BusState {
         if gone {
             self.complete_pending_final(agent, now_ms)?;
         }
+        self.record_digest_idle(agent, now_ms);
         Ok(())
     }
 }

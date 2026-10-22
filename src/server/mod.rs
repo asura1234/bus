@@ -23,6 +23,8 @@ pub(crate) mod workspaces;
 mod tests {
     #[path = "reply_delivery_test.rs"]
     mod reply_delivery;
+    #[path = "room_digest_test.rs"]
+    mod room_digest;
     use super::clients::input::apply_client_pane_input_events;
     use std::collections::{HashMap, HashSet};
     use std::fs;

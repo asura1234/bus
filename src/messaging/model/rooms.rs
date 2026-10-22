@@ -387,6 +387,7 @@ impl BusState {
         let Some(orchestrator) = orchestrator else {
             return self.record_developer_notice(room, Author::Bus, text, Vec::new(), now_ms);
         };
+        let fact_text = text.clone();
         let requests = self.submit_message_from(
             room,
             Draft {
@@ -397,11 +398,13 @@ impl BusState {
             Author::Bus,
             now_ms,
         )?;
-        requests
+        let prompt = requests
             .first()
             .and_then(|id| self.requests.get(id))
             .map(|request| request.prompt.id)
-            .ok_or(ModelError::InvalidTransition)
+            .ok_or(ModelError::InvalidTransition)?;
+        self.record_digest_notice(room, None, prompt, &fact_text, now_ms);
+        Ok(prompt)
     }
 
     /// Bus's final cleanup notice about a deleting agent goes to its surviving

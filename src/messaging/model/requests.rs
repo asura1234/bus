@@ -91,6 +91,7 @@ impl BusState {
             }
         }
 
+        self.ack_digest_action(&author, &draft.recipient_ids, now_ms);
         let prompt = Prompt {
             id: PromptId(self.allocate_id()),
             author,

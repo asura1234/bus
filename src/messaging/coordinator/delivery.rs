@@ -148,6 +148,18 @@ impl Worker {
             {
                 continue;
             }
+            if !steer_unbound
+                && self.state.room_digest_armed(agent.id)
+                && self.state.queued_requests(agent.id).is_empty()
+            {
+                let mut state = self.state.clone();
+                if state
+                    .queue_room_digest(agent.id, super::io::now_ms())
+                    .map_err(|e| e.to_string())?
+                {
+                    self.save(state)?;
+                }
+            }
             self.deliver_request(&agent, waited, steer_unbound)?;
         }
         Ok(())

@@ -93,6 +93,7 @@ impl Worker {
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
         // Sessions saved before MASTER existed gain it here, once, before any client sees them.
         state.ensure_master_room();
+        state.recover_room_digest_facts();
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
         state
