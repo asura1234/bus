@@ -26,6 +26,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../orchestration/rules.md"),
     ),
     (
+        "parallel-writes.md",
+        include_str!("../../orchestration/parallel-writes.md"),
+    ),
+    (
         "templates/workflow-template.md",
         include_str!("../../workflows/template.md"),
     ),

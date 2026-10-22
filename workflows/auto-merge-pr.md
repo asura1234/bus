@@ -3,18 +3,19 @@
 This workflow is a skill for the orchestrator: it shows how the developer wants
 one PR steered to "PR merged". Follow its steps and decisions, and use your own
 judgment for everything it leaves open: agent names, staffing, and how to
-recover.
+recover. The binding orchestrator rules also apply to this workflow.
 
 ## Graph
 
 ```mermaid
 flowchart TD
     begin(["Get PR merge-ready"]):::start --> askverify
-    askverify["Orchestrator: ask developer to merge without asking, or hold for manual test and approval"] --> measure
+    askverify["Orchestrator: reuse approved workflow kickoff authority and explicit holds; clarify only missing intent or authority"] --> measure
     measure["Orchestrator: measure added + removed lines against the PR base branch, excluding plans/ (git diff --shortstat base...HEAD)"] --> big{"Total changed lines >= 3000?"}
     big -- yes --> split["Author: run split-pr --publish"]
     big -- no --> lockgoal["Orchestrator: confirm the PR goal and non-goals are locked from the developer's words, with the origin recorded (ask the developer once if not)"]
-    lockgoal --> review
+    lockgoal --> initround["Orchestrator: record or resume fix_round in the workflow log (new PR: 0)"]
+    initround --> review
     split --> approveplan["Orchestrator: approve the split plan (split-pr CONFIRM)"]
     approveplan --> splitok{"split-pr built every part and published every publishable one?"}
     splitok -- no --> splitfailed(["Split failed (orchestrator recovers)"]):::failure
@@ -24,7 +25,11 @@ flowchart TD
         review["Reviewers: run review-pr in parallel, each in its own lane; skip reviewers that gave Ready"]
         review --> allready{Every reviewer has given Ready?}
         allready -- no --> anyabandon{Any Abandon?}
-        anyabandon -- "no (Needs Refinement)" --> address[Author: run address-review-comments, push]
+        anyabandon -- "no (Needs Refinement)" --> queuereview[Orchestrator: queue review findings for repair]
+        queuereview --> nextround["Orchestrator: next_fix_round = fix_round + 1"]
+        nextround --> overbudget{"next_fix_round > 2?"}
+        overbudget -- no --> startfix["Orchestrator: record fix_round = next_fix_round; start the queued repair batch"]
+        startfix --> address["Author: run address-review-comments for review findings or apply developer feedback; push"]
         address --> outscope{"Orchestrator: any finding outside the PR goal?"}
         outscope -- yes --> recordscope["Orchestrator: record it in deferred.md as a follow-up PR candidate; re-send goal and non-goals to author and reviewers"]
         outscope -- no --> flag
@@ -39,8 +44,10 @@ flowchart TD
         applyfirst --> remeasure
         remeasure{"Orchestrator: re-measure; total changed lines >= 3000?"}
         remeasure -- no --> review
-        applydec[Author: apply developer's feedback, push] --> remeasure
     end
+
+    overbudget -- yes --> holdround["Orchestrator: hold this PR; report cause and plan in MASTER; keep independent work moving"]
+    holdround --> roundheld([PR held: fix-round cap]):::failure
 
     needsdev -- yes --> informdev
     handback -- yes --> informdev
@@ -50,17 +57,20 @@ flowchart TD
     abandonfix -- yes --> split
     abandonfix -- no --> informdev
 
-    allready -- yes --> verify{"Developer asked to hold before merge? (start answer = merge permission)"}
-    verify -- yes --> holdmerge["Author: run merge-pr --hold-before-merge"]
+    allready -- yes --> verify{"Explicit developer hold before merge? (kickoff approval/start answer = merge authority)"}
+    verify -- yes --> holdmerge["Author: run merge-pr --hold-before-merge within the recorded fix-round budget"]
     holdmerge --> holding{merge-pr ready and holding?}
     holding -- no --> informdev
     holding -- yes --> manualtest[Developer: manual test and merge approval]:::developer
     manualtest --> approved{Approved?}
     approved -- yes --> merge
-    approved -- no --> applydec
-    verify -- no --> merge[Author: run merge-pr]
+    approved -- no --> queuefeedback[Orchestrator: queue developer feedback for repair]
+    queuefeedback --> nextround
+    verify -- no --> merge[Author: run merge-pr within the recorded fix-round budget]
     merge --> mergeok{merge-pr merged the PR?}
-    mergeok -- no --> informdev
+    mergeok -- no --> morerepairs{More repairs required?}
+    morerepairs -- yes --> queuereview
+    morerepairs -- no --> informdev
     mergeok -- yes --> mainco{PR worktree is the main checkout?}
     mainco -- no --> closewt[Orchestrator: run worktree-close on the PR worktree]
     mainco -- yes --> anydeferred
@@ -77,6 +87,27 @@ flowchart TD
     classDef developer fill:#fde2e4,stroke:#c9184a
 ```
 
+An approved workflow authorizes its path through review and merge on the exact
+head: required reviews are Ready, gates and requested acceptance pass, comments
+are adjudicated, and no explicit hold exists. Reuse that kickoff approval as the
+start answer; do not ask for per-PR merge OK. A draft-only, manual-test or other
+developer hold remains binding. Clarify missing intent or authority only for the
+affected part; keep independent work moving.
+
+Record `fix_round = 0` once per new PR in the workflow log and reuse the counter
+on resumes and when entering from another workflow. The initial review uses no
+fix round. Before each repair batch, calculate `next_fix_round = fix_round + 1`;
+if it exceeds two, hold this PR and report the cause and plan while independent
+work continues. Otherwise record the new counter, apply the batch and review
+the repaired head. The second repaired head still gets its final review and
+verification and may merge when every exact-head condition above passes.
+
+The same counter covers review, verification, gates, bot/GitHub comments and
+developer feedback. Tell the author, including while running `merge-pr`, to
+return to the budget gate **before** starting another repair batch; a skill
+must not silently start a third one. Several commits for one queued batch use
+one round; a newly required repair after checking that head uses the next.
+
 `deferred.md` is `<main checkout>/temp/<branch-slug>/deferred.md`, where every
 character of the branch name outside `A-Za-z0-9_-` becomes `-`. It holds only
 findings outside the PR goal, each with what it is and why it is out of scope.
@@ -91,6 +122,9 @@ developer.
 
 ## Failure recovery
 
+- **PR held: fix-round cap:** report the unresolved acceptance items, cause and
+  plan in MASTER, retain the counter and name the next owner or dependency.
+  Hold only this PR and its dependent operations; keep independent work moving.
 - **PR merge blocked (developer recovers):** the developer starts from the
   reason you posted in MASTER, `deferred.md`, and the PR state (branch, open
   PR, latest review round, the merge-pr report if it ran).
@@ -127,9 +161,9 @@ You handle these yourself:
 
 | Role | Model | Does |
 |---|---|---|
-| Orchestrator | any | Steers the run to "PR merged" and recovers from the cases above. Names and staffs the agents and changes the team as the run needs. Asks the merge-permission question once; that answer is the permission to merge. Gets the PR goal and non-goals locked from the developer's words, re-measures after every pushed fix, approves the split plan, decides whether splitting fixes an Abandon, records out-of-scope findings and flaky tests the author reports in `deferred.md`, triages flagged issues, and on the developer's behalf has the author apply best-of-n's top-ranked option. Informs the developer in MASTER at "PR merge blocked", and at "PR merged" when `deferred.md` has entries; after "PR merged", starts each recorded flaky test as its own PR. Writing `deferred.md` and running worktree-close are its only hands-on actions; it delegates everything else. |
-| Developer | - | Answers the merge-permission question; supplies the PR goal and non-goals when none is locked; optionally runs the manual test and merge approval while merge-pr holds; recovers from "PR merge blocked". |
-| Author | any | split-pr, address-review-comments (which commits the reviewers' tests), best-of-n, fixes, merge-pr (which handles CI and new GitHub review comments, pushing its own fixes). Before split-pr or merge-pr, commits any reviewer tests still left in the worktree. A flaky test found while running gate-and-fix or merge-pr is not fixed in this PR: it reports the test, error and diagnosis to the orchestrator and continues once a rerun passes. |
+| Orchestrator | any | Steers the run to "PR merged" and recovers from the cases above. Names and staffs the agents and changes the team as the run needs. Reuses approved workflow kickoff authority and explicit holds; clarifies only missing intent or authority. Gets the PR goal and non-goals locked from the developer's words, records the fix-round counter and holds a PR needing a third repair batch, re-measures after every pushed fix, approves the split plan, decides whether splitting fixes an Abandon, records out-of-scope findings and flaky tests the author reports in `deferred.md`, triages flagged issues, and on the developer's behalf has the author apply best-of-n's top-ranked option. Informs the developer in MASTER at "PR merge blocked", and at "PR merged" when `deferred.md` has entries; after "PR merged", starts each recorded flaky test as its own PR. Recording workflow state, writing `deferred.md` and running worktree-close are its only hands-on actions; it delegates everything else. |
+| Developer | - | Approves the workflow goal and authority or declares a hold; supplies the PR goal and non-goals when none is locked; optionally runs the manual test and merge approval while merge-pr holds; recovers from "PR merge blocked". |
+| Author | any | split-pr, address-review-comments (which commits the reviewers' tests), best-of-n, fixes, merge-pr (which handles CI and new GitHub review comments, returning to the shared budget gate before another repair batch). Before split-pr or merge-pr, commits any reviewer tests still left in the worktree. A flaky test found while running gate-and-fix or merge-pr is not fixed in this PR: it reports the test, error and diagnosis to the orchestrator and continues once a rerun passes. |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |
 
 All agents for one PR share its worktree (any worktree, not necessarily the
