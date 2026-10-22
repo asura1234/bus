@@ -260,17 +260,30 @@ pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
     }
 }
 
+/// Existing global aliases must resolve before project consent can authorize a
+/// write. A dangling alias is not evidence that its destination is unrelated.
+fn global_destination(path: &Path) -> Result<Option<PathBuf>, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => path.canonicalize().map(Some).map_err(|e| {
+            format!("Cannot resolve global Grok configuration; no hooks changed: {e}")
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// One containment check for installation and cold-resume rebinding. Project
 /// consent never authorizes a global config or a symlinked config ancestor.
 pub(super) fn project_hook_path(project: &Path) -> Result<PathBuf, String> {
     let root = common::project_root(project)
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    if let Some(home) = std::env::home_dir() {
-        let home = home.canonicalize().unwrap_or(home);
-        if root == home || root.starts_with(home.join(".grok")) {
-            return Err("Grok project hooks cannot modify the global ~/.grok configuration".into());
-        }
+    let home = std::env::home_dir().map(|home| home.canonicalize().unwrap_or(home));
+    if home
+        .as_ref()
+        .is_some_and(|home| root == *home || root.starts_with(home.join(".grok")))
+    {
+        return Err("Grok project hooks cannot modify the global ~/.grok configuration".into());
     }
     let mut path = root;
     for component in [".grok", "hooks", "bus.json"] {
@@ -285,6 +298,18 @@ pub(super) fn project_hook_path(project: &Path) -> Result<PathBuf, String> {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
+        }
+    }
+    if let Some(home) = home {
+        for global in [".grok", ".grok/hooks", ".grok/hooks/bus.json"] {
+            if global_destination(&home.join(global))?
+                .is_some_and(|global| path.starts_with(global))
+            {
+                return Err(
+                    "Grok project hooks resolve inside global configuration; no hooks changed"
+                        .into(),
+                );
+            }
         }
     }
     Ok(path)

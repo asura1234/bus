@@ -170,3 +170,124 @@ fn grok_home_dotfiles_repository_never_receives_project_hooks() {
     assert!(!initialized.get());
     assert!(!home.join(".grok").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_preserves_global_hooks_aliased_to_project_configuration() {
+    let mut mutated = Vec::new();
+    let mut accepted = Vec::new();
+    let mut initialized_aliases = Vec::new();
+    for alias in [".grok", ".grok/hooks", ".grok/hooks/bus.json"] {
+        let f = Fixture::new();
+        f.install();
+        let home = f.root.join("home");
+        let project_hooks = f.project.join(".grok/hooks");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&project_hooks).unwrap();
+        let original = b"{\"custom\":\"global-config-must-stay-unchanged\"}";
+        std::fs::write(project_hooks.join("bus.json"), original).unwrap();
+        if alias == ".grok" {
+            std::os::unix::fs::symlink(f.project.join(".grok"), home.join(alias)).unwrap();
+        } else if alias == ".grok/hooks/bus.json" {
+            std::fs::create_dir_all(home.join(".grok/hooks")).unwrap();
+            std::os::unix::fs::symlink(f.project.join(".grok/hooks/bus.json"), home.join(alias))
+                .unwrap();
+        } else {
+            std::fs::create_dir_all(home.join(".grok")).unwrap();
+            std::os::unix::fs::symlink(&project_hooks, home.join(alias)).unwrap();
+        }
+        let global_hooks = home.join(".grok/hooks/bus.json");
+        assert_eq!(std::fs::read(&global_hooks).unwrap(), original);
+        let initialized = std::cell::Cell::new(false);
+
+        let result = common::prepare(&f.spec("", true), |hooks| {
+            initialized.set(true);
+            std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+        });
+
+        if std::fs::read(&global_hooks).unwrap() != original {
+            mutated.push(alias);
+        }
+        if result.is_ok() {
+            accepted.push(alias);
+        }
+        if initialized.get() {
+            initialized_aliases.push(alias);
+        }
+    }
+    assert!(
+        mutated.is_empty(),
+        "project setup changed global hook bytes through {mutated:?}"
+    );
+    assert!(
+        accepted.is_empty(),
+        "global hook aliases were accepted: {accepted:?}"
+    );
+    assert!(
+        initialized_aliases.is_empty(),
+        "unsafe aliases initialized captures: {initialized_aliases:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_refuses_a_dangling_global_alias_before_creating_its_target() {
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::os::unix::fs::symlink(f.project.join(".grok"), home.join(".grok")).unwrap();
+    let initialized = std::cell::Cell::new(false);
+    let result = common::prepare(&f.spec("", true), |_| {
+        initialized.set(true);
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert!(!initialized.get());
+    assert!(!f.project.join(".grok").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_keeps_an_unrelated_global_alias_unchanged() {
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    let global = f.project.join("separate-global-config");
+    std::fs::create_dir_all(global.join("hooks")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let original = b"{\"custom\":\"keep-unrelated-global-hook\"}";
+    std::fs::write(global.join("hooks/bus.json"), original).unwrap();
+    std::os::unix::fs::symlink(&global, home.join(".grok")).unwrap();
+    f.prepare("");
+    assert!(f.project.join(".grok/hooks/bus.json").exists());
+    assert_eq!(
+        std::fs::read(home.join(".grok/hooks/bus.json")).unwrap(),
+        original
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_refuses_a_global_directory_alias_to_the_project_hooks_directory() {
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home");
+    let hooks = f.project.join(".grok/hooks");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&hooks).unwrap();
+    let original = b"{\"custom\":\"global-root-entry\"}";
+    std::fs::write(hooks.join("bus.json"), original).unwrap();
+    std::os::unix::fs::symlink(&hooks, home.join(".grok")).unwrap();
+    let initialized = std::cell::Cell::new(false);
+    let result = common::prepare(&f.spec("", true), |_| {
+        initialized.set(true);
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert!(!initialized.get());
+    assert_eq!(
+        std::fs::read(home.join(".grok/bus.json")).unwrap(),
+        original
+    );
+}
