@@ -948,3 +948,21 @@ fn cursor_composer_format_order_preserves_the_newest_draft() {
         );
     }
 }
+
+#[test]
+fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
+    // A reply line far above the composer is transcript, not the login
+    // surface; the live composer below it must stay observable for delivery.
+    let empty = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
+    for body_lines in [0, 1, 14] {
+        let screen = format!(
+            "◆ The deploy step failed with:\n\nLogin required\n\n{}\n{empty}",
+            "Re-authenticate the CLI, then retry.\n".repeat(body_lines)
+        );
+        assert_eq!(
+            observer(AgentKind::Grok, "next task".into())(&screen),
+            crate::terminal::runtime::InputObservation::Empty,
+            "{body_lines} body lines"
+        );
+    }
+}

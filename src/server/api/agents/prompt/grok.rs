@@ -49,13 +49,7 @@ pub(super) fn input(screen: &str) -> Option<String> {
     if top + 1 >= bottom {
         return None;
     }
-    // Login surfaces must not become ready just because an input box is visible.
-    if lines[..top].iter().any(|line| {
-        matches!(
-            line.trim().to_lowercase().as_str(),
-            "log in to grok" | "sign in to grok" | "login required" | "login with grok"
-        )
-    }) {
+    if login_surface(&lines[..top]) {
         return None;
     }
     let first = content(&lines[top + 1])?.trim_start().strip_prefix('❯')?;
@@ -85,6 +79,31 @@ pub(super) fn input(screen: &str) -> Option<String> {
     } else {
         Some(body)
     }
+}
+
+/// A login title owns only a bounded control region, starting at the viewport
+/// or a complete frame boundary. Blank padding does not extend its ownership
+/// into a preceding transcript or make a current login writable.
+fn login_surface(before_composer: &[String]) -> bool {
+    let mut region = Vec::new();
+    for line in before_composer
+        .iter()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(13)
+    {
+        if crate::agents::grok_surface::composer_border(line) {
+            break;
+        }
+        region.push(line.trim());
+    }
+    region.len() <= 12
+        && region.last().is_some_and(|heading| {
+            matches!(
+                heading.to_lowercase().as_str(),
+                "log in to grok" | "sign in to grok" | "login required" | "login with grok"
+            )
+        })
 }
 
 fn content(line: &str) -> Option<&str> {
