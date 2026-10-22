@@ -60,12 +60,13 @@ impl TerminalState {
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.managed_agent.is_some_and(|managed| {
-            matches!(
-                managed.phase,
-                ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
-            )
-        })
+        self.pending_agent_resume_plan.is_some()
+            || self.managed_agent.is_some_and(|managed| {
+                matches!(
+                    managed.phase,
+                    ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
+                )
+            })
     }
 
     /// Ends a managed launch that stopped at the agent's own update chooser
@@ -78,8 +79,10 @@ impl TerminalState {
     }
 
     pub fn managed_agent_interactive_ready(&self) -> bool {
-        self.managed_agent
-            .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
+        self.pending_agent_resume_plan.is_none()
+            && self
+                .managed_agent
+                .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
     }
 
     pub fn managed_agent_kind(&self) -> Option<AgentKind> {
