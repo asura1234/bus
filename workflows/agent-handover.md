@@ -2,7 +2,7 @@
 
 This workflow is a skill for the orchestrator: it shows how to replace a worker
 without losing the details of its current task. Automatically follow it when Bus
-sends `AGENT -> orchestrator: reached N compactions; get a handover note and
+sends `bus → orchestrator: AGENT reached N compactions; get a handover note and
 replace it.` at **Settings → Max compactions per agent**. No new approval is
 needed for this replacement. It applies only to workers: the orchestrator never
 clears or replaces itself, and clearing a worker is not a substitute.

@@ -219,8 +219,8 @@ its context.
 ## Unblock agents
 
 - **Dialogs:** agents stop at permission, trust and question dialogs and
-  other screens they cannot pass alone. The blocked worker sends you one
-  message, "Blocked, needs help to continue.", the same for every blocker and
+  other screens they cannot pass alone. Bus sends you one notice about the
+  blocked worker, "Blocked, needs help to continue.", the same for every blocker and
   once per episode; `bus wait` also stops early with
   `agent_waiting_on_dialog`. Look at its terminal: `bus agent dialog AGENT`
   shows the question or full command, the options and a fresh fingerprint
