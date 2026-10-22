@@ -18,6 +18,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../orchestration/bus-communication-guide.md"),
     ),
     (
+        "providers/grok.md",
+        include_str!("../../orchestration/providers/grok.md"),
+    ),
+    (
         "how-to-bus-cli.md",
         include_str!("../../orchestration/how-to-bus-cli.md"),
     ),
@@ -318,6 +322,9 @@ pub(crate) fn prompt_args(
     adopted: bool,
 ) -> Result<Option<Vec<String>>, String> {
     Ok(match provider {
+        Provider::Grok => {
+            crate::agents::providers::grok::system_prompt::prompt_args(path, adopted)?
+        }
         Provider::ClaudeCode => {
             Some(crate::agents::providers::claude_code::system_prompt::prompt_args(path, adopted))
         }

@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tools.acceptance import grok_provider  # noqa: E402
 from tools.acceptance.existing_instance_test import round_trip_prompt  # noqa: E402
 from tools.acceptance.harness_test import (  # noqa: E402
     Bus, CliError as CliError, E2E, WORKSPACE, SCRUB_PREFIXES as SCRUB_PREFIXES,
@@ -34,7 +35,7 @@ from tools.acceptance.harness_test import (  # noqa: E402
 )
 
 # Provider name -> the executable Bus launches for it.
-PROVIDERS = {"claude": "claude", "codex": "codex", "cursor": "cursor-agent"}
+PROVIDERS = {"claude": "claude", "codex": "codex", "cursor": "cursor-agent", "grok": grok_provider.COMMAND}
 CASES = ("single", "queued", "steering", "multi", "background", "dialog", "orchestrator", "adoption", "resume")
 
 
@@ -58,7 +59,7 @@ def parse_args(argv=None, which=shutil.which):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allow-live-models", action="store_true", required=True,
                         help="Required: the run spends real model usage")
-    parser.add_argument("--providers", help="Comma list of claude,codex,cursor (default: all installed)")
+    parser.add_argument("--providers", help="Comma list of claude,codex,cursor,grok (default: all installed)")
     parser.add_argument("--cases", default=",".join(CASES), help="Comma list of " + ",".join(CASES))
     parser.add_argument("--keep", action="store_true", help="Leave the Bus data directory for debugging")
     parser.add_argument("--binary", help="Bus binary (default: target/debug/bus)")
@@ -80,6 +81,8 @@ def parse_args(argv=None, which=shutil.which):
 
 def case_support(provider, case, providers, cases=CASES):
     """Return a SKIP reason, or None when the provider can run the case."""
+    if provider == "grok":
+        return grok_provider.case_support(case)
     if case == "adoption" and "orchestrator" not in cases:
         return "adopts the orchestrator case's session; select the orchestrator case too"
     if case == "background" and provider != "claude":
@@ -119,6 +122,8 @@ def pick_option(dialog, purpose):
 
 
 def dialog_prompt(provider, token):
+    if provider == "grok":
+        return grok_provider.dialog_prompt(token)
     # Bus rejects permission-mode launch args, and Claude's auto mode approves
     # most commands on its own, so Claude raises a question dialog instead.
     if provider == "claude":
@@ -502,7 +507,10 @@ class Run:
             reason = case_support(provider, case, self.args.providers, self.args.cases)
             if reason:
                 raise Skip(reason)
-            body(provider, row)
+            if provider == "grok":
+                grok_provider.run_case(self, case, row)
+            else:
+                body(provider, row)
             row["result"] = "PASS"
         except Skip as skip:
             row["result"], row["reason"] = "SKIP", str(skip)

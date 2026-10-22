@@ -13,6 +13,7 @@ mod claude;
 mod composer;
 mod fingerprint;
 pub(crate) use fingerprint::trace as trace_fingerprint;
+mod grok;
 mod style;
 
 use style::{highlighted, styled_lines, Style};
@@ -333,6 +334,9 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
     if composer::contains(&lines) {
         return None;
+    }
+    if let Some(dialog) = grok::parse(&lines, &styles) {
+        return Some(dialog);
     }
     let mut dialog = claude::parse(&lines, &styles)
         .or_else(|| numbered(&lines, &styles))

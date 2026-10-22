@@ -381,6 +381,36 @@ impl Worker {
                 Some(prompt),
                 CallbackEventKind::PromptStarted,
             )),
+            Parsed::CompletionCandidate { session, turn } => {
+                use crate::agents::providers::grok::completion::{
+                    resolve_candidate, CompletionResolution,
+                };
+                let idle = state
+                    .agent(id)
+                    .is_some_and(|a| a.status == RuntimeStatus::Idle);
+                let kind = match resolve_candidate(&record.value, idle)? {
+                    CompletionResolution::Pending => return Ok(ControlFlow::Break(())),
+                    CompletionResolution::Final {
+                        session: resolved_session,
+                        turn: resolved_turn,
+                        text,
+                    } if resolved_session == session && resolved_turn == turn => {
+                        CallbackEventKind::Final { text }
+                    }
+                    CompletionResolution::Cancelled {
+                        session: resolved_session,
+                        turn: resolved_turn,
+                        reason,
+                    } if resolved_session == session && resolved_turn == turn => {
+                        CallbackEventKind::Error {
+                            message: format!("Grok turn cancelled: {reason}"),
+                            provider_error: Some(reason),
+                        }
+                    }
+                    _ => return Err("Grok completion identity differs from its observation".into()),
+                };
+                Some(callback(record, id, session, turn, None, kind))
+            }
             Parsed::Final {
                 session,
                 turn,
@@ -518,6 +548,7 @@ impl Worker {
             Parsed::Session { session, .. }
             | Parsed::Started { session, .. }
             | Parsed::Final { session, .. }
+            | Parsed::CompletionCandidate { session, .. }
             | Parsed::BackgroundPending { session, .. }
             | Parsed::Failure { session, .. }
             | Parsed::Completed { session, .. }
@@ -730,6 +761,7 @@ fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
                     | Parsed::BackgroundPending { session, turn }
                     | Parsed::Response { session, turn, .. }
                     | Parsed::Completed { session, turn }
+                    | Parsed::CompletionCandidate { session, turn }
                     | Parsed::Failure { session, turn, .. },
                 ) => Some((session.clone(), turn.clone())),
                 _ => None,

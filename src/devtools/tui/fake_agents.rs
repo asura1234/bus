@@ -14,6 +14,7 @@ mod background;
 mod dialogs;
 mod directives;
 mod draft;
+mod grok;
 mod input;
 mod question;
 mod resume;
@@ -35,7 +36,7 @@ use std::time::Instant;
 
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
-const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
+const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent", "grok"];
 
 /// Links each provider name, and each effect stand-in, in `bin_dir` to the
 /// `bus` binary.
@@ -81,6 +82,9 @@ pub(super) fn stand_in(argv0: &str, names: &[&'static str]) -> Option<&'static s
 }
 
 pub(super) fn run(provider: &str, args: &[String]) -> i32 {
+    if provider == "grok" {
+        return grok::run(args);
+    }
     if args.iter().any(|a| a == "--version" || a == "-v") {
         let _ = writeln!(std::io::stdout(), "0.0.0 (bus tui fake {provider})");
         return 0;

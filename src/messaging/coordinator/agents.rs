@@ -545,7 +545,7 @@ impl Worker {
                 id,
                 Some(
                     match provider {
-                        Provider::Codex | Provider::Cursor => {
+                        Provider::Codex | Provider::Cursor | Provider::Grok => {
                             "Not ready; waiting for the provider terminal."
                         }
                         Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
@@ -619,6 +619,11 @@ impl Worker {
         } else {
             onboarding
         };
+        let text = if input.provider == Provider::Grok {
+            crate::agents::providers::grok::system_prompt::orchestrator_prompt(&text)?
+        } else {
+            text
+        };
         let adopted = prepared.adopted_session.is_some();
         let path = orchestrator::write_prompt(&hooks.spool, &text)?;
         match orchestrator::prompt_args(input.provider, &path, adopted)? {
@@ -636,6 +641,11 @@ impl Worker {
                         Draft {
                             text: match input.provider {
                                 Provider::Cursor => cursor::system_prompt::prompt_message(&text),
+                                Provider::Grok => {
+                                    crate::agents::providers::grok::system_prompt::prompt_message(
+                                        &text,
+                                    )
+                                }
                                 _ => orchestrator::prompt_message(&text),
                             },
                             files: Vec::new(),

@@ -347,6 +347,7 @@ impl Fixture {
 
     fn hook_path(&self) -> PathBuf {
         match self.provider {
+            crate::agents::providers::ProviderKind::Grok => panic!("This fixture covers the original providers; use dedicated Grok lane tests"),
             Provider::ClaudeCode => self
                 .root
                 .join("callbacks/owned-launch/claude-settings.json"),
@@ -357,6 +358,7 @@ impl Fixture {
 
     fn write_hooks(&self) {
         let (adapter, events): (&str, &[&str]) = match self.provider {
+            crate::agents::providers::ProviderKind::Grok => panic!("This fixture covers the original providers; use dedicated Grok lane tests"),
             Provider::ClaudeCode => (
                 "claude-hook",
                 &["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"],
@@ -653,6 +655,7 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
         assert_eq!(
             extras.args,
             match provider {
+            crate::agents::providers::ProviderKind::Grok => panic!("This fixture covers the original providers; use dedicated Grok lane tests"),
                 Provider::ClaudeCode => vec![
                     "--settings".to_owned(),
                     fixture.hook_path().to_string_lossy().into_owned(),
@@ -1141,6 +1144,7 @@ fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched
         std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
         let mut expected = launch::parse_path_tokens(expected).unwrap();
         expected.extend(match provider {
+            Provider::Grok => panic!("This fixture covers the original providers; use dedicated Grok lane tests"),
             Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),
             Provider::ClaudeCode => vec![
                 "--settings".into(),

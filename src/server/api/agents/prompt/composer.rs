@@ -29,6 +29,9 @@ pub(super) fn observer(
 }
 
 pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObservation {
+    if kind == AgentKind::Grok {
+        return super::grok::observe(screen, expected);
+    }
     let plain = screen
         .lines()
         .map(|line| {
@@ -208,6 +211,9 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
 }
 
 fn input(kind: AgentKind, screen: &str) -> Option<String> {
+    if kind == AgentKind::Grok {
+        return super::grok::input(screen);
+    }
     let styled: Vec<_> = screen.lines().map(styled_chars).collect();
     let lines: Vec<String> = styled
         .iter()

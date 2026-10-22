@@ -71,6 +71,7 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         "codex-hook" => ProviderKind::Codex,
         "claude-hook" => ProviderKind::ClaudeCode,
         "cursor-hook" => ProviderKind::Cursor,
+        "grok-hook" => ProviderKind::Grok,
         _ => return Err(io::Error::other("Unknown Bus callback provider")),
     };
     let mut bytes = Vec::new();
@@ -81,6 +82,9 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         return Err(io::Error::other("Bus callback exceeds 2 MiB"));
     }
     let value = serde_json::from_slice(&bytes)?;
+    if super::grok::hooks::is_foreign_callback(provider, &value) {
+        return Ok(());
+    }
     let parsed = spool::parse(provider, &value);
     observe_payload(provider, &value, &parsed);
     if matches!(parsed, Ok(spool::Parsed::Ignore)) {

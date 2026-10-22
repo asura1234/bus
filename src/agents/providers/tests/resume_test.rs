@@ -102,6 +102,9 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
         ProviderKind::Cursor,
     ] {
         let path = match provider {
+            crate::agents::providers::ProviderKind::Grok => {
+                panic!("This fixture covers the original providers; use dedicated Grok lane tests")
+            }
             ProviderKind::ClaudeCode => fixture.hooks.spool.join("claude-settings.json"),
             ProviderKind::Codex => fixture.root.join(".codex/hooks.json"),
             ProviderKind::Cursor => fixture.root.join(".cursor/hooks.json"),
@@ -113,6 +116,9 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
         )
         .unwrap();
         let (actual_path, args, rebound) = match provider {
+            crate::agents::providers::ProviderKind::Grok => {
+                panic!("This fixture covers the original providers; use dedicated Grok lane tests")
+            }
             ProviderKind::ClaudeCode => {
                 claude_code::resume::capture_args(&fixture.hooks, &fixture.root)
             }
@@ -123,6 +129,9 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
         assert_eq!(actual_path, path);
         assert!(!rebound);
         match provider {
+            crate::agents::providers::ProviderKind::Grok => {
+                panic!("This fixture covers the original providers; use dedicated Grok lane tests")
+            }
             ProviderKind::ClaudeCode => assert_eq!(
                 args,
                 vec!["--settings".to_owned(), path.to_string_lossy().into_owned()]

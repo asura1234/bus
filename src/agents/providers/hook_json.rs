@@ -54,6 +54,7 @@ pub(crate) struct HookContract {
 impl HookContract {
     pub(crate) const fn for_provider(provider: ProviderKind) -> Self {
         match provider {
+            ProviderKind::Grok => super::grok::HOOK_CONTRACT,
             ProviderKind::Codex => Self {
                 adapter: "codex-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop"],

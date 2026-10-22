@@ -73,9 +73,14 @@ impl Form {
 /// orchestrator, and Codex cannot be one (`orchestrator::check_new_orchestrator`).
 pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
     if orchestrator {
-        &[Provider::ClaudeCode, Provider::Cursor]
+        &[Provider::ClaudeCode, Provider::Cursor, Provider::Grok]
     } else {
-        &[Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
+        &[
+            Provider::Codex,
+            Provider::ClaudeCode,
+            Provider::Cursor,
+            Provider::Grok,
+        ]
     }
 }
 
