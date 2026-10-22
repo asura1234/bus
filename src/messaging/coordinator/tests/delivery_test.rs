@@ -224,7 +224,7 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
             .trim_end();
         let callback = match provider {
             crate::agents::providers::ProviderKind::Grok => {
-                panic!("This fixture covers the original providers; use dedicated Grok lane tests")
+                panic!("This fixture covers the original providers; use dedicated Grok tests")
             }
             Provider::ClaudeCode => json!({
                 "hook_event_name": "UserPromptSubmit",
@@ -1671,8 +1671,145 @@ fn grok_cleared_after_an_idle_turn_keeps_its_fresh_session_available() {
         cleared.runtime_identity.session_id.as_deref(),
         Some("fresh")
     );
-    assert_ne!(cleared.status, RuntimeStatus::Unavailable, "{:?}", cleared.actionable_error);
+    assert_ne!(
+        cleared.status,
+        RuntimeStatus::Unavailable,
+        "{:?}",
+        cleared.actionable_error
+    );
     assert_eq!(cleared.actionable_error, None);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn grok_reset_retires_known_old_observations_after_reopen_but_rejects_foreign_sessions() {
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..2 {
+        consume(&mut worker, agent, &dir);
+    }
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    // Opening intentionally invalidates cached Idle; model the fresh poll.
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    for value in [
+        json!({"hookEventName":"stop","sessionId":"session","promptId":"old","reason":"end_turn"}),
+        json!({"hookEventName":"notification","notificationType":"idle_prompt","sessionId":"session"}),
+    ] {
+        record(&dir, Provider::Grok, value);
+    }
+    consume(&mut worker, agent, &dir);
+    assert_ne!(
+        agent_of(&worker, agent).status,
+        RuntimeStatus::Unavailable,
+        "{:?}",
+        agent_of(&worker, agent)
+    );
+    assert!(
+        crate::agents::providers::spool::records(&dir.join("callbacks/launch"))
+            .unwrap()
+            .is_empty()
+    );
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"stop","sessionId":"foreign","promptId":"other","reason":"end_turn"}),
+    );
+    consume(&mut worker, agent, &dir);
+    assert_eq!(agent_of(&worker, agent).status, RuntimeStatus::Unavailable);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn grok_owned_pending_stop_survives_until_cancel_or_failure_without_publishing_success() {
+    for event in ["stop_cancelled", "stop_failure"] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
+        let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
+        worker.submit_ready().unwrap();
+        record(
+            &dir,
+            Provider::Grok,
+            json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":"turn","prompt":"PRIVATE_PROMPT"}),
+        );
+        record(
+            &dir,
+            Provider::Grok,
+            json!({"hookEventName":"stop","sessionId":"session","promptId":"turn","reason":"end_turn","lastAssistantMessage":"PRIVATE_REPLY"}),
+        );
+        consume(&mut worker, agent, &dir);
+        assert!(worker.state.request(request).unwrap().trusted_start_bound);
+        assert_ne!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            crate::agents::providers::spool::records(&dir.join("callbacks/launch"))
+                .unwrap()
+                .len(),
+            1
+        );
+        record(
+            &dir,
+            Provider::Grok,
+            json!({"hookEventName":event,"sessionId":"session","promptId":"turn","reason":"user_interrupt","error":"server_error"}),
+        );
+        consume(&mut worker, agent, &dir);
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Abandoned
+        );
+        assert!(worker
+            .state
+            .request(request)
+            .unwrap()
+            .pending_final
+            .is_none());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn grok_completion_deferrals_and_retry_expiry_are_diagnosable_without_message_contents() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
+        let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
+        worker.submit_ready().unwrap();
+        record(&dir, Provider::Grok, json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":"turn","prompt":"PRIVATE_PROMPT"}));
+        consume(&mut worker, agent, &dir);
+        worker.state.observe_status(agent, RuntimeStatus::Working, io::now_ms()).unwrap();
+        record(&dir, Provider::Grok, json!({"hookEventName":"stop","sessionId":"session","promptId":"turn","reason":"end_turn","lastAssistantMessage":"PRIVATE_REPLY"}));
+        consume(&mut worker, agent, &dir);
+        worker.state.observe_status(agent, RuntimeStatus::Idle, io::now_ms()).unwrap();
+        consume(&mut worker, agent, &dir);
+        consume(&mut worker, agent, &dir);
+        let spool = dir.join("callbacks/launch");
+        let pending = callbacks::records(&spool).unwrap();
+        assert_eq!(pending.len(), 1, "owned same-session proof remains pending");
+        let marker = pending[0].0.with_extension("grok-retry");
+        std::fs::write(&marker, br#"{"attempts":8,"next_at":0}"#).unwrap();
+        consume(&mut worker, agent, &dir);
+        assert!(callbacks::records(&spool).unwrap().is_empty());
+        assert!(!marker.exists(), "retired observations must remove their sidecars");
+        assert_ne!(worker.state.request(request).unwrap().phase, RequestPhase::Completed);
+        let logs = capture.text();
+        for reason in ["grok_not_idle", "grok_candidate", "grok_native_adapter_pending", "grok_attestation_pending", "grok_retry_not_due", "grok_retry_budget_exhausted"] {
+            assert!(logs.contains(reason), "missing {reason}: {logs}");
+        }
+        assert!(!logs.contains("PRIVATE_PROMPT") && !logs.contains("PRIVATE_REPLY"), "{logs}");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
 }

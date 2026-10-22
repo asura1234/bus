@@ -507,6 +507,9 @@ impl Worker {
         parsed: &Parsed,
         mut state: BusState,
     ) -> Result<ControlFlow<CallbackFlow, BusState>, String> {
+        if self.retire_superseded_grok_observation(id, dir, path, record, parsed)? {
+            return Ok(ControlFlow::Break(CallbackFlow::Next));
+        }
         let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
         let callback_session = match parsed {
             Parsed::Session { session, .. }

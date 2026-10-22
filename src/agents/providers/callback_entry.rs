@@ -83,6 +83,8 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
     }
     let value = serde_json::from_slice(&bytes)?;
     if super::grok::hooks::is_foreign_callback(provider, &value) {
+        tracing::debug!(event = "bus.callback.ignored", provider = ?provider,
+            reason = "foreign_provider_hook", "Hook belongs to another provider");
         return Ok(());
     }
     let parsed = spool::parse(provider, &value);

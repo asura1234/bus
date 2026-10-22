@@ -14,7 +14,23 @@ struct Retry {
     next_at: u64,
 }
 
-fn claim(path: &Path, now: u64) -> Result<bool, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum Claim {
+    Attempt(u8),
+    NotDue,
+    Exhausted,
+}
+
+pub(super) fn observation_paths(path: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths = vec![path.to_path_buf()];
+    let marker = path.with_extension("grok-retry");
+    if marker.exists() {
+        paths.push(marker);
+    }
+    paths
+}
+
+fn claim(path: &Path, now: u64) -> Result<Claim, String> {
     let marker = path.with_extension("grok-retry");
     let mut retry: Retry = match std::fs::read(&marker) {
         Ok(bytes) if bytes.len() <= 1024 => {
@@ -24,8 +40,11 @@ fn claim(path: &Path, now: u64) -> Result<bool, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Retry::default(),
         Err(error) => return Err(error.to_string()),
     };
-    if retry.attempts >= 8 || retry.next_at > now {
-        return Ok(false);
+    if retry.attempts >= 8 {
+        return Ok(Claim::Exhausted);
+    }
+    if retry.next_at > now {
+        return Ok(Claim::NotDue);
     }
     retry.attempts += 1;
     retry.next_at = now.saturating_add(2000);
@@ -34,10 +53,76 @@ fn claim(path: &Path, now: u64) -> Result<bool, String> {
         &serde_json::to_vec(&retry).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    Ok(true)
+    Ok(Claim::Attempt(retry.attempts))
+}
+
+fn claim_idle_observation(state: &BusState, id: AgentId, path: &Path) -> Result<Claim, String> {
+    if !state
+        .agent(id)
+        .is_some_and(|a| a.status == RuntimeStatus::Idle)
+    {
+        tracing::debug!(
+            event = "bus.callback.deferred",
+            reason = "grok_not_idle",
+            "Grok completion awaits settled idle"
+        );
+        return Ok(Claim::NotDue);
+    }
+    let claim = claim(path, crate::messaging::storage::io::now_ms())?;
+    match claim {
+        Claim::NotDue => tracing::debug!(
+            event = "bus.callback.deferred",
+            reason = "grok_retry_not_due",
+            "Grok observation retained until retry deadline"
+        ),
+        Claim::Exhausted => tracing::warn!(
+            event = "bus.callback.expired",
+            reason = "grok_retry_budget_exhausted",
+            attempts = 8,
+            "Grok observation retired without committed final proof"
+        ),
+        Claim::Attempt(attempt) => tracing::debug!(
+            event = "bus.callback.reconciling",
+            reason = "grok_candidate",
+            attempt,
+            "Checking Grok completion evidence"
+        ),
+    }
+    Ok(claim)
 }
 
 impl Worker {
+    pub(super) fn retire_superseded_grok_observation(
+        &mut self,
+        id: AgentId,
+        dir: &Path,
+        path: &Path,
+        record: &callbacks::Record,
+        parsed: &callbacks::Parsed,
+    ) -> Result<bool, String> {
+        let session = match parsed {
+            callbacks::Parsed::CompletionCandidate { session, .. }
+            | callbacks::Parsed::ReconcileSession { session } => session,
+            _ => return Ok(false),
+        };
+        if record.manifest.provider != crate::agents::providers::ProviderKind::Grok
+            || self
+                .state
+                .agent(id)
+                .and_then(|a| a.superseded_session_id.as_deref())
+                != Some(session.as_str())
+        {
+            return Ok(false);
+        }
+        tracing::debug!(
+            event = "bus.callback.ignored",
+            reason = "grok_superseded_session",
+            "Retiring observation from the accepted reset's previous session"
+        );
+        self.acknowledge_spool(dir, observation_paths(path))?;
+        Ok(true)
+    }
+
     pub(super) fn grok_completion_callback(
         &self,
         id: AgentId,
@@ -48,6 +133,13 @@ impl Worker {
         candidate_turn: Option<String>,
     ) -> Result<CallbackRecordResult, String> {
         let candidate = candidate_turn.is_some();
+        let _span = tracing::debug_span!(
+            "grok_observation",
+            agent_id = id.0,
+            sequence = record.sequence,
+            candidate
+        )
+        .entered();
         let turn = candidate_turn.or_else(|| {
             state
                 .agent(id)
@@ -62,10 +154,37 @@ impl Worker {
                 .and_then(|r| r.provider_turn_id.clone())
         });
         let Some(turn) = turn else {
-            return Ok(ControlFlow::Break(()));
+            tracing::debug!(
+                event = "bus.callback.ignored",
+                reason = "grok_no_owned_turn",
+                "Idle observation has no matching Bus request"
+            );
+            return Ok(ControlFlow::Continue((
+                state,
+                None,
+                observation_paths(path),
+            )));
         };
-        let kind = match self.resolve_grok_observation(id, &state, path, record, &session, &turn)? {
-            CompletionResolution::Pending => return Ok(ControlFlow::Break(())),
+        match claim_idle_observation(&state, id, path)? {
+            Claim::NotDue => return Ok(ControlFlow::Break(())),
+            Claim::Exhausted => {
+                return Ok(ControlFlow::Continue((
+                    state,
+                    None,
+                    observation_paths(path),
+                )))
+            }
+            Claim::Attempt(_) => {}
+        }
+        let kind = match self.resolve_grok_observation(id, &state, record, &session, &turn)? {
+            CompletionResolution::Pending => {
+                tracing::debug!(
+                    event = "bus.callback.deferred",
+                    reason = "grok_attestation_pending",
+                    "No committed session/turn final proof; Stop and idle alone cannot settle"
+                );
+                return Ok(ControlFlow::Break(()));
+            }
             CompletionResolution::Final {
                 session: s,
                 turn: t,
@@ -79,13 +198,22 @@ impl Worker {
                 message: format!("Grok turn cancelled: {reason}"),
                 provider_error: Some(reason),
             },
-            _ if !candidate => return Ok(ControlFlow::Break(())),
+            _ if !candidate => {
+                tracing::debug!(
+                    event = "bus.callback.deferred",
+                    reason = "grok_idle_outcome_not_final",
+                    "Session idle observation cannot certify this outcome"
+                );
+                return Ok(ControlFlow::Break(()));
+            }
             _ => return Err("Grok completion identity differs from its observation".into()),
         };
-        let mut remove = vec![path.to_path_buf()];
-        if path.with_extension("grok-retry").exists() {
-            remove.push(path.with_extension("grok-retry"));
-        }
+        tracing::debug!(
+            event = "bus.callback.resolved",
+            reason = "grok_attested_outcome",
+            "Grok outcome has matching session/turn evidence"
+        );
+        let remove = observation_paths(path);
         Ok(ControlFlow::Continue((
             state,
             Some(callback(record, id, session, turn, None, kind)),
@@ -97,7 +225,6 @@ impl Worker {
         &self,
         id: AgentId,
         state: &BusState,
-        path: &Path,
         record: &callbacks::Record,
         session: &str,
         turn: &str,
@@ -108,9 +235,6 @@ impl Worker {
         let idle = state
             .agent(id)
             .is_some_and(|a| a.status == RuntimeStatus::Idle);
-        if !idle || !claim(path, crate::messaging::storage::io::now_ms())? {
-            return Ok(CompletionResolution::Pending);
-        }
         #[cfg(feature = "dev-tools")]
         {
             // Only the private driver's owned process context authorizes the
@@ -148,6 +272,11 @@ impl Worker {
         }
         // Native Stop stays a candidate. An idle Notification has no turn
         // outcome and must never be passed off as a native final marker.
+        tracing::debug!(
+            event = "bus.callback.deferred",
+            reason = "grok_native_adapter_pending",
+            "Native committed-final adapter awaits authenticated evidence"
+        );
         if record
             .value
             .get("hookEventName")
@@ -171,10 +300,17 @@ mod tests {
         let path = root.join("event-owned.json");
         std::fs::write(&path, "retained observation").unwrap();
         for i in 0..8 {
-            assert!(claim(&path, i * 2000).unwrap());
-            assert!(!claim(&path, i * 2000 + 1).unwrap());
+            assert_eq!(claim(&path, i * 2000).unwrap(), Claim::Attempt(i as u8 + 1));
+            assert_eq!(
+                claim(&path, i * 2000 + 1).unwrap(),
+                if i == 7 {
+                    Claim::Exhausted
+                } else {
+                    Claim::NotDue
+                }
+            );
         }
-        assert!(!claim(&path, u64::MAX).unwrap());
+        assert_eq!(claim(&path, u64::MAX).unwrap(), Claim::Exhausted);
         assert_eq!(
             std::fs::read_to_string(path).unwrap(),
             "retained observation"
