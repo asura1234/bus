@@ -65,7 +65,9 @@ flowchart TD
         nextfix --> overbudget{"next_fix_round > 2?"}
         overbudget -- no --> countfix["Orchestrator: record fix_round = next_fix_round"]
         countfix --> fix[Author: address-review-comments or developer feedback; push]
-        fix --> verify1
+        fix -- review findings --> review
+        fix -- verify1 feedback --> verify1
+        fix -- verify2 feedback --> verify2
     end
 
     overbudget -- yes --> hold[Orchestrator: hold this PR; report cause and plan; keep independent work moving]
@@ -78,6 +80,9 @@ flowchart TD
     classDef developer fill:#fde2e4,stroke:#c9184a
     classDef current stroke-width:3px,stroke:#2563eb
 ```
+
+Record the initiating check with each repair batch. Return review fixes directly
+to review; return developer-feedback fixes only to the check that raised them.
 
 ## Participants
 
