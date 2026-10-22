@@ -74,22 +74,35 @@ Deadline scenarios age persisted clock fields then run the real coordinator. Thi
 
 ## Run
 
-Use an isolated build directory; none of these commands touches the running Bus or the main checkout's `target/debug`.
+Use the isolated worktree's one target directory; none of these commands touches the running Bus or the main checkout's `target/debug`. Acquire a room build slot for the run and release it on exit.
 
 ```sh
 cd /Users/dylanliu/work/bus-test-reply-delivery
-export CARGO_TARGET_DIR=/private/tmp/bus-reply-target
-cargo test --locked --bin bus server::tests::reply_delivery
-cargo test --locked --features dev-tools --test tui-driver reply_delivery_survives_actual_server_restart_mid_request -- --exact --nocapture
+export CARGO_TARGET_DIR="$PWD/target"
+export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR"
+with_build_slot() (
+  slot=
+  until [ -n "$slot" ]; do
+    if mkdir /tmp/bus-877-build-slot-1 2>/dev/null; then slot=/tmp/bus-877-build-slot-1
+    elif mkdir /tmp/bus-877-build-slot-2 2>/dev/null; then slot=/tmp/bus-877-build-slot-2
+    else sleep 60; fi
+  done
+  trap 'rmdir "$slot"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  "$@"
+)
+with_build_slot cargo test --locked --bin bus server::tests::reply_delivery
+with_build_slot cargo test --locked --features dev-tools --test tui-driver reply_delivery_survives_actual_server_restart_mid_request -- --exact --nocapture
 
 # Separate ignored soak: short default, one wall-clock minute.
-cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
+with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
 # Long mode: 30 wall-clock minutes (any positive value up to 1440).
-BUS_REPLY_SOAK_MINUTES=30 cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
+BUS_REPLY_SOAK_MINUTES=30 with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
 
 # #107 regressions are enabled by default; narrow reruns need no --ignored.
-cargo test --locked --bin bus server::tests::reply_delivery::background_pending_cannot_discard_captured_reply_or_block_queue -- --exact --nocapture
-cargo test --locked --bin bus server::tests::reply_delivery::transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart -- --exact --nocapture
+with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::background_pending_cannot_discard_captured_reply_or_block_queue -- --exact --nocapture
+with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart -- --exact --nocapture
 ```
 
 The soak uses twelve concurrent producer threads and keeps twelve agents active with first and queue-only messages. Each cycle spools all agents' starts, ticks once, spools all Stops, and ticks once. Reply text differs from the prompt. Every Claude first and queued turn must actually have a `shell_hold` before cap release. Fresh own-shell ids accompany a persistent shell report. After each coordinator reopen, explicit provider startup hooks establish known shell ownership again; unknown shells after restart are intentionally treated as inherited in production.
@@ -104,13 +117,16 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 
 | Test | Failure caught |
 | --- | --- |
+| `open_messaging_cross_room_session_delivery_has_its_own_reply` | MASTER/work peers receive attributed messages across rooms, bind the exact native payload after restart and return their own reply in the conversation room. |
+| `open_messaging_pending_cross_room_messages_do_not_coalesce` | An unavailable recipient's pending messages from different rooms keep separate turns and replies. |
+| `worker_message_typed_into_orchestrator_names_its_worker_and_room` | The exact `name (agent id, room R):` payload survives restart and matches the provider callback. |
 | `numbered_native_draft_edits_never_publish_blocked_or_resolved_notices` | Editing a numbered Claude native composer must not become a series of false dialog IDs and Blocked/Resolved notices, in MASTER or a work room, including restart. |
 | `numbered_codex_native_draft_edits_never_publish_blocked_notices` | Editing a numbered Codex composer above its model footer must not request dialog attention in MASTER or a work room. Adopted red-first from the Claude review. |
 | `dialog_episodes_publish_once_despite_detection_flaps_and_restart` | Two real episodes with the same menu each publish one Blocked and one Resolved; synchronized redraws with missing detection, selection changes, status flapping and coordinator reload cannot repeat or prematurely resolve them. |
 | `captured_reply_reaches_its_source_room_once_for_both_providers_and_authors` | Claude, Codex and Cursor; MASTER/work; identical developer/agent messages; completion, publication counters and no mirrored notice after restart. |
 | `cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final` | Injected user rows, omitted commentary suffixes and a newer transcript turn cannot replace the owned Cursor final (0dcc4bd2/44e94f38). |
 | `independently_answered_turns_keep_five_distinct_replies_while_shells_live` | Five answered turns with shells persisting across turns must keep five distinct answers (#96). |
-| `followup_to_held_master_turn_reaches_work_room_and_master_once` | An automatically routed blocked-worker notice reaches a held turn and shares its reply across two source rooms (#52/#60). |
+| `queued_worker_notice_after_held_master_turn_reaches_work_room_and_master_once` | An automatically routed work-room blocked-worker notice waits for a held MASTER turn, then gets its own reply; each source room publishes once. Same-room held follow-ups retain the #52/#60 steering behavior. |
 | `held_interim_survives_no_stop_wake_restart_and_releases_queued_request` | Captured text survives wake without Stop and coordinator restart; queue-only work then gets its own answer (#82). |
 | `coalesced_sends_share_one_answer_and_one_history_publication` | Three queued messages become one native paste and one shared reply; atomic Claude paste, Codex and unread dedupe. |
 | `direct_bus_control_shells_publish_equally_for_developer_and_agent` | Direct control verbs and quoted executable paths do not hold either sender's final (#103). |

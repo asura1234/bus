@@ -617,12 +617,7 @@ impl BusUi {
             ..
         } = layout;
         if self.recipient_menu {
-            let agents: Vec<_> = self
-                .snapshot
-                .state
-                .agents()
-                .filter(|a| a.room_id == room.id)
-                .collect();
+            let agents: Vec<_> = self.snapshot.state.room_recipients(room.id).collect();
             let available_above = composer_y.saturating_sub(2);
             // At full height the picker overlays the draft, not an empty area
             // above it. Its later hit targets win over the editor beneath.
@@ -638,7 +633,9 @@ impl BusUi {
             let start = self
                 .recipient_index
                 .saturating_sub(height.saturating_sub(1) as usize);
-            let all = !agents.is_empty() && agents.iter().all(|a| local.recipients.contains(&a.id));
+            let members: Vec<_> = agents.iter().filter(|a| a.room_id == room.id).collect();
+            let all =
+                !members.is_empty() && members.iter().all(|a| local.recipients.contains(&a.id));
             let entries = std::iter::once((format!("[{}] All", if all { "x" } else { " " }), None))
                 .chain(agents.iter().map(|a| {
                     (

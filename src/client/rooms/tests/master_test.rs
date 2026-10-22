@@ -25,6 +25,76 @@ fn master_fixture() -> (BusUi, RoomId, RoomId, RoomId, AgentId) {
     (ui, master, pr, other, orchestrator)
 }
 
+#[test]
+fn worker_to_orchestrator_picker_lists_and_selects_only_the_bound_orchestrator() {
+    let (mut ui, master, room, other, orchestrator) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let outsider = snapshot
+        .state
+        .create_agent(
+            master,
+            "other-orch",
+            Provider::ClaudeCode,
+            "/repo".into(),
+            None,
+        )
+        .unwrap();
+    snapshot.state.bind_orchestrator(outsider, other).unwrap();
+    let worker = snapshot
+        .state
+        .create_agent(room, "worker", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    ui.action(render::Action::Recipients);
+    ui.compute_view(100, 30);
+    assert!(!hit_rows(&ui, render::Action::Recipient(Some(orchestrator))).is_empty());
+    assert!(hit_rows(&ui, render::Action::Recipient(Some(outsider))).is_empty());
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.locals[&room].recipients.contains(&orchestrator));
+    assert!(!ui.locals[&room].recipients.contains(&worker));
+    ui.action(render::Action::Recipient(None));
+    assert_eq!(ui.locals[&room].recipients, [orchestrator, worker].into());
+    let mut state = ui.snapshot.state.clone();
+    state.set_draft_recipients(room, [orchestrator]).unwrap();
+    state.set_draft_text(room, "verify this").unwrap();
+    let requests = state.submit_draft(room, 1).unwrap();
+    assert_eq!(state.request(requests[0]).unwrap().agent_id, orchestrator);
+}
+
+#[test]
+fn work_room_picker_all_selects_members_like_cli_to_all() {
+    let (mut ui, _, room, _, orchestrator) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let worker = snapshot
+        .state
+        .create_agent(room, "worker", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    ui.action(render::Action::Recipient(None));
+    assert_eq!(
+        ui.locals[&room].recipients,
+        [worker].into(),
+        "All also selected the MASTER orchestrator {orchestrator:?}"
+    );
+    ui.action(render::Action::Recipients);
+    ui.compute_view(100, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let all_row = hit_rows(&ui, render::Action::Recipient(None))[0];
+    let text: String = (0..100).map(|x| buffer[(x, all_row)].symbol()).collect();
+    assert!(text.contains("[x] All"), "{text}");
+    ui.action(render::Action::Recipient(None));
+    assert!(ui.locals[&room].recipients.is_empty());
+    ui.action(render::Action::Recipient(Some(orchestrator)));
+    ui.action(render::Action::Recipient(None));
+    assert_eq!(ui.locals[&room].recipients, [orchestrator, worker].into());
+    ui.action(render::Action::Recipient(None));
+    assert_eq!(ui.locals[&room].recipients, [orchestrator].into());
+}
+
 fn sidebar_rows(ui: &mut BusUi) -> Vec<String> {
     ui.compute_view(100, 30);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));

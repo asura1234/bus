@@ -1,9 +1,9 @@
-//! A MASTER orchestrator's system prompt and the Bus docs it references. The
+//! Agent messaging onboarding, orchestrator system prompts and Bus docs. The
 //! prompt is a Bus-owned file in the launch's callback folder, delivered with
 //! each provider's own launch option; nothing is written into the agent's PWD.
 use std::path::{Path, PathBuf};
 
-use super::model::{Provider, RoomId};
+use super::model::{BusState, Provider, RoomId, MESSAGING_RULES_VERSION};
 use super::storage::io::{atomic_write, private_dir};
 
 /// The default orchestrator system prompt, with `{{...}}` placeholders.
@@ -135,6 +135,61 @@ pub(crate) struct PromptValues {
     pub room: Option<(String, RoomId)>,
     pub agent: String,
     pub docs: PathBuf,
+}
+
+/// Launch instructions apply to workers and orchestrators, including custom prompts.
+pub(crate) fn agent_onboarding(
+    name: &str,
+    id: super::model::AgentId,
+    room: RoomId,
+    docs: &Path,
+) -> String {
+    format!(
+        "Bus messaging: you are {name} (agent {}, room {}). Read {}/how-to-bus-cli.md. \
+         Use --as {} when sending messages. Any agent can message any agent by name or ID; \
+         names resolve in the conversation room, then your home room, then globally. \
+         --to orchestrator names your home room's bound orchestrator. \
+         Messages from another room wait for the next turn; never fold them into a running turn. \
+         Bus automatically adds 'name (agent id, room R):' to agent-authored messages. \
+         Send only the body; do not add a 'from X', 'X here' or signature line.",
+        id.0,
+        room.0,
+        docs.display(),
+        id.0
+    )
+}
+
+/// Preserve saved/custom prompts; send current common rules once before waiting
+/// work after an upgrade. The state marker and queue are saved atomically by open.
+pub(crate) fn queue_upgrade_onboarding(
+    state: &mut BusState,
+    data_dir: &Path,
+) -> Result<(), String> {
+    let agents: Vec<_> = state
+        .agents()
+        .filter(|agent| {
+            agent.messaging_rules_version < MESSAGING_RULES_VERSION
+                && !agent.deletion_pending
+                && state
+                    .room(agent.room_id)
+                    .is_some_and(|room| !room.deletion_pending)
+        })
+        .cloned()
+        .collect();
+    if agents.is_empty() {
+        return Ok(());
+    }
+    let docs = write_docs(data_dir)?;
+    for agent in agents {
+        let text = format!(
+            "Bus messaging rules updated. Follow these rules for the rest of this session.\n\n{}",
+            agent_onboarding(&agent.name, agent.id, agent.room_id, &docs)
+        );
+        state
+            .queue_messaging_onboarding(agent.id, text, super::storage::io::now_ms())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn docs_dir(data_dir: &Path) -> PathBuf {

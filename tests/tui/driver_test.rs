@@ -281,6 +281,7 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
 
     // Send through the composer: choose the agent, type, Enter.
     session.ok(&["click", "--text", "Choose agents"]);
+    session.ok(&["wait", "--text", "[ ] a1"]);
     session.ok(&["click", "--text", "[ ] a1"]);
     session.ok(&["press", "esc"]);
     session.ok(&["click", "--text", "Message selected agents"]);

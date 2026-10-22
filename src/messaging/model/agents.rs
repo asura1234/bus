@@ -4,16 +4,54 @@ use crate::messaging::prefs::colors;
 use std::path::PathBuf;
 use {
     super::{
-        AgentId, AgentRuntimeIdentity, BusState, Compactions, DialogNoticeTo, ModelError, Provider,
-        RequestPhase, RoomId, RuntimeStatus, DEVELOPER_RECIPIENT, UNBOUND_SETTLE_MS,
+        AgentId, AgentRuntimeIdentity, Author, BusState, Compactions, DialogNoticeTo, Draft,
+        ModelError, Provider, RequestPhase, RoomId, RuntimeStatus, DEVELOPER_RECIPIENT,
+        UNBOUND_SETTLE_MS,
     },
     crate::messaging::model::RoomAgent,
 };
 
 /// Why a request closed when its agent was deleted before it settled.
 pub(crate) const AGENT_DELETED: &str = "agent_deleted";
+/// Current Bus messaging instructions, delivered at launch or once after an upgrade.
+pub(crate) const MESSAGING_RULES_VERSION: u32 = 1;
 
 impl BusState {
+    /// Upgrade instructions are a separate first pending turn. Persist the
+    /// queued request and marker together, so a restart cannot duplicate it.
+    pub(crate) fn queue_messaging_onboarding(
+        &mut self,
+        agent: AgentId,
+        text: String,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let room = self
+            .agents
+            .get(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .room_id;
+        let ids = self.submit_message_with(
+            room,
+            Draft {
+                text,
+                files: Vec::new(),
+                recipient_ids: [agent].into_iter().collect(),
+            },
+            Author::Developer,
+            now_ms,
+            true,
+        )?;
+        let request = ids[0];
+        let queue = self.queues.get_mut(&agent).expect("submitted agent queue");
+        queue.retain(|id| *id != request);
+        queue.insert(0, request);
+        self.agents
+            .get_mut(&agent)
+            .expect("submitted agent")
+            .messaging_rules_version = MESSAGING_RULES_VERSION;
+        Ok(())
+    }
+
     pub(crate) fn create_agent(
         &mut self,
         room_id: RoomId,
@@ -66,6 +104,7 @@ impl BusState {
                 session_binding_invalidated: false,
                 deletion_pending: false,
                 orchestrates: None,
+                messaging_rules_version: MESSAGING_RULES_VERSION,
                 compactions: Compactions::default(),
                 last_compaction_callback: None,
                 session_reset_pending: false,

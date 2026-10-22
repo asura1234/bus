@@ -9,7 +9,7 @@ pub(crate) fn prompt_args(path: &Path, adopted: bool) -> Result<Option<Vec<Strin
     }
     // Keep the shell's typed command short; JSON escapes are valid TOML strings.
     let text = format!(
-        "You are a Bus orchestrator. Your system prompt is the file {}. \
+        "You are a Bus agent. Your system prompt is the file {}. \
          Read all of it before you act on any message, and follow it for the \
          whole session.",
         path.display()

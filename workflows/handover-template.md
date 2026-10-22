@@ -79,3 +79,9 @@ Use exactly **part of the task: commit-and-push when done** or
 **exploratory: safe to stash** for each actual change. Do not stash changes as
 part of writing this note; preserve them for the replacement and do not claim
 another worker's changes are safe to stash without checking with their owner.
+
+## Worker brief messaging rule
+
+Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
+room's bound orchestrator, and names or IDs can reach agents in any room.

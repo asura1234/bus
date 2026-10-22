@@ -98,7 +98,9 @@ class AcceptanceObservationTests(unittest.TestCase):
         self.assertIn("same persisted message status", guide)
         self.assertIn("waiting CLI process exits or Bus restarts", guide)
         self.assertIn("Every session has exactly one MASTER room", guide)
-        self.assertIn("or the room's MASTER\norchestrator", guide)
+        self.assertIn("Any agent can message any other agent", guide)
+        self.assertIn("name (agent id, room R):", guide)
+        self.assertIn('do not add a "from X", "X here" or signature line', guide)
         self.assertIn("does not interpret the reply", guide)
         self.assertIn("send --wait", guide)
 

@@ -78,10 +78,6 @@ impl AgentRecipients {
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&AgentId) -> bool) {
         self.0.retain(|id| keep(id));
     }
-
-    pub(crate) fn clear(&mut self) {
-        self.0.clear();
-    }
 }
 
 impl<'de> Deserialize<'de> for AgentRecipients {
@@ -382,6 +378,10 @@ pub(crate) struct RoomAgent {
     /// in `ensure_master_room`; Bus never creates one.
     #[serde(default)]
     pub(crate) orchestrates: Option<RoomId>,
+    /// Instructions supplied at launch, or durably queued ahead of work after upgrade.
+    /// Old state has no marker and receives the current rules once.
+    #[serde(default)]
+    pub(crate) messaging_rules_version: u32,
     #[serde(default)]
     pub(crate) compactions: Compactions,
     /// The launch and spool sequence of the last compaction hook counted. State
@@ -487,6 +487,9 @@ pub(crate) struct Request {
     pub(crate) room_id: RoomId,
     pub(crate) agent_id: AgentId,
     pub(crate) prompt: Prompt,
+    /// Sender's (name, home room) at send time; survives rename and deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sender_identity: Option<(String, RoomId)>,
     pub(crate) phase: RequestPhase,
     /// A queued request closed before typing, retained for status and restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]

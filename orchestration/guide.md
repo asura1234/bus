@@ -39,7 +39,8 @@ bus agent add --room MASTER --name claude-orch --provider claude \
   --pwd "$(pwd)" --orchestrates "$room_id"
 ```
 
-Bus launches you with an orchestrator system prompt (editable in the TUI form,
+Bus launches every agent with messaging instructions. It launches you with an
+orchestrator system prompt (editable in the TUI form,
 or `--system-prompt`/`--system-prompt-file`) that names your room and points to
 the Bus docs in `<BUS_DATA_DIR>/docs/`. Bus writes nothing into your PWD. A new
 PWD may show the provider's "trust this folder" prompt on first launch; the
@@ -66,6 +67,10 @@ asked:
 ```sh
 bus send --room "$room_id" --as claude-orch --to claude-dev --text "..."
 ```
+
+Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+Include this rule in worker briefs. Any agent can message agents in any room;
+`--to orchestrator` names the sender's home room's orchestrator.
 
 ### Move an existing session into MASTER
 

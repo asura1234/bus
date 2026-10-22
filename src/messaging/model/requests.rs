@@ -86,11 +86,6 @@ impl BusState {
                 .agents
                 .get(agent_id)
                 .ok_or(ModelError::UnknownAgent(*agent_id))?;
-            // A room's orchestrator lives in MASTER but takes messages from
-            // the room it orchestrates, such as a worker saying it is blocked.
-            if agent.room_id != room && agent.orchestrates != Some(room) {
-                return Err(ModelError::AgentOutsideRoom(*agent_id));
-            }
             if agent.deletion_pending {
                 return Err(ModelError::DeletionPending);
             }
@@ -115,6 +110,7 @@ impl BusState {
                     room_id: room,
                     agent_id,
                     prompt: prompt.clone(),
+                    sender_identity: self.message_sender(&prompt.author),
                     phase: RequestPhase::Queued,
                     failure_reason: None,
                     expected_launch_id: None,
@@ -548,10 +544,8 @@ impl BusState {
     /// The request a message may steer into: the agent's current request while
     /// its turn visibly runs, or while the idle agent holds its reply for
     /// background work that turn started (shells, agents, session crons),
-    /// bound by its submit hook, with no final reply yet. The idle agent takes
-    /// typed input, so the message reaches it rather than waiting on the hold.
-    /// Returns the first queued request and that lead, unless the queued one
-    /// asked to wait (`--queue`).
+    /// bound by its submit hook, with no final reply yet. Only the lead's own
+    /// room can steer; other rooms and `--queue` wait for their own turn.
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
         if !matches!(
@@ -574,7 +568,8 @@ impl BusState {
             return None;
         }
         let first = *self.queues.get(&agent)?.first()?;
-        (!self.requests.get(&first)?.queue_only).then_some((first, lead.id))
+        let queued = self.requests.get(&first)?;
+        (!queued.queue_only && queued.room_id == lead.room_id).then_some((first, lead.id))
     }
 
     /// Moves `request` from the queue into `lead`'s group before Bus types it
@@ -669,10 +664,11 @@ impl BusState {
 
     /// Joins the queued messages that piled up while the agent could not take
     /// them into `lead`'s prompt: consecutive ones from the queue front, up to
-    /// the first sent with `--queue`. Returns the text to type, each part
+    /// the first sent with `--queue` or from another room. Returns the text to type, each part
     /// marked with its sender and time, or `None` when `lead` goes alone.
     pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
-        let agent_id = self.requests.get(&lead)?.agent_id;
+        let request = self.requests.get(&lead)?;
+        let (agent_id, room) = (request.agent_id, request.room_id);
         let queue = self.queues.get(&agent_id)?;
         if queue.first() != Some(&lead) || self.requests.get(&lead)?.queue_only {
             return None;
@@ -680,7 +676,11 @@ impl BusState {
         let members: Vec<RequestId> = queue[1..]
             .iter()
             .copied()
-            .take_while(|id| self.requests.get(id).is_some_and(|r| !r.queue_only))
+            .take_while(|id| {
+                self.requests
+                    .get(id)
+                    .is_some_and(|r| !r.queue_only && r.room_id == room)
+            })
             .collect();
         if members.is_empty() {
             return None;
@@ -693,13 +693,14 @@ impl BusState {
             .iter()
             .enumerate()
             .filter_map(|(index, id)| {
+                let payload = self.render_request_payload(*id)?;
                 let prompt = &self.requests.get(id)?.prompt;
                 Some(format!(
                     "[{}/{count} from {} at {}]\n{}",
                     index + 1,
                     self.sender_name(&prompt.author),
                     clock(prompt.submitted_at_ms),
-                    prompt.rendered_payload()
+                    payload
                 ))
             })
             .collect::<Vec<_>>()

@@ -433,3 +433,125 @@ fn cold_resume_save_failure_cannot_deliver_or_adopt_an_unpersisted_identity() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn upgraded_agents_receive_current_messaging_rules_once_before_waiting_work() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        for role in ["worker", "default-orchestrator", "custom-orchestrator"] {
+            let (mut worker, original, room, dir, calls) = fixture(provider, vec![]);
+            let agent = if role == "worker" {
+                original
+            } else {
+                let master = worker.state.master_room().unwrap().id;
+                let id = worker
+                    .state
+                    .create_agent(master, role, provider, dir.clone(), None)
+                    .unwrap();
+                worker.state.bind_orchestrator(id, room).unwrap();
+                worker
+                    .state
+                    .set_agent_runtime_identity(
+                        id,
+                        AgentRuntimeIdentity {
+                            launch_id: Some("legacy".into()),
+                            terminal_id: Some("orchestrator-terminal".into()),
+                            pane_id: Some("orchestrator-pane".into()),
+                            session_id: Some("orchestrator-session".into()),
+                        },
+                    )
+                    .unwrap();
+                id
+            };
+            let home = worker.state.agent(agent).unwrap().room_id;
+            let active = if role == "worker" {
+                let id = queue(&mut worker, home, agent, "already in flight");
+                worker.state.begin_submission(id, "launch", 0).unwrap();
+                Some((id, worker.state.request(id).unwrap().clone()))
+            } else {
+                None
+            };
+            let queued = queue(&mut worker, home, agent, "work waiting before upgrade");
+            let launch = worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .runtime_identity
+                .launch_id
+                .as_ref()
+                .unwrap();
+            let spool = dir.join("callbacks").join(launch);
+            std::fs::create_dir_all(&spool).unwrap();
+            let prompt = spool.join("system-prompt.md");
+            if role != "worker" {
+                std::fs::write(&prompt, format!("old {role} instructions")).unwrap();
+            }
+            let old_prompt = std::fs::read(&prompt).ok();
+            // A pre-upgrade state has no knowledge of the new messaging rules.
+            let mut document = serde_json::to_value(&worker.state).unwrap();
+            document["agents"][agent.0.to_string()]
+                .as_object_mut()
+                .unwrap()
+                .remove("messaging_rules_version");
+            let legacy = serde_json::from_value(document).unwrap();
+            worker.store.save(&legacy).unwrap();
+            drop(worker);
+            let transport = || FakeTransport {
+                replies: VecDeque::new(),
+                calls: Arc::clone(&calls),
+                state_path: dir.join("state.json"),
+            };
+            let resumed = Worker::open(dir.clone(), Box::new(transport())).unwrap();
+            if let Some((id, before)) = &active {
+                assert_eq!(
+                    resumed.state.agent(agent).unwrap().current_request,
+                    Some(*id)
+                );
+                assert_eq!(
+                    resumed.state.request(*id).unwrap(),
+                    before,
+                    "upgrade must preserve active ownership"
+                );
+            }
+            let pending = resumed.state.queued_requests(agent).to_vec();
+            assert_eq!(
+                pending.len(),
+                2,
+                "missing upgrade onboarding: {provider:?}/{role}"
+            );
+            assert_eq!(pending[1], queued, "onboarding must precede waiting work");
+            let onboarding = resumed.state.request(pending[0]).unwrap();
+            assert!(onboarding.queue_only);
+            assert_eq!(onboarding.room_id, home);
+            assert_eq!(onboarding.prompt.author, Author::Developer);
+            assert!(onboarding
+                .prompt
+                .text
+                .contains("Bus automatically adds 'name (agent id, room R):'"));
+            assert!(onboarding
+                .prompt
+                .text
+                .contains("do not add a 'from X', 'X here' or signature line"));
+            assert!(onboarding
+                .prompt
+                .text
+                .contains("Messages from another room wait for the next turn"));
+            assert!(std::fs::read_to_string(dir.join("docs/how-to-bus-cli.md"))
+                .unwrap()
+                .contains("conversation room"));
+            assert_eq!(
+                std::fs::read(&prompt).ok(),
+                old_prompt,
+                "custom/saved prompt must survive"
+            );
+            drop(resumed);
+            let again = Worker::open(dir.clone(), Box::new(transport())).unwrap();
+            assert_eq!(
+                again.state.queued_requests(agent),
+                pending,
+                "restart must not enqueue twice"
+            );
+            drop(again);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}

@@ -114,3 +114,9 @@ main checkout.
 | Developer | - | Optionally reviews the triage table and changes rows. |
 | Investigator + verifier | any (prefer Codex) | One per bug. Main checkout. Reproduces, writes the investigation report, later verifies the fix against the fixer's worktree. Writes only reproduction tests. |
 | Fixer | any (prefer Codex) | Separate agent, own worktree per bug (or per shared root cause). Fixes test-first or adds diagnostics, runs the gate, opens the PR. |
+
+## Worker brief messaging rule
+
+Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
+room's bound orchestrator, and names or IDs can reach agents in any room.

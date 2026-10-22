@@ -170,14 +170,16 @@ impl BusState {
         Ok(())
     }
 
-    /// The agents a room's deletion removes: its members and its orchestrator,
-    /// which exists only for that room.
-    pub(crate) fn agents_deleted_with_room(&self, id: RoomId) -> Vec<AgentId> {
+    /// Picker order: room members and the bound MASTER orchestrator, by agent ID.
+    pub(crate) fn room_recipients(&self, room: RoomId) -> impl Iterator<Item = &RoomAgent> {
         self.agents
             .values()
-            .filter(|agent| agent.room_id == id || agent.orchestrates == Some(id))
-            .map(|agent| agent.id)
-            .collect()
+            .filter(move |a| a.room_id == room || a.orchestrates == Some(room))
+    }
+
+    /// Deleting a room removes its members and its dedicated orchestrator.
+    pub(crate) fn agents_deleted_with_room(&self, id: RoomId) -> Vec<AgentId> {
+        self.room_recipients(id).map(|a| a.id).collect()
     }
 
     pub(crate) fn set_room_sound(&mut self, id: RoomId, on: bool) -> Result<(), ModelError> {
@@ -234,6 +236,19 @@ impl BusState {
         }
         self.rooms.remove(&id);
         self.requests.retain(|_, request| request.room_id != id);
+        // Recipients in other rooms survive; their queues and current pointers
+        // must not retain requests removed with this conversation room.
+        for queue in self.queues.values_mut() {
+            queue.retain(|request| self.requests.contains_key(request));
+        }
+        for agent in self.agents.values_mut() {
+            if agent
+                .current_request
+                .is_some_and(|request| !self.requests.contains_key(&request))
+            {
+                agent.current_request = None;
+            }
+        }
         self.drop_history_of_room(id);
         // Match the UI, which falls back to the first room (MASTER) at once,
         // so `state` never shows a gap between the delete and the next view.
@@ -277,7 +292,7 @@ impl BusState {
                 .agents
                 .get(agent_id)
                 .ok_or(ModelError::UnknownAgent(*agent_id))?;
-            if agent.room_id != id {
+            if agent.room_id != id && agent.orchestrates != Some(id) {
                 return Err(ModelError::AgentOutsideRoom(*agent_id));
             }
         }

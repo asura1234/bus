@@ -59,7 +59,7 @@ fn codex_prompt_reference_is_short_escaped_and_skipped_for_adopted_threads() {
     let encoded = argv[1].strip_prefix("developer_instructions=").unwrap();
     let decoded: String = serde_json::from_str(encoded).unwrap();
     assert_eq!(decoded, format!(
-        "You are a Bus orchestrator. Your system prompt is the file {}. Read all of it before you act on any message, and follow it for the whole session.",
+        "You are a Bus agent. Your system prompt is the file {}. Read all of it before you act on any message, and follow it for the whole session.",
         path.display()
     ));
     assert!(system_prompt::prompt_args(path, true).unwrap().is_none());

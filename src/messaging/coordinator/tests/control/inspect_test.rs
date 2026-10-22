@@ -3,16 +3,11 @@ use super::*;
 #[test]
 fn dev_selectors_confirmation_and_normal_mode_fail_closed() {
     let (mut worker, room, _agent, dir) = fixture();
-    let other = worker.state.create_room("other").unwrap();
-    let alien = worker
-        .state
-        .create_agent(other, "alien", Provider::Codex, dir.clone(), None)
-        .unwrap();
     let bad = call(
         &mut worker,
         "bad",
         "message.send",
-        json!({"room":"test","to":[alien.0.to_string()],"text":"no"}),
+        json!({"room":"test","to":["missing-agent"],"text":"no"}),
     );
     assert!(!bad.ok);
     assert_eq!(worker.state.requests().count(), 0);

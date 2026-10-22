@@ -8,6 +8,7 @@ mod github;
 mod history;
 mod idle_agents;
 mod interrupts;
+mod payload;
 mod recovery;
 mod reply_routing;
 mod requests;
@@ -21,7 +22,7 @@ mod worker_notifications;
 #[cfg(test)]
 use requests::rejection_reason;
 
-pub(crate) use agents::AGENT_DELETED;
+pub(crate) use agents::{AGENT_DELETED, MESSAGING_RULES_VERSION};
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 #[cfg(test)]
 pub(crate) use history::ARCHIVE_AFTER_MS;
