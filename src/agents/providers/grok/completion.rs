@@ -78,7 +78,9 @@ pub(crate) fn resolve_candidate(
 ) -> Result<CompletionResolution, String> {
     let parsed = hooks::parse(value)?;
     let (session, turn) = match parsed {
-        Parsed::Ignore => return Ok(CompletionResolution::Pending),
+        Parsed::Ignore | Parsed::ReconcileSession { .. } => {
+            return Ok(CompletionResolution::Pending)
+        }
         Parsed::CompletionCandidate { session, turn } => (session, turn),
         Parsed::Failure {
             session,

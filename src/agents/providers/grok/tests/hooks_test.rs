@@ -104,7 +104,13 @@ fn grok_b_children_and_unattributed_notifications_never_become_finals() {
             "sessionId":"synthetic-session"})
             )
             .unwrap(),
-            Parsed::Ignore
+            if kind == "idle_prompt" {
+                Parsed::ReconcileSession {
+                    session: "synthetic-session".into(),
+                }
+            } else {
+                Parsed::Ignore
+            }
         );
     }
     assert!(parse(&event("future_unknown_event")).is_err());

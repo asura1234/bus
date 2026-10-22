@@ -20,12 +20,19 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
         return Ok(Parsed::Ignore);
     }
     let event = field(value, "hookEventName")?;
+    if event == "notification"
+        && value.get("notificationType").and_then(Value::as_str) == Some("idle_prompt")
+        && value.get("subagentType").is_none_or(Value::is_null)
+    {
+        // Session-level idle requests reconciliation, never finality by itself.
+        return Ok(Parsed::ReconcileSession {
+            session: identity(value, "sessionId")?,
+        });
+    }
     if value.get("subagentType").is_some_and(|v| !v.is_null())
         || event.starts_with("subagent_")
         || matches!(event.as_str(), "session_end" | "notification")
     {
-        // A session-level idle ping can prompt reconciliation, but cannot name
-        // the request whose answer should settle. G owns that reconciliation.
         return Ok(Parsed::Ignore);
     }
     if event == "stop"
