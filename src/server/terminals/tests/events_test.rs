@@ -168,7 +168,11 @@ fn session_capture_keeps_restored_claude_name_while_its_resume_has_not_started()
         state.active,
         0,
     );
-    let pane = snapshot.workspaces[0].tabs[0].panes.values().next().unwrap();
+    let pane = snapshot.workspaces[0].tabs[0]
+        .panes
+        .values()
+        .next()
+        .unwrap();
     assert_eq!(pane.agent_name.as_deref(), Some("ally"));
     assert_eq!(pane.managed_agent_kind.as_deref(), Some("claude"));
 }
@@ -183,7 +187,13 @@ mod grok_captured_composer_prompt {
     /// The idle Grok Build 1.0.5 fullscreen frame rendered from the offline
     /// capture: the model label is drawn inside the composer's bottom border.
     fn captured_idle_frame() -> String {
-        captured_layout(" Grok 4.6 (high) ─╯")
+        // Byte-identical offline capture; use its first completed normal frame,
+        // before later /hooks and /session built-in modal interactions.
+        let capture =
+            include_str!("../../../../tests/fixtures/grok-composer/native-1.0.5-offline.ansi");
+        let label = capture.find(":shortcuts").unwrap();
+        let end = label + capture[label..].find("\x1b[?2026l").unwrap() + "\x1b[?2026l".len();
+        capture[..end].to_owned()
     }
 
     fn captured_layout(label: &str) -> String {

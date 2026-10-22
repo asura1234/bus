@@ -1,4 +1,4 @@
-//! Guarded observation of the synthetic, version-scoped Grok composer contract.
+//! Guarded observation of the version-scoped Grok composer contract.
 use super::styled_chars;
 use crate::terminal::runtime::InputObservation;
 
@@ -40,18 +40,20 @@ pub(super) fn input(screen: &str) -> Option<String> {
     let bottom = (0..end)
         .rev()
         .find(|&index| !lines[index].trim().is_empty())?;
-    if !border(&lines[bottom]) {
+    if !crate::agents::grok_surface::composer_border(&lines[bottom]) {
         return None;
     }
-    let top = (0..bottom).rev().find(|&index| border(&lines[index]))?;
+    let top = (0..bottom)
+        .rev()
+        .find(|&index| crate::agents::grok_surface::composer_border(&lines[index]))?;
     if top + 1 >= bottom {
         return None;
     }
     // Login surfaces must not become ready just because an input box is visible.
-    if lines[..top].iter().rev().take(12).any(|line| {
+    if lines[..top].iter().any(|line| {
         matches!(
             line.trim().to_lowercase().as_str(),
-            "log in to grok" | "sign in to grok" | "login required"
+            "log in to grok" | "sign in to grok" | "login required" | "login with grok"
         )
     }) {
         return None;
@@ -92,14 +94,6 @@ fn content(line: &str) -> Option<&str> {
         Some(inner) => Some(inner.strip_suffix('│')?.trim_end()),
         None => Some(line),
     }
-}
-
-fn border(line: &str) -> bool {
-    let line = line.trim();
-    line.chars().filter(|c| *c == '─').count() >= 3
-        && line
-            .chars()
-            .all(|c| matches!(c, '─' | '╭' | '╮' | '╰' | '╯' | '┌' | '┐' | '└' | '┘'))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # Version-scoped Grok 1.0.5 adaptation of the legacy 0.2.101 manifest.
 # Historical rules below retain their original provenance; they are not verified
-# 1.0.5 permission/question evidence. Lane C's changed card/frame rules are
+# 1.0.5 permission/question evidence. Current card/frame rules are
 # exercised by SYNTHETIC fixtures in tests/fixtures/grok-{dialog,composer}.
 # Offline 1.0.5 evidence confirms boxed composer and Ctrl+X footer; authenticated
 # permission/trust/question cards, long-paste chips and native wakes remain pending.
@@ -44,7 +44,7 @@ state = "blocked"
 priority = 1400
 region = "whole_recent"
 visible_blocker = true
-line_regex = ['(?i)^\s*(?:Log in to Grok|Sign in to Grok|Login required)\s*$']
+line_regex = ['(?i)^\s*(?:Log in to Grok|Sign in to Grok|Login required|Login with Grok)\s*$']
 
 [[rules]]
 id = "osc_title_blocked"
@@ -187,4 +187,4 @@ state = "idle"
 priority = 100
 region = "whole_recent"
 visible_idle = true
-regex = ['(?ms)^\s*[╭┌]─+[╮┐]\s*\n\s*│\s*❯[^\n]*\n(?:[^\n]*\n)*?\s*[╰└]─+[╯┘]\s*\n[^\n]*Shift\+Tab:mode[^\n]*Ctrl\+[x.]:shortcuts\s*$']
+regex = ['(?ms)^\s*[╭┌]─+[╮┐]\s*\n\s*│\s*❯[^\n]*\n(?:[^\n]*\n)*?\s*(?:[╰└]─+[╯┘]|╰─+ Grok [A-Za-z0-9.() -]+ ─╯)\s*\n[^\n]*Shift\+Tab:mode[^\n]*Ctrl\+[x.]:shortcuts\s*$']
