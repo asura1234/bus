@@ -287,3 +287,97 @@ fn grok_resume_preserves_global_hooks_with_a_different_filename() {
         "global shared.json aliases were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn grok_resume_never_executes_an_unchanged_saved_binary() {
+    let f = Fixture::new();
+    f.install();
+    let executable = f.bin.join("grok");
+    let armed = f.root.join("armed");
+    let queried = f.root.join("queried-after-launch");
+    let quote = |path: &Path| crate::platform::remote_reattach_program(&path.to_string_lossy());
+    let script = std::fs::read_to_string(&executable).unwrap().replace(
+        "case \"$1\" in",
+        &format!(
+            "if [ -f {} ]; then /usr/bin/touch {}; /bin/sleep 0.1; fi\ncase \"$1\" in",
+            quote(&armed),
+            quote(&queried)
+        ),
+    );
+    assert!(script.contains("queried-after-launch"));
+    std::fs::write(&executable, script).unwrap();
+    f.prepare("");
+    std::fs::write(&armed, b"probe active only after launch").unwrap();
+    let spec = f.spec("", true);
+    capture_args(&spec.hooks, &f.project).unwrap();
+    launch::environment(&spec.hooks).unwrap();
+    assert!(
+        !queried.exists(),
+        "cold resume synchronously executed an identity query"
+    );
+}
+
+#[test]
+fn grok_resume_rejects_changed_or_obsolete_binary_stamps_without_discovery() {
+    for change in [
+        "size",
+        "mtime",
+        "replacement",
+        "target",
+        "missing-stamp",
+        "legacy-stamp",
+        "unchanged",
+    ] {
+        let f = Fixture::new();
+        f.install();
+        f.prepare("");
+        let executable = f.bin.join("grok");
+        let stamp = f.root.join("capture/grok-executable.json");
+        match change {
+            "size" => {
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&executable)
+                    .unwrap()
+                    .write_all(b"# changed\n")
+                    .unwrap();
+            }
+            "mtime" => {
+                let times = std::fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1234));
+                std::fs::File::open(&executable)
+                    .unwrap()
+                    .set_times(times)
+                    .unwrap();
+            }
+            "replacement" => {
+                let replacement = f.bin.join("replacement");
+                std::fs::copy(&executable, &replacement).unwrap();
+                std::fs::rename(replacement, &executable).unwrap();
+            }
+            "target" => {
+                let target = f.bin.join("alternate-target");
+                std::fs::rename(&executable, &target).unwrap();
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&target, &executable).unwrap();
+            }
+            "missing-stamp" => std::fs::remove_file(&stamp).unwrap(),
+            "legacy-stamp" => {
+                std::fs::write(&stamp, serde_json::to_vec(&executable).unwrap()).unwrap()
+            }
+            _ => {}
+        }
+        let spec = f.spec("", true);
+        assert_eq!(
+            capture_args(&spec.hooks, &f.project).is_ok(),
+            change == "unchanged",
+            "{change}"
+        );
+        assert_eq!(
+            launch::environment(&spec.hooks).is_ok(),
+            change == "unchanged",
+            "{change}"
+        );
+    }
+}
