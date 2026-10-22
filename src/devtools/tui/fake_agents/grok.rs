@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 
 pub(super) fn run(args: &[String]) -> i32 {
     if args.iter().any(|arg| arg == "--version" || arg == "-v") {
-        println!("grok 1.0.5 (bus-synthetic-fake)");
+        let _ = writeln!(io::stdout(), "grok 1.0.5 (bus-synthetic-fake)");
         return 0;
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("Grok Build TUI (SYNTHETIC Bus fixture)\n--no-leader --fullscreen --no-auto-update --resume UUID");
+        let _ = writeln!(io::stdout(), "Grok Build TUI\nSYNTHETIC Bus fixture\nUsage: grok [OPTIONS]\n--no-leader --fullscreen --no-auto-update --resume UUID --session-id UUID --permission-mode MODE --prompt-json JSON");
         return 0;
     }
     if std::env::var_os(super::FAKE_AGENT_ENV).is_none() {
@@ -138,6 +138,7 @@ struct Card {
     project_scope: bool,
     focused: bool,
     free_text: bool,
+    question: bool,
     answer: String,
 }
 
@@ -222,6 +223,9 @@ impl Grok {
         payload["cwd"] = json!(self.cwd);
         payload["transcriptPath"] = json!(self.transcript);
         payload["synthetic"] = json!(true);
+        if event == "Stop" && turn.is_some() && payload.get("reason").is_none() {
+            payload["reason"] = json!("end_turn");
+        }
         if let Some(turn) = turn {
             payload["promptId"] = json!(turn);
         }
@@ -330,10 +334,15 @@ impl Grok {
             .any(|s| prompt.contains(s))
         {
             self.card = Some(Card {
-                selected: 0,
+                selected: if prompt.contains("fake:free-text") {
+                    2
+                } else {
+                    0
+                },
                 project_scope: false,
                 focused: true,
                 free_text: prompt.contains("fake:free-text"),
+                question: prompt.contains("fake:question") || prompt.contains("fake:free-text"),
                 answer: String::new(),
             });
         }
@@ -407,11 +416,19 @@ impl Grok {
                 &active.id,
             )?;
         }
-        self.emit(
-            "Stop",
-            Some(&active.id),
-            json!({"lastAssistantMessage":clip(&reply)}),
-        )?;
+        if prompt.contains("fake:no-final-stop") {
+            self.emit(
+                "Notification",
+                None,
+                json!({"notificationType":"idle_prompt"}),
+            )?;
+        } else {
+            self.emit(
+                "Stop",
+                Some(&active.id),
+                json!({"lastAssistantMessage":clip(&reply)}),
+            )?;
+        }
         self.last = reply.chars().take(240).collect();
         if let Some(seconds) = prompt
             .split_once("fake:wake ")
@@ -463,31 +480,46 @@ impl Grok {
     }
 
     fn card_key_one(&mut self, bytes: &[u8]) -> io::Result<()> {
-        if bytes == b"\x1b" || bytes == b"\x03" {
+        if bytes == b"\x03" {
             return self.cancel();
         }
         let Some(card) = self.card.as_mut() else {
             return Ok(());
         };
         match bytes {
+            b"\x1b" if card.free_text => card.free_text = false,
+            b"\x1b" => card.focused = false,
+            b"X" if card.question && !card.free_text => {
+                self.card = None;
+            }
             b"\x1b[A" | b"\x1bOA" => card.selected = card.selected.saturating_sub(1),
             b"\x1b[B" | b"\x1bOB" => card.selected = (card.selected + 1).min(2),
             b"\x1b[C" | b"\x1b[D" => card.project_scope = !card.project_scope,
             b"\t" => card.focused = !card.focused,
-            b"z" if !card.free_text => {
+            b"z" if card.question && !card.free_text => {
                 card.free_text = true;
                 card.selected = 2;
             }
             b"1" if !card.free_text => {
                 card.selected = 0;
                 card.focused = true;
+                if card.question {
+                    return self.card_key_one(b"\r");
+                }
             }
             b"2" if !card.free_text => {
                 card.selected = 1;
                 card.focused = true;
+                if card.question {
+                    return self.card_key_one(b"\r");
+                }
             }
             b"\r" | b"\x1b[13u" if card.focused => {
-                if card.selected == 1 {
+                if card.question && card.selected == 2 && !card.free_text {
+                    card.free_text = true;
+                    return Ok(());
+                }
+                if card.selected == 1 && !card.question {
                     return self.cancel();
                 }
                 if card.free_text && card.answer.trim().is_empty() {
@@ -530,48 +562,65 @@ impl Grok {
             self.session, self.last
         );
         if let Some(card) = &self.card {
-            screen.push_str(&format!(
-                "◆ Synthetic permission/question card · scope:{}\r\n",
-                if card.project_scope {
-                    "project"
+            screen.push_str(if card.question {
+                "◆ Choose an answer\r\n┃ Question 1/1\r\n"
+            } else {
+                "◆ Allow synthetic shell command?\r\n"
+            });
+            if !card.question {
+                screen.push_str(if card.project_scope {
+                    "┃ Scope: all commands\r\n"
                 } else {
-                    "once"
-                }
-            ));
-            for (i, text) in ["Yes, proceed", "No, reject", "Type your answer here"]
+                    "┃ Scope: this command\r\n"
+                });
+            }
+            let labels = ["Yes, proceed", "No, reject", "Type your answer here"];
+            for (i, label) in labels
                 .iter()
                 .enumerate()
+                .take(if card.question { 3 } else { 2 })
             {
+                let selector = if i == 2 {
+                    "z".to_owned()
+                } else {
+                    (i + 1).to_string()
+                };
+                let label: &str = if i == 2 && !card.answer.is_empty() {
+                    card.answer.as_str()
+                } else {
+                    label
+                };
                 screen.push_str(&format!(
-                    "┃  {} ({}) {text}\r\n",
-                    if i == 2 {
-                        "z".into()
+                    "┃ {}{} (○) {label}\r\n",
+                    if card.focused && i == card.selected {
+                        "❯ "
                     } else {
-                        (i + 1).to_string()
+                        "  "
                     },
-                    if i == card.selected && card.focused {
-                        "●"
-                    } else {
-                        "○"
-                    }
+                    selector
                 ));
             }
-            screen.push_str(&format!(
-                "┃ {}{}\r\n1/3:select │ ←/→:scope │ Tab:scrollback │ Ctrl+c:cancel\r\n",
-                if card.focused {
-                    "❯ "
+            screen.push_str(if !card.focused {
+                if card.question {
+                    "Tab/Space: question\r\n"
                 } else {
-                    "focus parked "
-                },
-                card.answer
-            ));
+                    "Tab/Space: permission\r\n"
+                }
+            } else if card.free_text {
+                "Enter:submit │ Esc:back\r\n"
+            } else if card.question {
+                "1/2:select │ Shift+x:dismiss\r\n"
+            } else {
+                "1/2:select │ ←/→:scope │ Ctrl+o:yolo │ Ctrl+c:cancel\r\n"
+            });
+            return screen;
         } else if self.active.is_some() {
             screen.push_str("⠋ Working… [stop]\r\n");
         }
         screen.push_str(&format!(
-            "╭{}╮\r\n│ ❯ {}\r\n╰{}╯\r\n{}Ctrl+.:shortcuts\r\n",
+            "╭{}╮\r\n│ ❯ {} │\r\n╰{}╯\r\n{}Shift+Tab:mode │ Ctrl+x:shortcuts\r\n",
             "─".repeat(58),
-            self.draft.replace('\n', "\r\n│   "),
+            self.draft.replace('\n', " │\r\n│   "),
             "─".repeat(58),
             if self.active.is_some() {
                 "Esc:cancel │ "
@@ -643,6 +692,31 @@ mod scenario_tests {
     use serde_json::{json, Value};
     use std::path::Path;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn grok_g_fake_cards_match_joined_dialog_contract() {
+        let root = Scratch::new();
+        for prompt in ["fake:card", "fake:question", "fake:free-text"] {
+            let mut g = agent(root.path());
+            g.submit(prompt, Instant::now()).unwrap();
+            let screen = g.screen();
+            let dialog = crate::agents::dialog::parse(&screen)
+                .expect("fake must use C's synthetic contract");
+            assert!(!dialog.options.is_empty() || dialog.input.is_some());
+        }
+    }
+
+    #[test]
+    fn grok_g_question_shortcut_selects_and_finishes_the_card() {
+        let root = Scratch::new();
+        let mut g = agent(root.path());
+        g.submit("fake:question", Instant::now()).unwrap();
+        g.card_key(b"1").unwrap();
+        assert!(
+            g.card.is_none(),
+            "C sends the documented direct-selection key without Enter"
+        );
+    }
 
     struct Scratch(std::path::PathBuf);
     impl Scratch {
@@ -880,6 +954,9 @@ mod input_regression_tests {
         g.card_key(b"\x1b[").unwrap();
         g.card_key(b"C").unwrap();
         assert_ne!(g.screen(), before, "scope key split between reads was lost");
+        // Free-text belongs to the question card, not a permission approval.
+        let mut g = Grok::new(root.clone(), "stream-question".into(), json!({})).unwrap();
+        g.submit("fake:question", Instant::now()).unwrap();
         g.card_key(b"zhello\r").unwrap();
         assert!(g.card.is_none(), "coalesced free text and Enter were lost");
         assert!(g

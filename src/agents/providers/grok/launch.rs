@@ -30,6 +30,7 @@ pub(crate) fn resume_args(session: &str) -> Vec<String> {
 
 /// Only identity queries: never submit a prompt or run an inspection/model turn.
 fn identity_output(path: &Path, arg: &str) -> Result<String, String> {
+    let synthetic = driver_fixture(path)?;
     // Resolution may be called by a runtime thread. A separate scoped thread
     // keeps this synchronous API usable without nesting Tokio runtimes.
     std::thread::scope(|scope| {
@@ -54,6 +55,9 @@ fn identity_output(path: &Path, arg: &str) -> Result<String, String> {
                         {
                             command.env_remove(key);
                         }
+                    }
+                    if synthetic {
+                        command.env("BUS_TUI_FAKE_AGENT", "1");
                     }
                     #[cfg(unix)]
                     command.process_group(0);
@@ -111,6 +115,28 @@ fn identity_output(path: &Path, arg: &str) -> Result<String, String> {
             .join()
             .map_err(|_| "Grok Build identity probe panicked".to_owned())?
     })
+}
+
+/// In the fake driver, reject every installation except this Bus executable's
+/// alias. Preserve only the stand-in flag for its metadata query, never routing.
+fn driver_fixture(path: &Path) -> Result<bool, String> {
+    #[cfg(feature = "dev-tools")]
+    if std::env::var("BUS_TUI_FAKE_AGENT").as_deref() == Ok("1")
+        && std::env::var_os("BUS_TUI_OWNER").is_some()
+    {
+        let same = path
+            .canonicalize()
+            .ok()
+            .zip(std::env::current_exe().ok())
+            .is_some_and(|(alias, binary)| alias == binary);
+        return if same {
+            Ok(true)
+        } else {
+            Err("Isolated Grok acceptance requires this Bus's synthetic alias".into())
+        };
+    }
+    let _ = path;
+    Ok(false)
 }
 
 fn validate_executable(path: &Path) -> Result<(), String> {
