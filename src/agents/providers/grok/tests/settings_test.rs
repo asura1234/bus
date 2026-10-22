@@ -3,7 +3,7 @@ use super::launch_test::Fixture;
 use crate::agents::providers::{hook_json, launch as common};
 use serde_json::json;
 #[test]
-fn grok_ad_consent_absent_writes_nothing_and_never_initializes() {
+fn grok_consent_absent_writes_nothing_and_never_initializes() {
     let f = Fixture::new();
     f.install();
     let err = common::prepare(&f.spec("", false), |_| panic!("no consent")).unwrap_err();
@@ -12,7 +12,7 @@ fn grok_ad_consent_absent_writes_nothing_and_never_initializes() {
     assert!(!f.root.join("capture").exists());
 }
 #[test]
-fn grok_ad_settings_preserve_user_hooks_and_reject_conflict_atomically() {
+fn grok_settings_preserve_user_hooks_and_reject_conflict_atomically() {
     let f = Fixture::new();
     f.install();
     let path = f.project.join(".grok/hooks/bus.json");
@@ -45,7 +45,7 @@ fn grok_ad_settings_preserve_user_hooks_and_reject_conflict_atomically() {
     assert_eq!(std::fs::read(path).unwrap(), bytes);
 }
 #[test]
-fn grok_ad_settings_use_git_project_root_and_do_not_modify_other_hook_files() {
+fn grok_settings_use_git_project_root_and_do_not_modify_other_hook_files() {
     let f = Fixture::new();
     f.install();
     assert!(std::process::Command::new("/usr/bin/git")
@@ -80,7 +80,7 @@ fn grok_ad_settings_use_git_project_root_and_do_not_modify_other_hook_files() {
 }
 
 #[test]
-fn grok_ad_disabled_project_hooks_fail_before_files_or_initializer() {
+fn grok_disabled_project_hooks_fail_before_files_or_initializer() {
     let f = Fixture::new();
     f.install();
     let path = f.project.join(".grok/hooks/bus.json");

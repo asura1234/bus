@@ -8,7 +8,7 @@ fn event(name: &str) -> Value {
 }
 
 #[test]
-fn grok_b_offline_session_start_preserves_native_identity() {
+fn grok_offline_session_start_preserves_native_identity() {
     let value = serde_json::from_str(include_str!("fixtures/session-start.json")).unwrap();
     assert_eq!(
         parse(&value).unwrap(),
@@ -20,7 +20,7 @@ fn grok_b_offline_session_start_preserves_native_identity() {
 }
 
 #[test]
-fn grok_b_offline_shutdown_and_session_end_are_ignored() {
+fn grok_offline_shutdown_and_session_end_are_ignored() {
     let value = serde_json::from_str(include_str!("fixtures/shutdown-stop.json")).unwrap();
     assert_eq!(parse(&value).unwrap(), Parsed::Ignore);
     for reason in ["shutdown", "channel_closed"] {
@@ -32,7 +32,7 @@ fn grok_b_offline_shutdown_and_session_end_are_ignored() {
 }
 
 #[test]
-fn grok_b_prompt_and_stop_gate_are_scoped_facts() {
+fn grok_prompt_and_stop_gate_are_scoped_facts() {
     assert_eq!(
         parse(&event("user_prompt_submit")).unwrap(),
         Parsed::Started {
@@ -55,7 +55,7 @@ fn grok_b_prompt_and_stop_gate_are_scoped_facts() {
 }
 
 #[test]
-fn grok_b_missing_or_wrong_required_identity_fails() {
+fn grok_missing_or_wrong_required_identity_fails() {
     for name in [
         "session_start",
         "user_prompt_submit",
@@ -81,7 +81,7 @@ fn grok_b_missing_or_wrong_required_identity_fails() {
 }
 
 #[test]
-fn grok_b_children_and_unattributed_notifications_never_become_finals() {
+fn grok_children_and_unattributed_notifications_never_become_finals() {
     for name in [
         "session_start",
         "user_prompt_submit",
@@ -117,7 +117,7 @@ fn grok_b_children_and_unattributed_notifications_never_become_finals() {
 }
 
 #[test]
-fn grok_b_failures_and_late_cancels_are_never_successes() {
+fn grok_failures_and_late_cancels_are_never_successes() {
     let mut value = event("stop_failure");
     value["error"] = json!("server_error");
     value["errorDetails"] = json!("Synthetic API failure");
@@ -150,7 +150,7 @@ fn grok_b_failures_and_late_cancels_are_never_successes() {
 }
 
 #[test]
-fn grok_b_imported_callbacks_filtered_without_suppressing_native_providers() {
+fn grok_imported_callbacks_filtered_without_suppressing_native_providers() {
     let grok = event("stop");
     let claude = json!({"hook_event_name":"Stop", "session_id":"claude", "prompt_id":"c"});
     let cursor = json!({"hook_event_name":"stop", "conversation_id":"cursor", "generation_id":"g"});
@@ -174,7 +174,7 @@ fn grok_b_imported_callbacks_filtered_without_suppressing_native_providers() {
 }
 
 #[test]
-fn grok_b_synthetic_gate_sequence_keeps_candidate_and_cancel_distinct() {
+fn grok_synthetic_gate_sequence_keeps_candidate_and_cancel_distinct() {
     let rows: Vec<Value> = include_str!("fixtures/turn-events.jsonl")
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -190,7 +190,7 @@ fn grok_b_synthetic_gate_sequence_keeps_candidate_and_cancel_distinct() {
 }
 
 #[test]
-fn grok_b_native_provider_hooks_remain_decodable_after_foreign_filter() {
+fn grok_native_provider_hooks_remain_decodable_after_foreign_filter() {
     for (adapter, value) in [
         (
             ProviderKind::ClaudeCode,
@@ -210,7 +210,7 @@ fn grok_b_native_provider_hooks_remain_decodable_after_foreign_filter() {
 }
 
 #[test]
-fn grok_b_session_scoped_or_unsupported_stop_reason_is_not_a_turn_candidate() {
+fn grok_session_scoped_or_unsupported_stop_reason_is_not_a_turn_candidate() {
     for reason in [Value::Null, json!(""), json!("future_reason")] {
         let mut value = event("stop");
         value["reason"] = reason;

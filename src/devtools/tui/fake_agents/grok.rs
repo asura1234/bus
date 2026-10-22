@@ -682,7 +682,7 @@ impl Grok {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn grok_f_version_identifies_build_without_model_work() {
+    fn grok_version_identifies_build_without_model_work() {
         let mut output = Vec::new();
         assert_eq!(
             super::run_with_output(&["--version".into()], &mut output),
@@ -695,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_f_help_is_available_without_starting_runtime() {
+    fn grok_help_is_available_without_starting_runtime() {
         let mut output = Vec::new();
         assert_eq!(super::run_with_output(&["--help".into()], &mut output), 0);
         let text = String::from_utf8(output).unwrap();
@@ -721,7 +721,7 @@ mod scenario_tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn grok_g_fake_cards_match_joined_dialog_contract() {
+    fn grok_fake_cards_match_joined_dialog_contract() {
         let root = Scratch::new();
         for prompt in ["fake:card", "fake:question", "fake:free-text"] {
             let mut g = agent(root.path());
@@ -734,7 +734,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_g_question_shortcut_selects_and_finishes_the_card() {
+    fn grok_question_shortcut_selects_and_finishes_the_card() {
         let root = Scratch::new();
         let mut g = agent(root.path());
         g.submit("fake:question", Instant::now()).unwrap();
@@ -781,7 +781,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_discovers_only_nearest_project_hooks_and_preserves_order() {
+    fn grok_discovers_only_nearest_project_hooks_and_preserves_order() {
         let root = Scratch::new();
         let hooks = root.path().join(".grok/hooks");
         std::fs::create_dir_all(&hooks).unwrap();
@@ -805,7 +805,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_camelcase_hooks_nested_commands_and_shutdown_identity() {
+    fn grok_camelcase_hooks_nested_commands_and_shutdown_identity() {
         let root = Scratch::new();
         let output = root.path().join("hooks.jsonl");
         let hook = json!([{"hooks":[{"type":"command", "command":format!("cat >> '{}'; printf '\\n' >> '{}'", output.display(), output.display())}]}]);
@@ -838,7 +838,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_full_unicode_answer_is_preserved_while_hook_clips() {
+    fn grok_full_unicode_answer_is_preserved_while_hook_clips() {
         let root = Scratch::new();
         let mut g = agent(root.path());
         let output = root.path().join("stop.jsonl");
@@ -869,7 +869,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_gate_cancel_and_errors_never_record_a_successful_final() {
+    fn grok_gate_cancel_and_errors_never_record_a_successful_final() {
         for prompt in ["fake:gate-cancel", "fake:api-error", "fake:cancel"] {
             let root = Scratch::new();
             let mut g = agent(root.path());
@@ -886,7 +886,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_partial_transcript_suffix_stays_uncommitted() {
+    fn grok_partial_transcript_suffix_stays_uncommitted() {
         let root = Scratch::new();
         let mut g = agent(root.path());
         g.submit("fake:partial", Instant::now()).unwrap();
@@ -900,7 +900,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_timer_wake_owns_a_new_turn_without_keyboard_submission() {
+    fn grok_timer_wake_owns_a_new_turn_without_keyboard_submission() {
         let root = Scratch::new();
         let mut g = agent(root.path());
         let now = Instant::now();
@@ -919,7 +919,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_card_scope_and_parked_focus_do_not_approve() {
+    fn grok_card_scope_and_parked_focus_do_not_approve() {
         let root = Scratch::new();
         let mut g = agent(root.path());
         let now = Instant::now();
@@ -938,7 +938,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_live_steering_shares_the_active_turn_and_escape_cancels() {
+    fn grok_live_steering_shares_the_active_turn_and_escape_cancels() {
         let root = Scratch::new();
         let mut g = agent(root.path());
         let now = Instant::now();
@@ -954,7 +954,7 @@ mod scenario_tests {
     }
 
     #[test]
-    fn grok_f_resume_selector_preserves_uuid_and_rejects_missing_value() {
+    fn grok_resume_selector_preserves_uuid_and_rejects_missing_value() {
         assert_eq!(
             resume_session(&["--resume=uuid".into()]).unwrap(),
             Some("uuid".into())
@@ -976,7 +976,7 @@ mod input_regression_tests {
     use super::*;
 
     #[test]
-    fn grok_f_card_stream_handles_fragmented_arrows_and_coalesced_answer() {
+    fn grok_card_stream_handles_fragmented_arrows_and_coalesced_answer() {
         let root =
             std::env::temp_dir().join(format!("grok-f-stream-{}", super::super::pseudo_uuid()));
         std::fs::create_dir(&root).unwrap();
@@ -1002,7 +1002,7 @@ mod input_regression_tests {
     }
 
     #[test]
-    fn grok_f_resume_never_reuses_a_synthetic_turn_id_or_escapes_project() {
+    fn grok_resume_never_reuses_a_synthetic_turn_id_or_escapes_project() {
         let root =
             std::env::temp_dir().join(format!("grok-f-resume-{}", super::super::pseudo_uuid()));
         std::fs::create_dir(&root).unwrap();

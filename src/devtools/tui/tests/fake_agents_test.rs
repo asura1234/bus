@@ -929,7 +929,7 @@ fn settlement_redraw_fixture_holds_a_synchronized_approval_frame() {
 }
 
 #[test]
-fn grok_g_mixed_provider_resume_reuses_identity_in_session_start_hook() {
+fn mixed_provider_resume_reuses_identity_in_session_start_hook() {
     for provider in ["claude", "cursor-agent", "codex"] {
         let selector = if provider == "codex" {
             "resume"
@@ -952,7 +952,7 @@ fn grok_g_mixed_provider_resume_reuses_identity_in_session_start_hook() {
 }
 
 #[test]
-fn grok_g_mixed_provider_turn_ids_do_not_repeat_after_resume() {
+fn mixed_provider_turn_ids_do_not_repeat_after_resume() {
     let args = ["--resume".into(), "same-session".into()];
     let mut previous = FakeAgent::from_args("claude", json!({}), &args);
     let mut resumed = FakeAgent::from_args("claude", json!({}), &args);

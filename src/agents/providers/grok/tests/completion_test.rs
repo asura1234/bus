@@ -37,7 +37,7 @@ impl Drop for Transcript {
 }
 
 #[test]
-fn grok_b_unsettled_or_unproven_stop_is_pending() {
+fn grok_unsettled_or_unproven_stop_is_pending() {
     for idle in [false, true] {
         assert_eq!(
             resolve_candidate(&candidate(), idle).unwrap(),
@@ -47,7 +47,7 @@ fn grok_b_unsettled_or_unproven_stop_is_pending() {
 }
 
 #[test]
-fn grok_b_completion_rejects_absent_or_wrong_identity() {
+fn grok_completion_rejects_absent_or_wrong_identity() {
     for key in ["sessionId", "promptId"] {
         for bad in [Value::Null, json!(""), json!(1), json!(" ")] {
             let mut value = candidate();
@@ -58,7 +58,7 @@ fn grok_b_completion_rejects_absent_or_wrong_identity() {
 }
 
 #[test]
-fn grok_b_cancel_and_failure_end_matching_turn_without_answer() {
+fn grok_cancel_and_failure_end_matching_turn_without_answer() {
     let mut value = candidate();
     value["hookEventName"] = json!("stop_cancelled");
     value["reason"] = json!("user_interrupt");
@@ -78,7 +78,7 @@ fn grok_b_cancel_and_failure_end_matching_turn_without_answer() {
 }
 
 #[test]
-fn grok_b_shutdown_child_and_unattributed_idle_do_not_resolve_turns() {
+fn grok_shutdown_child_and_unattributed_idle_do_not_resolve_turns() {
     let mut value = candidate();
     value["reason"] = json!("shutdown");
     assert_eq!(
@@ -100,7 +100,7 @@ fn grok_b_shutdown_child_and_unattributed_idle_do_not_resolve_turns() {
 }
 
 #[test]
-fn grok_b_offline_hook_execution_success_is_not_turn_completion() {
+fn grok_offline_hook_execution_success_is_not_turn_completion() {
     let capture = include_str!("fixtures/updates.jsonl");
     let session = "01a162bf-5091-7c42-9b5c-47930d378acd";
     let transcript = Transcript::new(capture.as_bytes());
@@ -118,7 +118,7 @@ fn grok_b_offline_hook_execution_success_is_not_turn_completion() {
 }
 
 #[test]
-fn grok_b_missing_delayed_partial_and_unknown_transcripts_stay_pending() {
+fn grok_missing_delayed_partial_and_unknown_transcripts_stay_pending() {
     let transcript = Transcript::new(b"");
     assert_eq!(
         resolve_candidate(&transcript.value(), true).unwrap(),
@@ -140,7 +140,7 @@ fn grok_b_missing_delayed_partial_and_unknown_transcripts_stay_pending() {
 }
 
 #[test]
-fn grok_b_transcript_path_must_belong_to_callback_session() {
+fn grok_transcript_path_must_belong_to_callback_session() {
     let transcript = Transcript::new(b"");
     let mut value = transcript.value();
     value["sessionId"] = json!("another-session");
@@ -153,7 +153,7 @@ fn grok_b_transcript_path_must_belong_to_callback_session() {
 }
 
 #[test]
-fn grok_b_clipped_and_long_answers_never_publish_without_final_proof() {
+fn grok_clipped_and_long_answers_never_publish_without_final_proof() {
     let transcript = Transcript::new(b"");
     for text in [
         "x".repeat(32768),
@@ -170,7 +170,7 @@ fn grok_b_clipped_and_long_answers_never_publish_without_final_proof() {
 }
 
 #[test]
-fn grok_b_oversized_or_torn_transcripts_never_publish_prefix() {
+fn grok_oversized_or_torn_transcripts_never_publish_prefix() {
     let transcript = Transcript::new(&vec![b'x'; 2 * 1024 * 1024 + 1]);
     assert_eq!(
         resolve_candidate(&transcript.value(), true).unwrap(),
@@ -185,7 +185,7 @@ fn grok_b_oversized_or_torn_transcripts_never_publish_prefix() {
 
 #[cfg(unix)]
 #[test]
-fn grok_b_transcript_symlink_is_not_owned_evidence() {
+fn grok_transcript_symlink_is_not_owned_evidence() {
     let transcript = Transcript::new(b"");
     let other = transcript.root.join("other.jsonl");
     std::fs::write(&other, b"").unwrap();
@@ -195,7 +195,7 @@ fn grok_b_transcript_symlink_is_not_owned_evidence() {
 }
 
 #[test]
-fn grok_b_reader_preserves_long_unicode_reply_and_discards_only_cut_prefix() {
+fn grok_reader_preserves_long_unicode_reply_and_discards_only_cut_prefix() {
     let text = "Synthetic long answer 😀\n".repeat(3000);
     let row = json!({"method":"_x.ai/session/update", "params": {
         "sessionId":"synthetic-session", "update":{"sessionUpdate":"agent_message_chunk",
@@ -231,7 +231,7 @@ fn grok_b_reader_preserves_long_unicode_reply_and_discards_only_cut_prefix() {
 }
 
 #[test]
-fn grok_b_candidate_then_later_failure_or_cancel_keeps_original_turn_identity() {
+fn grok_candidate_then_later_failure_or_cancel_keeps_original_turn_identity() {
     let first = candidate();
     assert_eq!(
         resolve_candidate(&first, true).unwrap(),
@@ -258,7 +258,7 @@ fn attestation(text: &str) -> CompletionAttestation {
 }
 
 #[test]
-fn grok_b_attestation_is_required_even_when_idle() {
+fn grok_attestation_is_required_even_when_idle() {
     for idle in [false, true] {
         assert_eq!(
             resolve_attested_completion("synthetic-session", "synthetic-turn", idle, None).unwrap(),
@@ -274,7 +274,7 @@ fn grok_b_attestation_is_required_even_when_idle() {
 }
 
 #[test]
-fn grok_b_matching_idle_attestation_preserves_full_multiline_unicode_final() {
+fn grok_matching_idle_attestation_preserves_full_multiline_unicode_final() {
     let text = format!(
         "  Synthetic committed reply 😀
 {}
@@ -297,7 +297,7 @@ fn grok_b_matching_idle_attestation_preserves_full_multiline_unicode_final() {
 }
 
 #[test]
-fn grok_b_explicit_empty_final_is_distinct_from_missing_text_evidence() {
+fn grok_explicit_empty_final_is_distinct_from_missing_text_evidence() {
     let proof = attestation("");
     assert_eq!(
         resolve_attested_completion("synthetic-session", "synthetic-turn", true, Some(&proof))
@@ -320,7 +320,7 @@ fn grok_b_explicit_empty_final_is_distinct_from_missing_text_evidence() {
 }
 
 #[test]
-fn grok_b_attestation_identity_mismatch_and_empty_identity_always_fail() {
+fn grok_attestation_identity_mismatch_and_empty_identity_always_fail() {
     let proof = attestation("Synthetic reply");
     for idle in [false, true] {
         for (session, turn) in [
@@ -360,7 +360,7 @@ fn grok_b_attestation_identity_mismatch_and_empty_identity_always_fail() {
 }
 
 #[test]
-fn grok_b_late_old_prompt_attestation_cannot_settle_the_next_request() {
+fn grok_late_old_prompt_attestation_cannot_settle_the_next_request() {
     let proof = attestation("Synthetic old answer");
     assert!(
         resolve_attested_completion("synthetic-session", "next-prompt", true, Some(&proof))
@@ -376,7 +376,7 @@ fn grok_b_late_old_prompt_attestation_cannot_settle_the_next_request() {
 }
 
 #[test]
-fn grok_b_attested_no_stop_path_can_finish_without_inventing_native_final() {
+fn grok_attested_no_stop_path_can_finish_without_inventing_native_final() {
     // The trusted producer can reconcile an owned turn even if no Stop survived.
     let proof = attestation("Synthetic continuation-cap final");
     assert!(matches!(
@@ -388,7 +388,7 @@ fn grok_b_attested_no_stop_path_can_finish_without_inventing_native_final() {
 }
 
 #[test]
-fn grok_b_native_json_cannot_supply_a_bus_attestation() {
+fn grok_native_json_cannot_supply_a_bus_attestation() {
     let mut value = candidate();
     value["completionAttestation"] = json!({
         "session":"synthetic-session", "turn":"synthetic-turn",

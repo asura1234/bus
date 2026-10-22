@@ -85,7 +85,7 @@ impl Drop for Fixture {
     }
 }
 #[test]
-fn grok_ad_identity_prefers_validated_alias_over_regex_namesake() {
+fn grok_identity_prefers_validated_alias_over_regex_namesake() {
     let f = Fixture::new();
     f.executable(&f.bin.join("grok"), "grok 1.20110708 regex");
     let alias = f.root.join("home/.grok/bin/grok");
@@ -109,7 +109,7 @@ fn grok_ad_identity_prefers_validated_alias_over_regex_namesake() {
     );
 }
 #[test]
-fn grok_ad_identity_falls_back_only_to_verified_build_candidates() {
+fn grok_identity_falls_back_only_to_verified_build_candidates() {
     let f = Fixture::new();
     f.executable(&f.root.join("home/.grok/bin/grok"), "regex grok 1.0");
     f.install();
@@ -128,7 +128,7 @@ fn grok_ad_identity_falls_back_only_to_verified_build_candidates() {
     );
 }
 #[test]
-fn grok_ad_prepare_persists_original_argv_and_private_environment() {
+fn grok_prepare_persists_original_argv_and_private_environment() {
     let f = Fixture::new();
     f.install();
     let input="--permission-mode default --allow 'Bash(ls*)' --deny 'Bash(rm*)' --no-leader --fullscreen --no-auto-update -- '--single literal prompt'";
@@ -159,7 +159,7 @@ fn grok_ad_prepare_persists_original_argv_and_private_environment() {
     assert!(!f.root.join("home/.grok/config.toml").exists());
 }
 #[test]
-fn grok_ad_prepare_normalizes_adoption_and_prefixes_runtime_before_literal_tail() {
+fn grok_prepare_normalizes_adoption_and_prefixes_runtime_before_literal_tail() {
     let f = Fixture::new();
     f.install();
     let prepared =
@@ -188,7 +188,7 @@ fn grok_ad_prepare_normalizes_adoption_and_prefixes_runtime_before_literal_tail(
     );
 }
 #[test]
-fn grok_ad_prepare_rejects_invalid_input_before_initializer_or_hook_writes() {
+fn grok_prepare_rejects_invalid_input_before_initializer_or_hook_writes() {
     let f = Fixture::new();
     f.install();
     for input in ["--single hi", "'unterminated"] {
@@ -202,7 +202,7 @@ fn grok_ad_prepare_rejects_invalid_input_before_initializer_or_hook_writes() {
 }
 
 #[test]
-fn grok_ad_run_scoped_permissions_do_not_replace_saved_user_choices() {
+fn grok_run_scoped_permissions_do_not_replace_saved_user_choices() {
     let f = Fixture::new();
     f.install();
     std::env::set_var("BUS_YOLO", "1");
@@ -220,7 +220,7 @@ fn grok_ad_run_scoped_permissions_do_not_replace_saved_user_choices() {
 }
 
 #[test]
-fn grok_ad_identity_probe_rejects_slow_output() {
+fn grok_identity_probe_rejects_slow_output() {
     let f = Fixture::new();
     f.install();
     let executable = f.bin.join("grok");
@@ -232,7 +232,7 @@ fn grok_ad_identity_probe_rejects_slow_output() {
 }
 
 #[test]
-fn grok_ad_identity_probe_rejects_oversized_output() {
+fn grok_identity_probe_rejects_oversized_output() {
     let f = Fixture::new();
     f.install();
     let executable = f.bin.join("grok");

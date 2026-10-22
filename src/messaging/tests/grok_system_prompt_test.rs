@@ -13,7 +13,7 @@ fn flat(text: &str) -> String {
 }
 
 #[test]
-fn grok_e_fresh_and_adopted_sessions_bootstrap_without_launch_flags_or_file_io() {
+fn grok_fresh_and_adopted_sessions_bootstrap_without_launch_flags_or_file_io() {
     let path = Path::new("/not-created/grok e/it's system prompt.md");
     for adopted in [false, true] {
         assert_eq!(prompt_args(path, adopted).unwrap(), None);
@@ -25,7 +25,7 @@ fn grok_e_fresh_and_adopted_sessions_bootstrap_without_launch_flags_or_file_io()
 }
 
 #[test]
-fn grok_e_custom_instructions_survive_verbatim_with_grok_protocol_precedence() {
+fn grok_custom_instructions_survive_verbatim_with_grok_protocol_precedence() {
     let authored = "Keep 中文 and whitespace.
 
   Custom task: quote `--async` literally.
@@ -40,7 +40,7 @@ fn grok_e_custom_instructions_survive_verbatim_with_grok_protocol_precedence() {
 }
 
 #[test]
-fn grok_e_fill_values_are_preserved_without_expanding_inserted_placeholders() {
+fn grok_fill_values_are_preserved_without_expanding_inserted_placeholders() {
     let template = "Room {{ROOM_NAME}} ({{ROOM_ID}}); agent {{AGENT_NAME}}.
 Docs {{DOCS}}; workflows {{WORKFLOWS_DIR}}.";
     let authored = orchestration::fill(
@@ -63,7 +63,7 @@ Docs {{DOCS}}; workflows {{WORKFLOWS_DIR}}.";
 }
 
 #[test]
-fn grok_e_default_prompt_retains_room_policy_under_explicit_transport_override() {
+fn grok_default_prompt_retains_room_policy_under_explicit_transport_override() {
     let authored = orchestration::fill(
         orchestration::DEFAULT_PROMPT,
         &PromptValues {
@@ -85,7 +85,7 @@ fn grok_e_default_prompt_retains_room_policy_under_explicit_transport_override()
 }
 
 #[test]
-fn grok_e_bootstrap_delivers_full_prompt_and_does_not_replay_work() {
+fn grok_bootstrap_delivers_full_prompt_and_does_not_replay_work() {
     let authored = "Synthetic task text
 
 Keep this line.
@@ -100,7 +100,7 @@ Keep this line.
 }
 
 #[test]
-fn grok_e_dispatch_keeps_durable_notifications_and_uncertain_submissions() {
+fn grok_dispatch_keeps_durable_notifications_and_uncertain_submissions() {
     let prompt = flat(&orchestrator_prompt("Synthetic policy.").unwrap());
     for instruction in [
         "waiter can acknowledge a reply and suppress its Bus-delivered wake",
@@ -115,7 +115,7 @@ fn grok_e_dispatch_keeps_durable_notifications_and_uncertain_submissions() {
 }
 
 #[test]
-fn grok_e_dialog_guidance_requires_fresh_fingerprints_and_developer_authority() {
+fn grok_dialog_guidance_requires_fresh_fingerprints_and_developer_authority() {
     let prompt = flat(&orchestrator_prompt("Synthetic policy.").unwrap());
     for command in [
         "bus agent dialog WORKER",
@@ -132,7 +132,7 @@ fn grok_e_dialog_guidance_requires_fresh_fingerprints_and_developer_authority() 
 }
 
 #[test]
-fn grok_e_report_destinations_and_native_evidence_limit_are_explicit() {
+fn grok_report_destinations_and_native_evidence_limit_are_explicit() {
     let prompt = flat(&orchestrator_prompt("Synthetic policy.").unwrap());
     for instruction in [
         "final answering a developer message in MASTER belongs in MASTER",
@@ -148,7 +148,7 @@ fn grok_e_report_destinations_and_native_evidence_limit_are_explicit() {
 }
 
 #[test]
-fn grok_e_installed_guide_and_cold_resume_keep_the_same_bootstrap_policy() {
+fn grok_installed_guide_and_cold_resume_keep_the_same_bootstrap_policy() {
     let root = crate::utils::test_temp::unique_temp_path("grok-e-prompt");
     let docs = orchestration::write_docs(&root).unwrap();
     let guide = std::fs::read_to_string(docs.join("providers/grok.md")).unwrap();

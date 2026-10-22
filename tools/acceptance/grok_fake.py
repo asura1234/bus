@@ -1,6 +1,6 @@
 """Isolated Grok/Claude fake integration. No credentials or real providers.
 
-Uses F's fake CLIs and the disposable acceptance Bus lifecycle, with a closed
+Uses synthetic fake CLIs and the disposable acceptance Bus lifecycle, with a closed
 PATH, empty home and explicit binary. The synthetic completion schema proves
 Bus plumbing only; signed-in native Grok acceptance remains pending.
 """

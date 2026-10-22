@@ -6,7 +6,7 @@ use crate::agents::providers::{
 };
 use serde_json::json;
 #[test]
-fn grok_ad_resume_requires_existing_capture_without_silent_repair() {
+fn grok_resume_requires_existing_capture_without_silent_repair() {
     let f = Fixture::new();
     f.install();
     let spec = f.spec("", true);
@@ -26,7 +26,7 @@ fn grok_ad_resume_requires_existing_capture_without_silent_repair() {
     assert!(capture_args(&spec.hooks, &f.project).is_err());
 }
 #[test]
-fn grok_ad_resume_rebinds_exact_owned_hooks_and_restores_saved_options() {
+fn grok_resume_rebinds_exact_owned_hooks_and_restores_saved_options() {
     let f = Fixture::new();
     f.install();
     f.prepare("--session-id 160d1f8b-9023-44b8-9bc7-24333effb185 --permission-mode default --allow 'Bash(ls*)' initial");
@@ -57,7 +57,7 @@ fn grok_ad_resume_rebinds_exact_owned_hooks_and_restores_saved_options() {
     );
 }
 #[test]
-fn grok_ad_resume_revalidates_the_saved_executable_instead_of_switching_path() {
+fn grok_resume_revalidates_the_saved_executable_instead_of_switching_path() {
     let f = Fixture::new();
     f.install();
     f.prepare("");
@@ -75,7 +75,7 @@ fn grok_ad_resume_revalidates_the_saved_executable_instead_of_switching_path() {
     assert!(launch::environment(&spec.hooks).is_err());
 }
 #[test]
-fn grok_ad_resume_disabled_hooks_are_kept_unchanged() {
+fn grok_resume_disabled_hooks_are_kept_unchanged() {
     let f = Fixture::new();
     f.install();
     f.prepare("");
@@ -92,7 +92,7 @@ fn grok_ad_resume_disabled_hooks_are_kept_unchanged() {
 }
 
 #[test]
-fn grok_ad_resume_does_not_duplicate_explicit_runtime_flags() {
+fn grok_resume_does_not_duplicate_explicit_runtime_flags() {
     let f = Fixture::new();
     f.install();
     f.prepare("--no-leader --fullscreen --no-auto-update");
@@ -101,7 +101,7 @@ fn grok_ad_resume_does_not_duplicate_explicit_runtime_flags() {
 }
 
 #[test]
-fn grok_ad_cold_resume_preserves_explicit_runtime_with_literal_startup_tail() {
+fn grok_cold_resume_preserves_explicit_runtime_with_literal_startup_tail() {
     let f = Fixture::new();
     f.install();
     f.prepare("--resume=160d1f8b-9023-44b8-9bc7-24333effb185 --no-leader --fullscreen --no-auto-update --permission-mode default -- '--cwd=/tmp --single literal'");
@@ -135,7 +135,7 @@ fn grok_ad_cold_resume_preserves_explicit_runtime_with_literal_startup_tail() {
     );
 }
 #[test]
-fn grok_ad_cold_resume_rejects_relocating_saved_options_without_changing_hooks() {
+fn grok_cold_resume_rejects_relocating_saved_options_without_changing_hooks() {
     let f = Fixture::new();
     f.install();
     f.prepare("");

@@ -927,7 +927,7 @@ async fn failed_agent_start_input_rolls_back_and_can_retry() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn grok_g_start_invokes_selected_executable_despite_shell_shadowing() {
+async fn grok_start_invokes_selected_executable_despite_shell_shadowing() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = crate::utils::test_temp::unique_temp_path("bus-grok-selected ' executable");
     std::fs::create_dir_all(&scratch).unwrap();
@@ -994,7 +994,7 @@ async fn grok_g_start_invokes_selected_executable_despite_shell_shadowing() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn grok_g_start_rejects_unbound_or_invalid_executable_before_input() {
+async fn grok_start_rejects_unbound_or_invalid_executable_before_input() {
     for executable in [
         serde_json::Value::Null,
         serde_json::json!("relative/grok"),

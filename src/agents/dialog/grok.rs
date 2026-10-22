@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_permission_and_trust_use_contiguous_rows_and_arrows() {
+    fn grok_permission_and_trust_use_contiguous_rows_and_arrows() {
         for screen in [PERMISSION, TRUST] {
             let dialog = card(screen).expect("synthetic focused card");
             assert_eq!(dialog.kind, DialogKind::Choice);
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_scope_and_focus_invalidate_observed_digest() {
+    fn grok_scope_and_focus_invalidate_observed_digest() {
         let before = card(PERMISSION).unwrap();
         let scope = card(&PERMISSION.replace("this command", "all commands")).unwrap();
         let moved = card(&PERMISSION.replace("❯ 1", "  1").replace("  2", "❯ 2")).unwrap();
@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_checkboxes_preserve_checked_state_separate_from_focus() {
+    fn grok_checkboxes_preserve_checked_state_separate_from_focus() {
         let before = card(QUESTION).unwrap();
         let after = card(&QUESTION.replace("[ ] Red", "[✓] Red")).unwrap();
         assert_eq!(before.selected(), Some(1));
@@ -472,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_question_and_tab_style_changes_invalidate_digest() {
+    fn grok_question_and_tab_style_changes_invalidate_digest() {
         let before = card(QUESTION).unwrap();
         let next = card(&QUESTION.replace("1/2", "2/2")).unwrap();
         let styled = card(&QUESTION.replace("Question 1/2", "\x1b[7mQuestion 1/2\x1b[0m")).unwrap();
@@ -481,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_free_text_has_no_options_and_tracks_edits() {
+    fn grok_free_text_has_no_options_and_tracks_edits() {
         let before = card(TEXT).unwrap();
         let after = card(&TEXT.replace("ultraviolet please", "infrared")).unwrap();
         assert_eq!(before.kind, DialogKind::Question);
@@ -493,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_parked_card_has_no_actionable_selection() {
+    fn grok_parked_card_has_no_actionable_selection() {
         let dialog = card(PARKED).unwrap();
         assert_eq!(dialog.selected(), None);
         for row in &dialog.options {
@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_wrapped_labels_remain_one_option() {
+    fn grok_wrapped_labels_remain_one_option() {
         let dialog = card(WRAPPED).unwrap();
         assert_eq!(dialog.options.len(), 2);
         assert_eq!(
@@ -513,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_history_and_numbered_drafts_are_not_cards() {
+    fn grok_history_and_numbered_drafts_are_not_cards() {
         assert!(card(&format!("{PERMISSION}\n{DRAFT}")).is_none());
         assert!(super::super::parse(&format!("{PERMISSION}\n{DRAFT}")).is_none());
         assert!(contains_composer(&DRAFT.lines().collect::<Vec<_>>()));
@@ -525,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_ambiguous_missing_focus_and_truncated_cards_fail_closed() {
+    fn grok_ambiguous_missing_focus_and_truncated_cards_fail_closed() {
         for screen in [
             PERMISSION.replace("❯ 1", "  1"),
             PERMISSION.replace("  2", "❯ 2"),
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_radio_and_style_focus_are_not_checkbox_checks() {
+    fn grok_radio_and_style_focus_are_not_checkbox_checks() {
         let radio = PERMISSION.replace("❯ 1 (○)", "  1 (●)");
         assert_eq!(card(&radio).unwrap().selected(), Some(1));
         let styled =
@@ -547,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_narrow_footer_and_history_before_current_card() {
+    fn grok_narrow_footer_and_history_before_current_card() {
         let narrow = PERMISSION.replace(" │ Ctrl+o:yolo", "\nCtrl+o:yolo");
         assert_eq!(card(&narrow).unwrap().options.len(), 3);
         let screen = format!("{QUESTION}\n{PERMISSION}");
@@ -569,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_screen_rules_keep_parked_and_checkbox_cards_blocked() {
+    fn grok_screen_rules_keep_parked_and_checkbox_cards_blocked() {
         for screen in [PARKED, QUESTION, PERMISSION, TEXT, TRUST] {
             let result = detected(screen, "grok");
             assert_eq!(result.state, AgentState::Blocked, "{screen}");
@@ -578,14 +578,14 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_screen_rules_ignore_historical_options_before_current_composer() {
+    fn grok_screen_rules_ignore_historical_options_before_current_composer() {
         let result = detected(&format!("{PERMISSION}\n{DRAFT}"), "grok");
         assert!(!result.visible_blocker);
         assert!(result.visible_idle);
     }
 
     #[test]
-    fn grok_c_checkbox_focus_preserves_identity_and_changes_digest() {
+    fn grok_checkbox_focus_preserves_identity_and_changes_digest() {
         let original = card(QUESTION).unwrap();
         let moved = card(&QUESTION.replace("❯ 1", "  1").replace("  2", "❯ 2")).unwrap();
         assert_eq!(original.id(), moved.id());
@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_radio_questions_with_missing_rows_fail_closed() {
+    fn grok_radio_questions_with_missing_rows_fail_closed() {
         let radio = QUESTION
             .replace("[ ] Red", "(○) Red")
             .replace("[✓] Blue", "(○) Blue")
@@ -603,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_permission_missing_or_reordered_rows_fail_closed() {
+    fn grok_permission_missing_or_reordered_rows_fail_closed() {
         for screen in [
             PERMISSION.replace("┃   2 (○) Always allow this command\n", ""),
             PERMISSION
@@ -622,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_wrapped_final_row_stays_blocked_with_idle_osc() {
+    fn grok_wrapped_final_row_stays_blocked_with_idle_osc() {
         for original in [TRUST, QUESTION] {
             let end = original.lines().last().unwrap();
             let screen = original.replace(end, &format!("┃              long synthetic continuation one\n┃              long synthetic continuation two\n┃              long synthetic continuation three\n{end}"));
@@ -632,13 +632,13 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_current_composer_after_history_is_ready_without_osc() {
+    fn grok_current_composer_after_history_is_ready_without_osc() {
         let screen = format!("{PERMISSION}\n{DRAFT}");
         assert!(detected(&screen, "").visible_idle);
     }
 
     #[test]
-    fn grok_c_screen_rules_recognize_ctrl_x_without_login_readiness() {
+    fn grok_screen_rules_recognize_ctrl_x_without_login_readiness() {
         let result = detected(
             include_str!("../../../tests/fixtures/grok-composer/empty.txt"),
             "",

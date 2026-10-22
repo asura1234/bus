@@ -104,7 +104,7 @@ mod tests {
     const PASTED: &str = include_str!("../../../../../tests/fixtures/grok-composer/pasted.txt");
 
     #[test]
-    fn grok_g_visible_blank_lines_in_bootstrap_remain_exact() {
+    fn grok_visible_blank_lines_in_bootstrap_remain_exact() {
         let expected = "line one\n\n  line two\n";
         let screen = format!(
             "╭────────╮\n│ ❯ {} │\n╰────────╯\nShift+Tab:mode │ Ctrl+x:shortcuts\n",
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_exact_body_never_merges_commands_or_trims_user_indent() {
+    fn grok_exact_body_never_merges_commands_or_trims_user_indent() {
         let screen = DRAFT
             .replace("1. inspect the scratch project", "echo one")
             .replace("2. report results", "echo two");
@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_literal_placeholder_is_a_developer_draft() {
+    fn grok_literal_placeholder_is_a_developer_draft() {
         let screen = EMPTY.replace("\x1b[2m", "").replace("\x1b[0m", "");
         assert_eq!(input(&screen).as_deref(), Some("Type a message..."));
         assert_eq!(
@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grok_c_real_submission_preserves_unrelated_drafts_and_uncertain_chips() {
+    async fn grok_real_submission_preserves_unrelated_drafts_and_uncertain_chips() {
         use bytes::Bytes;
         use std::time::{Duration, Instant};
         for screen in [
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grok_c_uncertain_paste_after_write_is_retained_without_enter_or_retry() {
+    async fn grok_uncertain_paste_after_write_is_retained_without_enter_or_retry() {
         use bytes::Bytes;
         use std::time::{Duration, Instant};
         let (runtime, mut writes) =
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grok_c_emulated_composer_retains_exact_input_body() {
+    async fn grok_emulated_composer_retains_exact_input_body() {
         let (runtime, _) =
             crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
         runtime.test_process_pty_bytes(
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_composer_empty_and_numbered_draft_observation() {
+    fn grok_composer_empty_and_numbered_draft_observation() {
         assert_eq!(input(EMPTY), Some(String::new()));
         assert_eq!(observe(EMPTY, "synthetic prompt"), InputObservation::Empty);
         assert_eq!(
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_unrelated_drafts_and_internal_spaces_are_preserved() {
+    fn grok_unrelated_drafts_and_internal_spaces_are_preserved() {
         let draft = DRAFT.replace(
             "1. inspect the scratch project",
             "do not overwrite this draft",
@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_long_paste_chip_never_claims_owned_pending() {
+    fn grok_long_paste_chip_never_claims_owned_pending() {
         // A character count alone cannot attest the hidden paste's contents.
         assert_eq!(input(PASTED).as_deref(), Some("[Pasted text: 40000 chars]"));
         assert_eq!(
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_blocked_login_and_modal_composers_are_unavailable() {
+    fn grok_blocked_login_and_modal_composers_are_unavailable() {
         for blocker in [
             include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt"),
             include_str!("../../../../../tests/fixtures/grok-dialog/trust.txt"),
@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_latest_framed_composer_ignores_historical_options() {
+    fn grok_latest_framed_composer_ignores_historical_options() {
         let screen = format!(
             "{}\n{DRAFT}",
             include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt")
@@ -337,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_unframed_or_incomplete_composer_is_unavailable() {
+    fn grok_unframed_or_incomplete_composer_is_unavailable() {
         for screen in [
             "❯ task",
             "❯ task\nCtrl+x:shortcuts",
@@ -349,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_c_ansi_composer_matches_exact_multiline_body() {
+    fn grok_ansi_composer_matches_exact_multiline_body() {
         let wrapped = DRAFT
             .replace(
                 "1. inspect the scratch project",

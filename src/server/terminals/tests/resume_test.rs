@@ -5,7 +5,7 @@ use super::{
 
 #[cfg(unix)]
 #[test]
-fn grok_g_resume_binds_selected_alias_after_shell_startup() {
+fn grok_resume_binds_selected_alias_after_shell_startup() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = crate::utils::test_temp::unique_temp_path("bus-grok-resume ' executable");
     std::fs::create_dir_all(&scratch).unwrap();
@@ -52,7 +52,7 @@ fn grok_g_resume_binds_selected_alias_after_shell_startup() {
 }
 
 #[test]
-fn grok_g_resume_refuses_missing_or_relative_selected_executable() {
+fn grok_resume_refuses_missing_or_relative_selected_executable() {
     let mut plan = crate::agents::resume::catalog::AgentResumePlan {
         agent: "grok".into(),
         argv: vec!["grok".into(), "--resume".into(), "saved-session".into()],

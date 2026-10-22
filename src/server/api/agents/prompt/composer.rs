@@ -7,7 +7,7 @@ use crate::terminal::runtime::InputObservation;
 mod grok_observer_tests {
     use super::*;
     #[test]
-    fn grok_g_observer_preserves_unknown_and_edited_drafts_across_owned_observations() {
+    fn grok_observer_preserves_unknown_and_edited_drafts_across_owned_observations() {
         let empty = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
         let frame = |text: &str| empty.replace("\x1b[2mType a message...\x1b[0m", text);
         let observe = observer(AgentKind::Grok, "owned prompt".into());

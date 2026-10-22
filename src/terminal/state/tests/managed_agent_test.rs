@@ -15,7 +15,7 @@ fn managed_agent_becomes_ready_when_detection_is_idle() {
 }
 
 #[test]
-fn grok_g_saved_identity_is_not_ready_before_the_resume_process_starts() {
+fn grok_saved_identity_is_not_ready_before_the_resume_process_starts() {
     for kind in [AgentKind::Grok, AgentKind::Claude] {
         let mut terminal = test_terminal();
         terminal.restore_managed_agent("restored".into(), kind);
