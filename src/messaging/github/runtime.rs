@@ -107,10 +107,6 @@ pub(crate) enum Update {
         at_ms: u64,
     },
 }
-enum Message {
-    Update(Update),
-    Done,
-}
 #[derive(Clone, Default)]
 struct Schedule {
     next: u64,
@@ -121,7 +117,7 @@ struct Schedule {
 /// inject a source; the default test runtime never invokes installed tools.
 pub(crate) struct Runtime {
     source: Option<Arc<dyn Source>>,
-    pending: Option<mpsc::Receiver<Message>>,
+    pending: Option<mpsc::Receiver<Update>>,
     next_round: u64,
     schedules: BTreeMap<String, Schedule>,
 }
@@ -171,8 +167,8 @@ impl Runtime {
             let mut done = false;
             loop {
                 match receiver.try_recv() {
-                    Ok(Message::Update(update)) => updates.push(update),
-                    Ok(Message::Done) | Err(mpsc::TryRecvError::Disconnected) => {
+                    Ok(update) => updates.push(update),
+                    Err(mpsc::TryRecvError::Disconnected) => {
                         done = true;
                         break;
                     }
@@ -230,10 +226,7 @@ impl Runtime {
             .name("bus-github-watch".into())
             .spawn(move || {
                 let coverage = source.discover(&interests);
-                if tx
-                    .send(Message::Update(Update::Coverage(coverage.clone())))
-                    .is_err()
-                {
+                if tx.send(Update::Coverage(coverage.clone())).is_err() {
                     return;
                 }
                 for (repo, scopes) in coverage {
@@ -248,18 +241,18 @@ impl Runtime {
                     };
                     let result = source.fetch(&q);
                     if tx
-                        .send(Message::Update(Update::Repo {
+                        .send(Update::Repo {
                             repo,
                             scopes,
                             result,
                             at_ms: now,
-                        }))
+                        })
                         .is_err()
                     {
                         return;
                     }
                 }
-                let _ = tx.send(Message::Done);
+                // Dropping the sender marks the round complete after every result.
             });
         if spawned.is_ok() {
             self.pending = Some(rx);

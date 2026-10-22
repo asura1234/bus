@@ -105,6 +105,7 @@ const SAMPLES: &[&[&str]] = &[
     &["room", "create", "r"],
     &["room", "rename", "r", "s"],
     &["room", "notes", "r", "--text", "t"],
+    &["room", "github", "r", "--auto"],
     &["room", "delete", "r", "--confirm"],
     &["history", "--room", "r"],
     &[
