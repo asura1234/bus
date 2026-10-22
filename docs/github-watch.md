@@ -18,32 +18,41 @@ bus room github ROOM --off
 `bus state` includes `github_repos` (null means automatic, [] means off) and
 `github_discovered`. Overrides are saved with the room. MASTER itself has no watch.
 
-A PR belongs to a room when its head branch matches an agent's feature branch, or
-its author matches the GitHub author of that feature branch's remote tip. The
-repository's default branch does not establish ownership. With an explicit repo
-list, the room's agent branches apply to each listed repository.
+A PR belongs to the rooms whose agent feature branches match its head branch.
+Only when no room has a head-branch match does Bus fall back to the PR author:
+exactly one room must have a feature branch whose remote tip has that GitHub author.
+Ambiguous shared authors establish no ownership. The repository's default branch
+does not establish ownership. With an explicit repo list, the room's agent branches apply to each listed repository.
 
-Grey `bus` messages mention the room's orchestrator for default-branch merges,
+Grey `bus` messages address the room's orchestrator for owned default-branch merges,
 owned PRs becoming ready for review, completed CI (success or failure), and newly
 appearing merge conflicts. Other default-branch merges are combined into one
-informational message per repository per poll. Bus uses its existing notice and
-message delivery; this feature does not add an idle digest.
+informational message per repository per poll, with no recipient or orchestrator wake.
+The existing `bus → orchestrator` header identifies actionable notices, without a
+mention suffix. Bus uses its existing notice and message delivery; this feature does not add an idle digest.
 
-A fresh watch reports default-branch merges from the previous 24 hours and the
-current ready/CI/conflict state of owned open PRs. Later polls report transitions.
-Merge times are labelled UTC. Notice text includes the repository, PR number and
-head branch so the orchestrator can decide on cleanup, verification or follow-up.
+A fresh watch reports default-branch merges from the previous 24 hours. Each
+room's first observation of an owned open PR quietly records a baseline; later
+polls report ready/CI/conflict transitions. Merge times use the local clock, with
+a date for merges from earlier days. Notice text includes the repository, PR
+number and head branch so the orchestrator can decide on cleanup, verification or follow-up.
 
 The watcher runs outside the coordinator tick. It makes one GraphQL request per
 repository per 90-second round, shared across rooms, with open and merged PR pages
 advanced in subsequent rounds. Long scans therefore take more than one round.
 GitHub rate-limit resets and retry-after headers delay retries; other failures
 back off up to 24 minutes. Missing gh, authentication problems and unavailable
-repositories are logged, with one unavailable notice per room. No raw CLI error
-output is posted to rooms.
+repositories are logged, with one unavailable notice per room per outage. A
+successful poll clears the room's unavailable flag so a later outage is reported.
+No raw CLI error output is posted to rooms.
 
 Observation cursors and their notices are saved together in `state.json`. Restart
 resumes pagination and suppresses already reported merges and PR-state edges.
+The initial merge-time eligibility floor is fixed; the moving scan boundary uses
+updatedAt, so a merge that moves pages remains eligible on the next scan. Seen
+merge IDs remain persisted to avoid replay when older PRs receive new comments.
+Open-PR observations are retained across page gaps; a confirmed merged PR removes
+its open observation. Absence from a page is not treated as proof of closure.
 CI completion uses GitHub's full state counts when checks span more than one page,
 so a failure does not conceal other jobs still running.
 

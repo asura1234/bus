@@ -19,13 +19,15 @@ pub(crate) const OVERLAP_MS: u64 = 120_000;
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct Watermark {
+    /// Completed scan start; subsequent pages are bounded by updatedAt.
     pub(crate) merged_since_ms: u64,
+    /// Fixed initial merge-time floor, independent of updated-at page movement.
+    pub(crate) merged_after_ms: Option<u64>,
     pub(crate) scan_started_ms: u64,
     pub(crate) merged_cursor: Option<String>,
     pub(crate) open_cursor: Option<String>,
     pub(crate) merged_seen: BTreeMap<u64, u64>,
     pub(crate) observed: BTreeMap<u64, BTreeMap<u64, PrStatus>>,
-    pub(crate) open_seen: BTreeSet<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

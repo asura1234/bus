@@ -100,3 +100,55 @@ fn github_watch_failure_backoff_honors_later_rate_reset() {
         Some(1_000_000)
     );
 }
+
+struct TwoRepos {
+    fetched: Mutex<Vec<String>>,
+}
+impl Source for TwoRepos {
+    fn discover(&self, _: &[Interest]) -> BTreeMap<String, Vec<Scope>> {
+        ["a/one", "b/two"]
+            .into_iter()
+            .map(|repo| {
+                (
+                    repo.to_string(),
+                    vec![Scope {
+                        room: 7,
+                        ..Default::default()
+                    }],
+                )
+            })
+            .collect()
+    }
+    fn fetch(&self, q: &Query) -> Result<Page, Failure> {
+        self.fetched.lock().unwrap().push(q.repo.clone());
+        // GraphQL rate limit is per account: one low-budget response covers all repos.
+        Ok(Page {
+            retry_at_ms: Some(100 * POLL_MS),
+            ..Page::default()
+        })
+    }
+}
+fn finish_round(runtime: &mut Runtime, now: u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while runtime.pending.is_some() || runtime.next_round <= now {
+        runtime.tick(vec![], &BTreeMap::new(), now);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+#[test]
+fn github_watch_account_rate_limit_reset_pauses_every_repository() {
+    let source = Arc::new(TwoRepos {
+        fetched: Mutex::new(Vec::new()),
+    });
+    let mut rt = Runtime::with_source(source.clone());
+    finish_round(&mut rt, 1);
+    let first = source.fetched.lock().unwrap().len();
+    finish_round(&mut rt, POLL_MS + 1);
+    let fetched = source.fetched.lock().unwrap().clone();
+    assert_eq!(
+        fetched.len(),
+        first,
+        "polled again before the account-wide rate-limit reset: {fetched:?}"
+    );
+}

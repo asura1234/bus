@@ -42,7 +42,7 @@ fn github_watch_notices_and_watermarks_survive_restart_and_keep_normal_bus_deliv
     let requests: Vec<_> = state.requests().collect();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].prompt.author, Author::Bus);
-    assert!(requests[0].prompt.text.contains(&format!("@{}", agent.0)));
+    assert!(!requests[0].prompt.text.contains(" @"));
     assert_eq!(requests[0].agent_id, agent);
     let mut state: BusState =
         serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
@@ -52,7 +52,7 @@ fn github_watch_notices_and_watermarks_survive_restart_and_keep_normal_bus_deliv
     let mut state = BusState::new();
     let room = state.create_room("unbound").unwrap();
     state
-        .github_notice(room, "GitHub: o/r #137 merged into main".into(), 1)
+        .github_notice(room, false, "GitHub: o/r #137 merged into main".into(), 1)
         .unwrap();
     let state: BusState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
     assert_eq!(state.notices(room).count(), 1);
@@ -96,4 +96,110 @@ fn github_watch_reports_unavailable_once_per_room_even_after_restart_and_validat
         .set_github_repos(room, &serde_json::json!([]))
         .unwrap();
     assert_eq!(state.github_interests()[0].repos, Some(vec![]));
+}
+
+fn bound_room() -> (BusState, RoomId, crate::messaging::model::AgentId) {
+    let mut state = BusState::new();
+    let master = state.ensure_master_room();
+    let room = state.create_room("work").unwrap();
+    let orchestrator = state
+        .create_agent(
+            master,
+            "libtv-orch",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(orchestrator, room).unwrap();
+    (state, room, orchestrator)
+}
+
+fn merged_update(room: RoomId, branch: &str) -> Update {
+    Update::Repo {
+        repo: "o/r".into(),
+        scopes: vec![Scope {
+            room: room.0,
+            branches: ["fix/ours".into()].into(),
+        }],
+        result: Ok(Page {
+            default_branch: "main".into(),
+            merged: vec![PullRequest {
+                number: 137,
+                branch: branch.into(),
+                base: "main".into(),
+                merged_at_ms: Some(1000),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        at_ms: 2000,
+    }
+}
+
+#[test]
+fn github_watch_identifies_orchestrator_through_recipient_without_a_suffix() {
+    let (mut state, room, orchestrator) = bound_room();
+    state
+        .apply_github(&merged_update(room, "fix/ours"), 2000)
+        .unwrap();
+    let request = state.requests().next().unwrap();
+    assert_eq!(request.agent_id, orchestrator);
+    assert!(request
+        .prompt
+        .text
+        .ends_with("Next: cleanup / verify / follow-up."));
+    assert!(!request.prompt.text.contains(" @"));
+}
+
+#[test]
+fn github_watch_informational_merge_batch_does_not_wake_the_orchestrator() {
+    let (mut state, room, _) = bound_room();
+    state
+        .apply_github(&merged_update(room, "fix/theirs"), 2000)
+        .unwrap();
+    assert_eq!(
+        state.notices(room).count(),
+        1,
+        "informational batch must remain visible"
+    );
+    assert_eq!(
+        state.requests().count(),
+        0,
+        "informational batch was delivered: {:?}",
+        state.requests().map(|r| &r.prompt.text).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn github_watch_recovery_rearms_a_new_outage_after_restart() {
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let mut update = merged_update(room, "fix/theirs");
+    let failure = crate::messaging::github::source::Failure {
+        reason: "not logged in",
+        retry_at_ms: None,
+    };
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Err(failure.clone());
+    }
+    state.apply_github(&update, 1).unwrap();
+    state.apply_github(&update, 2).unwrap();
+    assert_eq!(state.notices(room).count(), 1);
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page::default());
+    }
+    state.apply_github(&update, 3).unwrap();
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Err(failure);
+    }
+    state.apply_github(&update, 4).unwrap();
+    state.apply_github(&update, 5).unwrap();
+    assert_eq!(
+        state.notices(room).count(),
+        2,
+        "new outage was suppressed after recovery"
+    );
 }

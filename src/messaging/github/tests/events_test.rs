@@ -110,13 +110,12 @@ fn github_watch_uses_feature_branch_authors_but_never_the_default_branch_author(
         ("main".into(), "alice".into()),
     ]
     .into();
-    let edges = changes(
-        "o/r",
-        &mut Watermark::default(),
-        &page,
-        &[scope(7, "fix/ours"), scope(8, "main")],
-        LOOKBACK_MS * 3,
-    );
+    let scopes = [scope(7, "fix/ours"), scope(8, "main")];
+    let mut mark = Watermark::default();
+    page.open[0].status.ready = false;
+    assert!(changes("o/r", &mut mark, &page, &scopes, LOOKBACK_MS * 3).is_empty());
+    page.open[0].status.ready = true;
+    let edges = changes("o/r", &mut mark, &page, &scopes, LOOKBACK_MS * 3 + POLL_MS);
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].room, 7);
 }
@@ -177,10 +176,7 @@ fn github_watch_pending_rerun_rearms_completion_and_ignores_merges_to_other_base
     page.open = vec![p.clone()];
     let scopes = [scope(7, "fix/ours")];
     let mut mark = Watermark::default();
-    assert_eq!(
-        changes("o/r", &mut mark, &page, &scopes, LOOKBACK_MS * 3).len(),
-        1
-    );
+    assert!(changes("o/r", &mut mark, &page, &scopes, LOOKBACK_MS * 3).is_empty());
     p.status.ci = Some("pending".into());
     page.open = vec![p.clone()];
     assert!(changes("o/r", &mut mark, &page, &scopes, LOOKBACK_MS * 3 + POLL_MS).is_empty());
@@ -199,4 +195,199 @@ fn github_watch_pending_rerun_rearms_completion_and_ignores_merges_to_other_base
     );
     assert_eq!(notices.len(), 1);
     assert!(notices[0].text.contains("CI completed: success"));
+}
+
+#[test]
+fn github_watch_same_github_author_does_not_make_every_room_own_every_pr() {
+    // Every branch in a single-account repository has the same head-commit author.
+    let now = LOOKBACK_MS * 3;
+    let mut page = page();
+    page.branch_authors = [
+        ("fix/a".into(), "alice".into()),
+        ("fix/b".into(), "alice".into()),
+    ]
+    .into();
+    let mut merged = pr(2, "fix/b");
+    merged.merged_at_ms = Some(now - 1000);
+    page.merged = vec![merged];
+    let notices = changes(
+        "o/r",
+        &mut Watermark::default(),
+        &page,
+        &[scope(7, "fix/a"), scope(8, "fix/b")],
+        now,
+    );
+    let owned: Vec<_> = notices
+        .iter()
+        .filter(|n| n.actionable)
+        .map(|n| n.room)
+        .collect();
+    assert_eq!(
+        owned,
+        [8],
+        "room 7 got an owned notice for room 8's merge: {notices:?}"
+    );
+}
+
+#[test]
+fn github_watch_first_poll_baselines_already_open_prs_without_ready_or_ci_notices() {
+    let now = LOOKBACK_MS * 3;
+    let mut page = page();
+    page.open = (1..=5)
+        .map(|n| {
+            let mut p = pr(n, "fix/ours");
+            p.status.ready = true;
+            p.status.ci = Some(format!("success:run{n}"));
+            p
+        })
+        .collect();
+    let notices = changes(
+        "o/r",
+        &mut Watermark::default(),
+        &page,
+        &[scope(7, "fix/ours")],
+        now,
+    );
+    assert!(
+        notices.is_empty(),
+        "first poll announced {} transitions that happened before the watch: {notices:?}",
+        notices.len()
+    );
+}
+
+#[test]
+fn github_watch_merge_time_uses_the_local_clock_like_chat_headers() {
+    let merged_at = 1_792_667_738_000; // 2026-10-22T11:15:38Z
+    let mut page = page();
+    let mut merged = pr(137, "fix/ours");
+    merged.merged_at_ms = Some(merged_at);
+    page.merged = vec![merged];
+    let notices = changes(
+        "o/r",
+        &mut Watermark::default(),
+        &page,
+        &[scope(7, "fix/ours")],
+        merged_at + 1000,
+    );
+    let local = crate::platform::local_datetime_at((merged_at / 1000) as i64).unwrap();
+    let shown = format!("at {:02}:{:02} ", local.hour(), local.minute());
+    assert!(
+        notices[0].text.contains(&shown),
+        "expected local {shown:?}: {}",
+        notices[0].text
+    );
+}
+
+#[test]
+fn github_watch_author_fallback_requires_no_head_owner_and_one_author_room() {
+    let now = LOOKBACK_MS * 3;
+    let mut page = page();
+    page.branch_authors = [
+        ("fix/a".into(), "alice".into()),
+        ("fix/b".into(), "bob".into()),
+    ]
+    .into();
+    let mut merged = pr(1, "unmatched");
+    merged.merged_at_ms = Some(now - 1000);
+    page.merged = vec![merged];
+    let scopes = [scope(7, "fix/a"), scope(8, "fix/b")];
+    let owners = |page: &Page| {
+        changes("o/r", &mut Watermark::default(), page, &scopes, now)
+            .into_iter()
+            .filter(|n| n.actionable)
+            .map(|n| n.room)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(owners(&page), [7], "one author room is the fallback owner");
+    page.branch_authors.insert("fix/b".into(), "ALICE".into());
+    assert!(
+        owners(&page).is_empty(),
+        "shared author must not own an unmatched PR"
+    );
+    page.branch_authors.insert("fix/b".into(), "bob".into());
+    page.merged[0].branch = "fix/b".into();
+    assert_eq!(
+        owners(&page),
+        [8],
+        "a head owner excludes an otherwise unique author owner"
+    );
+}
+
+#[test]
+fn github_watch_new_room_baselines_without_suppressing_existing_rooms_edges() {
+    let now = LOOKBACK_MS * 3;
+    let mut page = page();
+    page.open = vec![pr(1, "fix/ours")];
+    let mut mark = Watermark::default();
+    assert!(changes("o/r", &mut mark, &page, &[scope(7, "fix/ours")], now).is_empty());
+    page.open[0].status.ready = true;
+    page.open[0].status.ci = Some("success:run1".into());
+    page.open[0].status.conflict = true;
+    let scopes = [scope(7, "fix/ours"), scope(8, "fix/ours")];
+    let edges = changes("o/r", &mut mark, &page, &scopes, now + POLL_MS);
+    assert_eq!(edges.len(), 3);
+    assert!(edges.iter().all(|n| n.room == 7));
+    assert_eq!(mark.observed[&8][&1].ci.as_deref(), Some("success:run1"));
+    let mut recovered: Watermark =
+        serde_json::from_str(&serde_json::to_string(&mark).unwrap()).unwrap();
+    assert!(changes("o/r", &mut recovered, &page, &scopes, now + 2 * POLL_MS).is_empty());
+}
+
+#[test]
+fn github_watch_previous_local_day_includes_date() {
+    let at = 1_792_667_738_000;
+    let mut page = page();
+    let mut merged = pr(137, "fix/ours");
+    merged.merged_at_ms = Some(at);
+    page.merged = vec![merged];
+    let local = crate::platform::local_datetime_at((at / 1000) as i64).unwrap();
+    let notices = changes(
+        "o/r",
+        &mut Watermark::default(),
+        &page,
+        &[scope(7, "fix/ours")],
+        at + LOOKBACK_MS,
+    );
+    let shown = format!(
+        "at {} {:02}:{:02} ",
+        local.date(),
+        local.hour(),
+        local.minute()
+    );
+    assert!(notices[0].text.contains(&shown), "{}", notices[0].text);
+}
+
+#[test]
+fn github_watch_confirmed_merge_removes_open_observation_and_old_merge_ids_stay_deduped() {
+    let now = LOOKBACK_MS * 3;
+    let mut page = page();
+    let mut p = pr(1, "fix/ours");
+    page.open = vec![p.clone()];
+    let scopes = [scope(7, "fix/ours")];
+    let mut mark = Watermark::default();
+    assert!(changes("o/r", &mut mark, &page, &scopes, now).is_empty());
+    assert!(mark.observed[&7].contains_key(&1));
+    page.open.clear();
+    p.merged_at_ms = Some(now);
+    page.merged = vec![p];
+    assert_eq!(
+        changes("o/r", &mut mark, &page, &scopes, now + POLL_MS).len(),
+        1
+    );
+    assert!(!mark.observed[&7].contains_key(&1));
+    page.merged.clear();
+    changes("o/r", &mut mark, &page, &scopes, now + 10 * LOOKBACK_MS);
+    let mut recovered: Watermark =
+        serde_json::from_str(&serde_json::to_string(&mark).unwrap()).unwrap();
+    let mut updated = pr(1, "fix/ours");
+    updated.merged_at_ms = Some(now);
+    page.merged = vec![updated];
+    assert!(changes(
+        "o/r",
+        &mut recovered,
+        &page,
+        &scopes,
+        now + 11 * LOOKBACK_MS
+    )
+    .is_empty());
 }

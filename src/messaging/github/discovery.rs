@@ -1,4 +1,4 @@
-use super::{process, repository, Scope};
+use super::{events::remote_repository, process, Scope};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
@@ -39,7 +39,7 @@ fn remote_repos(output: &str) -> BTreeSet<String> {
     output
         .lines()
         .filter_map(|line| line.split_once(char::is_whitespace))
-        .filter_map(|(_, url)| repository(url))
+        .filter_map(|(_, url)| remote_repository(url))
         .collect()
 }
 fn coverage(

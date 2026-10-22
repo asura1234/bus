@@ -89,6 +89,9 @@ impl BusState {
                     .collect();
                 match result {
                     Ok(page) => {
+                        for scope in &scopes {
+                            self.github_unavailable.remove(&RoomId(scope.room));
+                        }
                         let mark = self.github_watch.entry(repo.clone()).or_default();
                         let notices = github::changes(repo, mark, page, &scopes, *at_ms);
                         for notice in notices {
@@ -99,14 +102,19 @@ impl BusState {
                                 actionable = notice.actionable,
                                 "GitHub notice created"
                             );
-                            self.github_notice(RoomId(notice.room), notice.text, now)?;
+                            self.github_notice(
+                                RoomId(notice.room),
+                                notice.actionable,
+                                notice.text,
+                                now,
+                            )?;
                         }
                     }
                     Err(failure) => {
                         for scope in scopes {
                             let room = RoomId(scope.room);
                             if self.github_unavailable.insert(room) {
-                                self.github_notice(room,format!("GitHub: watch unavailable ({}) — retrying in the background. Check gh installation / gh auth login.",failure.reason),now)?;
+                                self.github_notice(room,true,format!("GitHub: watch unavailable ({}) — retrying in the background. Check gh installation / gh auth login.",failure.reason),now)?;
                             }
                         }
                     }
@@ -115,9 +123,16 @@ impl BusState {
         }
         Ok(())
     }
-    fn github_notice(&mut self, room: RoomId, text: String, now: u64) -> Result<(), ModelError> {
-        let orchestrator = self.notice_orchestrator(room, None);
-        let text = orchestrator.map_or_else(|| text.clone(), |id| format!("{text} @{}", id.0));
+    fn github_notice(
+        &mut self,
+        room: RoomId,
+        actionable: bool,
+        text: String,
+        now: u64,
+    ) -> Result<(), ModelError> {
+        let orchestrator = actionable
+            .then(|| self.notice_orchestrator(room, None))
+            .flatten();
         self.post_bus_notice(room, orchestrator, text, now)
             .map(|_| ())
     }
