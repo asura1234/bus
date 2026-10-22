@@ -362,3 +362,87 @@ fn room_digest_a_later_real_idle_episode_after_a_tagged_completion_is_new_work()
         .iter()
         .any(|f| f["text"] == "Idle with no next task"));
 }
+
+#[test]
+fn room_digest_upgrade_migrates_old_payloads_and_notice_keys_without_replay() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(&mut s, room, orch, worker, "READY FOR VERIFY #1602");
+    let ready = facts(&s, orch)[0].clone();
+    s.post_developer_attention(worker, &format!("Worker alert {}", "界".repeat(1_000)), 40)
+        .unwrap();
+    let generic = s
+        .post_bus_notice(room, Some(orch), "Old generic notice".into(), 45)
+        .unwrap();
+    s.set_agent_runtime_identity(
+        orch,
+        AgentRuntimeIdentity {
+            launch_id: Some("orch".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let request = s.requests().find(|r| r.prompt.id == generic).unwrap().id;
+    s.begin_submission(request, "orch", 0).unwrap();
+    s.record_submission(
+        request,
+        SubmissionOutcome::Confirmed {
+            provider_session_id: None,
+            provider_turn_id: None,
+        },
+    )
+    .unwrap();
+    s.finish_for_test(request, "handled", 46);
+    let generic_fact_id = s.allocate_id();
+    let mut saved = serde_json::to_value(&s).unwrap();
+    let record = &mut saved["room_digests"][orch.0.to_string()];
+    let mut old = serde_json::Map::new();
+    let mut generic_fact = None;
+    for (mut key, mut fact) in record["facts"].as_object().unwrap().clone() {
+        fact.as_object_mut().unwrap().remove("source_id");
+        if fact["id"] == ready["id"] {
+            fact["acknowledged_at_ms"] = json!(30);
+        } else {
+            key = key.rsplit_once(':').unwrap().0.to_owned();
+            fact["text"] = json!(format!("Worker alert {}", "界".repeat(1_000)));
+            generic_fact = Some(fact.clone());
+        }
+        old.insert(key, fact);
+    }
+    let mut generic_fact = generic_fact.unwrap();
+    generic_fact["id"] = json!(generic_fact_id);
+    generic_fact["agent"] = Value::Null;
+    generic_fact["agent_name"] = json!("bus");
+    generic_fact["at_ms"] = json!(45);
+    generic_fact["text"] = json!("Old generic notice");
+    old.insert(format!("notice:{}", generic.0), generic_fact);
+    record["facts"] = Value::Object(old);
+    for field in [
+        "pending_watermark",
+        "previous_watermark",
+        "tombstones",
+        "pruned_through",
+    ] {
+        record.as_object_mut().unwrap().remove(field);
+    }
+    let mut reopened: BusState = serde_json::from_value(saved).unwrap();
+    reopened.recover_room_digest_facts();
+    let pending = facts(&reopened, orch);
+    assert_eq!(
+        pending.len(),
+        1,
+        "old notice keys must dedupe their canonical runtime source"
+    );
+    assert_eq!(pending[0]["agent"], json!(worker));
+    assert_eq!(pending[0]["text"].as_str().unwrap().chars().count(), 600);
+    let migrated = ledger(&reopened, orch);
+    let tombstones = migrated["tombstones"].as_object().unwrap();
+    assert!(tombstones.values().any(|t| t["id"] == ready["id"]
+        && t["acknowledged_at_ms"] == json!(30)
+        && t.get("text").is_none()));
+    assert!(
+        tombstones
+            .values()
+            .any(|t| t["id"] == json!(generic_fact_id)),
+        "a previously delivered generic notice must not wake again"
+    );
+}
