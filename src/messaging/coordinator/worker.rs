@@ -479,7 +479,7 @@ impl Worker {
         self.cleanup_failed_startups(&infos, events, io::now_ms())?;
         self.settle_requests()?;
         self.expire_unconfirmed_submissions(io::now_ms())?;
-        self.refresh_compaction_notices()?;
+        self.refresh_setting_notices()?;
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",

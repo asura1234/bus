@@ -48,6 +48,9 @@ impl Worker {
             BusCommand::SetMaxCompactionsPerAgent(limit) => {
                 return self.set_max_compactions_per_agent(limit, events);
             }
+            BusCommand::SetIdleAgentsAlert(limit) => {
+                return self.set_idle_agents_alert(limit, events);
+            }
             BusCommand::SetFeishuRecipient(recipient) => {
                 return self.set_feishu_recipient(recipient, events);
             }

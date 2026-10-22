@@ -287,9 +287,14 @@ impl BusUi {
         self.sound_settings_targets().len() + 1
     }
 
-    /// The sidebar width's Settings focus index, after the compaction limit.
-    pub(super) fn sidebar_width_field(&self) -> usize {
+    /// The idle agents alert's Settings focus index, after the compaction limit.
+    pub(super) fn idle_agents_field(&self) -> usize {
         self.compaction_field() + 1
+    }
+
+    /// The sidebar width's Settings focus index, after the idle agents alert.
+    pub(super) fn sidebar_width_field(&self) -> usize {
+        self.idle_agents_field() + 1
     }
 
     /// The overlay row's Settings focus index, after notification settings.

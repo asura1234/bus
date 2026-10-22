@@ -4,6 +4,7 @@ mod attention;
 mod callbacks;
 mod compactions;
 mod history;
+mod idle_agents;
 mod interrupts;
 mod recovery;
 mod reply_routing;
@@ -23,6 +24,7 @@ pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 #[cfg(test)]
 pub(crate) use history::ARCHIVE_AFTER_MS;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS, HISTORY_RETENTION_MS};
+pub(crate) use idle_agents::MIN_IDLE_FOR_ALERT_MS;
 pub(crate) use interrupts::INTERRUPTED;
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::{fingerprint_digest, BusState};

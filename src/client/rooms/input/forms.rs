@@ -210,6 +210,8 @@ impl BusUi {
             KeyCode::Left | KeyCode::Right => {
                 if self.settings_field == self.compaction_field() {
                     self.adjust_compaction_limit(code == KeyCode::Right);
+                } else if self.settings_field == self.idle_agents_field() {
+                    self.adjust_idle_agents_alert(code == KeyCode::Right);
                 } else if self.settings_field == self.sidebar_width_field() {
                     self.adjust_sidebar_width(code == KeyCode::Right);
                 } else if let Some(target) = self

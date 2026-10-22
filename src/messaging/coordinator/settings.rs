@@ -1,19 +1,48 @@
-//! Global settings the coordinator applies to its session: MASTER's sound and
-//! the All rooms sound, which new work rooms start with (see `bus::settings`).
+//! Global settings the coordinator applies to its session: MASTER's sound, the
+//! All rooms sound, which new work rooms start with, and the compaction and
+//! idle-agents limits behind Bus's notices (see `bus::settings`).
 use super::{mpsc, BusEvent, BusState, Room, RoomId, RoomKind, Worker};
 #[cfg(test)]
 use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
 use crate::messaging::prefs::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
-    pub(super) fn refresh_compaction_notices(&mut self) -> Result<(), String> {
-        let limit = self
+    /// Each tick re-reads the limits, so a change made in any Bus applies here.
+    pub(super) fn refresh_setting_notices(&mut self) -> Result<(), String> {
+        let saved = self
             .settings_path
             .as_deref()
             .and_then(|path| settings::load(path).ok())
-            .unwrap_or_default()
-            .max_compactions_per_agent;
-        self.apply_compaction_limit(limit)
+            .unwrap_or_default();
+        self.apply_compaction_limit(saved.max_compactions_per_agent)?;
+        self.apply_idle_agents_alert(saved.idle_agents_alert)
+    }
+
+    fn apply_idle_agents_alert(&mut self, limit: u32) -> Result<(), String> {
+        let mut state = self.state.clone();
+        if state
+            .notify_idle_agents(limit, crate::messaging::storage::io::now_ms())
+            .map_err(|error| error.to_string())?
+        {
+            self.save(state)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn set_idle_agents_alert(
+        &mut self,
+        limit: u32,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        settings::validate_idle_agents_alert(limit)?;
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.idle_agents_alert = limit)?;
+        self.apply_idle_agents_alert(limit)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        Ok(())
     }
 
     fn apply_compaction_limit(&mut self, limit: u32) -> Result<(), String> {

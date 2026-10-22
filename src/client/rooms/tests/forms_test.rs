@@ -107,6 +107,52 @@ fn settings_compaction_limit_mouse_controls_respect_the_allowed_range() {
 }
 
 #[test]
+fn settings_idle_agents_alert_is_visible_and_editable_with_arrow_keys() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    let screen = room_screen(&mut ui, 120, 40);
+    assert!(screen.contains("Idle agents alert (1–10)"), "{screen}");
+    assert!(screen.contains("‹ 7 ›"), "{screen}");
+    for _ in 0..ui.idle_agents_field() {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    assert_eq!(ui.settings_field, ui.idle_agents_field());
+    assert_eq!(ui.idle_agents_field(), ui.compaction_field() + 1);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(ui.settings.idle_agents_alert, 8);
+    assert!(ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::SetIdleAgentsAlert(8))));
+    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
+    assert_eq!(ui.settings.idle_agents_alert, 7);
+}
+
+#[test]
+fn settings_idle_agents_alert_mouse_controls_respect_the_allowed_range() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    room_screen(&mut ui, 120, 40);
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::AdjustIdleAgentsAlert(true)));
+    ui.settings.idle_agents_alert = 10;
+    let before = ui.pending.len();
+    ui.action(render::Action::AdjustIdleAgentsAlert(true));
+    assert_eq!(ui.settings.idle_agents_alert, 10);
+    assert_eq!(ui.pending.len(), before);
+    ui.settings.idle_agents_alert = 1;
+    ui.action(render::Action::AdjustIdleAgentsAlert(false));
+    assert_eq!(ui.settings.idle_agents_alert, 1);
+    assert_eq!(ui.pending.len(), before);
+    ui.action(render::Action::AdjustIdleAgentsAlert(true));
+    assert_eq!(ui.settings.idle_agents_alert, 2);
+    assert_eq!(ui.pending.len(), before + 1);
+}
+
+#[test]
 fn settings_sidebar_width_is_visible_and_editable_with_arrow_keys() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::Settings);

@@ -228,6 +228,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
             "feishu_cli_path": null,
             "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
+            "idle_agents_alert": 7,
             "background_shell_hold_minutes": 15,
             "sidebar_width": 28,
             "master_sound": {"enabled": false, "name": "Blow"},

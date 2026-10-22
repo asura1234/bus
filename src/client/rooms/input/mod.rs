@@ -593,6 +593,7 @@ impl BusUi {
             Action::EditFeishuCli => self.open_feishu_setting(true),
             Action::ToggleFeishuNotifications => self.toggle_feishu_notifications(),
             Action::AdjustCompactionLimit(forward) => self.adjust_compaction_limit(forward),
+            Action::AdjustIdleAgentsAlert(up) => self.adjust_idle_agents_alert(up),
             Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),
             Action::Cancel => {
                 if let Some(room) = self.room {

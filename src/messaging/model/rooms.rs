@@ -33,6 +33,7 @@ impl BusState {
                 sound: None,
                 sound_name: None,
                 report_turns: BTreeMap::new(),
+                idle_alert_sent: false,
             },
         );
         Ok(id)
@@ -81,6 +82,7 @@ impl BusState {
                         sound: None,
                         sound_name: None,
                         report_turns: BTreeMap::new(),
+                        idle_alert_sent: false,
                     },
                 );
                 MASTER_ROOM_ID
