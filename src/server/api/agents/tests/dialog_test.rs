@@ -943,3 +943,45 @@ async fn claude_option_list_free_text_row_holding_a_draft_can_still_be_submitted
         submitted.reason
     );
 }
+
+fn scrolled_tabbed_question(active: usize) -> String {
+    // Both questions can legitimately have the same prompt/options. Preserve
+    // the captured short-pane scrolling rows and vary only the active tab.
+    let header = match active {
+        0 => "← \x1b[7m ☐ Backend \x1b[0m ☐ Frontend  ✔ Submit  →",
+        1 => "←  ☐ Backend \x1b[7m ☐ Frontend \x1b[0m ✔ Submit  →",
+        _ => unreachable!(),
+    };
+    let scrolled = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-cursor3-scrolled.ansi"
+    );
+    let old_header = scrolled.lines().nth(1).unwrap();
+    scrolled.replace(old_header, header)
+}
+
+#[tokio::test]
+async fn scrolled_tabbed_question_rejects_a_choice_observed_on_another_tab() {
+    use crate::terminal::runtime::{DialogChoice, TerminalRuntime};
+
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel(80, 24);
+    let paint = |screen: String| {
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+    };
+    paint(scrolled_tabbed_question(0));
+    let observed =
+        crate::agents::dialog::parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
+    assert!(observed.tabs[0].active);
+    paint(scrolled_tabbed_question(1));
+    let current =
+        crate::agents::dialog::parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
+    assert!(current.tabs[1].active);
+    assert_eq!(
+        runtime
+            .try_choose_dialog_option(&observed.digest(), 3)
+            .unwrap(),
+        DialogChoice::Stale,
+        "switching to another tab invalidates the observed answer"
+    );
+    assert!(writes.try_recv().is_err());
+}

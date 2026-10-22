@@ -254,31 +254,6 @@ fn scrolled_tabbed_question_fingerprint_tracks_the_active_tab() {
     );
 }
 
-#[tokio::test]
-async fn scrolled_tabbed_question_rejects_a_choice_observed_on_another_tab() {
-    use crate::terminal::runtime::{DialogChoice, TerminalRuntime};
-
-    let (runtime, mut writes) = TerminalRuntime::test_with_channel(80, 24);
-    let paint = |screen: String| {
-        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
-        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
-    };
-    paint(scrolled_tabbed_question(0));
-    let observed = parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
-    assert!(observed.tabs[0].active);
-    paint(scrolled_tabbed_question(1));
-    let current = parse(&runtime.visible_ansi_snapshot_with_seq().unwrap().0).unwrap();
-    assert!(current.tabs[1].active);
-    assert_eq!(
-        runtime
-            .try_choose_dialog_option(&observed.digest(), 3)
-            .unwrap(),
-        DialogChoice::Stale,
-        "switching to another tab invalidates the observed answer"
-    );
-    assert!(writes.try_recv().is_err());
-}
-
 #[test]
 fn unscrolled_tabbed_question_fingerprint_tracks_the_active_tab() {
     let first = parse(TABS_Q1_REST).unwrap();
