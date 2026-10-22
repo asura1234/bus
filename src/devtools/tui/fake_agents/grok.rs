@@ -1,6 +1,6 @@
 //! Synthetic Grok Build fixture. Never invokes Grok or executes prompt commands.
 //! Session envelopes mirror offline 1.0.5 captures; turn/card schemas are
-//! provisional synthetic contracts, pending B/C alignment and native evidence.
+//! provisional synthetic contracts, pending authenticated native evidence.
 use super::input::{drain_input, Input};
 use serde_json::{json, Value};
 use std::io::{self, Write};
@@ -8,12 +8,16 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub(super) fn run(args: &[String]) -> i32 {
+    run_with_output(args, &mut io::stdout())
+}
+
+fn run_with_output(args: &[String], output: &mut impl Write) -> i32 {
     if args.iter().any(|arg| arg == "--version" || arg == "-v") {
-        let _ = writeln!(io::stdout(), "grok 1.0.5 (bus-synthetic-fake)");
+        let _ = writeln!(output, "grok 1.0.5 (bus-synthetic-fake)");
         return 0;
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        let _ = writeln!(io::stdout(), "Grok Build TUI\nSYNTHETIC Bus fixture\nUsage: grok [OPTIONS]\n--no-leader --fullscreen --no-auto-update --resume UUID --session-id UUID --permission-mode MODE --prompt-json JSON");
+        let _ = writeln!(output, "Grok Build TUI\nSYNTHETIC Bus fixture\nUsage: grok [OPTIONS]\n--no-leader --fullscreen --no-auto-update --resume UUID --session-id UUID --permission-mode MODE --prompt-json JSON");
         return 0;
     }
     if std::env::var_os(super::FAKE_AGENT_ENV).is_none() {
@@ -679,12 +683,33 @@ impl Grok {
 mod tests {
     #[test]
     fn grok_f_version_identifies_build_without_model_work() {
-        assert_eq!(super::run(&["--version".into()]), 0);
+        let mut output = Vec::new();
+        assert_eq!(
+            super::run_with_output(&["--version".into()], &mut output),
+            0
+        );
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "grok 1.0.5 (bus-synthetic-fake)\n"
+        );
     }
 
     #[test]
     fn grok_f_help_is_available_without_starting_runtime() {
-        assert_eq!(super::run(&["--help".into()]), 0);
+        let mut output = Vec::new();
+        assert_eq!(super::run_with_output(&["--help".into()], &mut output), 0);
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.lines().any(|line| line == "Grok Build TUI"));
+        for required in [
+            "Usage: grok",
+            "--resume",
+            "--session-id",
+            "--fullscreen",
+            "--permission-mode",
+            "--prompt-json",
+        ] {
+            assert!(text.contains(required), "{required} missing from {text}");
+        }
     }
 }
 
@@ -703,7 +728,7 @@ mod scenario_tests {
             g.submit(prompt, Instant::now()).unwrap();
             let screen = g.screen();
             let dialog = crate::agents::dialog::parse(&screen)
-                .expect("fake must use C's synthetic contract");
+                .expect("fake must use the supported synthetic contract");
             assert!(!dialog.options.is_empty() || dialog.input.is_some());
         }
     }
@@ -716,7 +741,7 @@ mod scenario_tests {
         g.card_key(b"1").unwrap();
         assert!(
             g.card.is_none(),
-            "C sends the documented direct-selection key without Enter"
+            "Question shortcuts select directly without Enter"
         );
     }
 
@@ -816,6 +841,8 @@ mod scenario_tests {
     fn grok_f_full_unicode_answer_is_preserved_while_hook_clips() {
         let root = Scratch::new();
         let mut g = agent(root.path());
+        let output = root.path().join("stop.jsonl");
+        g.hooks = json!({"Stop":[{"hooks":[{"type":"command", "command":format!("cat >> '{}'", output.display())}]}]});
         let now = Instant::now();
         g.submit("fake:long", now).unwrap();
         g.tick(now + Duration::from_secs(1)).unwrap();
@@ -823,19 +850,22 @@ mod scenario_tests {
         let text = records
             .iter()
             .find_map(|r| {
-                r["params"]["update"]["content"]["text"]
-                    .as_str()
-                    .filter(|s| s.chars().count() == 40000)
+                (r["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+                    .then(|| r["params"]["update"]["content"]["text"].as_str())
+                    .flatten()
             })
             .unwrap();
-        assert_eq!(text.chars().count(), 40000);
+        assert_eq!(text, "界".repeat(40000));
         assert!(records
             .iter()
             .all(|r| r["params"]["_meta"]["synthetic"] == true));
         assert!(records
             .iter()
             .any(|r| r["params"]["update"]["sessionUpdate"] == "turn_complete"));
-        assert_eq!(clip(text).chars().count(), 32768);
+        let hook: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(hook["hookEventName"], "stop");
+        assert_eq!(hook["sessionId"], g.session);
+        assert_eq!(hook["lastAssistantMessage"], "界".repeat(32768));
     }
 
     #[test]

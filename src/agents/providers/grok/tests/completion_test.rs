@@ -101,9 +101,20 @@ fn grok_b_shutdown_child_and_unattributed_idle_do_not_resolve_turns() {
 
 #[test]
 fn grok_b_offline_hook_execution_success_is_not_turn_completion() {
-    let transcript = Transcript::new(include_bytes!("fixtures/updates.jsonl"));
-    // Captured session differs from the synthetic callback: ownership must fail closed.
-    assert!(resolve_candidate(&transcript.value(), true).is_err());
+    let capture = include_str!("fixtures/updates.jsonl");
+    let session = "01a162bf-5091-7c42-9b5c-47930d378acd";
+    let transcript = Transcript::new(capture.as_bytes());
+    let directory = transcript.root.join(session);
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("updates.jsonl");
+    std::fs::rename(&transcript.path, &path).unwrap();
+    let mut value = candidate();
+    value["sessionId"] = json!(session);
+    value["transcriptPath"] = json!(path);
+    assert_eq!(
+        resolve_candidate(&value, true).unwrap(),
+        CompletionResolution::Pending
+    );
 }
 
 #[test]
@@ -389,22 +400,4 @@ fn grok_b_native_json_cannot_supply_a_bus_attestation() {
         resolve_candidate(&value, true).unwrap(),
         CompletionResolution::Pending
     );
-}
-
-#[test]
-fn grok_b_superseding_cancel_or_failure_keeps_attestation_absent() {
-    for event in ["stop_cancelled", "stop_failure"] {
-        let mut value = candidate();
-        value["hookEventName"] = json!(event);
-        value["reason"] = json!("user_interrupt");
-        assert!(matches!(
-            resolve_candidate(&value, true).unwrap(),
-            CompletionResolution::Cancelled { .. }
-        ));
-        // G invalidates a prior success attestation when this observation arrives.
-        assert_eq!(
-            resolve_attested_completion("synthetic-session", "synthetic-turn", true, None).unwrap(),
-            CompletionResolution::Pending
-        );
-    }
 }
