@@ -995,3 +995,26 @@ fn settlement_redraw_fixture_holds_a_synchronized_approval_frame() {
     assert_eq!(agent.submit("fake:dialog-settle redraw"), None);
     assert!(start.elapsed() >= std::time::Duration::from_millis(300));
 }
+
+#[test]
+fn grok_g_mixed_provider_resume_reuses_identity_in_session_start_hook() {
+    for provider in ["claude", "cursor-agent", "codex"] {
+        let selector = if provider == "codex" {
+            "resume"
+        } else {
+            "--resume"
+        };
+        let agent = FakeAgent::from_args(
+            provider,
+            json!({}),
+            &[selector.into(), "saved-session".into()],
+        );
+        let hook = agent.payload("SessionStart", None, json!({}));
+        let key = if provider == "cursor-agent" {
+            "conversation_id"
+        } else {
+            "session_id"
+        };
+        assert_eq!(hook[key], "saved-session", "{provider}");
+    }
+}

@@ -259,12 +259,14 @@ class Run:
 
         def blocker():
             self.peer = self.add(self.joint, "grok-peer")
-            job = self.send(self.joint, self.peer, "fake:question", author=self.orch)
+            job = self.send(self.joint, self.peer, "fake:question fake:raw-reply BLOCKER_RESOLVED", author=self.orch)
             found = poll(lambda: self.cli("agent", "dialog", self.peer), lambda r: r.get("dialog"))
             notice = poll(lambda: self.cli("agent", "read", self.orch, "--source", "recent", "--lines", 200),
                           lambda r: "Blocked, needs help to continue." in r.get("text", ""))
             outcome = self.dialog_action("agent", "choose", self.peer, "--option", 1, "--fingerprint", found["fingerprint"])
-            return {"blocker_wake": notice, "scripted_orchestrator_answer": outcome, "settled": self.settle(job)}
+            settled = self.settle(job)
+            resolved = self.stable_publication(self.joint, self.orch, "BLOCKER_RESOLVED")
+            return {"blocker_wake": notice, "scripted_orchestrator_answer": outcome, "settled": settled, "resolved": resolved}
         self.case("worker-blocker-wake-and-answer", blocker)
 
     def resume_cases(self):
@@ -315,12 +317,29 @@ class Run:
             return {"durable_final_before_restart": final, "job": job, "wake": wake}
         self.case("restart-before-worker-wake", restart_before_wake)
 
+    def partial_case(self):
+        def reject_partial():
+            message = self.send(self.room, self.worker, "fake:partial")
+            poll(lambda: self.cli("message", "status", message), lambda s: s["requests"][0]["start_bound"])
+            poll(lambda: next(a for a in self.cli("diagnostics")["agents"] if a["agent_id"] == self.worker),
+                 lambda a: a["status"] == "idle")
+            deadline = time.monotonic() + 3
+            reads = 0
+            while time.monotonic() < deadline:
+                status = self.cli("message", "status", message)
+                assert not status["complete"] and status["requests"][0]["reply"] is None, status
+                reads += 1
+                time.sleep(0.1)
+            return {"message": message, "expected": "pending", "stable_reads": reads, "status": status}
+        self.case("partial-jsonl-never-publishes-success", reject_partial)
+
     def execute(self):
         try:
             self.start()
             self.worker_cases()
             self.joint_cases()
             self.resume_cases()
+            self.partial_case()
         finally:
             self.report["cleanup"] = self.bus.stop()
             self.save()

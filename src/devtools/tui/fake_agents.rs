@@ -95,8 +95,7 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .map(|settings| settings["hooks"].clone())
         .unwrap_or(Value::Null);
-    let mut agent = FakeAgent::new(provider, hooks);
-    agent.resume(args);
+    let mut agent = FakeAgent::from_args(provider, hooks, args);
     // Codex defers SessionStart to its first prompt; Bus delivers to it unbound.
     // Claude and Cursor start theirs at launch: Bus delivers only to a bound session.
     if !agent.codex() {
