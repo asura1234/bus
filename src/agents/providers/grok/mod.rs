@@ -2,6 +2,7 @@
 pub(crate) mod completion;
 pub(crate) mod hooks;
 pub(crate) mod launch;
+mod project_hooks;
 pub(crate) mod resume;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod synthetic;

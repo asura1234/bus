@@ -21,7 +21,7 @@ impl Fixture {
         let bin = root.join("bin");
         fs::create_dir_all(&project).unwrap();
         fs::create_dir_all(&bin).unwrap();
-        let old = ["HOME", "PATH", "BUS_YOLO"]
+        let old = ["HOME", "PATH", "BUS_YOLO", "GROK_HOME"]
             .into_iter()
             .map(|k| (k, std::env::var_os(k)))
             .collect();
@@ -36,6 +36,7 @@ impl Fixture {
             .unwrap(),
         );
         std::env::remove_var("BUS_YOLO");
+        std::env::remove_var("GROK_HOME");
         Self {
             root,
             project,
@@ -301,5 +302,75 @@ fn grok_launch_never_writes_through_a_symlinked_global_grok_directory() {
         !global.exists(),
         "a project launch wrote the global Grok hook through the ~/.grok alias (prepare ok: {})",
         prepared.is_ok()
+    );
+}
+#[test]
+fn grok_launch_never_writes_into_the_grok_home_hook_directory() {
+    // GROK_HOME relocates Grok's global configuration, including its
+    // always-trusted hooks; a project inside it must not receive Bus hooks.
+    let f = Fixture::new();
+    f.install();
+    let previous = std::env::var_os("GROK_HOME");
+    std::env::set_var("GROK_HOME", f.project.join(".grok"));
+    let prepared = common::prepare(&f.spec("", true), |hooks| {
+        fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+    match previous {
+        Some(value) => std::env::set_var("GROK_HOME", value),
+        None => std::env::remove_var("GROK_HOME"),
+    }
+    let global = f.project.join(".grok/hooks/bus.json");
+    assert!(
+        !global.exists(),
+        "a project launch wrote $GROK_HOME/hooks/bus.json (prepare ok: {})",
+        prepared.is_ok()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_rechecks_project_ancestors_after_identity_queries() {
+    let f = Fixture::new();
+    f.install();
+    let project_config = f.project.join(".grok");
+    let moved_config = f.project.join(".grok-before-identity");
+    let global_config = f.root.join("home/.grok");
+    fs::create_dir_all(project_config.join("hooks")).unwrap();
+    fs::create_dir_all(global_config.join("hooks")).unwrap();
+    let global_hook = global_config.join("hooks/bus.json");
+    let original = br#"{"custom":"global-hook-must-stay-unchanged"}"#;
+    fs::write(&global_hook, original).unwrap();
+    let quote = |path: &Path| crate::platform::remote_reattach_program(&path.to_string_lossy());
+    // Deterministically model a concurrent project-directory replacement after
+    // containment validation, while the metadata-only fake is being queried.
+    // The child only swaps project paths; Bus performs the hook write itself.
+    let executable = f.bin.join("grok");
+    let script = fs::read_to_string(&executable).unwrap();
+    let replacement = format!(
+        "--version) /bin/mv {} {}; /bin/ln -s {} {}; ",
+        quote(&project_config),
+        quote(&moved_config),
+        quote(&global_config),
+        quote(&project_config),
+    );
+    fs::write(&executable, script.replacen("--version) ", &replacement, 1)).unwrap();
+    let initialized = std::cell::Cell::new(false);
+    let result = common::prepare(&f.spec("", true), |hooks| {
+        initialized.set(true);
+        fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    });
+    assert!(fs::symlink_metadata(&project_config)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(&global_hook).unwrap(), original,
+        "Bus changed global hook bytes after the project ancestor was replaced during identity validation");
+    assert!(
+        result.is_err(),
+        "swapped project ancestor was accepted: {result:?}"
+    );
+    assert!(
+        !initialized.get(),
+        "unsafe project ancestor initialized capture"
     );
 }
