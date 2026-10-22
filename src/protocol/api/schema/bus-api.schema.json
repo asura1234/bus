@@ -1265,6 +1265,13 @@
                 "null"
               ]
             },
+            "grok_home": {
+              "description": "Validated Grok global home, applied again after shell startup.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "kind": {
               "type": "string"
             },
