@@ -378,6 +378,10 @@ pub(crate) struct RoomAgent {
     /// in `ensure_master_room`; Bus never creates one.
     #[serde(default)]
     pub(crate) orchestrates: Option<RoomId>,
+    /// Instructions supplied at launch, or durably queued ahead of work after upgrade.
+    /// Old state has no marker and receives the current rules once.
+    #[serde(default)]
+    pub(crate) messaging_rules_version: u32,
     #[serde(default)]
     pub(crate) compactions: Compactions,
     /// The launch and spool sequence of the last compaction hook counted. State
