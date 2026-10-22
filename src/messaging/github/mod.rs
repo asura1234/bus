@@ -43,7 +43,6 @@ pub(crate) struct PullRequest {
     pub(crate) number: u64,
     pub(crate) branch: String,
     pub(crate) base: String,
-    pub(crate) author: String,
     pub(crate) merged_by: String,
     pub(crate) merged_at_ms: Option<u64>,
     pub(crate) status: PrStatus,
@@ -53,7 +52,6 @@ pub(crate) struct PullRequest {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Page {
     pub(crate) default_branch: String,
-    pub(crate) branch_authors: BTreeMap<String, String>,
     pub(crate) open: Vec<PullRequest>,
     pub(crate) merged: Vec<PullRequest>,
     pub(crate) open_cursor: Option<String>,

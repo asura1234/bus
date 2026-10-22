@@ -11,7 +11,6 @@ fn pr(number: u64, branch: &str) -> PullRequest {
         number,
         branch: branch.into(),
         base: "main".into(),
-        author: "alice".into(),
         merged_by: "merger".into(),
         mergeable_known: true,
         status: PrStatus {
@@ -100,24 +99,21 @@ fn github_watch_reports_ready_ci_and_conflict_edges_without_pending_or_unknown_f
 }
 
 #[test]
-fn github_watch_uses_feature_branch_authors_but_never_the_default_branch_author() {
+fn github_watch_unmatched_head_never_falls_back_to_the_default_or_feature_branch_author() {
     let mut page = page();
     let mut p = pr(1, "another-branch");
     p.status.ready = true;
-    page.open = vec![p];
-    page.branch_authors = [
-        ("fix/ours".into(), "alice".into()),
-        ("main".into(), "alice".into()),
-    ]
-    .into();
-    let scopes = [scope(7, "fix/ours"), scope(8, "main")];
-    let mut mark = Watermark::default();
-    page.open[0].status.ready = false;
-    assert!(changes("o/r", &mut mark, &page, &scopes, LOOKBACK_MS * 3).is_empty());
-    page.open[0].status.ready = true;
-    let edges = changes("o/r", &mut mark, &page, &scopes, LOOKBACK_MS * 3 + POLL_MS);
-    assert_eq!(edges.len(), 1);
-    assert_eq!(edges[0].room, 7);
+    p.merged_at_ms = Some(LOOKBACK_MS * 3);
+    page.merged = vec![p];
+    let notices = changes(
+        "o/r",
+        &mut Watermark::default(),
+        &page,
+        &[scope(7, "fix/ours"), scope(8, "main")],
+        LOOKBACK_MS * 3,
+    );
+    assert_eq!(notices.len(), 2);
+    assert!(notices.iter().all(|n| !n.actionable));
 }
 
 #[test]
@@ -202,11 +198,6 @@ fn github_watch_same_github_author_does_not_make_every_room_own_every_pr() {
     // Every branch in a single-account repository has the same head-commit author.
     let now = LOOKBACK_MS * 3;
     let mut page = page();
-    page.branch_authors = [
-        ("fix/a".into(), "alice".into()),
-        ("fix/b".into(), "alice".into()),
-    ]
-    .into();
     let mut merged = pr(2, "fix/b");
     merged.merged_at_ms = Some(now - 1000);
     page.merged = vec![merged];
@@ -279,14 +270,9 @@ fn github_watch_merge_time_uses_the_local_clock_like_chat_headers() {
 }
 
 #[test]
-fn github_watch_author_fallback_requires_no_head_owner_and_one_author_room() {
+fn github_watch_only_matching_heads_are_actionable() {
     let now = LOOKBACK_MS * 3;
     let mut page = page();
-    page.branch_authors = [
-        ("fix/a".into(), "alice".into()),
-        ("fix/b".into(), "bob".into()),
-    ]
-    .into();
     let mut merged = pr(1, "unmatched");
     merged.merged_at_ms = Some(now - 1000);
     page.merged = vec![merged];
@@ -298,19 +284,12 @@ fn github_watch_author_fallback_requires_no_head_owner_and_one_author_room() {
             .map(|n| n.room)
             .collect::<Vec<_>>()
     };
-    assert_eq!(owners(&page), [7], "one author room is the fallback owner");
-    page.branch_authors.insert("fix/b".into(), "ALICE".into());
     assert!(
         owners(&page).is_empty(),
-        "shared author must not own an unmatched PR"
+        "an unmatched head is always informational"
     );
-    page.branch_authors.insert("fix/b".into(), "bob".into());
     page.merged[0].branch = "fix/b".into();
-    assert_eq!(
-        owners(&page),
-        [8],
-        "a head owner excludes an otherwise unique author owner"
-    );
+    assert_eq!(owners(&page), [8]);
 }
 
 #[test]
@@ -390,4 +369,33 @@ fn github_watch_confirmed_merge_removes_open_observation_and_old_merge_ids_stay_
         now + 11 * LOOKBACK_MS
     )
     .is_empty());
+}
+
+#[test]
+fn github_watch_merge_from_a_room_whose_worker_left_is_not_claimed_by_the_only_other_authored_room()
+{
+    // Room 7's worker (branch fix/a) was deleted after opening its PR; the room
+    // still covers the repository. Room 8 has one pushed branch by the same author.
+    let now = LOOKBACK_MS * 3;
+    let mut page = page();
+    let mut merged = pr(2, "fix/a");
+    merged.merged_at_ms = Some(now - 1000);
+    page.merged = vec![merged];
+    let notices = changes(
+        "o/r",
+        &mut Watermark::default(),
+        &page,
+        &[
+            Scope {
+                room: 7,
+                branches: BTreeSet::new(),
+            },
+            scope(8, "fix/b"),
+        ],
+        now,
+    );
+    assert!(
+        notices.iter().all(|n| !n.actionable),
+        "room 8 told to clean up room 7's merge: {notices:?}"
+    );
 }

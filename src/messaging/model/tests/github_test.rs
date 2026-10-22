@@ -203,3 +203,165 @@ fn github_watch_recovery_rearms_a_new_outage_after_restart() {
         "new outage was suppressed after recovery"
     );
 }
+
+#[test]
+fn github_watch_one_failing_repo_beside_a_healthy_repo_reports_its_outage_once() {
+    let (mut state, room, _) = bound_room();
+    let scope = || {
+        vec![Scope {
+            room: room.0,
+            branches: ["fix/ours".into()].into(),
+        }]
+    };
+    let failed = Update::Repo {
+        repo: "o/gone".into(),
+        scopes: scope(),
+        result: Err(crate::messaging::github::source::Failure {
+            reason: "GitHub repository unavailable",
+            retry_at_ms: None,
+        }),
+        at_ms: 1,
+    };
+    let healthy = Update::Repo {
+        repo: "o/r".into(),
+        scopes: scope(),
+        result: Ok(Page {
+            default_branch: "main".into(),
+            ..Default::default()
+        }),
+        at_ms: 1,
+    };
+    for round in 0..3 {
+        state.apply_github(&failed, 10 + round).unwrap();
+        state.apply_github(&healthy, 10 + round).unwrap();
+    }
+    let outages = state
+        .requests()
+        .filter(|r| r.prompt.text.contains("watch unavailable"))
+        .count();
+    assert_eq!(
+        outages, 1,
+        "the same o/gone outage was announced every round"
+    );
+}
+
+#[test]
+fn github_watch_remembers_owned_heads_after_worker_deletion_and_restart() {
+    let (mut state, room, orchestrator) = bound_room();
+    let worker = state
+        .create_agent(
+            room,
+            "worker",
+            super::super::Provider::ClaudeCode,
+            "/repo".into(),
+            Some("fix/ours".into()),
+        )
+        .unwrap();
+    let coverage = Update::Coverage(
+        [(
+            "o/r".into(),
+            vec![Scope {
+                room: room.0,
+                branches: ["fix/ours".into()].into(),
+            }],
+        )]
+        .into(),
+    );
+    let before = state.clone();
+    state.apply_github(&coverage, 1).unwrap();
+    assert!(state.durable_poll_change_from(&before));
+    state.delete_agent(worker, 2).unwrap();
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    let interests = state.github_interests();
+    assert_eq!(interests[0].remembered, ["o/r".into()].into());
+    assert_eq!(
+        interests[0].owned_branches["o/r"],
+        ["fix/ours".into()].into()
+    );
+    assert!(interests[0]
+        .agents
+        .iter()
+        .all(|(_, branch)| branch.is_none()));
+    let scopes = vec![Scope {
+        room: room.0,
+        branches: interests[0].owned_branches["o/r"].clone(),
+    }];
+    let mut update = merged_update(room, "fix/ours");
+    if let Update::Repo { scopes: target, .. } = &mut update {
+        *target = scopes;
+    }
+    state.apply_github(&update, 3).unwrap();
+    let requests: Vec<_> = state.requests().collect();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].agent_id, orchestrator);
+    assert!(requests[0].prompt.text.contains("#137 merged"));
+    state
+        .set_github_repos(room, &serde_json::json!([]))
+        .unwrap();
+    state
+        .apply_github(
+            &Update::Coverage(
+                [(
+                    "other/repo".into(),
+                    vec![Scope {
+                        room: room.0,
+                        branches: ["unwanted".into()].into(),
+                    }],
+                )]
+                .into(),
+            ),
+            4,
+        )
+        .unwrap();
+    assert!(!state
+        .room(room)
+        .unwrap()
+        .github_branches
+        .contains_key("other/repo"));
+}
+
+#[test]
+fn github_watch_outages_recover_per_repo_and_persist_per_room() {
+    let mut state = BusState::new();
+    let a = state.create_room("a").unwrap();
+    let b = state.create_room("b").unwrap();
+    let update = |room: RoomId, repo: &str, failed: bool| Update::Repo {
+        repo: repo.into(),
+        scopes: vec![Scope {
+            room: room.0,
+            ..Default::default()
+        }],
+        result: if failed {
+            Err(crate::messaging::github::source::Failure {
+                reason: "not logged in",
+                retry_at_ms: None,
+            })
+        } else {
+            Ok(Page::default())
+        },
+        at_ms: 1,
+    };
+    state.apply_github(&update(a, "o/one", true), 1).unwrap();
+    state.apply_github(&update(a, "o/two", true), 2).unwrap();
+    state.apply_github(&update(b, "o/one", true), 3).unwrap();
+    assert_eq!(state.notices(a).count(), 2);
+    assert_eq!(state.notices(b).count(), 1);
+    assert!(state
+        .notices(a)
+        .any(|n| n.text.contains("GitHub: o/one watch unavailable")));
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state.apply_github(&update(a, "o/one", false), 4).unwrap();
+    state.apply_github(&update(a, "o/two", true), 5).unwrap();
+    state.apply_github(&update(b, "o/one", true), 6).unwrap();
+    assert_eq!(state.notices(a).count(), 2, "a different repo was rearmed");
+    assert_eq!(state.notices(b).count(), 1, "a different room was rearmed");
+    state.apply_github(&update(a, "o/one", true), 7).unwrap();
+    state.apply_github(&update(a, "o/one", true), 8).unwrap();
+    assert_eq!(
+        state.notices(a).count(),
+        3,
+        "the recovered repo must report one new outage"
+    );
+}

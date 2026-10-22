@@ -9,6 +9,7 @@ pub(crate) struct Interest {
     pub(crate) room: u64,
     pub(crate) repos: Option<Vec<String>>,
     pub(crate) remembered: BTreeSet<String>,
+    pub(crate) owned_branches: BTreeMap<String, BTreeSet<String>>,
     pub(crate) agents: Vec<(PathBuf, Option<String>)>,
 }
 
@@ -63,6 +64,16 @@ fn coverage(
                 }
             }
         }
+        for (repo, branches) in &mut rooms {
+            branches.extend(
+                interest
+                    .owned_branches
+                    .get(repo)
+                    .into_iter()
+                    .flatten()
+                    .cloned(),
+            );
+        }
         for (cwd, branch) in &interest.agents {
             if let Some(branch) = branch {
                 for (repo, branches) in &mut rooms {
@@ -104,5 +115,32 @@ mod tests {
         assert_eq!(result["owner/repo"].len(), 2);
         b.repos = Some(vec![]);
         assert_eq!(coverage(&[a, b], &remotes)["owner/repo"].len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod remembered_tests {
+    use super::*;
+    #[test]
+    fn github_watch_remembered_branches_stay_in_their_repository_and_obey_overrides() {
+        let mut interest = Interest {
+            room: 7,
+            remembered: ["o/one".into(), "o/two".into()].into(),
+            owned_branches: [
+                ("o/one".into(), ["fix/a".into()].into()),
+                ("o/two".into(), ["fix/b".into()].into()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let found = coverage(&[interest.clone()], &BTreeMap::new());
+        assert_eq!(found["o/one"][0].branches, ["fix/a".into()].into());
+        assert_eq!(found["o/two"][0].branches, ["fix/b".into()].into());
+        interest.repos = Some(vec!["o/two".into()]);
+        let found = coverage(&[interest.clone()], &BTreeMap::new());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found["o/two"][0].branches, ["fix/b".into()].into());
+        interest.repos = Some(vec![]);
+        assert!(coverage(&[interest], &BTreeMap::new()).is_empty());
     }
 }

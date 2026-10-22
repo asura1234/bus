@@ -230,6 +230,9 @@ pub(crate) struct Room {
     pub(crate) github_repos: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) github_discovered: BTreeSet<String>,
+    /// Head branches observed for this room, retained after worker cleanup.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) github_branches: BTreeMap<String, BTreeSet<String>>,
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,

@@ -3,7 +3,6 @@ use super::*;
 fn request() -> Query {
     Query {
         repo: "owner/repo".into(),
-        branches: ["fix/\"branch".into()].into(),
         watermark: Watermark::default(),
         now_ms: 2 * LOOKBACK_MS,
     }
@@ -15,7 +14,7 @@ fn response() -> Value {
     "rateLimit":{"remaining":90,"resetAt":"2026-10-22T12:00:00Z"}}})
 }
 #[test]
-fn github_watch_query_has_one_repository_request_and_both_connections_with_escaped_branches() {
+fn github_watch_query_has_one_repository_request_and_no_author_ownership_lookup() {
     let mut q = request();
     q.watermark.open_cursor = Some("open-page".into());
     q.watermark.merged_cursor = Some("merge-page".into());
@@ -23,7 +22,8 @@ fn github_watch_query_has_one_repository_request_and_both_connections_with_escap
     assert_eq!(text.matches("repository(owner:").count(), 1);
     assert!(text.contains("after: \"open-page\""));
     assert!(text.contains("after: \"merge-page\""));
-    assert!(text.contains("refs/heads/fix/\\\"branch"));
+    assert!(!text.contains("ref(qualifiedName:"));
+    assert!(!text.contains("author {"));
     assert!(text.contains("rateLimit"));
 }
 #[test]
@@ -79,10 +79,6 @@ fn github_watch_parser_reads_real_pr_shapes_and_pages_back_to_initial_scan_bound
         Some("merge-next"),
         "use scan start, not wall clock, across pagination"
     );
-    assert_eq!(
-        page.branch_authors.values().next().map(String::as_str),
-        Some("alice")
-    );
     assert!(page.open[0].status.ready);
     assert!(page.open[0].status.conflict);
     assert!(page.open[0].mergeable_known);
@@ -92,12 +88,11 @@ fn github_watch_parser_reads_real_pr_shapes_and_pages_back_to_initial_scan_bound
     assert!(parse(&q, &v).unwrap().merged_cursor.is_none());
 }
 
-fn owned_open(number: u64, branch: &str, author: &str) -> PullRequest {
+fn owned_open(number: u64, branch: &str) -> PullRequest {
     PullRequest {
         number,
         branch: branch.into(),
         base: "main".into(),
-        author: author.into(),
         status: PrStatus {
             head: format!("head-{number}"),
             ready: true,
@@ -125,7 +120,7 @@ fn github_watch_owned_pr_that_moves_pages_mid_scan_is_not_reannounced() {
         open_cursor: cursor.map(Into::into),
         ..Default::default()
     };
-    let x = owned_open(1, "fix/a", "alice");
+    let x = owned_open(1, "fix/a");
     let first = super::super::changes("o/r", &mut mark, &page(vec![x.clone()], None), &scopes, 1);
     assert!(first.is_empty(), "first observation must baseline quietly");
     // Next scan spans two pages; #1 was on page two when page one was read,
@@ -133,14 +128,14 @@ fn github_watch_owned_pr_that_moves_pages_mid_scan_is_not_reannounced() {
     super::super::changes(
         "o/r",
         &mut mark,
-        &page(vec![owned_open(2, "x", "bob")], Some("c1")),
+        &page(vec![owned_open(2, "x")], Some("c1")),
         &scopes,
         2,
     );
     super::super::changes(
         "o/r",
         &mut mark,
-        &page(vec![owned_open(3, "y", "bob")], None),
+        &page(vec![owned_open(3, "y")], None),
         &scopes,
         3,
     );
@@ -208,12 +203,7 @@ fn github_watch_merge_that_moves_pages_mid_scan_is_still_reported() {
 fn github_watch_pr_on_one_rooms_branch_is_not_owned_by_another_room_with_same_author() {
     let page = Page {
         default_branch: "main".into(),
-        branch_authors: [
-            ("fix/a".into(), "alice".into()),
-            ("fix/b".into(), "alice".into()),
-        ]
-        .into(),
-        open: vec![owned_open(5, "fix/a", "alice")],
+        open: vec![owned_open(5, "fix/a")],
         ..Default::default()
     };
     let scopes = [scope(7, "fix/a"), scope(8, "fix/b")];

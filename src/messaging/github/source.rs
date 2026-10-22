@@ -1,12 +1,10 @@
-//! A single GraphQL request observes both connections and branch identities.
+//! A single GraphQL request observes open PRs and default-branch merges.
 use super::{Page, PrStatus, PullRequest, Watermark, LOOKBACK_MS, OVERLAP_MS};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Query {
     pub(crate) repo: String,
-    pub(crate) branches: BTreeSet<String>,
     pub(crate) watermark: Watermark,
     pub(crate) now_ms: u64,
 }
@@ -19,15 +17,11 @@ pub(crate) struct Failure {
 
 pub(super) fn query(q: &Query) -> String {
     let (owner, name) = q.repo.split_once('/').expect("validated repository");
-    let branches = q.branches.iter().enumerate().map(|(i, name)| format!(
-        "b{i}: ref(qualifiedName: {}) {{ target {{ ... on Commit {{ author {{ user {{ login }} }} }} }} }}",
-        json!(format!("refs/heads/{name}")))).collect::<Vec<_>>().join("\n");
     format!(
         r#"query {{
       rateLimit {{ remaining resetAt cost }}
       repository(owner: {owner}, name: {name}) {{
         defaultBranchRef {{ name }}
-        {branches}
         open: pullRequests(states: OPEN, first: 50, after: {open}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{
           pageInfo {{ hasNextPage endCursor }}
           nodes {{ {fields} isDraft mergeable headRefOid
@@ -49,10 +43,9 @@ pub(super) fn query(q: &Query) -> String {
     }}"#,
         owner = json!(owner),
         name = json!(name),
-        branches = branches,
         open = json!(q.watermark.open_cursor),
         merged = json!(q.watermark.merged_cursor),
-        fields = "number headRefName baseRefName author { login }"
+        fields = "number headRefName baseRefName"
     )
 }
 
@@ -80,15 +73,6 @@ pub(super) fn parse(q: &Query, body: &Value) -> Result<Page, Failure> {
             retry_at_ms: None,
         })?
         .into();
-    let mut branch_authors = BTreeMap::new();
-    for (i, branch) in q.branches.iter().enumerate() {
-        if let Some(login) = repo
-            .pointer(&format!("/b{i}/target/author/user/login"))
-            .and_then(Value::as_str)
-        {
-            branch_authors.insert(branch.clone(), login.into());
-        }
-    }
     let open = nodes(repo, "open")?
         .iter()
         .map(pull_request)
@@ -112,7 +96,6 @@ pub(super) fn parse(q: &Query, body: &Value) -> Result<Page, Failure> {
         .is_some_and(|t| t < since);
     Ok(Page {
         default_branch,
-        branch_authors,
         open,
         merged: merged_nodes
             .iter()
@@ -165,7 +148,6 @@ fn pull_request(v: &Value) -> Result<PullRequest, Failure> {
         })?,
         branch: string("headRefName"),
         base: string("baseRefName"),
-        author: v["author"]["login"].as_str().unwrap_or("unknown").into(),
         merged_by: v["mergedBy"]["login"].as_str().unwrap_or("unknown").into(),
         merged_at_ms: v.get("mergedAt").and_then(timestamp),
         mergeable_known: matches!(v["mergeable"].as_str(), Some("MERGEABLE" | "CONFLICTING")),

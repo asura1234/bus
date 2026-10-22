@@ -16,13 +16,15 @@ bus room github ROOM --off
 ```
 
 `bus state` includes `github_repos` (null means automatic, [] means off) and
-`github_discovered`. Overrides are saved with the room. MASTER itself has no watch.
+`github_discovered`, plus remembered `github_branches` per repository. Overrides
+are saved with the room. MASTER itself has no watch.
 
-A PR belongs to the rooms whose agent feature branches match its head branch.
-Only when no room has a head-branch match does Bus fall back to the PR author:
-exactly one room must have a feature branch whose remote tip has that GitHub author.
-Ambiguous shared authors establish no ownership. The repository's default branch
-does not establish ownership. With an explicit repo list, the room's agent branches apply to each listed repository.
+A PR belongs to the rooms whose current or remembered agent feature branches match
+its head branch. Bus persists these branches per room and repository when discovery
+sees them, so worker cleanup or switching branches does not lose ownership. An
+unmatched head is informational; author identity never establishes ownership. The
+repository's default branch does not establish ownership. With an explicit repo
+list, the room's current agent branches apply to each listed repository.
 
 Grey `bus` messages address the room's orchestrator for owned default-branch merges,
 owned PRs becoming ready for review, completed CI (success or failure), and newly
@@ -42,8 +44,9 @@ repository per 90-second round, shared across rooms, with open and merged PR pag
 advanced in subsequent rounds. Long scans therefore take more than one round.
 GitHub rate-limit resets and retry-after headers delay retries; other failures
 back off up to 24 minutes. Missing gh, authentication problems and unavailable
-repositories are logged, with one unavailable notice per room per outage. A
-successful poll clears the room's unavailable flag so a later outage is reported.
+repositories are logged, with one unavailable notice per room/repository pair per
+outage. Only a successful poll of that repository clears its flag; another
+healthy repository cannot rearm the same outage. A later outage is reported again.
 No raw CLI error output is posted to rooms.
 
 Observation cursors and their notices are saved together in `state.json`. Restart

@@ -38,27 +38,8 @@ fn remote_path(value: &str) -> Option<&str> {
     .find_map(|prefix| value.strip_prefix(prefix))
 }
 
-fn owns(scope: &Scope, scopes: &[Scope], page: &Page, pr: &PullRequest) -> bool {
-    let head_match =
-        |s: &Scope| pr.branch != page.default_branch && s.branches.contains(&pr.branch);
-    if scopes.iter().any(head_match) {
-        return head_match(scope);
-    }
-    let authors: BTreeSet<_> = scopes
-        .iter()
-        .filter(|s| {
-            s.branches
-                .iter()
-                .filter(|b| *b != &page.default_branch)
-                .any(|branch| {
-                    page.branch_authors
-                        .get(branch)
-                        .is_some_and(|author| author.eq_ignore_ascii_case(&pr.author))
-                })
-        })
-        .map(|s| s.room)
-        .collect();
-    authors.len() == 1 && authors.contains(&scope.room)
+fn owns(scope: &Scope, page: &Page, pr: &PullRequest) -> bool {
+    pr.branch != page.default_branch && scope.branches.contains(&pr.branch)
 }
 fn notice(room: u64, repo: &str, text: String, actionable: bool) -> Notice {
     Notice {
@@ -111,9 +92,9 @@ pub(crate) fn changes(
         })
         .collect();
     for scope in scopes {
-        notices.extend(merge_changes(repo, scope, scopes, page, &fresh, now));
+        notices.extend(merge_changes(repo, scope, page, &fresh, now));
         let observed = mark.observed.entry(scope.room).or_default();
-        notices.extend(open_changes(repo, scope, scopes, page, observed));
+        notices.extend(open_changes(repo, scope, page, observed));
     }
     for pr in fresh {
         mark.merged_seen
@@ -137,7 +118,6 @@ pub(crate) fn changes(
 fn merge_changes(
     repo: &str,
     scope: &Scope,
-    scopes: &[Scope],
     page: &Page,
     fresh: &[&PullRequest],
     now: u64,
@@ -145,7 +125,7 @@ fn merge_changes(
     let mut notices = Vec::new();
     let mut other = Vec::new();
     for pr in fresh {
-        if owns(scope, scopes, page, pr) {
+        if owns(scope, page, pr) {
             notices.push(notice(
                 scope.room,
                 repo,
@@ -181,12 +161,11 @@ fn merge_changes(
 fn open_changes(
     repo: &str,
     scope: &Scope,
-    scopes: &[Scope],
     page: &Page,
     observed: &mut std::collections::BTreeMap<u64, super::PrStatus>,
 ) -> Vec<Notice> {
     let mut notices = Vec::new();
-    for pr in page.open.iter().filter(|pr| owns(scope, scopes, page, pr)) {
+    for pr in page.open.iter().filter(|pr| owns(scope, page, pr)) {
         let Some(old) = observed.get(&pr.number) else {
             observed.insert(pr.number, pr.status.clone());
             continue;

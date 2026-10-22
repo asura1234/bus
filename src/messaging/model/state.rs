@@ -14,7 +14,7 @@ pub(crate) struct BusState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) github_watch: BTreeMap<String, crate::messaging::github::Watermark>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(super) github_unavailable: BTreeSet<RoomId>,
+    pub(super) github_unavailable: BTreeSet<(RoomId, String)>,
     pub(super) next_status_revision: u64,
     pub(super) rooms: BTreeMap<RoomId, Room>,
     #[serde(deserialize_with = "deserialize_agents")]

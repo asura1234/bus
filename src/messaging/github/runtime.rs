@@ -235,7 +235,6 @@ impl Runtime {
                     }
                     let q = Query {
                         repo: repo.clone(),
-                        branches: scopes.iter().flat_map(|s| s.branches.clone()).collect(),
                         watermark: marks.get(&repo).cloned().unwrap_or_default(),
                         now_ms: now,
                     };

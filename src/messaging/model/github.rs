@@ -40,6 +40,7 @@ impl BusState {
                 room: room.id.0,
                 repos: room.github_repos.clone(),
                 remembered: room.github_discovered.clone(),
+                owned_branches: room.github_branches.clone(),
                 agents: self
                     .agents
                     .values()
@@ -60,7 +61,17 @@ impl BusState {
             Update::Coverage(coverage) => {
                 for (repo, scopes) in coverage {
                     for scope in scopes {
-                        if let Some(room) = self.rooms.get_mut(&RoomId(scope.room)) {
+                        if let Some(room) = self.rooms.get_mut(&RoomId(scope.room)).filter(|r| {
+                            !r.deletion_pending
+                                && r.kind == RoomKind::Work
+                                && r.github_repos
+                                    .as_ref()
+                                    .is_none_or(|repos| repos.contains(repo))
+                        }) {
+                            room.github_branches
+                                .entry(repo.clone())
+                                .or_default()
+                                .extend(scope.branches.iter().cloned());
                             if room.github_repos.is_none() {
                                 room.github_discovered.insert(repo.clone());
                             }
@@ -90,7 +101,8 @@ impl BusState {
                 match result {
                     Ok(page) => {
                         for scope in &scopes {
-                            self.github_unavailable.remove(&RoomId(scope.room));
+                            self.github_unavailable
+                                .remove(&(RoomId(scope.room), repo.clone()));
                         }
                         let mark = self.github_watch.entry(repo.clone()).or_default();
                         let notices = github::changes(repo, mark, page, &scopes, *at_ms);
@@ -113,8 +125,8 @@ impl BusState {
                     Err(failure) => {
                         for scope in scopes {
                             let room = RoomId(scope.room);
-                            if self.github_unavailable.insert(room) {
-                                self.github_notice(room,true,format!("GitHub: watch unavailable ({}) — retrying in the background. Check gh installation / gh auth login.",failure.reason),now)?;
+                            if self.github_unavailable.insert((room, repo.clone())) {
+                                self.github_notice(room,true,format!("GitHub: {repo} watch unavailable ({}) — retrying in the background. Check gh installation / gh auth login.",failure.reason),now)?;
                             }
                         }
                     }
