@@ -146,6 +146,9 @@ impl TerminalRuntime {
         let Some(input) = dialog.input.as_ref() else {
             return self.answer_free_text_option(&dialog, text, skip);
         };
+        if text.is_some() && !input.value.is_empty() {
+            return Ok(DialogChoice::FreeTextDraft);
+        }
         if skip && input.skip_key.is_none() {
             return Ok(DialogChoice::Unskippable);
         }

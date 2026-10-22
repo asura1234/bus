@@ -508,11 +508,15 @@ fn check_free_text(
             ))
         }
         (Some(_), _) => Ok(()),
+        (None, Some(field)) if field.draft && !skip => {
+            let action = if field.option == 0 {
+                "edit or submit it in the agent's pane".into()
+            } else {
+                format!("agent choose {} submits it, or edit it in the agent's pane", field.option)
+            };
+            Err(format!("The free-text field already holds a draft (free_text_holds_draft); {action}"))
+        }
         _ if claims.options == 0 => Ok(()),
-        (None, Some(field)) if field.draft && !skip => Err(format!(
-            "Option {} already holds a draft; agent choose {} submits it, or edit it in the agent's pane",
-            field.option, field.option
-        )),
         (None, Some(_)) if !skip => Ok(()),
         _ => Err("This is a choice dialog; use agent choose".into()),
     }

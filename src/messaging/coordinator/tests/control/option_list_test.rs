@@ -372,3 +372,52 @@ fn a_hidden_free_text_row_holding_a_draft_gets_no_text() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_draft_bus_moved_into_is_not_typed_over_by_the_next_answer() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-rest-top.ansi"
+    ));
+    let (_, first) = fingerprint(&mut worker, agent);
+    let drafted: &'static str = Box::leak(
+        SHORT_FIELD_FOCUSED
+            .replace("Type something.", "old draft")
+            .into_boxed_str(),
+    );
+    native.lock().unwrap().focus_shows = Some(drafted);
+    assert!(worker
+        .answer_dialog(agent, Some("Remap whole clips only"), false, &first)
+        .unwrap_err()
+        .contains("free_text_holds_draft"));
+    // Bus left the cursor inside the draft at a place it cannot know; the
+    // orchestrator's natural retry must not paste there and press Enter.
+    let (observed, again) = fingerprint(&mut worker, agent);
+    assert_eq!(observed["dialog"]["kind"], "question");
+    assert_eq!(observed["dialog"]["free_text"]["draft"], true);
+    let retried = worker.answer_dialog(agent, Some("Remap whole clips only"), false, &again);
+    assert!(
+        retried
+            .as_ref()
+            .is_err_and(|error| error.contains("free_text_holds_draft")),
+        "{retried:?}"
+    );
+    assert_eq!(native.lock().unwrap().answers.len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_ticked_multi_select_field_offers_next_as_a_choice() {
+    let dialog = crate::agents::dialog::parse(MULTI_SELECT_FIELD_TICKED_AND_FOCUSED).unwrap();
+    let labels: Vec<_> = dialog
+        .options
+        .iter()
+        .map(|option| (option.number, option.label.as_str(), option.free_text))
+        .collect();
+    let next = dialog
+        .options
+        .iter()
+        .find(|option| option.label == "Next")
+        .unwrap_or_else(|| panic!("no Next option: {labels:?}"));
+    assert!(dialog.keys_for(next.number).is_some(), "{labels:?}");
+}

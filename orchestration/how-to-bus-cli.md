@@ -938,7 +938,8 @@ which `agent dialog` marks `"free_text": true` (multi-select forms: the
 types the text and presses Enter. `agent choose` refuses that row, because
 Enter on the empty field declines the whole question. If someone left a draft
 in the row, `agent answer` refuses (`free_text_holds_draft`) and `agent choose`
-on the row submits the draft; replacing a draft needs the agent's pane. In a
+on the row submits the draft; replacing a draft needs the agent's pane. A focused
+draft also refuses `answer --text`; edit or submit it in the agent's pane. In a
 short pane Claude shows only part of the list: `agent dialog` returns the
 visible options with their real numbers, `choose` also takes the numbers
 scrolled out of view above or below the window, and `free_text.option` names

@@ -836,6 +836,25 @@ async fn claude_option_list_free_text_answer_leaves_a_draft_and_skips_alone() {
 }
 
 #[tokio::test]
+async fn claude_focused_free_text_draft_refuses_an_answer_without_writing() {
+    let draft = include_str!(
+        "../../../../../tests/fixtures/claude-option-list/tall-freetext-with-text-focused.ansi"
+    );
+    let (mut app, mut writes) = app_with_dialog_sized(draft.as_bytes(), Some("session"), 92, 45);
+    let observation = observe_dialog(&mut app);
+    let dialog = observation.dialog.as_ref().unwrap();
+    assert_eq!(dialog.kind, AgentDialogKind::Question);
+    assert!(dialog.free_text.unwrap().draft);
+    let result = chosen(&app.handle_agent_dialog_answer(
+        "draft".into(),
+        answer_params(&observation, Some("must not be pasted"), false),
+    ));
+    assert!(!result.written);
+    assert_eq!(result.reason.as_deref(), Some("free_text_holds_draft"));
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn claude_tabbed_form_free_text_answer_fills_the_row_and_choose_refuses_it() {
     let form = include_str!("../../../../../tests/fixtures/claude-option-list/tabs-q1-rest.ansi");
     let (mut app, mut writes) = app_with_dialog_sized(form.as_bytes(), Some("session"), 92, 45);
