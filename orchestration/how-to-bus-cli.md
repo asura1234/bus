@@ -322,6 +322,13 @@ A direct, single-recipient message from the fact's orchestrator acknowledges it
 when the recipient is its worker, or the body references its PR number, worker
 name or head SHA prefix (at least seven hex characters). For example, briefing a
 separate verifier with `verify #1602 at 870112624` handles that READY fact.
+PR and unlabelled hex keys come only from the milestone's tag line, not PRs or
+commits mentioned later in its body. A standalone `head <sha>` or `SHA: <sha>`
+metadata line also supplies a head. Unlabelled hex keys must contain a letter;
+numeric-only prefixes match only an explicit head/SHA field. A direct message
+mentioning the fact's own PR still counts even in a status aside such as
+`#1602 is waiting for a verifier`: this is an accepted trade-off of reference
+acknowledgment, which does not infer whether the message assigns verification.
 `--to all` and multi-recipient messages never acknowledge facts, including an
 All broadcast that expands to just one worker. A tagged completion has no
 separate idle-with-no-next-task fact for that same completion.

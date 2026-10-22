@@ -89,6 +89,10 @@ pub(super) fn references_fact(text: &str, fact: &RoomFact) -> bool {
         return true;
     }
     let body = fact.text.to_lowercase();
+    if super::status_tag(&body).is_none() {
+        return false;
+    }
+    let first = body.lines().next().unwrap_or_default();
     let prs = |s: &str| -> Vec<String> {
         s.split('#')
             .skip(1)
@@ -99,14 +103,27 @@ pub(super) fn references_fact(text: &str, fact: &RoomFact) -> bool {
             .collect()
     };
     let references = prs(&text);
-    if prs(&body).iter().any(|number| references.contains(number)) {
+    if prs(first).iter().any(|number| references.contains(number)) {
         return true;
     }
-    heads(&body).iter().any(|head| {
-        heads(&text)
+    let matches = |head: &str, explicit: bool| {
+        heads(&text, explicit)
             .iter()
             .any(|prefix| head.starts_with(prefix) || prefix.starts_with(head))
-    })
+    };
+    heads(first, false).iter().any(|head| matches(head, false))
+        || body.lines().enumerate().any(|(index, line)| {
+            let words: Vec<_> = line
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|word| !word.is_empty())
+                .collect();
+            // Outside the tag line, only a standalone head/SHA metadata field is identity.
+            (index == 0 || words.first().is_some_and(|w| matches!(*w, "head" | "sha")))
+                && words.windows(2).any(|pair| {
+                    matches!(pair[0], "head" | "sha")
+                        && heads(pair[1], true).iter().any(|head| matches(head, true))
+                })
+        })
 }
 
 fn contains_name(text: &str, name: &str) -> bool {
@@ -117,10 +134,12 @@ fn contains_name(text: &str, name: &str) -> bool {
     })
 }
 
-fn heads(s: &str) -> Vec<&str> {
+fn heads(s: &str, explicit: bool) -> Vec<&str> {
     s.split(|c: char| !c.is_alphanumeric())
         .filter(|word| {
-            (7..=40).contains(&word.len()) && word.chars().all(|c| c.is_ascii_hexdigit())
+            (7..=40).contains(&word.len())
+                && word.chars().all(|c| c.is_ascii_hexdigit())
+                && (explicit || word.chars().any(|c| c.is_ascii_alphabetic()))
         })
         .collect()
 }

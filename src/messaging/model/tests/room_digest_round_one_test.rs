@@ -446,3 +446,59 @@ fn room_digest_upgrade_migrates_old_payloads_and_notice_keys_without_replay() {
         "a previously delivered generic notice must not wake again"
     );
 }
+
+#[test]
+fn room_digest_a_pr_the_final_only_mentions_in_passing_does_not_ack_its_ready() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(
+        &mut s,
+        room,
+        orch,
+        worker,
+        "READY FOR VERIFY #1602\nRebased onto #138's messaging rules; head 870112624.",
+    );
+    let other = s
+        .create_agent(room, "docs", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    dispatch(
+        &mut s,
+        room,
+        orch,
+        &[other],
+        "Read the #138 messaging rules before you start.",
+    );
+    assert!(
+        facts(&s, orch).iter().any(
+            |f| f["text"].as_str().is_some_and(|t| t.starts_with("READY"))
+                && f["acknowledged_at_ms"].is_null()
+        ),
+        "an unrelated brief naming #138 cleared the #1602 READY"
+    );
+}
+
+#[test]
+fn room_digest_reference_keys_belong_to_the_tag_or_explicit_head_field() {
+    for (identity_suffix, message, handled) in [
+        ("\nDependency abcdef123456", "Read abcdef123", false),
+        (" 20261023", "Inspect 20261023", false),
+        ("\nBuild 870112624", "Inspect 8701126", false),
+        (" abcdef123456", "Verify abcdef123", true),
+        (" head 870112624", "Verify at 8701126", true),
+        ("\nSHA: 870112624", "Verify at 8701126", true),
+        ("\nRebased onto head 870112624", "Read 8701126", false),
+        ("", "Rebase now; #1602 is waiting for a verifier", true),
+    ] {
+        let (mut s, room, orch, worker) = fixture();
+        let final_text = format!("READY FOR VERIFY #1602{identity_suffix}");
+        complete(&mut s, room, orch, worker, &final_text);
+        let verifier = s
+            .create_agent(room, "verifier", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        dispatch(&mut s, room, orch, &[verifier], message);
+        assert_eq!(
+            facts(&s, orch).is_empty(),
+            handled,
+            "{final_text:?}: {message}"
+        );
+    }
+}
