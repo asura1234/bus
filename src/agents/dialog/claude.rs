@@ -1,7 +1,7 @@
 //! Claude AskUserQuestion panels have unnumbered buttons and horizontal tabs.
 use super::{
     highlighted, indentation, is_separator, marked_label, option_line, question_dialog, title,
-    unboxed, Dialog, DialogKind, DialogOption, OptionLine, Style,
+    unboxed, Dialog, DialogKind, DialogOption, OptionLine, Style, CHAT_LABEL,
 };
 
 pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
@@ -87,6 +87,21 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         hint: Some(hint),
         fingerprint_context: format!("{:?}", styles[header]),
     })
+}
+
+/// Claude's free-text field sits right above `Chat about this`; a scrolled
+/// list can hide it, leaving a gap in the numbers.
+pub(super) fn free_text_row(options: &[OptionLine]) -> Option<u32> {
+    match options {
+        [.., field, chat]
+            if chat.label == CHAT_LABEL
+                && field.number + 1 == chat.number
+                && checkbox_label(&field.label).is_none() =>
+        {
+            Some(field.number)
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn checkbox_label(label: &str) -> Option<&str> {

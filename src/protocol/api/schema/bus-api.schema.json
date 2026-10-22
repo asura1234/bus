@@ -4358,6 +4358,10 @@
         "AgentDialogOption": {
           "description": "One numbered option of a choice dialog on an agent's screen.",
           "properties": {
+            "free_text": {
+              "description": "An inline text field: answer it with text, not by choosing it.",
+              "type": "boolean"
+            },
             "label": {
               "type": "string"
             },
