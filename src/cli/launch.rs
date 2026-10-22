@@ -272,7 +272,11 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
             info!(path = %socket_path.display(), "server socket ready");
             return Ok(());
         }
-        if let Ok(error) = std::fs::read_to_string(crate::utils::paths::server_startup_error_path())
+        // File creation may become visible before its contents are written.
+        if let Some(error) =
+            std::fs::read_to_string(crate::utils::paths::server_startup_error_path())
+                .ok()
+                .filter(|error| !error.is_empty())
         {
             return Err(io::Error::other(format!(
                 "bus server could not start: {error}"
@@ -500,6 +504,31 @@ test "$sid" = "$$"
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wait_for_server_socket_ignores_empty_startup_error_until_cause_is_written() {
+        let _guard = env_lock().lock().unwrap();
+        let _bus = crate::utils::config::test_without_bus_env(&_guard);
+        let dir = unique_test_dir("wait-empty");
+        std::env::set_var("BUS_DATA_DIR", &dir);
+        let startup_error = crate::utils::paths::server_startup_error_path();
+        std::fs::create_dir_all(startup_error.parent().unwrap()).unwrap();
+        std::fs::write(&startup_error, "").unwrap();
+        let socket = dir.join("s.sock");
+
+        let empty_error = wait_for_server_socket(&socket, Duration::from_millis(100)).unwrap_err();
+        let cause =
+            "cannot listen: the path is past the Unix socket limit; use a shorter BUS_DATA_DIR";
+        std::fs::write(&startup_error, cause).unwrap();
+        let complete_error = wait_for_server_socket(&socket, Duration::from_secs(1)).unwrap_err();
+        std::fs::remove_dir_all(dir).unwrap();
+
+        assert_eq!(empty_error.kind(), io::ErrorKind::TimedOut, "{empty_error}");
+        assert_eq!(
+            complete_error.to_string(),
+            format!("bus server could not start: {cause}")
+        );
     }
 
     #[test]
