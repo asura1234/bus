@@ -4,6 +4,7 @@
 //! against known agent output patterns to determine state.
 
 pub(crate) mod dialog;
+pub(crate) mod grok_surface;
 pub mod manifest;
 pub(crate) mod resume;
 pub(crate) mod title;

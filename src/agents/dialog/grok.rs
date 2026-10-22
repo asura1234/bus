@@ -12,6 +12,18 @@ struct Row {
     label_at: usize,
 }
 
+/// Recognize ownership independently from successful option parsing. A malformed
+/// current card must still fence legacy menus above it.
+pub(super) fn current_card(lines: &[&str]) -> bool {
+    let Some(end) = lines.iter().rposition(|line| !line.trim().is_empty()) else {
+        return false;
+    };
+    footer_line(lines[end])
+        && lines[..end]
+            .iter()
+            .any(|line| line.trim_start().starts_with("◆ "))
+}
+
 pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     let end = lines.iter().rposition(|line| !line.trim().is_empty())?;
     let mut footer = end;
@@ -356,10 +368,13 @@ pub(super) fn contains_composer(lines: &[&str]) -> bool {
     else {
         return false;
     };
-    if !border(lines[bottom]) {
+    if !crate::agents::grok_surface::composer_border(lines[bottom]) {
         return false;
     }
-    let Some(top) = (0..bottom).rev().find(|&index| border(lines[index])) else {
+    let Some(top) = (0..bottom)
+        .rev()
+        .find(|&index| crate::agents::grok_surface::composer_border(lines[index]))
+    else {
         return false;
     };
     let Some(first) = lines.get(top + 1).filter(|_| top + 1 < bottom) else {
@@ -370,14 +385,6 @@ pub(super) fn contains_composer(lines: &[&str]) -> bool {
         .trim_start_matches('│')
         .trim_start()
         .starts_with('❯')
-}
-
-fn border(line: &str) -> bool {
-    let line = line.trim();
-    line.chars().filter(|c| *c == '─').count() >= 3
-        && line
-            .chars()
-            .all(|c| matches!(c, '─' | '╭' | '╮' | '╰' | '╯' | '┌' | '┐' | '└' | '┘'))
 }
 
 #[cfg(test)]
@@ -396,6 +403,24 @@ mod tests {
     const PARKED: &str = include_str!("../../../tests/fixtures/grok-dialog/parked-focus.txt");
     const WRAPPED: &str = include_str!("../../../tests/fixtures/grok-dialog/wrapped.txt");
     const DRAFT: &str = include_str!("../../../tests/fixtures/grok-composer/draft.txt");
+
+    #[tokio::test]
+    async fn grok_native_composer_fences_historical_numbered_dialogs() {
+        let capture =
+            include_str!("../../../tests/fixtures/grok-composer/native-1.0.5-offline.ansi");
+        let label = capture.find(":shortcuts").unwrap();
+        let end = label + capture[label..].find("\x1b[?2026l").unwrap() + "\x1b[?2026l".len();
+        let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 8);
+        runtime.test_process_pty_bytes(capture[..end].as_bytes());
+        let screen = runtime.visible_ansi();
+        let (texts, _) = styled_lines(&screen);
+        assert!(
+            contains_composer(&texts.iter().map(String::as_str).collect::<Vec<_>>()),
+            "{screen:?}"
+        );
+        let history = "Earlier menu\n❯ 1. Approve\n  2. Deny\nEnter to select\n";
+        assert!(super::super::parse(&format!("{history}{screen}")).is_none());
+    }
 
     fn card(screen: &str) -> Option<Dialog> {
         let (text, styles) = styled_lines(screen);

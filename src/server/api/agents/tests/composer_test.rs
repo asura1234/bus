@@ -5,8 +5,12 @@ async fn grok_login_heading_above_composer_padding_receives_no_input() {
     use std::time::{Duration, Instant};
 
     let empty = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
-    for gap in [0, 13] {
-        let screen = format!("Log in to Grok\n{}{empty}", "\n".repeat(gap));
+    for (heading, gap) in [
+        ("Log in to Grok", 0),
+        ("Log in to Grok", 13),
+        ("Login with Grok", 13),
+    ] {
+        let screen = format!("{heading}\n{}{empty}", "\n".repeat(gap));
         let (runtime, mut writes) =
             crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 30, 16);
         runtime.test_process_pty_bytes(
@@ -30,7 +34,10 @@ async fn grok_login_heading_above_composer_padding_receives_no_input() {
             writes.try_recv().is_err(),
             "login composer with {gap} padding lines received editing keys, paste or Enter"
         );
-        assert!(crate::terminal::runtime::PromptNotShown::is(&error), "{error}");
+        assert!(
+            crate::terminal::runtime::PromptNotShown::is(&error),
+            "{error}"
+        );
     }
 }
 

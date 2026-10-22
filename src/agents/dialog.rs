@@ -330,11 +330,13 @@ fn is_hint(line: &str) -> bool {
 pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let (texts, styles) = styled_lines(screen);
     let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
+    // A current Grok surface owns the decision even if its options are
+    // incomplete. Never resurrect a generic approval from transcript history.
+    if grok::current_card(&lines) {
+        return grok::parse(&lines, &styles);
+    }
     if composer::contains(&lines) {
         return None;
-    }
-    if let Some(dialog) = grok::parse(&lines, &styles) {
-        return Some(dialog);
     }
     let mut dialog = claude::parse(&lines, &styles)
         .or_else(|| numbered(&lines, &styles))
