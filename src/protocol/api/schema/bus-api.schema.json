@@ -1258,6 +1258,13 @@
               },
               "type": "array"
             },
+            "executable": {
+              "description": "Validated absolute Grok Build alias selected during launch preparation.\nRequired for Grok so shell startup cannot redirect the selected binary.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "kind": {
               "type": "string"
             },

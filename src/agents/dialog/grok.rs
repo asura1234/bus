@@ -162,12 +162,13 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
             kind: DialogKind::Question,
             input: Some(QuestionInput {
                 value,
-                skip_key: "shift+x",
+                skip_key: Some("shift+x"),
             }),
             text,
             options: Vec::new(),
             hint: Some(hint),
             fingerprint_context,
+            tabs: Vec::new(),
         });
     }
     if multi && !question {
@@ -183,6 +184,7 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
                 label: format!("{} {}", row.glyph, row.label),
                 identity_label: Some(row.label.clone()),
                 selected,
+                free_text: false,
                 // Stable shortcuts keep selection out of Dialog::id(). They also
                 // avoid arrow counts across a hidden row before the z editor.
                 navigation_key: if !parked && question {
@@ -210,6 +212,7 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         options,
         hint: Some(hint),
         fingerprint_context,
+        tabs: Vec::new(),
     })
 }
 
@@ -218,6 +221,7 @@ fn action(index: usize, label: &str, key: &'static str) -> DialogOption {
         number: index as u32 + 1,
         label: label.into(),
         selected: false,
+        free_text: false,
         navigation_key: Some(key),
         identity_label: None,
     }
@@ -446,7 +450,7 @@ mod tests {
         assert_eq!(before.kind, DialogKind::Question);
         assert!(before.options.is_empty());
         assert_eq!(before.input.as_ref().unwrap().value, "ultraviolet please");
-        assert_eq!(before.input.as_ref().unwrap().skip_key, "shift+x");
+        assert_eq!(before.input.as_ref().unwrap().skip_key, Some("shift+x"));
         assert_eq!(before.id(), after.id());
         assert_ne!(before.digest(), after.digest());
     }
