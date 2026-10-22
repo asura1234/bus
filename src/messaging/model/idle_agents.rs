@@ -30,8 +30,9 @@ impl BusState {
                 let idle = self.workers(room, |agent| finished(agent, now_ms));
                 if idle.len() > limit {
                     let text = format!(
-                        "{} idle agents (more than {limit}): {}. \
-                         Close down the idle agents that have finished their work.",
+                        "You have {} idle agents ({}). Either put them to work in parallel \
+                         on the open PRs, or close the ones you no longer need to save \
+                         resources. Your call.",
                         idle.len(),
                         idle.join(", ")
                     );

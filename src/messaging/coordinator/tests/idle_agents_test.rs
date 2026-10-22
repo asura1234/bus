@@ -150,8 +150,9 @@ fn more_idle_workers_than_the_default_posts_one_bus_alert_to_the_orchestrator() 
     assert_eq!(posted[0].recipient_ids, [r.orchestrator.unwrap()].into());
     assert_eq!(
         posted[0].text,
-        "8 idle agents (more than 7): w0, w1, w2, w3, w4, w5, w6, w7. \
-         Close down the idle agents that have finished their work."
+        "You have 8 idle agents (w0, w1, w2, w3, w4, w5, w6, w7). \
+         Either put them to work in parallel on the open PRs, or close the ones \
+         you no longer need to save resources. Your call."
     );
     assert_eq!(r.worker.state.room(r.room).unwrap().unread_count, 1);
     refresh(&mut r.worker);
@@ -171,7 +172,7 @@ fn a_room_without_an_orchestrator_alerts_the_developer() {
     assert!(posted[0].recipient_ids.is_empty());
     assert!(posted[0]
         .text
-        .starts_with("2 idle agents (more than 1): w0, w1."));
+        .starts_with("You have 2 idle agents (w0, w1)."));
     assert!(r.worker.state.requests().next().is_none());
     cleanup(r);
 }
@@ -236,7 +237,7 @@ fn only_idle_workers_without_an_open_or_queued_message_count() {
     assert!(
         posted[0]
             .text
-            .starts_with("2 idle agents (more than 1): w0, w1."),
+            .starts_with("You have 2 idle agents (w0, w1)."),
         "{}",
         posted[0].text
     );
