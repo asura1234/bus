@@ -314,12 +314,6 @@ fn dev_send_as_records_agent_author_and_skips_it_for_all() {
         .state
         .create_agent(room, "claude1", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
-    let other_room = worker.state.create_room("other").unwrap();
-    worker
-        .state
-        .create_agent(other_room, "outsider", Provider::Codex, dir.clone(), None)
-        .unwrap();
-
     let sent = call(
         &mut worker,
         "as-all",
@@ -370,9 +364,9 @@ fn dev_send_as_records_agent_author_and_skips_it_for_all() {
             "cannot send a message to itself",
         ),
         (
-            "as-outsider",
+            "as-missing",
             json!(["claude1"]),
-            "outsider",
+            "missing",
             "No matching room or agent",
         ),
     ] {
@@ -441,7 +435,7 @@ fn dev_send_as_the_only_room_agent_to_all_has_no_recipients() {
 }
 
 #[test]
-fn dev_send_as_allows_only_the_rooms_own_master_orchestrator_from_outside() {
+fn dev_send_as_allows_agents_from_other_rooms() {
     let (mut worker, room, codex, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
     let other = worker.state.create_room("other").unwrap();
@@ -495,16 +489,13 @@ fn dev_send_as_allows_only_the_rooms_own_master_orchestrator_from_outside() {
     assert!(in_master.ok, "{in_master:?}");
 
     for (id, author) in [("orch-other", "codex-orch"), ("orch-none", "idle-orch")] {
-        let rejected = call(
+        let sent = call(
             &mut worker,
             id,
             "message.send",
             json!({"room":"test","to":["codex1"],"text":"x","as":author}),
         );
-        assert!(
-            error_message(&rejected).contains("in this room or its orchestrator"),
-            "{id}: {rejected:?}"
-        );
+        assert!(sent.ok, "{id}: {sent:?}");
     }
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

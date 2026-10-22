@@ -483,6 +483,9 @@ pub(crate) struct Request {
     pub(crate) room_id: RoomId,
     pub(crate) agent_id: AgentId,
     pub(crate) prompt: Prompt,
+    /// Sender's (name, home room) at send time; survives rename and deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sender_identity: Option<(String, RoomId)>,
     pub(crate) phase: RequestPhase,
     /// A queued request closed before typing, retained for status and restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]

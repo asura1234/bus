@@ -297,35 +297,47 @@ be answered. Each transport request still has its normal finite timeout;
 `send --async`. Bounded waits still report transport failures immediately.
 To obtain a message ID before waiting, use plain `send`, then `wait --async`.
 
-To record the message as written by a room agent instead of the developer, add
-`--as AGENT`. The author must be an agent in the same room, or the room's MASTER
-orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is
-`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]`. A MASTER
-agent reports to the developer with `--to human` (see Report to the developer in
-MASTER).
+To record the message as written by an agent instead of the developer, add
+`--as AGENT`. Any agent can message any other agent, across work rooms and
+MASTER. The author cannot also be a recipient; `--to all` skips it. The generic
+form is `send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
+[--as AGENT] [--queue] [--async]`. The message, history and reply stay in the
+conversation room chosen by `--room`.
 
-A worker can message its own room's bound MASTER orchestrator at any time, even
-before the orchestrator has sent it work. Use the orchestrator's name, numeric
-agent ID, or the case-insensitive reserved `orchestrator` alias:
+An exact numeric agent ID always resolves globally, even if a local agent has
+that ID as its name. A name first resolves among agents in the sender's home
+room, then among all agents. If several agents match at the chosen level, Bus
+errors and lists each candidate's name, ID and room; select an ID to disambiguate.
+Without `--as`, the selected conversation room supplies the local-name scope.
+`--as` uses the same ID/name resolver, with the selected room as its local scope.
+
+A worker can message its orchestrator before being assigned any work:
 
 ```sh
 bus send --room "$room_id" --as "$agent_id" --to orchestrator \
   --text "Ready for verify; please check the implementation."
 ```
 
-This is a normal message in the work room: it appears in that room's chat and
-history, reaches the orchestrator's existing session, and receives its reply
-there. A worker message waits for a running MASTER turn to finish, then gets its
-own turn and reply. The orchestrator's session prefixes the payload with
-`NAME (agent ID) in room ROOM_ID:` so its source is clear. `--queue`, `wait`, and
-settlement work as for other agent recipients.
-Only that room's bound orchestrator is reachable from MASTER this way. Existing
-room members take precedence over a matching orchestrator name or the alias;
-ambiguous member names still require an ID. If no member matches and the room
-has no orchestrator, `--to orchestrator` reports `This room has no bound
-orchestrator`. `--to all` still targets room members only (excluding `--as`).
-The work-room composer's agent picker lists the bound orchestrator separately;
-its All row selects and clears room members only.
+The case-insensitive reserved `orchestrator` alias resolves to the orchestrator
+bound to the sender's own home room, even when `--room` chooses another
+conversation room. A real member of that home room named `orchestrator` takes
+precedence. With no matching member and no binding, Bus reports `This room has
+no bound orchestrator`. Other orchestrators, MASTER peers and workers in any
+room are reachable by name or ID.
+
+Bus automatically prepends `name (agent id, room R):` to every agent-authored
+payload it delivers, using the sender's home room ID. Send only the message
+body: do not add a "from X", "X here" or signature line. If the first line
+already names the same sender by name or agent ID, Bus keeps that identity
+without adding a duplicate header. The stored chat text stays as authored;
+the delivered payload and callback matching use the same rendered text.
+
+A message from another conversation room waits for the recipient's running
+turn to finish, then gets its own turn and reply. Same-room steering,
+`--queue`, `wait` and settlement keep their normal behavior.
+`--to all` targets conversation-room members only (excluding `--as`). The
+work-room composer's picker lists the bound orchestrator separately; its All
+row selects and clears room members only.
 
 `send` confirms that the message was durably queued. It does not mean the agent
 started or replied. `wait` polls every 200 milliseconds until every recipient

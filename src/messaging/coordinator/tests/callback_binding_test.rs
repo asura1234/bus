@@ -306,6 +306,19 @@ fn route_at(worker: &mut Worker, at_ms: u64) {
     worker.save(state).unwrap();
 }
 
+// These hooks report the exact attributed input typed into the worker, as a
+// real provider does; the late-final assertions below remain unchanged.
+fn authored_start(worker: &Worker, author: AgentId, turn: &str, text: &str) -> serde_json::Value {
+    let sender = worker.state.agent(author).unwrap();
+    claude_start(
+        turn,
+        &format!(
+            "{} (agent {}, room {}):\n{text}",
+            sender.name, author.0, sender.room_id.0
+        ),
+    )
+}
+
 /// The request completes on an interim Stop (a Codex-style Stop without a
 /// task census) and the async sender has already seen that interim.
 fn completed_on_interim(
@@ -321,7 +334,11 @@ fn completed_on_interim(
         worker.state.agent(agent).unwrap().current_request,
         Some(source)
     );
-    record(dir, Provider::ClaudeCode, claude_start("p1", "open work"));
+    record(
+        dir,
+        Provider::ClaudeCode,
+        authored_start(worker, orch, "p1", "open work"),
+    );
     consume(worker, agent, dir);
     record(
         dir,
@@ -363,7 +380,7 @@ fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_
             record(
                 &dir,
                 Provider::ClaudeCode,
-                claude_start("p2", "second work"),
+                authored_start(&worker, orch, "p2", "second work"),
             );
             consume(&mut worker, agent, &dir);
             assert!(worker.state.request(next).unwrap().trusted_start_bound);
@@ -405,7 +422,7 @@ fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_
             record(
                 &dir,
                 Provider::ClaudeCode,
-                claude_start("p2", "second work"),
+                authored_start(&worker, orch, "p2", "second work"),
             );
             consume(&mut worker, agent, &dir);
         }
@@ -489,7 +506,11 @@ fn abandoned_request_does_not_spend_its_turn_on_a_first_interim_late_final() {
     let (mut worker, agent, orch, room, dir) = orchestrated_worker();
     let source = send_from(&mut worker, room, orch, agent, "open work");
     worker.submit_ready().unwrap();
-    record(&dir, Provider::ClaudeCode, claude_start("p1", "open work"));
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        authored_start(&worker, orch, "p1", "open work"),
+    );
     consume(&mut worker, agent, &dir);
     let now = io::now_ms();
     worker

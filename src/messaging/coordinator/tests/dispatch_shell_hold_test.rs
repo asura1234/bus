@@ -121,8 +121,16 @@ fn master_reply(author_is_agent: bool, command: &str, held: bool) {
         .unwrap()
         .id;
     f.deliver();
-    assert_eq!(f.typed(), [("status please".into(), false)]);
-    f.started("turn-1", "status please");
+    let payload = if author_is_agent {
+        format!(
+            "desktop master (agent {}, room {}):\nstatus please",
+            sender.0, f.room.0
+        )
+    } else {
+        "status please".into()
+    };
+    assert_eq!(f.typed(), [(payload.clone(), false)]);
+    f.started("turn-1", &payload);
     f.consume();
     f.status(RuntimeStatus::Working);
     f.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1",

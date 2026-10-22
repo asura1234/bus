@@ -379,7 +379,7 @@ impl Delivery {
             .unwrap()
             .id
     }
-    fn add_owned(
+    pub(crate) fn add_owned(
         &mut self,
         room: RoomId,
         provider: Provider,

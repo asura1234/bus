@@ -107,7 +107,7 @@ fn claude_coalesced_paste_with_adjacent_input_completes_every_joined_message() {
 }
 
 #[test]
-fn coalesced_cross_room_reply_is_published_in_every_members_room() {
+fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let work = fixture.room;
     let mut state = fixture.worker.state.clone();
@@ -160,30 +160,42 @@ fn coalesced_cross_room_reply_is_published_in_every_members_room() {
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
     let typed = fixture.typed()[0].0.clone();
-    fixture.started("batch", &typed);
+    fixture.started("worker-turn", &typed);
+    assert_eq!(fixture.request(member).phase, RequestPhase::Queued);
+    assert_eq!(fixture.request(member).group, None);
     let unread: Vec<_> = [work, master]
         .into_iter()
         .map(|id| fixture.worker.state.room(id).unwrap().unread_count)
         .collect();
-    fixture.stopped("batch", "dialog and follow-up answered");
+    fixture.stopped("worker-turn", "dialog answered");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    for ((room, request), unread) in [(work, lead), (master, member)].into_iter().zip(unread) {
-        assert_eq!(
-            fixture.reply(request).as_deref(),
-            Some("dialog and follow-up answered")
-        );
+    fixture.deliver();
+    let typed = fixture.typed()[1].0.clone();
+    assert_eq!(typed, "developer follow-up");
+    fixture.started("master-turn", &typed);
+    fixture.stopped("master-turn", "follow-up answered");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    for ((room, request, reply), unread) in [
+        (work, lead, "dialog answered"),
+        (master, member, "follow-up answered"),
+    ]
+    .into_iter()
+    .zip(unread)
+    {
+        assert_eq!(fixture.reply(request).as_deref(), Some(reply));
         let room = fixture.worker.state.room(room).unwrap();
         assert_eq!(
             room.latest_replies
                 .get(&orchestrator)
                 .map(|reply| reply.text.as_str()),
-            Some("dialog and follow-up answered")
+            Some(reply)
         );
         assert_eq!(
             room.unread_count,
             unread + 1,
-            "one shared reply in each room"
+            "one separate reply in each source room"
         );
     }
 }

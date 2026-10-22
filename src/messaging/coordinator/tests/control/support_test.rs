@@ -14,6 +14,8 @@ mod messages_tests;
 mod option_list_tests;
 #[path = "orchestrator_recipient_test.rs"]
 mod orchestrator_recipient_tests;
+#[path = "open_messaging_test.rs"]
+mod open_messaging_tests;
 #[path = "rooms_test.rs"]
 mod rooms_tests;
 

@@ -6,6 +6,94 @@ use crate::messaging::model::{Provider, RequestPhase};
 use serde_json::json;
 
 #[tokio::test]
+async fn open_messaging_pending_cross_room_messages_do_not_coalesce() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let sender = f.agents[0];
+    let recipient = f.add_owned(f.master, Provider::Codex, "remote", false);
+    let master = f.master;
+    let work = f.work;
+    f.status(recipient, AgentState::Working);
+    f.tick();
+    let first = f.send(recipient, master, "developer task", false, None);
+    let next = f.send(recipient, work, "worker question", false, Some(sender));
+    f.tick();
+    f.status(recipient, AgentState::Idle);
+    f.tick();
+    assert_eq!(f.state().request(next).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(f.state().request(next).unwrap().group, None);
+    let payload = f.typed(recipient).last().unwrap().clone();
+    assert_eq!(payload, "developer task");
+    f.start(recipient, "developer", &payload);
+    f.stop(
+        recipient,
+        "developer",
+        "developer answer",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(31_000);
+    let payload = f.typed(recipient).last().unwrap().clone();
+    assert!(payload.ends_with("worker question"));
+    f.start(recipient, "worker", &payload);
+    f.stop(recipient, "worker", "worker answer", json!([]), json!([]));
+    f.elapse(31_000);
+    f.assert_reply(first, "developer answer");
+    f.assert_reply(next, "worker answer");
+}
+
+#[tokio::test]
+async fn open_messaging_cross_room_session_delivery_has_its_own_reply() {
+    for sender_in_master in [false, true] {
+        let mut f = Delivery::new(&[Provider::Codex], sender_in_master);
+        let sender = f.agents[0];
+        let source = if sender_in_master { f.master } else { f.work };
+        let destination = if sender_in_master { f.work } else { f.master };
+        let recipient = f.add_owned(destination, Provider::ClaudeCode, "remote-peer", false);
+        let request = f.send(
+            recipient,
+            source,
+            "cross-room question",
+            false,
+            Some(sender),
+        );
+        f.tick();
+        let payload = f.typed(recipient).last().unwrap().clone();
+        let expected = format!(
+            "agent-0 (agent {}, room {}):\ncross-room question",
+            sender.0, source.0
+        );
+        assert_eq!(payload, expected);
+        f.reopen();
+        f.start(recipient, "cross-room-turn", &payload);
+        assert!(f.state().request(request).unwrap().trusted_start_bound);
+        f.stop(
+            recipient,
+            "cross-room-turn",
+            "cross-room answer",
+            json!([]),
+            json!([]),
+        );
+        f.elapse(31_000);
+        f.assert_reply(request, "cross-room answer");
+        let history = f.call("room.history", json!({"room":source.0.to_string()}));
+        assert_eq!(
+            history["messages"][0]["prompt"]["author"],
+            json!({"agent":sender})
+        );
+        assert_eq!(
+            history["messages"][0]["prompt"]["text"],
+            "cross-room question"
+        );
+        assert!(
+            f.call("room.history", json!({"room":destination.0.to_string()}))["messages"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
 async fn worker_to_orchestrator_delivers_queued_message_into_its_session_and_settles() {
     let mut f = Delivery::new(&[Provider::Codex], false);
     let worker = f.agents[0];
@@ -198,7 +286,7 @@ async fn worker_message_typed_into_orchestrator_names_its_worker_and_room() {
     assert!(
         typed
             == format!(
-                "{name} (agent {}) in room {}:\nI am blocked",
+                "{name} (agent {}, room {}):\nI am blocked",
                 worker.0, f.work.0
             ),
         "the orchestrator cannot tell this worker message from a developer prompt: {typed:?}"
@@ -357,7 +445,8 @@ async fn captured_reply_reaches_its_source_room_once_for_both_providers_and_auth
                 let request = f.send(agent, room, "same status message", false, author);
                 f.tick();
                 assert_eq!(f.typed(agent).len(), i + 1);
-                f.start(agent, &format!("turn-{i}"), "same status message");
+                let payload = f.typed(agent).last().unwrap().clone();
+                f.start(agent, &format!("turn-{i}"), &payload);
                 f.stop(agent, &format!("turn-{i}"), "answer", json!([]), json!([]));
                 f.tick();
                 f.reopen();
@@ -607,7 +696,8 @@ async fn direct_bus_control_shells_publish_equally_for_developer_and_agent() {
             let request = f.send(agent, f.master, "status", false, author);
             f.tick();
             let turn = format!("dispatch-{n}");
-            f.start(agent, &turn, "status");
+            let payload = f.typed(agent).last().unwrap().clone();
+            f.start(agent, &turn, &payload);
             f.stop(agent, &turn, "dispatched", json!([{"id":format!("control-{n}"),"type":"shell","status":"running","command":command}]), json!([]));
             f.assert_reply(request, "dispatched");
             f.assert_no_stalls();
@@ -771,7 +861,8 @@ async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter()
     let orch = f.add_orchestrator();
     let request = f.send(agent, f.work, "owned work", false, Some(orch));
     f.tick();
-    f.start(agent, "owned", "owned work");
+    let payload = f.typed(agent).last().unwrap().clone();
+    f.start(agent, "owned", &payload);
     let message = f.state().request(request).unwrap().prompt.id;
     f.call(
         "message.status",
@@ -930,7 +1021,8 @@ async fn worker_reply_wakes_orchestrator_once_without_waiter_and_survives_reopen
         let orch = f.add_orchestrator();
         let request = f.send(agent, f.work, "build", false, Some(orch));
         f.tick();
-        f.start(agent, "build", "build");
+        let payload = f.typed(agent).last().unwrap().clone();
+        f.start(agent, "build", &payload);
         f.stop(agent, "build", "worker result", json!([]), json!([]));
         f.age_request_progress(3_000);
         f.reopen();

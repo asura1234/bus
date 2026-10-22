@@ -1,4 +1,4 @@
-# Worker messages to its orchestrator
+# Open agent messaging
 
 Run only on a fresh scratch Bus through the TUI driver, at 140x40, with fake
 providers. No desktop automation or real model use is needed. CLI commands below
@@ -8,7 +8,7 @@ reads and screen text. No steps may be skipped.
 
 ## Cases (run order)
 
-### WOC-01 — Unprompted work-room messages reach only its bound MASTER orchestrator
+### WOC-01 — Agent messages reach peers across rooms with sender attribution
 
 **Preconditions/setup:** Create `qa-work` and `qa-other` with the scratch CLI.
 Add `qa-worker` (Codex) to `qa-work`. Add `libtv-app master` (Claude) in MASTER,
@@ -21,7 +21,7 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    `Orchestrator`. Wait for its message to settle. Click `room:qa-work` and
    inspect history and the orchestrator's terminal → one normal worker-authored
    work-room message addressed to the bound orchestrator, delivered into its
-   session with the `qa-worker (agent ID) in room ROOM_ID:` attribution header,
+   session with the `qa-worker (agent ID, room ROOM_ID):` attribution header,
    with a `fake reply:` answering that text; both message and reply
    show in the work-room chat. MASTER history remains empty.
 2. Fixture: send `WOC name ready` the same way, targeting `libtv-app master` by
@@ -35,11 +35,14 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    queued until the MASTER turn ends and receives its own attributed reply;
    the MASTER reply contains only the MASTER request, and neither reply is
    substituted for the other.
-4. Fixture: send from `qa-worker` to `other-orch` by name and ID in `qa-work`;
-   also send without `--as` to `orchestrator` in a newly created room with no orchestrator →
-   the first two fail with `No matching room or agent`; the last fails with
-   `This room has no bound orchestrator`. No failed send adds a history row or
-   a request, and `other-orch` receives no message.
+4. Fixture: send from `qa-worker` to `other-orch` by name and ID in `qa-work` →
+   both reach that unrelated MASTER orchestrator, receive distinct replies in
+   `qa-work`, and carry the worker's attribution. Send without `--as` to
+   `orchestrator` in a newly created unbound room → clear missing-binding error,
+   no history row. Add agents named `duplicate` to MASTER (bound to a new `qa-duplicate` room)
+   and `qa-other`; send
+   to `duplicate` from `qa-worker` → an ambiguity error lists both IDs and rooms,
+   without adding a request or history row.
 5. In `qa-work`, press Ctrl+P → the picker lists `qa-worker` and `libtv-app
    master`, and excludes `other-orch`. Click All → only `qa-worker` is checked,
    All shows checked, and the orchestrator remains unchecked. Click All again →
@@ -48,6 +51,10 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    press Enter. Wait for its reply → the developer-authored message and its
    orchestrator reply appear in `qa-work` history, proving selection persists
    and submits to the orchestrator.
+
+6. Fixture: send `qa-worker here —` followed by a newline and `WOC already
+   identified` to `orchestrator` as `qa-worker` → its reply echoes exactly that
+   authored text with no second sender header.
 
 **Evidence:** CLI receipts and status/history JSON, orchestrator terminal text,
 picker and chat snapshots. The driver trace records every action; no real

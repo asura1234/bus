@@ -811,33 +811,6 @@ fn message_status_still_answers_when_a_flagged_recipients_screen_is_unreadable()
 }
 
 #[test]
-fn only_the_rooms_own_orchestrator_takes_messages_from_outside_its_room() {
-    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
-    let master = worker.state.master_room().unwrap().id;
-    let bystander = worker
-        .state
-        .create_agent(master, "other", Provider::ClaudeCode, dir.clone(), None)
-        .unwrap();
-    let draft = |to: AgentId| Draft {
-        text: "hi".into(),
-        files: Vec::new(),
-        recipient_ids: [to].into(),
-    };
-    assert!(worker
-        .state
-        .submit_message_from(room, draft(orchestrator.unwrap()), Author::Agent(agent), 1)
-        .is_ok());
-    assert!(matches!(
-        worker
-            .state
-            .submit_message_from(room, draft(bystander), Author::Agent(agent), 1),
-        Err(ModelError::AgentOutsideRoom(id)) if id == bystander
-    ));
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
 fn collapsed_question_inspection_retries_redraw_without_repeating_notice() {
     struct RedrawDuringOpen {
         inner: CollapsedCodexQuestion,

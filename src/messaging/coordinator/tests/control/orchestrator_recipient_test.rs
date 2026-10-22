@@ -84,34 +84,16 @@ fn worker_to_orchestrator_without_binding_has_clear_error() {
 }
 
 #[test]
-fn worker_to_orchestrator_never_exposes_other_master_agents_or_broadcasts() {
+fn worker_to_orchestrator_broadcast_still_targets_members_only() {
     let (mut worker, room, _, dir) = fixture();
     let own = bound(&mut worker, room, &dir, "own-orch");
     let other_room = worker.state.create_room("other").unwrap();
-    let other = bound(&mut worker, other_room, &dir, "other-orch");
+    let _other = bound(&mut worker, other_room, &dir, "other-orch");
     let master = worker.state.master_room().unwrap().id;
-    let unbound = worker
+    let _unbound = worker
         .state
         .create_agent(master, "unbound", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
-    for selector in [
-        "other-orch".into(),
-        other.0.to_string(),
-        "unbound".into(),
-        unbound.0.to_string(),
-    ] {
-        let sent = call(
-            &mut worker,
-            &selector,
-            "message.send",
-            json!({"room":"test","as":"codex1","to":[selector],"text":"blocked"}),
-        );
-        assert_eq!(
-            error_message(&sent),
-            "No matching room or agent",
-            "{sent:?}"
-        );
-    }
     let peer = worker
         .state
         .create_agent(room, "peer", Provider::Codex, dir.clone(), None)
@@ -202,14 +184,14 @@ fn worker_to_orchestrator_alias_with_a_member_reaches_both_in_one_message() {
 }
 
 #[test]
-fn orchestrator_writing_as_itself_to_the_alias_is_rejected_as_a_self_message() {
+fn orchestrator_writing_as_itself_to_its_id_is_rejected_as_a_self_message() {
     let (mut worker, room, _, dir) = fixture();
     let orchestrator = bound(&mut worker, room, &dir, "own-orch");
     let sent = call(
         &mut worker,
         "self",
         "message.send",
-        json!({"room":"test","as":orchestrator.0.to_string(),"to":["orchestrator"],"text":"me"}),
+        json!({"room":"test","as":orchestrator.0.to_string(),"to":[orchestrator.0.to_string()],"text":"me"}),
     );
     assert_eq!(
         error_message(&sent),

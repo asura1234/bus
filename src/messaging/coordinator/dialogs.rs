@@ -4,8 +4,8 @@
 //! a typed Bus developer-attention notice instead.
 #[cfg(test)]
 use super::{
-    schema, AgentRuntimeIdentity, BTreeMap, Method, ModelError, PathBuf, PromptId, Provider,
-    ResponseResult, RoomId, RuntimeStatus, Transport,
+    schema, AgentRuntimeIdentity, BTreeMap, Method, PathBuf, PromptId, Provider, ResponseResult,
+    RoomId, RuntimeStatus, Transport,
 };
 use super::{AgentId, Author, BusState, Draft, Worker};
 use crate::messaging::model::DialogNoticeTo;

@@ -236,6 +236,19 @@ impl BusState {
         }
         self.rooms.remove(&id);
         self.requests.retain(|_, request| request.room_id != id);
+        // Recipients in other rooms survive; their queues and current pointers
+        // must not retain requests removed with this conversation room.
+        for queue in self.queues.values_mut() {
+            queue.retain(|request| self.requests.contains_key(request));
+        }
+        for agent in self.agents.values_mut() {
+            if agent
+                .current_request
+                .is_some_and(|request| !self.requests.contains_key(&request))
+            {
+                agent.current_request = None;
+            }
+        }
         self.drop_history_of_room(id);
         // Match the UI, which falls back to the first room (MASTER) at once,
         // so `state` never shows a gap between the delete and the next view.

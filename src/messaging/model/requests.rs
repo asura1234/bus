@@ -86,11 +86,6 @@ impl BusState {
                 .agents
                 .get(agent_id)
                 .ok_or(ModelError::UnknownAgent(*agent_id))?;
-            // A room's orchestrator lives in MASTER but takes messages from
-            // the room it orchestrates, such as a worker saying it is blocked.
-            if agent.room_id != room && agent.orchestrates != Some(room) {
-                return Err(ModelError::AgentOutsideRoom(*agent_id));
-            }
             if agent.deletion_pending {
                 return Err(ModelError::DeletionPending);
             }
@@ -115,6 +110,7 @@ impl BusState {
                     room_id: room,
                     agent_id,
                     prompt: prompt.clone(),
+                    sender_identity: self.message_sender(&prompt.author),
                     phase: RequestPhase::Queued,
                     failure_reason: None,
                     expected_launch_id: None,
@@ -668,10 +664,11 @@ impl BusState {
 
     /// Joins the queued messages that piled up while the agent could not take
     /// them into `lead`'s prompt: consecutive ones from the queue front, up to
-    /// the first sent with `--queue`. Returns the text to type, each part
+    /// the first sent with `--queue` or from another room. Returns the text to type, each part
     /// marked with its sender and time, or `None` when `lead` goes alone.
     pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
-        let agent_id = self.requests.get(&lead)?.agent_id;
+        let request = self.requests.get(&lead)?;
+        let (agent_id, room) = (request.agent_id, request.room_id);
         let queue = self.queues.get(&agent_id)?;
         if queue.first() != Some(&lead) || self.requests.get(&lead)?.queue_only {
             return None;
@@ -679,7 +676,11 @@ impl BusState {
         let members: Vec<RequestId> = queue[1..]
             .iter()
             .copied()
-            .take_while(|id| self.requests.get(id).is_some_and(|r| !r.queue_only))
+            .take_while(|id| {
+                self.requests
+                    .get(id)
+                    .is_some_and(|r| !r.queue_only && r.room_id == room)
+            })
             .collect();
         if members.is_empty() {
             return None;
