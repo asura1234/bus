@@ -263,61 +263,6 @@ pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
     }
 }
 
-/// Existing global aliases must resolve before project consent can authorize a
-/// write. A dangling alias is not evidence that its destination is unrelated.
-fn global_destination(path: &Path) -> Result<Option<PathBuf>, String> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => path.canonicalize().map(Some).map_err(|e| {
-            format!("Cannot resolve global Grok configuration; no hooks changed: {e}")
-        }),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// One containment check for installation and cold-resume rebinding. Project
-/// consent never authorizes a global config or a symlinked config ancestor.
-pub(super) fn project_hook_path(project: &Path) -> Result<PathBuf, String> {
-    let root = common::project_root(project)
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let home = std::env::home_dir().map(|home| home.canonicalize().unwrap_or(home));
-    if home
-        .as_ref()
-        .is_some_and(|home| root == *home || root.starts_with(home.join(".grok")))
-    {
-        return Err("Grok project hooks cannot modify the global ~/.grok configuration".into());
-    }
-    let mut path = root;
-    for component in [".grok", "hooks", "bus.json"] {
-        path.push(component);
-        match std::fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err("Grok project hook paths cannot contain symlinks".into());
-            }
-            Ok(meta) if component != "bus.json" && !meta.is_dir() => {
-                return Err("Grok project hook ancestor is not a directory".into());
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    if let Some(home) = home {
-        for global in [".grok", ".grok/hooks", ".grok/hooks/bus.json"] {
-            if global_destination(&home.join(global))?
-                .is_some_and(|global| path.starts_with(global))
-            {
-                return Err(
-                    "Grok project hooks resolve inside global configuration; no hooks changed"
-                        .into(),
-                );
-            }
-        }
-    }
-    Ok(path)
-}
-
 pub(crate) fn prepare(
     spec: &LaunchSpec,
     initialize: impl FnOnce(&HookContext) -> Result<(), String>,
@@ -340,15 +285,13 @@ pub(crate) fn prepare(
             notice.message
         ));
     }
-    let path = project_hook_path(&cwd)?;
-    let executable = resolve_executable()?;
+    let (_, _, executable) = super::project_hooks::update(
+        &cwd,
+        &spec.hooks.binary,
+        super::project_hooks::Mode::Install,
+        resolve_executable,
+    )?;
     let env = environment_for(&spec.hooks, &executable)?;
-    if path.exists()
-        && hook_json::read_resume_json(&path)?["disableAllHooks"].as_bool() == Some(true)
-    {
-        return Err("Grok project hooks are disabled; existing configuration was kept".into());
-    }
-    hook_json::install_hooks(&path, super::HOOK_CONTRACT, &spec.hooks.binary)?;
     initialize(&spec.hooks)?;
     for (name, bytes) in [
         (

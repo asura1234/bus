@@ -229,3 +229,61 @@ fn grok_resume_preserves_global_hooks_aliased_to_project_configuration() {
         "global hook aliases were accepted: {accepted:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn grok_resume_preserves_global_hooks_with_a_different_filename() {
+    let mut mutated = Vec::new();
+    let mut accepted = Vec::new();
+    for alias in ["direct", "relative", "chained", "unrelated"] {
+        let f = Fixture::new();
+        f.install();
+        f.prepare("");
+        let global_hooks = f.root.join("home/.grok/hooks");
+        std::fs::create_dir_all(&global_hooks).unwrap();
+        let project_file = f.project.join(".grok/hooks/bus.json");
+        let original = std::fs::read(&project_file).unwrap();
+        let global_file = global_hooks.join("shared.json");
+        match alias {
+            "direct" => std::os::unix::fs::symlink(&project_file, &global_file).unwrap(),
+            "relative" => {
+                std::os::unix::fs::symlink("../../../project/.grok/hooks/bus.json", &global_file)
+                    .unwrap()
+            }
+            "chained" => {
+                std::os::unix::fs::symlink(&project_file, global_hooks.join("linked-hook.json"))
+                    .unwrap();
+                std::os::unix::fs::symlink("linked-hook.json", &global_file).unwrap();
+            }
+            "unrelated" => {
+                let independent = f.root.join("independent-hook.json");
+                std::fs::write(&independent, &original).unwrap();
+                std::os::unix::fs::symlink(independent, &global_file).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(std::fs::read(&global_file).unwrap(), original);
+        let mut spec = f.spec("", true);
+        spec.hooks.binary = f.root.join("replacement-bus");
+        let result = capture_args(&spec.hooks, &f.project);
+        if std::fs::read(&global_file).unwrap() != original {
+            mutated.push(alias);
+        }
+        if alias == "unrelated" {
+            assert!(
+                result.is_ok(),
+                "unrelated global alias blocked resume: {result:?}"
+            );
+        } else if result.is_ok() {
+            accepted.push(alias);
+        }
+    }
+    assert!(
+        mutated.is_empty(),
+        "resume changed global shared.json bytes through {mutated:?}"
+    );
+    assert!(
+        accepted.is_empty(),
+        "global shared.json aliases were accepted: {accepted:?}"
+    );
+}

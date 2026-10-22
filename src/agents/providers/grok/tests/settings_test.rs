@@ -291,3 +291,191 @@ fn grok_setup_refuses_a_global_directory_alias_to_the_project_hooks_directory() 
         original
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn grok_setup_preserves_global_hooks_with_a_different_filename() {
+    let mut mutated = Vec::new();
+    let mut accepted = Vec::new();
+    let mut initialized_aliases = Vec::new();
+    for alias in ["direct", "relative", "chained", "unrelated"] {
+        let f = Fixture::new();
+        f.install();
+        let project_hooks = f.project.join(".grok/hooks");
+        let global_hooks = f.root.join("home/.grok/hooks");
+        std::fs::create_dir_all(&project_hooks).unwrap();
+        std::fs::create_dir_all(&global_hooks).unwrap();
+        let project_file = project_hooks.join("bus.json");
+        let original = b"{\"custom\":\"global-shared-hook-must-stay-unchanged\"}";
+        std::fs::write(&project_file, original).unwrap();
+        let global_file = global_hooks.join("shared.json");
+        match alias {
+            "direct" => std::os::unix::fs::symlink(&project_file, &global_file).unwrap(),
+            "relative" => {
+                std::os::unix::fs::symlink("../../../project/.grok/hooks/bus.json", &global_file)
+                    .unwrap()
+            }
+            "chained" => {
+                std::os::unix::fs::symlink(&project_file, global_hooks.join("linked-hook.json"))
+                    .unwrap();
+                std::os::unix::fs::symlink("linked-hook.json", &global_file).unwrap();
+            }
+            "unrelated" => {
+                let independent = f.root.join("independent-hook.json");
+                std::fs::write(&independent, original).unwrap();
+                std::os::unix::fs::symlink(independent, &global_file).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(std::fs::read(&global_file).unwrap(), original);
+        let initialized = std::cell::Cell::new(false);
+        let result = common::prepare(&f.spec("", true), |hooks| {
+            initialized.set(true);
+            std::fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+        });
+        if std::fs::read(&global_file).unwrap() != original {
+            mutated.push(alias);
+        }
+        if alias == "unrelated" {
+            assert!(
+                result.is_ok(),
+                "unrelated global alias blocked project setup: {result:?}"
+            );
+            assert!(initialized.get());
+        } else {
+            if result.is_ok() {
+                accepted.push(alias);
+            }
+            if initialized.get() {
+                initialized_aliases.push(alias);
+            }
+        }
+    }
+    assert!(
+        mutated.is_empty(),
+        "project setup changed global shared.json bytes through {mutated:?}"
+    );
+    assert!(
+        accepted.is_empty(),
+        "global shared.json aliases were accepted: {accepted:?}"
+    );
+    assert!(
+        initialized_aliases.is_empty(),
+        "unsafe aliases initialized captures: {initialized_aliases:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_hook_global_roots_are_enforced_for_install_and_resume() {
+    for resume in [false, true] {
+        for route in [
+            "grok-home",
+            "grok-home-parent",
+            "grok-home-alias",
+            "config-parent",
+            "config-alias",
+            "config-second",
+            "config-folder",
+            "config-file",
+            "config-relative",
+            "config-tilde",
+            "configured-shared",
+            "configured-nested-shared",
+            "independent-home",
+            "independent",
+        ] {
+            let f = Fixture::new();
+            f.install();
+            f.prepare("");
+            let file = f.project.join(".grok/hooks/bus.json");
+            let original = std::fs::read(&file).unwrap();
+            let global = f.root.join("home/.grok");
+            std::fs::create_dir_all(&global).unwrap();
+            if route.starts_with("grok-home") || route == "independent-home" {
+                let root = match route {
+                    "grok-home-parent" => f.project.clone(),
+                    "grok-home-alias" => {
+                        let alias = f.root.join("relocated-home");
+                        std::os::unix::fs::symlink(f.project.join(".grok"), &alias).unwrap();
+                        alias
+                    }
+                    "independent-home" => f.root.join("separate-home"),
+                    _ => f.project.join(".grok"),
+                };
+                std::env::set_var("GROK_HOME", root);
+            } else {
+                let entry = match route {
+                    "config-parent" => f.project.clone(),
+                    "config-alias" => {
+                        let alias = f.root.join("configured-alias");
+                        std::os::unix::fs::symlink(f.project.join(".grok/hooks"), &alias).unwrap();
+                        alias
+                    }
+                    "config-second" | "config-folder" => f.project.join(".grok/hooks"),
+                    "config-file" => file.clone(),
+                    "config-relative" => std::path::PathBuf::from("../../project/.grok/hooks"),
+                    "config-tilde" => std::path::PathBuf::from("~/../project/.grok/hooks"),
+                    _ => f.root.join("additional-hooks"),
+                };
+                if route.starts_with("configured-") || route == "independent" {
+                    let folder = if route == "configured-nested-shared" {
+                        entry.join("hooks")
+                    } else {
+                        entry.clone()
+                    };
+                    std::fs::create_dir_all(&folder).unwrap();
+                    let target = if route == "independent" {
+                        let other = f.root.join("independent.json");
+                        std::fs::write(&other, &original).unwrap();
+                        other
+                    } else {
+                        file.clone()
+                    };
+                    std::os::unix::fs::symlink(target, folder.join("shared.json")).unwrap();
+                }
+                std::fs::write(
+                    global.join("config.toml"),
+                    format!(
+                        "hooks-paths = [{}{}]\n",
+                        if route == "config-second" {
+                            format!(
+                                "{}, ",
+                                serde_json::to_string(
+                                    &f.root.join("independent-first").to_string_lossy()
+                                )
+                                .unwrap()
+                            )
+                        } else {
+                            String::new()
+                        },
+                        serde_json::to_string(&entry.to_string_lossy()).unwrap()
+                    ),
+                )
+                .unwrap();
+            }
+            let mut spec = f.spec("", true);
+            spec.hooks.binary = f.root.join("replacement-bus");
+            let initialized = std::cell::Cell::new(false);
+            let result = if resume {
+                crate::agents::providers::grok::resume::capture_args(&spec.hooks, &f.project)
+                    .map(|_| ())
+            } else {
+                common::prepare(&spec, |_| {
+                    initialized.set(true);
+                    Ok(())
+                })
+                .map(|_| ())
+            };
+            assert_eq!(
+                result.is_ok(),
+                route.starts_with("independent"),
+                "{resume}/{route}: {result:?}"
+            );
+            if !route.starts_with("independent") {
+                assert!(!initialized.get(), "{resume}/{route}");
+                assert_eq!(std::fs::read(&file).unwrap(), original, "{resume}/{route}");
+            }
+        }
+    }
+}
