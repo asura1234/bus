@@ -896,7 +896,13 @@ async fn claude_short_pane_option_list_takes_free_text_scrolled_below_the_window
         "free text must be answerable in one command in a short pane: {:?}",
         answered.reason
     );
-    assert!(writes.try_recv().is_ok());
+    // Only the moves: the hidden field may hold a draft until it is redrawn.
+    assert_eq!(answered.reason.as_deref(), Some("free_text_focused"));
+    assert_eq!(
+        writes.try_recv().unwrap(),
+        Bytes::from_static(b"\x1b[B\x1b[B\x1b[B\x1b[B")
+    );
+    assert!(writes.try_recv().is_err());
 }
 
 #[tokio::test]

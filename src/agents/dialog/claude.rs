@@ -49,8 +49,10 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     if rows.iter().filter(|row| row.selected).count() != 1 {
         return None;
     }
-    if hint.contains("ctrl+g to edit") {
-        let selected = rows.iter().find(|row| row.selected)?;
+    let selected = rows.iter().find(|row| row.selected)?;
+    // A ticked multi-select field keeps focus after its answer; the form
+    // still waits for Next or Submit, so it stays a choice.
+    if hint.contains("ctrl+g to edit") && !selected.label.starts_with("[✔]") {
         let mut dialog = text_question(&lines[header..start], &hint, &selected.label)?;
         dialog.fingerprint_context = format!("{:?}", styles[header]);
         return Some(dialog);

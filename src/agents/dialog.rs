@@ -182,11 +182,11 @@ impl Dialog {
         if let Some(key) = option.and_then(|option| option.navigation_key) {
             return Some(vec![key]);
         }
+        // Scrolling hides options above the window as well as below it.
         let hidden = option.is_none()
-            && self.claude_chat().is_some_and(|chat| {
-                (self.options.first().map_or(1, |first| first.number)..chat.number)
-                    .contains(&number)
-            });
+            && self
+                .claude_chat()
+                .is_some_and(|chat| (1..chat.number).contains(&number));
         if option.is_none() && !hidden {
             return None;
         }
@@ -199,9 +199,11 @@ impl Dialog {
         Some(keys)
     }
 
-    /// The free-text row's number, whether it holds a draft, and whether it
-    /// is a multi-select checkbox.
+    /// Free-text row number, draft and checkbox flags; a focused field is row 0.
     pub(crate) fn free_text_summary(&self) -> Option<(u32, bool, bool)> {
+        if let (DialogKind::Question, Some(input)) = (self.kind, &self.input) {
+            return Some((0, !input.value.is_empty(), false));
+        }
         let number = self.free_text_option()?;
         let checkbox = self.options.iter().any(|option| {
             option.number == number && claude::checkbox_label(&option.label).is_some()

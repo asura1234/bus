@@ -19,6 +19,9 @@ pub(crate) enum DialogChoice {
     Unskippable,
     /// The free-text row already holds text someone typed.
     FreeTextDraft,
+    /// Arrows moved to a free-text row scrolled out of view; no text was
+    /// typed, since only the redrawn row shows whether it holds a draft.
+    Focused(Vec<String>),
 }
 
 impl TerminalRuntime {
@@ -209,6 +212,19 @@ impl TerminalRuntime {
         let Some(moves) = dialog.free_text_keys() else {
             return Ok(DialogChoice::Unreachable);
         };
+        if !dialog.options.iter().any(|option| option.free_text) {
+            self.io
+                .try_send_bytes(Bytes::from(
+                    moves
+                        .iter()
+                        .flat_map(|key| self.encode_dialog_key(key))
+                        .collect::<Vec<_>>(),
+                ))
+                .map_err(|error| error.to_string())?;
+            return Ok(DialogChoice::Focused(
+                moves.into_iter().map(str::to_owned).collect(),
+            ));
+        }
         if !self.bracketed_paste_enabled() && text.contains(['\n', '\t']) {
             return Err("Multiline answers require bracketed paste support".into());
         }

@@ -7,6 +7,8 @@ struct Native {
     screen: &'static str,
     /// Frames the agent draws after a write, one per observation.
     after_write: Vec<&'static str>,
+    /// The first answer only focuses a hidden free-text row and shows this.
+    focus_shows: Option<&'static str>,
     choices: Vec<schema::AgentDialogChooseParams>,
     answers: Vec<schema::AgentDialogAnswerParams>,
 }
@@ -89,6 +91,17 @@ impl Transport for ScreenTransport {
             }
             Method::AgentDialogAnswer(params) => {
                 native.answers.push(params);
+                if let Some(focused) = native.focus_shows.take() {
+                    native.screen = focused;
+                    return Ok(ResponseResult::AgentDialogChosen {
+                        choice: schema::AgentDialogChooseResult {
+                            written: true,
+                            reason: Some("free_text_focused".into()),
+                            keys: vec!["down".into(); 4],
+                            observation: observation(focused),
+                        },
+                    });
+                }
                 written(&mut native, vec!["down".into(), "enter".into()])
             }
             other => panic!("unexpected native method: {other:?}"),
@@ -267,6 +280,94 @@ fn a_short_pane_at_rest_takes_a_free_text_answer() {
     let (_, fingerprint) = fingerprint(&mut worker, agent);
     let answered = worker.answer_dialog(agent, Some("Remap whole clips only"), false, &fingerprint);
     assert!(answered.is_ok(), "{answered:?}");
+    assert_eq!(native.lock().unwrap().answers.len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Claude 2.1.308 after Enter in a multi-select form's `Type something`
+/// checkbox (capture `multi-q1-enter-empty`, here holding the typed text):
+/// the box is ticked and the field keeps focus.
+const MULTI_SELECT_FIELD_TICKED_AND_FOCUSED: &str = "←  ☐ Caches  ☐ Region  ✔ Submit  →\n\nWhich caches may be removed?\n\n  1. [ ] Build cache\n         Remove the build cache.\n  2. [ ] Package cache\n         Remove the package cache.\n❯ 3. [✔] Keep only the newest cache\n     Next\n────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel\n";
+
+#[test]
+fn a_multi_select_free_text_answer_leaves_a_way_on_to_next() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-question/multi-select.txt"
+    ));
+    let (observed, first) = fingerprint(&mut worker, agent);
+    assert_eq!(observed["dialog"]["free_text"]["checkbox"], true);
+    native.lock().unwrap().after_write = vec![MULTI_SELECT_FIELD_TICKED_AND_FOCUSED; 64];
+    worker
+        .answer_dialog(agent, Some("Keep only the newest cache"), false, &first)
+        .unwrap();
+    let (after, again) = fingerprint(&mut worker, agent);
+    // The form still waits for Next or Submit; the orchestrator must be able
+    // to choose it without pressing Enter in the field again.
+    assert_eq!(after["dialog"]["kind"], "choice", "{after}");
+    assert!(worker.choose_dialog_option(agent, 4, &again).is_ok());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_short_pane_can_choose_an_option_scrolled_above_the_window() {
+    let dialog = crate::agents::dialog::parse(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-cursor4-scrolled.ansi"
+    ))
+    .unwrap();
+    assert_eq!(dialog.keys_for(2), Some(vec!["up", "up", "enter"]));
+    assert_eq!(
+        dialog.keys_for(1),
+        Some(vec!["up", "up", "up", "enter"]),
+        "option 1 exists above the visible 2"
+    );
+}
+
+const SHORT_FIELD_FOCUSED: &str = include_str!(
+    "../../../../../tests/fixtures/claude-option-list/short-freetext-focused-empty.ansi"
+);
+
+#[test]
+fn a_hidden_free_text_row_is_focused_and_checked_empty_before_any_text() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-rest-top.ansi"
+    ));
+    let (_, fingerprint) = fingerprint(&mut worker, agent);
+    native.lock().unwrap().focus_shows = Some(SHORT_FIELD_FOCUSED);
+    let answered = worker
+        .answer_dialog(agent, Some("Remap whole clips only"), false, &fingerprint)
+        .unwrap();
+    assert_eq!(answered["outcome"], "closed");
+    let answers = &native.lock().unwrap().answers;
+    assert_eq!(
+        answers.len(),
+        2,
+        "focus, then the text into the empty field"
+    );
+    let focused = crate::agents::dialog::parse(SHORT_FIELD_FOCUSED).unwrap();
+    assert_eq!(answers[1].expected_dialog_digest, focused.digest());
+    assert_eq!(answers[1].text.as_deref(), Some("Remap whole clips only"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_hidden_free_text_row_holding_a_draft_gets_no_text() {
+    let (mut worker, agent, dir, native) = option_list_worker(include_str!(
+        "../../../../../tests/fixtures/claude-option-list/short-rest-top.ansi"
+    ));
+    let (_, fingerprint) = fingerprint(&mut worker, agent);
+    let drafted: &'static str = Box::leak(
+        SHORT_FIELD_FOCUSED
+            .replace("Type something.", "old draft")
+            .into_boxed_str(),
+    );
+    native.lock().unwrap().focus_shows = Some(drafted);
+    let refused = worker
+        .answer_dialog(agent, Some("Remap whole clips only"), false, &fingerprint)
+        .unwrap_err();
+    assert!(refused.contains("free_text_holds_draft"), "{refused}");
     assert_eq!(native.lock().unwrap().answers.len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

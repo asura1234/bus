@@ -34,6 +34,9 @@ struct DialogFingerprintClaims {
     observed_at_ns: u128,
 }
 
+/// The native answer only moved to a hidden free-text row (see
+/// `fill_focused_free_text`).
+const FREE_TEXT_FOCUSED: &str = "free_text_focused";
 /// How long `agent choose` watches the screen for the dialog to react.
 const DIALOG_SETTLE_POLLS: u32 = 20;
 const DIALOG_SETTLE_INTERVAL: Duration = Duration::from_millis(100);
@@ -297,6 +300,18 @@ impl Worker {
         };
         let native = self.transport.request(method);
         let keys = match native {
+            Ok(ResponseResult::AgentDialogChosen { choice })
+                if choice.written && choice.reason.as_deref() == Some(FREE_TEXT_FOCUSED) =>
+            {
+                let mut keys = choice.keys;
+                keys.extend(self.fill_focused_free_text(
+                    &pane_id,
+                    &terminal_id,
+                    session_id.as_deref(),
+                    text.unwrap_or_default(),
+                )?);
+                keys
+            }
             Ok(ResponseResult::AgentDialogChosen { choice }) if choice.written => choice.keys,
             Ok(ResponseResult::AgentDialogChosen { choice }) => {
                 return Err(format!(
@@ -335,6 +350,64 @@ impl Worker {
             result["skipped"] = json!(skip);
         }
         Ok(result)
+    }
+
+    /// The second step of answering a free-text row scrolled out of view:
+    /// once the moves redraw it as the focused field, type only if it is empty.
+    fn fill_focused_free_text(
+        &mut self,
+        pane_id: &str,
+        terminal_id: &str,
+        session_id: Option<&str>,
+        text: &str,
+    ) -> Result<Vec<String>, String> {
+        let mut field = None;
+        for poll in 0..DIALOG_SETTLE_POLLS {
+            if poll > 0 {
+                std::thread::sleep(DIALOG_SETTLE_INTERVAL);
+            }
+            if let Ok(observation) =
+                self.native_dialog_checked(pane_id, terminal_id, session_id, false)
+            {
+                field = observation
+                    .dialog
+                    .filter(|dialog| dialog.kind == schema::AgentDialogKind::Question);
+                if field.is_some() {
+                    break;
+                }
+            }
+        }
+        let field = field.ok_or(
+            "Moved to the free-text row, but it never showed as a focused field; no text was typed",
+        )?;
+        if field.free_text.is_some_and(|free_text| free_text.draft) {
+            return Err(
+                "Moved to the free-text row; no text was typed (free_text_holds_draft): edit the draft in the agent's pane or answer it there".into(),
+            );
+        }
+        let answer =
+            self.transport
+                .request(Method::AgentDialogAnswer(schema::AgentDialogAnswerParams {
+                    target: pane_id.into(),
+                    expected_terminal_id: terminal_id.into(),
+                    expected_pane_id: pane_id.into(),
+                    expected_session_id: session_id.map(str::to_owned),
+                    expected_dialog_digest: field.digest,
+                    text: Some(text.into()),
+                    skip: false,
+                }));
+        match answer {
+            Ok(ResponseResult::AgentDialogChosen { choice }) if choice.written => Ok(choice.keys),
+            Ok(ResponseResult::AgentDialogChosen { choice }) => Err(format!(
+                "Moved to the free-text row; no text was typed ({})",
+                choice.reason.as_deref().unwrap_or("dialog changed")
+            )),
+            Ok(_) => Err("Unexpected native dialog response; outcome is uncertain".into()),
+            Err(error) => Err(format!(
+                "Dialog answer outcome is uncertain: {}",
+                error.message
+            )),
+        }
     }
 
     fn settle_dialog_answer(

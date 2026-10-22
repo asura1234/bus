@@ -941,8 +941,11 @@ in the row, `agent answer` refuses (`free_text_holds_draft`) and `agent choose`
 on the row submits the draft; replacing a draft needs the agent's pane. In a
 short pane Claude shows only part of the list: `agent dialog` returns the
 visible options with their real numbers, `choose` also takes the numbers
-scrolled out of view, and `free_text.option` names the row even when hidden,
-so `answer --text` still reaches it.
+scrolled out of view above or below the window, and `free_text.option` names
+the row even when hidden. `answer --text` then moves to it first and types
+only once the redrawn field shows it empty (a draft there gets no text,
+`free_text_holds_draft`). After a free-text answer on a multi-select question,
+the ticked field keeps focus; it stays a choice, so choose Next or Submit.
 When the cursor is already on the row, `agent dialog` shows it as a focused
 text question, as it does for Cursor's `Other` row.
 A multi-question form (`←  ☐ Fresh files  ☐ Helper home  ✔ Submit  →`) shows
