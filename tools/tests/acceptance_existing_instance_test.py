@@ -261,6 +261,17 @@ class EndToEndEnvironmentTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 e2e.find_binary(root=root)
 
+    def test_data_dir_keeps_session_sockets_under_the_unix_limit_from_any_checkout(self):
+        # From a worktree, temp/e2e/<ts>/data made herdr-client.sock 123 bytes (macOS allows 104).
+        data = e2e.short_data_dir()
+        try:
+            self.assertFalse(data.is_relative_to(e2e.ROOT))
+            self.assertEqual(data.stat().st_mode & 0o777, 0o700)
+            for name in ("herdr.sock", "herdr-client.sock"):
+                self.assertLess(len(str(data / "herdr-config/sessions/bus" / name).encode()), 104)
+        finally:
+            data.rmdir()
+
     def test_bus_launches_in_dev_mode(self):
         self.assertEqual(e2e.bus_argv(Path("/x/bus")), ["/x/bus", "--dev"])
 
