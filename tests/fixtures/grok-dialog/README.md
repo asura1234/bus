@@ -1,10 +1,9 @@
 # Grok dialog fixtures — SYNTHETIC
 
-These fixtures were authored for lane C against the G0 contract on 2026-10-22.
+These fixtures describe the supported synthetic card contract.
 They are parser hypotheses, not captures of authenticated Grok Build 1.0.5 cards.
 The exact binary-matching local guide `~/.grok/docs/user-guide/03-keyboard-shortcuts.md`
-and the historical 0.2.101 manifest inform the keys and gutter shapes. The
-investigation metadata says the guide matches this binary; permission, trust,
+and the historical 0.2.101 manifest inform the keys and gutter shapes. Permission, trust,
 question, narrow/wrapped and parked-focus model cards remain uncaptured.
 
 Supported synthetic contract:

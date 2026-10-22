@@ -112,12 +112,12 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
                 "--resume" | "-r" | "--session-id" | "--continue" | "-c" | "--fork-session"
             ),
             ProviderKind::Cursor => matches!(name, "--resume" | "--continue"),
-            ProviderKind::Grok => super::super::grok::launch::is_session_selector(name),
+            ProviderKind::Grok => unreachable!("Grok filters its own resumable options"),
         };
         if selector {
             index += 1;
             if !arg.contains('=')
-                && matches!(name, "--resume" | "-r" | "--session-id" | "-s")
+                && matches!(name, "--resume" | "-r" | "--session-id")
                 && args.get(index).is_some_and(|value| !value.starts_with('-'))
             {
                 index += 1;

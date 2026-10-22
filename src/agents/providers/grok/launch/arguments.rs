@@ -300,7 +300,7 @@ pub(crate) fn runtime_additions(args: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// G wires this companion into the shared resume owner after the lane join.
+/// The shared resume owner uses this to omit startup-only selectors and prompts.
 /// Derive argv from the verbatim saved options; never replay startup prompts,
 /// literal tails or session selectors. Preserve unknown spans without guessing.
 pub(crate) fn resumable_options(args: &[String]) -> Vec<String> {

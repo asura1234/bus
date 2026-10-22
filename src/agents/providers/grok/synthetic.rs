@@ -1,4 +1,4 @@
-//! A dev-tools-only adapter for F's synthetic transcript contract. Never a
+//! A dev-tools-only adapter for the synthetic transcript contract. Never a
 //! claim about native Grok serialization. The coordinator supplies an owned
 //! scratch root; native JSON cannot opt itself into this adapter.
 use super::completion::CompletionAttestation;
