@@ -8,7 +8,8 @@ use std::time::Duration;
 
 mod composer;
 
-pub(super) const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
+#[cfg(test)]
+pub(super) use crate::protocol::api::submission::SUBMIT_DELAY as AGENT_PROMPT_SUBMIT_DELAY;
 
 struct StyledChar {
     character: char,
@@ -168,34 +169,63 @@ pub(super) fn agent_prompt_submit_delay(
     agent: crate::agents::AgentKind,
     prompt_bytes: usize,
 ) -> Duration {
-    #[cfg(windows)]
-    if agent == crate::agents::AgentKind::Codex {
-        // Codex consumes Windows paste bursts at about 4 bytes/ms, then suppresses Enter briefly.
-        // ponytail: best-effort ConPTY timing; remove when Codex exposes a paste-complete boundary.
-        return Duration::from_millis(600 + prompt_bytes as u64 / 4);
-    }
-    #[cfg(not(windows))]
-    let _ = (agent, prompt_bytes);
-    AGENT_PROMPT_SUBMIT_DELAY
+    crate::protocol::api::submission::submit_delay(
+        agent == crate::agents::AgentKind::Codex,
+        prompt_bytes,
+    )
 }
 
 impl App {
+    pub(in crate::server) fn handle_deferred_agent_api_message(
+        &mut self,
+        message: crate::server::api::ApiRequestMessage,
+    ) -> bool {
+        self.handle_deferred_agent_api_request_at(
+            message.request,
+            message.respond_to,
+            message.received_at,
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn handle_deferred_agent_api_request(
         &mut self,
         request: crate::protocol::api::schema::Request,
         respond_to: std::sync::mpsc::Sender<String>,
     ) -> bool {
+        self.handle_deferred_agent_api_request_at(request, respond_to, std::time::Instant::now())
+    }
+
+    pub(super) fn handle_deferred_agent_api_request_at(
+        &mut self,
+        request: crate::protocol::api::schema::Request,
+        respond_to: std::sync::mpsc::Sender<String>,
+        started: std::time::Instant,
+    ) -> bool {
+        let Some(budget) = crate::protocol::api::submission::method_budget(&request.method) else {
+            return false;
+        };
+        let hard_deadline = started + budget;
+        if std::time::Instant::now() >= hard_deadline {
+            // No lookup, paste or Enter has run. Queue latency cannot turn
+            // definite non-delivery into a fresh native submission window.
+            let _ = respond_to.send(encode_error(
+                request.id,
+                crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
+                crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE,
+            ));
+            return true;
+        }
         let api_request_id = request.id.clone();
-        let started = std::time::Instant::now();
         let queued = match request.method {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params, false)
+                self.queue_agent_prompt(request.id, params, false, hard_deadline)
             }
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
-                self.queue_agent_prompt_if_idle(request.id, params)
+                self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
             }
             crate::protocol::api::schema::Method::AgentPromptIfUnbound(params) => {
-                self.queue_agent_prompt_if_unbound(request.id, params)
+                self.queue_agent_prompt_if_unbound(request.id, params, hard_deadline)
             }
             _ => return false,
         };
@@ -205,33 +235,16 @@ impl App {
                     pane_id = %agent.pane_id, terminal_id = %agent.terminal_id,
                     "Prompt submission queued in native terminal writer");
                 std::thread::spawn(move || {
-                    let completed = completion.recv();
-                    let not_shown =
-                        |err: &std::io::Error| crate::terminal::runtime::PromptNotShown::is(err);
-                    let outcome = match &completed {
-                        Ok(Ok(())) => "written",
-                        Ok(Err(err)) if not_shown(err) => "not_shown",
-                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => "timeout",
-                        Ok(Err(_)) => "write_failed",
-                        Err(_) => "writer_closed",
-                    };
-                    tracing::info!(target: "bus::server::api::agents", event = "bus.terminal.result", api_request_id = %id,
-                        pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
-                        elapsed_ms = started.elapsed().as_millis() as u64,
-                        "Native prompt and Enter submission completed; this is not model acceptance");
-                    let response = match completed {
-                        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
-                        Ok(Err(err)) if not_shown(&err) => encode_error(
-                            id,
-                            crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
-                            err.to_string(),
-                        ),
-                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
-                            encode_error(id, "timeout", err.to_string())
-                        }
-                        Ok(Err(err)) => encode_error(id, "agent_prompt_failed", err.to_string()),
-                        Err(_) => encode_error(id, "agent_prompt_failed", "pty actor closed"),
-                    };
+                    // A blocked native writer must not extend the RPC forever.
+                    // Timeout stays uncertain: Enter may already have been sent.
+                    let response = complete_agent_prompt(
+                        id,
+                        agent,
+                        hard_deadline,
+                        started,
+                        std::time::Instant::now(),
+                        |timeout| completion.recv_timeout(timeout),
+                    );
                     let _ = respond_to.send(response);
                 });
             }
@@ -248,6 +261,7 @@ impl App {
         &mut self,
         id: String,
         params: crate::protocol::api::schema::AgentPromptIfUnboundParams,
+        hard_deadline: std::time::Instant,
     ) -> Result<
         (
             String,
@@ -271,6 +285,7 @@ impl App {
                 wait: None,
             },
             true,
+            hard_deadline,
         )
     }
 
@@ -278,6 +293,7 @@ impl App {
         &mut self,
         id: String,
         params: crate::protocol::api::schema::AgentPromptIfIdleParams,
+        hard_deadline: std::time::Instant,
     ) -> Result<
         (
             String,
@@ -301,6 +317,7 @@ impl App {
                 wait: None,
             },
             true,
+            hard_deadline,
         )
     }
 
@@ -309,6 +326,7 @@ impl App {
         id: String,
         params: AgentPromptParams,
         observe: bool,
+        hard_deadline: std::time::Instant,
     ) -> Result<
         (
             String,
@@ -371,12 +389,17 @@ impl App {
         }
         let submit_delay = agent_prompt_submit_delay(expected_agent, params.text.len());
         #[cfg(windows)]
-        let submit_deadline = params
+        let caller_deadline = params
             .wait
             .as_ref()
             .and_then(|wait| wait.submission_deadline);
         #[cfg(not(windows))]
-        let submit_deadline = None;
+        let caller_deadline = None;
+        let submit_deadline = Some(
+            caller_deadline.map_or(hard_deadline, |deadline: std::time::Instant| {
+                deadline.min(hard_deadline)
+            }),
+        );
         if expected_agent == crate::agents::AgentKind::GithubCopilot {
             // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
             let focus =
@@ -443,4 +466,50 @@ fn queue_prompt_input(
         deadline,
         composer::observer(kind, text),
     )
+}
+
+// The waiter is injectable so boundary races use a virtual response timeline.
+pub(super) fn complete_agent_prompt(
+    id: String,
+    agent: crate::protocol::api::schema::AgentInfo,
+    hard_deadline: std::time::Instant,
+    started: std::time::Instant,
+    now: std::time::Instant,
+    receive: impl FnOnce(Duration) -> Result<std::io::Result<()>, std::sync::mpsc::RecvTimeoutError>,
+) -> String {
+    let response_deadline = hard_deadline + crate::protocol::api::submission::RESPONSE_GRACE;
+    let completed = receive(response_deadline.saturating_duration_since(now));
+    let not_shown = |err: &std::io::Error| crate::terminal::runtime::PromptNotShown::is(err);
+    let outcome = match &completed {
+        Ok(Ok(())) => "written",
+        Ok(Err(err)) if not_shown(err) => "not_shown",
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => "timeout",
+        Ok(Err(_)) => "write_failed",
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => "timeout",
+        Err(_) => "writer_closed",
+    };
+    tracing::info!(target: "bus::server::api::agents", event = "bus.terminal.result", api_request_id = %id,
+        pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "Native prompt and Enter submission completed; this is not model acceptance");
+    match completed {
+        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
+        Ok(Err(err)) if not_shown(&err) => encode_error(
+            id,
+            crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
+            err.to_string(),
+        ),
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
+            encode_error(id, "timeout", err.to_string())
+        }
+        Ok(Err(err)) => encode_error(id, "agent_prompt_failed", err.to_string()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => encode_error(
+            id,
+            "timeout",
+            "Native prompt submission exceeded its hard deadline",
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            encode_error(id, "agent_prompt_failed", "pty actor closed")
+        }
+    }
 }

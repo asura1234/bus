@@ -63,6 +63,7 @@ pub(super) fn handle_connection_with_stop(
     let Some(line) = read_initial_request_line(&mut stream)? else {
         return Ok(());
     };
+    let received_at = Instant::now();
 
     let line = line.trim();
     if line.is_empty() {
@@ -116,6 +117,7 @@ pub(super) fn handle_connection_with_stop(
             let response = prompt_agent(
                 request_id.clone(),
                 params,
+                received_at,
                 &mut stream,
                 api_tx,
                 event_hub,
@@ -145,6 +147,7 @@ pub(super) fn handle_connection_with_stop(
                 id: request_id,
                 method: method_body,
             },
+            received_at,
             api_tx,
             capabilities,
             server_stop,
@@ -157,6 +160,7 @@ pub(super) fn handle_connection_with_stop(
 fn serve_regular_request(
     stream: &mut LocalStream,
     request: Request,
+    received_at: Instant,
     api_tx: &ApiRequestSender,
     capabilities: ServerCapabilities,
     server_stop: &Arc<AtomicBool>,
@@ -164,7 +168,7 @@ fn serve_regular_request(
     changes_ui: bool,
 ) -> io::Result<()> {
     let request_id = request.id.clone();
-    let response = handle_request(request, api_tx, capabilities, server_stop);
+    let response = handle_request_received(request, api_tx, capabilities, server_stop, received_at);
     let result = write_text_line_allow_disconnect(stream, &response);
     match &result {
         Ok(()) => crate::utils::logging::api_request_completed(
@@ -228,11 +232,22 @@ fn finish_wait_response(
     result
 }
 
+#[cfg(test)]
 pub(super) fn handle_request(
     request: Request,
     api_tx: &ApiRequestSender,
     capabilities: ServerCapabilities,
     server_stop: &Arc<AtomicBool>,
+) -> String {
+    handle_request_received(request, api_tx, capabilities, server_stop, Instant::now())
+}
+
+fn handle_request_received(
+    request: Request,
+    api_tx: &ApiRequestSender,
+    capabilities: ServerCapabilities,
+    server_stop: &Arc<AtomicBool>,
+    received_at: Instant,
 ) -> String {
     if matches!(&request.method, Method::Ping(_)) {
         return serde_json::to_string(&SuccessResponse {
@@ -272,7 +287,7 @@ pub(super) fn handle_request(
         );
     }
 
-    dispatch_to_app(request, api_tx, None, None)
+    dispatch_to_app(request, api_tx, None, None, received_at)
 }
 
 pub(super) fn api_response_outcome(response: &str) -> &'static str {
@@ -460,7 +475,16 @@ pub(in crate::server::api) fn dispatch_to_app_with_timeout(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
-    dispatch_to_app(request, api_tx, timeout, None)
+    dispatch_to_app_with_timeout_at(request, api_tx, timeout, Instant::now())
+}
+
+pub(in crate::server::api) fn dispatch_to_app_with_timeout_at(
+    request: Request,
+    api_tx: &ApiRequestSender,
+    timeout: Option<Duration>,
+    received_at: Instant,
+) -> String {
+    dispatch_to_app(request, api_tx, timeout, None, received_at)
 }
 
 pub(in crate::server::api) fn dispatch_to_app_with_caller_timeout(
@@ -468,11 +492,21 @@ pub(in crate::server::api) fn dispatch_to_app_with_caller_timeout(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
+    dispatch_to_app_with_caller_timeout_at(request, api_tx, timeout, Instant::now())
+}
+
+pub(in crate::server::api) fn dispatch_to_app_with_caller_timeout_at(
+    request: Request,
+    api_tx: &ApiRequestSender,
+    timeout: Option<Duration>,
+    received_at: Instant,
+) -> String {
     dispatch_to_app(
         request,
         api_tx,
         timeout,
         Some(("timeout", "timed out waiting for agent status")),
+        received_at,
     )
 }
 
@@ -481,10 +515,12 @@ fn dispatch_to_app(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
     timeout_response: Option<(&str, &str)>,
+    received_at: Instant,
 ) -> String {
     let request_id = request.id.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     if let Err(err) = api_tx.send(ApiRequestMessage {
+        received_at,
         request,
         respond_to,
     }) {

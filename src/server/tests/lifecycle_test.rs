@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn headless_prompt_dispatch_preserves_the_socket_receipt_budget() {
+    let mut server = test_headless_server();
+    let (respond_to, response) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        received_at: Instant::now() - Duration::from_secs(4),
+        request: crate::protocol::api::schema::Request {
+            id: "expired_before_lookup".into(),
+            method: crate::protocol::api::schema::Method::AgentPrompt(
+                crate::protocol::api::schema::AgentPromptParams {
+                    target: "not-looked-up".into(),
+                    text: "from bus".into(),
+                    wait: None,
+                },
+            ),
+        },
+        respond_to,
+    });
+    let response: serde_json::Value = serde_json::from_str(&response.recv().unwrap()).unwrap();
+    assert_eq!(
+        response["error"]["code"],
+        crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
+    );
+    assert_eq!(server.app.terminal_runtimes.len(), 0);
+}
+
+#[test]
 fn client_launched_server_saves_and_stops_after_last_client_grace() {
     let mut server = test_headless_server();
     server.stop_without_clients = true;
@@ -97,6 +123,7 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(
         server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: crate::protocol::api::schema::Request {
                 id: "headless_stop_after_events".into(),
                 method: crate::protocol::api::schema::Method::ServerStop(
@@ -172,6 +199,7 @@ fn drained_api_requests_are_timed_like_waited_ones() {
         let (respond_to, response_rx) = std::sync::mpsc::channel();
         api_tx
             .send(crate::server::api::ApiRequestMessage {
+                received_at: std::time::Instant::now(),
                 request: api::schema::Request {
                     id: id.into(),
                     method: api::schema::Method::PaneList(api::schema::PaneListParams::default()),

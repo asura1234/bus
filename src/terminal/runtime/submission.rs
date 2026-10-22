@@ -1,5 +1,6 @@
 //! Observe the composer between writes; retry only Enter for the owned draft.
 use super::{io::PaneRuntimeIo, TerminalRuntime};
+use crate::protocol::api::submission::{confirmation_budget, maximum_budget, WITHDRAW_GRACE};
 use crate::terminal::emulator::PaneTerminal;
 use bytes::Bytes;
 use std::{
@@ -43,9 +44,6 @@ impl PromptNotShown {
     }
 }
 
-/// Time allowed after the deadline to clear a paste that never showed.
-const WITHDRAW_GRACE: Duration = Duration::from_secs(1);
-
 struct ObservedSubmission {
     terminal: Arc<PaneTerminal>,
     io: PaneRuntimeIo,
@@ -54,6 +52,7 @@ struct ObservedSubmission {
     enter: Bytes,
     clear: Vec<Bytes>,
     deadline: std::cell::Cell<Instant>,
+    hard_deadline: Instant,
 }
 
 impl TerminalRuntime {
@@ -68,6 +67,10 @@ impl TerminalRuntime {
         deadline: Option<Instant>,
         inspect: impl Fn(&str) -> InputObservation + Send + 'static,
     ) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
+        let now = Instant::now();
+        let hard_deadline = deadline
+            .unwrap_or(now + maximum_budget(delay))
+            .min(now + maximum_budget(delay));
         let submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             io: self.io.clone(),
@@ -75,9 +78,11 @@ impl TerminalRuntime {
             inspect: Box::new(inspect),
             enter,
             clear,
+            // Queue/dispatch time must not consume the withdrawal reserve.
             deadline: std::cell::Cell::new(
-                deadline.unwrap_or_else(|| Instant::now() + delay + Duration::from_secs(2)),
+                (now + confirmation_budget(delay)).min(hard_deadline - WITHDRAW_GRACE),
             ),
+            hard_deadline,
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -114,6 +119,7 @@ impl ObservedSubmission {
         if self.observe() != InputObservation::Empty {
             return Err(io::Error::other(PromptNotShown));
         }
+        self.check_deadline()?;
         let completion = self.io.queue_user_input_submission(
             bytes,
             Bytes::new(),
@@ -155,6 +161,7 @@ impl ObservedSubmission {
                 ))
             }
         }
+        self.check_deadline()?;
         let completion = self.io.queue_user_input_submission(
             key,
             Bytes::new(),
@@ -183,7 +190,8 @@ impl ObservedSubmission {
         if self.observe() != InputObservation::Other {
             return Err(timeout);
         }
-        self.deadline.set(Instant::now() + WITHDRAW_GRACE);
+        self.deadline
+            .set((Instant::now() + WITHDRAW_GRACE).min(self.hard_deadline));
         self.clear_draft()?;
         Err(io::Error::other(PromptNotShown))
     }
@@ -210,7 +218,6 @@ impl ObservedSubmission {
         }
         let mut last_enter = None;
         loop {
-            self.check_deadline()?;
             let guard = self
                 .content_lock
                 .lock()
@@ -224,6 +231,9 @@ impl ObservedSubmission {
             {
                 return Ok(());
             }
+            // An observation can cross the deadline while waiting for the
+            // content lock. Confirm acceptance first; only further input expires.
+            self.check_deadline()?;
             let retry = observation == InputObservation::Pending
                 && last_enter.is_none_or(|at: Instant| at.elapsed() >= Duration::from_millis(250));
             let completion = if retry {

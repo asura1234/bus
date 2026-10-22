@@ -381,6 +381,7 @@ async fn public_background_tab_create_preserves_client_locations() {
 
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        received_at: std::time::Instant::now(),
         request: crate::protocol::api::schema::Request {
             id: "create-background-tab".into(),
             method: crate::protocol::api::schema::Method::TabCreate(
@@ -431,6 +432,7 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
 
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        received_at: std::time::Instant::now(),
         request: crate::protocol::api::schema::Request {
             id: "focus-second-workspace".into(),
             method: crate::protocol::api::schema::Method::WorkspaceFocus(
@@ -500,6 +502,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
 
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        received_at: std::time::Instant::now(),
         request: crate::protocol::api::schema::Request {
             id: "test.client.shell.workspace.focus".into(),
             method: crate::protocol::api::schema::Method::WorkspaceFocus(
@@ -796,6 +799,7 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
     server.handle_client_shell_api_request(
         62,
         crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: crate::protocol::api::schema::Request {
                 id: "focus-own-tab".into(),
                 method: crate::protocol::api::schema::Method::TabFocus(
@@ -841,6 +845,7 @@ async fn public_close_reapplies_controller_geometry() {
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
     assert!(
         server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: crate::protocol::api::schema::Request {
                 id: "public-close-geometry".into(),
                 method: crate::protocol::api::schema::Method::PaneClose(

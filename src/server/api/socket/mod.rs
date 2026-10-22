@@ -10,8 +10,11 @@ use std::time::Duration;
 use tracing::warn;
 
 pub(crate) use accept::start_server_with_stop_control;
+#[cfg(windows)]
+pub(in crate::server::api) use connection::dispatch_to_app_with_caller_timeout_at;
 pub(in crate::server::api) use connection::{
-    dispatch_to_app_with_caller_timeout, dispatch_to_app_with_timeout, should_stop_connection,
+    dispatch_to_app_with_caller_timeout, dispatch_to_app_with_timeout,
+    dispatch_to_app_with_timeout_at, should_stop_connection,
 };
 
 pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);

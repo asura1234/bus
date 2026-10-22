@@ -199,6 +199,7 @@ async fn frozen_visible_read_keeps_range_metadata_during_partial_redraw() {
     let (respond_to, history_response) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check_inner(
         crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: request("history", ReadSource::Recent, Some(8)),
             respond_to,
         },
@@ -217,6 +218,7 @@ async fn frozen_visible_read_keeps_range_metadata_during_partial_redraw() {
     let (respond_to, visible_response) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check_inner(
         crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: request("visible", ReadSource::Visible, None),
             respond_to,
         },

@@ -116,6 +116,7 @@ pub(super) fn frame_text(frame: &FrameData) -> String {
 pub(super) fn headless_pane_list(server: &mut HeadlessServer) -> Vec<api::schema::PaneInfo> {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        received_at: std::time::Instant::now(),
         request: api::schema::Request {
             id: "list-titles".into(),
             method: api::schema::Method::PaneList(api::schema::PaneListParams::default()),

@@ -312,6 +312,7 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     let changed =
         server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: api::schema::Request {
                 id: "notify".into(),
                 method: api::schema::Method::NotificationShow(
@@ -375,6 +376,7 @@ fn notification_show_api_preserves_colon_in_forwarded_title() {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     let changed =
         server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: api::schema::Request {
                 id: "notify".into(),
                 method: api::schema::Method::NotificationShow(
@@ -422,6 +424,7 @@ fn notification_show_api_validates_empty_title_before_disabled_delivery() {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     let changed =
         server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: api::schema::Request {
                 id: "notify".into(),
                 method: api::schema::Method::NotificationShow(
@@ -454,6 +457,7 @@ fn notification_show_api_reports_no_foreground_client() {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     let changed =
         server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: api::schema::Request {
                 id: "notify".into(),
                 method: api::schema::Method::NotificationShow(
@@ -502,6 +506,7 @@ fn notification_show_api_includes_sound_in_semantic_event() {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(
         server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now(),
             request: api::schema::Request {
                 id: "notify".into(),
                 method: api::schema::Method::NotificationShow(
@@ -560,7 +565,8 @@ fn startup_idle_does_not_forward_completion() {
         server.handle_internal_event_with_forwarding(TerminalEvent::AgentProcessDetected {
             pane_id,
             agent: crate::agents::AgentKind::Pi,
-            replaced: None, observed_at: Instant::now(),
+            replaced: None,
+            observed_at: Instant::now(),
         })
     );
 
@@ -588,7 +594,8 @@ fn startup_idle_does_not_forward_completion() {
             state: crate::agents::AgentState::Idle,
             visible_blocker: false,
             process_exited: false,
-            exited_process: None, observed_at: Instant::now(),
+            exited_process: None,
+            observed_at: Instant::now(),
         })
     );
     assert!(
@@ -872,7 +879,8 @@ fn notify_messages_after_agent_exit(
         state: crate::agents::AgentState::Working,
         visible_blocker: false,
         process_exited: false,
-        exited_process: None, observed_at: Instant::now(),
+        exited_process: None,
+        observed_at: Instant::now(),
     });
     while client_control_rx
         .recv_timeout(Duration::from_millis(20))
@@ -885,7 +893,8 @@ fn notify_messages_after_agent_exit(
         state: crate::agents::AgentState::Idle,
         visible_blocker: false,
         process_exited: true,
-        exited_process: None, observed_at: Instant::now(),
+        exited_process: None,
+        observed_at: Instant::now(),
     });
     if delay_seconds != 0 {
         let deliveries = server
@@ -979,7 +988,8 @@ fn notify_messages_after_unknown_agent_exit(
     server.handle_internal_event_with_forwarding(TerminalEvent::AgentProcessDetected {
         pane_id,
         agent: crate::agents::AgentKind::Codex,
-        replaced: None, observed_at: Instant::now(),
+        replaced: None,
+        observed_at: Instant::now(),
     });
     while client_control_rx
         .recv_timeout(Duration::from_millis(20))
@@ -992,7 +1002,8 @@ fn notify_messages_after_unknown_agent_exit(
         state: crate::agents::AgentState::Idle,
         visible_blocker: false,
         process_exited: true,
-        exited_process: None, observed_at: Instant::now(),
+        exited_process: None,
+        observed_at: Instant::now(),
     });
     if delay_seconds != 0 {
         let deliveries = server

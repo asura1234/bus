@@ -75,6 +75,116 @@ fn screen(kind: AgentKind, draft: &str) -> String {
 }
 
 #[tokio::test]
+async fn an_expired_dispatch_budget_is_definitely_rejected_before_any_input() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let (respond_to, response) = std::sync::mpsc::channel();
+    // Inject queue/drain latency without sleeping: 4 s has consumed the
+    // native budget, but the coordinator's 4.3 s read is still open.
+    assert!(
+        app.handle_deferred_agent_api_message(crate::server::api::ApiRequestMessage {
+            received_at: std::time::Instant::now() - Duration::from_secs(4),
+            request: Request {
+                id: "delayed_dispatch".into(),
+                method
+            },
+            respond_to,
+        })
+    );
+    let value: serde_json::Value = serde_json::from_str(
+        &response
+            .recv_timeout(Duration::from_millis(100))
+            .expect("exhausted dispatch budget must answer immediately"),
+    )
+    .unwrap();
+    assert_eq!(
+        value["error"]["code"],
+        crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "expired request must not type or press Enter"
+    );
+}
+
+#[tokio::test]
+async fn a_definite_withdrawal_after_the_writer_deadline_reaches_the_response() {
+    let (app, _, _) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let agent = app.agent_info(0, pane).unwrap();
+    let writer_deadline = std::time::Instant::now();
+    let observed_at = writer_deadline + Duration::from_millis(20);
+    let result_delay = Duration::from_millis(50);
+    let response = crate::server::api::agents::prompt::complete_agent_prompt(
+        "late_withdrawal".into(),
+        agent,
+        writer_deadline,
+        writer_deadline - Duration::from_secs(3),
+        observed_at,
+        |timeout| {
+            if timeout >= result_delay {
+                Ok(Err(std::io::Error::other(
+                    crate::terminal::runtime::PromptNotShown,
+                )))
+            } else {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            }
+        },
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        response["error"]["code"],
+        crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
+    );
+}
+
+#[tokio::test]
+async fn an_expired_native_budget_answers_without_typing_or_waiting_for_a_new_deadline() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let budget = crate::protocol::api::submission::method_budget(&method).unwrap();
+    let started = std::time::Instant::now() - budget - Duration::from_secs(1);
+    let (tx, rx) = std::sync::mpsc::channel();
+    assert!(app.handle_deferred_agent_api_request_at(
+        Request {
+            id: "expired".into(),
+            method
+        },
+        tx,
+        started,
+    ));
+    let response: serde_json::Value = serde_json::from_str(
+        &rx.recv_timeout(Duration::from_secs(5))
+            .expect("native response must be bounded"),
+    )
+    .unwrap();
+    assert_eq!(
+        response["error"]["code"],
+        crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "expired work must not type or press Enter"
+    );
+}
+
+#[tokio::test]
+async fn an_unresponsive_writer_still_returns_uncertain_timeout() {
+    let (app, _, _) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let agent = app.agent_info(0, pane).unwrap();
+    let deadline = std::time::Instant::now();
+    let response = crate::server::api::agents::prompt::complete_agent_prompt(
+        "unresponsive_writer".into(),
+        agent,
+        deadline,
+        deadline,
+        deadline,
+        |_| Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(response["error"]["code"], "timeout");
+}
+
+#[tokio::test]
 async fn guarded_submission_rejects_unavailable_composer_before_any_write() {
     let (app, _, mut writes) = provider_fixture(AgentKind::Codex, false, "");
     let pane = app.state.workspaces[0].tabs[0].root_pane;

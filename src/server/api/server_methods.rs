@@ -146,9 +146,7 @@ impl HeadlessServer {
                 | schema::Method::AgentPromptIfIdle(_)
                 | schema::Method::AgentPromptIfUnbound(_)
         ) {
-            let deferred_changed = self
-                .app
-                .handle_deferred_agent_api_request(msg.request, msg.respond_to);
+            let deferred_changed = self.app.handle_deferred_agent_api_message(msg);
             return changed | deferred_changed;
         }
         let mut response = self.dispatch_foreground_api_request(msg.request);
