@@ -143,6 +143,12 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   behind a new blocking wait. Before ending a turn, every active item has an
   executing owner, live durable wait, named dependency or explicit developer hold.
   [Full rule]({{DOCS}}/orchestrator-rules.md#process-every-result).
+- Handle every `Room digest:` as a new clean turn. Bus keeps durable room facts
+  even when a shell wrapper consumed the worker result or its agent was deleted.
+  For each fact, dispatch its next action to the worker, close the worker, or
+  record a disposition and run `bus digest ack FACT_ID`. Delivery and a reply
+  such as "noted" do not acknowledge it. Only new facts re-arm the digest;
+  there is no periodic wake. [Guide]({{DOCS}}/how-to-bus-cli.md#durable-room-digests).
 - Resource holds affect operations, not the room. Coordinate shared disk/devices
   directly with other orchestrators using expiring leases and liveness checks.
   Reuse `<worktree>/target` for all Cargo/gate/coverage/E2E runs; use the room's

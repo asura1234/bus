@@ -297,6 +297,43 @@ be answered. Each transport request still has its normal finite timeout;
 `send --async`. Bounded waits still report transport failures immediately.
 To obtain a message ID before waiting, use plain `send`, then `wait --async`.
 
+### Durable room digests
+
+Start a worker milestone final's first line with `READY FOR VERIFY`,
+`REVIEW READY`, `MERGED`, `DONE` or `BLOCKED`, followed by the task/PR and head
+where relevant. A tag mentioned later in the reply is ordinary prose. Bus also
+records abandoned/stalled requests, idle workers with no next task, actionable
+GitHub watch notices and Bus alerts. These facts belong to the bound
+orchestrator and are independent of a waiter's transport `seen` state.
+
+When the orchestrator can start a clean idle turn, Bus sends one Bus-authored,
+queue-only `Room digest: …` message in the work room. It lists the outstanding
+facts, each fact ID, age and next owner/action. It cannot steer into a running
+MASTER or notification turn. Bursts coalesce until that idle boundary, and an
+older pending message takes priority.
+
+A fact is acknowledged only when its orchestrator sends a message to that
+worker, the worker is deleted, or someone explicitly dismisses that fact:
+
+```sh
+bus digest ack FACT_ID
+```
+
+Record the next owner or hold/disposition before dismissing. Reading the
+digest, returning `noted`, receiving a worker final or consuming an async wait
+does not acknowledge anything. Acknowledgment and worker deletion retain the
+fact's snapshot, including the worker name/ID, even when its request history is
+removed. The per-orchestrator ledger, acknowledgment timestamps and digest
+watermark survive server and waiter restarts. An upgrade recovers retained
+facts and reconciles later dispatches; history erased before this feature
+cannot be reconstructed.
+
+Only new facts re-arm the digest. Unacknowledged older facts are included with
+the new facts in the next digest. An unchanged digest is never periodically
+repeated, including after an hour or a restart: there is no reminder timer or
+blind room-polling loop. Initial worker availability is a fact too; assign or
+close that worker rather than leave it without a next task.
+
 To record the message as written by an agent instead of the developer, add
 `--as AGENT`. Any agent can message any other agent, across work rooms and
 MASTER. The author cannot also be a recipient; `--to all` skips it. The generic
