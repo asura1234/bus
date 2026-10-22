@@ -101,6 +101,7 @@ impl BusUi {
                 self.sound_target(target)
             ),
             Action::AdjustCompactionLimit(up) => format!("compaction-limit:{}", way(*up)),
+            Action::AdjustIdleAgentsAlert(up) => format!("idle-agents-alert:{}", way(*up)),
             Action::AdjustSidebarWidth(up) => format!("sidebar-width:{}", way(*up)),
             Action::Cancel => "cancel".into(),
             Action::Add => "add".into(),

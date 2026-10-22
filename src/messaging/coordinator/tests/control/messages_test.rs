@@ -101,6 +101,37 @@ fn dev_send_and_history_preserve_explicit_recipient_order() {
 }
 
 #[test]
+fn history_lists_bus_messages_and_notices_signed_bus() {
+    let (mut worker, room, codex, dir) = fixture();
+    worker
+        .state
+        .submit_message_from(
+            room,
+            crate::messaging::model::Draft {
+                text: "codex1 (agent 1). Blocked, needs help to continue.".into(),
+                files: Vec::new(),
+                recipient_ids: [codex].into(),
+            },
+            Author::Bus,
+            1,
+        )
+        .unwrap();
+    let history = call(
+        &mut worker,
+        "bus-history",
+        "room.history",
+        json!({"room":"test"}),
+    );
+    assert!(history.ok, "{history:?}");
+    let messages = history.result["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0]["prompt"]["author"], "bus");
+    assert!(messages[0]["delivery"].is_object());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_history_retains_twenty_ordered_messages_and_their_own_final_replies() {
     let (mut worker, _room, agent, dir) = fixture();
     worker
@@ -588,7 +619,7 @@ fn dev_send_to_developer_posts_an_orchestrator_report_in_master_history() {
 }
 
 #[test]
-fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_developer_kept() {
+fn bus_notices_load_beside_reports_to_the_developer() {
     let (mut worker, _room, _codex, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
     let orchestrator = worker
@@ -601,14 +632,15 @@ fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_developer_
         .unwrap();
     let mut saved = serde_json::to_value(&worker.state).unwrap();
     let notices = &mut saved["rooms"][master.0.to_string()]["notices"];
-    let mut legacy = notices[0].clone();
-    legacy["author"] = json!("bus");
-    legacy["text"] = json!("orch never started message 9");
-    notices.as_array_mut().unwrap().push(legacy);
+    let mut bus = notices[0].clone();
+    bus["author"] = json!("bus");
+    bus["text"] = json!("orch never started message 9");
+    notices.as_array_mut().unwrap().push(bus);
     let loaded: BusState = serde_json::from_value(saved).unwrap();
     let notices = &loaded.room(master).unwrap().notices;
-    assert_eq!(notices.len(), 1, "Bus is not an agent and authors nothing");
+    assert_eq!(notices.len(), 2, "Bus signs its own notices");
     assert_eq!(notices[0].text, "first report");
+    assert_eq!(notices[1].author, Author::Bus);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -130,9 +130,12 @@ the wrapper remains held.
   picture. *Why:* one giant ask in one terminal is daunting and goes worse.
 - **Size the team to the current step.** Add workers with `bus agent add`
   when a parallel step starts and delete them with `bus agent delete` when
-  their part is done; do not keep idle agents around for later steps. *Why:*
-  work lives in files and commits, so a deleted worker loses nothing; a fresh
-  one is briefed from those files.
+  their part is done; do not keep idle agents around for later steps. When
+  Bus sends the **Settings → Idle agents alert** notice:
+  `bus → orchestrator: You have N idle agents (name1, name2, …). Either put them to work in parallel on the open PRs, or close the ones you no longer need to save resources. Your call.`
+  The orchestrator chooses between parallel work and closing workers it no
+  longer needs. *Why:* work lives in files and commits, so a deleted
+  worker loses nothing; a fresh one is briefed from those files.
 - **Keep follow-ups in the running workflow file, not in your context.**
   Unless the graph has a pause or developer check before them, execute them in
   order; never defer them to later. If the room has no running workflow, create
@@ -201,7 +204,7 @@ the wrapper remains held.
   tokens and misleads the agent.
 - **Replace a worker on its compaction-limit notice.** Automatically follow
   [agent-handover](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md)
-  when Bus sends `AGENT -> orchestrator: reached N compactions` at **Settings →
+  when Bus sends `bus → orchestrator: AGENT reached N compactions` at **Settings →
   Max compactions per agent**. That workflow defines the `temp/` note contract,
   the same provider and role requirements, and how to brief it from the note
   and delete the old agent. *Why:* each compaction loses detail, and quality
@@ -211,13 +214,13 @@ the wrapper remains held.
   for compactions. *Why:* you carry the context, carry-over and situational
   awareness for the whole effort.
 - **On "Blocked, needs help to continue.", look at the worker's terminal.** A
-  worker blocked on a dialog, question, trust prompt or any other screen sends
-  you exactly that message, once, with no details; `bus wait` also stops with
+  worker blocked on a dialog, question, trust prompt or any other screen gets
+  you exactly that Bus notice, once, with no details; `bus wait` also stops with
   `agent_waiting_on_dialog`. Inspect it with `bus agent dialog AGENT` (or `bus
   agent read AGENT --source visible`) and handle it with `bus agent choose` or
   `bus agent answer`, asking the developer first for anything destructive or
-  outward-facing. Bus relays this worker-authored notice; a blocked orchestrator
-  instead gets a Bus-authored developer-attention notice in MASTER. *Why:* the
+  outward-facing. The notice is signed `bus`; a blocked orchestrator instead
+  gets a Bus developer-attention notice in MASTER. *Why:* the
   blocked terminal is the source of truth.
 - **Use `worktree-new` only when it is a must.** By default all workers share
   one branch: give each worker its file boundaries and grant shared files one

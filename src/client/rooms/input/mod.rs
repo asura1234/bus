@@ -507,14 +507,7 @@ impl BusUi {
             Action::CancelDelete => self.cancel_delete(),
             Action::ConfirmDelete => self.confirm_delete(),
             Action::DismissAlert => self.dismiss_alert(),
-            Action::ScrollFiles(forward) => {
-                self.file_scroll = if forward {
-                    self.file_scroll.saturating_add(1)
-                } else {
-                    self.file_scroll.saturating_sub(1)
-                };
-                self.detail_path = None;
-            }
+            Action::ScrollFiles(forward) => self.scroll_files(forward),
             Action::Room(room) => self.open_room(room),
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
@@ -593,6 +586,7 @@ impl BusUi {
             Action::EditFeishuCli => self.open_feishu_setting(true),
             Action::ToggleFeishuNotifications => self.toggle_feishu_notifications(),
             Action::AdjustCompactionLimit(forward) => self.adjust_compaction_limit(forward),
+            Action::AdjustIdleAgentsAlert(up) => self.adjust_idle_agents_alert(up),
             Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),
             Action::Cancel => {
                 if let Some(room) = self.room {
@@ -603,5 +597,14 @@ impl BusUi {
             }
             Action::Add => self.add(),
         }
+    }
+
+    fn scroll_files(&mut self, forward: bool) {
+        self.file_scroll = if forward {
+            self.file_scroll.saturating_add(1)
+        } else {
+            self.file_scroll.saturating_sub(1)
+        };
+        self.detail_path = None;
     }
 }

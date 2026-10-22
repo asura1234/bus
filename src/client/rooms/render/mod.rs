@@ -25,6 +25,8 @@ use ratatui::style::{Color, Style};
 
 /// Background of mouse-selected text.
 const SELECTION: Color = Color::Rgb(44, 88, 56);
+/// Muted text, and the "bus" sender of Bus-generated notices.
+pub(super) const GREY: Color = Color::Rgb(145, 148, 159);
 pub(super) const ACCENT: Color = {
     let [r, g, b] = crate::messaging::prefs::colors::YOU_COLOR;
     Color::Rgb(r, g, b)
@@ -69,6 +71,8 @@ pub(super) enum Action {
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
     AdjustCompactionLimit(bool),
+    /// Raises (true) or lowers the idle agents alert by one.
+    AdjustIdleAgentsAlert(bool),
     /// Widens (true) or narrows the room sidebar by one cell.
     AdjustSidebarWidth(bool),
     Cancel,
@@ -175,11 +179,11 @@ pub(super) enum SoundSettingsLine {
         target: SoundTarget,
         field: usize,
     },
-    Compactions {
+    Stepper {
         field: usize,
-    },
-    SidebarWidth {
-        field: usize,
+        label: &'static str,
+        value: String,
+        adjust: fn(bool) -> Action,
     },
     /// Dev builds only.
     PerfOverlay {

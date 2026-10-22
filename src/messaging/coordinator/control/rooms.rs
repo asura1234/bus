@@ -75,7 +75,7 @@ impl Worker {
                 let mut messages = self
                     .state
                     .requests()
-                    .filter(|r| r.room_id == room && !r.delivery_only())
+                    .filter(|r| r.room_id == room)
                     .map(|r| (r.prompt.id, (&r.prompt, true)))
                     .collect::<BTreeMap<_, _>>();
                 messages.extend(self.state.notices(room).map(|n| (n.id, (n, false))));

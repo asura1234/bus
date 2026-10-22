@@ -136,6 +136,8 @@ mod recovery_tests;
 
 #[path = "compaction_test.rs"]
 mod compaction_tests;
+#[path = "idle_agents_test.rs"]
+mod idle_agents_tests;
 
 #[path = "scheduling_test.rs"]
 mod scheduling_tests;

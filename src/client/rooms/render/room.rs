@@ -10,7 +10,7 @@ use super::super::{
 use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
 use super::sidebar::{message_name_color, status_name};
 use super::text::{display, provider, wrap};
-use super::{Action, Hit, View, ACCENT};
+use super::{Action, Hit, View, ACCENT, GREY};
 use crate::messaging::model::{Room, RoomId, RoomKind};
 use ratatui::{
     layout::Rect,
@@ -413,6 +413,7 @@ impl BusUi {
             let span_width = text.width() as u16;
             let color = match tone {
                 Tone::You => Some(ACCENT),
+                Tone::Bus => Some(GREY),
                 Tone::Agent(id) => self.snapshot.state.agent(*id).map(|agent| {
                     message_name_color(&self.snapshot.state, self.room, agent, &self.settings)
                 }),

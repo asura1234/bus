@@ -107,15 +107,6 @@ impl History {
         width: u16,
         now: u64,
     ) {
-        if prompt.compaction_limit_notice {
-            lines.extend(wrap_header(
-                vec![(prompt.text.clone(), Tone::Text)],
-                width,
-                "",
-                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
-            ));
-            return;
-        }
         let mut header = vec![
             (
                 participant_label(state, &prompt.author),
@@ -182,9 +173,6 @@ impl History {
         width: u16,
     ) {
         let prompt = exchange.prompt;
-        if prompt.compaction_limit_notice {
-            return;
-        }
         let mut replied = false;
         for agent_id in &prompt.recipient_ids {
             let Some(agent) = state.agent(*agent_id) else {
@@ -200,7 +188,7 @@ impl History {
                 let newest = members.iter().rev().find(|id| {
                     state
                         .request(**id)
-                        .is_some_and(|member| member.room_id == room.id && !member.delivery_only())
+                        .is_some_and(|member| member.room_id == room.id)
                 });
                 if newest.is_some_and(|last| *last != request.id) {
                     continue;
@@ -357,11 +345,8 @@ fn wrap_header(
 /// then notices and any saved latest-only prompt.
 fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
     let mut exchanges = BTreeMap::new();
-    // Dialog notices to orchestrators are delivery-only, never history.
-    for request in state
-        .requests()
-        .filter(|r| r.room_id == room.id && !r.delivery_only())
-    {
+    // Room messages, including Bus notices, share prompt/reply history.
+    for request in state.requests().filter(|r| r.room_id == room.id) {
         let prompt = &request.prompt;
         exchanges
             .entry((prompt.submitted_at_ms, prompt.id.0))
@@ -439,7 +424,7 @@ fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str 
 fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
         Author::Developer => "You".into(),
-        Author::Bus => "Bus".into(),
+        Author::Bus => crate::messaging::model::BUS_SENDER.into(),
         Author::Agent(id) => state
             .agent(*id)
             .map(|agent| agent.name.clone())
@@ -462,7 +447,7 @@ fn participant_tone(participant: &Author) -> Tone {
     match participant {
         Author::Agent(id) => Tone::Agent(*id),
         Author::Developer => Tone::You,
-        Author::Bus => Tone::Muted,
+        Author::Bus => Tone::Bus,
     }
 }
 
@@ -472,10 +457,7 @@ fn participant_tone(participant: &Author) -> Tone {
 // width, or age label requires sorting and wrapping those immutable bodies.
 fn signature(state: &BusState, room: &Room) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for request in state
-        .requests()
-        .filter(|r| r.room_id == room.id && !r.delivery_only())
-    {
+    for request in state.requests().filter(|r| r.room_id == room.id) {
         request.id.0.hash(&mut hash);
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
@@ -506,7 +488,7 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         .collect();
     let prompts = state
         .requests()
-        .filter(|r| r.room_id == room.id && !r.delivery_only())
+        .filter(|r| r.room_id == room.id)
         .map(|r| &r.prompt)
         .chain(state.notices(room.id))
         .chain(room.latest_prompt.as_ref());

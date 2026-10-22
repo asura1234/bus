@@ -105,7 +105,6 @@ impl BusState {
                 files: Vec::new(),
                 recipient_ids: Default::default(),
                 submitted_at_ms: now_ms,
-                compaction_limit_notice: false,
                 attention_origin: None,
             });
         Ok(id)

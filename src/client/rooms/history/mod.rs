@@ -18,6 +18,8 @@ pub(super) enum Tone {
     Text,
     Muted,
     You,
+    /// The grey "bus" sender of Bus-generated notices.
+    Bus,
     Agent(AgentId),
 }
 

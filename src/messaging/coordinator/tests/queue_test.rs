@@ -259,7 +259,7 @@ fn an_unstarted_request_is_released_when_the_agent_begins_another_turn_of_its_ow
         RequestPhase::Abandoned
     );
     assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
-    // Bus is not an agent: releasing the request posts nothing anywhere.
+    // Releasing this request posts no room notice.
     assert!(worker.state.rooms().all(|room| room.notices.is_empty()));
     // The queue moves on once that turn settles.
     record(

@@ -1,5 +1,6 @@
 //! The Settings screen: color blind mode, the sound rows, the compaction
-//! limit, the sidebar width and the dev performance overlay.
+//! limit, the idle agents alert, the sidebar width and the dev performance
+//! overlay.
 use super::super::BusUi;
 use super::text::display;
 use super::{Action, SoundSettingsLine, SoundTarget, View};
@@ -54,13 +55,25 @@ impl BusUi {
         lines.extend(targets);
         lines.push(SoundSettingsLine::Empty(""));
         lines.push(SoundSettingsLine::Heading("AGENTS"));
-        lines.push(SoundSettingsLine::Compactions {
+        lines.push(SoundSettingsLine::Stepper {
             field: self.compaction_field(),
+            label: "Max compactions per agent (1–100)",
+            value: self.settings.max_compactions_per_agent.to_string(),
+            adjust: Action::AdjustCompactionLimit,
+        });
+        lines.push(SoundSettingsLine::Stepper {
+            field: self.idle_agents_field(),
+            label: "Idle agents alert (1–10)",
+            value: self.settings.idle_agents_alert.to_string(),
+            adjust: Action::AdjustIdleAgentsAlert,
         });
         lines.push(SoundSettingsLine::Empty(""));
         lines.push(SoundSettingsLine::Heading("SIDEBAR"));
-        lines.push(SoundSettingsLine::SidebarWidth {
+        lines.push(SoundSettingsLine::Stepper {
             field: self.sidebar_width_field(),
+            label: "Sidebar width (20–60)",
+            value: self.settings.sidebar_width.to_string(),
+            adjust: Action::AdjustSidebarWidth,
         });
         lines.push(SoundSettingsLine::Empty(""));
         lines.push(SoundSettingsLine::Heading("NOTIFICATIONS"));
@@ -268,26 +281,12 @@ impl BusUi {
             SoundSettingsLine::Empty(text) => {
                 view.row(rect, *text, None, false, true);
             }
-            SoundSettingsLine::Compactions { field } => {
-                self.stepper_settings_row(
-                    view,
-                    rect,
-                    *field,
-                    "Max compactions per agent (1–100)",
-                    self.settings.max_compactions_per_agent.to_string(),
-                    Action::AdjustCompactionLimit,
-                );
-            }
-            SoundSettingsLine::SidebarWidth { field } => {
-                self.stepper_settings_row(
-                    view,
-                    rect,
-                    *field,
-                    "Sidebar width (20–60)",
-                    self.settings.sidebar_width.to_string(),
-                    Action::AdjustSidebarWidth,
-                );
-            }
+            SoundSettingsLine::Stepper {
+                field,
+                label,
+                value,
+                adjust,
+            } => self.stepper_settings_row(view, rect, *field, label, value, *adjust),
             SoundSettingsLine::PerfOverlay { field } => {
                 let on = crate::client::perf::OVERLAY.is_on();
                 view.row(
@@ -396,7 +395,7 @@ impl BusUi {
         rect: Rect,
         field: usize,
         label: &str,
-        value: String,
+        value: &str,
         adjust: fn(bool) -> Action,
     ) {
         let selected = self.settings_field == field;

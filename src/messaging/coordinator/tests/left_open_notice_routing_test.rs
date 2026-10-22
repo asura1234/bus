@@ -34,6 +34,7 @@ fn session_moved_left_open_notice_lands_in_room_history_without_a_composer_error
         "{}",
         notice.text
     );
+    assert_eq!(notice.author, Author::Bus);
     assert!(left_open_requests(&worker).is_empty());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -71,6 +72,7 @@ fn room_deletion_reports_left_open_terminal_in_master_not_to_its_deleted_orchest
         "{}",
         notice.text
     );
+    assert_eq!(notice.author, Author::Bus);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -105,6 +107,7 @@ fn left_open_notice_to_orchestrator_keeps_the_developer_draft_in_the_room() {
     let requests = left_open_requests(&worker);
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].agent_id, orchestrator);
+    assert_eq!(requests[0].prompt.author, Author::Bus);
     let draft = &worker.state.room(room).unwrap().draft;
     assert_eq!(draft.text, "half typed");
     assert_eq!(

@@ -762,9 +762,7 @@ impl Delivery {
             let replies: BTreeSet<_> = self
                 .state()
                 .requests()
-                .filter(|r| {
-                    r.room_id == room.id && r.phase == RequestPhase::Completed && !r.delivery_only()
-                })
+                .filter(|r| r.room_id == room.id && r.phase == RequestPhase::Completed)
                 .filter_map(|r| r.pending_final.as_ref().map(|p| p.callback_id.clone()))
                 .collect();
             let sends: BTreeSet<_> = self
@@ -772,8 +770,7 @@ impl Delivery {
                 .requests()
                 .filter(|r| {
                     r.room_id == room.id
-                        && matches!(r.prompt.author, Author::Agent(_))
-                        && !r.delivery_only()
+                        && matches!(r.prompt.author, Author::Agent(_) | Author::Bus)
                 })
                 .map(|r| r.prompt.id)
                 .collect();

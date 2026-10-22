@@ -835,19 +835,18 @@ marks such an agent `dialog: true` and `status: blocked`, using the same status
 as the agent list even when its provider still reports idle.
 
 Once an agent has been blocked for about a second, on a dialog, a question, a trust
-prompt or any other screen it cannot pass alone, the blocked agent posts one
-message in its work room: `AGENT → ORCHESTRATOR: Blocked, needs help to
-continue.` when the room has an orchestrator, delivered and waking it like any
-agent message, or `AGENT → You: Blocked, needs help to continue.` when it has
-none. The notice names the agent and includes `Inspect: bus agent dialog AGENT`,
+prompt or any other screen it cannot pass alone, Bus posts one notice in its
+work room, signed `bus`: `bus → ORCHESTRATOR: AGENT (agent N). Blocked, needs
+help to continue.` when the room has an orchestrator, delivered and waking it
+like any message, or `bus → You: …` when it has none. The notice names the agent and includes `Inspect: bus agent dialog AGENT`,
 but no options or fingerprint: look at the agent's terminal with that command (or
 `bus agent read AGENT --source visible`) and answer as below. It is posted once
 per dialog episode; selection changes and unreadable redraws do not repeat it.
 Once the dialog is confirmed closed, one `Resolved; dialog is gone` notice
-follows through the same route, authored by the agent. A blocked MASTER
-orchestrator instead sends a Bus-authored developer-attention notice in MASTER,
-since MASTER has no orchestrator of its own; its Resolved notice retains the
-ordinary agent author. Numbered text in an editable Claude or Codex native
+follows through the same route, also signed `bus`. A blocked MASTER
+orchestrator instead gets a Bus developer-attention notice in MASTER, since
+MASTER has no orchestrator of its own; its Resolved notice is a `bus` notice to
+the developer there. Numbered text in an editable Claude or Codex native
 composer is not a dialog and generates neither notice.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last

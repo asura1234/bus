@@ -4,7 +4,7 @@ Date: <YYYY-MM-DD>
 Room / task: <room and task goal>
 Provider / role: <provider and current role>
 PWD: <absolute working directory to use for the fresh agent>
-Compaction notice: <AGENT -> orchestrator: reached N compactions>
+Compaction notice: <bus → orchestrator: AGENT reached N compactions>
 
 <!--
 Write this note to temp/handover/<agent>-<date>.md in your PWD and report its

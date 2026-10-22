@@ -32,6 +32,21 @@ impl BusUi {
         }
     }
 
+    pub(super) fn adjust_idle_agents_alert(&mut self, up: bool) {
+        use crate::messaging::prefs::settings::{MAX_IDLE_AGENTS_ALERT, MIN_IDLE_AGENTS_ALERT};
+        self.settings_field = self.idle_agents_field();
+        let current = self.settings.idle_agents_alert;
+        let next = if up {
+            current.saturating_add(1).min(MAX_IDLE_AGENTS_ALERT)
+        } else {
+            current.saturating_sub(1).max(MIN_IDLE_AGENTS_ALERT)
+        };
+        if next != current {
+            self.settings.idle_agents_alert = next;
+            self.queue(BusCommand::SetIdleAgentsAlert(next), Effect::None);
+        }
+    }
+
     /// Shown at the new width on the next frame; the coordinator saves it
     /// and every Bus session reads it back from `SettingsChanged`.
     pub(super) fn adjust_sidebar_width(&mut self, wider: bool) {
@@ -133,8 +148,7 @@ impl BusUi {
         let Some(line) = lines.iter().position(|line| {
             matches!(line,
                 super::super::render::SoundSettingsLine::Sound { field, .. }
-                | super::super::render::SoundSettingsLine::Compactions { field }
-                | super::super::render::SoundSettingsLine::SidebarWidth { field }
+                | super::super::render::SoundSettingsLine::Stepper { field, .. }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
                 | super::super::render::SoundSettingsLine::Freeze { field }
                 | super::super::render::SoundSettingsLine::FeishuRecipient { field }

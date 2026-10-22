@@ -47,7 +47,7 @@ impl BusUi {
             .collect();
         let prompts = state
             .requests()
-            .filter(|request| request.room_id == room && !request.delivery_only())
+            .filter(|request| request.room_id == room)
             .map(|request| &request.prompt)
             .chain(
                 state

@@ -67,6 +67,7 @@ pub(crate) enum BusCommand {
     /// Every work room's sound name (None is Bus's own ding), also saved for new rooms.
     SetAllRoomsSoundName(Option<String>),
     SetMaxCompactionsPerAgent(u32),
+    SetIdleAgentsAlert(u32),
     /// The room sidebar's width in cells, clamped to the settings range.
     SetSidebarWidth(u16),
     SetFreezeNotifications(bool),

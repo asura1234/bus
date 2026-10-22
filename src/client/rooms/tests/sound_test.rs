@@ -819,14 +819,15 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
         rows[..row].iter().any(|row| row.ends_with("DEVELOPER")),
         "{rows:#?}"
     );
-    // Color blind, MASTER, All rooms, one room, compactions, sidebar width,
-    // Feishu, recipient, CLI path, freeze notifications, then the overlay.
-    for _ in 0..10 {
+    // Color blind, MASTER, All rooms, one room, compactions, idle agents,
+    // sidebar width, Feishu, recipient, CLI path, freeze notifications, then
+    // the overlay.
+    for _ in 0..11 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    assert_eq!(ui.settings_field, 10);
+    assert_eq!(ui.settings_field, 11);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 10, "the overlay row is the last field");
+    assert_eq!(ui.settings_field, 11, "the overlay row is the last field");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(crate::client::perf::OVERLAY.is_on());
     let rows = settings_rows(&mut ui, 40);

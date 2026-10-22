@@ -1,6 +1,6 @@
 //! Reports a steady dialog wait to the room and resolves earlier help when it
 //! settles. A readable native screen suppresses stale blocked metadata. The
-//! worker sends its notice once per episode; a blocked MASTER orchestrator gets
+//! notice is signed "bus", once per episode; a blocked MASTER orchestrator gets
 //! a typed Bus developer-attention notice instead.
 #[cfg(test)]
 use super::{
@@ -142,8 +142,8 @@ impl Worker {
     }
 }
 
-/// The blocked agent's own message in its work room: to the room's
-/// orchestrator, which delivers it like any agent message and wakes the
+/// Bus's notice about a blocked agent in its work room: to the room's
+/// orchestrator, which delivers it like any message and wakes the
 /// orchestrator, or else to the developer. A blocked MASTER orchestrator tells
 /// the developer directly, since MASTER cannot itself be orchestrated.
 fn post_blocked(
@@ -179,11 +179,8 @@ pub(super) fn post_dialog_notice(
     }
     let now = crate::messaging::storage::io::now_ms();
     let orchestrator = state
-        .orchestrator_of(room)
-        .filter(|orchestrator| {
-            open_dialog && orchestrator.id != id && !orchestrator.deletion_pending
-        })
-        .map(|orchestrator| orchestrator.id);
+        .notice_orchestrator(room, Some(id))
+        .filter(|_| open_dialog);
     match orchestrator {
         Some(orchestrator) => state
             .submit_message_from(
@@ -193,12 +190,12 @@ pub(super) fn post_dialog_notice(
                     files: Vec::new(),
                     recipient_ids: [orchestrator].into(),
                 },
-                Author::Agent(id),
+                Author::Bus,
                 now,
             )
             .map(|requests| requests.first().copied().map(DialogNoticeTo::Orchestrator)),
         None => state
-            .post_to_developer(room, id, text, Vec::new(), now)
+            .post_bus_notice(room, None, text, now)
             .map(|_| Some(DialogNoticeTo::Developer)),
     }
     .map_err(|error| error.to_string())
