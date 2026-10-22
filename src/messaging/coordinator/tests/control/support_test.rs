@@ -10,12 +10,12 @@ mod dialogs_tests;
 mod inspect_tests;
 #[path = "messages_test.rs"]
 mod messages_tests;
+#[path = "open_messaging_test.rs"]
+mod open_messaging_tests;
 #[path = "option_list_test.rs"]
 mod option_list_tests;
 #[path = "orchestrator_recipient_test.rs"]
 mod orchestrator_recipient_tests;
-#[path = "open_messaging_test.rs"]
-mod open_messaging_tests;
 #[path = "rooms_test.rs"]
 mod rooms_tests;
 

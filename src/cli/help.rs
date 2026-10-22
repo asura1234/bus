@@ -68,8 +68,14 @@ and Cursor fields, existing drafts refuse further text (free_text_holds_draft);
 edit or submit the draft in the agent's pane.
 Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
-send --as records the message as written by that room agent or the room's MASTER
-orchestrator; --to all then skips it.
+send --as records the message as written by an agent; --to all then skips it.
+Any agent can message any other agent across rooms. IDs resolve globally; names prefer
+its home room, then all rooms, with candidate IDs and rooms on ambiguity.
+The case-insensitive --to orchestrator alias names the sender's home-room orchestrator.
+All still covers conversation-room members only. Cross-room messages wait for a new turn.
+Bus automatically adds 'name (agent id, room R):' to agent-authored payloads.
+Send only the body: do not add a 'from X', 'X here' or signature line.
+An existing leading identity for the same sender is kept without a second header.
 send --room master --as AGENT --to human posts a MASTER agent's message to the developer
 in MASTER chat, with no agent recipient and nothing to wait for; it rings like a reply.
 agent interrupt stops an agent's running turn: Bus presses the provider's stop key once
