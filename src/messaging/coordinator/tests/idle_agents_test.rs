@@ -258,7 +258,7 @@ fn only_idle_workers_without_an_open_or_queued_message_count() {
     observe(&mut r.worker, &[w[4]], RuntimeStatus::Unavailable, 120_000);
     let mut state = r.worker.state.clone();
     // Codex reports Idle under an approval dialog; it is shown Blocked.
-    state.observe_dialog(w[5], true).unwrap();
+    state.observe_dialog(w[5], true, 120_000).unwrap();
     state.prepare_delete_agent(w[6]).unwrap();
     let queued = state
         .submit_message_from(

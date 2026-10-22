@@ -66,7 +66,7 @@ impl BusState {
                 .prompt
                 .text
         );
-        self.post_to_developer(room, agent, text, Vec::new(), now_ms)?;
+        self.post_bus_notice(room, None, text, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 

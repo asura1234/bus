@@ -428,6 +428,13 @@ fn a_blocked_notice_the_orchestrator_never_takes_reaches_the_developer() {
             (Vec::new(), expected_resolved(&worker, agent))
         ]
     );
+    assert!(worker
+        .state
+        .room(room)
+        .unwrap()
+        .notices
+        .iter()
+        .all(|notice| notice.author == Author::Bus));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
