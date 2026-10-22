@@ -297,6 +297,67 @@ be answered. Each transport request still has its normal finite timeout;
 `send --async`. Bounded waits still report transport failures immediately.
 To obtain a message ID before waiting, use plain `send`, then `wait --async`.
 
+### Durable room digests
+
+Start a worker milestone final's first line with `READY FOR VERIFY`,
+`REVIEW READY`, `MERGED`, `DONE` or `BLOCKED`, followed by the task/PR and head
+where relevant. Any non-alphanumeric boundary is valid (`DONE.`, `MERGED, #1607`);
+a tag mentioned later in the reply is ordinary prose. Bus also
+records abandoned/stalled requests, idle workers with no next task, actionable
+agent-specific Bus alerts. Generic GitHub/Bus notices already have their own
+delivery and do not also become facts. Notices about several workers record
+each subject, so retasking those workers handles the notice. These facts belong to the bound
+orchestrator and are independent of a waiter's transport `seen` state.
+Healthy background requests that still have an owner and live wait do not
+produce an action digest. Alerts about the orchestrator's own provider/dialog
+remain developer alerts. Their existing notification paths are unchanged.
+
+When the orchestrator can start a clean idle turn, Bus sends one Bus-authored,
+queue-only `Room digest: …` message in the work room. It lists the outstanding
+facts, each fact ID, age and next owner/action. It cannot steer into a running
+MASTER or notification turn. Bursts coalesce until that idle boundary, and an
+older pending message takes priority.
+
+A direct, single-recipient message from the fact's orchestrator acknowledges it
+when the recipient is its worker, or the body references its PR number, worker
+name or head SHA prefix (at least seven hex characters). For example, briefing a
+separate verifier with `verify #1602 at 870112624` handles that READY fact.
+PR and unlabelled hex keys come only from the milestone's tag line, not PRs or
+commits mentioned later in its body. A standalone `head <sha>` or `SHA: <sha>`
+metadata line also supplies a head. Unlabelled hex keys must contain a letter;
+numeric-only prefixes match only an explicit head/SHA field. A direct message
+mentioning the fact's own PR still counts even in a status aside such as
+`#1602 is waiting for a verifier`: this is an accepted trade-off of reference
+acknowledgment, which does not infer whether the message assigns verification.
+`--to all` and multi-recipient messages never acknowledge facts, including an
+All broadcast that expands to just one worker. A tagged completion has no
+separate idle-with-no-next-task fact for that same completion.
+
+Deleting its worker acknowledges a fact too, or explicitly dismiss it:
+
+```sh
+bus digest ack FACT_ID
+```
+
+Record the next owner or hold/disposition before dismissing. Reading the
+digest, returning `noted`, receiving a worker final or consuming an async wait
+does not acknowledge anything. Pending fact text is capped at 600 characters.
+Acknowledgment discards that payload and retains only an ID/source-key/agent-ID/
+ack-time tombstone for dedupe, even if the worker and its request history are
+deleted. Tombstones expire after seven days through ordinary history cleanup.
+
+The ledger and watermarks survive server and waiter restarts. The delivery
+watermark advances only when the digest is delivered; abandonment restores its
+previous value so undelivered work can be retried. Startup replays only runtime
+fact sources, treating sources at or below covered watermarks as already covered.
+Upgrades reconcile retained direct actions; erased history cannot be reconstructed.
+
+Only new facts re-arm the digest. Unacknowledged older facts are included with
+the new facts in the next digest. An unchanged digest is never periodically
+repeated, including after an hour or a restart: there is no reminder timer or
+blind room-polling loop. Initial worker availability is a fact too; assign or
+close that worker rather than leave it without a next task.
+
 To record the message as written by an agent instead of the developer, add
 `--as AGENT`. Any agent can message any other agent, across work rooms and
 MASTER. The author cannot also be a recipient; `--to all` skips it. The generic

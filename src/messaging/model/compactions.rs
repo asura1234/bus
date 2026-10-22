@@ -53,7 +53,7 @@ impl BusState {
             agent.name, agent.compactions.count
         );
         let orchestrator = self.notice_orchestrator(room, Some(id));
-        self.post_bus_notice(room, orchestrator, text, now_ms)
+        self.post_bus_notice_about(room, orchestrator, [id].into(), text, now_ms)
             .map(|_| ())
     }
 }

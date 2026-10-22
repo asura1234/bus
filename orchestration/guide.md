@@ -165,6 +165,22 @@ it as acknowledged. Transport delivery or `seen` is not evidence of action.
 Keep this ledger durable across restarts; deduplicate repeated events and re-arm
 only on new facts. Do not add blind polling loops or wake for every chat line.
 
+Bus enforces a separate durable fact ledger for milestone finals whose first
+line starts with `READY FOR VERIFY`, `REVIEW READY`, `MERGED`, `DONE` or
+`BLOCKED`, abandoned/stalled requests, workers idle without a next task,
+agent-specific Bus alerts. Generic GitHub/Bus notices retain their own delivery;
+only notices with agent subjects also become action facts. A coalesced `Room digest:`
+arrives only on a clean idle turn and names each fact's age and next owner.
+Treat it as an action list: directly dispatch to the worker, brief a verifier
+referencing its PR/name/head, close it, or record a
+disposition and run `bus digest ack FACT_ID`. Delivery, waiter `seen` and a
+reply such as "noted" leave the fact unacknowledged; broadcasts never acknowledge
+facts. Tagged completions do not create a duplicate idle fact. Pending text is
+capped at 600 characters; ack leaves only a dedupe tombstone (including deleted
+worker IDs), expiring after seven days. The ledger and delivery watermark survive
+restart. The watermark advances on delivery and rolls back on abandonment. Only
+a new fact triggers another delivered digest; elapsed time never does.
+
 Before ending a turn, give **every active item** one of: a next executing owner,
 a live durable wait, a named dependency, or an explicit developer hold. Record
 the message/wait ID, dependency or hold reason, rather than just "waiting".

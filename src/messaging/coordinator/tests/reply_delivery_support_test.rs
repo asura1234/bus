@@ -396,6 +396,29 @@ impl Delivery {
         let identity = self.native.lock().unwrap().add(id, room, provider);
         state.set_agent_runtime_identity(id, identity).unwrap();
         state.confirm_hook_setup(id).unwrap();
+        state
+            .observe_status(id, RuntimeStatus::Idle, io::now_ms())
+            .unwrap();
+        // Initial availability is known fixture setup, not the event under test.
+        // Explicitly dismiss only launch-idle facts; retain every real outcome.
+        state.recover_room_digest_facts();
+        let document = serde_json::to_value(&state).unwrap();
+        if let Some(records) = document["room_digests"].as_object() {
+            for record in records.values() {
+                for fact in record["facts"].as_object().unwrap().values() {
+                    if fact["text"] == "Idle with no next task"
+                        && fact["agent"]
+                            .as_u64()
+                            .and_then(|id| state.agent(AgentId(id)))
+                            .is_some_and(|a| a.busy_revision == 0)
+                    {
+                        state
+                            .ack_digest_fact(fact["id"].as_u64().unwrap(), io::now_ms())
+                            .unwrap();
+                    }
+                }
+            }
+        }
         callbacks::initialize(
             &self.dir.join(format!("callbacks/launch-{}", id.0)),
             &callbacks::Manifest {

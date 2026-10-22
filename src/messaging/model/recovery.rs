@@ -111,6 +111,7 @@ impl BusState {
                     agent.actionable_error = None;
                 }
             }
+            self.record_digest_request(request, recovered_at_ms);
             return Ok(());
         }
         if !matches!(
@@ -162,6 +163,7 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
         agent.actionable_error = None;
+        self.record_digest_request(request, recovered_at_ms);
         Ok(())
     }
 }

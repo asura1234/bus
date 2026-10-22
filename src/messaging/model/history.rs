@@ -137,6 +137,7 @@ impl super::BusState {
     /// Moves settled requests and old notices into the archive and drops what
     /// no longer needs keeping. True when anything changed.
     pub(crate) fn archive(&mut self, now_ms: u64) -> bool {
+        let digests = self.prune_digest_tombstones(now_ms);
         let pending = self.retain_unrouted_worker_replies() | self.retain_worker_outcomes(now_ms);
         let moved = self.archive_settled(now_ms.saturating_sub(ARCHIVE_AFTER_MS));
         let expired = self.drop_history_before(now_ms.saturating_sub(HISTORY_RETENTION_MS));
@@ -153,7 +154,7 @@ impl super::BusState {
                     .is_some_and(|notice| retained.contains(&notice))
         });
         let events = self.prune_worker_events(now_ms);
-        pending | moved | expired | spent | events | (routes != self.reply_routes.len())
+        digests | pending | moved | expired | spent | events | (routes != self.reply_routes.len())
     }
 
     /// Settled requests no agent, queue or open group refers to, and notices,

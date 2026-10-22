@@ -404,6 +404,8 @@ fn claude_image_placeholder_matches_when_text_before_the_image_ends_in_whitespac
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: 0,
             attention_origin: None,
+            broadcast: false,
+            digest_notice_agents: Default::default(),
         };
         // Whether the hook keeps the trailing space or not, the lifted image
         // leaves the typed text line as the whole remaining prompt.
