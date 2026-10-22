@@ -398,3 +398,49 @@ fn room_digest_only_new_facts_rearm_and_a_burst_coalesces_with_older_unacknowled
         "an undelivered digest must survive ordinary queued expiry"
     );
 }
+
+#[test]
+fn room_digest_a_healthy_background_idle_notice_is_not_actionable() {
+    use super::reply_routing::ReplyRoute;
+    use super::worker_events::{WorkerEvent, WorkerEventKind};
+    let (mut s, room, orch, worker) = fixture();
+    let request = s
+        .submit_message_from(
+            room,
+            Draft {
+                text: "healthy background task".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Agent(orch),
+            10,
+        )
+        .unwrap()[0];
+    s.begin_submission(request, "launch", 0).unwrap();
+    s.record_submission(
+        request,
+        SubmissionOutcome::Confirmed {
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn".into()),
+        },
+    )
+    .unwrap();
+    s.requests.get_mut(&request).unwrap().awaiting_background = true;
+    s.observe_status(worker, RuntimeStatus::Idle, 20).unwrap();
+    let event = WorkerEvent {
+        agent: worker,
+        room,
+        group: Some(request),
+        message: s.request(request).unwrap().prompt.id,
+        at_ms: 20,
+        episode: Some(0),
+        kind: WorkerEventKind::Idle,
+        text: "Idle with open request (background work pending)".into(),
+        route: ReplyRoute::Seen,
+    };
+    s.record_digest_event("idle:healthy:0", &event);
+    assert!(
+        facts(&s, orch).is_empty(),
+        "healthy work already has an owner and a live wait; do not create an action digest"
+    );
+}

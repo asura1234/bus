@@ -305,6 +305,9 @@ where relevant. A tag mentioned later in the reply is ordinary prose. Bus also
 records abandoned/stalled requests, idle workers with no next task, actionable
 GitHub watch notices and Bus alerts. These facts belong to the bound
 orchestrator and are independent of a waiter's transport `seen` state.
+Healthy background requests that still have an owner and live wait do not
+produce an action digest. Alerts about the orchestrator's own provider/dialog
+remain developer alerts. Their existing notification paths are unchanged.
 
 When the orchestrator can start a clean idle turn, Bus sends one Bus-authored,
 queue-only `Room digest: …` message in the work room. It lists the outstanding

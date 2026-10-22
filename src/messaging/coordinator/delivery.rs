@@ -149,6 +149,7 @@ impl Worker {
                 continue;
             }
             if !steer_unbound
+                && agent.current_request.is_none()
                 && self.state.room_digest_armed(agent.id)
                 && self.state.queued_requests(agent.id).is_empty()
             {

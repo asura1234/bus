@@ -172,7 +172,7 @@ impl BusState {
     pub(super) fn record_digest_event(&mut self, key: &str, event: &WorkerEvent) {
         if matches!(
             event.kind,
-            WorkerEventKind::Outcome | WorkerEventKind::Exited | WorkerEventKind::Idle
+            WorkerEventKind::Outcome | WorkerEventKind::Exited
         ) {
             let source = if event.kind == WorkerEventKind::Outcome {
                 format!("request:{key}")

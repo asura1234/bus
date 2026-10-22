@@ -1335,19 +1335,9 @@ fn a_new_background_idle_episode_wakes_once_after_the_first_notice_was_handled()
     );
     let calls = f.calls.lock().unwrap();
     assert_eq!(
-        calls
-            .iter()
-            .filter(|text| !text.starts_with("Room digest:"))
-            .count(),
-        2
-    );
-    assert_eq!(
-        calls
-            .iter()
-            .filter(|text| text.starts_with("Room digest:"))
-            .count(),
-        1,
-        "replying to notices is not a next action, so one digest is still required"
+        calls.len(),
+        2,
+        "healthy background work only keeps its existing notifications"
     );
 }
 
