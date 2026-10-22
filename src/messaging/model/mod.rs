@@ -3,6 +3,7 @@ mod agents;
 mod attention;
 mod callbacks;
 mod compactions;
+mod disk_space;
 mod history;
 mod idle_agents;
 mod interrupts;

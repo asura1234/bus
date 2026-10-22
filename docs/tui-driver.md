@@ -355,6 +355,12 @@ or 777 in Bus's output). `since_last_input` is the index the next
 Every copy Bus made in this session (OSC 52).
 
 ### fixture
+
+Disk alerts use synthetic free space in driver sessions: write a decimal byte
+count to `disk-free-bytes` in the scratch data directory (`status` prints it).
+An absent file means healthy capacity. Samples still run every 60 seconds;
+see [disk space alerts](disk-space-alerts.md).
+
 `fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P]`
 
 Writes a file for the session to send and prints its path: `image` is a

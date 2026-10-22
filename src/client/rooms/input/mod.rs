@@ -587,6 +587,8 @@ impl BusUi {
             Action::ToggleFeishuNotifications => self.toggle_feishu_notifications(),
             Action::AdjustCompactionLimit(forward) => self.adjust_compaction_limit(forward),
             Action::AdjustIdleAgentsAlert(up) => self.adjust_idle_agents_alert(up),
+            Action::AdjustDiskWarningGb(up) => self.adjust_disk_threshold(true, up),
+            Action::AdjustDiskCriticalGb(up) => self.adjust_disk_threshold(false, up),
             Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),
             Action::Cancel => {
                 if let Some(room) = self.room {

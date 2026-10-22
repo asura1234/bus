@@ -12,6 +12,7 @@ use std::path::Path;
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 
 pub(super) struct Worker {
+    pub(super) disk_space: super::disk_space::DiskSpace,
     pub(super) attention: super::attention::Runtime,
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
@@ -104,6 +105,7 @@ impl Worker {
         }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
+            disk_space: super::disk_space::DiskSpace::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
             state,
@@ -458,6 +460,7 @@ impl Worker {
         can_deliver: impl FnMut() -> bool,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        self.refresh_disk_space_at(std::time::Instant::now())?;
         self.expire_queued_now()?;
         let Some(infos) = self.poll().inspect_err(|_| {
             tracing::warn!(

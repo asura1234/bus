@@ -249,6 +249,11 @@ pub(crate) struct Room {
     /// count falls back to the limit, so the next episode notifies again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) idle_alert_sent: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "super::disk_space::DiskAlerts::is_empty"
+    )]
+    pub(super) disk_alerts: super::disk_space::DiskAlerts,
 }
 
 /// A provider turn that ended with a final callback, and the notice ids it

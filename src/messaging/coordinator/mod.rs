@@ -2,6 +2,7 @@
 pub(crate) mod agents;
 pub(crate) mod attention;
 mod delivery;
+mod disk_space;
 mod exit_snapshot;
 mod expiry;
 mod poll;
@@ -68,6 +69,8 @@ pub(crate) enum BusCommand {
     SetAllRoomsSoundName(Option<String>),
     SetMaxCompactionsPerAgent(u32),
     SetIdleAgentsAlert(u32),
+    SetDiskWarningGb(u32),
+    SetDiskCriticalGb(u32),
     /// The room sidebar's width in cells, clamped to the settings range.
     SetSidebarWidth(u16),
     SetFreezeNotifications(bool),

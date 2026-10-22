@@ -24,6 +24,10 @@ also qualify. `[needs_developer_attention]` still renders the internal badge;
 by itself it does not send a DM. Failed sends warn without blocking Bus or
 retrying. See [Feishu notification settings and behavior](docs/developer-notifications.md).
 
+Settings includes disk warning and critical thresholds (20/5 GB free by
+default). Bus checks its data volume every minute and posts one grey `bus`
+notice per level in each work room. See [disk space alerts](docs/disk-space-alerts.md).
+
 Bus is a fork of [Herdr](https://github.com/herdrdev/herdr) and inherits its
 [Apache License 2.0](LICENSE).
 

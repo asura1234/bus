@@ -102,6 +102,8 @@ impl BusUi {
             ),
             Action::AdjustCompactionLimit(up) => format!("compaction-limit:{}", way(*up)),
             Action::AdjustIdleAgentsAlert(up) => format!("idle-agents-alert:{}", way(*up)),
+            Action::AdjustDiskWarningGb(up) => format!("disk-warning:{}", way(*up)),
+            Action::AdjustDiskCriticalGb(up) => format!("disk-critical:{}", way(*up)),
             Action::AdjustSidebarWidth(up) => format!("sidebar-width:{}", way(*up)),
             Action::Cancel => "cancel".into(),
             Action::Add => "add".into(),

@@ -136,6 +136,8 @@ mod recovery_tests;
 
 #[path = "compaction_test.rs"]
 mod compaction_tests;
+#[path = "disk_alert_test.rs"]
+mod disk_alert_tests;
 #[path = "idle_agents_test.rs"]
 mod idle_agents_tests;
 
