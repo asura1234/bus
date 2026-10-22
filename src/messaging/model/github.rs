@@ -48,7 +48,16 @@ impl BusState {
                         !a.deletion_pending
                             && (a.room_id == room.id || a.orchestrates == Some(room.id))
                     })
-                    .map(|a| (a.cwd.clone(), a.branch.clone()))
+                    .map(|a| {
+                        (
+                            a.cwd.clone(),
+                            if a.room_id == room.id {
+                                a.branch.clone()
+                            } else {
+                                None
+                            },
+                        )
+                    })
                     .collect(),
             })
             .collect()
@@ -60,23 +69,7 @@ impl BusState {
         match update {
             Update::Coverage(coverage) => {
                 for (repo, scopes) in coverage {
-                    for scope in scopes {
-                        if let Some(room) = self.rooms.get_mut(&RoomId(scope.room)).filter(|r| {
-                            !r.deletion_pending
-                                && r.kind == RoomKind::Work
-                                && r.github_repos
-                                    .as_ref()
-                                    .is_none_or(|repos| repos.contains(repo))
-                        }) {
-                            room.github_branches
-                                .entry(repo.clone())
-                                .or_default()
-                                .extend(scope.branches.iter().cloned());
-                            if room.github_repos.is_none() {
-                                room.github_discovered.insert(repo.clone());
-                            }
-                        }
-                    }
+                    self.remember_github_heads(repo, scopes);
                 }
             }
             Update::Repo {
@@ -106,6 +99,7 @@ impl BusState {
                         }
                         let mark = self.github_watch.entry(repo.clone()).or_default();
                         let notices = github::changes(repo, mark, page, &scopes, *at_ms);
+                        self.remember_github_heads(repo, &scopes);
                         for notice in notices {
                             tracing::debug!(
                                 event = "bus.github.notice.created",
@@ -135,6 +129,27 @@ impl BusState {
         }
         Ok(())
     }
+    fn remember_github_heads(&mut self, repo: &str, scopes: &[github::Scope]) {
+        let mark = self.github_watch.get(repo);
+        for scope in scopes {
+            let Some(room) = self.rooms.get_mut(&RoomId(scope.room)).filter(|r| {
+                !r.deletion_pending
+                    && r.kind == RoomKind::Work
+                    && r.github_repos
+                        .as_ref()
+                        .is_none_or(|repos| repos.iter().any(|r| r == repo))
+            }) else {
+                continue;
+            };
+            let branches = room.github_branches.entry(repo.into()).or_default();
+            branches.extend(scope.branches.iter().cloned());
+            branches.retain(|branch| mark.is_none_or(|m| !m.closed_head(branch)));
+            if room.github_repos.is_none() {
+                room.github_discovered.insert(repo.into());
+            }
+        }
+    }
+
     fn github_notice(
         &mut self,
         room: RoomId,

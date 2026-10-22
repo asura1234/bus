@@ -35,9 +35,9 @@ pub(super) fn query(q: &Query) -> String {
             }} }} }} }}
           }}
         }}
-        merged: pullRequests(states: MERGED, first: 50, after: {merged}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{
+        merged: pullRequests(states: [MERGED, CLOSED], first: 50, after: {merged}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{
           pageInfo {{ hasNextPage endCursor }}
-          nodes {{ {fields} mergedAt mergedBy {{ login }} updatedAt }}
+          nodes {{ {fields} state mergedAt mergedBy {{ login }} updatedAt }}
         }}
       }}
     }}"#,
@@ -88,7 +88,7 @@ pub(super) fn parse(q: &Query, body: &Value) -> Result<Page, Failure> {
     } else {
         q.watermark.merged_since_ms.saturating_sub(OVERLAP_MS)
     };
-    // UPDATED_AT ordering lets us stop only after an entire older boundary.
+    // Merged and closed PRs share the durable UPDATED_AT scan cursor.
     let older = merged_nodes
         .last()
         .and_then(|n| n.get("updatedAt"))
@@ -99,6 +99,12 @@ pub(super) fn parse(q: &Query, body: &Value) -> Result<Page, Failure> {
         open,
         merged: merged_nodes
             .iter()
+            .filter(|pr| pr["state"] == "MERGED")
+            .map(pull_request)
+            .collect::<Result<_, _>>()?,
+        closed: merged_nodes
+            .iter()
+            .filter(|pr| pr["state"] == "CLOSED")
             .map(pull_request)
             .collect::<Result<_, _>>()?,
         open_cursor: cursor(repo, "open")?,

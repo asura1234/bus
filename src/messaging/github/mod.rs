@@ -28,6 +28,16 @@ pub(crate) struct Watermark {
     pub(crate) open_cursor: Option<String>,
     pub(crate) merged_seen: BTreeMap<u64, u64>,
     pub(crate) observed: BTreeMap<u64, BTreeMap<u64, PrStatus>>,
+    /// Known PR lifecycle per head; true means explicitly merged/closed.
+    pub(crate) head_prs: BTreeMap<String, BTreeMap<u64, bool>>,
+}
+
+impl Watermark {
+    pub(crate) fn closed_head(&self, branch: &str) -> bool {
+        self.head_prs
+            .get(branch)
+            .is_some_and(|prs| prs.values().all(|closed| *closed))
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -54,6 +64,7 @@ pub(crate) struct Page {
     pub(crate) default_branch: String,
     pub(crate) open: Vec<PullRequest>,
     pub(crate) merged: Vec<PullRequest>,
+    pub(crate) closed: Vec<PullRequest>,
     pub(crate) open_cursor: Option<String>,
     pub(crate) merged_cursor: Option<String>,
     pub(crate) retry_at_ms: Option<u64>,

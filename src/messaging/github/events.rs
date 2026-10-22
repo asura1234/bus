@@ -74,6 +74,20 @@ pub(crate) fn changes(
     now: u64,
 ) -> Vec<Notice> {
     let mut notices = Vec::new();
+    // Keep explicit lifecycle observations across pages and restarts. A terminal
+    // PR must not disown another open PR that shares its head branch.
+    for (prs, closed) in [
+        (&page.merged, true),
+        (&page.closed, true),
+        (&page.open, false),
+    ] {
+        for pr in prs {
+            mark.head_prs
+                .entry(pr.branch.clone())
+                .or_default()
+                .insert(pr.number, closed);
+        }
+    }
     if mark.scan_started_ms == 0 {
         mark.scan_started_ms = now;
     }
@@ -109,7 +123,13 @@ pub(crate) fn changes(
     let rooms: BTreeSet<_> = scopes.iter().map(|s| s.room).collect();
     mark.observed.retain(|room, prs| {
         // Missing from a paginated scan is not proof of closure.
-        prs.retain(|id, _| !page.merged.iter().any(|pr| pr.number == *id));
+        prs.retain(|id, _| {
+            !page
+                .merged
+                .iter()
+                .chain(&page.closed)
+                .any(|pr| pr.number == *id)
+        });
         rooms.contains(room)
     });
     notices

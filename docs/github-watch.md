@@ -5,8 +5,9 @@ Bus watches GitHub repositories covered by each work room. It reads GitHub using
 Only github.com remotes are supported.
 
 Repositories come from the git remotes of the room's agents, including its MASTER
-orchestrator. Bus remembers discovered repositories so cleaning up the last worker
-does not stop merge monitoring. Set an explicit list, return to discovery, or turn
+orchestrator. The orchestrator contributes repository coverage only; its branch
+does not establish room ownership. Bus remembers discovered repositories so
+cleaning up the last worker does not stop merge monitoring. Set an explicit list, return to discovery, or turn
 monitoring off for a room:
 
 ```sh
@@ -21,8 +22,12 @@ are saved with the room. MASTER itself has no watch.
 
 A PR belongs to the rooms whose current or remembered agent feature branches match
 its head branch. Bus persists these branches per room and repository when discovery
-sees them, so worker cleanup or switching branches does not lose ownership. An
-unmatched head is informational; author identity never establishes ownership. The
+sees them, so worker cleanup or switching branches does not lose ownership. Only
+room-member branches are remembered. A remembered head is retired when its PR is
+seen merged or closed, and is not remembered again merely because a worker still
+has that checkout. Another known open PR on the same head keeps ownership active;
+reopening a PR also allows the current room members to establish ownership again.
+An unmatched head is informational; author identity never establishes ownership. The
 repository's default branch does not establish ownership. With an explicit repo
 list, the room's current agent branches apply to each listed repository.
 
@@ -54,8 +59,10 @@ resumes pagination and suppresses already reported merges and PR-state edges.
 The initial merge-time eligibility floor is fixed; the moving scan boundary uses
 updatedAt, so a merge that moves pages remains eligible on the next scan. Seen
 merge IDs remain persisted to avoid replay when older PRs receive new comments.
-Open-PR observations are retained across page gaps; a confirmed merged PR removes
-its open observation. Absence from a page is not treated as proof of closure.
+Open-PR observations are retained across page gaps; a confirmed merged or closed
+PR removes its open observation. Both terminal states share the paginated scan,
+so closed PR cleanup does not require another GitHub request. Absence from a page
+is not treated as proof of closure.
 CI completion uses GitHub's full state counts when checks span more than one page,
 so a failure does not conceal other jobs still running.
 

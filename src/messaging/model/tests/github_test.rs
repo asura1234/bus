@@ -365,3 +365,152 @@ fn github_watch_outages_recover_per_repo_and_persist_per_room() {
         "the recovered repo must report one new outage"
     );
 }
+
+#[test]
+fn github_watch_orchestrator_discovers_repos_without_contributing_owned_heads() {
+    let (mut state, room, orchestrator) = bound_room();
+    state.agents.get_mut(&orchestrator).unwrap().branch = Some("fix/orchestrator".into());
+    state
+        .create_agent(
+            room,
+            "member",
+            super::super::Provider::ClaudeCode,
+            "/member".into(),
+            Some("fix/member".into()),
+        )
+        .unwrap();
+    let interests = state.github_interests();
+    assert!(interests[0]
+        .agents
+        .iter()
+        .any(|(cwd, _)| cwd == &std::path::PathBuf::from("/repo")));
+    let branches: Vec<_> = interests[0]
+        .agents
+        .iter()
+        .filter_map(|(_, b)| b.as_deref())
+        .collect();
+    assert_eq!(
+        branches,
+        ["fix/member"],
+        "orchestrator head became room ownership"
+    );
+}
+
+#[test]
+fn github_watch_merged_head_expires_and_is_not_remembered_again_after_restart() {
+    let (mut state, room, _) = bound_room();
+    let coverage = Update::Coverage(
+        [(
+            "o/r".into(),
+            vec![Scope {
+                room: room.0,
+                branches: ["fix/ours".into()].into(),
+            }],
+        )]
+        .into(),
+    );
+    state.apply_github(&coverage, 1).unwrap();
+    state
+        .apply_github(&merged_update(room, "fix/ours"), 2)
+        .unwrap();
+    assert!(
+        state
+            .room(room)
+            .unwrap()
+            .github_branches
+            .get("o/r")
+            .is_none_or(|b| !b.contains("fix/ours")),
+        "merged head stayed remembered"
+    );
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state.apply_github(&coverage, 3).unwrap();
+    assert!(
+        state
+            .room(room)
+            .unwrap()
+            .github_branches
+            .get("o/r")
+            .is_none_or(|b| !b.contains("fix/ours")),
+        "discovery re-remembered a terminal head"
+    );
+}
+
+#[test]
+fn github_watch_closed_head_expires_but_a_different_open_pr_keeps_the_head_owned() {
+    let (mut state, room, _) = bound_room();
+    let mut update = merged_update(room, "fix/ours");
+    let open = PullRequest {
+        number: 138,
+        branch: "fix/ours".into(),
+        base: "main".into(),
+        ..Default::default()
+    };
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            open: vec![open.clone()],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 1).unwrap();
+    state
+        .apply_github(&merged_update(room, "fix/ours"), 2)
+        .unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"),
+        "an older merged PR disowned the active PR on the same head"
+    );
+    let before = state.requests().count();
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            closed: vec![open.clone()],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 3).unwrap();
+    assert!(!state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"));
+    assert!(!state.github_watermarks()["o/r"].observed[&room.0].contains_key(&138));
+    assert_eq!(
+        state.requests().count(),
+        before,
+        "closure must not become a merge notification"
+    );
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            open: vec![open],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 4).unwrap();
+    assert!(
+        state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"),
+        "reopened PR could not restore current-member ownership"
+    );
+}
+
+#[test]
+fn github_watch_new_open_pr_can_reestablish_retired_head_ownership() {
+    let (mut state, room, _) = bound_room();
+    state
+        .apply_github(&merged_update(room, "fix/ours"), 1)
+        .unwrap();
+    assert!(!state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"));
+    let mut update = merged_update(room, "fix/ours");
+    if let Update::Repo { result, .. } = &mut update {
+        *result = Ok(Page {
+            default_branch: "main".into(),
+            open: vec![PullRequest {
+                number: 138,
+                branch: "fix/ours".into(),
+                base: "main".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+    }
+    state.apply_github(&update, 2).unwrap();
+    assert!(state.room(room).unwrap().github_branches["o/r"].contains("fix/ours"));
+}
