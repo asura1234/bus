@@ -522,7 +522,7 @@ fn upgraded_agents_receive_current_messaging_rules_once_before_waiting_work() {
             let onboarding = resumed.state.request(pending[0]).unwrap();
             assert!(onboarding.queue_only);
             assert_eq!(onboarding.room_id, home);
-            assert_eq!(onboarding.prompt.author, Author::Developer);
+            assert_eq!(onboarding.prompt.author, Author::Bus);
             assert!(onboarding
                 .prompt
                 .text
