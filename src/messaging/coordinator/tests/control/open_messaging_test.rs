@@ -276,3 +276,21 @@ fn open_messaging_room_deletion_clears_foreign_queued_request_references() {
 fn open_messaging_room_deletion_clears_foreign_active_request_references() {
     deletion_preserves_foreign_recipient(true);
 }
+
+#[test]
+fn open_messaging_an_existing_header_matches_names_that_begin_with_from() {
+    for name in ["From worker", "From agent 9", "Équipe"] {
+        let (mut w, room, author, dir) = fixture();
+        w.state.rename_agent(author, name).unwrap();
+        let peer = add(&mut w, room, &dir, "peer");
+        let text = format!("{name} (agent {}, room {}):\nready", author.0, room.0);
+        assert!(send(&mut w, room, author, &peer.0.to_string(), &text).ok);
+        let id = w.state.requests().last().unwrap().id;
+        assert_eq!(
+            w.state.render_request_payload(id).as_deref(),
+            Some(text.as_str())
+        );
+        drop(w);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

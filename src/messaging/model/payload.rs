@@ -38,11 +38,13 @@ impl BusState {
 /// A name or ID embedded later in the message does not identify its author.
 fn starts_with_sender(text: &str, name: &str, id: u64) -> bool {
     let first = text.trim_start().lines().next().unwrap_or_default().trim();
-    let first = first
-        .get(..5)
-        .filter(|prefix| prefix.eq_ignore_ascii_case("from "))
-        .map_or(first, |_| first[5..].trim_start());
-    identity_prefix(first, name) || identity_prefix(first, &format!("agent {id}"))
+    let agent_id = format!("agent {id}");
+    let identifies = |line: &str| identity_prefix(line, name) || identity_prefix(line, &agent_id);
+    identifies(first)
+        || (first
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("from "))
+            && identifies(first[5..].trim_start()))
 }
 
 fn identity_prefix(line: &str, identity: &str) -> bool {
