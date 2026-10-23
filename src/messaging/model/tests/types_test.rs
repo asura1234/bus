@@ -72,62 +72,28 @@ fn feishu_prunes_delivery_guards_after_their_history_is_removed() {
 }
 
 #[test]
-fn developer_attention_stall_uses_existing_deadline_and_ignores_working_or_blocked() {
+fn operational_notice_stalled_requests_keep_status_without_bus_chat() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
     state.confirm_hook_setup(agent).unwrap();
     let request = submit_text(&mut state, room, agent, "queued");
     let master = state.ensure_master_room();
-    state
-        .notify_stalled_attention(10 + QUEUED_STALL_MS - 1)
-        .unwrap();
-    assert_eq!(state.notices(master).count(), 0);
-    state
-        .notify_stalled_attention(10 + QUEUED_STALL_MS)
-        .unwrap();
-    state
-        .notify_stalled_attention(10 + QUEUED_STALL_MS + 1)
-        .unwrap();
-    assert_eq!(state.notices(master).count(), 1);
-    assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
-    let mut recovered = state.clone();
-    let recovery = 10 + QUEUED_STALL_MS + 10;
-    recovered
-        .observe_status(agent, RuntimeStatus::Working, recovery)
-        .unwrap();
-    recovered.notify_stalled_attention(recovery + 1).unwrap();
-    recovered
-        .observe_status(agent, RuntimeStatus::Idle, recovery + 2)
-        .unwrap();
-    recovered
-        .notify_stalled_attention(recovery + 2 + QUEUED_STALL_MS)
-        .unwrap();
-    assert_eq!(
-        recovered.notices(master).count(),
-        1,
-        "working then idle must not re-arm the same stalled request"
-    );
-    let serialized = serde_json::to_vec(&recovered).unwrap();
-    let mut recovered: BusState = serde_json::from_slice(&serialized).unwrap();
-    recovered.prune_attention();
-    recovered.notify_stalled_attention(u64::MAX).unwrap();
-    assert_eq!(recovered.notices(master).count(), 1);
-    let another = submit_text(&mut recovered, room, agent, "another request");
-    assert_ne!(request, another);
-    recovered.notify_stalled_attention(u64::MAX).unwrap();
-    assert_eq!(
-        recovered.notices(master).count(),
-        2,
-        "a distinct stalled request still alerts"
-    );
-    for status in [RuntimeStatus::Working, RuntimeStatus::Blocked] {
-        let mut state = state.clone();
-        state.attention_episodes.clear();
-        state.rooms.get_mut(&master).unwrap().notices.clear();
-        state.observe_status(agent, status, 20).unwrap();
-        state.notify_stalled_attention(u64::MAX).unwrap();
+    for now in [10 + QUEUED_STALL_MS, 10 + QUEUED_STALL_MS + 1] {
+        state.record_stalled_errors(now).unwrap();
         assert_eq!(state.notices(master).count(), 0);
+        assert_eq!(
+            state
+                .stall_reason(state.request(request).unwrap(), now)
+                .as_deref(),
+            Some("not_submitted")
+        );
     }
+    assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
+    let mut reloaded: BusState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    reloaded.record_stalled_errors(u64::MAX).unwrap();
+    assert_eq!(reloaded.notices(master).count(), 0);
+    assert_eq!(reloaded.request(request).unwrap().prompt.text, "queued");
 }
 
 #[test]

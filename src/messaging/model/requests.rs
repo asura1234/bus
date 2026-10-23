@@ -381,13 +381,6 @@ impl BusState {
             .collect();
         for (request, agent, prompt) in unconfirmed {
             let message = Self::unconfirmed_submission_message(prompt);
-            self.attention_episode(
-                format!("stall:{}", request.0),
-                Some(true),
-                agent,
-                &message,
-                now_ms,
-            )?;
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
             self.set_agent_error(agent, Some(message))?;
             tracing::info!(

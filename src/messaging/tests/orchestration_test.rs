@@ -1,4 +1,5 @@
 use super::*;
+use crate::messaging::model::BusState;
 
 fn temp_root(label: &str) -> PathBuf {
     crate::utils::test_temp::unique_temp_path(&format!("bus-orch-{label}"))
@@ -679,46 +680,15 @@ fn docs_written_for_agents_name_no_dev_tool_and_no_dev_flag() {
 }
 
 #[test]
-fn upgrade_onboarding_is_signed_by_bus_not_the_developer() {
-    let data = temp_root("upgrade-onboarding-author");
+fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     let mut state = BusState::new();
     let room = state.create_room("work").unwrap();
     let agent = state
         .create_agent(room, "codex1", Provider::Codex, "/repo".into(), None)
         .unwrap();
-    let mut value = serde_json::to_value(&state).unwrap();
-    value["agents"][agent.0.to_string()]["messaging_rules_version"] = serde_json::json!(0);
-    let mut state: BusState = serde_json::from_value(value).unwrap();
-    queue_upgrade_onboarding(&mut state, &data).unwrap();
-    let request = state.requests().next().expect("onboarding queued");
-    assert_eq!(
-        request.prompt.author,
-        crate::messaging::model::Author::Bus,
-        "Bus's own rules refresh shown in chat as written by the developer"
-    );
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[test]
-fn version_three_agents_receive_the_peer_sop_once_across_reload() {
-    let data = temp_root("peer-sop-upgrade");
-    let mut state = BusState::new();
-    let room = state.create_room("work").unwrap();
-    let old = state
-        .create_agent(room, "existing", Provider::Codex, "/repo".into(), None)
-        .unwrap();
-    state
-        .create_agent(room, "current", Provider::Codex, "/repo".into(), None)
-        .unwrap();
-    let mut value = serde_json::to_value(&state).unwrap();
-    // Version 3 is the deployed onboarding before the peer SOP shipped.
-    value["agents"][old.0.to_string()]["messaging_rules_version"] = serde_json::json!(3);
-    let mut state: BusState = serde_json::from_value(value).unwrap();
-    queue_upgrade_onboarding(&mut state, &data).unwrap();
-    assert_eq!(state.requests().count(), 1);
-    let saved = serde_json::to_value(&state).unwrap();
-    let mut reloaded: BusState = serde_json::from_value(saved).unwrap();
-    queue_upgrade_onboarding(&mut reloaded, &data).unwrap();
-    assert_eq!(reloaded.requests().count(), 1);
-    std::fs::remove_dir_all(data).unwrap();
+    let text = agent_onboarding("codex1", agent, room, Path::new("/bus-docs"));
+    assert!(text.contains("Bus messaging: you are codex1"));
+    assert!(text.contains("Read /bus-docs/how-to-bus-cli.md"));
+    assert!(text.contains("Send only the body"));
+    assert_eq!(state.requests().count(), 0);
 }

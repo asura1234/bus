@@ -391,36 +391,6 @@ impl BusState {
             .ok_or(ModelError::InvalidTransition)
     }
 
-    /// Bus's final cleanup notice about a deleting agent goes to its surviving
-    /// orchestrator, else room history. A deleting room reports in MASTER.
-    pub(crate) fn post_deletion_notice(
-        &mut self,
-        deleted: AgentId,
-        message: String,
-        now_ms: u64,
-    ) -> Result<(), ModelError> {
-        let agent = self
-            .agents
-            .get(&deleted)
-            .ok_or(ModelError::UnknownAgent(deleted))?;
-        if !agent.deletion_pending {
-            return Err(ModelError::InvalidTransition);
-        }
-        let text = format!("Deleted agent \"{}\". {message}", agent.name);
-        let room = if self
-            .rooms
-            .get(&agent.room_id)
-            .is_some_and(|room| room.deletion_pending)
-        {
-            MASTER_ROOM_ID
-        } else {
-            agent.room_id
-        };
-        let orchestrator = self.notice_orchestrator(room, Some(deleted));
-        self.post_bus_notice(room, orchestrator, text, now_ms)
-            .map(|_| ())
-    }
-
     fn record_developer_notice(
         &mut self,
         room: RoomId,

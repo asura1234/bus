@@ -470,7 +470,7 @@ fn cold_resume_save_failure_cannot_deliver_or_adopt_an_unpersisted_identity() {
 }
 
 #[test]
-fn upgraded_agents_receive_current_messaging_rules_once_before_waiting_work() {
+fn upgraded_agents_keep_saved_instructions_and_pending_work_without_new_turns() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         for role in ["worker", "default-orchestrator", "custom-orchestrator"] {
             let (mut worker, original, room, dir, calls) = fixture(provider, vec![]);
@@ -549,30 +549,10 @@ fn upgraded_agents_receive_current_messaging_rules_once_before_waiting_work() {
             }
             let pending = resumed.state.queued_requests(agent).to_vec();
             assert_eq!(
-                pending.len(),
-                2,
-                "missing upgrade onboarding: {provider:?}/{role}"
+                pending,
+                vec![queued],
+                "upgrade must not prepend a rules-refresh task: {provider:?}/{role}"
             );
-            assert_eq!(pending[1], queued, "onboarding must precede waiting work");
-            let onboarding = resumed.state.request(pending[0]).unwrap();
-            assert!(onboarding.queue_only);
-            assert_eq!(onboarding.room_id, home);
-            assert_eq!(onboarding.prompt.author, Author::Bus);
-            assert!(onboarding
-                .prompt
-                .text
-                .contains("Bus automatically adds 'name (agent id, room R):'"));
-            assert!(onboarding
-                .prompt
-                .text
-                .contains("do not add a 'from X', 'X here' or signature line"));
-            assert!(onboarding
-                .prompt
-                .text
-                .contains("Messages from another room wait for the next turn"));
-            assert!(std::fs::read_to_string(dir.join("docs/how-to-bus-cli.md"))
-                .unwrap()
-                .contains("conversation room"));
             assert_eq!(
                 std::fs::read(&prompt).ok(),
                 old_prompt,

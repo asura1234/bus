@@ -3184,3 +3184,19 @@ fn notify_you_async_rejects_both_developer_aliases() {
 fn retired_room_digest_ack_cli_is_rejected() {
     assert!(command(&["digest", "ack", "42"]).is_err());
 }
+
+#[test]
+fn worker_human_fallback_cli_preserves_explicit_room_and_author() {
+    let parsed = command(&[
+        "send", "--room", "7", "--as", "worker", "--to", "human", "--text", "status",
+    ])
+    .unwrap();
+    assert_eq!(parsed.method, "message.send");
+    assert_eq!(parsed.params["room"], "7");
+    assert_eq!(parsed.params["as"], "worker");
+    assert_eq!(parsed.params["to"], json!(["human"]));
+    assert!(command(&[
+        "send", "--room", "7", "--as", "worker", "--to", "human", "--text", "status", "--async"
+    ])
+    .is_err());
+}

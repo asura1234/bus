@@ -194,10 +194,7 @@ impl BusState {
         )
     }
 
-    pub(crate) fn notify_stalled_attention(
-        &mut self,
-        now_ms: u64,
-    ) -> Result<(), super::ModelError> {
+    pub(crate) fn record_stalled_errors(&mut self, now_ms: u64) -> Result<(), super::ModelError> {
         let observed: Vec<_> = self
             .requests
             .values()
@@ -220,16 +217,27 @@ impl BusState {
                 } else {
                     format!("Agent stalled past its timeout on message {} ({reason}). Inspect: bus message status {}", prompt.0, prompt.0)
                 };
-                self.attention_episode(
-                    format!("stall:{}", request.0),
-                    Some(true),
-                    agent,
-                    &message,
-                    now_ms,
-                )?;
+                if self
+                    .attention_episodes
+                    .insert(format!("stall:{}", request.0))
+                {
+                    tracing::warn!(
+                        event = "bus.message.stalled",
+                        request_id = request.0,
+                        message_id = prompt.0,
+                        agent_id = agent.0,
+                        reason,
+                        detail = message,
+                        "Request is stalled; inspect message status"
+                    );
+                }
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn record_error_episode(&mut self, key: String) -> bool {
+        self.attention_episodes.insert(key)
     }
 
     pub(crate) fn attention_origin(&self, id: AgentId) -> Option<AttentionOrigin> {

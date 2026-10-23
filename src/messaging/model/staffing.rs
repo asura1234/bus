@@ -1,5 +1,5 @@
 //! Routing identities survive roster changes; queue metrics remain inspectable.
-use super::{AgentId, BusState, ModelError, RoomId};
+use super::{AgentId, BusState, RoomId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -11,56 +11,6 @@ pub(super) struct RetiredAgent {
 }
 
 impl BusState {
-    pub(crate) fn post_staffing_blocker(
-        &mut self,
-        agent: AgentId,
-        text: String,
-        now: u64,
-    ) -> Result<(), ModelError> {
-        let room = self
-            .agent(agent)
-            .ok_or(ModelError::UnknownAgent(agent))?
-            .room_id;
-        let recipient = self.notice_orchestrator(room, Some(agent));
-        self.post_bus_notice(room, recipient, text, now).map(|_| ())
-    }
-
-    pub(crate) fn post_roster_addition(
-        &mut self,
-        agent: AgentId,
-        now: u64,
-    ) -> Result<(), ModelError> {
-        let member = self.agent(agent).ok_or(ModelError::UnknownAgent(agent))?;
-        let old: Vec<_> = self
-            .retired_agents
-            .iter()
-            .filter(|(_, old)| {
-                old.room == member.room_id
-                    && old.name == member.name
-                    && old
-                        .orchestrates
-                        .is_none_or(|room| member.orchestrates == Some(room))
-            })
-            .map(|(id, _)| id.0.to_string())
-            .collect();
-        let text = format!(
-            "Roster change: added {} (agent {}) to room {}.{}",
-            member.name,
-            agent.0,
-            member.room_id.0,
-            if old.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " Removed IDs {} now forward to this replacement.",
-                    old.join(", ")
-                )
-            }
-        );
-        self.post_bus_notice(member.room_id, None, text, now)
-            .map(|_| ())
-    }
-
     /// Only recipient resolution uses tombstones. Authors and administrative
     /// commands must always name a currently existing agent.
     pub(crate) fn retired_recipient(

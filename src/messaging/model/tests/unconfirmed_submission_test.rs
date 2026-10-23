@@ -51,7 +51,7 @@ fn a_failed_unconfirmed_write_still_tells_the_developer() {
 
     // Left open, the write past its bound raises developer attention.
     let mut open = state.clone();
-    open.notify_stalled_attention(bound).unwrap();
+    open.record_stalled_errors(bound).unwrap();
     assert_eq!(
         tagged_master_notices(&mut open),
         1,
@@ -77,7 +77,7 @@ fn a_failed_unconfirmed_write_still_tells_the_developer() {
 fn an_unconfirmed_write_already_reported_is_not_reported_twice() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let (_, _, bound) = uncertain_write(&mut state, room, agent);
-    state.notify_stalled_attention(bound).unwrap();
+    state.record_stalled_errors(bound).unwrap();
     assert_unknown_outcome_notice(&state);
     state.fail_unconfirmed_submissions(bound).unwrap();
     state.expire_stalled_queued_requests(bound).unwrap();

@@ -3,7 +3,7 @@
 //! each provider's own launch option; nothing is written into the agent's PWD.
 use std::path::{Path, PathBuf};
 
-use super::model::{BusState, Provider, RoomId, MESSAGING_RULES_VERSION};
+use super::model::{Provider, RoomId};
 use super::storage::io::{atomic_write, private_dir};
 
 /// The default orchestrator system prompt, with `{{...}}` placeholders.
@@ -160,6 +160,7 @@ pub(crate) fn agent_onboarding(
          Merge only with exact-head VERIFIED, all required reviewers Ready, gates and requested acceptance passing, \
          comments adjudicated, recorded authority and no explicit hold. Enforce these checks during merge-pr too. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
+         For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \
          Finals still go to the orchestrator, including after peer-started work. \
          The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit room notes or the roster. \
@@ -172,39 +173,6 @@ pub(crate) fn agent_onboarding(
         id.0,
         docs.display()
     )
-}
-
-/// Preserve saved/custom prompts; send current common rules once before waiting
-/// work after an upgrade. The state marker and queue are saved atomically by open.
-pub(crate) fn queue_upgrade_onboarding(
-    state: &mut BusState,
-    data_dir: &Path,
-) -> Result<(), String> {
-    let agents: Vec<_> = state
-        .agents()
-        .filter(|agent| {
-            agent.messaging_rules_version < MESSAGING_RULES_VERSION
-                && !agent.deletion_pending
-                && state
-                    .room(agent.room_id)
-                    .is_some_and(|room| !room.deletion_pending)
-        })
-        .cloned()
-        .collect();
-    if agents.is_empty() {
-        return Ok(());
-    }
-    let docs = write_docs(data_dir)?;
-    for agent in agents {
-        let text = format!(
-            "Bus messaging rules updated. Follow these rules for the rest of this session.\n\n{}",
-            agent_onboarding(&agent.name, agent.id, agent.room_id, &docs)
-        );
-        state
-            .queue_messaging_onboarding(agent.id, text, super::storage::io::now_ms())
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 pub(crate) fn docs_dir(data_dir: &Path) -> PathBuf {

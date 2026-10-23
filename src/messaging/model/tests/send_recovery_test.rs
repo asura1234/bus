@@ -325,7 +325,7 @@ fn feishu_queued_request_that_stalled_while_bus_was_down_still_tells_the_develop
     state
         .observe_status(agent, RuntimeStatus::Unavailable, reopened_at)
         .unwrap();
-    state.notify_stalled_attention(reopened_at + 500).unwrap();
+    state.record_stalled_errors(reopened_at + 500).unwrap();
     let master = state.ensure_master_room();
     let tagged = state
         .notices(master)

@@ -60,18 +60,9 @@ fn a_terminal_closed_before_a_failed_save_is_not_reported_still_open() {
         .clone()
         .unwrap();
     let master = f.worker.state.master_room().unwrap().id;
-    let notice = f
-        .worker
-        .state
-        .notices(master)
-        .map(|p| p.text.clone())
-        .find(|t| t.contains("Agent process exited"))
-        .expect("exit notice");
-    assert!(
-        !notice.contains("its terminal is still open"),
-        "closed terminal reported open: terminal_closed={:?}\n{notice}",
-        snapshot.terminal_closed
-    );
+    assert_eq!(f.worker.state.notices(master).count(), 0);
+    assert_eq!(snapshot.terminal_closed, Some(true));
+    assert!(snapshot.path.as_ref().unwrap().is_file());
 }
 
 #[test]

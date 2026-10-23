@@ -179,20 +179,22 @@ fn provider_exit_with_open_request_saves_its_screen_reports_the_tail_and_closes_
 }
 
 #[test]
-fn provider_exit_while_idle_saves_its_screen_in_the_exit_notice_and_closes_the_terminal() {
+fn provider_exit_while_idle_saves_screen_in_state_without_chat() {
     let mut f = Fixture::new();
     exited_worker(&mut f);
     let pane = ExitedPane::install(&mut f, 0);
     f.worker.poll().unwrap();
     let master = f.worker.state.master_room().unwrap().id;
-    let notice = f
+    assert_eq!(f.worker.state.notices(master).count(), 0);
+    let snapshot = f
         .worker
         .state
-        .notices(master)
-        .map(|p| p.text.clone())
-        .find(|text| text.contains("Agent process exited"))
-        .expect("exit notice");
-    assert_snapshot(&f, &pane, &notice);
+        .agent(f.agent)
+        .unwrap()
+        .exit_snapshot
+        .as_ref()
+        .unwrap();
+    assert_snapshot(&f, &pane, &snapshot.notice());
     assert!(f.calls.lock().unwrap().is_empty());
 }
 
@@ -328,10 +330,9 @@ fn an_orchestrator_provider_exit_is_saved_but_leaves_its_terminal_open() {
     );
 }
 
-/// Screen text quoted in the MASTER exit notice is the worker's output, not
-/// Bus asking the developer for anything, so it must not page them off-machine.
+/// Saved exit output remains inspectable without paging the developer.
 #[test]
-fn screen_text_quoted_in_the_exit_notice_pages_no_one() {
+fn saved_exit_output_pages_no_one() {
     let mut f = Fixture::new();
     exited_worker(&mut f);
     install_screen(
@@ -343,13 +344,17 @@ fn screen_text_quoted_in_the_exit_notice_pages_no_one() {
     let before = f.worker.state.clone();
     f.worker.poll().unwrap();
     let master = f.worker.state.master_room().unwrap().id;
-    assert!(
-        f.worker
-            .state
-            .notices(master)
-            .any(|n| n.text.contains("Agent process exited")),
-        "exit notice missing"
-    );
+    assert_eq!(f.worker.state.notices(master).count(), 0);
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .exit_snapshot
+        .as_ref()
+        .unwrap()
+        .tail
+        .contains("paste the prod token"));
     let mut waiting = crate::messaging::feishu::waiting::WaitingNotifications::default();
     waiting.configure(true);
     let now = io::now_ms();

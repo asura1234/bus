@@ -283,6 +283,33 @@ two-second burst and first-action-line format; untagged direct posts use `sender
 No user setting disables these alerts, including a saved legacy Feishu off preference.
 Recipient and CLI path remain editable. See [developer notifications](../docs/developer-notifications.md).
 
+## Repository status reporting belongs to the agent and harness
+
+Bus does not discover repositories, poll a code host, interpret PR/merge-request
+state or decide the next workflow action. Use your agent and harness tools for
+GitHub, GitLab, Aliyun or another repository host.
+
+For assigned repository work, report these meaningful transitions yourself:
+
+- your PR/merge request is merged;
+- it becomes ready for review;
+- CI finishes, with its result;
+- a new merge conflict appears;
+- an upstream merge materially affects your assigned work.
+
+Include repository, PR/merge-request number, exact head when available, status
+and the next action or owner. Send one update per meaningful transition; do not
+broadcast every merge in an unrelated repository. Message the orchestrator bound
+to your room. If the room has no orchestrator, post to You from your own room:
+
+```sh
+bus send --room ROOM --as WORKER --to human --text "REPO PR #N; head SHA; STATUS; next ACTION"
+```
+
+This is an ordinary worker-authored message, not a Bus-generated notice. Check
+whether an orchestrator is bound rather than treating any send failure as a
+reason to send a second copy to You.
+
 ## Send work and wait for the reply
 
 Send a task to one agent and retain the returned message ID:
@@ -347,12 +374,8 @@ else. An ordinary sentence or a header with a forged ID or room always gets
 the genuine sender header. The stored chat text stays as authored;
 the delivered payload and callback matching use the same rendered text.
 
-After an upgrade, existing agents receive these current messaging rules from Bus once
-as their first pending message, before waiting work; saved custom prompts are
-preserved. New agents receive the rules at launch.
-
-If the upgrade instruction cannot be prepared, Bus logs a warning and continues
-coordinator startup. It retries the skipped refresh on a later startup.
+New agents receive Bus protocol instructions at launch. Existing conversations
+keep their saved instructions; upgrades do not insert new task turns.
 
 A message from another conversation room waits for the recipient's running
 turn to finish, then gets its own turn and reply. Same-room steering,
@@ -437,7 +460,7 @@ message; new events can join a still-queued batch during its collection window.
 Long text uses a preview and `bus message status MESSAGE_ID` or
 `bus history --room ROOM` pointer. Different workers keep their own identity.
 No room monitoring, self-timer or surviving waiter is required. Blocked,
-Resolved and failed-startup notices keep their existing behavior.
+Resolved notices keep their existing behavior. Startup failures are retained in agent state and diagnostic logs.
 
 An author's `send --async --as ORCH` renews a three-second waiter lease, so its
 reply and no-reply outcome components wait for the combined output.

@@ -142,7 +142,7 @@ the wrapper remains held.
   You can rely on these notifications without room polling or self-timers.
   Normal idle waits for callback settlement, so a late Stop produces one reply
   wake; persistent idle open work and confirmed exit remain visible. Blocked,
-  Resolved and failed-startup notices are unchanged.
+  Resolved notices are unchanged; startup failures remain in lifecycle state and logs.
   A live author waiter defers its own reply/outcome components and marks only
   flushed replies and exact printed event keys seen; use `wait --message ID
   --as YOUR_NAME` to resume that behavior. Idle (including background shells), other-message, exit and autonomous

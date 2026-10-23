@@ -5,6 +5,9 @@ mod delivery;
 mod disk_space;
 mod exit_snapshot;
 mod expiry;
+#[cfg(test)]
+#[path = "tests/operational_notice_retirement_test.rs"]
+mod operational_notice_retirement_tests;
 mod poll;
 #[cfg(test)]
 #[path = "tests/reply_delivery_support_test.rs"]
@@ -159,7 +162,7 @@ pub(crate) struct LeftOpenTerminal {
     pub(crate) terminal_id: String,
     pub(crate) reason: LeftOpenReason,
     /// Why Bus did not close it and what the caller may do, shared by the
-    /// CLI result, room notice and diagnostic log.
+    /// CLI result and diagnostic log.
     pub(crate) message: String,
 }
 

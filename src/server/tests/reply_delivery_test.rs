@@ -1091,7 +1091,7 @@ async fn socket_eagain_during_active_reply_preserves_ownership_and_recovers_once
 }
 
 #[tokio::test]
-async fn transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart() {
+async fn transcript_unmatched_diagnostic_is_not_rearmed_by_status_flapping_or_restart() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
     let agent = f.agents[0];
     f.send(agent, f.work, "lost reply", false, None);
@@ -1101,7 +1101,7 @@ async fn transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart
     f.tick();
     f.age_request_progress(600_000);
     f.tick();
-    assert_eq!(f.stall_alerts(), 1);
+    assert_eq!(f.stall_diagnostics(), 1);
     f.status(agent, AgentState::Working);
     f.tick();
     f.status(agent, AgentState::Idle);
@@ -1109,7 +1109,7 @@ async fn transcript_unmatched_alert_is_not_rearmed_by_status_flapping_or_restart
     f.age_request_progress(600_000);
     f.reopen();
     f.tick();
-    assert_eq!(f.stall_alerts(), 1);
+    assert_eq!(f.stall_diagnostics(), 1);
 }
 
 // One cycle is also a normal integration guard: both rounds must really hold
@@ -1125,7 +1125,7 @@ async fn batched_reply_cycles_hold_fresh_shells_after_reopen() {
         f.provider_startup();
     }
     assert_eq!(f.state().requests().count(), 50);
-    assert_eq!(f.stall_alerts(), 2);
+    assert_eq!(f.stall_diagnostics(), 2);
 }
 
 #[tokio::test]
@@ -1233,9 +1233,9 @@ fn stall_cycle(f: &mut Delivery, round: usize) {
     f.age_request_progress(600_000);
     f.tick();
     assert_eq!(
-        f.stall_alerts_for(request),
+        f.stall_diagnostics_for(request),
         1,
-        "the phase must really trigger an alert"
+        "the phase must really record a diagnostic"
     );
     f.status(agent, AgentState::Working);
     f.tick();
@@ -1244,9 +1244,9 @@ fn stall_cycle(f: &mut Delivery, round: usize) {
     f.age_request_progress(600_000);
     f.reopen();
     assert_eq!(
-        f.stall_alerts_for(request),
+        f.stall_diagnostics_for(request),
         1,
-        "same request alerted twice after flapping/restart"
+        "same request diagnosed twice after flapping/restart"
     );
     f.stop(
         agent,
@@ -1256,7 +1256,7 @@ fn stall_cycle(f: &mut Delivery, round: usize) {
         json!([]),
     );
     f.assert_reply(request, &format!("late-reply-{round}"));
-    assert_eq!(f.stall_alerts_for(request), 1);
+    assert_eq!(f.stall_diagnostics_for(request), 1);
 }
 
 fn run_soak() {
@@ -1273,9 +1273,9 @@ fn run_soak() {
     while Instant::now() < deadline {
         delivery_cycle(&mut f, round);
         assert_eq!(
-            f.stall_alerts(),
+            f.stall_diagnostics(),
             round,
-            "delivery phase raised an unexpected alert"
+            "delivery phase recorded an unexpected stall diagnostic"
         );
         stall_cycle(&mut f, round);
         orchestrator_inbox_burst(round);
@@ -1310,9 +1310,9 @@ fn run_soak() {
         f.state().room(f.work).unwrap().unread_count as usize,
         completed + notices.len()
     );
-    assert_eq!(f.stall_alerts(), round);
+    assert_eq!(f.stall_diagnostics(), round);
     f.assert_publications();
-    eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} intentional stall alerts, {} idle-worker notices, no repeated alerts", round * 30, began.elapsed(), f.stall_alerts(), notices.len());
+    eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} intentional stall diagnostics, {} idle-worker notices, no repeated stall diagnostics", round * 30, began.elapsed(), f.stall_diagnostics(), notices.len());
 }
 
 /// Negative control: the contract must notice a second visible publication,

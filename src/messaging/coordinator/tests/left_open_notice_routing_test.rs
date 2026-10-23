@@ -10,7 +10,7 @@ fn left_open_requests(worker: &Worker) -> Vec<crate::messaging::model::Request> 
 }
 
 #[test]
-fn session_moved_left_open_notice_lands_in_room_history_without_a_composer_error() {
+fn session_moved_left_open_details_are_command_results_without_chat() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Cursor,
         vec![
@@ -21,27 +21,32 @@ fn session_moved_left_open_notice_lands_in_room_history_without_a_composer_error
             }),
         ],
     );
-    let (events, _) = mpsc::channel();
+    let (events, received) = mpsc::channel();
     worker
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
     assert_eq!(worker.snapshot().error, None);
-    let notice = worker.state.notices(room).last().unwrap();
-    assert!(
-        notice.text.contains("author")
-            && notice.text.contains("another provider session")
-            && notice.text.contains("close pane pane yourself"),
-        "{}",
-        notice.text
-    );
-    assert_eq!(notice.author, Author::Bus);
+    assert_eq!(worker.state.notices(room).count(), 0);
+    let terminals = received
+        .try_iter()
+        .find_map(|event| {
+            if let BusEvent::TerminalsLeftOpen(terminals) = event {
+                Some(terminals)
+            } else {
+                None
+            }
+        })
+        .expect("structured deletion outcome");
+    assert_eq!(terminals.len(), 1);
+    assert!(terminals[0].message.contains("another provider session"));
+    assert_eq!(terminals[0].pane_id, "pane");
     assert!(left_open_requests(&worker).is_empty());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn room_deletion_reports_left_open_terminal_in_master_not_to_its_deleted_orchestrator() {
+fn room_deletion_returns_left_open_details_without_chat() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Codex,
         vec![identity_changed(), native_agents(None), identity_changed()],
@@ -58,7 +63,7 @@ fn room_deletion_reports_left_open_terminal_in_master_not_to_its_deleted_orchest
         .unwrap();
     state.bind_orchestrator(orchestrator, room).unwrap();
     worker.save(state).unwrap();
-    let (events, _) = mpsc::channel();
+    let (events, received) = mpsc::channel();
     worker
         .command(BusCommand::DeleteRoom(room), &events)
         .unwrap();
@@ -66,19 +71,16 @@ fn room_deletion_reports_left_open_terminal_in_master_not_to_its_deleted_orchest
     assert!(worker.state.agent(orchestrator).is_none());
     assert!(worker.state.agent(agent).is_none());
     assert!(left_open_requests(&worker).is_empty());
-    let notice = worker.state.notices(RoomId(0)).last().unwrap();
-    assert!(
-        notice.text.contains("author") && notice.text.contains("close pane pane yourself"),
-        "{}",
-        notice.text
-    );
-    assert_eq!(notice.author, Author::Bus);
+    assert_eq!(worker.state.notices(RoomId(0)).count(), 0);
+    assert!(received
+        .try_iter()
+        .any(|event| matches!(event, BusEvent::TerminalsLeftOpen(ref t) if t.len()==1)));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn left_open_notice_to_orchestrator_keeps_the_developer_draft_in_the_room() {
+fn left_open_result_keeps_the_developer_draft_without_waking_orchestrator() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Codex,
         vec![identity_changed(), native_agents(None), identity_changed()],
@@ -100,14 +102,15 @@ fn left_open_notice_to_orchestrator_keeps_the_developer_draft_in_the_room() {
     state.set_draft_text(room, "half typed").unwrap();
     state.set_draft_recipients(room, [peer]).unwrap();
     worker.save(state).unwrap();
-    let (events, _) = mpsc::channel();
+    let (events, received) = mpsc::channel();
     worker
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
     let requests = left_open_requests(&worker);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].agent_id, orchestrator);
-    assert_eq!(requests[0].prompt.author, Author::Bus);
+    assert!(requests.is_empty());
+    assert!(received
+        .try_iter()
+        .any(|event| matches!(event, BusEvent::TerminalsLeftOpen(ref t) if t.len()==1)));
     let draft = &worker.state.room(room).unwrap().draft;
     assert_eq!(draft.text, "half typed");
     assert_eq!(
@@ -119,7 +122,7 @@ fn left_open_notice_to_orchestrator_keeps_the_developer_draft_in_the_room() {
 }
 
 #[test]
-fn failed_deletion_posts_no_left_open_notice_and_its_retry_posts_exactly_one() {
+fn failed_deletion_retry_returns_one_left_open_result_without_chat() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Codex,
         vec![
@@ -133,7 +136,7 @@ fn failed_deletion_posts_no_left_open_notice_and_its_retry_posts_exactly_one() {
             identity_changed(),
         ],
     );
-    let (events, _) = mpsc::channel();
+    let (events, received) = mpsc::channel();
     assert!(worker
         .command(BusCommand::DeleteAgent(agent), &events)
         .is_err());
@@ -144,14 +147,19 @@ fn failed_deletion_posts_no_left_open_notice_and_its_retry_posts_exactly_one() {
         .unwrap();
     assert!(worker.state.agent(agent).is_none());
     assert_eq!(worker.snapshot().error, None);
-    assert_eq!(
-        worker
-            .state
-            .notices(room)
-            .filter(|notice| notice.text.contains("close pane pane yourself"))
-            .count(),
-        1
-    );
+    assert_eq!(worker.state.notices(room).count(), 0);
+    let results: Vec<_> = received
+        .try_iter()
+        .filter_map(|event| {
+            if let BusEvent::TerminalsLeftOpen(t) = event {
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

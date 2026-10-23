@@ -137,6 +137,16 @@ to their peers. Assign one verifier per 1–2 PRs.
 ## Worker brief messaging rule
 
 Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+
+For repository work, the agent/harness reports meaningful status transitions:
+PR/merge-request merged, ready for review, CI finished, a new conflict, or a
+relevant upstream merge affecting the assignment. Include repo/PR/head/status
+and next action. Message the room orchestrator; if none exists, post to You in
+your own room with `bus send --room ROOM --as WORKER --to human --text "STATUS"`.
+Send one update per meaningful transition, with normal worker attribution;
+do not broadcast unrelated repository activity. See the repository-status rule
+in the installed `parallel-writes.md` and `how-to-bus-cli.md` guides.
+
 Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
 room's bound orchestrator, and names or IDs can reach agents in any room.
 

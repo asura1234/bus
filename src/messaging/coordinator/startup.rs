@@ -90,14 +90,20 @@ impl Worker {
                     "the native provider launch ended before startup was confirmed"
                 };
                 let text = format!(
-                    "BLOCKED {} (agent {}). Startup failed: {reason}. Agent identity and queued work retained. Inspect readiness or resume this agent.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
-                    agent.name, agent.id.0, launch::provider_kind(agent.provider), startup.command
+                    "Startup failed: {reason}. Agent identity and queued work retained. Inspect readiness or resume this agent.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
+                    launch::provider_kind(agent.provider), startup.command
                 );
                 let mut state = self.state.clone();
                 state
-                    .post_staffing_blocker(agent.id, text, now_ms)
+                    .set_agent_error(agent.id, Some(text))
                     .map_err(|e| e.to_string())?;
-                state.set_agent_error(agent.id, Some(format!("Startup failed: {reason}; identity and queue retained. Inspect readiness or resume this agent."))).map_err(|e| e.to_string())?;
+                tracing::warn!(
+                    event = "bus.agent.startup_failed",
+                    agent_id = agent.id.0,
+                    provider = launch::provider_kind(agent.provider),
+                    reason,
+                    "Agent startup failed; identity and queued work retained"
+                );
                 startup.reported = true;
                 state
                     .set_agent_startup(agent.id, Some(startup))

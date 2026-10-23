@@ -159,3 +159,16 @@ evidence first and prove no build/check uses the paths. Never remove the live
 Bus target or another worker's output. Log deleted absolute paths and measured
 sizes, release the build slot on success or failure, and record retained paths
 and worktree/branch cleanup in the workflow.
+
+## Repository status reports
+
+Repository monitoring and Git/host operations belong to the worker agent and
+its harness. For assigned work, report a PR/merge request becoming ready for
+review, completed CI, a new conflict, its merge, and any upstream merge that
+materially affects the assignment. Include the repository, PR number, exact
+head/status and next action. Send one update per meaningful transition to the
+room's bound orchestrator; if none exists, use `bus send --room ROOM --as WORKER
+--to human --text "STATUS"` to post in your own room for You. The installed
+`how-to-bus-cli.md` documents this explicit recipient. Do not monitor or broadcast
+unrelated repository activity, and do not expect Bus to interpret repository
+workflow state for you.

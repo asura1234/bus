@@ -48,12 +48,40 @@ impl BusState {
         Ok(!retired.is_empty())
     }
 
+    /// Retire only queued rules-refresh inputs from older versions.
+    pub(crate) fn retire_queued_upgrade_onboarding(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let retired: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.phase == RequestPhase::Queued
+                    && request.prompt.author == super::Author::Bus
+                    && request
+                        .prompt
+                        .text
+                        .starts_with("Bus messaging rules updated.")
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in retired {
+            self.recover_idle_request(id, now_ms)?;
+            self.requests
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownRequest(id))?
+                .failure_reason = Some("messaging_onboarding_retired".into());
+        }
+        Ok(())
+    }
+
     /// Capture all reasons before recovery clears the agent's last refusal.
     pub(crate) fn expire_stalled_queued_requests(
         &mut self,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.notify_stalled_attention(now_ms)?;
+        self.record_stalled_errors(now_ms)?;
         let stalled: Vec<_> = self
             .requests
             .values()
@@ -94,7 +122,7 @@ impl BusState {
         &mut self,
         request: RequestId,
         reason: &str,
-        now_ms: u64,
+        _now_ms: u64,
     ) -> Result<(), ModelError> {
         let Some((agent, room)) = self
             .agents
@@ -104,15 +132,14 @@ impl BusState {
         else {
             return Ok(());
         };
-        let text = format!(
-            "{}\nThe orchestrator did not receive this ({reason}).",
-            self.requests
-                .get(&request)
-                .ok_or(ModelError::UnknownRequest(request))?
-                .prompt
-                .text
+        tracing::warn!(
+            event = "bus.dialog.notice_undelivered",
+            request_id = request.0,
+            agent_id = agent.0,
+            room_id = room.0,
+            reason,
+            "Blocked-dialog notice was not delivered; inspect request and dialog state"
         );
-        self.post_bus_notice(room, None, text, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 

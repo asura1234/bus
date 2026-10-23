@@ -97,6 +97,9 @@ impl Worker {
         state
             .retire_queued_room_digests(io::now_ms())
             .map_err(|e| e.to_string())?;
+        state
+            .retire_queued_upgrade_onboarding(io::now_ms())
+            .map_err(|e| e.to_string())?;
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
         state
@@ -116,12 +119,6 @@ impl Worker {
             state
                 .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
                 .map_err(|e| e.to_string())?;
-        }
-        if let Err(error) =
-            super::super::orchestration::queue_upgrade_onboarding(&mut state, &data_dir)
-        {
-            tracing::warn!(event = "bus.onboarding.upgrade_skipped", %error,
-                "Upgrade onboarding skipped; coordinator startup continues");
         }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
