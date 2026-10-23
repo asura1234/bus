@@ -696,3 +696,50 @@ fn explicit_you_mention_in_peer_traffic_alerts_but_partial_tokens_do_not() {
         assert_eq!(policy.take(3000).is_some(), alerts, "{text}");
     }
 }
+
+#[test]
+fn coalesced_developer_and_peer_requests_keep_developer_phrase_context() {
+    let (mut before, _, work, orchestrator) = fixture();
+    let worker = before
+        .create_agent(work, "worker", Provider::Codex, "/tmp".into(), None)
+        .unwrap();
+    let first = before
+        .submit_message_from(
+            work,
+            crate::messaging::model::Draft {
+                text: "Inspect".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Developer,
+            1,
+        )
+        .unwrap()[0];
+    let second = before
+        .submit_message_from(
+            work,
+            crate::messaging::model::Draft {
+                text: "Also inspect the logs".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Agent(orchestrator),
+            2,
+        )
+        .unwrap()[0];
+    assert!(before.coalesce_queue(first).is_some());
+    let mut value = serde_json::to_value(&before).unwrap();
+    for request in [first, second] {
+        let item = &mut value["requests"][request.0.to_string()];
+        item["phase"] = serde_json::json!("completed");
+        item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"Still waiting on you: Approve access", "received_at_ms":3, "provider_session_id":null, "provider_turn_id":null});
+        item["completed_at_ms"] = serde_json::json!(3);
+    }
+    let next: BusState = serde_json::from_value(value).unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert_eq!(
+        policy.take(3000).as_deref(),
+        Some("worker is waiting on you: Approve access")
+    );
+}

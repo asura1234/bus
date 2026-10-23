@@ -86,15 +86,20 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
         }
         if request.phase == RequestPhase::Completed {
             if let Some(reply) = &request.pending_final {
+                let key = Key::Final(request.group.unwrap_or(request.id));
+                let developer_context = request.prompt.author == Author::Developer
+                    || result
+                        .get(&key)
+                        .is_some_and(|message| message.developer_context);
                 result.insert(
-                    Key::Final(request.group.unwrap_or(request.id)),
+                    key,
                     Message {
                         sender: state
                             .agent(request.agent_id)
                             .map_or("Bus", |a| a.name.as_str()),
                         text: crate::messaging::attention::text(&reply.text).unwrap_or(&reply.text),
                         directed: false,
-                        developer_context: request.prompt.author == Author::Developer,
+                        developer_context,
                         at_ms: request.completed_at_ms.unwrap_or(reply.received_at_ms),
                     },
                 );
