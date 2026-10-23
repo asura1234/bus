@@ -1,7 +1,6 @@
 //! Inspect development commands on the single coordinator.
 use super::{
-    mpsc, optional_text, optional_u32, required, schema, AgentId, BusEvent, Method, ResponseResult,
-    Worker,
+    mpsc, optional_text, optional_u32, schema, AgentId, BusEvent, Method, ResponseResult, Worker,
 };
 use serde_json::{json, Value};
 
