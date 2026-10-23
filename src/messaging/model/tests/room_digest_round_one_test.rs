@@ -482,7 +482,7 @@ fn room_digest_reference_keys_belong_to_the_tag_or_explicit_head_field() {
         ("\nDependency abcdef123456", "Read abcdef123", false),
         (" 20261023", "Inspect 20261023", false),
         ("\nBuild 870112624", "Inspect 8701126", false),
-        (" abcdef123456", "Verify abcdef123", true),
+        (" abcdef123456", "Verify abcdef123", false),
         (" head 870112624", "Verify at 8701126", true),
         ("\nSHA: 870112624", "Verify at 8701126", true),
         ("\nhead abcdef123456", "Verify abcdef123", true),

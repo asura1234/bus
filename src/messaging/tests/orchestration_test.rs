@@ -722,3 +722,47 @@ fn version_three_agents_receive_the_peer_sop_once_across_reload() {
     assert_eq!(reloaded.requests().count(), 1);
     std::fs::remove_dir_all(data).unwrap();
 }
+
+#[test]
+fn digest_peer_rules_upgrade_once_across_reload() {
+    use crate::messaging::model::MESSAGING_RULES_VERSION;
+
+    let data = temp_root("digest-peer-rules-upgrade");
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let old = state
+        .create_agent(room, "existing", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let current = state
+        .create_agent(room, "current", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let mut saved = serde_json::to_value(&state).unwrap();
+    // Follow this PR's eventual master+1 target rather than reserving merge order.
+    saved["agents"][old.0.to_string()]["messaging_rules_version"] =
+        serde_json::json!(MESSAGING_RULES_VERSION - 1);
+    let mut state: BusState = serde_json::from_value(saved).unwrap();
+    queue_upgrade_onboarding(&mut state, &data).unwrap();
+    assert_eq!(state.requests().count(), 1);
+    assert!(state.queued_requests(current).is_empty());
+    let request = state.request(state.queued_requests(old)[0]).unwrap();
+    assert!(request
+        .prompt
+        .text
+        .contains("directly message its worker from any room"));
+    assert!(request.prompt.text.contains(
+        "brief a verifier in the fact's conversation room using its PR (#N) or head SHA (7+ hex characters)"
+    ));
+    assert_eq!(
+        state.agent(old).unwrap().messaging_rules_version,
+        MESSAGING_RULES_VERSION
+    );
+    let saved = serde_json::to_value(&state).unwrap();
+    let mut reloaded: BusState = serde_json::from_value(saved).unwrap();
+    queue_upgrade_onboarding(&mut reloaded, &data).unwrap();
+    assert_eq!(
+        reloaded.requests().count(),
+        1,
+        "rules refresh repeated after reload"
+    );
+    std::fs::remove_dir_all(data).unwrap();
+}

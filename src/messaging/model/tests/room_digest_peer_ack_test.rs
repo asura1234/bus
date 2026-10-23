@@ -167,7 +167,13 @@ fn room_digest_peer_brief_accepts_explicit_markdown_identity_fields() {
 #[test]
 fn room_digest_peer_brief_accepts_a_numeric_prefix_of_a_known_head() {
     let (mut s, room, orch, worker) = fixture();
-    complete(&mut s, room, orch, worker, "REVIEW READY 1234567abcdef12");
+    complete(
+        &mut s,
+        room,
+        orch,
+        worker,
+        "REVIEW READY head 1234567abcdef12",
+    );
     let peer = reviewer(&mut s, room);
     brief(&mut s, room, orch, peer, "Verify 1234567");
     assert!(facts(&s, orch).is_empty());
@@ -231,4 +237,91 @@ fn room_digest_recovered_direct_worker_assignment_from_master_still_acknowledges
         facts(&s, orch).is_empty(),
         "replay must preserve cross-room direct-worker action"
     );
+}
+
+#[test]
+fn room_digest_peer_brief_for_another_pr_on_the_same_base_does_not_ack() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(
+        &mut s,
+        room,
+        orch,
+        worker,
+        "READY FOR VERIFY #159 head e14c7645, rebased onto 499cac8f",
+    );
+    let peer = reviewer(&mut s, room);
+    brief(
+        &mut s,
+        room,
+        orch,
+        peer,
+        "Review #160 head 7a1b2c3d, base 499cac8f",
+    );
+    assert_eq!(
+        facts(&s, orch).len(),
+        1,
+        "a shared base SHA identified a different PR's READY fact"
+    );
+}
+
+#[test]
+fn room_digest_peer_brief_for_the_parent_pr_does_not_ack_a_stacked_ready_fact() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(
+        &mut s,
+        room,
+        orch,
+        worker,
+        "READY FOR VERIFY #159 (stacked on #158)",
+    );
+    let peer = reviewer(&mut s, room);
+    brief(&mut s, room, orch, peer, "Review #158");
+    assert_eq!(
+        facts(&s, orch).len(),
+        1,
+        "the parent PR's brief retired the stacked PR's READY fact"
+    );
+}
+
+#[test]
+fn room_digest_peer_brief_accepts_only_marked_tag_line_heads() {
+    for (milestone, reference) in [
+        (
+            "REVIEW READY #159 head abcdef123456, rebased onto 499cac8f",
+            "Verify abcdef1",
+        ),
+        ("REVIEW READY #159 sha 1234567abcdef12", "Verify 1234567"),
+        ("READY FOR VERIFY #159 @abcdef123456", "Verify abcdef1"),
+        ("READY FOR VERIFY #159 @1234567890", "Verify 1234567"),
+    ] {
+        let (mut s, room, orch, worker) = fixture();
+        complete(&mut s, room, orch, worker, milestone);
+        let peer = reviewer(&mut s, room);
+        brief(&mut s, room, orch, peer, reference);
+        assert!(facts(&s, orch).is_empty(), "{milestone}: {reference}");
+    }
+}
+
+#[test]
+fn room_digest_recovered_peer_brief_excludes_shared_bases_and_stacked_parents() {
+    for (milestone, reference) in [
+        (
+            "READY FOR VERIFY #159 head e14c7645, rebased onto 499cac8f",
+            "Review #160 head 7a1b2c3d, base 499cac8f",
+        ),
+        ("READY FOR VERIFY #159 (stacked on #158)", "Review #158"),
+    ] {
+        let (mut s, room, orch, worker) = fixture();
+        complete(&mut s, room, orch, worker, milestone);
+        s.room_digests.clear();
+        let peer = reviewer(&mut s, room);
+        brief(&mut s, room, orch, peer, reference);
+        s.recover_room_digest_facts();
+        assert_eq!(facts(&s, orch).len(), 1, "replay: {milestone}: {reference}");
+        brief(&mut s, room, orch, peer, "Review #159");
+        assert!(
+            facts(&s, orch).is_empty(),
+            "the fact's own PR must still acknowledge"
+        );
+    }
 }

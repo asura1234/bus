@@ -99,15 +99,16 @@ pub(super) fn references_fact(text: &str, fact: &RoomFact) -> bool {
     {
         return true;
     }
-    if tag.is_none() {
+    let Some(tag) = tag else {
         return false;
-    }
+    };
     let prs = pr_references(&text);
-    let heads = heads(&text, true);
-    let first = body.lines().next().unwrap_or_default();
+    let heads = heads(&text);
+    let first = body.lines().next().unwrap_or_default().trim_start();
+    let first = &first[tag.len()..];
     pr_references(first)
-        .iter()
-        .any(|number| prs.contains(number))
+        .first()
+        .is_some_and(|number| prs.contains(number))
         || first_line_head_matches(first, &heads)
         || body.lines().skip(1).any(|line| {
             let Some((label, value)) = identity_field(line) else {
@@ -146,12 +147,6 @@ fn pr_references(text: &str) -> Vec<&str> {
 }
 
 fn first_line_head_matches(line: &str, references: &[&str]) -> bool {
-    if heads(line, false)
-        .iter()
-        .any(|head| matching_head(head, references))
-    {
-        return true;
-    }
     let words: Vec<_> = line
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|word| !word.is_empty())
@@ -159,6 +154,12 @@ fn first_line_head_matches(line: &str, references: &[&str]) -> bool {
     words.windows(2).any(|pair| {
         matches!(pair[0], "head" | "sha")
             && self_contained_head(pair[1]).is_some_and(|head| matching_head(head, references))
+    }) || line.split('@').skip(1).any(|suffix| {
+        let head = suffix
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or_default();
+        self_contained_head(head).is_some_and(|head| matching_head(head, references))
     })
 }
 
@@ -169,7 +170,7 @@ fn matching_head(head: &str, references: &[&str]) -> bool {
 }
 
 fn self_contained_head(value: &str) -> Option<&str> {
-    heads(value, true).into_iter().find(|head| *head == value)
+    heads(value).into_iter().find(|head| *head == value)
 }
 
 fn identity_field(line: &str) -> Option<(&str, &str)> {
@@ -213,12 +214,10 @@ fn contains_name(text: &str, name: &str) -> bool {
     })
 }
 
-fn heads(s: &str, explicit: bool) -> Vec<&str> {
+fn heads(s: &str) -> Vec<&str> {
     s.split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|word| {
-            (7..=40).contains(&word.len())
-                && word.chars().all(|c| c.is_ascii_hexdigit())
-                && (explicit || word.chars().any(|c| c.is_ascii_alphabetic()))
+            (7..=40).contains(&word.len()) && word.chars().all(|c| c.is_ascii_hexdigit())
         })
         .collect()
 }

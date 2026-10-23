@@ -325,11 +325,13 @@ handles a READY fact only by its exact PR number
 (`#1602`, not `#16020` or `#1602suffix`) or a head SHA prefix of at least seven
 hex characters, for example `verify #1602 at 870112624`. A worker name alone does
 not identify which PR is ready. Other fact kinds retain exact worker-name matches.
-PR and unlabelled hex keys come from the milestone's tag line; standalone `PR`,
-`head` or `SHA` metadata fields also supply identity. Backticks and single
+On the milestone's tag line, only the first `#N` supplies the PR; a head must
+follow a `head`/`SHA` word or use `@<sha>`. Other PRs and bare hex tokens on that
+line, including stacked parents and base commits, do not identify the milestone.
+Standalone `PR`, `head` or `SHA` metadata fields also supply identity. Backticks and single
 Markdown links around those field values are accepted. Dependency PRs/commits in
-ordinary prose do not identify the milestone. Unlabelled source hex keys must
-contain a letter; an explicit head/SHA field can be numeric. A brief's numeric
+ordinary prose do not identify the milestone. An explicitly marked head/SHA can
+be numeric. A brief's numeric
 prefix counts when it matches a known head. The same peer-only room guard and
 direct-worker exception apply when retained accepted actions are replayed after
 restart. Reference
