@@ -1,7 +1,7 @@
 //! Messages development commands on the single coordinator.
 use super::{
     mpsc, optional_text, required, AgentId, AgentRecipients, Author, BusEvent, Draft, ModelError,
-    PathBuf, PromptId, Request, RequestId, RequestPhase, RoomId, RoomKind, Worker,
+    PathBuf, PromptId, Request, RequestId, RequestPhase, RoomId, Worker,
 };
 use serde_json::{json, Value};
 
@@ -136,7 +136,7 @@ impl Worker {
         let files = attachment_files(p)?;
         let to_developer = selectors
             .iter()
-            .any(|s| s.eq_ignore_ascii_case(crate::messaging::model::DEVELOPER_RECIPIENT));
+            .any(|s| crate::messaging::model::is_developer_recipient(s));
         if to_developer {
             return self.control_send_to_developer(p, room, author, selectors.len(), files);
         }
@@ -261,7 +261,7 @@ impl Worker {
         Ok(id)
     }
 
-    /// `send --to human`: an agent's message to the developer in MASTER. It is
+    /// `send --to you`: any agent's message to the developer in this room. It is
     /// delivered to no agent, so it has no requests and nothing to wait for.
     pub(in crate::messaging::coordinator) fn control_send_to_developer(
         &mut self,
@@ -272,16 +272,12 @@ impl Worker {
         files: Vec<PathBuf>,
     ) -> Result<Value, String> {
         if selector_count != 1 {
-            return Err("--to human cannot be combined with agent recipients".into());
+            return Err("--to you cannot be combined with agent recipients".into());
         }
         let author = author
-            .ok_or("--to human requires --as AGENT: the developer cannot message themselves")?;
-        // Reports belong where the developer reads them all: one MASTER chat.
-        if self.state.room(room).map(|r| r.kind) != Some(RoomKind::Master) {
-            return Err("--to human posts only in the MASTER room; use --room master".into());
-        }
+            .ok_or("--to you requires --as AGENT: the developer cannot message themselves")?;
         if p.get("queue").and_then(Value::as_bool).unwrap_or(false) {
-            return Err("--queue does not apply to --to human".into());
+            return Err("--queue does not apply to --to you".into());
         }
         let mut state = self.state.clone();
         let message = state

@@ -3,6 +3,7 @@ mod agents;
 mod attention;
 mod callbacks;
 mod compactions;
+mod developer_notifications;
 mod digests;
 mod disk_space;
 mod github;
@@ -26,6 +27,7 @@ use requests::rejection_reason;
 
 pub(crate) use agents::{AGENT_DELETED, MESSAGING_RULES_VERSION};
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
+pub(crate) use developer_notifications::new_developer_notifications;
 #[cfg(test)]
 pub(crate) use history::ARCHIVE_AFTER_MS;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS, HISTORY_RETENTION_MS};
@@ -39,11 +41,11 @@ use types::payload_matches;
 pub(crate) use {
     crate::messaging::model::types::RoomAgent,
     types::{
-        AgentId, AgentRecipients, AgentRuntimeIdentity, AgentStartup, Author, CallbackDisposition,
-        CallbackEventKind, CallbackRejection, Compactions, DialogNoticeTo, Draft, ExitSnapshot,
-        ModelError, PendingFinal, Prompt, PromptId, Provider, ProviderCallback, Reply, Request,
-        RequestId, RequestPhase, Room, RoomId, RoomKind, RuntimeStatus, SubmissionOutcome,
-        BLOCKED_STALL_MS, BUS_SENDER, DELIVERED_STALL_MS, DEVELOPER_RECIPIENT,
+        is_developer_recipient, AgentId, AgentRecipients, AgentRuntimeIdentity, AgentStartup,
+        Author, CallbackDisposition, CallbackEventKind, CallbackRejection, Compactions,
+        DialogNoticeTo, Draft, ExitSnapshot, ModelError, PendingFinal, Prompt, PromptId, Provider,
+        ProviderCallback, Reply, Request, RequestId, RequestPhase, Room, RoomId, RoomKind,
+        RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER, DELIVERED_STALL_MS,
         HELD_REPLY_SETTLE_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS, STEERING_SETTLE_MS,
         TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },

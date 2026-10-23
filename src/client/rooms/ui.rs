@@ -327,9 +327,7 @@ impl BusUi {
 
     pub(super) fn toggle_feishu_notifications(&mut self) {
         self.settings_field = self.feishu_field();
-        let on = !self.settings.feishu_notifications;
-        self.settings.feishu_notifications = on;
-        self.queue(BusCommand::SetFeishuNotifications(on), Effect::None);
+        self.show_toast("Developer notifications are always on");
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -538,8 +536,15 @@ impl BusUi {
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
         if let Some(config) = &self.sound_config {
+            let alerts = crate::messaging::model::new_developer_notifications(
+                &previous.state,
+                &self.snapshot.state,
+            );
+            for _ in &alerts {
+                crate::platform::sound::play_developer();
+            }
             if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
-                .filter(|_| self.ringer.allow(std::time::Instant::now()))
+                .filter(|_| alerts.is_empty() && self.ringer.allow(std::time::Instant::now()))
             {
                 let name = self
                     .snapshot

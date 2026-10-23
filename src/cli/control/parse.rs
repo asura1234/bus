@@ -543,7 +543,7 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
     if follow
         && recipients
             .iter()
-            .any(|r| r.eq_ignore_ascii_case(crate::messaging::model::DEVELOPER_RECIPIENT))
+            .any(|r| crate::messaging::model::is_developer_recipient(r))
     {
         return Err("--async waits for agents; a message to the developer has none".into());
     }

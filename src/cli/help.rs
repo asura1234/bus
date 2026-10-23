@@ -43,7 +43,7 @@ pub const AGENT_HELP: &str =
   wait --message MESSAGE_ID [--timeout SECONDS | --async] [--as AGENT]
   history --room ROOM
   settings
-  settings feishu-notifications (--on | --off)
+  settings feishu-notifications --on  (always on; --off is rejected)
 
 Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the
@@ -85,8 +85,11 @@ Worker milestone finals start with READY FOR VERIFY, REVIEW READY, MERGED, DONE 
 Bus retains actionable room facts separately from waiter reads and sends one Room digest on a clean idle turn.
 Message the worker, delete it, or use digest ack FACT_ID to acknowledge a fact; delivery and replies do not.
 Only new facts re-arm the digest. Time alone never wakes a room, and deleted-worker facts remain durable.
-send --room master --as AGENT --to human posts a MASTER agent's message to the developer
-in MASTER chat, with no agent recipient and nothing to wait for; it rings like a reply.
+send --room ROOM --as AGENT --to you posts any agent's message to the developer in every room.
+It stays in that room, addressed to You, with no agent request or wait. --to human is an alias.
+Messages to you and every [waiting-on-you] always notify with a distinct sound and Feishu bot DM;
+room sounds and legacy Feishu off settings cannot silence them. Developer sends never notify.
+Use @you or [waiting-on-you] for things only the developer can do or decide.
 agent interrupt stops an agent's running turn: Bus presses the provider's stop key once
 (Esc for claude and codex, Ctrl+C for cursor), waits up to 15 s until the agent is idle,
 and reports stopped, already_idle, or failed with a reason (exit 1). The turn, the messages

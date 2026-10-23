@@ -386,15 +386,7 @@ impl BusUi {
         };
         view.row(
             rect,
-            format!(
-                "[{}] Feishu notifications{}",
-                if self.settings.feishu_notifications {
-                    "x"
-                } else {
-                    " "
-                },
-                suffix
-            ),
+            format!("Feishu notifications (always on){}", suffix),
             Some(Action::ToggleFeishuNotifications),
             self.settings_field == field,
             false,

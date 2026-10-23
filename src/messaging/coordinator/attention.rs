@@ -118,17 +118,18 @@ impl Runtime {
             }
         };
         let desired = (
-            saved.feishu_notifications,
+            worker.settings_path.is_some(),
             saved.feishu_recipient.clone(),
             saved.feishu_cli_path.clone(),
         );
         if self.config.as_ref() != Some(&desired) {
-            self.stop();
+            if self.config.is_none() {
+                // Startup history is the baseline. Later settings edits cannot drop new alerts.
+                self.previous = Some((worker.revision, worker.state.clone()));
+            }
             self.status.enabled = desired.0;
             self.waiting.configure(desired.0);
             self.config = Some(desired);
-            // Startup and changes to enabled/destination skip history rather than replaying it.
-            self.previous = Some((worker.revision, worker.state.clone()));
         }
         self.retired.retain(|job| !job.is_finished());
         self.collect_completion();
@@ -176,11 +177,14 @@ impl Worker {
         on: bool,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        if !on {
+            return Err("Developer notifications are always on and cannot be disabled".into());
+        }
         let path = self
             .settings_path
             .as_ref()
             .ok_or("Bus settings location unavailable")?;
-        let saved = settings::update(path, |s| s.feishu_notifications = on)?;
+        let saved = settings::update(path, |s| s.feishu_notifications = true)?;
         let _ = events.send(BusEvent::SettingsChanged(saved));
         self.pump_feishu(events, crate::messaging::storage::io::now_ms())
     }

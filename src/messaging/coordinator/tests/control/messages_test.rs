@@ -577,11 +577,6 @@ fn dev_send_to_developer_posts_an_orchestrator_report_in_master_history() {
             "requires --as",
         ),
         (
-            "work-room",
-            json!({"room":"test","to":["human"],"text":"x","as":"claude-orch"}),
-            "only in the MASTER room",
-        ),
-        (
             "mixed",
             json!({"room":"master","to":["human","claude-orch"],"text":"x","as":"claude-orch"}),
             "cannot be combined",
@@ -632,6 +627,32 @@ fn bus_notices_load_beside_reports_to_the_developer() {
     assert_eq!(notices.len(), 2, "Bus signs its own notices");
     assert_eq!(notices[0].text, "first report");
     assert_eq!(notices[1].author, Author::Bus);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn notify_you_any_sender_can_post_in_any_conversation_room() {
+    let (mut worker, work, sender, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    for room in [work, master] {
+        for selector in ["you", "YOU", "human"] {
+            let sent = call(
+                &mut worker,
+                "notify-you",
+                "message.send",
+                json!({
+                    "room":room.0.to_string(), "to":[selector], "text":"Decide release timing", "as":sender.0.to_string()
+                }),
+            );
+            assert!(sent.ok, "{room:?}/{selector}: {sent:?}");
+            assert_eq!(sent.result["request_ids"], json!([]));
+            let notice = worker.state.notices(room).last().unwrap();
+            assert_eq!(notice.author, Author::Agent(sender));
+            assert!(notice.recipient_ids.is_empty());
+        }
+    }
+    assert_eq!(worker.state.requests().count(), 0);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

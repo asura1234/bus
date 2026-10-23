@@ -116,7 +116,7 @@ fn developer_notification_toggle_discards_pending_without_replay() {
 }
 
 #[test]
-fn developer_notification_excludes_work_rooms_and_agent_directed_prompts() {
+fn developer_notification_includes_work_rooms_and_tagged_agent_directed_prompts() {
     let (before, master, work, agent) = fixture();
     let mut next = before.clone();
     next.post_to_developer(work, agent, "[waiting-on-you] work room".into(), vec![], 1)
@@ -135,7 +135,7 @@ fn developer_notification_excludes_work_rooms_and_agent_directed_prompts() {
     let now = 1000_u64;
     let mut policy = enabled();
     policy.observe(&before, &next, now);
-    assert!(policy.take(now + 3000).is_none());
+    assert_eq!(policy.take(now + 3000).as_deref(), Some("libtv-app master is waiting on you: work room\nlibtv-app master is waiting on you: agent directed"));
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn developer_notification_matches_tag_and_equivalent_whole_phrases() {
 }
 
 #[test]
-fn developer_notification_untagged_and_partial_phrases_are_quiet() {
+fn developer_notification_untagged_peer_messages_and_partial_phrases_are_quiet() {
     for text in [
         "Need access",
         "[needs_developer_attention] Need access",
@@ -379,8 +379,17 @@ fn developer_notification_untagged_and_partial_phrases_are_quiet() {
     ] {
         let (before, master, _, agent) = fixture();
         let mut next = before.clone();
-        next.post_to_developer(master, agent, text.into(), vec![], 1)
-            .unwrap();
+        next.submit_message_from(
+            master,
+            crate::messaging::model::Draft {
+                text: text.into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(agent),
+            1,
+        )
+        .unwrap();
         let mut policy = enabled();
         let now = 1000_u64;
         policy.observe(&before, &next, now);
@@ -389,7 +398,7 @@ fn developer_notification_untagged_and_partial_phrases_are_quiet() {
 }
 
 #[test]
-fn developer_notification_untagged_messages_do_not_join_a_burst() {
+fn developer_notification_untagged_direct_messages_join_a_burst() {
     let (before, master, _, agent) = fixture();
     let mut next = before.clone();
     next.post_to_developer(master, agent, "Untagged".into(), vec![], 1)
@@ -403,7 +412,7 @@ fn developer_notification_untagged_messages_do_not_join_a_burst() {
     policy.observe(&before, &next, now);
     assert_eq!(
         policy.take(now + 2000).as_deref(),
-        Some("libtv-app master is waiting on you: Approve")
+        Some("libtv-app master to you: Untagged\nlibtv-app master is waiting on you: Approve\nlibtv-app master to you: Untagged too")
     );
 }
 
@@ -471,4 +480,135 @@ fn developer_notification_markdown_markers_preserve_the_action() {
     ] {
         assert_eq!(waiting_action(message), Some(expected), "{message}");
     }
+}
+
+#[test]
+fn notify_you_worker_posts_and_tagged_peer_messages_in_every_room() {
+    let (before, master, work, orchestrator) = fixture();
+    let mut before = before;
+    let worker = before
+        .create_agent(work, "worker", Provider::Codex, "/tmp".into(), None)
+        .unwrap();
+    for room in [master, work] {
+        let mut next = before.clone();
+        next.post_to_developer(room, worker, "Decide release timing".into(), vec![], 1)
+            .unwrap();
+        let mut policy = enabled();
+        policy.observe(&before, &next, 1000);
+        assert_eq!(
+            policy.take(3000).as_deref(),
+            Some("worker to you: Decide release timing")
+        );
+    }
+    let mut next = before.clone();
+    next.submit_message_from(
+        work,
+        crate::messaging::model::Draft {
+            text: "[waiting-on-you] Approve access".into(),
+            files: vec![],
+            recipient_ids: [orchestrator].into(),
+        },
+        Author::Agent(worker),
+        1,
+    )
+    .unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert_eq!(
+        policy.take(3000).as_deref(),
+        Some("worker is waiting on you: Approve access")
+    );
+}
+
+#[test]
+fn notify_you_tagged_worker_final_to_an_agent_notifies_once() {
+    let (mut before, _, work, orchestrator) = fixture();
+    let worker = before
+        .create_agent(work, "worker", Provider::Codex, "/tmp".into(), None)
+        .unwrap();
+    let request = before
+        .submit_message_from(
+            work,
+            crate::messaging::model::Draft {
+                text: "Inspect".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Agent(orchestrator),
+            1,
+        )
+        .unwrap()[0];
+    let mut value = serde_json::to_value(&before).unwrap();
+    let item = &mut value["requests"][request.0.to_string()];
+    item["phase"] = serde_json::json!("completed");
+    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"[waiting-on-you] Decide release", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_at_ms"] = serde_json::json!(2);
+    let next: BusState = serde_json::from_value(value).unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert_eq!(
+        policy.take(3000).as_deref(),
+        Some("worker is waiting on you: Decide release")
+    );
+    policy.observe(&next, &next, 4000);
+    assert!(policy.take(6000).is_none());
+}
+
+#[test]
+fn notify_you_developer_own_tagged_prompt_never_notifies() {
+    let (before, _, work, agent) = fixture();
+    let mut next = before.clone();
+    next.submit_message_from(
+        work,
+        crate::messaging::model::Draft {
+            text: "[waiting-on-you] Developer text".into(),
+            files: vec![],
+            recipient_ids: [agent].into(),
+        },
+        Author::Developer,
+        1,
+    )
+    .unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert!(policy.take(4000).is_none());
+}
+
+#[test]
+fn notify_you_forwarded_worker_reply_and_ack_do_not_repeat_the_alert() {
+    let (mut before, _, work, orchestrator) = fixture();
+    let worker = before
+        .create_agent(work, "worker", Provider::Codex, "/tmp".into(), None)
+        .unwrap();
+    let request = before
+        .submit_message_from(
+            work,
+            crate::messaging::model::Draft {
+                text: "Inspect".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Agent(orchestrator),
+            1,
+        )
+        .unwrap()[0];
+    let mut value = serde_json::to_value(&before).unwrap();
+    let item = &mut value["requests"][request.0.to_string()];
+    item["phase"] = serde_json::json!("completed");
+    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"[waiting-on-you] Decide release", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_at_ms"] = serde_json::json!(2);
+    let mut next: BusState = serde_json::from_value(value).unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert!(policy.take(3000).is_some());
+    let completed = next.clone();
+    assert!(next
+        .route_worker_replies(5000, &std::collections::BTreeSet::new())
+        .unwrap());
+    policy.observe(&completed, &next, 5000);
+    assert!(policy.take(8000).is_none());
+    let forwarded = next.clone();
+    next.see_worker_reply(request, orchestrator, 9000).unwrap();
+    policy.observe(&forwarded, &next, 9000);
+    assert!(policy.take(12000).is_none());
 }

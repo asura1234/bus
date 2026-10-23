@@ -32,6 +32,25 @@ pub(super) const AUDIO_PLAYER_POLL_INTERVAL: Duration = Duration::from_millis(25
 
 pub(super) static SOUND_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Mandatory developer alerts have their own bundled cue, independent of normal sound config.
+pub(crate) fn play_developer() {
+    if sound_playback_disabled_by_env() {
+        return;
+    }
+    std::thread::spawn(|| {
+        let id = SOUND_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "bus-developer-alert-{}-{id}.mp3",
+            std::process::id()
+        ));
+        if let Err(err) =
+            play_bytes_at(include_bytes!("../../../assets/sounds/developer.mp3"), path)
+        {
+            warn!(err = %err, "developer alert playback failed");
+        }
+    });
+}
+
 pub(super) static SOUND_DONE: &[u8] = include_bytes!("../../../assets/sounds/done.mp3");
 
 /// Play a notification sound in a background thread.
@@ -76,7 +95,10 @@ pub(super) fn play_file(path: &Path) -> Result<(), String> {
 
 pub(super) fn play_bytes(data: &[u8]) -> Result<(), String> {
     // Write to a temp file because the supported audio players need a file path.
-    let tmp = temp_sound_path();
+    play_bytes_at(data, temp_sound_path())
+}
+
+fn play_bytes_at(data: &[u8], tmp: PathBuf) -> Result<(), String> {
     let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
     file.write_all(data).map_err(|e| e.to_string())?;
     drop(file);

@@ -712,3 +712,22 @@ fn workers_launch_with_messaging_and_no_signature_instructions_for_every_provide
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn notify_you_reserves_developer_names_for_create_and_rename() {
+    let (mut worker, room, agent, dir) = fixture();
+    for name in ["You", " you ", "human"] {
+        assert_eq!(
+            worker
+                .state
+                .create_agent(room, name, Provider::Codex, "/repo".into(), None),
+            Err(ModelError::ReservedAgentName)
+        );
+        assert_eq!(
+            worker.state.rename_agent(agent, name),
+            Err(ModelError::ReservedAgentName)
+        );
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
