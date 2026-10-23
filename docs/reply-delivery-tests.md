@@ -126,7 +126,7 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 | `captured_reply_reaches_its_source_room_once_for_both_providers_and_authors` | Claude, Codex and Cursor; MASTER/work; identical developer/agent messages; completion, publication counters and no mirrored notice after restart. |
 | `cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final` | Injected user rows, omitted commentary suffixes and a newer transcript turn cannot replace the owned Cursor final (0dcc4bd2/44e94f38). |
 | `independently_answered_turns_keep_five_distinct_replies_while_shells_live` | Five answered turns with shells persisting across turns must keep five distinct answers (#96). |
-| `queued_worker_notice_after_held_master_turn_reaches_work_room_and_master_once` | An automatically routed work-room blocked-worker notice waits for a held MASTER turn, then gets its own reply; each source room publishes once. Same-room held follow-ups retain the #52/#60 steering behavior. |
+| `queued_worker_notice_after_held_master_turn_reaches_work_room_and_master_once` | An automatically routed work-room blocked-worker notice takes its own turn at the held MASTER Stop, without waiting for shells; the captured interim and new answer each publish once in their source room. Held orchestrator replies now hand off queued input as independent turns before shell exit. |
 | `held_interim_survives_no_stop_wake_restart_and_releases_queued_request` | Captured text survives wake without Stop and coordinator restart; queue-only work then gets its own answer (#82). |
 | `coalesced_sends_share_one_answer_and_one_history_publication` | Three queued messages become one native paste and one shared reply; atomic Claude paste, Codex and unread dedupe. |
 | `direct_bus_control_shells_publish_equally_for_developer_and_agent` | Direct control verbs and quoted executable paths do not hold either sender's final (#103). |
@@ -150,3 +150,35 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 ## Evidence
 
 Exact tested heads, historical-red output, measured runtimes, gate artifacts and the Claude review are recorded in the PR validation report. Compilation errors and fixture setup errors are not counted as historical RED evidence. No delivery/matching production implementation is changed by this suite.
+
+## Orchestrator inbox admission during background waits
+
+An idle orchestrator with queued input retires a held background Stop using the
+existing `background_shells_new_turn` outcome. Its captured interim remains the
+old request's answer; the next input is submitted normally, with its own callback
+boundary, turn and conversation room. A textless held Stop closes without an
+invented answer. A live generation or native dialog is not an admission boundary.
+The existing grace for autonomous starts protects native status lag; an interrupted
+turn can reach the next idle boundary without a Stop. Worker background holds
+retain their existing cap and late-reply behavior (#107/#116).
+
+Actual blocked-worker notices, identified by their persisted dialog-routing request
+IDs, take priority over ordinary orchestrator inbox messages and get separate
+turns. Other senders cannot acquire priority by imitating notice text. Direct
+human-typed Claude turns are identified from matching session/turn transcript
+metadata and do not become continuations of an unrelated Bus request. Bus-submitted
+input and already-bound folded turns retain ownership.
+
+The four enabled `orchestrator_inbox_*` regressions prove early cross-room admission,
+source-room attribution and replay/restart safety, real dialog priority while a
+live turn stays uninterrupted, direct human input followed by a no-Stop interrupt,
+and a textless background Stop. Each reproduced RED on `4e30f80e` before the fix.
+
+Both the ordinary two-cycle guard and the official timed soak now run an additional
+orchestrator burst per cycle: 28 queued messages alternate MASTER and the work room,
+a real worker dialog must take priority, and each answered turn starts another
+long background shell. The burst drains without aging those holds to their caps,
+checks distinct replies and visible publication counts, and reopens the coordinator
+four times with explicit provider startup hooks. Each burst proves 30 additional
+requests (held input, blocked notice, and 28 queued inputs). The original twelve-agent
+load and stall-alert phases retain their independent counts and assertions.

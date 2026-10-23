@@ -13,8 +13,9 @@ impl Worker {
         {
             return true;
         }
-        match crate::agents::providers::claude_code::hooks::scheduled_prompt(&record.value) {
-            Some(true) => {
+        use crate::agents::providers::claude_code::hooks::{prompt_origin, PromptOrigin};
+        match prompt_origin(&record.value) {
+            Some(PromptOrigin::Scheduled | PromptOrigin::Human) => {
                 // Explicit input Bus submitted still wins inside this model guard.
                 state.mark_unowned_background_turn(callback);
             }

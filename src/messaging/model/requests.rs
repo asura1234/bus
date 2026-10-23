@@ -613,6 +613,40 @@ impl BusState {
         groups
     }
 
+    /// Real blocked-worker notices take precedence in an orchestrator's inbox.
+    /// Use the persisted dialog routing identity, never sender-authored text.
+    /// Keep FIFO order within each class and give each notice its own turn.
+    pub(crate) fn prioritize_orchestrator_dialogs(&mut self, agent: AgentId) -> bool {
+        if !self
+            .agents
+            .get(&agent)
+            .is_some_and(|a| a.orchestrates.is_some())
+        {
+            return false;
+        }
+        let notices: std::collections::BTreeSet<_> = self
+            .agents
+            .values()
+            .filter_map(|a| match a.dialog_notice_to {
+                Some(super::DialogNoticeTo::Orchestrator(id)) => Some(id),
+                _ => None,
+            })
+            .collect();
+        let Some(queue) = self.queues.get_mut(&agent) else {
+            return false;
+        };
+        let before = queue.clone();
+        queue.sort_by_key(|id| !notices.contains(id));
+        let mut changed = *queue != before;
+        for id in queue.iter().filter(|id| notices.contains(id)) {
+            if let Some(request) = self.requests.get_mut(id) {
+                changed |= !request.queue_only;
+                request.queue_only = true;
+            }
+        }
+        changed
+    }
+
     pub(crate) fn next_queued_request(&self, agent: AgentId) -> Option<RequestId> {
         let agent_state = self.agents.get(&agent)?;
         if agent_state.current_request.is_some() || agent_state.deletion_pending {

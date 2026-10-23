@@ -466,7 +466,7 @@ fn line_continuations_do_not_hide_real_work_around_bus_controls() {
 }
 
 #[test]
-fn scheduled_prompt_identity_requires_matching_provider_metadata_in_a_bounded_tail() {
+fn prompt_origin_requires_matching_provider_metadata_in_a_bounded_tail() {
     let root = crate::utils::test_temp::unique_temp_path("claude-scheduled");
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("transcript.jsonl");
@@ -474,7 +474,10 @@ fn scheduled_prompt_identity_requires_matching_provider_metadata_in_a_bounded_ta
     let row = json!({"type":"user","sessionId":"s","promptId":"p","isMeta":true,
         "promptSource":"system","turnOrigin":"scheduled","scheduledTaskId":"cron-1"});
     std::fs::write(&path, format!("{row}\n")).unwrap();
-    assert_eq!(super::scheduled_prompt(&hook), Some(true));
+    assert_eq!(
+        super::prompt_origin(&hook),
+        Some(super::PromptOrigin::Scheduled)
+    );
     for (key, value) in [
         ("sessionId", json!("other-session")),
         ("promptId", json!("other-turn")),
@@ -489,22 +492,28 @@ fn scheduled_prompt_identity_requires_matching_provider_metadata_in_a_bounded_ta
         let expected = if matches!(key, "sessionId" | "promptId") {
             None
         } else {
-            Some(false)
+            Some(super::PromptOrigin::Other)
         };
-        assert_eq!(super::scheduled_prompt(&hook), expected, "{key}");
+        assert_eq!(super::prompt_origin(&hook), expected, "{key}");
     }
     // Later tool-result rows share the turn id but carry no prompt origin.
     let tool_result = json!({"type":"user","sessionId":"s","promptId":"p",
         "message":{"role":"user","content":[{"type":"tool_result","content":"done"}]}});
     std::fs::write(&path, format!("{row}\n{tool_result}\n")).unwrap();
-    assert_eq!(super::scheduled_prompt(&hook), Some(true));
+    assert_eq!(
+        super::prompt_origin(&hook),
+        Some(super::PromptOrigin::Scheduled)
+    );
     let mut large = vec![b'x'; 2 * 1024 * 1024 + 10];
     large.extend_from_slice(format!("\n{row}\n{{partial").as_bytes());
     std::fs::write(&path, large).unwrap();
-    assert_eq!(super::scheduled_prompt(&hook), Some(true));
+    assert_eq!(
+        super::prompt_origin(&hook),
+        Some(super::PromptOrigin::Scheduled)
+    );
     std::fs::remove_file(&path).unwrap();
-    assert_eq!(super::scheduled_prompt(&hook), None);
-    assert_eq!(super::scheduled_prompt(&json!({})), None);
+    assert_eq!(super::prompt_origin(&hook), None);
+    assert_eq!(super::prompt_origin(&json!({})), None);
     std::fs::remove_dir_all(root).unwrap();
 }
 

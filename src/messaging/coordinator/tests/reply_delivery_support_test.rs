@@ -451,7 +451,12 @@ impl Delivery {
         self.tick();
         self.state()
             .requests()
-            .find(|r| r.agent_id == orchestrator && r.room_id == self.work)
+            .find(|r| {
+                r.agent_id == orchestrator
+                    && r.room_id == self.work
+                    && r.prompt.author == crate::messaging::model::Author::Bus
+                    && r.prompt.text.contains("Blocked, needs help")
+            })
             .expect("real dialog poll must route a work-room request to its orchestrator")
             .id
     }
@@ -624,6 +629,22 @@ impl Delivery {
         }
         self.tick();
     }
+    pub(crate) fn human_start(&mut self, agent: AgentId, turn: &str, text: &str) {
+        let path = self.dir.join(format!("rollout-{}.jsonl", agent.0));
+        self.append_transcript(
+            agent,
+            json!({"type":"user", "sessionId":format!("session-{}", agent.0),
+            "promptId":turn, "promptSource":"typed", "turnOrigin":"human",
+            "message":{"role":"user","content":text}}),
+        );
+        self.record(
+            agent,
+            json!({"hook_event_name":"UserPromptSubmit", "prompt_id":turn,
+            "prompt":text, "transcript_path":path}),
+        );
+        self.status(agent, AgentState::Working);
+        self.tick();
+    }
     pub(crate) fn start(&mut self, agent: AgentId, turn: &str, text: &str) {
         self.spool_start(agent, turn, text);
         self.tick();
@@ -726,6 +747,9 @@ impl Delivery {
             .unwrap()
             .with_history(Arc::clone(self.state().history()));
         self.worker_mut().save(state).unwrap();
+        for at in self.worker_mut().own_turns.values_mut() {
+            *at -= Duration::from_millis(millis);
+        }
         self.tick();
     }
 

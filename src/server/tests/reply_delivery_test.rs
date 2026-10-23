@@ -193,23 +193,8 @@ async fn worker_message_during_orchestrator_background_hold_keeps_the_held_maste
             f.send(orchestrator, master, "I am blocked", false, None)
         };
         f.tick();
-        if from_worker {
-            // Cross-room input now waits even during a held background reply.
-            assert_eq!(
-                f.state().request(follow_up).unwrap().phase,
-                RequestPhase::Queued
-            );
-            assert_eq!(f.state().request(follow_up).unwrap().group, None);
-            assert_eq!(f.typed(orchestrator).last().unwrap(), &payload);
-            f.stop(
-                orchestrator,
-                "one",
-                "captured master status",
-                json!([]),
-                json!([]),
-            );
-            f.elapse(31_000);
-        }
+        assert_eq!(f.state().request(follow_up).unwrap().group, None);
+        f.assert_reply(held, "captured master status");
         let typed = f.typed(orchestrator).last().unwrap().clone();
         assert!(
             typed.contains("I am blocked"),
@@ -587,22 +572,9 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
     );
     let follow = f.blocked_worker_notice(agent);
     f.tick();
-    assert_eq!(
-        f.state().request(follow).unwrap().phase,
-        RequestPhase::Queued
-    );
     assert_eq!(f.state().request(follow).unwrap().group, None);
-    assert_eq!(f.typed(agent).last().unwrap(), "start work");
     let before_work = f.state().room(f.work).unwrap().unread_count;
-    f.stop(
-        agent,
-        "one",
-        "work and tests complete",
-        json!([]),
-        json!([]),
-    );
-    f.elapse(6_000);
-    f.assert_reply(first, "work and tests complete");
+    f.assert_reply(first, "working on it");
     let typed = f.typed(agent).last().unwrap().clone();
     assert!(typed.contains("Blocked, needs help to continue"), "{typed}");
     f.start(agent, "worker-notice", &typed);
@@ -615,7 +587,7 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
     );
     f.elapse(6_000);
     f.assert_reply(follow, "worker notice acknowledged");
-    f.assert_reply(first, "work and tests complete");
+    f.assert_reply(first, "working on it");
     assert_eq!(f.state().room(f.master).unwrap().unread_count, 1);
     assert_eq!(
         f.state().room(f.work).unwrap().unread_count,
@@ -1170,6 +1142,7 @@ async fn batched_reply_cycles_hold_fresh_shells_after_reopen() {
     for round in 0..2 {
         delivery_cycle(&mut f, round);
         stall_cycle(&mut f, round);
+        orchestrator_inbox_burst(round);
         f.reopen();
         f.provider_startup();
     }
@@ -1327,6 +1300,7 @@ fn run_soak() {
             "delivery phase raised an unexpected alert"
         );
         stall_cycle(&mut f, round);
+        orchestrator_inbox_burst(round);
         f.reopen();
         // Startup is explicit: an unknown shell after coordinator restart is
         // deliberately treated as inherited by production. This profile needs
@@ -1380,4 +1354,225 @@ async fn reply_contract_rejects_second_visible_publication() {
         result.is_err(),
         "a second visible publication escaped the reply contract"
     );
+}
+
+#[tokio::test]
+async fn orchestrator_inbox_admits_master_peers_before_background_shells_finish() {
+    for restart in [false, true] {
+        let mut f = Delivery::new(&[Provider::Codex], false);
+        let sender = f.agents[0];
+        let orch = f.add_orchestrator();
+        let held = f.send(orch, f.work, "notice", false, None);
+        f.tick();
+        f.start(orch, "held", "notice");
+        f.stop(
+            orch,
+            "held",
+            "notice answer",
+            json!([{"id":"watcher","type":"shell","status":"running","command":"sleep 3600"}]),
+            json!([]),
+        );
+        let next = f.send(orch, f.master, "peer question", true, Some(sender));
+        if restart {
+            f.reopen();
+        } else {
+            f.tick();
+        }
+        let payload = f.typed(orch).last().unwrap().clone();
+        assert!(
+            payload.ends_with("peer question"),
+            "inbox blocked by held reply: {payload}"
+        );
+        assert_eq!(f.state().request(next).unwrap().group, None);
+        f.assert_reply(held, "notice answer");
+        f.start(orch, "peer", &payload);
+        // A replay from the old turn cannot overwrite the new request.
+        f.stop(orch, "held", "notice answer", json!([]), json!([]));
+        assert!(f.state().request(next).unwrap().pending_final.is_none());
+        f.stop(orch, "peer", "peer answer", json!([]), json!([]));
+        f.elapse(31_000);
+        f.assert_reply(next, "peer answer");
+        f.reopen();
+        f.assert_reply(held, "notice answer");
+        f.assert_reply(next, "peer answer");
+    }
+}
+
+#[tokio::test]
+async fn orchestrator_inbox_prioritizes_real_blocked_notices_at_held_boundary() {
+    let mut f = Delivery::new(&[Provider::ClaudeCode], true);
+    let orch = f.agents[0];
+    let held = f.send(orch, f.master, "status", false, None);
+    f.tick();
+    f.start(orch, "status-turn", "status");
+    let ordinary = f.send(orch, f.master, "ordinary followup", true, None);
+    // Queue the actual notice while the provider is still generating.
+    let notice = f.blocked_worker_notice(orch);
+    assert_eq!(
+        f.typed(orch).len(),
+        1,
+        "a live turn must not be interrupted"
+    );
+    f.stop(
+        orch,
+        "status-turn",
+        "captured status",
+        json!([{"id":"watcher","type":"shell","status":"running","command":"sleep 3600"}]),
+        json!([]),
+    );
+    let payload = f.typed(orch).last().unwrap().clone();
+    assert!(
+        payload.contains("Blocked, needs help"),
+        "notice did not take priority: {payload}"
+    );
+    assert_eq!(
+        f.state().request(ordinary).unwrap().phase,
+        RequestPhase::Queued
+    );
+    f.assert_reply(held, "captured status");
+    f.start(orch, "notice-turn", &payload);
+    f.stop(orch, "notice-turn", "help given", json!([]), json!([]));
+    f.elapse(31_000);
+    f.assert_reply(notice, "help given");
+    assert_eq!(f.typed(orch).last().unwrap(), "ordinary followup");
+    f.start(orch, "ordinary-turn", "ordinary followup");
+    f.stop(
+        orch,
+        "ordinary-turn",
+        "ordinary answer",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(31_000);
+    f.assert_reply(ordinary, "ordinary answer");
+}
+
+#[tokio::test]
+async fn orchestrator_inbox_human_turn_and_interrupt_cannot_renew_an_old_hold() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let sender = f.agents[0];
+    let orch = f.add_orchestrator();
+    let held = f.send(orch, f.work, "notice", false, None);
+    f.tick();
+    f.start(orch, "held", "notice");
+    f.stop(
+        orch,
+        "held",
+        "original answer",
+        json!([{"id":"watcher","type":"shell","status":"running","command":"sleep 3600"}]),
+        json!([]),
+    );
+    // Exact first-party transcript metadata from the incident's direct input.
+    f.human_start(orch, "human", "typed directly");
+    assert_eq!(
+        f.state().request(held).unwrap().provider_turn_id.as_deref(),
+        Some("held")
+    );
+    let next = f.send(orch, f.master, "peer question", true, Some(sender));
+    f.tick();
+    assert_eq!(f.state().request(next).unwrap().phase, RequestPhase::Queued);
+    // Interrupted Claude turn: no Stop hook, only a subsequent idle observation.
+    f.status(orch, AgentState::Idle);
+    f.elapse(31_000);
+    f.assert_reply(held, "original answer");
+    let payload = f.typed(orch).last().unwrap().clone();
+    assert!(
+        payload.ends_with("peer question"),
+        "interrupt stranded the queue: {payload}"
+    );
+    f.start(orch, "peer", &payload);
+    f.stop(orch, "peer", "peer answer", json!([]), json!([]));
+    f.elapse(31_000);
+    f.assert_reply(next, "peer answer");
+}
+
+fn orchestrator_inbox_burst(round: usize) {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let sender = f.agents[0];
+    let orch = f.add_orchestrator();
+    let held = f.send(orch, f.work, "work notice", false, None);
+    f.tick();
+    f.start(orch, "held", "work notice");
+    let mut requests = Vec::new();
+    for n in 0..28 {
+        let prompt = format!("inbox-{round}-{n}");
+        let room = if n % 2 == 0 { f.master } else { f.work };
+        requests.push((f.send(orch, room, &prompt, true, Some(sender)), prompt));
+    }
+    let blocker = f.blocked_worker_notice(orch);
+    f.stop(
+        orch,
+        "held",
+        "held reply",
+        json!([{"id":"long-wait","type":"shell","status":"running","command":"sleep 3600"}]),
+        json!([]),
+    );
+    let payload = f.typed(orch).last().unwrap().clone();
+    assert!(
+        payload.contains("Blocked, needs help"),
+        "28 queued messages hid a dialog: {payload}"
+    );
+    f.assert_reply(held, "held reply");
+    f.start(orch, "blocker", &payload);
+    f.stop(orch, "blocker", "blocker reply", json!([]), json!([]));
+    f.elapse(31_000);
+    f.assert_reply(blocker, "blocker reply");
+    for (n, (request, prompt)) in requests.into_iter().enumerate() {
+        let payload = f.typed(orch).last().unwrap().clone();
+        assert!(payload.ends_with(&prompt), "wrong FIFO turn: {payload}");
+        assert_eq!(f.state().request(request).unwrap().group, None);
+        let turn = format!("inbox-turn-{round}-{n}");
+        f.start(orch, &turn, &payload);
+        // Every turn launches another long wait: a backlog must still drain
+        // without waiting for a shell exit or aging a hold to its cap.
+        f.stop(orch, &turn, &format!("answer-{prompt}"),
+            json!([{"id":format!("wait-{n}"),"type":"shell","status":"running","command":"sleep 3600"}]), json!([]));
+        if n == 27 {
+            f.elapse(3_600_000);
+        }
+        f.assert_reply(request, &format!("answer-{prompt}"));
+        if n < 27 {
+            assert_eq!(
+                f.state()
+                    .request(request)
+                    .unwrap()
+                    .failure_reason
+                    .as_deref(),
+                Some("background_shells_new_turn"),
+                "turn {n} did not release its real hold"
+            );
+        }
+        if n % 7 == 0 {
+            f.reopen();
+            f.record(
+                orch,
+                json!({"hook_event_name":"SessionStart","source":"startup"}),
+            );
+            f.tick();
+        }
+    }
+    f.assert_publications();
+    f.assert_no_stalls();
+}
+
+#[tokio::test]
+async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_reply() {
+    let mut f = Delivery::new(&[Provider::Codex], false);
+    let orch = f.add_orchestrator();
+    let held = f.send(orch, f.work, "notice", false, None);
+    f.tick();
+    f.start(orch, "held", "notice");
+    f.stop(orch, "held", "", json!([]), json!([{"cron_id":"cron"}]));
+    let next = f.send(orch, f.master, "next", true, None);
+    f.tick();
+    assert_eq!(f.typed(orch).last().unwrap(), "next");
+    assert_eq!(
+        f.state().request(held).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert!(f.state().request(held).unwrap().pending_final.is_none());
+    f.start(orch, "next", "next");
+    f.stop(orch, "next", "next answer", json!([]), json!([]));
+    f.elapse(31_000);
+    f.assert_reply(next, "next answer");
 }

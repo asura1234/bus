@@ -489,14 +489,21 @@ fn is_redirect_operator(command: &str, index: usize, ch: char) -> bool {
 /// answering Bus input. The transcript records their origin; prompt wording
 /// alone is insufficient. None means the matching row is not available yet:
 /// Claude may publish it only after UserPromptSubmit hooks have run.
-pub(crate) fn scheduled_prompt(value: &Value) -> Option<bool> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PromptOrigin {
+    Scheduled,
+    Human,
+    Other,
+}
+
+pub(crate) fn prompt_origin(value: &Value) -> Option<PromptOrigin> {
     use std::io::{Read, Seek, SeekFrom};
     let ((session, turn), path) = value
         .get("session_id")
         .and_then(Value::as_str)
         .zip(value.get("prompt_id").and_then(Value::as_str))
         .zip(value.get("transcript_path").and_then(Value::as_str))?;
-    let read = || -> std::io::Result<Option<bool>> {
+    let read = || -> std::io::Result<Option<PromptOrigin>> {
         if !std::fs::metadata(path)?.is_file() {
             return Ok(None);
         }
@@ -527,12 +534,19 @@ pub(crate) fn scheduled_prompt(value: &Value) -> Option<bool> {
                 && row["turnOrigin"].is_string()
             {
                 return Ok(Some(
-                    row["isMeta"] == true
+                    if row["promptSource"] == "typed" && row["turnOrigin"] == "human" {
+                        PromptOrigin::Human
+                    } else if row["isMeta"] == true
                         && row["promptSource"] == "system"
                         && row["turnOrigin"] == "scheduled"
                         && row["scheduledTaskId"]
                             .as_str()
-                            .is_some_and(|id| !id.is_empty()),
+                            .is_some_and(|id| !id.is_empty())
+                    {
+                        PromptOrigin::Scheduled
+                    } else {
+                        PromptOrigin::Other
+                    },
                 ));
             }
         }

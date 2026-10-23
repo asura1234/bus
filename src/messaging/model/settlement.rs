@@ -91,6 +91,49 @@ impl BusState {
         self.deliver_held_interim(agent, id, interim, now_ms, "background_shells_timeout")
     }
 
+    /// A held Stop ends generation even though its background work remains.
+    /// Give an idle orchestrator's queued inbox its own turn, preserving the
+    /// captured answer under the old request just as a separately bound turn
+    /// does. Workers retain their ordinary bounded background waits.
+    pub(crate) fn release_orchestrator_inbox(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+    ) -> Option<RequestId> {
+        let owner = self.agents.get(&agent)?;
+        if owner.orchestrates.is_none()
+            || owner.status != RuntimeStatus::Idle
+            || owner.dialog
+            || owner.deletion_pending
+            || owner.session_binding_invalidated
+            || !owner.hook_setup_confirmed
+            || self.queued_requests(agent).is_empty()
+        {
+            return None;
+        }
+        let id = owner.current_request?;
+        let request = self.requests.get(&id)?;
+        if request.phase != RequestPhase::Active
+            || !request.trusted_start_bound
+            || !request.awaiting_background
+            || self.group_members(id).iter().any(|member| {
+                self.requests.get(member).is_some_and(|member| {
+                    !member.settled() && member.steered && !member.trusted_start_bound
+                })
+            })
+        {
+            return None;
+        }
+        if let Some(interim) = Self::held_interim(request) {
+            self.deliver_held_interim(agent, id, interim, now_ms, "background_shells_new_turn")
+        } else {
+            // A textless Stop still frees the inbox; no answer is invented.
+            self.close_turn_with_reason(id, now_ms, "background_shells_new_turn".into())
+                .ok()?;
+            Some(id)
+        }
+    }
+
     /// Settles the agent's current request `id`, with its group, on `interim`:
     /// the newest text a `Stop` gave while the turn held for its shells.
     /// `reason` says why the hold ended short of the real reply.
