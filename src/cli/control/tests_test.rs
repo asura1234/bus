@@ -101,6 +101,7 @@ fn room_sound_requires_exactly_one_of_on_or_off() {
 /// and both help texts are checked against each other method by method.
 const SAMPLES: &[&[&str]] = &[
     &["state"],
+    &["agent", "list"],
     &["settings"],
     &["room", "create", "r"],
     &["room", "rename", "r", "s"],
@@ -2332,7 +2333,6 @@ fn agent_interrupt_names_one_agent_or_one_room_with_optional_text_and_author() {
     assert_eq!(parsed.params, json!({"room": "lab", "text": "pause"}));
     for args in [
         &["agent", "interrupt"][..],
-        &["agent", "interrupt", "worker", "--room", "lab"][..],
         &["agent", "interrupt", "worker", "--text", " "][..],
     ] {
         assert!(command(args).is_err(), "must reject {args:?}");
@@ -2456,6 +2456,41 @@ fn agent_interrupt_text_is_sent_as_a_new_message_after_the_stop() {
     );
     // The interrupt itself carries only the agent and its author.
     assert_eq!(requests[0].params, json!({"agent": "a4", "as": "orch"}));
+}
+
+#[test]
+fn agent_interrupt_follow_up_uses_the_receipts_conversation_and_resolved_author() {
+    for author in [Some(99), None] {
+        let mut args = vec![
+            "agent",
+            "interrupt",
+            "a4",
+            "--room",
+            "conversation",
+            "--text",
+            "next task",
+        ];
+        if author.is_some() {
+            args.extend(["--as", "owner"]);
+        }
+        let (outcome, response, requests, _) = run_interrupt(
+            &args,
+            json!({"room_id":7,"conversation_room_id":8,"author_id":author,"agents":[{"agent_id":4,"name":"a4","outcome":"already_idle"}]}),
+            [],
+        );
+        assert!(outcome.is_ok(), "{response}");
+        let send = requests
+            .iter()
+            .find(|request| request.method == "message.send")
+            .unwrap();
+        assert_eq!(send.params["room"], "8");
+        assert_eq!(
+            send.params.get("as"),
+            author.map(|id| json!(id.to_string())).as_ref()
+        );
+        assert_eq!(response["result"]["conversation_room_id"], 8);
+        assert_eq!(response["result"]["author_id"], json!(author));
+    }
 }
 
 #[test]
@@ -3199,4 +3234,51 @@ fn worker_human_fallback_cli_preserves_explicit_room_and_author() {
         "send", "--room", "7", "--as", "worker", "--to", "human", "--text", "status", "--async"
     ])
     .is_err());
+}
+
+#[test]
+fn identity_every_agent_cli_entry_accepts_names_ids_and_scoping() {
+    for selector in ["reviewer", "21546"] {
+        for tail in [
+            vec!["read", "--source", "visible"],
+            vec!["dialog"],
+            vec!["choose", "--option", "1", "--fingerprint", "fp"],
+            vec!["answer", "--text", "yes", "--fingerprint", "fp"],
+            vec!["delete", "--confirm"],
+            vec!["setup-confirm", "--confirm"],
+            vec!["clear"],
+            vec!["interrupt"],
+            vec!["rename", "reviewer"],
+        ] {
+            let mut argv = vec!["agent", tail[0], selector];
+            argv.extend_from_slice(&tail[1..]);
+            argv.extend_from_slice(&["--room", "work", "--as", "owner"]);
+            let parsed = command(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+            assert_eq!(parsed.params["agent"], selector);
+            assert_eq!(parsed.params["room"], "work");
+            assert_eq!(parsed.params["as"], "owner");
+        }
+    }
+    assert_eq!(
+        command(&["agent", "list", "--room", "work"])
+            .unwrap()
+            .method,
+        "agent.list"
+    );
+}
+
+#[test]
+fn identity_send_wait_and_message_seen_accept_names_or_ids_as_authors() {
+    for selector in ["reviewer", "21546"] {
+        for argv in [
+            vec![
+                "send", "--room", "work", "--to", selector, "--as", selector, "--text", "body",
+            ],
+            vec!["wait", "--message", "99", "--as", selector],
+            vec!["message", "seen", "42", "--as", selector],
+        ] {
+            let parsed = command(&argv).unwrap();
+            assert_eq!(parsed.params["as"], selector);
+        }
+    }
 }

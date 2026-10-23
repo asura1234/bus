@@ -14,7 +14,7 @@ impl Worker {
         match method {
             "agent.focus" | "room.focus" => {
                 let (room, agent) = if method == "agent.focus" {
-                    let id = self.control_agent(required(p, "agent")?, None)?;
+                    let id = self.control_agent(p)?;
                     let agent = self.state.agent(id).ok_or("Unknown agent")?;
                     if agent.runtime_identity.pane_id.is_none() {
                         return Err("Agent has no terminal; inspect its launch error".into());

@@ -548,10 +548,13 @@ impl BusState {
             .filter_map(|(index, id)| {
                 let payload = self.render_request_payload(*id)?;
                 let prompt = &self.requests.get(id)?.prompt;
+                let attribution = match prompt.author {
+                    Author::Agent(_) => String::new(),
+                    _ => format!(" from {}", self.sender_name(&prompt.author)),
+                };
                 Some(format!(
-                    "[{}/{count} from {} at {}]\n{}",
+                    "[{}/{count}{attribution} at {}]\n{}",
                     index + 1,
-                    self.sender_name(&prompt.author),
                     clock(prompt.submitted_at_ms),
                     payload
                 ))

@@ -312,10 +312,7 @@ fn authored_start(worker: &Worker, author: AgentId, turn: &str, text: &str) -> s
     let sender = worker.state.agent(author).unwrap();
     claude_start(
         turn,
-        &format!(
-            "{} (agent {}, room {}):\n{text}",
-            sender.name, author.0, sender.room_id.0
-        ),
+        &format!("{} (room {}):\n{text}", sender.name, sender.room_id.0),
     )
 }
 

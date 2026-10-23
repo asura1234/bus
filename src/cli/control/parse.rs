@@ -270,7 +270,7 @@ fn room_cli() -> Command {
 }
 
 fn agent_cli() -> Command {
-    subcommand("agent")
+    let command = subcommand("agent")
         .subcommand_required(true)
         .subcommand(
             subcommand("add")
@@ -326,11 +326,7 @@ fn agent_cli() -> Command {
         .subcommand(subcommand("clear").arg(value_arg("agent").required(true)))
         .subcommand(
             subcommand("interrupt")
-                .arg(
-                    value_arg("agent")
-                        .required_unless_present("room")
-                        .conflicts_with("room"),
-                )
+                .arg(value_arg("agent").required_unless_present("room"))
                 .arg(value_arg("room").long("room"))
                 .arg(value_arg("text").long("text"))
                 .arg(value_arg("as").long("as")),
@@ -351,10 +347,26 @@ fn agent_cli() -> Command {
                 .arg(value_arg("agent").required(true))
                 .arg(flag("confirm")),
         )
+        .subcommand(subcommand("list").arg(value_arg("room").long("room")));
+    command.mut_subcommands(|sub| {
+        if matches!(sub.get_name(), "add" | "list" | "interrupt") {
+            sub
+        } else {
+            sub.arg(value_arg("room").long("room"))
+                .arg(value_arg("as").long("as"))
+        }
+    })
 }
 
 fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
-    Ok(match args.subcommand() {
+    let (method, mut params) = match args.subcommand() {
+        Some(("list", args)) => {
+            let mut params = json!({});
+            if let Some(room) = args.get_one::<String>("room") {
+                params["room"] = json!(room);
+            }
+            ("agent.list", params)
+        }
         Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
         Some(("clear", args)) => ("agent.clear", json!({"agent": required(args, "agent")?})),
         Some(("interrupt", args)) => {
@@ -377,7 +389,7 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
             json!({"agent": required(args, "agent")?, "name": required(args, "name")?}),
         ),
         Some(("add", args)) => return parse_agent_add(args),
-        Some(("read", args)) => return parse_agent_read(args),
+        Some(("read", args)) => parse_agent_read(args)?,
         Some(("dialog", args)) => (
             "agent.dialog.observe",
             json!({"agent": required(args, "agent")?}),
@@ -404,7 +416,17 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
             json!({"agent": required(args, "agent")?, "confirm": confirmed(args)?}),
         ),
         _ => return Err("unknown agent command".into()),
-    })
+    };
+    if let Some((sub, args)) = args.subcommand() {
+        if sub != "add" && sub != "list" {
+            for field in ["room", "as"] {
+                if let Some(value) = args.get_one::<String>(field) {
+                    params[field] = json!(value);
+                }
+            }
+        }
+    }
+    Ok((method, params))
 }
 
 fn parse_room(args: &ArgMatches) -> Result<(&'static str, Value), String> {

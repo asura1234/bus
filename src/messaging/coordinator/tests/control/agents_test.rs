@@ -700,7 +700,7 @@ fn workers_launch_with_messaging_and_no_signature_instructions_for_every_provide
             "{prompt}"
         );
         assert!(
-            prompt.contains("Bus automatically adds 'name (agent id, room R):'"),
+            prompt.contains("Bus adds one sender header: 'name:' locally"),
             "{prompt}"
         );
         assert!(

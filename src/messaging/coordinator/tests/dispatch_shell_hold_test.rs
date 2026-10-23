@@ -122,10 +122,7 @@ fn master_reply(author_is_agent: bool, command: &str, held: bool) {
         .id;
     f.deliver();
     let payload = if author_is_agent {
-        format!(
-            "desktop master (agent {}, room {}):\nstatus please",
-            sender.0, f.room.0
-        )
+        format!("desktop master (room {}):\nstatus please", f.room.0)
     } else {
         "status please".into()
     };

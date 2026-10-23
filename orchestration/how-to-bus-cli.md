@@ -354,12 +354,10 @@ form is `send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
 [--as AGENT] [--queue] [--async]`. The message, history and reply stay in the
 conversation room chosen by `--room`.
 
-An exact numeric agent ID always resolves globally, even if a local agent has
-that ID as its name. A name first resolves among agents in the selected
-conversation room (`--room`), then in the sender's home room, then among all
-agents. If several agents match at the chosen level, Bus errors and lists each candidate's name, ID and room; select an ID to disambiguate.
-Without `--as`, the selected conversation room supplies both local scopes.
-`--as` uses the same ID/name resolver, with the selected room as its local scope.
+Names and numeric agent IDs resolve globally across every room, including
+MASTER. An exact existing numeric ID wins over a numeric name. `--room` chooses
+the conversation; it never narrows the current agent-name namespace. `--as`
+identifies the author using the same shared name/ID resolver.
 
 A worker can message its orchestrator before being assigned any work:
 
@@ -375,14 +373,38 @@ named `orchestrator` takes precedence. With no matching member and no binding,
 Bus reports `This room has no bound orchestrator`. Other orchestrators, MASTER peers and workers in any
 room are reachable by name or ID.
 
-Bus automatically prepends `name (agent id, room R):` to every agent-authored
-payload it delivers, using the sender's home room ID. Send only the message
-body: do not add a "from X", "X here" or signature line. Bus suppresses a duplicate
-header only when the first line is the exact Bus header with this sender's own name, ID and home room, or a short identity-only
-line: the sender's name or `agent ID` followed by `:` or ` here —` and nothing
-else. An ordinary sentence or a header with a forged ID or room always gets
-the genuine sender header. The stored chat text stays as authored;
-the delivered payload and callback matching use the same rendered text.
+Bus prepends exactly one sender line to agent-authored payloads: `name:` for
+same-room delivery, and `name (room R):` when the conversation or recipient
+crosses rooms or involves MASTER. Numeric names and historical names retained from before a rename include
+`(agent ID)` so the sender can still be addressed unambiguously. Batched agent messages use `[N/M at HH:MM]` without repeating the
+sender; developer/Bus messages without an inner header retain their sender in
+the batch marker.
+
+Send only the message body: do not add a "from X", "X here" or signature line.
+An exact current or legacy Bus header with this sender's own name, ID and home
+room, or a short identity-only line (`name:` or `agent ID here —`), is normalized
+to the genuine current header. Ordinary sentences and headers with a forged ID
+or room keep their content and receive the real header. Stored chat text stays
+as authored; delivered payloads and callback matching use the same frozen text.
+
+Every CLI agent selector accepts a globally unique current name or numeric ID,
+including `--as`, `agent dialog/choose/answer/read/delete/interrupt/rename/setup-confirm/clear`,
+and the dev commands `focus/details`. The selector commands also accept optional
+`--room ROOM` and `--as AGENT` context; names remain global. Exact target IDs do
+not require resolving that optional author context. For interrupt, `--room`
+chooses the conversation for the receipt and follow-up text, while the interrupt
+notice stays in the target agent's room where its turn ran.
+`agent interrupt --room ROOM` without AGENT stops that room's eligible agents.
+
+```sh
+bus agent list
+bus agent list --room "$room_id"
+bus agent dialog reviewer --room "$room_id" --as owner
+```
+
+`agent list` emits JSON mapping rows with `name`, `id` and `room`. Message
+and request selectors remain numeric resource IDs; an agent-valued
+`--as` on message/wait commands uses the same global name/ID resolver.
 
 New agents receive Bus protocol instructions at launch. Existing conversations
 keep their saved instructions; upgrades do not insert new task turns.
@@ -633,7 +655,9 @@ message tells you to look at its terminal.
 A message sent to an idle agent starts a new turn and group, as before. When
 messages piled up while the agent could not take them (it was launching,
 blocked, or finishing another turn), Bus sends them as one prompt, in order,
-each part headed `[N/M from SENDER at HH:MM]`, and they form one group.
+each part headed `[N/M at HH:MM]` for agent-authored messages, whose inner
+payload carries the sender header. Developer/Bus parts retain
+`[N/M from SENDER at HH:MM]`. The parts form one group.
 
 Add `--queue` to wait for the agent to become idle and give the message a turn
 of its own, with its own reply. A `--queue` message is never typed into a
@@ -688,10 +712,16 @@ result then includes its `message_id`; follow it with `wait`. When Claude Code
 is interrupted before it answered, it puts the interrupted prompt back into its
 input box; Bus clears it before typing the next message.
 
-`--room ROOM` instead stops every working or blocked agent in the room except
-the `--as` agent, and returns one entry per agent under `agents`; `--text` then
-goes to every agent that stopped. The generic form is
-`agent interrupt (AGENT | --room ROOM) [--text TEXT] [--as AGENT]`.
+With AGENT, optional `--room ROOM` chooses the conversation for the receipt
+and follow-up text; the interrupt notice stays in the target agent's room.
+Without AGENT, `--room ROOM` stops every working or blocked agent in that room
+except the `--as` agent, returning one entry per agent under `agents`; `--text`
+then goes to every agent that stopped. The forms are:
+
+```sh
+bus agent interrupt AGENT [--room ROOM] [--text TEXT] [--as AGENT]
+bus agent interrupt --room ROOM [--text TEXT] [--as AGENT]
+```
 
 Interrupting kills no process and keeps the provider context; to start a fresh
 context, use `agent clear` once the agent is idle.
@@ -949,7 +979,7 @@ as the agent list even when its provider still reports idle.
 
 Once an agent has been blocked for about a second, on a dialog, a question, a trust
 prompt or any other screen it cannot pass alone, Bus posts one notice in its
-work room, signed `bus`: `bus → ORCHESTRATOR: AGENT (agent N). Blocked, needs
+work room, signed `bus`: `bus → ORCHESTRATOR: AGENT. Blocked, needs
 help to continue.` when the room has an orchestrator, delivered and waking it
 like any message, or `bus → You: …` when it has none. The notice names the agent and includes `Inspect: bus agent dialog AGENT`,
 but no options or fingerprint: look at the agent's terminal with that command (or
@@ -1091,7 +1121,9 @@ Reliable callers should also follow these rules:
 
 1. Parse the JSON response and require `ok: true`; do not infer success from
    human-readable terminal output.
-2. Capture room, agent, message, and request IDs and prefer IDs in later calls.
+2. Capture room, message and request IDs. Use globally unique current agent
+   names for readability; numeric or historical names include the sender ID
+   when needed to address that identity unambiguously.
 3. Use `--to all` only when broadcasting is intentional.
 4. Use `wait` when a program needs completion; do not treat `send` as completion.
    Orchestrators receive terminal event notifications without periodic polling.

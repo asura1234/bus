@@ -1305,3 +1305,57 @@ fn reply_routing_persisted_floor_keeps_pruned_month_old_peer_outcomes_quiet() {
         f.calls.lock().unwrap()
     );
 }
+
+#[test]
+fn identity_batched_worker_notification_has_exactly_one_sender_line() {
+    let mut f = Fixture::new();
+    let first = f.send(Author::Agent(f.orch), "task one");
+    f.finish(first, "READY FOR VERIFY first");
+    f.worker
+        .state
+        .route_worker_replies(io::now_ms(), &BTreeSet::new())
+        .unwrap();
+    let lead = f.notices()[0].id;
+    // A second worker contributes another notification in the same queue.
+    let peer = f
+        .worker
+        .state
+        .create_agent(
+            f.room,
+            "rev-claude8",
+            Provider::ClaudeCode,
+            f.dir.clone(),
+            None,
+        )
+        .unwrap();
+    let id = f
+        .worker
+        .state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "task two".into(),
+                files: vec![],
+                recipient_ids: [peer].into(),
+            },
+            Author::Agent(f.orch),
+            io::now_ms() - 4_000,
+        )
+        .unwrap()[0];
+    f.worker
+        .state
+        .finish_for_test(id, "REVIEW READY second", io::now_ms() - 3_000);
+    f.worker
+        .state
+        .route_worker_replies(io::now_ms(), &BTreeSet::new())
+        .unwrap();
+    let payload = f.worker.state.coalesce_queue(lead).unwrap();
+    assert_eq!(payload.matches("builder").count(), 1, "{payload}");
+    assert_eq!(payload.matches("rev-claude8").count(), 1, "{payload}");
+    assert!(!payload.contains(" from "), "{payload}");
+    assert!(!payload.contains("(agent "), "{payload}");
+    assert!(
+        payload.contains(&format!("rev-claude8 (room {}):", f.room.0)),
+        "{payload}"
+    );
+}

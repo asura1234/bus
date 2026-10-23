@@ -58,10 +58,7 @@ async fn open_messaging_cross_room_session_delivery_has_its_own_reply() {
         );
         f.tick();
         let payload = f.typed(recipient).last().unwrap().clone();
-        let expected = format!(
-            "agent-0 (agent {}, room {}):\ncross-room question",
-            sender.0, source.0
-        );
+        let expected = format!("agent-0 (room {}):\ncross-room question", source.0);
         assert_eq!(payload, expected);
         f.reopen();
         f.start(recipient, "cross-room-turn", &payload);
@@ -269,11 +266,7 @@ async fn worker_message_typed_into_orchestrator_names_its_worker_and_room() {
     let typed = f.typed(orchestrator).last().unwrap().clone();
     let name = f.state().agent(worker).unwrap().name.clone();
     assert!(
-        typed
-            == format!(
-                "{name} (agent {}, room {}):\nI am blocked",
-                worker.0, f.work.0
-            ),
+        typed == format!("{name} (room {}):\nI am blocked", f.work.0),
         "the orchestrator cannot tell this worker message from a developer prompt: {typed:?}"
     );
     let request = f.state().requests().next().unwrap().id;
@@ -323,10 +316,7 @@ async fn work_room_message_never_types_into_orchestrators_own_running_turn() {
     let payload = f.typed(orchestrator).last().unwrap().clone();
     assert_eq!(
         payload,
-        format!(
-            "agent-0 (agent {}, room {}):\nI am blocked",
-            worker.0, f.work.0
-        )
+        format!("agent-0 (room {}):\nI am blocked", f.work.0)
     );
     f.start(orchestrator, "independent-worker-turn", &payload);
     f.stop(
@@ -909,11 +899,14 @@ async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter()
     );
     f.tick();
     let typed = f.typed(orch);
-    assert_eq!(typed.len(), 1);
-    assert!(typed[0].contains("autonomous result"));
+    assert_eq!(typed.len(), 1, "typed payloads: {typed:#?}");
+    assert!(
+        typed[0].contains("autonomous result"),
+        "typed payloads: {typed:#?}"
+    );
     assert!(
         !typed[0].contains("owned result"),
-        "a live waiter owns the original reply"
+        "a live waiter owns the original reply; typed payloads: {typed:#?}"
     );
     f.assert_reply(request, "owned result");
 }

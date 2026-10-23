@@ -65,7 +65,7 @@ impl BusState {
                     && self.queued_requests(agent.id).is_empty()
                     && test(agent)
             })
-            .map(|agent| agent.name.clone())
+            .map(|agent| self.agent_message_label(agent.id))
             .collect()
     }
 }

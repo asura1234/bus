@@ -57,7 +57,7 @@ impl BusState {
             let notice = if let Some(id) = queued {
                 id
             } else {
-                let text = self.notification_text(worker, &parts);
+                let text = Self::notification_text(&parts);
                 self.submit_message_from(
                     room,
                     Draft {
@@ -158,9 +158,8 @@ impl BusState {
         parts
     }
 
-    fn notification_text(&self, worker: AgentId, parts: &[Part]) -> String {
-        let name = self.agent(worker).map_or("worker", |a| a.name.as_str());
-        let mut text = format!("{name} (agent {}).", worker.0);
+    fn notification_text(parts: &[Part]) -> String {
+        let mut text = String::new();
         let room = parts.first().map_or(RoomId(0), |p| p.room);
         for (index, part) in parts.iter().enumerate() {
             if text.chars().count() + part.text.chars().count() > 3_500 {
@@ -171,7 +170,9 @@ impl BusState {
                 ));
                 break;
             }
-            text.push('\n');
+            if !text.is_empty() {
+                text.push('\n');
+            }
             text.push_str(&part.text);
         }
         text
@@ -190,15 +191,14 @@ impl BusState {
         else {
             return Ok(());
         };
-        let worker = match request.prompt.author {
-            Author::Agent(worker) => worker,
-            _ => return Ok(()),
-        };
+        if !matches!(request.prompt.author, Author::Agent(_)) {
+            return Ok(());
+        }
         let parts = self.notification_parts(Some(notice), &BTreeSet::new());
         if parts.is_empty() {
             self.recover_idle_request(notice, now_ms)?;
         } else {
-            let text = self.notification_text(worker, &parts);
+            let text = Self::notification_text(&parts);
             if let Some(request) = self.requests.get_mut(&notice) {
                 request.prompt.text = text;
             }

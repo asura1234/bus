@@ -68,7 +68,7 @@ asked:
 bus send --room "$room_id" --as claude-orch --to claude-dev --text "..."
 ```
 
-Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for numeric or historical names. Send only the body; do not add a "from X", "X here" or signature line.
 Include this rule in worker briefs. Any agent can message agents in any room;
 `--to orchestrator` names the sender's home room's orchestrator.
 

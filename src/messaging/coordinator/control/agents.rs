@@ -1,7 +1,7 @@
 //! Agents development commands on the single coordinator.
 use super::{
-    launch, mpsc, optional_bool, optional_text, required, schema, unique, AddAgent, AgentId,
-    BusCommand, BusEvent, Method, Provider, ResponseResult, RoomId, RuntimeStatus, Worker,
+    launch, mpsc, optional_bool, optional_text, required, schema, AddAgent, AgentId, BusCommand,
+    BusEvent, Method, Provider, ResponseResult, RoomId, RuntimeStatus, Worker,
     MASTER_AGENT_NEEDS_ROOM,
 };
 use crate::messaging::orchestration::OrchestratorSpec;
@@ -15,22 +15,28 @@ impl Worker {
         _events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<Value, String> {
         match method {
+            "agent.list" => {
+                let room = optional_text(p, "room")?
+                    .map(|s| self.control_room(s))
+                    .transpose()?;
+                Ok(
+                    json!({"agents":self.state.agents().filter(|a| room.is_none_or(|room| a.room_id == room)).map(|a|json!({"name":a.name,"id":a.id,"room":a.room_id})).collect::<Vec<_>>()}),
+                )
+            }
             "agent.details" => self.control_command(BusCommand::SetDetails(
-                self.control_agent(required(p, "agent")?, None)?,
+                self.control_agent(p)?,
                 p.get("on")
                     .and_then(Value::as_bool)
                     .ok_or("Details must be on or off")?,
             )),
             "agent.rename" => self.control_command(BusCommand::RenameAgent(
-                self.control_agent(required(p, "agent")?, None)?,
+                self.control_agent(p)?,
                 required(p, "name")?.into(),
             )),
-            "agent.delete" => self.control_command(BusCommand::DeleteAgent(
-                self.control_agent(required(p, "agent")?, None)?,
-            )),
-            "agent.setup-confirm" => self.control_command(BusCommand::CompleteHookSetup(
-                self.control_agent(required(p, "agent")?, None)?,
-            )),
+            "agent.delete" => self.control_command(BusCommand::DeleteAgent(self.control_agent(p)?)),
+            "agent.setup-confirm" => {
+                self.control_command(BusCommand::CompleteHookSetup(self.control_agent(p)?))
+            }
             "agent.add" => {
                 let provider = match required(p, "provider")? {
                     "claude" => Provider::ClaudeCode,
@@ -69,28 +75,12 @@ impl Worker {
                 })
             }
             "agent.clear" => {
-                let agent = self.control_agent(required(p, "agent")?, None)?;
+                let agent = self.control_agent(p)?;
                 self.control_clear(agent)
             }
             "agent.interrupt" => self.control_interrupt(p),
             _ => Err("Unknown method".into()),
         }
-    }
-
-    pub(in crate::messaging::coordinator) fn control_agent(
-        &self,
-        selector: &str,
-        room: Option<RoomId>,
-    ) -> Result<AgentId, String> {
-        unique(
-            self.state
-                .agents()
-                .filter(|a| {
-                    room.is_none_or(|r| r == a.room_id)
-                        && (selector == a.id.0.to_string() || selector == a.name)
-                })
-                .map(|a| a.id),
-        )
     }
 
     /// Starts a fresh provider context in an idle agent's terminal. The reset
@@ -171,8 +161,8 @@ impl Worker {
         p: &Value,
     ) -> Result<Value, String> {
         let (room, agent) = match (optional_text(p, "agent")?, optional_text(p, "room")?) {
-            (Some(agent), None) => {
-                let id = self.control_agent(agent, None)?;
+            (Some(_), _) => {
+                let id = self.control_agent(p)?;
                 (
                     self.state.agent(id).ok_or("Unknown agent")?.room_id,
                     Some(id),
@@ -181,8 +171,12 @@ impl Worker {
             (None, Some(room)) => (self.control_room(room)?, None),
             _ => return Err("Name one agent, or a room with --room".into()),
         };
+        let conversation = optional_text(p, "room")?
+            .map(|selector| self.control_room(selector))
+            .transpose()?
+            .unwrap_or(room);
         let author = optional_text(p, "as")?
-            .map(|selector| self.control_author(room, selector))
+            .map(|selector| self.control_author(conversation, selector))
             .transpose()?;
         let targets: Vec<AgentId> = match agent {
             Some(id) if author == Some(id) => {
@@ -213,7 +207,9 @@ impl Worker {
             rows.push(self.interrupt_agent(&mut state, id, room, &interrupter, now)?);
         }
         self.save(state)?;
-        Ok(json!({"room_id": room, "agents": rows}))
+        Ok(
+            json!({"room_id": room, "conversation_room_id": conversation, "author_id": author, "agents": rows}),
+        )
     }
 
     /// One agent's part of an interrupt, as its result row: the stop key for

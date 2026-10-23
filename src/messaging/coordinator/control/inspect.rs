@@ -1,7 +1,6 @@
 //! Inspect development commands on the single coordinator.
 use super::{
-    mpsc, optional_text, optional_u32, required, schema, AgentId, BusEvent, Method, ResponseResult,
-    Worker,
+    mpsc, optional_text, optional_u32, schema, AgentId, BusEvent, Method, ResponseResult, Worker,
 };
 use serde_json::{json, Value};
 
@@ -74,7 +73,7 @@ impl Worker {
                 Ok(json!({"stage":"queued"}))
             }
             "agent.read" => self.control_read(
-                self.control_agent(required(p, "agent")?, None)?,
+                self.control_agent(p)?,
                 optional_text(p, "source")?,
                 optional_u32(p, "lines")?,
             ),

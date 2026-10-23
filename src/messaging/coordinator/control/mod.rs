@@ -4,6 +4,7 @@ mod dialogs;
 mod inspect;
 mod messages;
 mod rooms;
+mod selectors;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod ui_hits;
 
@@ -237,7 +238,8 @@ impl Worker {
             | "settings.feishu_notifications"
             | "bus.quit"
             | "agent.read" => self.execute_inspect(method, p, events),
-            "agent.details"
+            "agent.list"
+            | "agent.details"
             | "agent.rename"
             | "agent.delete"
             | "agent.setup-confirm"
@@ -351,6 +353,7 @@ const fn spec(
 /// TUI driver's `ui hits` / `ui screen`) are registered in this table too.
 pub(crate) const METHODS: &[MethodSpec] = &[
     spec("state", "state", &[], false, Tier::Agent),
+    spec("agent.list", "agent list", &["room"], false, Tier::Agent),
     spec("settings", "settings", &[], false, Tier::Agent),
     spec(
         "settings.feishu_notifications",
@@ -401,32 +404,38 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "agent.read",
         "agent read",
-        &["agent", "source", "lines"],
+        &["agent", "source", "lines", "room", "as"],
         false,
         Tier::Agent,
     ),
     spec(
         "agent.dialog.observe",
         "agent dialog",
-        &["agent"],
+        &["agent", "room", "as"],
         false,
         Tier::Agent,
     ),
     spec(
         "agent.dialog.choose",
         "agent choose",
-        &["agent", "option", "fingerprint"],
+        &["agent", "option", "fingerprint", "room", "as"],
         true,
         Tier::Agent,
     ),
     spec(
         "agent.dialog.answer",
         "agent answer",
-        &["agent", "text", "skip", "fingerprint"],
+        &["agent", "text", "skip", "fingerprint", "room", "as"],
         true,
         Tier::Agent,
     ),
-    spec("agent.clear", "agent clear", &["agent"], true, Tier::Agent),
+    spec(
+        "agent.clear",
+        "agent clear",
+        &["agent", "room", "as"],
+        true,
+        Tier::Agent,
+    ),
     spec(
         "agent.interrupt",
         "agent interrupt",
@@ -437,21 +446,21 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "agent.rename",
         "agent rename",
-        &["agent", "name"],
+        &["agent", "name", "room", "as"],
         true,
         Tier::Agent,
     ),
     spec(
         "agent.setup-confirm",
         "agent setup-confirm",
-        &["agent", "confirm"],
+        &["agent", "confirm", "room", "as"],
         true,
         Tier::Agent,
     ),
     spec(
         "agent.delete",
         "agent delete",
-        &["agent", "confirm"],
+        &["agent", "confirm", "room", "as"],
         true,
         Tier::Agent,
     ),
@@ -493,11 +502,17 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         true,
         Tier::Dev,
     ),
-    spec("agent.focus", "agent focus", &["agent"], true, Tier::Dev),
+    spec(
+        "agent.focus",
+        "agent focus",
+        &["agent", "room", "as"],
+        true,
+        Tier::Dev,
+    ),
     spec(
         "agent.details",
         "agent details",
-        &["agent", "on"],
+        &["agent", "on", "room", "as"],
         true,
         Tier::Dev,
     ),
