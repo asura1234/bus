@@ -331,7 +331,18 @@ impl Worker {
         &mut self,
         call: crate::messaging::control::server::ControlCall,
         events: &mpsc::Sender<BusEvent>,
+        snapshots: &Mutex<Arc<BusSnapshot>>,
     ) {
+        if let Some(queued) = call.queued_for() {
+            perf::CONTROL_QUEUE.record_op(queued, perf::control_method_label(&call.request.method));
+            tracing::debug!(
+                event = "bus.control.command.dequeued",
+                control_request_id = %call.request.id.chars().take(128).collect::<String>(),
+                method = perf::control_method_label(&call.request.method),
+                queue_ms = queued.as_millis() as u64,
+                "Control command reached the coordinator"
+            );
+        }
         if call
             .deadline
             .is_some_and(|deadline| std::time::Instant::now() >= deadline)
@@ -352,6 +363,13 @@ impl Worker {
             started.elapsed(),
             perf::control_method_label(&call.request.method),
         );
+        // Publish even a failed mutation's durable pending state before its
+        // reply. The following tick can block on native IO or callbacks.
+        if control_dispatch::is_mutation(&call.request.method) {
+            if let Ok(mut shared) = snapshots.lock() {
+                *shared = self.timed_snapshot();
+            }
+        }
         // A disconnected client does not cancel or replay a committed action.
         let _ = call.reply.try_send(response);
     }
@@ -393,7 +411,7 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
-                    self.serve_control(call, &events);
+                    self.serve_control(call, &events, &snapshots);
                 }
                 Ok((id, command)) => {
                     let submitting =
@@ -479,9 +497,13 @@ impl Worker {
         can_deliver: impl FnMut() -> bool,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        perf::COORDINATOR_LOOP.relabel("tick.disk_space");
         self.refresh_disk_space_at(std::time::Instant::now())?;
+        perf::COORDINATOR_LOOP.relabel("tick.github");
         self.refresh_github()?;
+        perf::COORDINATOR_LOOP.relabel("tick.expire");
         self.expire_queued_now()?;
+        perf::COORDINATOR_LOOP.relabel("tick.poll");
         let Some(infos) = self.poll().inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",
@@ -493,16 +515,22 @@ impl Worker {
             return Ok(());
         };
         // Every callback this tick applies is persisted by one write.
+        perf::COORDINATOR_LOOP.relabel("tick.callbacks");
         self.begin_batch();
         let consumed = self
             .consume_all_callbacks()
             .and_then(|()| self.archive_when_due());
+        perf::COORDINATOR_LOOP.relabel("tick.save_callbacks");
         let finished = self.finish_batch();
         consumed.and(finished)?;
+        perf::COORDINATOR_LOOP.relabel("tick.cleanup_startups");
         self.cleanup_failed_startups(&infos, events, io::now_ms())?;
+        perf::COORDINATOR_LOOP.relabel("tick.settle");
         self.settle_requests()?;
         self.expire_unconfirmed_submissions(io::now_ms())?;
+        perf::COORDINATOR_LOOP.relabel("tick.notices");
         self.refresh_setting_notices()?;
+        perf::COORDINATOR_LOOP.relabel("tick.submit");
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",

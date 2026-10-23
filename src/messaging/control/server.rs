@@ -21,7 +21,7 @@ use std::{
         Arc,
     },
     thread::{self, JoinHandle},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 // Independent finite pools: status followers cannot consume interactive slots.
@@ -102,6 +102,7 @@ struct Endpoint {
     listener: Option<ipc::LocalListener>,
     clients: Vec<Client>,
     poll_budget: Option<Arc<()>>,
+    last_overload_log: Option<Instant>,
 }
 
 fn serve(
@@ -117,6 +118,7 @@ fn serve(
             listener: Some(listener),
             clients: Vec::new(),
             poll_budget: (index == 1).then(|| Arc::new(())),
+            last_overload_log: None,
         })
         .collect::<Vec<_>>();
     let mut next_id = CONTROL_COMMAND_BIT;
@@ -145,6 +147,7 @@ impl Endpoint {
             }
             match listener.accept() {
                 Ok(stream) if self.clients.len() >= MAX_CLIENTS => {
+                    self.log_overload();
                     // One extra bounded slot delivers overload errors without
                     // leaving unread Windows pipe writes in a linger pool.
                     if self.clients.len() == MAX_CLIENTS {
@@ -182,12 +185,49 @@ impl Endpoint {
         self.clients
             .retain_mut(|client| client.poll(commands, next_id, self.poll_budget.as_ref()));
     }
+
+    /// One bounded snapshot per second during overload, including readers
+    /// that hold their slot after the reply. No request parameters are logged.
+    fn log_overload(&mut self) {
+        let now = Instant::now();
+        if self
+            .last_overload_log
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1))
+        {
+            return;
+        }
+        self.last_overload_log = Some(now);
+        let mut phases = [0usize; 4];
+        let holders: Vec<_> = self.clients.iter().map(|client| {
+            let (index, phase) = match client.state {
+                State::Reading(_) => (0, "reading"),
+                State::Waiting { .. } => (1, "waiting"),
+                State::Writing { .. } => (2, "writing"),
+                State::Closing => (3, "closing"),
+            };
+            phases[index] += 1;
+            let (id, method) = client.request.as_ref().map_or(("", "unread"), |(id, method)| (id.as_str(), *method));
+            serde_json::json!({"request_id":id,"method":method,"phase":phase,"age_ms":now.duration_since(client.accepted).as_millis() as u64})
+        }).collect();
+        tracing::warn!(
+            event = "bus.control.admission.rejected",
+            endpoint = if self.poll_budget.is_some() { "status" } else { "interactive" },
+            active = self.clients.len(), limit = MAX_CLIENTS,
+            reading = phases[0], waiting = phases[1], writing = phases[2], closing = phases[3],
+            queued_polls = self.poll_budget.as_ref().map_or(0, |budget| Arc::strong_count(budget).saturating_sub(1)),
+            holders = ?holders,
+            "Control connection limit reached"
+        );
+    }
 }
 
 struct Client {
     stream: ControlledStream,
     state: State,
     deadline: Instant,
+    accepted: Instant,
+    /// Retained through writing/closing so slow reply readers are attributable.
+    request: Option<(String, &'static str)>,
 }
 
 enum State {
@@ -212,6 +252,8 @@ impl Client {
             stream: ControlledStream(stream),
             state: State::Reading(Frame::default()),
             deadline: Instant::now() + IO_TIMEOUT,
+            accepted: Instant::now(),
+            request: None,
         }
     }
 
@@ -252,6 +294,13 @@ impl Client {
                     ..
                 } => {
                     crate::messaging::perf::CONTROL_REQUEST.record_op(started.elapsed(), method);
+                    tracing::warn!(
+                        event = "bus.control.request.timeout",
+                        control_request_id = %id.chars().take(128).collect::<String>(), method,
+                        endpoint = if poll_budget.is_some() { "status" } else { "interactive" },
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "Coordinator deadline elapsed; the operation may still complete"
+                    );
                     self.respond(Response::failure(
                         id,
                         "coordinator_timeout",
@@ -374,6 +423,7 @@ impl Client {
         }
         let id = request.id.clone();
         let method = crate::messaging::perf::control_method_label(&request.method);
+        self.request = Some((id.chars().take(128).collect(), method));
         let (reply, receiver) = mpsc::sync_channel(1);
         let command_id = *next_id;
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;

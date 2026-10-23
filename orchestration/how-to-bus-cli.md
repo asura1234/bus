@@ -1230,6 +1230,13 @@ another pane, or its session would not stop), Bus still deletes the agent and
 its messages, leaves the terminal open, and lists it under
 `terminals_left_open` in the result. Close it yourself if it is no longer needed.
 
+A successful delete response means the agent was removed durably and that
+removal was published to the UI snapshot. If terminal close cannot be confirmed
+or persistence fails, the command returns an error; inspect `state` for
+`deletion_pending` and `actionable_error` before retrying. A control timeout
+does not cancel deletion: it may still finish. Reuse the same `--request-id`
+to retrieve its retained outcome rather than assume it failed.
+
 ## Upgrading to the always-on control socket
 
 Every session now answers control commands. A Bus that is still running from an

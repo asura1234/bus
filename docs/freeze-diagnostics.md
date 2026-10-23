@@ -30,6 +30,12 @@ The recorder adds these bounded diagnostics:
 - `coordinator.store.serialize`, `.write`, `.fsync`, `.rename`, `.dir_sync`
   timers and `.bytes`: durable state-save phases, without weakening file or
   directory synchronization.
+- `coordinator.control.queue`: time from control dispatch to coordinator
+  dequeue, separate from `coordinator.control` execution time. Debug logs
+  correlate `bus.control.command.dequeued` with the request ID and queue time;
+  `bus.control.request.timeout` records deadline expiry without cancelling a
+  mutation. Coordinator stalls name the tick phase (`tick.poll`,
+  `tick.callbacks`, `tick.save_callbacks`, `tick.settle`, `tick.submit`, etc.).
 - `machine`: a separate worker samples macOS every 5 seconds. It reports the
   top 8 readable CPU processes using PID plus process start time, executable basename
   and CPU delta, alongside load, memory pressure level and cumulative page-in
@@ -46,3 +52,24 @@ configuration still applies. New record kinds and fields are additive JSONL.
 
 Dev-tools builds expose a Settings action, “Test freeze recovery notification
 (3.5 s)”, for scratch terminal tests. Release builds do not contain the action.
+
+Control overload emits `bus.control.admission.rejected` at most once per second
+per endpoint. Each record names `interactive` or `status`, its active/limit
+counts, reading/waiting/writing/closing counts, outstanding status queue permits,
+and at most 17 holders with request ID, known method, phase and connection age.
+IDs are capped at 128 characters; request parameters and unknown method text
+are excluded. Unread connections have no request identity. Standard CLI IDs
+contain a PID, which can be correlated with a contemporaneous process snapshot;
+they do not identify whether a caller used `send --async` or `wait` by themselves.
+These are sampled overload snapshots, not an exhaustive connection ledger.
+Status followers use `wait.sock` with separate admission from `control.sock`.
+The timeout and dequeued records also cap their logged IDs at 128 characters;
+request validation and response correlation still use the full ID.
+
+`bus.deletion.pending` follows the durable delete intent;
+`bus.deletion.completed` follows durable agent removal and reports how many
+terminals were left open. Both carry the agent ID and, for control deletions,
+inherit the control request span. A pending event without completion requires
+checking the error and saved state; it is not evidence of successful removal.
+Pending is emitted only on the transition into deletion_pending. Failed-startup
+cleanup retries the guarded close without repeating that unchanged intent.

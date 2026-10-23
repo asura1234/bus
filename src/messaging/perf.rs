@@ -16,6 +16,8 @@ pub(crate) static CONTROL_SKIPPED: crate::utils::perf::Counter =
     crate::utils::perf::Counter::new("coordinator.control.skipped");
 /// A control socket request from dispatch to reply, including its wait in the command queue.
 pub(crate) static CONTROL_REQUEST: Timer = Timer::new("control.request");
+/// Waiting to begin a control command, separate from executing it.
+pub(crate) static CONTROL_QUEUE: Timer = Timer::new("coordinator.control.queue");
 /// One call from the coordinator to the server API; slow ones are logged with the method.
 pub(crate) static SERVER_API: Timer = Timer::new("coordinator.server_api");
 /// Writing `state.json`, including its fsyncs.
