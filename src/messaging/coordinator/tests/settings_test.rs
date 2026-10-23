@@ -314,9 +314,9 @@ fn feishu_notifications_cannot_be_disabled_or_change_freeze_or_sound() {
     assert!(worker
         .command(BusCommand::SetFeishuNotifications(false), &events)
         .is_err());
-    for on in [true] {
+    {
         worker
-            .command(BusCommand::SetFeishuNotifications(on), &events)
+            .command(BusCommand::SetFeishuNotifications(true), &events)
             .unwrap();
         let echoes: Vec<_> = receiver
             .try_iter()
@@ -326,9 +326,9 @@ fn feishu_notifications_cannot_be_disabled_or_change_freeze_or_sound() {
             })
             .collect();
         assert_eq!(echoes.len(), 1);
-        assert_eq!(echoes[0].feishu_notifications, on);
+        assert!(echoes[0].feishu_notifications);
         let saved = settings::load(&root.join("settings.json")).unwrap();
-        assert_eq!(saved.feishu_notifications, on);
+        assert!(saved.feishu_notifications);
         assert!(saved.freeze_notifications);
         assert!(saved.master_sound.enabled);
     }

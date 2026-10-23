@@ -10,7 +10,7 @@ pub(crate) mod ui_hits;
 use super::{
     launch, mpsc, schema, AddAgent, AgentId, AgentRecipients, Author, BTreeMap, BusCommand,
     BusEvent, Draft, Duration, Method, ModelError, PathBuf, PromptId, Provider, Request, RequestId,
-    RequestPhase, ResponseResult, RoomId, RoomKind, RuntimeStatus, Worker, MASTER_AGENT_NEEDS_ROOM,
+    RequestPhase, ResponseResult, RoomId, RuntimeStatus, Worker, MASTER_AGENT_NEEDS_ROOM,
 };
 #[cfg(test)]
 use super::{

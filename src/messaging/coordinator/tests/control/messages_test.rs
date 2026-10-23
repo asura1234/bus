@@ -639,7 +639,7 @@ fn notify_you_any_sender_can_post_in_any_conversation_room() {
         for selector in ["you", "YOU", "human"] {
             let sent = call(
                 &mut worker,
-                "notify-you",
+                &format!("notify-you-{}-{selector}", room.0),
                 "message.send",
                 json!({
                     "room":room.0.to_string(), "to":[selector], "text":"Decide release timing", "as":sender.0.to_string()

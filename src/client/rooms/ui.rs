@@ -327,6 +327,8 @@ impl BusUi {
 
     pub(super) fn toggle_feishu_notifications(&mut self) {
         self.settings_field = self.feishu_field();
+        // Normalize a legacy saved off value when this informational row is activated.
+        self.queue(BusCommand::SetFeishuNotifications(true), Effect::None);
         self.show_toast("Developer notifications are always on");
     }
 
