@@ -186,10 +186,10 @@ fn observe_exit(
     // The saved exit of this launch stands once Bus closed the pane that
     // showed it, so later requests still learn the worker exited.
     let saved = info.is_none()
-        && agent
-            .exit_snapshot
-            .as_ref()
-            .is_some_and(|s| s.launch_id == agent.runtime_identity.launch_id);
+        && agent.exit_snapshot.as_ref().is_some_and(|s| {
+            s.launch_id == agent.runtime_identity.launch_id
+                && Some(s.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+        });
     let evidence = match (
         info,
         agent.runtime_identity.pane_id.as_ref(),

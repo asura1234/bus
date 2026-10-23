@@ -579,3 +579,142 @@ fn confirmed_room_resume_clears_the_previous_startup_error() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+struct RecoveredProviderExit {
+    closes: Arc<Mutex<Vec<schema::PaneCloseIfIdentityParams>>>,
+}
+impl Transport for RecoveredProviderExit {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::PaneGet(p) => Ok(ResponseResult::PaneInfo {
+                pane: serde_json::from_value(json!({
+                    "pane_id": p.pane_id, "terminal_id": "new-terminal",
+                    "workspace_id": "w1", "tab_id": "new", "focused": false,
+                    "agent_status": "unknown", "revision": 1,
+                    "agent_process_exited": true
+                }))
+                .unwrap(),
+            }),
+            Method::PaneRead(p) => Ok(ResponseResult::PaneRead {
+                read: serde_json::from_value(json!({
+                    "pane_id": p.pane_id, "workspace_id": "w1", "tab_id": "new",
+                    "source": p.source, "format": "text", "revision": 1,
+                    "text": "resumed provider: new fatal error", "truncated": false
+                }))
+                .unwrap(),
+            }),
+            Method::PaneCloseIfIdentity(p) => {
+                self.closes.lock().unwrap().push(p);
+                Ok(ResponseResult::Ok {})
+            }
+            other => panic!("unexpected recovered-exit operation {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn recovered_provider_records_and_closes_its_next_exit() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    struct RestorePath(Option<std::ffi::OsString>);
+    impl Drop for RestorePath {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _restore = RestorePath(std::env::var_os("PATH"));
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("codex"), "fixture executable").unwrap();
+    std::env::set_var("PATH", &bin);
+    let old_snapshot = dir.join("previous-exit.txt");
+    std::fs::write(&old_snapshot, "previous provider exit").unwrap();
+    let hooks = dir.join(".codex/hooks.json");
+    let document = merge_hooks(
+        json!({}),
+        HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(&hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    let mut state = worker.state.clone();
+    state
+        .record_exit_snapshot(
+            agent,
+            crate::messaging::model::ExitSnapshot {
+                launch_id: Some("launch".into()),
+                terminal_id: "terminal".into(),
+                path: Some(old_snapshot.clone()),
+                error: None,
+                tail: "previous provider exit".into(),
+                at_ms: 1,
+                terminal_closed: Some(true),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(RecoveryNative {
+        starts: Arc::default(),
+        refuse_close: false,
+    });
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "resuming");
+    let mut ready = native_info("new-pane", "codex", "session");
+    ready.terminal_id = "new-terminal".into();
+    ready.name = Some(format!("bus-r{}-a{}", room.0, agent.0));
+    ready.interactive_ready = true;
+    worker.transport = Box::new(FakeTransport {
+        replies: vec![Ok(ResponseResult::AgentList {
+            agents: vec![ready.clone()],
+        })]
+        .into(),
+        calls: Arc::default(),
+        state_path: dir.join("state.json"),
+    });
+    worker.poll().unwrap();
+    worker
+        .cleanup_failed_startups(&[ready], &std::sync::mpsc::channel().0, io::now_ms())
+        .unwrap();
+    assert!(worker.state.agent(agent).unwrap().startup.is_none());
+    let closes = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(RecoveredProviderExit {
+        closes: Arc::clone(&closes),
+    });
+    worker.poll().unwrap();
+    worker.close_exited_terminals().unwrap();
+    let snapshot = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .exit_snapshot
+        .clone()
+        .unwrap();
+    let closed = closes.lock().unwrap().clone();
+    assert_eq!(
+        std::fs::read_to_string(&old_snapshot).unwrap(),
+        "previous provider exit"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        (snapshot.terminal_id.as_str(), closed.len()),
+        ("new-terminal", 1),
+        "recovery must capture and close the replacement provider's own exit",
+    );
+    assert!(
+        snapshot.tail.contains("new fatal error"),
+        "the replacement exit must retain its own diagnostic screen"
+    );
+    assert_eq!(
+        closed.len(),
+        1,
+        "the replacement provider's exited terminal must be handled once"
+    );
+    assert_eq!(closed[0].expected_terminal_id, "new-terminal");
+}

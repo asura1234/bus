@@ -11,7 +11,7 @@ const TAIL_LINES: usize = 20;
 const TAIL_LINE_CHARS: usize = 160;
 const TAIL_CHARS: usize = 1_600;
 
-/// Save the exited provider's screen once per launch, before anything else
+/// Save the exited provider's screen once per launch and terminal, before anything else
 /// touches the pane. A worker's terminal is closed only after this record is
 /// durable (`Worker::close_exited_terminals`); a MASTER orchestrator's stays
 /// open for the developer. Startup failures report their own screen.
@@ -28,7 +28,7 @@ pub(super) fn save(
         || agent
             .exit_snapshot
             .as_ref()
-            .is_some_and(|saved| saved.launch_id == launch_id)
+            .is_some_and(|saved| saved.launch_id == launch_id && saved.terminal_id == terminal)
     {
         return Ok(());
     }
@@ -105,6 +105,8 @@ impl Worker {
                     && agent.exit_snapshot.as_ref().is_some_and(|snapshot| {
                         snapshot.close_pending()
                             && snapshot.launch_id == agent.runtime_identity.launch_id
+                            && Some(snapshot.terminal_id.as_str())
+                                == agent.runtime_identity.terminal_id.as_deref()
                     })
             })
             .cloned()
