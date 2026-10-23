@@ -40,31 +40,43 @@ impl Source for GitHub {
             format!("query={}", source::query(q)),
         ];
         let (success, output, stderr) = process::output("gh", &args).map_err(|reason| Failure {
-            reason,
+            reason: reason.into(),
             retry_at_ms: None,
         })?;
-        let (headers, body) = split_headers(&output);
-        let retry = retry_at(headers, q.now_ms);
-        if !success {
-            return Err(Failure {
-                reason: if stderr.contains("gh auth login") || stderr.contains("GH_TOKEN") {
-                    "GitHub watch requires gh authentication; run gh auth login"
-                } else {
-                    "GitHub request failed"
-                },
-                retry_at_ms: retry,
-            });
-        }
-        let value = serde_json::from_str(body).map_err(|_| Failure {
-            reason: "Invalid GitHub response",
-            retry_at_ms: retry,
-        })?;
-        source::parse(q, &value).map(|mut page| {
-            page.retry_at_ms = page.retry_at_ms.max(retry);
-            page
-        })
+        parse_response(q, success, &output, &stderr)
     }
 }
+
+fn parse_response(q: &Query, success: bool, output: &str, stderr: &str) -> Result<Page, Failure> {
+    let (headers, body) = split_headers(output);
+    let retry = retry_at(headers, q.now_ms);
+    if !success {
+        let summary = if stderr.contains("gh auth login") || stderr.contains("GH_TOKEN") {
+            "GitHub watch requires gh authentication; run gh auth login"
+        } else {
+            "GitHub request failed"
+        };
+        let status = headers.lines().next().unwrap_or_default();
+        let detail = if stderr.trim().is_empty() {
+            body
+        } else {
+            stderr
+        };
+        return Err(Failure {
+            reason: source::diagnostic(&[summary, ": ", status, " ", detail]),
+            retry_at_ms: retry,
+        });
+    }
+    let value = serde_json::from_str(body).map_err(|error| Failure {
+        reason: source::diagnostic(&["Invalid GitHub response: ", &error.to_string(), "; ", body]),
+        retry_at_ms: retry,
+    })?;
+    source::parse(q, &value).map(|mut page| {
+        page.retry_at_ms = page.retry_at_ms.max(retry);
+        page
+    })
+}
+
 fn split_headers(output: &str) -> (&str, &str) {
     if output.starts_with("HTTP/") {
         if let Some((headers, body)) = output
@@ -203,7 +215,7 @@ impl Runtime {
                         tracing::warn!(
                             event = "bus.github.unavailable",
                             repo,
-                            reason = failure.reason,
+                            reason = %failure.reason,
                             "GitHub watch will retry"
                         );
                     }

@@ -11,8 +11,24 @@ pub(crate) struct Query {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Failure {
-    pub(crate) reason: &'static str,
+    pub(crate) reason: String,
     pub(crate) retry_at_ms: Option<u64>,
+}
+
+/// Bound external diagnostics before they reach logs or durable room notices.
+/// Count Unicode characters, and keep one physical line even for CLI stderr.
+pub(super) fn diagnostic(parts: &[&str]) -> String {
+    let mut chars =
+        parts
+            .iter()
+            .flat_map(|part| part.chars())
+            .map(|c| if c.is_control() { ' ' } else { c });
+    let mut text: String = chars.by_ref().take(512).collect();
+    if chars.next().is_some() {
+        text.pop();
+        text.push('…');
+    }
+    text.trim().to_owned()
 }
 
 pub(super) fn query(q: &Query) -> String {
@@ -51,9 +67,9 @@ pub(super) fn query(q: &Query) -> String {
 
 pub(super) fn parse(q: &Query, body: &Value) -> Result<Page, Failure> {
     let retry = body.pointer("/data/rateLimit/resetAt").and_then(timestamp);
-    if body.get("errors").is_some() {
+    if let Some(errors) = body.get("errors") {
         return Err(Failure {
-            reason: "GitHub GraphQL request failed",
+            reason: diagnostic(&["GitHub GraphQL request failed: ", &errors.to_string()]),
             retry_at_ms: retry,
         });
     }
@@ -61,7 +77,7 @@ pub(super) fn parse(q: &Query, body: &Value) -> Result<Page, Failure> {
         .pointer("/data/repository")
         .filter(|v| v.is_object())
         .ok_or(Failure {
-            reason: "GitHub repository unavailable",
+            reason: "GitHub repository unavailable".into(),
             retry_at_ms: None,
         })?;
     let default_branch = repo
@@ -69,7 +85,7 @@ pub(super) fn parse(q: &Query, body: &Value) -> Result<Page, Failure> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or(Failure {
-            reason: "GitHub default branch unavailable",
+            reason: "GitHub default branch unavailable".into(),
             retry_at_ms: None,
         })?
         .into();
@@ -124,7 +140,7 @@ fn nodes<'a>(repo: &'a Value, connection: &str) -> Result<&'a Vec<Value>, Failur
         .and_then(|v| v.get("nodes"))
         .and_then(Value::as_array)
         .ok_or(Failure {
-            reason: "Incomplete GitHub response",
+            reason: "Incomplete GitHub response".into(),
             retry_at_ms: None,
         })
 }
@@ -136,11 +152,11 @@ fn cursor(repo: &Value, connection: &str) -> Result<Option<String>, Failure> {
             .as_str()
             .map(|s| Some(s.into()))
             .ok_or(Failure {
-                reason: "Missing GitHub page cursor",
+                reason: "Missing GitHub page cursor".into(),
                 retry_at_ms: None,
             }),
         None => Err(Failure {
-            reason: "Missing GitHub page information",
+            reason: "Missing GitHub page information".into(),
             retry_at_ms: None,
         }),
     }
@@ -149,7 +165,7 @@ fn pull_request(v: &Value) -> Result<PullRequest, Failure> {
     let string = |field: &str| v[field].as_str().unwrap_or("").to_owned();
     Ok(PullRequest {
         number: v["number"].as_u64().ok_or(Failure {
-            reason: "Invalid GitHub PR",
+            reason: "Invalid GitHub PR".into(),
             retry_at_ms: None,
         })?,
         branch: string("headRefName"),
