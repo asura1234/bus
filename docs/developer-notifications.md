@@ -21,7 +21,7 @@ existing settings. No desktop popup is added.
 
 Feishu bot DMs are always on. A legacy `feishu_waiting_notifications: false` is read as true,
 and `bus settings feishu-notifications --off` is rejected. The Settings row says **always on**;
-it cannot toggle this route. Freeze recovery notifications keep their separate toggle.
+it cannot toggle this route. Freeze diagnostics do not emit user notifications.
 The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
 Click **Recipient open_id** to edit it; **lark-cli path** overrides the executable,
 with an empty field using `lark-cli` from PATH. Bus stores no credentials.
