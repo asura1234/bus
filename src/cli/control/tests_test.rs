@@ -2459,6 +2459,41 @@ fn agent_interrupt_text_is_sent_as_a_new_message_after_the_stop() {
 }
 
 #[test]
+fn agent_interrupt_follow_up_uses_the_receipts_conversation_and_resolved_author() {
+    for author in [Some(99), None] {
+        let mut args = vec![
+            "agent",
+            "interrupt",
+            "a4",
+            "--room",
+            "conversation",
+            "--text",
+            "next task",
+        ];
+        if author.is_some() {
+            args.extend(["--as", "owner"]);
+        }
+        let (outcome, response, requests, _) = run_interrupt(
+            &args,
+            json!({"room_id":7,"conversation_room_id":8,"author_id":author,"agents":[{"agent_id":4,"name":"a4","outcome":"already_idle"}]}),
+            [],
+        );
+        assert!(outcome.is_ok(), "{response}");
+        let send = requests
+            .iter()
+            .find(|request| request.method == "message.send")
+            .unwrap();
+        assert_eq!(send.params["room"], "8");
+        assert_eq!(
+            send.params.get("as"),
+            author.map(|id| json!(id.to_string())).as_ref()
+        );
+        assert_eq!(response["result"]["conversation_room_id"], 8);
+        assert_eq!(response["result"]["author_id"], json!(author));
+    }
+}
+
+#[test]
 fn agent_interrupt_retries_failed_state_reads_before_delivering_text() {
     let mut failures = vec![Err("socket read timed out".into())];
     for code in ["server_busy", "coordinator_busy", "coordinator_timeout"] {

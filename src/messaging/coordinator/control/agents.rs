@@ -204,10 +204,12 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rows = Vec::new();
         for id in targets {
-            rows.push(self.interrupt_agent(&mut state, id, room, &interrupter, now)?);
+            rows.push(self.interrupt_agent(&mut state, id, conversation, &interrupter, now)?);
         }
         self.save(state)?;
-        Ok(json!({"room_id": room, "agents": rows}))
+        Ok(
+            json!({"room_id": room, "conversation_room_id": conversation, "author_id": author, "agents": rows}),
+        )
     }
 
     /// One agent's part of an interrupt, as its result row: the stop key for

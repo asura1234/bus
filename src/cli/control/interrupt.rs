@@ -27,6 +27,17 @@ pub(super) fn run(
     }
     let id = receipt.id.clone();
     let room = receipt.result["room_id"].clone();
+    let conversation = receipt
+        .result
+        .get("conversation_room_id")
+        .unwrap_or(&room)
+        .clone();
+    // Older servers omit resolved context; keep their original receipt contract.
+    let author = match receipt.result.get("author_id") {
+        Some(Value::Null) => None,
+        Some(id) => Some(json!(id.to_string())),
+        None => author,
+    };
     let mut rows = receipt.result["agents"]
         .as_array()
         .cloned()
@@ -44,6 +55,11 @@ pub(super) fn run(
     } else {
         json!({"room_id": room, "agents": rows})
     };
+    for field in ["conversation_room_id", "author_id"] {
+        if let Some(value) = receipt.result.get(field) {
+            result[field] = value.clone();
+        }
+    }
     // Agents that did stop get --text even when another one failed: their
     // turn and queue are closed already, so it is the only work they have.
     let recipients: Vec<String> = rows
@@ -62,7 +78,8 @@ pub(super) fn run(
     let Some(text) = text.filter(|_| !recipients.is_empty()) else {
         return finish(result);
     };
-    let mut params = json!({"room": room.to_string(), "to": recipients, "text": text, "files": []});
+    let mut params =
+        json!({"room": conversation.to_string(), "to": recipients, "text": text, "files": []});
     if let Some(author) = author {
         params["as"] = author;
     }

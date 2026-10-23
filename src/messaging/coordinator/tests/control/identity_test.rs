@@ -211,3 +211,58 @@ fn identity_unresolved_agent_selector_errors_name_the_failing_selector() {
         "AGENT failure must name the AGENT selector: {target_error:?}"
     );
 }
+
+#[test]
+fn identity_interrupt_receipt_and_notice_keep_the_conversation_and_resolved_author() {
+    let (mut w, home, target, dir) = fixture();
+    let conversation = w.state.create_room("conversation").unwrap();
+    w.state
+        .create_agent(home, "owner", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let author = w
+        .state
+        .create_agent(conversation, "owner", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    w.state
+        .observe_status(target, RuntimeStatus::Idle, 1)
+        .unwrap();
+    let request = w
+        .state
+        .submit_message_from(
+            home,
+            Draft {
+                text: "queued work".into(),
+                files: vec![],
+                recipient_ids: [target].into(),
+            },
+            Author::Developer,
+            2,
+        )
+        .unwrap()[0];
+    let response = call(
+        &mut w,
+        "interrupt-context",
+        "agent.interrupt",
+        json!({"agent":target.0.to_string(),"room":conversation.0.to_string(),"as":"owner"}),
+    );
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.result["conversation_room_id"], json!(conversation));
+    assert_eq!(response.result["author_id"], json!(author));
+    assert_eq!(
+        w.state
+            .room(conversation)
+            .unwrap()
+            .notices
+            .last()
+            .unwrap()
+            .author,
+        Author::Agent(author)
+    );
+    assert!(w.state.room(home).unwrap().notices.is_empty());
+    assert_eq!(
+        w.state.request(request).unwrap().failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
