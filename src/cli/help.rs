@@ -71,7 +71,7 @@ wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by an agent; --to all then skips it.
 Current agent names are unique across all rooms, including MASTER; add/rename reject duplicates.
 Every AGENT selector accepts a name or numeric ID. agent list prints name -> id -> room rows.
-Agent commands accept optional --room ROOM and --as AGENT for name resolution.
+Agent commands with an AGENT selector accept optional --room ROOM and --as AGENT for name resolution.
 Any agent can message any other agent across rooms. IDs resolve globally; names prefer
 the conversation --room, then its home room, then all rooms, with candidate IDs and rooms on ambiguity.
 Only when no live candidate matches, removed recipient IDs/names forward to a unique same-name

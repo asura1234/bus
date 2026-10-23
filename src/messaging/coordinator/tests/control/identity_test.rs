@@ -43,7 +43,9 @@ fn identity_scoped_agent_commands_use_conversation_then_home_then_global() {
         let error = error_message(&result);
         assert_ne!(error, "Unknown parameter", "{method}");
         assert!(
-            !error.contains("Ambiguous") && !error.contains("No matching"),
+            !error.contains("Ambiguous")
+                && !error.contains("No matching")
+                && !error.contains("No agent matches"),
             "{method}: {result:?}"
         );
         assert!(
@@ -178,4 +180,34 @@ fn identity_headers_use_names_and_disambiguate_only_shared_names() {
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn identity_unresolved_agent_selector_errors_name_the_failing_selector() {
+    let (mut w, _room, _agent, dir) = fixture();
+    let bad_author = call(
+        &mut w,
+        "bad-as",
+        "agent.dialog.observe",
+        json!({"agent":"codex1","as":"ghost-author"}),
+    );
+    let bad_target = call(
+        &mut w,
+        "bad-agent",
+        "agent.dialog.observe",
+        json!({"agent":"ghost-target","as":"codex1"}),
+    );
+    let author_error = error_message(&bad_author);
+    let target_error = error_message(&bad_target);
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        author_error.contains("ghost-author"),
+        "--as failure must name the --as selector: {author_error:?}"
+    );
+    assert!(author_error.starts_with("--as:"), "{author_error}");
+    assert!(
+        target_error.contains("ghost-target"),
+        "AGENT failure must name the AGENT selector: {target_error:?}"
+    );
 }

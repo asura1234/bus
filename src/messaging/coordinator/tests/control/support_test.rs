@@ -20,6 +20,8 @@ mod option_list_tests;
 mod orchestrator_recipient_tests;
 #[path = "rooms_test.rs"]
 mod rooms_tests;
+#[path = "selector_label_roundtrip_test.rs"]
+mod selector_label_roundtrip_tests;
 
 struct NoTransport;
 

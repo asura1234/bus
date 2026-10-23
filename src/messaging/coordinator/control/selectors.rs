@@ -12,12 +12,8 @@ impl Worker {
         selector: &str,
         recipient_alias: bool,
     ) -> Result<AgentId, String> {
-        if let Some(agent) = selector
-            .parse::<u64>()
-            .ok()
-            .and_then(|id| self.state.agent(AgentId(id)))
-        {
-            return Ok(agent.id);
+        if let Some(id) = self.exact_agent(selector) {
+            return Ok(id);
         }
         let mut candidates: Vec<_> = self.state.agents().filter(|a| a.name == selector).collect();
         if let Some(scope) = [room, sender_room]
@@ -42,7 +38,7 @@ impl Worker {
         }
         match candidates.as_slice() {
             [agent] => Ok(agent.id),
-            [] => Err("No matching room or agent".into()),
+            [] => Err(format!("No agent matches {selector:?}")),
             _ => Err(format!(
                 "Ambiguous agent name {selector:?}; use an ID: {}",
                 candidates
@@ -60,13 +56,29 @@ impl Worker {
         let room = optional_text(p, "room")?
             .map(|s| self.control_room(s))
             .transpose()?;
-        let author = optional_text(p, "as")?
-            .map(|s| self.resolve_agent(room, room, s, false))
-            .transpose()?;
+        let selector = required(p, "agent")?;
+        if let Some(id) = self.exact_agent(selector) {
+            return Ok(id);
+        }
+        let author = optional_text(p, "as")
+            .and_then(|value| {
+                value
+                    .map(|s| self.resolve_agent(room, room, s, false))
+                    .transpose()
+            })
+            .map_err(|error| format!("--as: {error}"))?;
         let home = author
             .and_then(|id| self.state.agent(id))
             .map(|a| a.room_id)
             .or(room);
-        self.resolve_agent(room, home, required(p, "agent")?, false)
+        self.resolve_agent(room, home, selector, false)
+    }
+
+    fn exact_agent(&self, selector: &str) -> Option<AgentId> {
+        selector
+            .parse::<u64>()
+            .ok()
+            .and_then(|id| self.state.agent(AgentId(id)))
+            .map(|agent| agent.id)
     }
 }

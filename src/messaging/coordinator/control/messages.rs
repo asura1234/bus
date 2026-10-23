@@ -205,7 +205,9 @@ impl Worker {
         room: RoomId,
         selector: &str,
     ) -> Result<AgentId, String> {
-        let id = self.resolve_agent(Some(room), Some(room), selector, false)?;
+        let id = self
+            .resolve_agent(Some(room), Some(room), selector, false)
+            .map_err(|error| format!("--as: {error}"))?;
         if self.state.agent(id).is_some_and(|a| a.deletion_pending) {
             return Err("Author agent is being deleted".into());
         }

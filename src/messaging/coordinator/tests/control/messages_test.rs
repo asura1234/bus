@@ -367,7 +367,7 @@ fn dev_send_as_records_agent_author_and_skips_it_for_all() {
             "as-missing",
             json!(["claude1"]),
             "missing",
-            "No matching room or agent",
+            "No agent matches \"missing\"",
         ),
     ] {
         let failed = call(
