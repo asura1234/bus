@@ -961,9 +961,33 @@
           ],
           "type": "object"
         },
+        "AgentDialogChoiceAction": {
+          "oneOf": [
+            {
+              "enum": [
+                "choose"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "focus",
+              "description": "Send only navigation arrows, never confirmation.",
+              "type": "string"
+            },
+            {
+              "const": "confirm",
+              "description": "Send Enter only if the requested option is already visibly selected.",
+              "type": "string"
+            }
+          ]
+        },
         "AgentDialogChooseParams": {
           "additionalProperties": false,
           "properties": {
+            "action": {
+              "$ref": "#/schemas/request/$defs/AgentDialogChoiceAction",
+              "description": "Automatic UI actions separate navigation from confirmation. Omission\npreserves ordinary choose behavior for existing callers."
+            },
             "expected_dialog_digest": {
               "type": "string"
             },
