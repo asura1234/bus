@@ -101,6 +101,41 @@ class CoverageInstrumentationTest(unittest.TestCase):
                     self.assertEqual(quality.coverage(), 0)
                 self.assertEqual(json.loads(reference.read_text())["rust"]["percent"], 90)
 
+    def test_first_report_uses_policy_reference_and_strict_twenty_point_boundary(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            target = root / "target"
+            target.mkdir()
+            name = f"{root.name}-unit-fixture.profraw"
+            (target / name).write_bytes(b"unit")
+            value = {
+                "head": "fixture", "unit": True, "integration": True,
+                "profile_target": str(target.resolve()), "unit_profraw": [name],
+            }
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({"rust_line_percent": 80}))
+            with (
+                patch.object(quality, "ROOT", root),
+                patch.object(quality, "OUTPUT", root),
+                patch.object(quality, "POLICY", policy),
+                patch.object(quality, "state", return_value=value),
+                patch.object(quality, "run", return_value=0),
+                patch.dict(os.environ, {"CARGO_LLVM_COV_TARGET_DIR": str(target)}),
+            ):
+                with patch.object(quality, "rust_lines", return_value=(60, 100)):
+                    self.assertEqual(quality.coverage(), 1)
+                measured = json.loads((root / "summary.json").read_text())["rust"]
+                self.assertEqual(measured["reference_percent"], 80)
+                self.assertNotIn("failure", measured)
+                self.assertFalse((root / "last-successful.json").exists())
+                with patch.object(quality, "rust_lines", return_value=(59, 100)):
+                    with self.assertRaisesRegex(ValueError, "dropped by 21.*policy minimum"):
+                        quality.coverage()
+                measured = json.loads((root / "summary.json").read_text())["rust"]
+                self.assertFalse(measured["pass"])
+                self.assertIn("more than 20 points", measured["failure"])
+                self.assertFalse((root / "last-successful.json").exists())
+
     @unittest.skipUnless(
         shutil.which("cargo") and shutil.which("cargo-llvm-cov"),
         "requires the Rust coverage tools",
