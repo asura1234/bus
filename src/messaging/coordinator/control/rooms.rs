@@ -98,16 +98,14 @@ impl Worker {
                 return Ok(id);
             }
         }
-        if selector.eq_ignore_ascii_case(crate::messaging::model::MASTER_ROOM_NAME) {
-            if let Some(room) = self.state.master_room() {
-                return Ok(room.id);
-            }
+        if selector.eq_ignore_ascii_case(crate::messaging::model::MASTER_ROOM_NAME)
+            || self.state.rooms().any(|r| r.name == selector)
+        {
+            return self.control_room(selector);
         }
         unique(
             self.state
-                .rooms()
-                .map(|r| (r.id, r.name.as_str()))
-                .chain(self.state.history_rooms())
+                .history_rooms()
                 .filter(|(_, name)| *name == selector)
                 .map(|(id, _)| id),
         )

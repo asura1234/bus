@@ -502,3 +502,25 @@ fn audit_deleted_room_history_is_readable_but_cannot_be_mutated() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn history_by_name_reads_the_live_room_after_a_same_name_room_was_deleted() {
+    let (mut worker, room, _agent, dir) = fixture();
+    worker.state.delete_room(room, 2).unwrap();
+    let live = worker.state.create_room("test").unwrap();
+    worker
+        .state
+        .post_bus_notice(live, None, "live room notice".into(), 3)
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let history = call(
+        &mut worker,
+        "history",
+        "room.history",
+        json!({"room":"test"}),
+    );
+    assert!(history.ok, "{history:?}");
+    assert_eq!(history.result["room_id"], live.0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
