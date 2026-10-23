@@ -345,7 +345,7 @@ fn room_blocker_from_a_failed_add_clears_once_room_resume_runs_with_no_held_agen
 }
 
 #[test]
-fn resumed_agent_after_binary_outage_reports_a_failed_startup() {
+fn resumed_agent_after_binary_outage_retains_failed_startup_in_state_without_chat() {
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "retained failed-resume task");
@@ -402,8 +402,8 @@ fn resumed_agent_after_binary_outage_reports_a_failed_startup() {
             .notices(room)
             .filter(|n| n.text.contains("Startup failed"))
             .count(),
-        1,
-        "a reported failed resume must not post duplicate notices"
+        0,
+        "startup failures retain structured state without retired operational chat"
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

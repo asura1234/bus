@@ -1,6 +1,9 @@
 //! Persisted DTOs, identities and payload representation.
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 macro_rules! id_type {
     ($name:ident) => {
