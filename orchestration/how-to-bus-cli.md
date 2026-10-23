@@ -105,21 +105,6 @@ bus agent setup-confirm "$agent_id" --confirm
 
 The `--confirm` flag is deliberately required for setup approval and deletion.
 
-## Watch a room's GitHub repositories
-
-Bus derives github.com repositories from agents' git remotes and watches owned
-PRs plus every merge into the default branch. Override the repository list or
-switch monitoring off for a work room:
-
-```sh
-bus room github ROOM --repos asura1234/bus,owner/repo
-bus room github ROOM --auto
-bus room github ROOM --off
-```
-
-`bus state` exposes `github_repos` and `github_discovered`. See the
-[GitHub watch guide](../docs/github-watch.md) for ownership, polling and notices.
-
 ## Use the MASTER room
 
 Every session has exactly one MASTER room. It holds orchestrator agents: each

@@ -139,39 +139,8 @@ fn room_digest_a_new_idle_worker_without_an_assignment_is_actionable() {
 }
 
 #[test]
-fn room_digest_generic_github_and_disk_notices_keep_their_own_delivery() {
-    use crate::messaging::github::{Page, PullRequest, Scope, Update};
-    let (mut s, room, orch, _) = fixture();
-    let update = Update::Repo {
-        repo: "o/r".into(),
-        scopes: vec![Scope {
-            room: room.0,
-            branches: ["fix/ours".into()].into(),
-        }],
-        result: Ok(Page {
-            default_branch: "main".into(),
-            merged: vec![PullRequest {
-                number: 1607,
-                branch: "fix/ours".into(),
-                base: "main".into(),
-                merged_at_ms: Some(1000),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }),
-        at_ms: 2000,
-    };
-    s.apply_github(&update, 2000).unwrap();
-    assert!(s
-        .requests()
-        .any(|r| r.agent_id == orch && r.prompt.text.contains("#1607")));
-    assert!(
-        facts(&s, orch).is_empty(),
-        "standalone notice is not a duplicate action fact"
-    );
-    let before = facts(&s, orch).len();
-    s.apply_github(&update, 3000).unwrap();
-    assert_eq!(facts(&s, orch).len(), before);
+fn room_digest_generic_disk_notices_keep_their_own_delivery() {
+    let (mut s, _, orch, _) = fixture();
     s.notify_disk_space(1, 20, 5, 4000).unwrap();
     assert!(s
         .requests()

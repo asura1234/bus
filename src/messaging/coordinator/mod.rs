@@ -5,7 +5,6 @@ mod delivery;
 mod disk_space;
 mod exit_snapshot;
 mod expiry;
-mod github;
 mod poll;
 #[cfg(test)]
 #[path = "tests/reply_delivery_support_test.rs"]
@@ -13,6 +12,9 @@ pub(crate) mod reply_delivery_support;
 #[cfg(test)]
 #[path = "tests/reply_routing_test.rs"]
 mod reply_routing_tests;
+#[cfg(test)]
+#[path = "tests/retired_github_watch_test.rs"]
+mod retired_github_watch_tests;
 #[cfg(test)]
 #[path = "tests/room_digest_test.rs"]
 mod room_digest_tests;

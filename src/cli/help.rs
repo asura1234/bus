@@ -20,7 +20,6 @@ pub const AGENT_HELP: &str =
   room create NAME
   room rename ROOM NAME
   room notes ROOM --text TEXT
-  room github ROOM (--auto | --off | --repos OWNER/REPO,OWNER/REPO)
   room delete ROOM --confirm
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]

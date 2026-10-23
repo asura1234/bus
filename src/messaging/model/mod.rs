@@ -6,7 +6,6 @@ mod compactions;
 mod developer_notifications;
 mod digests;
 mod disk_space;
-mod github;
 mod history;
 mod idle_agents;
 mod interrupts;

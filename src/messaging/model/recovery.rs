@@ -2,6 +2,29 @@
 use super::{BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus};
 
 impl BusState {
+    /// Close only never-submitted notices emitted by the retired GitHub watch.
+    /// Ordinary agent/developer messages and already typed work are retained.
+    pub(crate) fn retire_queued_github_notices(&mut self, now_ms: u64) -> Result<(), ModelError> {
+        let retired: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.phase == RequestPhase::Queued
+                    && request.prompt.author == super::Author::Bus
+                    && request.prompt.text.starts_with("GitHub: ")
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in retired {
+            self.recover_idle_request(id, now_ms)?;
+            self.requests
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownRequest(id))?
+                .failure_reason = Some("github_watch_retired".into());
+        }
+        Ok(())
+    }
+
     /// Capture all reasons before recovery clears the agent's last refusal.
     pub(crate) fn expire_stalled_queued_requests(
         &mut self,

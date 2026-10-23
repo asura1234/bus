@@ -247,18 +247,6 @@ fn parse_message(args: &ArgMatches) -> Result<(&'static str, Value), String> {
 
 fn room_cli() -> Command {
     subcommand("room")
-        .subcommand(
-            subcommand("github")
-                .arg(value_arg("room").required(true))
-                .arg(flag("auto"))
-                .arg(flag("off"))
-                .arg(value_arg("repos").long("repos"))
-                .group(
-                    clap::ArgGroup::new("github-mode")
-                        .args(["auto", "off", "repos"])
-                        .required(true),
-                ),
-        )
         .subcommand_required(true)
         .subcommand(subcommand("create").arg(value_arg("name").required(true)))
         .subcommand(subcommand("focus").arg(value_arg("room").required(true)))
@@ -430,22 +418,6 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
 
 fn parse_room(args: &ArgMatches) -> Result<(&'static str, Value), String> {
     Ok(match args.subcommand() {
-        Some(("github", args)) => {
-            let repos = if args.get_flag("auto") {
-                Value::Null
-            } else if args.get_flag("off") {
-                json!([])
-            } else {
-                json!(required(args, "repos")?
-                    .split(',')
-                    .map(str::trim)
-                    .collect::<Vec<_>>())
-            };
-            (
-                "room.github",
-                json!({"room":required(args, "room")?, "repos":repos}),
-            )
-        }
         Some(("focus", args)) => ("room.focus", json!({"room": required(args, "room")?})),
         Some(("seen", args)) => ("room.seen", json!({"room": required(args, "room")?})),
         Some(("sound", args)) => {

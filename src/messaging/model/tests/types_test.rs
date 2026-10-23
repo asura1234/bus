@@ -483,3 +483,42 @@ fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whi
     assert_eq!(state.next_queued_request(agent), Some(queued));
     assert_eq!(state.request(request).unwrap().prompt.text, "Look \t");
 }
+
+#[test]
+fn retired_github_watch_legacy_state_load_preserves_rooms_and_drops_watch_fields() {
+    let mut state = BusState::default();
+    let room = state.create_room("keep-room").unwrap();
+    state
+        .set_room_notes(room, "keep these notes".into())
+        .unwrap();
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["github_watch"] = serde_json::json!({"owner/repo":{"scan_started_ms":1}});
+    document["github_unavailable"] = serde_json::json!([[room.0, "owner/repo"]]);
+    let saved_room = &mut document["rooms"][room.0.to_string()];
+    saved_room["github_repos"] = serde_json::json!(["owner/repo"]);
+    saved_room["github_discovered"] = serde_json::json!(["owner/repo"]);
+    for field in [
+        "github_branches",
+        "github_member_branches",
+        "github_retired_branches",
+    ] {
+        saved_room[field] = serde_json::json!({"owner/repo":["feature"]});
+    }
+    let loaded: BusState = serde_json::from_value(document).unwrap();
+    assert_eq!(loaded.room(room).unwrap().notes, "keep these notes");
+    let written = serde_json::to_value(loaded).unwrap();
+    assert!(written.get("github_watch").is_none());
+    assert!(written.get("github_unavailable").is_none());
+    for field in [
+        "github_repos",
+        "github_discovered",
+        "github_branches",
+        "github_member_branches",
+        "github_retired_branches",
+    ] {
+        assert!(
+            written["rooms"][room.0.to_string()].get(field).is_none(),
+            "retired watch field {field} was written again"
+        );
+    }
+}
