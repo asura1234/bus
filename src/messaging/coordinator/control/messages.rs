@@ -218,31 +218,25 @@ impl Worker {
         {
             return Ok(agent.id);
         }
-        if recipient_alias && selector.parse::<u64>().is_ok() {
-            if let Some(id) = self.state.retired_recipient(selector, room, sender_room)? {
-                return Ok(id);
-            }
-        }
         let mut candidates: Vec<_> = self.state.agents().filter(|a| a.name == selector).collect();
         if let Some(scope) = [room, sender_room]
             .into_iter()
             .find(|scope| candidates.iter().any(|a| a.room_id == *scope))
         {
             candidates.retain(|a| a.room_id == scope);
-        } else if recipient_alias {
-            if let Some(id) = self.state.retired_recipient(selector, room, sender_room)? {
-                return Ok(id);
-            }
-            if selector.eq_ignore_ascii_case("orchestrator") {
-                return self
-                    .state
-                    .orchestrator_of(sender_room)
-                    .map(|a| a.id)
-                    .ok_or_else(|| "This room has no bound orchestrator".into());
-            }
+        } else if recipient_alias && selector.eq_ignore_ascii_case("orchestrator") {
+            return self
+                .state
+                .orchestrator_of(sender_room)
+                .map(|a| a.id)
+                .ok_or_else(|| "This room has no bound orchestrator".into());
         }
         match candidates.as_slice() {
             [agent] => Ok(agent.id),
+            [] if recipient_alias => self
+                .state
+                .retired_recipient(selector, room, sender_room)?
+                .ok_or_else(|| "No matching room or agent".into()),
             [] => Err("No matching room or agent".into()),
             _ => Err(format!(
                 "Ambiguous agent name {selector:?}; use an ID: {}",

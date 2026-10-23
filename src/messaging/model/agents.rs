@@ -187,6 +187,7 @@ impl BusState {
             id,
             super::staffing::RetiredAgent {
                 room: removed.room_id,
+                orchestrates: removed.orchestrates,
                 name: removed.name,
             },
         );

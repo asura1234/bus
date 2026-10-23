@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct RetiredAgent {
     pub(super) room: RoomId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) orchestrates: Option<RoomId>,
     pub(super) name: String,
 }
 
@@ -33,7 +35,13 @@ impl BusState {
         let old: Vec<_> = self
             .retired_agents
             .iter()
-            .filter(|(_, old)| old.room == member.room_id && old.name == member.name)
+            .filter(|(_, old)| {
+                old.room == member.room_id
+                    && old.name == member.name
+                    && old
+                        .orchestrates
+                        .is_none_or(|room| member.orchestrates == Some(room))
+            })
             .map(|(id, _)| id.0.to_string())
             .collect();
         let text = format!(
@@ -66,34 +74,40 @@ impl BusState {
             self.retired_agents.get(&AgentId(id))
         } else {
             [conversation, home].into_iter().find_map(|room| {
-                self.retired_agents
-                    .values()
-                    .rev()
-                    .find(|a| a.room == room && a.name == selector)
+                self.retired_agents.values().rev().find(|a| {
+                    (a.room == room || a.orchestrates == Some(room)) && a.name == selector
+                })
             })
         };
         let Some(retired) = retired else {
             return Ok(None);
         };
-        let mut replacements = self
-            .agents()
-            .filter(|a| a.room_id == retired.room && a.name == retired.name && !a.deletion_pending);
+        let mut replacements = self.agents().filter(|a| {
+            a.room_id == retired.room
+                && a.name == retired.name
+                && !a.deletion_pending
+                && retired
+                    .orchestrates
+                    .is_none_or(|room| a.orchestrates == Some(room))
+        });
         let first = replacements.next();
         if replacements.next().is_some() {
             return Err(format!(
                 "Ambiguous replacement for {:?} in room {}; use a current ID",
-                retired.name, retired.room.0
+                retired.name,
+                retired.orchestrates.unwrap_or(retired.room).0
             ));
         }
         let recipient = first.map(|a| a.id).or_else(|| {
-            self.orchestrator_of(retired.room)
+            self.orchestrator_of(retired.orchestrates.unwrap_or(retired.room))
                 .filter(|a| !a.deletion_pending)
                 .map(|a| a.id)
         });
         recipient.map(Some).ok_or_else(|| {
             format!(
                 "Removed agent {:?} has no replacement or orchestrator in room {}",
-                retired.name, retired.room.0
+                retired.name,
+                retired.orchestrates.unwrap_or(retired.room).0
             )
         })
     }

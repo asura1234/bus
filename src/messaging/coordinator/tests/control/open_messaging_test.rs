@@ -476,17 +476,120 @@ fn staffing_tombstones_forward_names_but_never_authors_or_admin_commands() {
     assert!(!admin.ok);
     w.state.delete_agent(replacement, 200).unwrap();
     let other = w.state.create_room("remote-only").unwrap();
-    add(&mut w, other, &dir, "departed");
+    let live = add(&mut w, other, &dir, "departed");
+    assert!(
+        send(
+            &mut w,
+            room,
+            author,
+            "departed",
+            "message to the unique live agent"
+        )
+        .ok
+    );
+    assert_eq!(w.state.requests().last().unwrap().agent_id, live);
+    // A retired numeric ID still retains its original-room affinity.
     assert!(
         !send(
             &mut w,
             room,
             author,
-            "departed",
-            "must not leak across rooms"
+            &old.0.to_string(),
+            "no original-room destination"
         )
         .ok
     );
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn removed_worker_id_from_its_room_orchestrator_is_not_forwarded_back_to_the_sender() {
+    let (mut w, room, _author, dir) = fixture();
+    let worker = add(&mut w, room, &dir, "finished-worker");
+    let master = w.state.master_room().unwrap().id;
+    let orch = add(&mut w, master, &dir, "room-orch");
+    w.state.bind_orchestrator(orch, room).unwrap();
+    w.state.delete_agent(worker, 100).unwrap();
+    let before = w.state.requests().count();
+    let response = send(
+        &mut w,
+        room,
+        orch,
+        &worker.0.to_string(),
+        "late merge notice",
+    );
+    let self_addressed =
+        w.state.requests().count() > before && w.state.requests().last().unwrap().agent_id == orch;
+    assert!(
+        !self_addressed,
+        "orchestrator's message to its removed worker was queued to the orchestrator itself: {response:?}"
+    );
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn removed_local_name_does_not_divert_a_unique_live_agent_elsewhere_to_the_orchestrator() {
+    let (mut w, room, author, dir) = fixture();
+    let old = add(&mut w, room, &dir, "reviewer");
+    w.state.delete_agent(old, 100).unwrap();
+    let master = w.state.master_room().unwrap().id;
+    let orch = add(&mut w, master, &dir, "room-orch");
+    w.state.bind_orchestrator(orch, room).unwrap();
+    let other = w.state.create_room("other").unwrap();
+    let live = add(&mut w, other, &dir, "reviewer");
+    let response = send(
+        &mut w,
+        room,
+        author,
+        "reviewer",
+        "question for the live reviewer",
+    );
+    assert!(response.ok, "{response:?}");
+    assert_eq!(
+        w.state.requests().last().unwrap().agent_id,
+        live,
+        "a globally unique live name was diverted to the room orchestrator by a tombstone"
+    );
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn removed_orchestrator_id_forwards_to_the_rooms_current_orchestrator() {
+    let (mut w, room, author, dir) = fixture();
+    let master = w.state.master_room().unwrap().id;
+    let first = add(&mut w, master, &dir, "orch-a");
+    w.state.bind_orchestrator(first, room).unwrap();
+    w.state.delete_agent(first, 100).unwrap();
+    let second = add(&mut w, master, &dir, "orch-b");
+    w.state.bind_orchestrator(second, room).unwrap();
+    let response = send(&mut w, room, author, &first.0.to_string(), "merge notice");
+    assert!(response.ok, "{response:?}");
+    assert_eq!(w.state.requests().last().unwrap().agent_id, second);
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn retired_orchestrator_id_keeps_its_work_room_when_its_name_is_reused_elsewhere() {
+    let (mut w, room, author, dir) = fixture();
+    let master = w.state.master_room().unwrap().id;
+    let old = add(&mut w, master, &dir, "orch");
+    w.state.bind_orchestrator(old, room).unwrap();
+    w.state.delete_agent(old, 100).unwrap();
+    let other = w.state.create_room("another-work-room").unwrap();
+    let unrelated = add(&mut w, master, &dir, "orch");
+    w.state.bind_orchestrator(unrelated, other).unwrap();
+    let current = add(&mut w, master, &dir, "current-orch");
+    w.state.bind_orchestrator(current, room).unwrap();
+    w.state = serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
+    let response = send(&mut w, room, author, &old.0.to_string(), "late room notice");
+    assert!(response.ok, "{response:?}");
+    assert_eq!(w.state.requests().last().unwrap().agent_id, current);
+    assert!(send(&mut w, room, author, "orch", "message to the live name").ok);
+    assert_eq!(w.state.requests().last().unwrap().agent_id, unrelated);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

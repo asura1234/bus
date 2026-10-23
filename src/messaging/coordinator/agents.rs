@@ -42,7 +42,7 @@ impl Worker {
         }
         let left_open: Vec<_> = self.stop_agent_terminal(id)?.into_iter().collect();
         let mut state = self.state.clone();
-        state.post_bus_notice(removed.room_id, None, format!("Roster change: removed {} (agent {}). Messages to its old ID or name will forward to a same-name replacement in room {}, or that room's orchestrator.", removed.name, id.0, removed.room_id.0), super::io::now_ms()).map_err(|e| e.to_string())?;
+        state.post_bus_notice(removed.room_id, None, format!("Roster change: removed {} (agent {}). If no live recipient matches, its old ID or name forwards to a same-name replacement or current orchestrator in room {}.", removed.name, id.0, removed.orchestrates.unwrap_or(removed.room_id).0), super::io::now_ms()).map_err(|e| e.to_string())?;
         for terminal in &left_open {
             state
                 .post_deletion_notice(

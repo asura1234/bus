@@ -72,6 +72,9 @@ wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by an agent; --to all then skips it.
 Any agent can message any other agent across rooms. IDs resolve globally; names prefer
 the conversation --room, then its home room, then all rooms, with candidate IDs and rooms on ambiguity.
+Only when no live candidate matches, removed recipient IDs/names forward to a unique same-name
+replacement in the original room, or that room's current orchestrator. Removed orchestrators
+forward through the work room they orchestrated. Authors and administrative commands never forward.
 The case-insensitive --to orchestrator alias names the sender's home-room orchestrator.
 All still covers conversation-room members only. Cross-room messages wait for a new turn.
 Bus automatically adds 'name (agent id, room R):' to agent-authored payloads.
