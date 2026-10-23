@@ -872,3 +872,52 @@ fn queue_pressure_flapping_at_the_threshold_keeps_one_unacknowledged_fact() {
         pressure.len()
     );
 }
+
+#[test]
+fn queue_pressure_acknowledged_during_recovery_starts_a_new_episode_on_the_next_crossing() {
+    let (mut s, room, orch, worker) = fixture();
+    let enqueue = |s: &mut BusState, at| {
+        s.submit_message_with(
+            room,
+            Draft {
+                text: "hub work".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Developer,
+            at,
+            true,
+        )
+        .unwrap();
+    };
+    let pressure = |s: &BusState| {
+        facts(s, orch)
+            .into_iter()
+            .filter(|f| f["text"].as_str().unwrap().starts_with("Queue pressure"))
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..4 {
+        enqueue(&mut s, 100);
+    }
+    let first = pressure(&s)[0]["id"].as_u64().unwrap();
+    s.observe_status(orch, RuntimeStatus::Idle, 200).unwrap();
+    assert!(s.queue_room_digest(orch, 200).unwrap());
+    // Dispatch one: the queue is back at 3 while the fact is still unacknowledged.
+    let request = s.queued_requests(worker)[0];
+    s.begin_submission(request, "launch", 0).unwrap();
+    // The orchestrator handles the bottleneck and acknowledges the fact.
+    s.ack_digest_fact(first, 300).unwrap();
+    // The very next event is a new message that lifts the queue to 4 again.
+    enqueue(&mut s, 400);
+    let next = pressure(&s);
+    assert_eq!(
+        next.len(),
+        1,
+        "a crossing after acknowledgment must surface a new pressure fact: {next:?}"
+    );
+    assert_ne!(next[0]["id"].as_u64().unwrap(), first);
+    assert!(
+        s.room_digest_armed(orch),
+        "the new episode must wake its owner"
+    );
+}

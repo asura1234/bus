@@ -429,7 +429,7 @@ fn blocked_shell_without_the_expected_provider_still_expires() {
 }
 
 #[test]
-fn a_stuck_failed_startup_deletion_does_not_relog_pending_every_tick() {
+fn a_stuck_failed_startup_deletion_does_not_relog_pending_on_each_retry() {
     let (mut worker, agent, _room, dir) = pending(Provider::Codex);
     worker.transport = Box::new(FailedLaunchNative {
         state_path: dir.join("state.json"),
