@@ -3290,4 +3290,5 @@ fn room_resume_is_a_control_command() {
     assert_eq!(parsed.method, "agent.resume");
     assert_eq!(parsed.params, json!({"room":"8259"}));
     assert!(command(&["agent", "resume"]).is_err());
+    assert!(command(&["agent", "resume", "--room", "8259", "--as", "owner"]).is_err());
 }

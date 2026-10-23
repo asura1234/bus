@@ -350,7 +350,7 @@ fn agent_cli() -> Command {
         )
         .subcommand(subcommand("list").arg(value_arg("room").long("room")));
     command.mut_subcommands(|sub| {
-        if matches!(sub.get_name(), "add" | "list" | "interrupt") {
+        if matches!(sub.get_name(), "add" | "list" | "interrupt" | "resume") {
             sub
         } else {
             sub.arg(value_arg("room").long("room"))
@@ -420,7 +420,7 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
         _ => return Err("unknown agent command".into()),
     };
     if let Some((sub, args)) = args.subcommand() {
-        if sub != "add" && sub != "list" {
+        if !matches!(sub, "add" | "list" | "resume") {
             for field in ["room", "as"] {
                 if let Some(value) = args.get_one::<String>(field) {
                     params[field] = json!(value);
