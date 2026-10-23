@@ -1611,7 +1611,10 @@ async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() 
     let next = f.send(orch, f.work, "new room", true, None);
     // The production grace allows a separate submit hook to arrive. Once it
     // expires, a genuinely folded member shares the captured old answer.
-    tokio::time::sleep(std::time::Duration::from_millis(3_100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(
+        crate::messaging::model::STEERING_SETTLE_MS + 100,
+    ))
+    .await;
     f.tick();
     assert_eq!(
         f.typed(orch).last().unwrap(),
