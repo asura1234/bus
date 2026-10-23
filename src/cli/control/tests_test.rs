@@ -3204,7 +3204,7 @@ fn worker_human_fallback_cli_preserves_explicit_room_and_author() {
 fn identity_every_agent_cli_entry_accepts_names_ids_and_scoping() {
     for selector in ["reviewer", "21546"] {
         for tail in [
-            vec!["read"],
+            vec!["read", "--source", "visible"],
             vec!["dialog"],
             vec!["choose", "--option", "1", "--fingerprint", "fp"],
             vec!["answer", "--text", "yes", "--fingerprint", "fp"],
