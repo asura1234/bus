@@ -102,6 +102,7 @@ impl BusState {
 
         let broadcast = broadcast || draft.recipient_ids.len() > 1;
         self.ack_digest_action(
+            room,
             &author,
             &draft.recipient_ids,
             &draft.text,

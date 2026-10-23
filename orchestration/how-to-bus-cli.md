@@ -318,17 +318,21 @@ facts, each fact ID, age and next owner/action. It cannot steer into a running
 MASTER or notification turn. Bursts coalesce until that idle boundary, and an
 older pending message takes priority.
 
-A direct, single-recipient message from the fact's orchestrator acknowledges it
-when the recipient is its worker, or the body references its PR number, worker
-name or head SHA prefix (at least seven hex characters). For example, briefing a
-separate verifier with `verify #1602 at 870112624` handles that READY fact.
-PR and unlabelled hex keys come only from the milestone's tag line, not PRs or
-commits mentioned later in its body. A standalone `head <sha>` or `SHA: <sha>`
-metadata line also supplies a head. Unlabelled hex keys must contain a letter;
-numeric-only prefixes match only an explicit head/SHA field. A direct message
-mentioning the fact's own PR still counts even in a status aside such as
-`#1602 is waiting for a verifier`: this is an accepted trade-off of reference
-acknowledgment, which does not infer whether the message assigns verification.
+A direct, single-recipient message from the fact's orchestrator, sent in the
+fact's conversation room, acknowledges it when the recipient is its worker.
+A brief to a separate verifier handles a READY fact only by its exact PR number
+(`#1602`, not `#16020` or `#1602suffix`) or a head SHA prefix of at least seven
+hex characters, for example `verify #1602 at 870112624`. A worker name alone does
+not identify which PR is ready. Other fact kinds retain exact worker-name matches.
+PR and unlabelled hex keys come from the milestone's tag line; standalone `PR`,
+`head` or `SHA` metadata fields also supply identity. Backticks and single
+Markdown links around those field values are accepted. Dependency PRs/commits in
+ordinary prose do not identify the milestone. Unlabelled source hex keys must
+contain a letter; an explicit head/SHA field can be numeric. A brief's numeric
+prefix counts when it matches a known head. The same room/reference rules apply
+when retained accepted actions are replayed after restart. Reference
+acknowledgement does not infer whether a message assigns verification: an exact
+`#1602 is waiting for a verifier` aside still counts.
 `--to all` and multi-recipient messages never acknowledge facts, including an
 All broadcast that expands to just one worker. A tagged completion has no
 separate idle-with-no-next-task fact for that same completion.

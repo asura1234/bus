@@ -135,10 +135,10 @@ fn room_digest_tombstones_expire_after_seven_days_without_rearming() {
 }
 
 #[test]
-fn room_digest_reference_ack_accepts_pr_name_and_head_but_not_partial_matches() {
+fn room_digest_reference_ack_requires_pr_or_head_and_rejects_partial_matches() {
     for (reference, handled) in [
         ("verify #1602", true),
-        ("verify impl", true),
+        ("verify impl", false),
         ("verify at 8701126", true),
         ("verify #16020", false),
         ("verify implementation", false),

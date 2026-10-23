@@ -149,6 +149,7 @@ impl BusState {
                 {
                     Some((
                         author,
+                        r.room_id,
                         r.agent_id,
                         r.prompt.submitted_at_ms,
                         r.prompt.text.clone(),
@@ -165,13 +166,14 @@ impl BusState {
                 .filter_map(|(key, fact)| {
                     actions
                         .iter()
-                        .filter(|(author, agent, at, text)| {
+                        .filter(|(author, room, agent, at, text)| {
                             author == orchestrator
+                                && *room == fact.room
                                 && *at > fact.at_ms
                                 && (Some(*agent) == fact.agent
                                     || super::actions::references_fact(text, fact))
                         })
-                        .map(|(_, _, at, _)| *at)
+                        .map(|(_, _, _, at, _)| *at)
                         .min()
                         .map(|at| (key.clone(), at))
                 })

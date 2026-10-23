@@ -4,6 +4,9 @@ use serde_json::{json, Value};
 #[path = "room_digest_round_one_test.rs"]
 mod round_one;
 
+#[path = "room_digest_peer_ack_test.rs"]
+mod peer_ack;
+
 fn fixture() -> (BusState, RoomId, AgentId, AgentId) {
     let mut s = BusState::new();
     let master = s.ensure_master_room();

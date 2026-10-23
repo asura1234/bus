@@ -1,9 +1,10 @@
-use super::{AgentId, AgentRecipients, Author, BusState, RoomFact, TOMBSTONE_RETENTION_MS};
+use super::{AgentId, AgentRecipients, Author, BusState, RoomFact, RoomId, TOMBSTONE_RETENTION_MS};
 
 impl BusState {
     /// Accepted, direct dispatches count as action; broadcasts and transport reads do not.
     pub(in crate::messaging::model) fn ack_digest_action(
         &mut self,
+        room: RoomId,
         author: &Author,
         recipients: &AgentRecipients,
         text: &str,
@@ -23,7 +24,9 @@ impl BusState {
             .facts
             .iter()
             .filter(|(_, fact)| {
-                fact.agent.is_some_and(|id| recipients.contains(&id)) || references_fact(text, fact)
+                fact.room == room
+                    && (fact.agent.is_some_and(|id| recipients.contains(&id))
+                        || references_fact(text, fact))
             })
             .map(|(key, _)| key.clone())
             .collect();
@@ -85,57 +88,120 @@ impl BusState {
 
 pub(super) fn references_fact(text: &str, fact: &RoomFact) -> bool {
     let text = text.to_lowercase();
-    if !fact.agent_name.is_empty() && contains_name(&text, &fact.agent_name.to_lowercase()) {
+    let body = fact.text.to_lowercase();
+    let tag = super::status_tag(&body);
+    // A worker name alone cannot identify which PR is ready. Keep existing
+    // name-based handling for other kinds of facts, outside readiness handoffs.
+    if !matches!(tag, Some("READY FOR VERIFY" | "REVIEW READY"))
+        && !fact.agent_name.is_empty()
+        && contains_name(&text, &fact.agent_name.to_lowercase())
+    {
         return true;
     }
-    let body = fact.text.to_lowercase();
-    if super::status_tag(&body).is_none() {
+    if tag.is_none() {
         return false;
     }
+    let prs = pr_references(&text);
+    let heads = heads(&text, true);
     let first = body.lines().next().unwrap_or_default();
-    let prs = |s: &str| -> Vec<String> {
-        s.split('#')
-            .skip(1)
-            .filter_map(|part| {
-                let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
-                (!digits.is_empty()).then_some(digits)
-            })
-            .collect()
-    };
-    let references = prs(&text);
-    if prs(first).iter().any(|number| references.contains(number)) {
+    pr_references(first)
+        .iter()
+        .any(|number| prs.contains(number))
+        || first_line_head_matches(first, &heads)
+        || body.lines().skip(1).any(|line| {
+            let Some((label, value)) = identity_field(line) else {
+                return false;
+            };
+            match label {
+                "pr" => value.strip_prefix('#').is_some_and(|number| {
+                    !number.is_empty()
+                        && number.chars().all(|c| c.is_ascii_digit())
+                        && prs.contains(&number)
+                }),
+                "head" | "sha" => {
+                    self_contained_head(value).is_some_and(|head| matching_head(head, &heads))
+                }
+                _ => false,
+            }
+        })
+}
+
+fn pr_references(text: &str) -> Vec<&str> {
+    text.split('#')
+        .skip(1)
+        .filter_map(|part| {
+            let end = part
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(part.len());
+            let (digits, rest) = part.split_at(end);
+            (!digits.is_empty()
+                && !rest
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_'))
+            .then_some(digits)
+        })
+        .collect()
+}
+
+fn first_line_head_matches(line: &str, references: &[&str]) -> bool {
+    if heads(line, false)
+        .iter()
+        .any(|head| matching_head(head, references))
+    {
         return true;
     }
-    let matches = |head: &str, explicit: bool| {
-        heads(&text, explicit)
-            .iter()
-            .any(|prefix| head.starts_with(prefix) || prefix.starts_with(head))
-    };
-    heads(first, false).iter().any(|head| matches(head, false))
-        || body.lines().enumerate().any(|(index, line)| {
-            // Outside the tag line, the entire value must be a standalone head/SHA field.
-            if index != 0 {
-                let Some((label, value)) = line
-                    .split_once(':')
-                    .or_else(|| line.trim().split_once(char::is_whitespace))
-                else {
-                    return false;
-                };
-                let value = value.trim();
-                return matches!(label.trim(), "head" | "sha")
-                    && heads(value, true)
-                        .iter()
-                        .any(|head| *head == value && matches(head, true));
-            }
-            let words: Vec<_> = line
-                .split(|c: char| !c.is_ascii_alphanumeric())
-                .filter(|word| !word.is_empty())
-                .collect();
-            words.windows(2).any(|pair| {
-                matches!(pair[0], "head" | "sha")
-                    && heads(pair[1], true).iter().any(|head| matches(head, true))
-            })
+    let words: Vec<_> = line
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|word| !word.is_empty())
+        .collect();
+    words.windows(2).any(|pair| {
+        matches!(pair[0], "head" | "sha")
+            && self_contained_head(pair[1]).is_some_and(|head| matching_head(head, references))
+    })
+}
+
+fn matching_head(head: &str, references: &[&str]) -> bool {
+    references
+        .iter()
+        .any(|prefix| head.starts_with(prefix) || prefix.starts_with(head))
+}
+
+fn self_contained_head(value: &str) -> Option<&str> {
+    heads(value, true).into_iter().find(|head| *head == value)
+}
+
+fn identity_field(line: &str) -> Option<(&str, &str)> {
+    let line = line.trim();
+    let line = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .unwrap_or(line);
+    let separator = line.find(|c: char| c == ':' || c.is_whitespace())?;
+    let (label, value) = line.split_at(separator);
+    let value = value.trim_start();
+    let value = value.strip_prefix(':').unwrap_or(value).trim_start();
+    let label = label.trim();
+    let label = label
+        .strip_prefix("**")
+        .and_then(|s| s.strip_suffix("**"))
+        .unwrap_or(label);
+    Some((label, identity_value(value.trim())))
+}
+
+fn identity_value(value: &str) -> &str {
+    let value = value
+        .strip_prefix('`')
+        .and_then(|s| s.strip_suffix('`'))
+        .unwrap_or(value);
+    value
+        .strip_prefix('[')
+        .and_then(|s| s.split_once("]("))
+        .and_then(|(label, target)| target.strip_suffix(')').map(|target| (label, target)))
+        .filter(|(_, target)| {
+            !target.is_empty() && !target.contains(')') && !target.chars().any(char::is_whitespace)
         })
+        .map_or(value, |(label, _)| label)
 }
 
 fn contains_name(text: &str, name: &str) -> bool {
@@ -147,7 +213,7 @@ fn contains_name(text: &str, name: &str) -> bool {
 }
 
 fn heads(s: &str, explicit: bool) -> Vec<&str> {
-    s.split(|c: char| !c.is_alphanumeric())
+    s.split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|word| {
             (7..=40).contains(&word.len())
                 && word.chars().all(|c| c.is_ascii_hexdigit())
