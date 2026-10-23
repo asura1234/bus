@@ -176,7 +176,7 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
                 .submit_message_from(
                     room,
                     Draft {
-                        text: text.into(),
+                        text,
                         files: vec![],
                         recipient_ids: [peer].into(),
                     },
