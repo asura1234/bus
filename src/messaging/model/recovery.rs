@@ -48,8 +48,8 @@ impl BusState {
         Ok(!retired.is_empty())
     }
 
-    /// Retire only queued rules-refresh inputs from older versions.
-    pub(crate) fn retire_queued_upgrade_onboarding(
+    /// Retire only never-submitted operational inputs from older versions.
+    pub(crate) fn retire_queued_operational_notices(
         &mut self,
         now_ms: u64,
     ) -> Result<(), ModelError> {
@@ -57,21 +57,28 @@ impl BusState {
             .requests
             .values()
             .filter(|request| {
-                request.phase == RequestPhase::Queued
-                    && request.prompt.author == super::Author::Bus
-                    && request
-                        .prompt
-                        .text
-                        .starts_with("Bus messaging rules updated.")
+                request.phase == RequestPhase::Queued && request.prompt.author == super::Author::Bus
             })
-            .map(|request| request.id)
+            .filter_map(|request| {
+                let text = request.prompt.text.as_str();
+                let reason = if text.starts_with("Bus messaging rules updated.") {
+                    "messaging_onboarding_retired"
+                } else if (text.starts_with("BLOCKED ") && text.contains(". Startup failed:"))
+                    || text.starts_with("Deleted agent \"")
+                {
+                    "operational_notice_retired"
+                } else {
+                    return None;
+                };
+                Some((request.id, reason))
+            })
             .collect();
-        for id in retired {
+        for (id, reason) in retired {
             self.recover_idle_request(id, now_ms)?;
             self.requests
                 .get_mut(&id)
                 .ok_or(ModelError::UnknownRequest(id))?
-                .failure_reason = Some("messaging_onboarding_retired".into());
+                .failure_reason = Some(reason.into());
         }
         Ok(())
     }

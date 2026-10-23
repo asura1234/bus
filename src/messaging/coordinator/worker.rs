@@ -98,7 +98,7 @@ impl Worker {
             .retire_queued_room_digests(io::now_ms())
             .map_err(|e| e.to_string())?;
         state
-            .retire_queued_upgrade_onboarding(io::now_ms())
+            .retire_queued_operational_notices(io::now_ms())
             .map_err(|e| e.to_string())?;
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
