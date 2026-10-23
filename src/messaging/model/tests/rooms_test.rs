@@ -287,7 +287,7 @@ fn room_notes_drafts_and_names_are_room_local_and_ids_survive_renames() {
 }
 
 #[test]
-fn deleting_the_visible_room_drops_its_orchestrators_master_requests_and_shows_master() {
+fn deleting_the_visible_room_closes_its_orchestrators_master_requests_and_shows_master() {
     let mut state = BusState::new();
     let master = state.ensure_master_room();
     let pr = state.create_room("pr-123").unwrap();
@@ -300,12 +300,15 @@ fn deleting_the_visible_room_drops_its_orchestrators_master_requests_and_shows_m
     state.delete_room(pr, 0).unwrap();
 
     assert_eq!(state.visible_room(), Some(master));
-    assert!(state.request(queued).is_none());
+    assert_eq!(
+        state.request(queued).unwrap().failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
     assert!(!state.queues.contains_key(&orchestrator));
     assert!(state.orchestrator_of(pr).is_none());
     assert!(state
         .requests()
-        .all(|request| request.agent_id != orchestrator));
+        .all(|request| request.agent_id != orchestrator || request.settled()));
 }
 
 #[test]

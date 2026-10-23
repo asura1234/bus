@@ -12,7 +12,15 @@ fn delete_agent_stops_terminal_before_removing_persisted_work() {
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
     assert!(worker.state.agent(agent).is_none());
-    assert!(worker.state.request(request).is_none());
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_deleted")
+    );
     assert!(worker
         .state
         .room(room)
@@ -28,7 +36,14 @@ fn delete_agent_stops_terminal_before_removing_persisted_work() {
         .unwrap()
         .unwrap();
     assert!(recovered.agent(agent).is_none());
-    assert!(recovered.request(request).is_none());
+    assert_eq!(
+        recovered
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_deleted")
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -93,7 +108,15 @@ fn delete_room_partial_close_preserves_retryable_state_and_other_rooms() {
     assert!(recovered.state.room(room).is_none());
     assert!(recovered.state.agent(agent).is_none());
     assert!(recovered.state.agent(second).is_none());
-    assert!(recovered.state.request(request).is_none());
+    assert_eq!(
+        recovered
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_deleted")
+    );
     assert!(recovered.state.agent(other_agent).is_some());
     assert!(recovered.state.room(other_room).is_some());
     assert_eq!(

@@ -20,9 +20,8 @@ impl ReplyRoute {
 }
 
 impl BusState {
-    /// Capture responsibility before archive can discard an old recovered
-    /// callback. Only retained in-memory replies qualify; expired JSONL lines
-    /// without this marker must not become new work during the next load.
+    /// Capture responsibility before retiring routing metadata. Permanent audit
+    /// records below the recovery floor must not become new work on restart.
     pub(super) fn retain_unrouted_worker_replies(&mut self) -> bool {
         let pending: BTreeSet<_> = self
             .requests()
@@ -54,6 +53,7 @@ impl BusState {
             && request.pending_final.is_some()
             && self.reply_orchestrator(request).is_some()
             && self.reply_routes.get(&reply_key(request)) != Some(&ReplyRoute::Seen)
+            && (self.routing_source(request) || self.reply_routes.contains_key(&reply_key(request)))
     }
 
     pub(crate) fn is_reply_notification(&self, request: RequestId) -> bool {

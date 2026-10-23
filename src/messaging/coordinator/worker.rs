@@ -223,20 +223,20 @@ impl Worker {
         Ok(())
     }
 
-    /// Before serving anything, drops expired history from the file, so the
+    /// Before serving anything, deduplicates crash copies in history, so the
     /// rewrite never runs on the UI thread or between commands.
     fn compact_history(&self) {
         match self.store.compact_history() {
             Ok(true) => tracing::info!(
                 event = "bus.history.compacted",
                 entries = self.state.history().len(),
-                "Bus history rewritten without expired entries"
+                "Bus history rewritten without duplicate crash copies"
             ),
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 event = "bus.history.compact_failed",
                 %error,
-                "Bus history keeps expired entries until the next start"
+                "Bus history keeps duplicate crash copies until the next start"
             ),
         }
     }
@@ -254,8 +254,8 @@ impl Worker {
         self.archive_history(io::now_ms())
     }
 
-    /// Archives settled requests and old notices, and drops expired history
-    /// and spent ids, in one save when anything changed.
+    /// Archives settled requests and old notices, and prunes transient routing
+    /// metadata and spent ids, in one save when anything changed.
     pub(super) fn archive_history(&mut self, now_ms: u64) -> Result<(), String> {
         let mut state = self.state.clone();
         let mut changed = state.archive(now_ms);

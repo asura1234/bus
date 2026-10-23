@@ -2,6 +2,9 @@ use super::*;
 use crate::messaging::{control::Request as ControlRequest, native::TransportError};
 use serde_json::json;
 
+#[path = "history_upgrade_test.rs"]
+mod history_upgrade;
+
 #[path = "worker_events_test.rs"]
 mod worker_events;
 
@@ -844,8 +847,8 @@ fn reply_routing_old_recovered_reply_is_released_once_delivered() {
     f.reopen();
     f.worker.submit_ready().unwrap();
     assert!(
-        f.worker.state.request(source).is_none(),
-        "a delivered reply follows ordinary retention again"
+        f.worker.state.request(source).is_some(),
+        "a delivered reply stays in the permanent audit archive"
     );
     assert_eq!(f.calls.lock().unwrap().len(), 1, "no second wake");
 }
@@ -872,8 +875,8 @@ fn reply_routing_expired_seen_reply_does_not_reappear_from_append_only_history()
         io::now_ms() - 8 * 24 * 60 * 60_000,
     );
     f.worker.save(state).unwrap();
-    // First archive appends this source. Expiring it later removes the model
-    // entry, while disk compaction normally waits until the next Bus start.
+    // First archive appends this source. Expiring routing metadata later
+    // must not make that permanent source become new work on restart.
     f.worker.archive_history(io::now_ms()).unwrap();
     assert!(
         f.call(
@@ -883,14 +886,14 @@ fn reply_routing_expired_seen_reply_does_not_reappear_from_append_only_history()
         .ok
     );
     f.worker.archive_history(io::now_ms()).unwrap();
-    assert!(f.worker.state.request(source).is_none());
+    assert!(f.worker.state.request(source).is_some());
     f.reopen();
     f.worker.submit_ready().unwrap();
     assert!(
         f.calls.lock().unwrap().is_empty(),
         "expired seen history must never become a pending reply again"
     );
-    assert!(f.worker.state.request(source).is_none());
+    assert!(f.worker.state.request(source).is_some());
 }
 
 #[test]
@@ -919,7 +922,7 @@ fn reply_routing_pending_group_survives_after_its_developer_lead_expires() {
     }
     f.worker.save(state).unwrap();
     f.worker.archive_history(io::now_ms()).unwrap();
-    assert!(f.worker.state.request(lead).is_none());
+    assert!(f.worker.state.request(lead).is_some());
     assert!(f.worker.state.request(member).is_some());
     f.reopen();
     f.worker.submit_ready().unwrap();
@@ -1149,5 +1152,156 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
     assert!(
         missing.is_empty(),
         "an orchestrator's coalesced message still owes the changed late final: {missing:?}"
+    );
+}
+
+#[test]
+fn reply_routing_format_2_upgrade_keeps_old_history_without_waking_old_replies() {
+    let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "build during last month".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            io::now_ms() - 30 * 24 * 60 * 60_000,
+        )
+        .unwrap()[0];
+    state.finish_for_test(source, "Old verdict", io::now_ms() - 29 * 24 * 60 * 60_000);
+    f.worker.save(state).unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    // Rewrite state.json as a format 2 binary leaves it: no recovery floor, and
+    // the reply route of the long-expired source already pruned.
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    saved["version"] = json!(2);
+    saved["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("routing_before_ms");
+    saved["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("reply_routes");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let history = std::fs::read(f.dir.join("history.jsonl")).unwrap();
+    f.reopen();
+    assert!(!f.worker.store.compact_history().unwrap());
+    assert_eq!(std::fs::read(f.dir.join("history.jsonl")).unwrap(), history);
+    // Production tick order: archive_when_due runs before submit_ready_while.
+    f.worker.archive_history(io::now_ms()).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.calls.lock().unwrap().is_empty(),
+        "an upgraded month-old reply must not wake the orchestrator again"
+    );
+    assert_eq!(
+        f.worker
+            .state
+            .request(source)
+            .unwrap()
+            .pending_final
+            .as_ref()
+            .map(|r| r.text.as_str()),
+        Some("Old verdict")
+    );
+}
+
+#[test]
+fn reply_routing_format_2_upgrade_does_not_backfill_month_old_peer_outcomes() {
+    let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let peer = state
+        .create_agent(f.room, "peer", Provider::Codex, f.dir.clone(), None)
+        .unwrap();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "peer review last month".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(peer),
+            io::now_ms() - 30 * 24 * 60 * 60_000,
+        )
+        .unwrap()[0];
+    state.finish_for_test(
+        source,
+        "Old peer verdict",
+        io::now_ms() - 29 * 24 * 60 * 60_000,
+    );
+    f.worker.save(state).unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    // A format 2 binary pruned the outcome event of this expired source but
+    // left its line in history.jsonl until the next start.
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    saved["version"] = json!(2);
+    for key in ["routing_before_ms", "reply_routes", "worker_events"] {
+        saved["state"].as_object_mut().unwrap().remove(key);
+    }
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    f.reopen();
+    // Production tick order: expire_queued_now, poll, archive_when_due, submit.
+    f.worker.expire_queued_now().unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.calls.lock().unwrap().is_empty(),
+        "a month-old peer outcome must not wake the orchestrator after upgrade: {:?}",
+        f.calls.lock().unwrap()
+    );
+}
+
+#[test]
+fn reply_routing_persisted_floor_keeps_pruned_month_old_peer_outcomes_quiet() {
+    let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let peer = state
+        .create_agent(f.room, "peer", Provider::Codex, f.dir.clone(), None)
+        .unwrap();
+    let source = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "peer review last month".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(peer),
+            io::now_ms() - 30 * 24 * 60 * 60_000,
+        )
+        .unwrap()[0];
+    state.finish_for_test(
+        source,
+        "Old peer verdict",
+        io::now_ms() - 29 * 24 * 60 * 60_000,
+    );
+    f.worker.save(state).unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(saved["state"]["routing_before_ms"].as_u64().unwrap() > 0);
+    saved["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("worker_events");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    f.reopen();
+    f.worker.expire_queued_now().unwrap();
+    f.worker.archive_history(io::now_ms()).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.calls.lock().unwrap().is_empty(),
+        "{:?}",
+        f.calls.lock().unwrap()
     );
 }

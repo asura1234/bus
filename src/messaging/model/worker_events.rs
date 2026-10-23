@@ -202,6 +202,7 @@ impl BusState {
         let requests: Vec<_> = self
             .requests()
             .filter(|r| !retired_automation(r))
+            .filter(|r| self.event_backfill_source(r))
             .filter(|r| {
                 self.worker_orchestrator(r.agent_id).is_some()
                     && self
@@ -431,10 +432,18 @@ impl BusState {
     }
 
     pub(super) fn prune_worker_events(&mut self, now_ms: u64) -> bool {
-        let groups: std::collections::BTreeSet<_> = self.requests().map(reply_key).collect();
+        let groups: std::collections::BTreeSet<_> = self
+            .requests()
+            .filter(|r| self.routing_source(r))
+            .map(reply_key)
+            .collect();
         let messages: std::collections::BTreeSet<_> = self
             .rooms()
-            .flat_map(|room| self.notices(room.id).map(|p| p.id))
+            .flat_map(|room| {
+                self.notices(room.id)
+                    .filter(|p| p.submitted_at_ms >= self.routing_before_ms)
+                    .map(|p| p.id)
+            })
             .collect();
         let keep: std::collections::BTreeSet<_> = self
             .worker_events

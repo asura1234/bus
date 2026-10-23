@@ -247,7 +247,15 @@ pub(super) fn delete_failure_suspends_while_native_ownership_is_unproven(
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
     assert!(recovered.state.agent(agent).is_none());
-    assert!(recovered.state.request(request).is_none());
+    assert_eq!(
+        recovered
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_deleted")
+    );
     drop(recovered);
     std::fs::remove_dir_all(dir).unwrap();
 }

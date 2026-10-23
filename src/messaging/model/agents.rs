@@ -136,10 +136,7 @@ impl BusState {
         Ok(())
     }
 
-    /// Removes agent `id` with its queue and requests at `now_ms`. An
-    /// unsettled request of a message that other existing agents also
-    /// received, live or archived, stays, closed as `agent_deleted`, so the
-    /// message never reads complete without it.
+    /// Retire the runtime; keep every message, reply and historical identity.
     pub(crate) fn delete_agent(&mut self, id: AgentId, now_ms: u64) -> Result<(), ModelError> {
         let removed = self
             .agents
@@ -148,29 +145,21 @@ impl BusState {
         self.retired_agents.insert(
             id,
             super::staffing::RetiredAgent {
-                room: removed.room_id,
+                room: Some(removed.room_id),
                 orchestrates: removed.orchestrates,
                 name: removed.name,
+                provider: Some(removed.provider),
+                cwd: Some(removed.cwd),
             },
         );
         self.queues.remove(&id);
-        let shared: std::collections::BTreeSet<_> = self
-            .requests()
-            .filter(|request| self.agents.contains_key(&request.agent_id))
-            .map(|request| request.prompt.id)
-            .collect();
-        self.requests.retain(|_, request| {
-            request.agent_id != id || !request.settled() && shared.contains(&request.prompt.id)
-        });
         for request in self.requests.values_mut() {
-            if request.agent_id == id {
-                request.group = None;
+            if request.agent_id == id && !request.settled() {
                 request.phase = RequestPhase::Abandoned;
                 request.completed_at_ms = Some(now_ms);
                 request.failure_reason = Some(AGENT_DELETED.into());
             }
         }
-        self.drop_history_of_agent(id);
         for room in self.rooms.values_mut() {
             room.draft.recipient_ids.remove(&id);
             room.latest_replies.remove(&id);

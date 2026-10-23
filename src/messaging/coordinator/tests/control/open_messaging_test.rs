@@ -287,7 +287,10 @@ fn deletion_preserves_foreign_recipient(active: bool) {
     }
     w.state.delete_room(home, 10).unwrap();
     assert!(w.state.agent(peer).is_some());
-    assert!(w.state.request(removed).is_none());
+    assert_eq!(
+        w.state.request(removed).unwrap().failure_reason.as_deref(),
+        Some("room_deleted")
+    );
     assert!(w.state.request(kept).is_some());
     assert_eq!(w.state.agent(peer).unwrap().current_request, None);
     assert_eq!(w.state.queued_requests(peer), &[kept]);
@@ -608,6 +611,30 @@ fn retired_orchestrator_id_keeps_its_work_room_when_its_name_is_reused_elsewhere
     assert_eq!(w.state.requests().last().unwrap().agent_id, current);
     assert!(send(&mut w, room, author, "orch", "message to the live name").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, unrelated);
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn retired_numeric_id_keeps_replacement_ambiguity_after_storage_roundtrip() {
+    let (mut w, room, author, dir) = fixture();
+    let old = add(&mut w, room, &dir, "owner");
+    w.state.delete_agent(old, 100).unwrap();
+    add(&mut w, room, &dir, "owner");
+    let duplicate = add(&mut w, room, &dir, "legacy-owner");
+    // Fresh names are globally unique. Model an old persisted duplicate to
+    // retain the pre-upgrade ambiguity guard across raw storage round-trips.
+    let mut legacy = serde_json::to_value(&w.state).unwrap();
+    legacy["agents"][duplicate.0.to_string()]["name"] = serde_json::json!("owner");
+    w.state = serde_json::from_value(legacy).unwrap();
+    w.save(w.state.clone()).unwrap();
+    w.state = w.store.load().unwrap().unwrap();
+    let response = send(&mut w, room, author, &old.0.to_string(), "late notice");
+    assert!(!response.ok);
+    assert!(error_message(&response).contains("Ambiguous replacement"));
+    let response = send(&mut w, room, author, "owner", "live ambiguity");
+    assert!(!response.ok);
+    assert!(error_message(&response).contains("Ambiguous"));
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

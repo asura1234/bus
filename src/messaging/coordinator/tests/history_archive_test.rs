@@ -1,5 +1,5 @@
 //! Settled requests and old notices move to `history.jsonl`: durably before
-//! they leave `state.json`, once each after a crash, and kept for 7 days.
+//! they leave `state.json`, once each after a crash, and retained permanently.
 use super::*;
 use crate::messaging::model::{ARCHIVE_AFTER_MS, HISTORY_RETENTION_MS};
 use crate::messaging::storage::state_store::SaveStage;
@@ -179,7 +179,7 @@ fn age_in_history(dir: &Path, requests: &[RequestId], days: u64) {
 }
 
 #[test]
-fn history_older_than_a_week_or_of_deleted_rooms_is_dropped_on_open() {
+fn history_older_than_a_week_and_of_deleted_rooms_is_kept_on_open() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let old = settled(&mut worker, room, agent, 2);
     let recent = settled(&mut worker, room, agent, 2);
@@ -206,37 +206,42 @@ fn history_older_than_a_week_or_of_deleted_rooms_is_dropped_on_open() {
         .map(|request| request.id)
         .collect();
     assert!(
-        old.iter().all(|request| !kept.contains(request)),
+        old.iter().all(|request| kept.contains(request)),
         "older than 7 days"
     );
     assert!(
-        gone.iter().all(|request| !kept.contains(request)),
+        gone.iter().all(|request| kept.contains(request)),
         "deleted room"
     );
     assert!(
         recent.iter().all(|request| kept.contains(request)),
         "6 days old stays"
     );
-    assert!(reopened.store.compact_history().unwrap());
+    assert!(!reopened.store.compact_history().unwrap());
     let archived = archived_request_ids(&dir);
     assert_eq!(
         archived.len(),
-        recent.len(),
-        "the file keeps only what was loaded"
+        recent.len() + old.len() + gone.len(),
+        "the file keeps every committed request"
     );
     drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn a_crash_while_pruning_history_keeps_every_recent_entry() {
+fn a_crash_while_deduplicating_history_keeps_every_committed_entry() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let old = settled(&mut worker, room, agent, 2);
     let recent = settled(&mut worker, room, agent, 3);
     worker.archive_history(later()).unwrap();
     drop(worker);
     age_in_history(&dir, &old, HISTORY_RETENTION_MS / DAY_MS + 1);
-    let before = std::fs::read(dir.join("history.jsonl")).unwrap();
+    let history = dir.join("history.jsonl");
+    let bytes = std::fs::read(&history).unwrap();
+    let mut duplicated = bytes.clone();
+    duplicated.extend_from_slice(&bytes);
+    std::fs::write(&history, duplicated).unwrap();
+    let before = std::fs::read(&history).unwrap();
 
     let reopened = reopen_saved(&dir);
     reopened.store.fail_once_at(SaveStage::Replace);
@@ -245,7 +250,7 @@ fn a_crash_while_pruning_history_keeps_every_recent_entry() {
     assert_eq!(
         std::fs::read(dir.join("history.jsonl")).unwrap(),
         before,
-        "an interrupted prune leaves the old file whole"
+        "an interrupted deduplication leaves the old file whole"
     );
     let reloaded = JsonStore::new(dir.join("state.json"))
         .load()
@@ -337,5 +342,285 @@ fn callback_pruning_keeps_ids_that_can_still_match_an_open_request() {
         "replaying an old background event must not erase a captured final reply"
     );
     drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn audit_delete_keeps_active_and_archived_messages_after_restart() {
+    for archived in [false, true] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let finished = settled(&mut worker, room, agent, 1)[0];
+        let message = worker.state.request(finished).unwrap().prompt.id;
+        if archived {
+            worker.archive_history(later()).unwrap();
+        }
+        let pending = queue(&mut worker, room, agent, "still queued");
+        let (events, _) = mpsc::channel();
+        worker
+            .command(BusCommand::DeleteAgent(agent), &events)
+            .unwrap();
+        assert_eq!(worker.control_message(message).unwrap()["complete"], true);
+        assert_eq!(
+            worker
+                .state
+                .request(finished)
+                .unwrap()
+                .pending_final
+                .as_ref()
+                .map(|r| r.text.as_str()),
+            Some(reply(0).as_str())
+        );
+        assert_eq!(
+            worker
+                .state
+                .request(pending)
+                .unwrap()
+                .failure_reason
+                .as_deref(),
+            Some("agent_deleted")
+        );
+        drop(worker);
+        let mut reopened = reopen_saved(&dir);
+        assert_eq!(reopened.control_message(message).unwrap()["complete"], true);
+        assert!(reopened.state.request(pending).is_some());
+        drop(reopened);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn audit_deleted_room_keeps_requests_and_notices_after_restart() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = settled(&mut worker, room, agent, 1)[0];
+    let message = worker.state.request(request).unwrap().prompt.id;
+    let notice = worker
+        .state
+        .post_bus_notice(room, None, "audit notice".into(), io::now_ms())
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let (events, _) = mpsc::channel();
+    worker
+        .command(BusCommand::DeleteRoom(room), &events)
+        .unwrap();
+    assert!(worker.state.request(request).is_some());
+    assert!(worker.state.notices(room).any(|p| p.text == "audit notice"));
+    drop(worker);
+    let mut reopened = reopen_saved(&dir);
+    assert_eq!(reopened.control_message(message).unwrap()["complete"], true);
+    assert_eq!(
+        reopened.control_message(notice).unwrap()["prompt"]["text"],
+        "audit notice"
+    );
+    assert!(reopened
+        .state
+        .notices(room)
+        .any(|p| p.text == "audit notice"));
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn audit_archive_never_expires_settled_requests() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = settled(&mut worker, room, agent, 1)[0];
+    worker
+        .archive_history(later() + HISTORY_RETENTION_MS * 10)
+        .unwrap();
+    assert!(worker.state.request(request).is_some());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn audit_restart_compaction_keeps_old_and_orphaned_records() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = settled(&mut worker, room, agent, 1)[0];
+    worker.archive_history(later()).unwrap();
+    drop(worker);
+    age_in_history(&dir, &[request], 30);
+    let path = dir.join("state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    state["state"]["agents"]
+        .as_object_mut()
+        .unwrap()
+        .remove(&agent.0.to_string());
+    std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let reopened = reopen_saved(&dir);
+    assert!(reopened.state.request(request).is_some());
+    reopened.store.compact_history().unwrap();
+    assert!(archived_request_ids(&dir).contains(&request.0));
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn audit_clear_and_same_name_replacement_keep_each_identity_and_peer_message() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let old = settled(&mut worker, room, agent, 1)[0];
+    let name = worker.state.agent(agent).unwrap().name.clone();
+    let mut state = worker.state.clone();
+    state.begin_session_reset(agent).unwrap();
+    state
+        .rebind_reset_session(agent, "fresh-context".into())
+        .unwrap();
+    assert!(state.request(old).is_some());
+    let peer = state
+        .create_agent(room, "peer", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let sent = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "peer verdict".into(),
+                files: vec![],
+                recipient_ids: [peer].into(),
+            },
+            Author::Agent(agent),
+            io::now_ms(),
+        )
+        .unwrap()[0];
+    state.finish_for_test(sent, "peer reply", io::now_ms());
+    state.delete_agent(agent, io::now_ms()).unwrap();
+    let replacement = state
+        .create_agent(room, &name, Provider::Codex, dir.clone(), None)
+        .unwrap();
+    assert_ne!(agent, replacement);
+    worker.save(state).unwrap();
+    worker.archive_history(later()).unwrap();
+    drop(worker);
+    let mut reopened = reopen_saved(&dir);
+    assert_eq!(
+        reopened.state.agent_label(agent),
+        format!("{name} [deleted]")
+    );
+    assert_eq!(reopened.state.agent_label(replacement), name);
+    assert!(reopened.state.request(old).is_some());
+    assert_eq!(
+        reopened.state.request(sent).unwrap().prompt.author,
+        Author::Agent(agent)
+    );
+    let message = reopened.state.request(old).unwrap().prompt.id;
+    let status = reopened.control_message(message).unwrap();
+    assert_eq!(status["requests"][0]["deleted"], true);
+    assert_eq!(
+        status["requests"][0]["agent_name"],
+        format!("{name} [deleted]")
+    );
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn audit_recent_history_with_deleted_recipient_survives_compaction() {
+    audit_orphaned_history(false);
+}
+
+#[test]
+fn audit_recent_history_with_deleted_room_survives_compaction() {
+    audit_orphaned_history(true);
+}
+
+fn audit_orphaned_history(remove_room: bool) {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = settled(&mut worker, room, agent, 1)[0];
+    worker.archive_history(later()).unwrap();
+    drop(worker);
+    let path = dir.join("state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    if remove_room {
+        state["state"]["rooms"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&room.0.to_string());
+    } else {
+        state["state"]["agents"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&agent.0.to_string());
+    }
+    std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let reopened = reopen_saved(&dir);
+    assert!(reopened.state.request(request).is_some());
+    reopened.store.compact_history().unwrap();
+    assert!(archived_request_ids(&dir).contains(&request.0));
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn audit_delete_cannot_commit_without_a_durable_identity_tombstone() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "keep on failed delete");
+    worker.state.prepare_delete_agent(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let mut deleted = worker.state.clone();
+    deleted.delete_agent(agent, io::now_ms()).unwrap();
+    worker.store.fail_once_at(SaveStage::TempWrite);
+    assert!(worker.save(deleted).is_err());
+    drop(worker);
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert!(saved.agent(agent).unwrap().deletion_pending);
+    assert_eq!(saved.request(request).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(saved.agent_label(agent), "author");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[path = "retired_history_test.rs"]
+mod retired_history;
+
+#[test]
+fn audit_retired_digest_metadata_keeps_the_full_source_reply() {
+    use std::io::Write;
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = queue(&mut worker, room, agent, "legacy source task");
+    let text = format!("DONE {}", "audit payload ".repeat(150));
+    let mut state = worker.state.clone();
+    state.finish_for_test(request, &text, io::now_ms());
+    worker.save(state).unwrap();
+    let path = dir.join("state.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    document["version"] = serde_json::json!(2);
+    document["state"]["room_digests"] = serde_json::json!({agent.0.to_string(): {
+        "armed": false, "watermark": 99, "pending_watermark": null,
+        "facts": {"final:legacy": {"id":99, "source_id":request.0,
+            "room":room.0, "agent":agent.0, "agent_name":"author",
+            "at_ms":io::now_ms(), "text":"capped summary",
+            "next_action":"verify", "acknowledged_at_ms":io::now_ms()}}
+    }});
+    drop(worker);
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let store = JsonStore::new(path.clone());
+    let mut loaded = store.load().unwrap().unwrap();
+    assert!(serde_json::to_value(&loaded)
+        .unwrap()
+        .get("room_digests")
+        .is_none());
+    let future = io::now_ms() + 2 * HISTORY_RETENTION_MS;
+    loaded.archive(future);
+    loaded.delete_agent(agent, future + 1).unwrap();
+    store.save(&loaded).unwrap();
+    // Exercise an actual crash-copy compaction, not only its no-op path.
+    let history = std::fs::read(dir.join("history.jsonl")).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("history.jsonl"))
+        .unwrap()
+        .write_all(&history)
+        .unwrap();
+    let reopened = JsonStore::new(path.clone());
+    reopened.load().unwrap();
+    assert!(reopened.compact_history().unwrap());
+    let saved = JsonStore::new(path).load().unwrap().unwrap();
+    let source = saved.request(request).unwrap();
+    assert_eq!(source.prompt.text, "legacy source task");
+    assert_eq!(source.phase, RequestPhase::Completed);
+    assert_eq!(source.pending_final.as_ref().unwrap().text, text);
+    assert!(saved.agent(agent).is_none());
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -834,11 +834,19 @@ falls back to the default ding, which honors a custom `[ui.sound]` `path` or
 
 ## Inspect rooms, replies, and terminals
 
-Read the durable message history for a room:
+Read the permanent message history for a room (including deleted agents):
 
 ```sh
 bus history --room "$room_id"
 ```
+
+Messages and requests are retained after agent/room deletion and provider context
+clears, with no seven-day expiry. Deleted participants show `NAME [deleted]`.
+`history --room ID` also reads a deleted room. Live room names resolve first;
+deleted names are a fallback when unambiguous among deleted rooms.
+`message status ID` continues to return archived requests and posted notices.
+Storage and recovery limits are documented in the repository file
+`docs/message-history.md`.
 
 Each entry has the message (`prompt`: author, text, files, recipients and
 `submitted_at_ms`) and its `delivery` status. Messages delivered to nobody,
@@ -1211,8 +1219,7 @@ attributes it to that agent. After its provider exited, Bus has usually closed
 that terminal already (see Provider exits); otherwise deletion closes the shell
 the provider left, even if it is running a command. When the server refuses
 that close (another agent or managed name took the terminal, it is shared with
-another pane, or its session would not stop), Bus still deletes the agent and
-its messages, leaves the terminal open, and lists it under
+another pane, or its session would not stop), Bus still retires the agent, preserves its messages and requests, leaves the terminal open, and lists it under
 `terminals_left_open` in the result. Close it yourself if it is no longer needed.
 
 A successful delete response means the agent was removed durably and that

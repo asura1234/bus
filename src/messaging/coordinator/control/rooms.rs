@@ -66,25 +66,49 @@ impl Worker {
             "room.delete" => self.control_command(BusCommand::DeleteRoom(
                 self.control_room(required(p, "room")?)?,
             )),
-            "room.history" => {
-                let room = self.control_room(required(p, "room")?)?;
-                let now = super::super::io::now_ms();
-                self.expire_queued_requests(now)?;
-                // Messages carry their delivery; notices (reports to the
-                // developer, interrupts) were delivered to nobody.
-                let mut messages = self
-                    .state
-                    .requests()
-                    .filter(|r| r.room_id == room)
-                    .map(|r| (r.prompt.id, (&r.prompt, true)))
-                    .collect::<BTreeMap<_, _>>();
-                messages.extend(self.state.notices(room).map(|n| (n.id, (n, false))));
-                Ok(
-                    json!({"room_id":room,"messages":messages.iter().map(|(id,(prompt,delivered))|json!({"prompt":prompt,"delivery":delivered.then(|| self.control_message_at(*id, now).ok()).flatten()})).collect::<Vec<_>>()}),
-                )
-            }
+            "room.history" => self.control_history(required(p, "room")?),
             _ => Err("Unknown method".into()),
         }
+    }
+
+    fn control_history(&mut self, selector: &str) -> Result<Value, String> {
+        let room = self.control_history_room(selector)?;
+        let now = super::super::io::now_ms();
+        self.expire_queued_requests(now)?;
+        // Messages carry their delivery; notices (reports to the
+        // developer, interrupts) were delivered to nobody.
+        let mut messages = self
+            .state
+            .requests()
+            .filter(|r| r.room_id == room)
+            .map(|r| (r.prompt.id, (&r.prompt, true)))
+            .collect::<BTreeMap<_, _>>();
+        messages.extend(self.state.notices(room).map(|n| (n.id, (n, false))));
+        Ok(
+            json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.control_message_at(*id, now).ok()).flatten()})).collect::<Vec<_>>()}),
+        )
+    }
+
+    fn control_history_room(&self, selector: &str) -> Result<RoomId, String> {
+        if let Ok(id) = selector.parse::<u64>().map(RoomId) {
+            if self.state.history_room_name(id).is_some()
+                || self.state.requests().any(|r| r.room_id == id)
+                || self.state.notices(id).next().is_some()
+            {
+                return Ok(id);
+            }
+        }
+        if selector.eq_ignore_ascii_case(crate::messaging::model::MASTER_ROOM_NAME)
+            || self.state.rooms().any(|r| r.name == selector)
+        {
+            return self.control_room(selector);
+        }
+        unique(
+            self.state
+                .history_rooms()
+                .filter(|(_, name)| *name == selector)
+                .map(|(id, _)| id),
+        )
     }
 
     pub(in crate::messaging::coordinator) fn control_room(

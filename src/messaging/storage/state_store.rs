@@ -7,12 +7,14 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use super::journal::JournalOp;
 use super::journal::{push_coalesced, replay, JournalDocument, JournalEntry};
-use crate::messaging::model::{Archived, BusState, History, HISTORY_RETENTION_MS};
+use crate::messaging::model::{Archived, BusState, History};
 use std::sync::Arc;
 
-/// Version 2 keeps settled history in `history.jsonl`; a version 1 file, which
-/// still holds it inline, loads as is and is archived from on.
-pub(crate) const STORE_VERSION: u64 = 2;
+/// Version 3 retains permanent history and reads legacy archive identities into
+/// the canonical retired-agent map introduced in version 2.
+/// Version 1 inline history still loads and is archived from then on.
+pub(crate) const STORE_VERSION: u64 = 3;
+const ARCHIVED_HISTORY_VERSION: u64 = 2;
 const INLINE_HISTORY_VERSION: u64 = 1;
 
 #[derive(Debug)]
@@ -155,6 +157,8 @@ pub(crate) struct JsonStore {
     history: std::sync::Mutex<Arc<History>>,
     /// The file holds lines the last load dropped; `compact_history` rewrites it.
     history_stale: std::sync::atomic::AtomicBool,
+    /// Legacy identity lines may be removed only after their canonical state is durable.
+    history_legacy_agents: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     fail_stage: std::sync::Mutex<Option<SaveStage>>,
     /// Completed `state.json` writes, so tests can count saves.
@@ -171,6 +175,7 @@ impl JsonStore {
             journal: std::sync::Mutex::new(JournalState::default()),
             history: std::sync::Mutex::new(Arc::default()),
             history_stale: std::sync::atomic::AtomicBool::new(false),
+            history_legacy_agents: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fail_stage: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -193,13 +198,20 @@ impl JsonStore {
     }
 
     /// Rewrites `history.jsonl` without the entries the last load dropped
-    /// (expired, of deleted rooms or agents, duplicated, or a torn last line).
+    /// (duplicate crash copies or an uncommitted torn last line).
     /// True when it rewrote the file. Only the coordinator, which owns the
     /// data directory, may call it.
     pub(crate) fn compact_history(&self) -> Result<bool, StoreError> {
         if !self
             .history_stale
             .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(false);
+        }
+        if self
+            .history_legacy_agents
+            .load(std::sync::atomic::Ordering::Acquire)
+            && !self.legacy_agents_durable()?
         {
             return Ok(false);
         }
@@ -217,6 +229,38 @@ impl JsonStore {
         })?;
         self.history_stale
             .store(false, std::sync::atomic::Ordering::Release);
+        self.history_legacy_agents
+            .store(false, std::sync::atomic::Ordering::Release);
+        Ok(true)
+    }
+
+    /// A stale-state save or a failed migration save must not let compaction
+    /// erase the only durable rendering metadata. Validate against disk first.
+    fn legacy_agents_durable(&self) -> Result<bool, StoreError> {
+        let Some(mut saved) = self.load_base()? else {
+            return Ok(false);
+        };
+        let path = self.history_path();
+        let bytes = std::fs::read(&path).map_err(|source| StoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let complete = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+        for line in bytes[..complete]
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            let item =
+                serde_json::from_slice::<Archived>(line).map_err(|source| StoreError::Corrupt {
+                    path: path.clone(),
+                    source,
+                })?;
+            if let Archived::LegacyAgent { id, agent } = item {
+                if saved.merge_retired_agent(id, agent) {
+                    return Ok(false);
+                }
+            }
+        }
         Ok(true)
     }
 
@@ -226,21 +270,19 @@ impl JsonStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Reads `history.jsonl`, keeping what `state` can still show: entries
-    /// younger than the retention, of rooms and agents that still exist, and
-    /// not also live in `state` (a crash between an append and its save).
+    /// Reads every committed archive record, regardless of age or live owners.
+    /// A duplicate in state.json wins after a crash between append and save.
     /// A torn last line is skipped; any other unreadable line is corruption.
-    fn load_history(&self, state: &BusState) -> Result<Arc<History>, StoreError> {
+    fn load_history(&self, state: &mut BusState) -> Result<Arc<History>, StoreError> {
         let path = self.history_path();
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(source) => return Err(StoreError::Io { path, source }),
         };
-        let cutoff = super::io::now_ms().saturating_sub(HISTORY_RETENTION_MS);
-        let (event_groups, event_messages) = state.worker_pending_sources();
         let mut history = History::default();
         let mut stale = false;
+        let mut legacy_agents = false;
         let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
         for (index, line) in lines.iter().enumerate() {
             let last = index + 1 == lines.len();
@@ -262,30 +304,27 @@ impl JsonStore {
                     })
                 }
             };
-            let pinned_reply = matches!(&item, Archived::Request(request) if state.reply_delivery_pending(request));
-            let pinned_event = match &item {
-                Archived::Request(r) => event_groups.contains(&r.group.unwrap_or(r.id)),
-                Archived::Notice { prompt, .. } => event_messages.contains(&prompt.id),
+            if let Archived::LegacyAgent { id, agent } = item {
+                state.merge_retired_agent(id, agent);
+                stale = true;
+                legacy_agents = true;
+                continue;
+            }
+            let kept = match &item {
+                Archived::Request(request) => state.request(request.id).is_none(),
+                Archived::Notice { room, prompt } => {
+                    state.notices(*room).all(|live| live.id != prompt.id)
+                }
+                Archived::Room { .. } => true,
+                Archived::LegacyAgent { .. } => unreachable!("normalized above"),
             };
-            let kept = (item.settled_at_ms() >= cutoff || pinned_reply || pinned_event)
-                && state.room(item.room()).is_some()
-                && match &item {
-                    // A deleted recipient's open request stays as its failure.
-                    Archived::Request(request) => {
-                        (state.agent(request.agent_id).is_some()
-                            || request.failure_reason.as_deref()
-                                == Some(crate::messaging::model::AGENT_DELETED))
-                            && state.request(request.id).is_none()
-                    }
-                    Archived::Notice { room, prompt } => {
-                        state.notices(*room).all(|live| live.id != prompt.id)
-                    }
-                };
             stale |= !kept || history.contains(&item);
             if kept {
                 history.insert(item);
             }
         }
+        self.history_legacy_agents
+            .store(legacy_agents, std::sync::atomic::Ordering::Release);
         let history = Arc::new(history);
         *self.history_lock() = Arc::clone(&history);
         self.history_stale
@@ -411,7 +450,7 @@ impl JsonStore {
         let entries = self.load_journal()?;
         replay(&mut state, &entries, base_seq);
         state.adopt_version_one_guards(super::io::now_ms());
-        let history = self.load_history(&state)?;
+        let history = self.load_history(&mut state)?;
         let state = state.with_history(history);
         let mut journal = self.journal_state();
         journal.seq = entries
@@ -480,18 +519,27 @@ impl JsonStore {
                     "missing numeric Bus state version",
                 )),
             })?;
-        if version != STORE_VERSION && version != INLINE_HISTORY_VERSION {
+        if ![
+            STORE_VERSION,
+            ARCHIVED_HISTORY_VERSION,
+            INLINE_HISTORY_VERSION,
+        ]
+        .contains(&version)
+        {
             return Err(StoreError::UnsupportedVersion {
                 path: self.path.clone(),
                 found: version,
             });
         }
-        let document = serde_json::from_value::<StoredDocument>(value).map_err(|source| {
+        let mut document = serde_json::from_value::<StoredDocument>(value).map_err(|source| {
             StoreError::Corrupt {
                 path: self.path.clone(),
                 source,
             }
         })?;
+        if version < STORE_VERSION {
+            document.state.advance_routing_floor(super::io::now_ms());
+        }
         self.journal_state().verified = fingerprint;
         Ok(Some((document.state, document.journal_seq)))
     }

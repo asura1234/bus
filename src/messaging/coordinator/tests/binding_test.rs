@@ -42,7 +42,10 @@ fn deletion_retry_reconciles_launch_attested_initial_session_without_callbacks_o
             .unwrap();
         assert!(worker.state.agent(agent).is_none());
         assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
-        assert_eq!(worker.state.requests().count(), 0);
+        assert!(worker
+            .state
+            .requests()
+            .all(|r| r.failure_reason.as_deref() == Some("agent_deleted")));
         assert_eq!(
             *calls.lock().unwrap(),
             vec![None, None, Some("native-session".into())]

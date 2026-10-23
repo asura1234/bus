@@ -109,7 +109,14 @@ impl BusState {
 
     /// Whether the session holds anything beyond its MASTER room.
     pub(crate) fn has_work(&self) -> bool {
-        !self.agents.is_empty() || self.rooms.values().any(|room| room.kind == RoomKind::Work)
+        !self.agents.is_empty()
+            || !self.retired_agents.is_empty()
+            || self
+                .rooms
+                .values()
+                .any(|room| room.kind == RoomKind::Work || !room.notices.is_empty())
+            || self.requests().next().is_some()
+            || self.history.len() > 0
     }
 
     pub(crate) fn master_room(&self) -> Option<&Room> {
@@ -228,22 +235,36 @@ impl BusState {
         for agent in self.agents_deleted_with_room(id) {
             self.delete_agent(agent, now_ms)?;
         }
-        self.rooms.remove(&id);
-        self.requests.retain(|_, request| request.room_id != id);
-        // Recipients in other rooms survive; their queues and current pointers
-        // must not retain requests removed with this conversation room.
+        self.archive_room_notices(id);
+        let room = self.rooms.remove(&id).expect("checked room");
+        std::sync::Arc::make_mut(&mut self.history).insert(super::Archived::Room {
+            id,
+            name: room.name,
+        });
+        // Cross-room recipients survive, but work from this deleted room must
+        // never execute later. Keep its request as a terminal audit outcome.
+        let mut closed = std::collections::BTreeSet::new();
+        for request in self
+            .requests
+            .values_mut()
+            .filter(|r| r.room_id == id && !r.settled())
+        {
+            request.phase = super::RequestPhase::Abandoned;
+            request.completed_at_ms = Some(now_ms);
+            request.failure_reason = Some("room_deleted".into());
+            closed.insert(request.id);
+        }
         for queue in self.queues.values_mut() {
-            queue.retain(|request| self.requests.contains_key(request));
+            queue.retain(|request| !closed.contains(request));
         }
         for agent in self.agents.values_mut() {
             if agent
                 .current_request
-                .is_some_and(|request| !self.requests.contains_key(&request))
+                .is_some_and(|request| closed.contains(&request))
             {
                 agent.current_request = None;
             }
         }
-        self.drop_history_of_room(id);
         // Match the UI, which falls back to the first room (MASTER) at once,
         // so `state` never shows a gap between the delete and the next view.
         if self.visible_room == Some(id) {
