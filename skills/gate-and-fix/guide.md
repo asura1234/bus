@@ -68,7 +68,9 @@ replace `rebase-origin-main` or PR creation.
   The gate drops every inherited `BUS_*`/`HERDR_*` variable (see **Environment** above); tests
   that model isolated config roots set and restore those variables within their fixture boundaries.
 - Coverage builds use `--no-rustc-wrapper`, so Cargo includes instrumentation flags in its artifact
-  cache key even when `CARGO_LLVM_COV_TARGET_DIR` equals `CARGO_TARGET_DIR`. The unit lane records
+  cache key even when `CARGO_LLVM_COV_TARGET_DIR` equals `CARGO_TARGET_DIR`. Keep instrumented output
+  separate in `<target>/llvm-cov-target`; regressions cover both separate and shared target settings.
+  The unit lane records
   its nonempty `*-unit-*.profraw` files before CLI or integration runs; coverage refuses to export
   if that evidence is missing, deleted, or belongs to another target. It also diagnoses drops over
   20 percentage points from the last successful local report (the policy floor is the reference

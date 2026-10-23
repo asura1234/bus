@@ -106,10 +106,17 @@ class CoverageInstrumentationTest(unittest.TestCase):
         "requires the Rust coverage tools",
     )
     def test_normal_test_build_cannot_mask_coverage(self):
+        for shared_target in (False, True):
+            with self.subTest(shared_target=shared_target):
+                self.exercise_target_cache(shared_target)
+
+    def exercise_target_cache(self, shared_target):
         # A dependency-free fixture exercises Cargo's real artifact cache. Its
         # private target and profiles never touch the enclosing gate's coverage.
         with tempfile.TemporaryDirectory(prefix="bus-cov-cache-") as folder:
             root = Path(folder)
+            target = root / "target"
+            coverage_target = target if shared_target else target / "llvm-cov-target"
             (root / "src").mkdir()
             (root / "Cargo.toml").write_text(
                 '[package]\nname = "coverage_cache_fixture"\n'
@@ -131,8 +138,8 @@ class CoverageInstrumentationTest(unittest.TestCase):
             }
             env.update(
                 BUS_DATA_DIR=str(root / "data"),
-                CARGO_TARGET_DIR=str(root / "target"),
-                CARGO_LLVM_COV_TARGET_DIR=str(root / "target"),
+                CARGO_TARGET_DIR=str(target),
+                CARGO_LLVM_COV_TARGET_DIR=str(coverage_target),
                 CARGO_ENCODED_RUSTFLAGS="",
                 CARGO_INCREMENTAL="0",
             )
@@ -159,8 +166,12 @@ class CoverageInstrumentationTest(unittest.TestCase):
                     patch.object(quality.shutil, "which", side_effect=which),
                 ):
                     self.assertEqual(quality.rust_test("--lib", fresh=True), 0)
-                    profiles = quality.unit_profraw_files(root / "target")
+                    profiles = quality.unit_profraw_files(coverage_target)
                     self.assertTrue(
                         profiles, "coverage reused a normal binary and wrote no unit profile"
                     )
                     self.assertTrue(all(path.stat().st_size > 0 for path in profiles))
+                    quality.require_unit_profraw({
+                        "profile_target": str(coverage_target.resolve()),
+                        "unit_profraw": [path.name for path in profiles],
+                    })
