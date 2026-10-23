@@ -37,6 +37,7 @@ class Run(helper.Run):
         self.until(lambda: all(agent["status"] == "idle" for agent in self.state()["agents"]), "all fake agents idle")
         for room in ["master", "notify-work", "notify-other"]:
             self.bus("room", "sound", room, "--off")
+        assert all(not room["sound"] for room in self.state()["rooms"]), "room sound fixture did not mute every room"
         settings_path = Path(self.session["data_dir"]) / "settings.json"
         saved = json.loads(settings_path.read_text())
         saved["feishu_waiting_notifications"] = False
