@@ -190,13 +190,12 @@ impl BusUi {
             KeyCode::Down => {
                 let last = self
                     .perf_overlay_field()
-                    .unwrap_or_else(|| self.freeze_field());
+                    .unwrap_or_else(|| self.feishu_field() + 2);
                 self.settings_field = (self.settings_field + 1).min(last);
             }
             // Enter alone toggles (Space is deliberately inert in Settings).
             KeyCode::Enter => match self.settings_field {
                 0 => self.toggle_color_blind_mode(),
-                field if field == self.freeze_field() => self.toggle_freeze_notifications(),
                 field if field == self.feishu_field() + 1 => self.open_feishu_setting(false),
                 field if field == self.feishu_field() + 2 => self.open_feishu_setting(true),
                 field if field == self.feishu_field() => self.toggle_feishu_notifications(),

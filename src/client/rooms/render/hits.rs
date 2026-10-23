@@ -88,9 +88,6 @@ impl BusUi {
             Action::Settings => "settings".into(),
             Action::ToggleColorBlindMode => "color-blind".into(),
             Action::TogglePerfOverlay => "perf-overlay".into(),
-            #[cfg(feature = "dev-tools")]
-            Action::SimulateFreeze => "freeze-test".into(),
-            Action::ToggleFreezeNotifications => "freeze-notifications".into(),
             Action::EditFeishuRecipient => "feishu-recipient".into(),
             Action::EditFeishuCli => "feishu-cli-path".into(),
             Action::ToggleFeishuNotifications => "feishu-notifications".into(),

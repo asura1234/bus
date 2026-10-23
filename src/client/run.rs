@@ -66,8 +66,7 @@ fn run_client_with_mode(
     stop_server: fn() -> Result<(), String>,
 ) -> io::Result<()> {
     let logging_options = init_logging(&logging_options);
-    let mut perf_hooks = crate::platform::usage::perf_hooks();
-    perf_hooks.notification = Some(super::freeze_alert::encode);
+    let perf_hooks = crate::platform::usage::perf_hooks();
     // Dropped on return, which drains the queued perf records.
     let _perf = crate::utils::perf::start(
         &crate::utils::paths::data_dir(),

@@ -82,7 +82,6 @@ pub(crate) enum BusCommand {
     SetDiskCriticalGb(u32),
     /// The room sidebar's width in cells, clamped to the settings range.
     SetSidebarWidth(u16),
-    SetFreezeNotifications(bool),
     SetFeishuRecipient(String),
     SetFeishuCliPath(Option<String>),
     SetFeishuNotifications(bool),

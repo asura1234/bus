@@ -131,8 +131,6 @@ fn windows_report_each_threads_cpu_delta_and_reset_missing_threads() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -197,8 +195,6 @@ fn window_record_has_process_sample_and_only_active_metrics() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -257,8 +253,6 @@ fn records_are_appended_as_jsonl_under_the_session_perf_dir() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -283,8 +277,6 @@ fn watchdog_writes_stall_records_and_captures_stacks_once_per_cooldown() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: counting_capture,
         },
     );
@@ -366,8 +358,6 @@ fn watchdog_lag_is_recorded_when_the_perf_thread_wakes_late() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -392,8 +382,6 @@ fn coordinator_capture_does_not_suppress_later_ui_capture() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -446,8 +434,6 @@ fn start_is_a_no_op_when_disabled() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture
         }
     )
@@ -469,8 +455,6 @@ fn concurrent_loop_captures_keep_retention_bounded() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: delayed_capture,
         },
     );
@@ -502,8 +486,6 @@ fn pruning_does_not_delete_an_active_capture_output() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: capture,
         },
     );
@@ -537,8 +519,6 @@ fn stall_warnings_carry_the_latest_process_and_system_sample() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -581,8 +561,6 @@ fn high_machine_load_warns_at_most_once_a_minute() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -617,8 +595,6 @@ fn high_machine_load_warns_at_most_once_a_minute() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -645,8 +621,6 @@ fn stack_captures_prune_old_files_to_a_bounded_retention() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: write_capture,
         },
     );
@@ -682,8 +656,6 @@ fn two_client_processes_sharing_the_role_file_keep_each_others_latest_records() 
     let hooks = PerfHooks {
         sample: no_sample,
         machine: || None,
-        local_hm: |_| (12, 34),
-        notification: None,
         capture_stacks: no_capture,
     };
     let mut first = Recorder::open(&dir, "client", &small, hooks).expect("first client");
@@ -719,8 +691,6 @@ fn a_stall_that_moves_on_and_stays_blocked_in_a_later_stage_names_that_stage() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -879,8 +849,6 @@ fn perf_window_does_not_block_the_watchdog_behind_another_writer() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -923,8 +891,6 @@ fn normal_process_exit_preserves_records_queued_behind_a_busy_writer() {
             PerfHooks {
                 sample: no_sample,
                 machine: || None,
-                local_hm: |_| (12, 34),
-                notification: None,
                 capture_stacks: no_capture,
             },
         )
@@ -1115,8 +1081,6 @@ fn dropping_the_running_recorder_stops_it_promptly() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     )
@@ -1218,8 +1182,6 @@ fn dropping_recorder_keeps_exit_deadline_when_watchdog_is_logging_a_stall() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     )
@@ -1285,8 +1247,6 @@ fn client_error_process_exit_preserves_queued_recorder_windows() {
             PerfHooks {
                 sample: counted_sample,
                 machine: || None,
-                local_hm: |_| (12, 34),
-                notification: None,
                 capture_stacks: no_capture,
             },
         )
@@ -1351,8 +1311,6 @@ fn severe_stall_escalates_at_five_fifteen_thirty_seconds_with_one_identity() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -1399,8 +1357,6 @@ fn dump_evictions_have_a_byte_count_and_reason_record() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -1428,8 +1384,6 @@ fn run_start_record_identifies_the_compiled_binary() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     )
@@ -1456,8 +1410,6 @@ fn active_message_metadata_is_preserved_in_windows_and_stall_records() {
         PerfHooks {
             sample: no_sample,
             machine: || None,
-            local_hm: |_| (12, 34),
-            notification: None,
             capture_stacks: no_capture,
         },
     );
@@ -1485,26 +1437,4 @@ fn active_message_metadata_is_preserved_in_windows_and_stall_records() {
         .get("active_message")
         .is_none());
     std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn recovered_freeze_alert_uses_the_injected_host_encoder() {
-    crate::utils::perf::recovery::set_enabled(true);
-    let ended = crate::utils::perf::StallEvent {
-        kind: crate::utils::perf::StallKind::Ended,
-        loop_name: "client.ui_loop",
-        stage: "server_message",
-        busy_ms: 4000,
-        stall_id: 1,
-    };
-    fn encode(text: &str) -> Vec<u8> {
-        format!("host:{text}").into_bytes()
-    }
-    crate::utils::perf::recovery::observe(&ended, 9, 7, encode);
-    let bytes = crate::utils::perf::recovery::take()
-        .expect("a recovered client stall over three seconds yields one alert");
-    assert_eq!(
-        bytes,
-        b"host:Bus froze for 4.0 s at 09:07; details: bus perf"
-    );
 }

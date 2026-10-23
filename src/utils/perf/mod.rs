@@ -13,7 +13,6 @@ pub(crate) mod machine;
 pub(crate) mod operation;
 pub(crate) mod queue;
 mod recorder;
-pub(crate) mod recovery;
 mod retention;
 mod writer;
 

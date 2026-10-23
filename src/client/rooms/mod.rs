@@ -103,7 +103,6 @@ impl crate::client::compositor::ClientShellState {
                 Err(error) => bus.error = Some(error),
             }
         }
-        crate::utils::perf::recovery::set_enabled(bus.settings.freeze_notifications);
         if let Some(room) = bus.room {
             bus.open_room(room);
         }

@@ -39,7 +39,6 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::SetIdleAgentsAlert(_) => "set_idle_agents_alert",
         C::SetDiskWarningGb(_) => "set_disk_warning_gb",
         C::SetDiskCriticalGb(_) => "set_disk_critical_gb",
-        C::SetFreezeNotifications(_) => "set_freeze_notifications",
         C::SetFeishuRecipient(_) => "set_feishu_recipient",
         C::SetFeishuCliPath(_) => "set_feishu_cli_path",
         C::SetSidebarWidth(_) => "set_sidebar_width",
