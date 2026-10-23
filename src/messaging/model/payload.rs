@@ -114,19 +114,22 @@ fn starts_with_sender(text: &str, name: &str, id: u64, room: u64) -> bool {
         format!("{name} (agent {id}, room {room}):"),
         format!("{name} (agent {id}) (room {room}):"),
         format!("{name} (room {room}):"),
-        format!("{name} (agent {id}):"),
-        format!("{name} (agent {id})."),
     ]
     .contains(&first.to_owned())
         || identity_only_line(first, name, id)
 }
 
 fn identity_only_line(first: &str, name: &str, id: u64) -> bool {
-    [name.to_owned(), format!("agent {id}")]
-        .iter()
-        .any(|identity| {
-            [":", " here —"]
-                .iter()
-                .any(|ending| first.eq_ignore_ascii_case(&format!("{identity}{ending}")))
-        })
+    [
+        format!("{name} (agent {id}):"),
+        format!("{name} (agent {id})."),
+    ]
+    .contains(&first.to_owned())
+        || [name.to_owned(), format!("agent {id}")]
+            .iter()
+            .any(|identity| {
+                [":", " here —"]
+                    .iter()
+                    .any(|ending| first.eq_ignore_ascii_case(&format!("{identity}{ending}")))
+            })
 }
