@@ -200,6 +200,16 @@ fn an_uncertain_dialog_write_escalates_without_replaying_or_closing_its_active_g
     assert_eq!(f.request(notice).phase, RequestPhase::Active);
     assert!(f.request(notice).uncertain_outcome);
     assert_eq!(f.request(notice).group, Some(lead));
+    let attention = &f
+        .worker
+        .state
+        .room(f.request(notice).room_id)
+        .unwrap()
+        .notices[0]
+        .text;
+    assert!(attention.contains("Delivery to the orchestrator is unconfirmed"));
+    assert!(attention.contains("it may already have received this"));
+    assert!(!attention.contains("The orchestrator did not receive this"));
     assert_eq!(f.worker.state.queued_requests(f.agent), &[head]);
     f.deliver();
     assert_eq!(f.typed().len(), 1, "unknown writes must never be replayed");

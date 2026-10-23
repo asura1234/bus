@@ -164,13 +164,13 @@ impl BusState {
         Ok(expired)
     }
 
-    /// A blocked notice the orchestrator never took would leave the dialog
-    /// unreported for as long as it stays open, so the developer gets it.
+    /// An undelivered or unconfirmed blocked notice must reach the developer;
+    /// an unknown native write may already have reached the orchestrator.
     fn redirect_dialog_notice(
         &mut self,
         request: RequestId,
         reason: &str,
-        _now_ms: u64,
+        now_ms: u64,
     ) -> Result<(), ModelError> {
         let Some((agent, room)) = self
             .agents
@@ -188,6 +188,17 @@ impl BusState {
             reason,
             "Blocked-dialog notice was not delivered; inspect request and dialog state"
         );
+        let notice = self
+            .requests
+            .get(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        let delivery = if notice.uncertain_outcome {
+            "Delivery to the orchestrator is unconfirmed; it may already have received this"
+        } else {
+            "The orchestrator did not receive this"
+        };
+        let text = format!("{}\n{delivery} ({reason}).", notice.prompt.text);
+        self.post_bus_notice(room, None, text, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 
