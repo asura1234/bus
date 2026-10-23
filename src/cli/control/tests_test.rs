@@ -101,6 +101,7 @@ fn room_sound_requires_exactly_one_of_on_or_off() {
 /// and both help texts are checked against each other method by method.
 const SAMPLES: &[&[&str]] = &[
     &["state"],
+    &["agent", "list"],
     &["settings"],
     &["room", "create", "r"],
     &["room", "rename", "r", "s"],
