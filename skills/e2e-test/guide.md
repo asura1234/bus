@@ -60,12 +60,9 @@ you saw. You do not decide what the product should do, and you never change the 
 - Fixtures: `fixture image --pattern quadrants|red-diagonal|blue-circle --file F`,
   `fixture file --file F [--text T]`; files land in the session's work dir
   (`/tmp/bus-tui/<name>/work`), which is also the scratch workspace for agents' PWD.
-- Notifications: waiting-tagged developer MASTER messages send bot DMs through lark-cli.
-  Both `[waiting-on-you]` and `[waiting_on_you]` and existing whole phrases qualify.
-  Run a recording shim on a closed inherited PATH; assert its argv and a two-second burst.
-  Feishu notifications is default on with editable recipient and optional CLI path.
   Developer messages emit no terminal popup; freezes are recorded only in diagnostics.
-  Room sound effects keep their existing behavior regardless of focus.
+  Mandatory developer sounds use system sound files; the always-on picker previews through
+  the effects recorder. Room sound effects keep their existing behavior regardless of focus.
 - Fake agents answer each delivered prompt a moment later with `fake reply: <prompt>`. The
   echo adds find matches and pushes history, so let deliveries settle (`bus history` shows
   every request `replied`) before judging counts, positions or drags.

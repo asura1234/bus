@@ -287,8 +287,11 @@ Every agent post to you, plus every agent message or final with an explicit `@yo
 room and sender. The legacy whole phrase `waiting on you` qualifies only in developer-addressed
 notices and replies to developer-authored requests. In peer traffic a bare phrase does not trigger developer alerts
 because "you" refers to the receiving agent. Developer-authored sends never notify.
-The bundled developer-alert sound is distinct from ordinary room sounds and ignores
-room switches and normal notification cooldown. Feishu bot DMs use the existing
+The developer-alert system sound is configured separately from ordinary room sounds and ignores
+room switches and normal notification cooldown. In Settings, **Notify you sound (always on)**
+offers System default and installed system sounds; the arrows, Left/Right or Enter choose and
+preview a sound, saved across sessions. System default prefers Glass, then another installed
+sound; missing selections fall back to it. There is no Off choice. Feishu bot DMs use the existing
 two-second burst and first-action-line format; untagged direct posts use `sender to you: text`.
 No user setting disables these alerts, including a saved legacy Feishu off preference.
 Recipient and CLI path remain editable. See [developer notifications](../docs/developer-notifications.md).
@@ -828,14 +831,15 @@ bus state | jq '.result.build'
   `reason`; it never means the allowance is unused. After Bus restarts, Claude
   must emit a fresh observation. Cursor usage is not collected yet.
 - `settings` holds the settings every Bus shares (see Shared settings below):
-  `color_blind_mode`, `master_sound` and `room_sound`.
+  `color_blind_mode`, `master_sound`, `room_sound` and `developer_sound`.
 
 ## Sound notifications
 
 Bus can ding when a new message lands in a room, like a group chat. A room rings
 for an agent's final reply or a message an agent sent with `send --as`, never
-for the developer's own sends. Nothing rings for the first two seconds after start
-or resume, and one ding covers a burst of messages.
+for the developer's own sends. Ordinary room sounds have a two-second startup/resume
+grace period and one ding covers a burst. Mandatory developer alerts use their separate
+system-sound selector and bypass room switches, startup grace and ordinary cooldown.
 
 MASTER starts with sound on; work rooms start off. Toggle a room from Settings
 in the UI. MASTER's sound is shared by every session (see Shared settings
@@ -1200,8 +1204,9 @@ Non-goals: UI changes"
 ### Shared settings
 
 Settings that are not tied to one room are shared by every Bus session:
-color-blind mode, MASTER's sound (`master_sound`) and the last `All rooms` sound,
-which new work rooms start with (`room_sound`). They live in `settings.json` beside the session
+color-blind mode, MASTER's sound (`master_sound`), the last `All rooms` sound
+which new work rooms start with (`room_sound`), and the developer alert's system
+sound (`developer_sound`, null for System default). They live in `settings.json` beside the session
 registry (`~/.local/share/bus/settings.json`). A change made in any Bus, from
 the UI or the CLI, is what every Bus launched or resumed afterwards starts with:
 at launch MASTER takes `master_sound`, and each room created later takes
