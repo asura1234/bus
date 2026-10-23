@@ -292,11 +292,11 @@ impl App {
             },
             AgentStartError::TargetBusy(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_busy".into(),
-                message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then add the agent again."),
+                message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then retry the launch."),
             },
             AgentStartError::ShellStarting(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_shell_starting".into(),
-                message: format!("agent target pane {target} is still settling its shell startup output. Wait briefly or answer any shell startup question in the terminal, then add the agent again."),
+                message: format!("agent target pane {target} is still settling its shell startup output. Wait briefly or answer any shell startup question in the terminal, then retry the launch."),
             },
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
