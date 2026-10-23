@@ -28,6 +28,11 @@ impl Worker {
         let mut state = self.state.clone();
         state.prepare_delete_agent(id).map_err(|e| e.to_string())?;
         self.save(state)?;
+        tracing::info!(
+            event = "bus.deletion.pending",
+            agent_id = id.0,
+            "Agent deletion is durable; terminal close and removal are pending"
+        );
         let left_open: Vec<_> = self.stop_agent_terminal(id)?.into_iter().collect();
         let mut state = self.state.clone();
         for terminal in &left_open {
@@ -43,6 +48,12 @@ impl Worker {
             .delete_agent(id, super::io::now_ms())
             .map_err(|e| e.to_string())?;
         self.save(state)?;
+        tracing::info!(
+            event = "bus.deletion.completed",
+            agent_id = id.0,
+            terminals_left_open = left_open.len(),
+            "Agent removal is durable"
+        );
         self.branch_checks.remove(&id);
         self.codex_rollouts.remove(&id);
         self.finish_deletion(left_open, events);

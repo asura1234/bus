@@ -79,6 +79,16 @@ pub(crate) struct ControlCall {
     pub(crate) _poll_permit: Option<Arc<()>>,
 }
 
+impl ControlCall {
+    /// Transport dispatch time is anchored by the same finite reply deadline.
+    /// Direct in-process callers without a deadline have no queue measurement.
+    pub(crate) fn queued_for(&self) -> Option<Duration> {
+        self.deadline
+            .and_then(|deadline| deadline.checked_sub(WORKER_TIMEOUT))
+            .map(|started| started.elapsed())
+    }
+}
+
 pub(super) struct ControlledStream(pub(super) ipc::LocalStream);
 
 impl Drop for ControlledStream {
