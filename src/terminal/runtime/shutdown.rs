@@ -78,6 +78,8 @@ pub(super) fn shutdown_pane_processes(
     }
     pids.sort_unstable();
     pids.dedup();
+    info!(event = "bus.pane.shutdown", pane = pane_id.raw(), session_id = child_pid,
+        pids = ?pids, "Stopping the owned PTY session, including surviving children");
 
     for (signal, grace) in [
         (
