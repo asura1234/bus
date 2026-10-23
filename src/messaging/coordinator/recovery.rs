@@ -3,6 +3,7 @@ use super::{
     schema, AgentId, AgentRuntimeIdentity, Method, ResponseResult, RoomAgent, RoomId,
     RuntimeStatus, Worker,
 };
+use crate::agents::providers::launch;
 use crate::agents::resume::catalog::{self, AgentSessionRefKind};
 use crate::messaging::identity;
 use serde_json::{json, Value};
@@ -40,10 +41,32 @@ impl Worker {
             }
             results.push(row);
         }
+        let recovered: Vec<_> = self
+            .state
+            .room(room)
+            .ok_or("Unknown room")?
+            .missing_provider_binaries
+            .iter()
+            .filter(|binary| launch::executable_available(binary))
+            .cloned()
+            .collect();
+        let mut state = self.state.clone();
+        for binary in recovered {
+            state.clear_unheld_missing_binary(room, &binary, super::io::now_ms());
+        }
+        self.save(state)?;
         Ok(json!({"room_id":room, "agents":results}))
     }
 
     fn resume_saved_agent(&mut self, agent: &RoomAgent) -> Result<(), String> {
+        if let Err(error) = self.ensure_provider_binary(agent.room_id, agent.provider) {
+            let mut state = self.state.clone();
+            state
+                .block_missing_binary(agent.id, agent.provider.executable(), super::io::now_ms())
+                .map_err(|e| e.to_string())?;
+            self.save(state)?;
+            return Err(error);
+        }
         if agent.session_binding_invalidated || !agent.hook_setup_confirmed {
             return Err("Session ownership or hook setup needs inspection before resume".into());
         }
@@ -77,6 +100,16 @@ impl Worker {
             },
             &plan,
         )?;
+        self.launch_saved_agent(agent, kind, plan, extras)
+    }
+
+    fn launch_saved_agent(
+        &mut self,
+        agent: &RoomAgent,
+        kind: &str,
+        plan: catalog::AgentResumePlan,
+        extras: super::resume::LaunchExtras,
+    ) -> Result<(), String> {
         self.close_resume_terminal(agent)?;
         let created = self
             .transport
@@ -123,6 +156,13 @@ impl Worker {
         if !matches!(started, ResponseResult::AgentStarted { .. }) {
             return Err("Provider start outcome needs inspection; no retry".into());
         }
+        // The new launch now owns diagnosis. Keeping the previous missing
+        // marker would suppress both startup settlement and a second outage.
+        let mut state = self.state.clone();
+        state
+            .clear_missing_binary(agent.id, super::io::now_ms())
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
         self.report_adopted_session(
             agent.id,
             agent.provider,

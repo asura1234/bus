@@ -2,16 +2,20 @@
 use super::{AgentId, BusState, ModelError, RoomId};
 
 impl BusState {
+    pub(crate) fn missing_binary_message(room: RoomId, binary: &str) -> String {
+        format!(
+            "BLOCKED: provider binary '{binary}' is missing from PATH in room {}. Tasks and saved sessions are retained. Restore '{binary}', then run: bus agent resume --room {}",
+            room.0, room.0
+        )
+    }
+
     pub(crate) fn report_missing_binary(
         &mut self,
         room: RoomId,
         binary: &str,
         now: u64,
     ) -> Result<String, ModelError> {
-        let text = format!(
-            "BLOCKED: provider binary '{binary}' is missing from PATH in room {}. Tasks and saved sessions are retained. Restore '{binary}', then run: bus agent resume --room {}",
-            room.0, room.0
-        );
+        let text = Self::missing_binary_message(room, binary);
         let record = self
             .rooms
             .get_mut(&room)
@@ -49,6 +53,11 @@ impl BusState {
             agent.actionable_error = None;
         }
         let (room, binary) = (agent.room_id, agent.provider.executable());
+        self.clear_unheld_missing_binary(room, binary, now);
+        Ok(())
+    }
+
+    pub(crate) fn clear_unheld_missing_binary(&mut self, room: RoomId, binary: &str, now: u64) {
         if !self
             .agents()
             .any(|a| a.room_id == room && a.missing_binary.as_deref() == Some(binary))
@@ -59,6 +68,5 @@ impl BusState {
                 }
             }
         }
-        Ok(())
     }
 }

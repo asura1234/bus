@@ -287,9 +287,12 @@ pub(crate) fn saved_options(provider: ProviderKind, spool: &Path) -> Result<Vec<
 }
 
 pub(crate) fn binary_available(provider: ProviderKind) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join(executable(provider)).is_file())
-    })
+    executable_available(executable(provider))
+}
+
+pub(crate) fn executable_available(binary: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(binary).is_file()))
 }
 
 pub(crate) fn project_root(cwd: &Path) -> PathBuf {

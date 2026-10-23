@@ -4,7 +4,7 @@ use crate::agents::providers::launch;
 
 impl Worker {
     pub(super) fn ensure_provider_binary(
-        &mut self,
+        &self,
         room: RoomId,
         provider: super::Provider,
     ) -> Result<(), String> {
@@ -12,12 +12,8 @@ impl Worker {
             return Ok(());
         }
         let binary = launch::executable(provider);
-        let mut state = self.state.clone();
-        let error = state
-            .report_missing_binary(room, binary, super::io::now_ms())
-            .map_err(|e| e.to_string())?;
-        self.save(state)?;
-        Err(error)
+        // Refusing a new agent has no retained work or saved agent to block.
+        Err(BusState::missing_binary_message(room, binary))
     }
 
     pub(super) fn observe_missing_binary(

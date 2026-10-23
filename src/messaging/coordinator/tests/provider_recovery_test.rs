@@ -19,7 +19,7 @@ impl Transport for MissingNative {
 }
 
 #[test]
-fn codexup_missing_binary_blocks_the_room_once_and_retains_queued_work() {
+fn missing_binary_blocks_the_room_once_and_retains_queued_work() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "recoverable task");
     let mut state = worker.state.clone();
@@ -116,7 +116,7 @@ impl Transport for RecoveryNative {
 }
 
 #[test]
-fn codexup_room_resume_preserves_the_session_queue_and_capture_and_refuses_an_unsafe_close() {
+fn room_resume_preserves_the_session_queue_and_capture_and_refuses_an_unsafe_close() {
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     for refuse_close in [false, true] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
@@ -173,7 +173,7 @@ fn codexup_room_resume_preserves_the_session_queue_and_capture_and_refuses_an_un
 }
 
 #[test]
-fn codexup_room_outage_survives_restart_with_one_fact_and_resolves_when_provider_recovers() {
+fn room_outage_survives_restart_with_one_fact_and_resolves_when_provider_recovers() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
     let master = state.master_room().unwrap().id;
@@ -232,7 +232,7 @@ fn codexup_room_outage_survives_restart_with_one_fact_and_resolves_when_provider
 }
 
 #[test]
-fn codexup_pending_restore_tracks_the_new_terminal_before_provider_detection() {
+fn pending_restore_tracks_the_new_terminal_before_provider_detection() {
     for foreign in [false, true] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
         let mut pending = native_info(
@@ -278,4 +278,200 @@ fn codexup_pending_restore_tracks_the_new_terminal_before_provider_detection() {
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn room_resume_clears_the_provider_blocker_after_its_blocked_agents_were_deleted() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    state.block_missing_binary(agent, "codex", 100).unwrap();
+    // The operator removes the broken worker, restores codex, then runs the documented recovery.
+    state.delete_agent(agent, 101).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(MissingNative);
+    worker.resume_room(room).unwrap();
+    worker.poll().unwrap();
+    assert_ne!(
+        worker.state.room_status(room),
+        RuntimeStatus::Blocked,
+        "a room with no agent left on the missing provider must not stay blocked forever"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_blocker_from_a_failed_add_clears_once_room_resume_runs_with_no_held_agent() {
+    // Recover persisted blockers from a formerly refused add with no saved
+    // agent holding the outage. The documented resume must clear them.
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let mut state = worker.state.clone();
+    state.report_missing_binary(room, "codex", 100).unwrap();
+    worker.save(state).unwrap();
+    let kind = crate::messaging::identity::provider_kind(Provider::ClaudeCode).label();
+    let mut ready = native_info("pane", kind, "session");
+    ready.name = Some(format!("bus-r{}-a{}", room.0, agent.0));
+    ready.interactive_ready = true;
+    worker.transport = Box::new(FakeTransport {
+        replies: vec![
+            Ok(ResponseResult::AgentList {
+                agents: vec![ready.clone()],
+            }),
+            Ok(ResponseResult::AgentList {
+                agents: vec![ready],
+            }),
+        ]
+        .into(),
+        calls: Arc::default(),
+        state_path: dir.join("state.json"),
+    });
+    worker.poll().unwrap();
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"].as_array().unwrap().len(), 0);
+    assert_ne!(
+        worker.state.room_status(room),
+        RuntimeStatus::Blocked,
+        "a room blocker no agent holds must not outlive the documented recovery"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn resumed_agent_after_binary_outage_reports_a_failed_startup() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let hooks = dir.join(".codex/hooks.json");
+    let document = merge_hooks(
+        json!({}),
+        HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(&hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    let mut state = worker.state.clone();
+    state.block_missing_binary(agent, "codex", 101).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(RecoveryNative {
+        starts: Arc::default(),
+        refuse_close: false,
+    });
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "resuming");
+    // The resumed provider never confirmed startup and its native launch ended.
+    worker
+        .cleanup_failed_startups(&[], &std::sync::mpsc::channel().0, u64::MAX)
+        .unwrap();
+    let saved = worker.state.agent(agent).unwrap();
+    assert!(
+        saved.startup.is_none(),
+        "the failed resume launch must be settled, not left pending"
+    );
+    assert!(
+        worker
+            .state
+            .notices(room)
+            .any(|n| n.text.contains("Startup failed")),
+        "a failed resume after an outage must be reported"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn refused_add_does_not_create_an_unheld_room_blocker() {
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let (worker, _, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let old = std::env::var_os("PATH");
+    std::env::set_var("PATH", &dir);
+    let result = worker.ensure_provider_binary(room, Provider::Codex);
+    match old {
+        Some(v) => std::env::set_var("PATH", v),
+        None => std::env::remove_var("PATH"),
+    }
+    assert!(result.unwrap_err().contains("codex"));
+    assert!(worker
+        .state
+        .room(room)
+        .unwrap()
+        .missing_provider_binaries
+        .is_empty());
+    assert!(!worker
+        .state
+        .notices(room)
+        .any(|n| n.text.starts_with("BLOCKED")));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_resume_keeps_the_saved_pane_while_the_provider_binary_is_missing() {
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    state.block_missing_binary(agent, "codex", 100).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(MissingNative);
+    let old = std::env::var_os("PATH");
+    std::env::set_var("PATH", &dir);
+    let result = worker.resume_room(room);
+    match old {
+        Some(v) => std::env::set_var("PATH", v),
+        None => std::env::remove_var("PATH"),
+    }
+    let result = result.unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked");
+    assert!(
+        result["agents"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("missing from PATH"),
+        "{result}"
+    );
+    let saved = worker.state.agent(agent).unwrap();
+    assert_eq!(
+        saved.runtime_identity.terminal_id.as_deref(),
+        Some("terminal")
+    );
+    assert!(saved.startup.is_none());
+    assert_eq!(saved.missing_binary.as_deref(), Some("codex"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deleting_the_last_missing_binary_holder_resolves_the_room_fact() {
+    let (worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    let master = state.master_room().unwrap().id;
+    let orch = state
+        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(orch, room).unwrap();
+    let second = state
+        .create_agent(room, "second", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    state.block_missing_binary(agent, "codex", 100).unwrap();
+    state.block_missing_binary(second, "codex", 101).unwrap();
+    state.delete_agent(agent, 102).unwrap();
+    assert!(state
+        .room(room)
+        .unwrap()
+        .missing_provider_binaries
+        .contains("codex"));
+    state.delete_agent(second, 103).unwrap();
+    assert!(state
+        .room(room)
+        .unwrap()
+        .missing_provider_binaries
+        .is_empty());
+    let value = serde_json::to_value(&state).unwrap();
+    assert!(value["room_digests"][orch.0.to_string()]["facts"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|key| !key.starts_with("provider-block:")));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }

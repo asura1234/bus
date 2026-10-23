@@ -144,6 +144,9 @@ impl BusState {
             .agents
             .remove(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
+        if let Some(binary) = removed.missing_binary {
+            self.clear_unheld_missing_binary(removed.room_id, &binary, now_ms);
+        }
         self.retired_agents.insert(
             id,
             super::staffing::RetiredAgent {
