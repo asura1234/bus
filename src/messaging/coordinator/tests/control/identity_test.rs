@@ -213,7 +213,7 @@ fn identity_unresolved_agent_selector_errors_name_the_failing_selector() {
 }
 
 #[test]
-fn identity_interrupt_receipt_and_notice_keep_the_conversation_and_resolved_author() {
+fn identity_interrupt_preserves_receipt_context_and_target_room_notice() {
     let (mut w, home, target, dir) = fixture();
     let conversation = w.state.create_room("conversation").unwrap();
     w.state
@@ -249,16 +249,10 @@ fn identity_interrupt_receipt_and_notice_keep_the_conversation_and_resolved_auth
     assert_eq!(response.result["conversation_room_id"], json!(conversation));
     assert_eq!(response.result["author_id"], json!(author));
     assert_eq!(
-        w.state
-            .room(conversation)
-            .unwrap()
-            .notices
-            .last()
-            .unwrap()
-            .author,
+        w.state.room(home).unwrap().notices.last().unwrap().author,
         Author::Agent(author)
     );
-    assert!(w.state.room(home).unwrap().notices.is_empty());
+    assert!(w.state.room(conversation).unwrap().notices.is_empty());
     assert_eq!(
         w.state.request(request).unwrap().failure_reason.as_deref(),
         Some("interrupted")

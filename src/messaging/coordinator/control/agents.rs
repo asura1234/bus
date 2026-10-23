@@ -204,7 +204,7 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rows = Vec::new();
         for id in targets {
-            rows.push(self.interrupt_agent(&mut state, id, conversation, &interrupter, now)?);
+            rows.push(self.interrupt_agent(&mut state, id, room, &interrupter, now)?);
         }
         self.save(state)?;
         Ok(

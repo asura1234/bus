@@ -324,3 +324,32 @@ fn a_reply_captured_after_the_key_but_before_idle_completes_normally() {
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.reply(lead).as_deref(), Some("Parser written."));
 }
+
+#[test]
+fn interrupting_with_another_conversation_room_records_the_notice_where_the_turn_ran() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let mut state = fixture.worker.state.clone();
+    let side = state.create_room("side").unwrap();
+    fixture.worker.save(state).unwrap();
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    let response = interrupt(&mut fixture, json!({"agent": "builder", "room": "side"}));
+    assert!(response.ok, "{response:?}");
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    // `wait` on the closed message points to its room's history for who stopped it.
+    let in_turn_room: Vec<String> = fixture
+        .worker
+        .state
+        .notices(fixture.room)
+        .map(|notice| notice.text.clone())
+        .collect();
+    let in_side: usize = fixture.worker.state.notices(side).count();
+    assert_eq!(
+        in_turn_room,
+        ["Interrupted builder."],
+        "notice went to the --room conversation instead ({in_side} there)"
+    );
+}
