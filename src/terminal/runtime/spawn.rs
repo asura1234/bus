@@ -737,7 +737,6 @@ impl TerminalRuntime {
             &response_tx,
         )?;
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
-        let kitty_keyboard_flags = Arc::new(AtomicU16::new(0));
         let content_write_lock = Arc::new(Mutex::new(()));
 
         let spawned = spawn_with_portable_pty(rows, cols, cmd)
@@ -818,7 +817,7 @@ impl TerminalRuntime {
             child_pid,
             reported_cwd,
             child_wait_completed: Some(child_wait_completed),
-            kitty_keyboard_flags,
+            kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq,
             content_write_lock,
             #[cfg(test)]
