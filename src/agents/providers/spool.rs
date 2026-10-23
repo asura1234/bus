@@ -145,6 +145,17 @@ fn try_publish_pending(dir: &Path, own: Option<&Path>) -> io::Result<()> {
         Err(error) => return Err(error),
     };
     if let Some(path) = own {
+        // Never let a later hook allocate a sequence ahead of a completed stage.
+        // Leave the backlog to the consumer instead of draining it in a hook.
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.path() != path
+                && entry.file_name().to_string_lossy().starts_with("pending-")
+                && entry.path().extension().is_some_and(|e| e == "json")
+            {
+                return Ok(());
+            }
+        }
         // Hooks do not drain a backlog within their provider's five-second budget.
         // A consumer may already have published this envelope while we staged it.
         match std::fs::read(path) {
@@ -160,9 +171,14 @@ fn try_publish_pending(dir: &Path, own: Option<&Path>) -> io::Result<()> {
 // Caller holds append.lock; sequence allocation and duplicate publication remain
 // serialized, with the same event wire format and acknowledgement path as before.
 fn publish_pending(dir: &Path) -> io::Result<()> {
-    let mut pending = read_records(dir, "pending-")?;
-    pending.sort_by(|a, b| (a.1.at_ms, &a.0).cmp(&(b.1.at_ms, &b.0)));
-    for (staged, record) in pending {
+    // Millisecond capture timestamps can tie across completed hooks. Use the
+    // files' full-resolution write order, not arbitrary pid/counter filenames.
+    let mut pending = read_records(dir, "pending-")?
+        .into_iter()
+        .map(|(path, record)| Ok((std::fs::metadata(&path)?.modified()?, path, record)))
+        .collect::<io::Result<Vec<_>>>()?;
+    pending.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    for (_, staged, record) in pending {
         publish_record(dir, &staged, record)?;
     }
     Ok(())
