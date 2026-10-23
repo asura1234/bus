@@ -901,6 +901,45 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
 }
 
 #[test]
+fn developer_sound_choice_survives_color_blind_save_before_coordinator_echo() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-developer-sound-color-blind");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("settings.json");
+    crate::messaging::prefs::settings::save(
+        &path,
+        &crate::messaging::prefs::settings::BusSettings::default(),
+    )
+    .unwrap();
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.settings_path = Some(path.clone());
+    ui.system_sounds = Some(vec!["Ping".into()]);
+    ui.action(render::Action::CycleDeveloperSound(true));
+    let command_id = ui.pending.back().unwrap().id;
+    ui.action(render::Action::ToggleColorBlindMode);
+    let saved = crate::messaging::prefs::settings::update(&path, |settings| {
+        settings.developer_sound = Some("Ping".into());
+    })
+    .unwrap();
+    ui.receive_event(BusEvent::SettingsChanged(saved));
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id,
+        result: Ok(()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = command_id;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert!(ui.pending.is_empty());
+    let displayed_choice = ui.settings.developer_sound.clone();
+    let persisted_choice = crate::messaging::prefs::settings::load(&path)
+        .unwrap()
+        .developer_sound;
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(persisted_choice.as_deref(), Some("Ping"));
+    assert_eq!(displayed_choice, persisted_choice);
+}
+
+#[test]
 fn feishu_notifications_stay_on_without_changing_draft() {
     let (mut ui, master, _) = sound_fixture(0);
     ui.open_room(master);

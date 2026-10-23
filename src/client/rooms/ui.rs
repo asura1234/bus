@@ -259,7 +259,7 @@ impl BusUi {
             match crate::messaging::prefs::settings::update(path, |settings| {
                 settings.color_blind_mode = on
             }) {
-                Ok(saved) => self.settings = saved,
+                Ok(saved) => self.receive_settings(saved),
                 Err(error) => self.error = Some(error),
             }
         }
