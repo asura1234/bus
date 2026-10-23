@@ -436,15 +436,17 @@ fn a_stuck_failed_startup_deletion_does_not_relog_pending_every_tick() {
         close_failures: 100,
         ..Default::default()
     });
+    // Readiness failure retains the agent; deletion is an explicit action.
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+        .unwrap();
     // Keep callsite interest global while other libtest threads exercise the
     // same log site without a thread-local subscriber.
     let _callsite_registration = tracing::Dispatch::new(tracing_subscriber::registry());
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run_filtered("bus=info", || {
         for _ in 0..5 {
-            assert!(worker
-                .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
-                .is_err());
+            assert!(worker.delete_agent(agent, &mpsc::channel().0).is_err());
         }
     });
     assert!(worker.state.agent(agent).unwrap().deletion_pending);
