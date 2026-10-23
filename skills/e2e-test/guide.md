@@ -60,9 +60,13 @@ you saw. You do not decide what the product should do, and you never change the 
 - Fixtures: `fixture image --pattern quadrants|red-diagonal|blue-circle --file F`,
   `fixture file --file F [--text T]`; files land in the session's work dir
   (`/tmp/bus-tui/<name>/work`), which is also the scratch workspace for agents' PWD.
-  Developer messages emit no terminal popup; freezes are recorded only in diagnostics.
-  Mandatory developer sounds use system sound files; the always-on picker previews through
-  the effects recorder. Room sound effects keep their existing behavior regardless of focus.
+- Notifications: direct developer posts, explicit @you mentions and waiting-tagged agent
+  messages notify in every room; bare waiting phrases qualify only in developer conversations.
+  Bot DMs are always on, with editable recipient/CLI path and a two-second burst; assert argv
+  through a recording shim on a closed PATH. Notify you sound (always on) cycles System default
+  and installed system sounds, recording previews and alerts by their system file target.
+  Room switches, focus and ordinary cooldown do not suppress this cue. Developer-authored sends
+  do not notify, and no terminal popup is added; freezes are recorded only in diagnostics.
 - Fake agents answer each delivered prompt a moment later with `fake reply: <prompt>`. The
   echo adds find matches and pushes history, so let deliveries settle (`bus history` shows
   every request `replied`) before judging counts, positions or drags.
