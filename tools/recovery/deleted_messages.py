@@ -49,10 +49,15 @@ def decoded_objects(value):
 
 
 def receipts(value):
-    """Decode nested tool output JSON without treating incidental numbers as IDs."""
+    """Identify send receipts, including posted sends with no request IDs.
+
+    Status responses also contain message_id, but have requests instead of the
+    request_ids array that message.send returns. They cannot confirm a send.
+    """
     for obj in decoded_objects(value):
         result = obj.get("result", {})
-        if obj.get("ok") is True and isinstance(result, dict) and "message_id" in result:
+        if (obj.get("ok") is True and isinstance(result, dict) and "message_id" in result
+                and isinstance(result.get("request_ids"), list)):
             yield result
 
 
