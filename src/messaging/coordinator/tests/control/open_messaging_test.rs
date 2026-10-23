@@ -621,7 +621,12 @@ fn retired_numeric_id_keeps_replacement_ambiguity_after_storage_roundtrip() {
     let old = add(&mut w, room, &dir, "owner");
     w.state.delete_agent(old, 100).unwrap();
     add(&mut w, room, &dir, "owner");
-    add(&mut w, room, &dir, "owner");
+    let duplicate = add(&mut w, room, &dir, "legacy-owner");
+    // Fresh names are globally unique. Model an old persisted duplicate to
+    // retain the pre-upgrade ambiguity guard across raw storage round-trips.
+    let mut legacy = serde_json::to_value(&w.state).unwrap();
+    legacy["agents"][duplicate.0.to_string()]["name"] = serde_json::json!("owner");
+    w.state = serde_json::from_value(legacy).unwrap();
     w.save(w.state.clone()).unwrap();
     w.state = w.store.load().unwrap().unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "late notice");
