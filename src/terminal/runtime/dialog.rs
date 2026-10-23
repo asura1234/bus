@@ -115,7 +115,10 @@ impl TerminalRuntime {
         phase: &str,
     ) -> Result<(std::sync::MutexGuard<'_, ()>, crate::agents::dialog::Dialog), DialogChoice> {
         use std::time::{Duration, Instant};
-        let deadline = Instant::now() + Duration::from_millis(40);
+        let timeout = Duration::from_millis(40);
+        #[cfg(test)]
+        let timeout = self.test_dialog_wait_timeout(timeout);
+        let deadline = Instant::now() + timeout;
         loop {
             let guard = self
                 .content_write_lock
@@ -125,6 +128,8 @@ impl TerminalRuntime {
             let revision = self.content_seq();
             if synchronized || !revision.is_multiple_of(2) {
                 drop(guard);
+                #[cfg(test)]
+                self.test_signal_dialog_redraw();
                 if Instant::now() >= deadline {
                     tracing::debug!(
                         event = "bus.dialog.redrawing",

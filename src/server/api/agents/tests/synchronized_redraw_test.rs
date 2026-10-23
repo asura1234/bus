@@ -53,8 +53,14 @@ async fn guarded_choice_waits_for_the_same_synchronized_redraw_then_sends_once()
             .lookup_runtime_sender(0, pane)
             .unwrap()
             .test_pty_writer();
+        let observed_wait = app
+            .lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_observe_dialog_redraw(Duration::from_secs(2));
         let painter = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(5));
+            observed_wait
+                .recv_timeout(Duration::from_secs(10))
+                .expect("guard must observe the unfinished frame before repaint");
             writer(format!("{}\x1b[?2026l", &next[third..]).as_bytes());
         });
         let response = choose(&mut app, &observed, Some("session"), &digest, 1);
@@ -95,8 +101,14 @@ async fn guarded_answer_during_synchronized_redraw_is_retryable_then_rechecks_co
             .lookup_runtime_sender(0, pane)
             .unwrap()
             .test_pty_writer();
+        let observed_wait = app
+            .lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_observe_dialog_redraw(Duration::from_secs(2));
         let painter = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(5));
+            observed_wait
+                .recv_timeout(Duration::from_secs(10))
+                .expect("guard must observe the unfinished frame before repaint");
             writer(format!("\x1b[2J\x1b[H{next}\x1b[?2026l").as_bytes());
         });
         let response = app.handle_agent_dialog_answer(

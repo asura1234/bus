@@ -812,6 +812,8 @@ impl TerminalRuntime {
             kitty_keyboard_flags,
             content_seq,
             content_write_lock,
+            #[cfg(test)]
+            dialog_wait_test: Mutex::default(),
             detection_content_seq,
             managed_launch_pending,
             preserve_processes_on_drop: false,
