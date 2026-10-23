@@ -43,6 +43,9 @@ async fn captured_dialog_fingerprints_ignore_unrelated_redraws() {
 
 #[tokio::test]
 async fn captured_dialog_fingerprint_logs_explain_selection_only_staleness() {
+    if run_logging_test_alone("captured_dialog_fingerprint_logs_explain_selection_only_staleness") {
+        return;
+    }
     for (before, moved) in [(CODEX_BEFORE, CODEX_MOVED), (CLAUDE_BEFORE, CLAUDE_MOVED)] {
         let (mut app, mut writes) =
             app_with_dialog_sized(before.as_bytes(), Some("session"), 134, 45);
@@ -123,6 +126,9 @@ async fn captured_dialog_fingerprint_logs_explain_selection_only_staleness() {
 
 #[tokio::test]
 async fn captured_dialog_fingerprint_logs_distinguish_closed_questions() {
+    if run_logging_test_alone("captured_dialog_fingerprint_logs_distinguish_closed_questions") {
+        return;
+    }
     let (mut app, mut writes) =
         app_with_dialog_sized(CODEX_BEFORE.as_bytes(), Some("session"), 134, 45);
     let observed = observe_dialog(&mut app);
@@ -163,6 +169,10 @@ fn field_value<'a>(line: &'a str, field: &str) -> &'a str {
 
 #[tokio::test]
 async fn captured_dialog_fingerprint_logs_redact_malformed_expected_digests() {
+    if run_logging_test_alone("captured_dialog_fingerprint_logs_redact_malformed_expected_digests")
+    {
+        return;
+    }
     for screen in [CODEX_BEFORE, ""] {
         let (mut app, mut writes) =
             app_with_dialog_sized(screen.as_bytes(), Some("session"), 134, 45);
@@ -184,4 +194,29 @@ async fn captured_dialog_fingerprint_logs_redact_malformed_expected_digests() {
         assert!(log.contains("expected_digest_valid=false"), "{log}");
         assert!(!log.contains("private-malformed-digest"), "{log}");
     }
+}
+
+/// Per-test scoped tracing filters can race their global interest cache when
+/// libtest runs several captures concurrently. Exercise the real dev filter
+/// in a child test process, just as nextest isolates individual tests.
+fn run_logging_test_alone(name: &str) -> bool {
+    const CHILD: &str = "DIALOG_FINGERPRINT_LOG_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg(format!(
+            "server::api::agents::tests::fingerprint_tests::{name}"
+        ))
+        .args(["--exact", "--nocapture"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
 }
