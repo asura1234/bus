@@ -761,32 +761,20 @@ impl TerminalRuntime {
         );
 
         let io = {
-            let terminal = terminal.clone();
-            let response_writer = response_tx.clone();
-            let render_notify = render_notify.clone();
-            let render_dirty = render_dirty.clone();
-            let content_seq = content_seq.clone();
-            let content_write_lock = content_write_lock.clone();
-            let detection_content_seq = detection_content_seq.clone();
-            let child_pid = child_pid.clone();
-            let events = events.clone();
-            let reported_cwd = reported_cwd.clone();
-            let compression_wake = compression.notifier();
-            let rt = tokio::runtime::Handle::current();
             let on_read = pty_read_callback(PtyReadContext {
                 pane_id,
-                terminal,
-                response_writer,
-                render_notify,
-                render_dirty,
-                content_seq,
-                content_write_lock,
-                detection_content_seq,
-                child_pid,
-                events,
-                reported_cwd,
-                compression_wake,
-                rt,
+                terminal: terminal.clone(),
+                response_writer: response_tx.clone(),
+                render_notify: render_notify.clone(),
+                render_dirty: render_dirty.clone(),
+                content_seq: content_seq.clone(),
+                content_write_lock: content_write_lock.clone(),
+                detection_content_seq: detection_content_seq.clone(),
+                child_pid: child_pid.clone(),
+                events: events.clone(),
+                reported_cwd: reported_cwd.clone(),
+                compression_wake: compression.notifier(),
+                rt: tokio::runtime::Handle::current(),
                 agent_detection,
             });
 
