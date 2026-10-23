@@ -122,8 +122,10 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
         );
         assert_eq!(worker.snapshot().error, None);
         let notice_room = if delete_room { RoomId(0) } else { room };
-        let notice = worker.state.notices(notice_room).last().unwrap();
-        assert!(notice.text.contains("author") && notice.text.contains(message));
+        assert!(
+            worker.state.notices(notice_room).next().is_none(),
+            "the command result carries the left-open terminal details without a chat notice"
+        );
         drop(worker);
         let recovered = JsonStore::new(dir.join("state.json"))
             .load()
@@ -131,9 +133,7 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
             .unwrap();
         assert!(recovered.agent(agent).is_none());
         assert!(recovered.request(request).is_none());
-        assert!(recovered
-            .notices(notice_room)
-            .any(|notice| notice.text.contains(message)));
+        assert!(recovered.notices(notice_room).next().is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

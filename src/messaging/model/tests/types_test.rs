@@ -452,9 +452,7 @@ fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whi
 fn retired_github_watch_legacy_state_load_preserves_rooms_and_drops_watch_fields() {
     let mut state = BusState::default();
     let room = state.create_room("keep-room").unwrap();
-    state
-        .set_room_notes(room, "keep these notes".into())
-        .unwrap();
+    state.set_room_notes(room, "keep these notes").unwrap();
     let mut document = serde_json::to_value(&state).unwrap();
     document["github_watch"] = serde_json::json!({"owner/repo":{"scan_started_ms":1}});
     document["github_unavailable"] = serde_json::json!([[room.0, "owner/repo"]]);

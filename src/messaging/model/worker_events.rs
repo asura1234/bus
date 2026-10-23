@@ -29,6 +29,20 @@ pub(super) struct WorkerEvent {
     pub(super) route: ReplyRoute,
 }
 
+/// Cancelling retired inputs preserves history without creating replacement work.
+fn retired_automation(request: &Request) -> bool {
+    request.prompt.author == Author::Bus
+        && matches!(
+            request.failure_reason.as_deref(),
+            Some(
+                "github_watch_retired"
+                    | "room_digest_retired"
+                    | "messaging_onboarding_retired"
+                    | "operational_notice_retired"
+            )
+        )
+}
+
 impl BusState {
     pub(super) fn worker_orchestrator(&self, worker: AgentId) -> Option<AgentId> {
         let agent = self.agent(worker)?;
@@ -187,19 +201,7 @@ impl BusState {
             .collect();
         let requests: Vec<_> = self
             .requests()
-            // Retiring queued automation must not replace it with a failure wake.
-            .filter(|r| {
-                !(r.prompt.author == Author::Bus
-                    && matches!(
-                        r.failure_reason.as_deref(),
-                        Some(
-                            "github_watch_retired"
-                                | "room_digest_retired"
-                                | "messaging_onboarding_retired"
-                                | "operational_notice_retired"
-                        )
-                    ))
-            })
+            .filter(|r| !retired_automation(r))
             .filter(|r| {
                 self.worker_orchestrator(r.agent_id).is_some()
                     && self
