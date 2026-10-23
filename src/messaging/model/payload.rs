@@ -18,7 +18,7 @@ impl BusState {
         )
     }
 
-    pub(super) fn named_agent_label(&self, id: AgentId, name: &str) -> String {
+    fn named_agent_label(&self, id: AgentId, name: &str) -> String {
         if name.parse::<u64>().is_ok() || self.agent(id).is_none_or(|agent| agent.name != name) {
             format!("{name} (agent {})", id.0)
         } else {
