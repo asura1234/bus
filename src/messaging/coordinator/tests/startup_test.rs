@@ -392,3 +392,33 @@ fn blocked_shell_without_the_expected_provider_still_expires() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_stuck_failed_startup_deletion_does_not_relog_pending_every_tick() {
+    let (mut worker, agent, _room, dir) = pending(Provider::Codex);
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        close_failures: 100,
+        ..Default::default()
+    });
+    // Keep callsite interest global while other libtest threads exercise the
+    // same log site without a thread-local subscriber.
+    let _callsite_registration = tracing::Dispatch::new(tracing_subscriber::registry());
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run_filtered("bus=info", || {
+        for _ in 0..5 {
+            assert!(worker
+                .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+                .is_err());
+        }
+    });
+    assert!(worker.state.agent(agent).unwrap().deletion_pending);
+    let text = capture.text();
+    let pending = text.matches("bus.deletion.pending").count();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        pending, 1,
+        "an unchanged pending deletion is re-announced at info on every retry ({pending} records in 5 ticks):\n{text}"
+    );
+}

@@ -69,3 +69,5 @@ Status followers use `wait.sock` with separate admission from `control.sock`.
 terminals were left open. Both carry the agent ID and, for control deletions,
 inherit the control request span. A pending event without completion requires
 checking the error and saved state; it is not evidence of successful removal.
+Pending is emitted only on the transition into deletion_pending. Failed-startup
+cleanup retries the guarded close without repeating that unchanged intent.
