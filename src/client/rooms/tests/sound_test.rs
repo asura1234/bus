@@ -157,6 +157,22 @@ fn settings_lists_master_sound_above_every_work_room() {
 }
 
 #[test]
+fn release_settings_keyboard_reaches_the_developer_sound_picker() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.system_sounds = Some(vec!["Ping".into()]);
+    ui.action(render::Action::Settings);
+    for _ in 0..30 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+    assert!(ui.pending.iter().any(|pending| matches!(
+        &pending.command,
+        BusCommand::SetDeveloperSoundName(Some(name)) if name == "Ping"
+    )));
+}
+
+#[test]
 fn developer_sound_picker_keeps_long_name_controls_inside_settings_list() {
     let (mut ui, _, _) = sound_fixture(0);
     let sound_name = "A long installed notification sound ".repeat(3);

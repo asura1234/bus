@@ -190,7 +190,7 @@ impl BusUi {
             KeyCode::Down => {
                 let last = self
                     .perf_overlay_field()
-                    .unwrap_or_else(|| self.feishu_field() + 2);
+                    .unwrap_or_else(|| self.developer_sound_field());
                 self.settings_field = (self.settings_field + 1).min(last);
             }
             // Enter alone toggles (Space is deliberately inert in Settings).
