@@ -208,6 +208,7 @@ fn dialog_observation(
     let pending_question = agent.agent.as_deref() == Some("codex")
         && crate::agents::dialog::codex_question_pending(&screen);
     let dialog = crate::agents::dialog::parse(&screen);
+    runtime.trace_dialog_fingerprint(dialog.as_ref(), "observe", None, content_revision, false);
     tracing::debug!(
         event = "bus.dialog.observed",
         terminal_id = %agent.terminal_id,

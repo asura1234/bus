@@ -25,6 +25,25 @@ pub(crate) enum DialogChoice {
 }
 
 impl TerminalRuntime {
+    /// Log only hashes and metadata from the exact snapshot being checked.
+    pub(crate) fn trace_dialog_fingerprint(
+        &self,
+        dialog: Option<&crate::agents::dialog::Dialog>,
+        phase: &str,
+        expected_digest: Option<&str>,
+        content_revision: u64,
+        synchronized_output: bool,
+    ) {
+        crate::agents::dialog::trace_fingerprint(
+            dialog,
+            phase,
+            expected_digest,
+            content_revision,
+            self.pane_id.raw(),
+            synchronized_output,
+        );
+    }
+
     /// Open only the live Codex queue under the same lock as terminal updates.
     pub(crate) fn try_open_pending_codex_question(&self) -> Result<(), String> {
         let _guard = self
@@ -55,9 +74,15 @@ impl TerminalRuntime {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped())
-            .filter(|dialog| dialog.digest() == expected_digest)
-        else {
+        let dialog = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped());
+        self.trace_dialog_fingerprint(
+            dialog.as_ref(),
+            "choose",
+            Some(expected_digest),
+            self.content_seq(),
+            self.synchronized_output_active(),
+        );
+        let Some(dialog) = dialog.filter(|dialog| dialog.digest() == expected_digest) else {
             return Ok(DialogChoice::Stale);
         };
         let Some(keys) = dialog.keys_for(option) else {
@@ -138,9 +163,15 @@ impl TerminalRuntime {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped())
-            .filter(|dialog| dialog.digest() == expected_digest)
-        else {
+        let dialog = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped());
+        self.trace_dialog_fingerprint(
+            dialog.as_ref(),
+            "answer",
+            Some(expected_digest),
+            self.content_seq(),
+            self.synchronized_output_active(),
+        );
+        let Some(dialog) = dialog.filter(|dialog| dialog.digest() == expected_digest) else {
             return Ok(DialogChoice::Stale);
         };
         let Some(input) = dialog.input.as_ref() else {

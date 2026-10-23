@@ -11,6 +11,8 @@
 use sha2::{Digest, Sha256};
 mod claude;
 mod composer;
+mod fingerprint;
+pub(crate) use fingerprint::trace as trace_fingerprint;
 mod style;
 
 use style::{highlighted, styled_lines, Style};
