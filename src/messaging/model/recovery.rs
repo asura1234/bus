@@ -1,5 +1,8 @@
 //! Explicit recovery and terminal failure of unsubmitted queued requests.
-use super::{BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus};
+use super::{
+    Author, BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus,
+    QUEUED_STALL_MS,
+};
 
 impl BusState {
     /// Close only never-submitted notices emitted by the retired GitHub watch.
@@ -83,6 +86,22 @@ impl BusState {
         Ok(())
     }
 
+    /// Only a live dialog episode's Bus-authored notice to its bound
+    /// orchestrator can bypass ordinary delivery. Text never grants priority.
+    pub(crate) fn is_dialog_notice(&self, id: RequestId) -> bool {
+        self.request(id).is_some_and(|request| {
+            !request.settled()
+                && request.prompt.author == Author::Bus
+                && self.agents.values().any(|worker| {
+                    worker.dialog_notice.is_some()
+                        && worker.dialog_notice_to == Some(DialogNoticeTo::Orchestrator(id))
+                        && worker.room_id == request.room_id
+                        && self.notice_orchestrator(worker.room_id, Some(worker.id))
+                            == Some(request.agent_id)
+                })
+        })
+    }
+
     /// Capture all reasons before recovery clears the agent's last refusal.
     pub(crate) fn expire_stalled_queued_requests(
         &mut self,
@@ -96,6 +115,12 @@ impl BusState {
             .filter(|request| !self.is_reply_notification(request.id))
             .filter_map(|request| {
                 self.stall_reason(request, now_ms)
+                    .or_else(|| {
+                        (self.is_dialog_notice(request.id)
+                            && now_ms.saturating_sub(request.prompt.submitted_at_ms)
+                                >= QUEUED_STALL_MS)
+                            .then(|| "dialog_notice_undelivered".into())
+                    })
                     .map(|reason| (request.id, reason))
             })
             .collect();
@@ -119,6 +144,22 @@ impl BusState {
             }
             self.redirect_dialog_notice(id, &reason, now_ms)?;
             expired.push(id);
+        }
+        // An unknown native write must never be replayed or recovered out of
+        // its active group. Escalate the still-unconfirmed dialog separately.
+        let uncertain: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.uncertain_outcome
+                    && !request.trusted_start_bound
+                    && self.is_dialog_notice(request.id)
+                    && now_ms.saturating_sub(request.prompt.submitted_at_ms) >= QUEUED_STALL_MS
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in uncertain {
+            self.redirect_dialog_notice(id, "dialog_notice_submission_unconfirmed", now_ms)?;
         }
         Ok(expired)
     }

@@ -398,7 +398,8 @@ impl BusState {
     /// its turn visibly runs, or while the idle agent holds its reply for
     /// background work that turn started (shells, agents, session crons),
     /// bound by its submit hook, with no final reply yet. Only the lead's own
-    /// room can steer; other rooms and `--queue` wait for their own turn.
+    /// room can steer ordinary work; blocked-dialog notices may interrupt any
+    /// room's turn, including when older cross-room work heads the queue.
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
         if !matches!(
@@ -420,7 +421,11 @@ impl BusState {
         {
             return None;
         }
-        let first = *self.queues.get(&agent)?.first()?;
+        let queue = self.queues.get(&agent)?;
+        if let Some(notice) = queue.iter().find(|id| self.is_dialog_notice(**id)) {
+            return Some((*notice, lead.id));
+        }
+        let first = *queue.first()?;
         let queued = self.requests.get(&first)?;
         (!queued.queue_only && queued.room_id == lead.room_id).then_some((first, lead.id))
     }
@@ -442,9 +447,7 @@ impl BusState {
             .agents
             .get(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
-        if agent.current_request != Some(lead)
-            || self.queues.get(&agent_id).and_then(|queue| queue.first()) != Some(&request)
-        {
+        if self.next_steering(agent_id) != Some((request, lead)) {
             return Err(ModelError::InvalidTransition);
         }
         let status_revision = agent.status_revision;
@@ -455,7 +458,7 @@ impl BusState {
             .expected_launch_id
             .clone();
         if let Some(queue) = self.queues.get_mut(&agent_id) {
-            queue.remove(0);
+            queue.retain(|id| *id != request);
         }
         let request_state = self
             .requests
@@ -610,7 +613,8 @@ impl BusState {
 
     /// Real blocked-worker notices take precedence in an orchestrator's inbox.
     /// Use the persisted dialog routing identity, never sender-authored text.
-    /// Keep FIFO order within each class and give each notice its own turn.
+    /// Keep FIFO order within each class. Idle delivery gives each notice its
+    /// own turn; `next_steering` allows it into an already-active turn.
     pub(crate) fn prioritize_orchestrator_dialogs(&mut self, agent: AgentId) -> bool {
         if self
             .agents
@@ -620,12 +624,10 @@ impl BusState {
             return false;
         }
         let notices: std::collections::BTreeSet<_> = self
-            .agents
-            .values()
-            .filter_map(|a| match a.dialog_notice_to {
-                Some(super::DialogNoticeTo::Orchestrator(id)) => Some(id),
-                _ => None,
-            })
+            .queued_requests(agent)
+            .iter()
+            .copied()
+            .filter(|id| self.is_dialog_notice(*id))
             .collect();
         let Some(queue) = self.queues.get_mut(&agent) else {
             return false;

@@ -9,6 +9,9 @@ use std::sync::{
     Arc, Mutex,
 };
 
+#[path = "dialog_priority_test.rs"]
+mod dialog_priority_tests;
+
 #[path = "turn_settlement_test.rs"]
 mod turn_settlement_tests;
 

@@ -74,6 +74,8 @@ alternate screen with Codex 0.162's collapsed queued question (`? 1 question`,
 `⇧← to answer`, a warning beside `? for shortcuts`). Shift+Left opens it
 (`Which design should the worker use?`: Alpha, Beta, Other), Up/Down move, and
 Enter on Alpha or Beta answers it; the turn then replies as usual.
+`fake:question-text` shows an expanded Chinese free-text question with no
+options. `bus agent answer --text` submits it and lets the turn reply.
 The fake Codex also writes a rollout (`rollout-fake-SESSION.jsonl` in the
 temp dir, named in every hook's `transcript_path`) with each turn's
 `task_started`, `UserMessage` and `task_complete` answer, as Codex 0.163.0

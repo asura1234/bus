@@ -2,15 +2,16 @@
 //! working, drawn as Codex 0.162 draws it (tests/fixtures/codex-question):
 //! on the alternate screen, with a startup warning beside the shortcuts hint.
 //! Shift+Left opens the question, Up/Down move, Enter answers.
-use super::FakeAgent;
+use super::{drain_input, FakeAgent, Input};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-const DIRECTIVE: &str = "fake:question";
 const OPTIONS: [&str; 3] = ["Alpha", "Beta", "Other"];
 
+const TEXT_QUESTION: &str = "• Working (0s • esc to interrupt)\r\n\r\n• Queued follow-up inputs\r\n\r\n  请提供该 bug 的 record id 或行链接\r\n\r\n  Type your answer\r\n\r\n  enter submit   ctrl+] skip   shift+→ main prompt\r\n";
+
 pub(super) fn requested(provider: &str, prompt: &str) -> bool {
-    provider == "codex" && prompt.trim() == DIRECTIVE
+    provider == "codex" && matches!(prompt.trim(), "fake:question" | "fake:question-text")
 }
 
 fn collapsed() -> String {
@@ -83,18 +84,47 @@ fn keys(pending: &mut Vec<u8>) -> Vec<Key> {
 impl FakeAgent {
     /// Holds the turn on the queued question until it is answered (bounded at
     /// 600 seconds), then leaves the alternate screen and lets the turn reply.
-    pub(super) fn queued_question(&mut self) -> Result<(), i32> {
+    pub(super) fn queued_question(&mut self, free_text: bool) -> Result<(), i32> {
         let mut out = std::io::stdout();
         let draw = |out: &mut std::io::Stdout, screen: &str| {
             let _ = write!(out, "\x1b[H\x1b[J{screen}");
             let _ = out.flush();
         };
         let _ = write!(out, "\x1b[?1049h");
-        draw(&mut out, &collapsed());
-        let result = self.hold_question(&mut out, draw);
+        let result = if free_text {
+            draw(&mut out, TEXT_QUESTION);
+            self.hold_text_question()
+        } else {
+            draw(&mut out, &collapsed());
+            self.hold_question(&mut out, draw)
+        };
         let _ = write!(out, "\x1b[?1049l");
         let _ = out.flush();
         result
+    }
+
+    fn hold_text_question(&mut self) -> Result<(), i32> {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(600) {
+            let bytes = match self
+                .input
+                .as_ref()
+                .map(|rx| rx.recv_timeout(Duration::from_millis(100)))
+            {
+                Some(Ok(bytes)) => bytes,
+                Some(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => continue,
+                _ => return Err(0),
+            };
+            self.pending.extend(bytes);
+            for input in drain_input(&mut self.pending) {
+                match input {
+                    Input::Enter => return Ok(()),
+                    Input::Interrupt => return Err(0),
+                    _ => {}
+                }
+            }
+        }
+        Err(1)
     }
 
     fn hold_question(
@@ -153,6 +183,16 @@ mod tests {
         assert_eq!(dialog.options.len(), 3);
         assert_eq!(dialog.selected(), Some(1));
         assert_eq!(dialog.keys_for(2), Some(vec!["down", "enter"]));
+    }
+
+    #[test]
+    fn question_fixture_accepts_a_codex_free_text_question() {
+        assert!(requested("codex", "fake:question-text"));
+        assert!(!requested("claude", "fake:question-text"));
+        let dialog = crate::agents::dialog::parse(TEXT_QUESTION).unwrap();
+        assert_eq!(dialog.kind, crate::agents::dialog::DialogKind::Question);
+        assert!(dialog.options.is_empty());
+        assert_eq!(dialog.text, "请提供该 bug 的 record id 或行链接");
     }
 
     #[test]
