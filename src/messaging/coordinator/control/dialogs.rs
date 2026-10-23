@@ -226,12 +226,16 @@ impl Worker {
         &mut self,
         id: AgentId,
         expected_shape: &str,
-    ) -> Result<Option<(String, u32)>, String> {
+    ) -> Result<super::super::auto_dialogs::AutomaticObservation, String> {
+        use super::super::auto_dialogs::AutomaticObservation as Observed;
         let observation = self.observe_dialog(id)?;
         let Some(fingerprint) = observation["fingerprint"].as_str() else {
-            return Ok(None);
+            return Ok(Observed::Changed);
         };
         let claims = decode_dialog_fingerprint(fingerprint)?;
+        if claims.dialog_shape != expected_shape {
+            return Ok(Observed::Changed);
+        }
         let dialog = &observation["dialog"];
         let options = dialog["options"].as_array();
         let actionable = options.is_some_and(|options| {
@@ -243,7 +247,6 @@ impl Worker {
                 && options.iter().filter(|row| row["selected"] == true).count() == 1
         });
         if claims.session_id.is_none()
-            || claims.dialog_shape != expected_shape
             || claims.options != 3
             || claims.free_text.is_some()
             || dialog["kind"] != "choice"
@@ -252,13 +255,13 @@ impl Worker {
                 .as_array()
                 .is_some_and(|tabs| !tabs.is_empty())
         {
-            return Ok(None);
+            return Ok(Observed::Unavailable);
         }
         let selected = options
             .and_then(|rows| rows.iter().find(|row| row["selected"] == true))
             .and_then(|row| row["number"].as_u64())
             .ok_or("Missing selection")? as u32;
-        Ok(Some((fingerprint.to_owned(), selected)))
+        Ok(Observed::Ready(fingerprint.to_owned(), selected))
     }
 
     /// Answers the observed dialog once: the fingerprint is spent before any

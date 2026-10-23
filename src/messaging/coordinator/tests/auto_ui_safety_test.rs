@@ -46,6 +46,12 @@ fn auto_ui_exact_shape_from_an_unlisted_provider_is_not_allowed() {
 #[test]
 fn auto_ui_codex_keeps_waiting_from_the_exact_policy_shape() {
     let mut rig = Rig::with_provider(Provider::Codex);
+    let observed: schema::AgentDialog = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/provider-ui/codex-extra-thought.json"
+    ))
+    .unwrap();
+    assert_eq!(observed.hint, None);
+    rig.native.lock().unwrap().dialog = Some(observed);
     rig.polls(4);
     assert_eq!(
         rig.native.lock().unwrap().actions,
@@ -57,11 +63,7 @@ fn auto_ui_codex_keeps_waiting_from_the_exact_policy_shape() {
         .state
         .queued_requests(rig.orchestrator)
         .is_empty());
-    let notices = &rig.worker.state.room(rig.room).unwrap().notices;
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].author, Author::Bus);
-    assert!(notices[0].recipient_ids.is_empty());
-    assert!(notices[0].text.contains("Dismiss and keep waiting"));
+    assert!(rig.worker.state.room(rig.room).unwrap().notices.is_empty());
     rig.finish();
 }
 
@@ -116,7 +118,7 @@ fn auto_ui_a_later_episode_can_answer_the_identical_known_shape() {
     rig.native.lock().unwrap().dialog = Some(parsed(CAPTURE));
     rig.polls(3);
     assert_eq!(rig.native.lock().unwrap().actions, [2, 2]);
-    assert_eq!(rig.worker.state.room(rig.room).unwrap().notices.len(), 2);
+    assert!(rig.worker.state.room(rig.room).unwrap().notices.is_empty());
     assert!(rig
         .worker
         .state
@@ -161,19 +163,7 @@ fn auto_ui_storage_failure_prevents_native_keys() {
 
 #[test]
 fn auto_ui_master_provider_prompt_needs_no_developer_attention() {
-    let mut rig = Rig::new();
-    let mut state = rig.worker.state.clone();
-    let identity = state.agent(rig.agent).unwrap().runtime_identity.clone();
-    state
-        .set_agent_runtime_identity(rig.agent, AgentRuntimeIdentity::default())
-        .unwrap();
-    state
-        .set_agent_runtime_identity(rig.orchestrator, identity)
-        .unwrap();
-    rig.agent = rig.orchestrator;
-    rig.room = state.master_room().unwrap().id;
-    rig.native.lock().unwrap().agent = rig.agent;
-    rig.worker.save(state).unwrap();
+    let mut rig = Rig::new().in_master();
     rig.polls(4);
     assert_eq!(rig.native.lock().unwrap().actions, [2]);
     assert!(rig
@@ -181,10 +171,25 @@ fn auto_ui_master_provider_prompt_needs_no_developer_attention() {
         .state
         .queued_requests(rig.orchestrator)
         .is_empty());
+    assert!(rig.worker.state.room(rig.room).unwrap().notices.is_empty());
+    rig.finish();
+}
+
+#[test]
+fn auto_ui_stalled_master_dialog_retains_human_unblock_attention() {
+    let mut rig = Rig::new().in_master();
+    {
+        let mut native = rig.native.lock().unwrap();
+        native.keep_open = true;
+        native.uncertain = true;
+    }
+    rig.polls(8);
+    assert_eq!(rig.native.lock().unwrap().actions, [2]);
     let notices = &rig.worker.state.room(rig.room).unwrap().notices;
     assert_eq!(notices.len(), 1);
-    assert!(notices[0].attention_origin.is_none());
-    assert_eq!(notices[0].author, Author::Bus);
+    assert!(notices[0].attention_origin.is_some());
+    assert!(notices[0].text.contains("Blocked, needs help"));
+    assert!(!notices[0].text.contains("Auto-answer attempt"));
     rig.finish();
 }
 
@@ -248,7 +253,7 @@ fn auto_ui_a_brief_coherent_close_starts_a_new_episode() {
     rig.native.lock().unwrap().dialog = Some(parsed(CAPTURE));
     rig.polls(3);
     assert_eq!(rig.native.lock().unwrap().actions, [2, 2]);
-    assert_eq!(rig.worker.state.room(rig.room).unwrap().notices.len(), 2);
+    assert!(rig.worker.state.room(rig.room).unwrap().notices.is_empty());
     rig.finish();
 }
 
@@ -277,7 +282,71 @@ fn auto_ui_unreadable_or_pending_close_cannot_replay_an_uncertain_answer() {
         }
         rig.polls(4);
         assert_eq!(rig.native.lock().unwrap().actions, [2]);
-        assert_eq!(rig.worker.state.room(rig.room).unwrap().notices.len(), 1);
+        assert!(rig.worker.state.room(rig.room).unwrap().notices.is_empty());
         rig.finish();
     }
+}
+
+#[test]
+fn auto_ui_focus_that_never_redraws_falls_back_to_ordinary_routing() {
+    let mut rig = Rig::new();
+    rig.polls(2);
+    assert_eq!(rig.native.lock().unwrap().focuses, [2]);
+    // The provider dropped the arrow: the same dialog stays on option 1.
+    rig.native.lock().unwrap().dialog = Some(parsed(CAPTURE));
+    rig.polls(20);
+    assert!(rig.native.lock().unwrap().actions.is_empty());
+    assert_eq!(
+        rig.worker.state.queued_requests(rig.orchestrator).len(),
+        1,
+        "a stalled automatic answer leaves the agent blocked with nobody asked"
+    );
+    // Once handed off, a late selection redraw and restart must not send Enter.
+    {
+        let mut native = rig.native.lock().unwrap();
+        let dialog = native.dialog.as_mut().unwrap();
+        for option in &mut dialog.options {
+            option.selected = option.number == 2;
+        }
+        dialog.digest.push_str("-late-focus");
+    }
+    let mut rig = rig.reopen();
+    rig.polls(4);
+    assert!(rig.native.lock().unwrap().actions.is_empty());
+    assert_eq!(rig.worker.state.queued_requests(rig.orchestrator).len(), 1);
+    rig.finish();
+}
+
+#[test]
+fn auto_ui_uncertain_confirm_with_the_dialog_still_open_is_reported() {
+    let mut rig = Rig::new();
+    {
+        let mut native = rig.native.lock().unwrap();
+        native.uncertain = true;
+        native.keep_open = true;
+    }
+    rig.polls(20);
+    assert_eq!(rig.native.lock().unwrap().actions, [2]);
+    assert_eq!(
+        rig.worker.state.queued_requests(rig.orchestrator).len(),
+        1,
+        "the dialog is still open after an uncertain answer and nobody is asked"
+    );
+    rig.finish();
+}
+
+#[test]
+fn auto_ui_unactionable_fresh_observation_asks_without_sending_keys() {
+    let mut rig = Rig::new();
+    let mut unselected = parsed(CAPTURE);
+    for option in &mut unselected.options {
+        option.selected = false;
+    }
+    unselected.digest.push_str("-unselected");
+    rig.native.lock().unwrap().replace_on_read = Some((2, unselected));
+    rig.polls(20);
+    assert_eq!(rig.native.lock().unwrap().attempts, 0);
+    assert!(rig.native.lock().unwrap().actions.is_empty());
+    assert_eq!(rig.worker.state.queued_requests(rig.orchestrator).len(), 1);
+    rig.finish();
 }

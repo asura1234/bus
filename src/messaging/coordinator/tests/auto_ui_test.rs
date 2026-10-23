@@ -253,6 +253,21 @@ impl Rig {
             self.worker.poll().unwrap();
         }
     }
+    fn in_master(mut self) -> Self {
+        let mut state = self.worker.state.clone();
+        let identity = state.agent(self.agent).unwrap().runtime_identity.clone();
+        state
+            .set_agent_runtime_identity(self.agent, AgentRuntimeIdentity::default())
+            .unwrap();
+        state
+            .set_agent_runtime_identity(self.orchestrator, identity)
+            .unwrap();
+        self.agent = self.orchestrator;
+        self.room = state.master_room().unwrap().id;
+        self.native.lock().unwrap().agent = self.agent;
+        self.worker.save(state).unwrap();
+        self
+    }
     fn reopen(self) -> Self {
         let Self {
             worker,
@@ -319,11 +334,7 @@ fn auto_ui_known_shape_answers_without_waking_orchestrator() {
         .state
         .queued_requests(rig.orchestrator)
         .is_empty());
-    let notices = &rig.worker.state.room(rig.room).unwrap().notices;
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].author, Author::Bus);
-    assert!(notices[0].recipient_ids.is_empty());
-    assert!(notices[0].text.contains("Dismiss and keep waiting"));
+    assert!(rig.worker.state.room(rig.room).unwrap().notices.is_empty());
     assert!(capture.text().contains("bus.dialog.auto_answer"));
     assert!(capture.text().contains("claude_extra_thought"));
     rig.finish();
@@ -342,12 +353,8 @@ fn auto_ui_uncertain_attempt_is_not_replayed_after_restart() {
     let mut rig = rig.reopen();
     rig.polls(4);
     assert_eq!(rig.native.lock().unwrap().actions, [2]);
-    assert!(rig
-        .worker
-        .state
-        .queued_requests(rig.orchestrator)
-        .is_empty());
-    assert_eq!(rig.worker.state.room(rig.room).unwrap().notices.len(), 1);
+    assert_eq!(rig.worker.state.queued_requests(rig.orchestrator).len(), 1);
+    assert!(rig.worker.state.room(rig.room).unwrap().notices.is_empty());
     rig.finish();
 }
 

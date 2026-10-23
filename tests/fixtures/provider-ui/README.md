@@ -16,8 +16,13 @@ the copied orchestrator transcript lines 42011 and 42276, and the copied archive
 `herdr-server.log.20261022T191506.875844000Z.gz:21476`.
 No live pane or provider launch was used to create this semantic fixture.
 
-The Codex allowlist entry uses the same exact title, body and three options from
-the orchestrator's explicit text fallback. The reported source worker could not
-verify that prompt or its provider identity in retained artifacts. No real Codex
-PTY capture of this prompt is available or claimed. This authorises only the
-exact supplied shape for Codex; layout or wording variants fail closed.
+`codex-extra-thought.json` records the exact parsed choice supplied by the
+orchestrator from a real `bus agent dialog 21828` observation on 2026-10-23:
+the full two-line text, the three numbered options, option 1 selected, and
+`hint: null`. It is a real Bus observation, not a native PTY capture. The ID and
+digest are derived with the existing native hash contract; fixture transport
+identity is supplied by the test rig. Its semantic shape ID is the same as
+Claude's above: the hint changes the exact digest but is not part of the shape
+ID. The fixture regression feeds this parsed observation through the Codex
+automatic path, without parsing the Claude screen scaffold. Unknown text or
+option variants fail closed.

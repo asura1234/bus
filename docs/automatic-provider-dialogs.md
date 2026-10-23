@@ -3,9 +3,10 @@
 Bus has a closed allowlist of native provider dialogs whose answer is fixed.
 The initial entries are Claude's and Codex's “Giving this request a little extra
 thought” prompt: Bus chooses **Dismiss and keep waiting**, retaining the current
-model. Claude's identity comes from retained native observations. The Codex entry
-uses the explicitly supplied policy text; no real Codex capture of that prompt
-is claimed. An unrecognised Codex variant stays on the ordinary dialog path.
+model. Claude's identity comes from retained native observations. The Codex
+fixture records the exact parsed dialog supplied from a real Bus observation;
+it is not a native PTY capture. An unrecognised Codex variant stays on the
+ordinary dialog path.
 
 Recognition uses the provider and the complete parsed dialog shape ID, covering
 the title, kind, and every numbered option. A matching phrase in terminal text
@@ -26,13 +27,17 @@ bounded synchronized-frame guard, so a repaint cannot lend a partial grid or a
 replacement permission dialog to the earlier action. Ordinary manual choice
 submission keeps its existing behavior.
 
-Before keys are sent, Bus durably reserves the phase and records a plain
-Bus-authored room notice describing the attempt. This creates no orchestrator
-request or developer-attention wake. The `bus.dialog.auto_answer` log records
-the allowlist rule, option, phase and outcome without copying prompt text.
+Before keys are sent, Bus durably reserves the phase. Automatic attempts add no
+room-history notice, orchestrator request or developer-attention wake. The
+structured `bus.dialog.auto_answer` log records the allowlist rule, option,
+phase and outcome without copying prompt text. Ordinary help notifications
+remain available when automatic handling cannot finish.
 
 An uncertain confirmation is not replayed, including after a restart. A new
 launch or a coherently closed dialog allows a later occurrence of the same
 provider prompt to start another episode. Storage failure prevents key input.
-These conservative boundaries can leave an uncertain attempt for a person to
-inspect; they never authorize an answer to a different dialog.
+If a spent confirmation remains open or focus does not reach the target, the
+ordinary blocked-dialog path asks the orchestrator exactly once. The reservation
+prevents another Enter, and a later focus redraw cannot resume automation after
+handoff, including after restart. These boundaries never authorize an answer to
+a different dialog.
