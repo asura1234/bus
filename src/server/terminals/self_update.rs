@@ -285,6 +285,10 @@ impl App {
         ) else {
             return false;
         };
+        // Bus owns a shared provider installation: a pane must never mutate it.
+        if kind == crate::agents::AgentKind::Codex && name.starts_with("bus-r") {
+            return false;
+        }
         if terminal.state != AgentState::Blocked {
             return false;
         }

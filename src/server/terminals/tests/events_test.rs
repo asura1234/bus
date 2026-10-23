@@ -123,7 +123,7 @@ mod codex_self_update_listing {
         let started = app.handle_api_request(schema::Request {
             id: "start".into(),
             method: schema::Method::AgentStart(schema::AgentStartParams {
-                name: "bus-r1-a2".into(),
+                name: "native-codex".into(),
                 kind: "codex".into(),
                 pane_id,
                 args: vec!["-c".into(), "hooks=bus".into()],

@@ -4,7 +4,7 @@ use crate::protocol::api::schema;
 use crate::server::workspaces::Workspace;
 
 const CHOOSER: &[u8] = include_bytes!("../../../../tests/fixtures/codex-update/chooser-0.162.ansi");
-const NAME: &str = "bus-r1-a2";
+const NAME: &str = "native-codex";
 
 struct Harness {
     app: App,
@@ -599,4 +599,16 @@ async fn stuck_update_reports_blocked_while_waiting_for_a_person_to_stop_it() {
         schema::AgentStatus::Blocked,
         "an update waiting on a person's recovery action must be shown as blocked"
     );
+}
+
+#[tokio::test]
+async fn codexup_never_accepts_a_global_update_in_a_managed_pane() {
+    let mut harness = codex_at_update_chooser();
+    harness.terminal().set_agent_name("bus-r1-a2".into());
+    assert!(!harness.app.supervise_self_updates(Instant::now()));
+    assert!(
+        harness.writes.try_recv().is_err(),
+        "Bus must not select Update now"
+    );
+    assert_eq!(harness.phase(), None);
 }

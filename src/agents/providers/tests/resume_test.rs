@@ -127,7 +127,7 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
                 args,
                 vec!["--settings".to_owned(), path.to_string_lossy().into_owned()]
             ),
-            ProviderKind::Codex => assert_eq!(args, vec!["--no-daemon"]),
+            ProviderKind::Codex => assert_eq!(args, codex::launch::runtime_args()),
             ProviderKind::Cursor => assert!(args.is_empty()),
         }
     }

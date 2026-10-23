@@ -31,7 +31,7 @@ fn codex_adoption_extracts_only_a_leading_uuid_resume_form() {
 
 #[test]
 fn codex_launch_uses_a_private_runtime() {
-    assert_eq!(launch::runtime_args(), args(&["--no-daemon"]));
+    assert!(launch::runtime_args().contains(&"--no-daemon".to_owned()));
 }
 
 #[test]
@@ -69,4 +69,14 @@ fn codex_prompt_reference_is_short_escaped_and_skipped_for_adopted_threads() {
         .unwrap();
     assert!(argv[1].contains(&long));
     assert!(!argv[1].contains("Bus: this is your system prompt"));
+}
+
+#[test]
+fn codexup_launch_disables_startup_update_checks() {
+    let argv = launch::runtime_args();
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == ["-c", "check_for_update_on_startup=false"]),
+        "{argv:?}"
+    );
 }
