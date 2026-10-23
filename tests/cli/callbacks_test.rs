@@ -5,6 +5,76 @@ use std::{
 };
 
 #[test]
+fn reply_capture_diagnostics_distinguish_empty_missing_and_ignored_callbacks() {
+    let root = std::env::temp_dir().join(format!(
+        "bus-hook-shape-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    for (index, (text, transcript, expected, parsed)) in [
+        (serde_json::Value::Null, true, "null", "invalid"),
+        (serde_json::json!(""), true, "empty", "invalid"),
+        (serde_json::json!("PRIVATE_REPLY"), true, "text", "parsed"),
+        (serde_json::json!("PRIVATE_REPLY"), false, "text", "ignored"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = root.join(index.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"agent_id":2,"provider":"codex","launch_id":"launch"}"#,
+        )
+        .unwrap();
+        let mut payload = serde_json::json!({
+            "hook_event_name":"Stop", "session_id":"shape-session", "turn_id":"shape-turn",
+            "last_assistant_message":text, "prompt":"PRIVATE_PROMPT"
+        });
+        if transcript {
+            payload["transcript_path"] = serde_json::json!("/PRIVATE_PATH/transcript.jsonl");
+        }
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bus"))
+            .args(["--bus-callback", "codex-hook"])
+            .env("BUS_CALLBACK_DIR", &dir)
+            .env("BUS_LAUNCH_ID", "launch")
+            .env("BUS_LOG", "bus=info")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"{}\n");
+        let log = std::fs::read_to_string(dir.join("hook.log")).unwrap();
+        let shape = log.lines().find(|line| line.contains("bus.callback.payload_shape"))
+            .expect("every decoded hook needs a content-free shape observation, including ignored hooks");
+        for field in [
+            format!("final_state=\"{expected}\""),
+            format!("parse_outcome=\"{parsed}\""),
+            "hook_event=\"Stop\"".into(),
+            "session_id=Some(\"shape-session\")".into(),
+            "turn_id=Some(\"shape-turn\")".into(),
+            format!("transcript_present={transcript}"),
+        ] {
+            assert!(shape.contains(&field), "missing {field}: {shape}");
+        }
+        assert!(!log.contains("PRIVATE"), "{log}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

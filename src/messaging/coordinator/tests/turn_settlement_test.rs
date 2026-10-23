@@ -5,6 +5,60 @@ const CALLBACK_GRACE_MS: u64 = crate::messaging::model::TURN_SETTLE_MS;
 const HELD_REPLY_GRACE_MS: u64 = crate::messaging::model::HELD_REPLY_SETTLE_MS;
 
 #[test]
+fn reply_capture_diagnostics_identify_every_abandoned_group_member() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let mut fixture = Fixture::new(Provider::ClaudeCode);
+        let lead = running(&mut fixture, "PRIVATE_PROMPT", "turn-1");
+        let joined = fixture.send("PRIVATE_STEERING", false);
+        fixture.deliver();
+        fixture.started("turn-1", "PRIVATE_STEERING");
+        fixture.consume();
+        fixture.status(RuntimeStatus::Idle);
+        fixture.now += CALLBACK_GRACE_MS;
+        fixture.status(RuntimeStatus::Idle);
+        fixture.consume();
+        let log = capture.text();
+        for id in [lead, joined] {
+            let row = log
+                .lines()
+                .find(|line| {
+                    line.contains("bus.message.no_reply")
+                        && line.contains(&format!("request_id={} ", id.0))
+                })
+                .expect("every closed member must be diagnosable after deletion");
+            for field in [
+                format!("lead_id={}", lead.0),
+                "reason=\"reply_not_captured\"".into(),
+                "session_id=Some(\"session\")".into(),
+                "turn_id=Some(\"turn-1\")".into(),
+                "start_bound=true".into(),
+            ] {
+                assert!(row.contains(&field), "missing {field}: {row}");
+            }
+        }
+        assert!(!log.contains("PRIVATE"), "{log}");
+    });
+}
+
+#[test]
+fn reply_capture_diagnostics_do_not_report_a_failed_settlement_save_as_durable() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "PRIVATE_PROMPT", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture
+        .worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| assert!(fixture.worker.settle_requests().is_err()));
+    assert!(!capture.text().contains("bus.message.no_reply"));
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+}
+
+#[test]
 fn failed_provider_turn_closes_its_group_and_releases_the_queue() {
     for provider in [Provider::Cursor, Provider::ClaudeCode] {
         let mut fixture = Fixture::new(provider);

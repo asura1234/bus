@@ -1,5 +1,40 @@
 use super::*;
 
+#[test]
+fn reply_capture_diagnostics_record_loaded_ownership_before_restart_observations() {
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
+    worker.submit_ready().unwrap();
+    let before = worker.state.request(request).unwrap().clone();
+    let queued = queue(&mut worker, room, agent, "PRIVATE_QUEUED");
+    let transport = FakeTransport {
+        replies: vec![].into(),
+        calls,
+        state_path: dir.join("state.json"),
+    };
+    drop(worker);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let worker = Worker::open(dir.clone(), Box::new(transport)).unwrap();
+        assert_eq!(worker.state.request(request).unwrap(), &before);
+        let log = capture.text();
+        let row = log
+            .lines()
+            .find(|line| line.contains("bus.resume.open_request"))
+            .expect("startup must record the saved request before replacing status observations");
+        assert!(row.contains(&format!("request_id={} ", request.0)), "{row}");
+        assert!(row.contains("uncertain_outcome=true"), "{row}");
+        assert!(
+            !log.lines()
+                .any(|line| line.contains("bus.resume.open_request")
+                    && line.contains(&format!("request_id={} ", queued.0))),
+            "{log}"
+        );
+        assert!(!log.contains("PRIVATE"), "{log}");
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn resumed_info(provider: Provider) -> schema::AgentInfo {
     let kind = crate::messaging::identity::provider_kind(provider).label();
     serde_json::from_value(json!({
