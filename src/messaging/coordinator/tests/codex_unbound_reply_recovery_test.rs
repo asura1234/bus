@@ -171,3 +171,64 @@ fn steered_input_recorded_in_the_lead_turn_shares_its_recorded_answer() {
 
 #[path = "codex_identical_steering_test.rs"]
 mod codex_identical_steering_tests;
+
+/// A steered follower that transcript recovery detaches from its group closes
+/// as `reply_not_captured`; its no-reply diagnostic must still name the lead.
+#[test]
+fn reply_capture_diagnostics_record_a_follower_detached_by_transcript_recovery() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut fixture, rollout) = with_session_rollout();
+        let lead = fixture.send("merge the PR", false);
+        fixture.deliver();
+        fixture.record(
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+            "turn_id":"turn-1","prompt":"merge the PR","transcript_path":rollout}),
+        );
+        fixture.consume();
+        fixture.status(RuntimeStatus::Working);
+        let follow = fixture.send("then close the worktree", false);
+        fixture.deliver();
+        let typed = fixture.typed().last().unwrap().0.clone();
+        append_lines(
+            &rollout,
+            &(recorded_turn(fixture.now + 1, "turn-1", "merge the PR", "Merged.")
+                + &recorded_turn(fixture.now + 2, "turn-2", &typed, "Closed the worktree.")),
+        );
+        fixture.status(RuntimeStatus::Working);
+        fixture.status(RuntimeStatus::Idle);
+        fixture.consume();
+        fixture.now += TURN_SETTLE_MS;
+        fixture.status(RuntimeStatus::Idle);
+        fixture.consume();
+        fixture.now += STEERING_SETTLE_MS;
+        fixture.status(RuntimeStatus::Idle);
+        fixture.consume();
+        assert_eq!(
+            fixture.request(follow).failure_reason.as_deref(),
+            Some("reply_not_captured")
+        );
+        let log = capture.text();
+        let rows: Vec<_> = log
+            .lines()
+            .filter(|line| {
+                line.contains("bus.message.recovered")
+                    && line.contains("reason=\"reply_not_captured\"")
+                    && line.contains(&format!("request_id={} ", follow.0))
+            })
+            .collect();
+        assert_eq!(rows.len(), 1, "{log}");
+        assert!(
+            rows[0].contains(&format!("lead_id={}", lead.0)),
+            "{}",
+            rows[0]
+        );
+        assert!(
+            !log.lines()
+                .any(|line| line.contains("bus.message.recovered")
+                    && line.contains("reason=\"reply_not_captured\"")
+                    && line.contains(&format!("request_id={} ", lead.0))),
+            "the recovered lead was answered, not abandoned: {log}"
+        );
+    });
+}

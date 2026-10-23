@@ -2,7 +2,7 @@
 use super::{
     control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
-    RequestId, RuntimeStatus, StoragePause, Transport,
+    RequestId, RequestPhase, RuntimeStatus, StoragePause, Transport,
 };
 use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
@@ -558,6 +558,14 @@ impl Worker {
                 // unproven follower while completing the rest of the group.
                 let mut members = self.state.group_members(lead);
                 members.push(lead);
+                members.retain(|id| {
+                    self.state.request(*id).is_some_and(|request| {
+                        !matches!(
+                            request.phase,
+                            RequestPhase::Completed | RequestPhase::Abandoned
+                        )
+                    })
+                });
                 settled_groups.push((lead, members));
             }
         }
@@ -567,15 +575,19 @@ impl Worker {
             for (lead, members) in settled_groups {
                 let _group = tracing::info_span!("bus.settlement", lead_id = lead.0).entered();
                 for id in members {
-                    if self.state.request(id).is_some_and(|request| {
-                        request.failure_reason.as_deref() == Some("reply_not_captured")
-                    }) {
-                        diagnostics::request(
-                            &self.state,
-                            id,
-                            "bus.message.no_reply",
-                            "reply_not_captured",
-                        );
+                    let reason = self.state.request(id).and_then(|request| {
+                        match request.failure_reason.as_deref() {
+                            Some(reason @ ("reply_not_captured" | "agent_unavailable")) => {
+                                Some(reason)
+                            }
+                            Some(reason) if reason.starts_with("provider_error:") => {
+                                Some("provider_error")
+                            }
+                            _ => None,
+                        }
+                    });
+                    if let Some(reason) = reason {
+                        diagnostics::request(&self.state, id, "bus.message.recovered", reason);
                     }
                 }
             }

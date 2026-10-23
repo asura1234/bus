@@ -23,7 +23,8 @@ fn reply_capture_diagnostics_identify_every_abandoned_group_member() {
             let row = log
                 .lines()
                 .find(|line| {
-                    line.contains("bus.message.no_reply")
+                    line.contains("bus.message.recovered")
+                        && line.contains("reason=\"reply_not_captured\"")
                         && line.contains(&format!("request_id={} ", id.0))
                 })
                 .expect("every closed member must be diagnosable after deletion");
@@ -42,20 +43,73 @@ fn reply_capture_diagnostics_identify_every_abandoned_group_member() {
 }
 
 #[test]
-fn reply_capture_diagnostics_do_not_report_a_failed_settlement_save_as_durable() {
-    let mut fixture = Fixture::new(Provider::ClaudeCode);
-    let lead = running(&mut fixture, "PRIVATE_PROMPT", "turn-1");
-    fixture.status(RuntimeStatus::Idle);
-    fixture.now += CALLBACK_GRACE_MS;
-    fixture.status(RuntimeStatus::Idle);
-    fixture
-        .worker
-        .store
-        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
-    let capture = crate::utils::logging::test_capture::Capture::default();
-    capture.run(|| assert!(fixture.worker.settle_requests().is_err()));
-    assert!(!capture.text().contains("bus.message.no_reply"));
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+fn reply_capture_diagnostics_record_a_settlement_once_after_a_failed_save_is_retried() {
+    for reason in ["reply_not_captured", "agent_unavailable", "provider_error"] {
+        let mut fixture = Fixture::new(Provider::Codex);
+        let lead = running(&mut fixture, "PRIVATE_PROMPT", "turn-1");
+        let follower = fixture.send("PRIVATE_STEERING", false);
+        fixture.deliver();
+        fixture.started("turn-1", "PRIVATE_STEERING");
+        fixture.consume();
+        if reason == "provider_error" {
+            let rollout = fixture.dir.join("rollout-error.jsonl");
+            std::fs::write(
+                &rollout,
+                json!({"type":"event_msg","payload":{
+                    "type":"task_complete","turn_id":"turn-1","error":{"message":"PRIVATE_ERROR"}
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            fixture.record(
+                json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+                "turn_id":"turn-1","prompt":"PRIVATE_STEERING","transcript_path":rollout}),
+            );
+            fixture.consume();
+        }
+        fixture.status(RuntimeStatus::Idle);
+        let status = if reason == "agent_unavailable" {
+            RuntimeStatus::Unavailable
+        } else {
+            RuntimeStatus::Idle
+        };
+        fixture.status(status);
+        fixture.now += CALLBACK_GRACE_MS;
+        fixture.status(status);
+        fixture
+            .worker
+            .store
+            .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| {
+            assert!(fixture.worker.settle_requests().is_err());
+            assert!(!capture.text().contains("bus.message.recovered"));
+            assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+            fixture.worker.settle_requests().unwrap();
+            fixture.worker.settle_requests().unwrap();
+        });
+        let log = capture.text();
+        for id in [lead, follower] {
+            let rows: Vec<_> = log
+                .lines()
+                .filter(|line| {
+                    line.contains("bus.message.recovered")
+                        && line.contains(&format!("request_id={} ", id.0))
+                })
+                .collect();
+            assert_eq!(rows.len(), 1, "{reason}: {log}");
+            assert!(
+                rows[0].contains(&format!("reason=\"{reason}\"")),
+                "{reason}: {}",
+                rows[0]
+            );
+            assert_eq!(fixture.request(id).phase, RequestPhase::Abandoned);
+        }
+        assert!(
+            !log.contains("bus.message.no_reply") && !log.contains("PRIVATE"),
+            "{log}"
+        );
+    }
 }
 
 #[test]
@@ -1744,4 +1798,32 @@ fn truncated_tail_must_not_assign_a_later_identical_turn_to_an_earlier_request()
     end_without_stop(&mut fixture);
     assert!(fixture.reply(id).is_none(), "{:?}", fixture.reply(id));
     assert_reply_not_captured(&fixture, id);
+}
+
+#[test]
+fn reply_capture_recovered_log_is_not_written_for_an_unsaved_settlement() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "prompt", "turn-1");
+    fixture.status(RuntimeStatus::Idle);
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture
+        .worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        assert!(fixture.worker.settle_requests().is_err());
+        fixture.worker.settle_requests().unwrap();
+    });
+    let log = capture.text();
+    let rows = log
+        .lines()
+        .filter(|line| {
+            line.contains("bus.message.recovered")
+                && line.contains("reply_not_captured")
+                && line.contains(&format!("request_id={} ", lead.0))
+        })
+        .count();
+    assert_eq!(rows, 1, "{log}");
 }
