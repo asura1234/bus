@@ -88,7 +88,7 @@ impl RoomDigest {
 }
 
 impl BusState {
-    fn record_room_fact(
+    pub(super) fn record_room_fact(
         &mut self,
         room: RoomId,
         agent: Option<AgentId>,
@@ -204,8 +204,13 @@ impl BusState {
             return;
         };
         let (room, worker) = (request.room_id, request.agent_id);
+        let blocked = request
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("provider_error:"));
         let text = format!(
-            "Request {} {outcome}; message {}.\n{}",
+            "{}Request {} {outcome}; message {}.\n{}",
+            if blocked { "BLOCKED " } else { "" },
             id.0,
             request.prompt.id.0,
             request.prompt.text.chars().take(200).collect::<String>()

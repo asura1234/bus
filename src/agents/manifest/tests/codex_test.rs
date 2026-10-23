@@ -484,3 +484,32 @@ fn codex_hooks_blockers_require_live_controls_and_ignore_previous_menus() {
         assert!(!result.visible_blocker, "{screen}");
     }
 }
+
+#[test]
+fn staffing_codex_startup_prompt_is_ready_even_with_a_stale_working_title() {
+    let screen = "› Ask Codex to do anything\n  GPT-6.1-Sol xhigh · ~/work/libtv-app-prd-canvasbar\n  ? for shortcuts                       ⚠ 1 warning · f2 to view\n";
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "⠋ Codex", "");
+    assert_eq!(
+        result.state,
+        AgentState::Idle,
+        "a live startup prompt is readiness, not working"
+    );
+    assert!(result.visible_idle);
+}
+
+#[test]
+fn staffing_codex_startup_idle_requires_live_complete_footer_and_preserves_blockers() {
+    let prompt = "› Ask Codex to do anything\n  GPT-6.1-Sol xhigh · ~/work/libtv-app\n  ? for shortcuts                       ⚠ 1 warning · f2 to view\n";
+    for screen in [
+        format!("{prompt}• Working (1s · esc to interrupt)\n"),
+        "› Ask Codex to do anything\n  ? for shortcuts\n".to_owned(),
+    ] {
+        assert_eq!(
+            detect_screen_with_osc(AgentKind::Codex, &screen, "⠋ Codex", "").state,
+            AgentState::Working
+        );
+    }
+    let blocked = detect_screen_with_osc(AgentKind::Codex, prompt, "Action Required", "");
+    assert_eq!(blocked.state, AgentState::Blocked);
+    assert!(blocked.visible_blocker);
+}

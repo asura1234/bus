@@ -407,3 +407,86 @@ fn open_messaging_conversation_member_wins_over_master_name_and_ambiguity_stays_
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn staffing_stale_id_forwards_only_to_same_room_replacement_or_its_orchestrator() {
+    let (mut w, room, author, dir) = fixture();
+    let old = add(&mut w, room, &dir, "owner");
+    w.state.delete_agent(old, 100).unwrap();
+    let other = w.state.create_room("other-room").unwrap();
+    add(&mut w, other, &dir, "owner");
+    let master = w.state.master_room().unwrap().id;
+    let orch = add(&mut w, master, &dir, "orch");
+    w.state.bind_orchestrator(orch, room).unwrap();
+    let response = send(&mut w, room, author, &old.0.to_string(), "merge notice");
+    assert!(response.ok, "{response:?}");
+    assert_eq!(w.state.requests().last().unwrap().agent_id, orch);
+    let replacement = add(&mut w, room, &dir, "owner");
+    let state: BusState = serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
+    w.state = state;
+    assert!(send(&mut w, room, author, &old.0.to_string(), "next notice").ok);
+    assert_eq!(w.state.requests().last().unwrap().agent_id, replacement);
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn staffing_state_exposes_agent_queue_depth_and_oldest_age() {
+    let (mut w, room, author, dir) = fixture();
+    let peer = add(&mut w, room, &dir, "hub");
+    for _ in 0..4 {
+        assert!(send(&mut w, room, author, "hub", "queued task").ok);
+    }
+    let response = call(&mut w, "staffing-state", "state", json!({}));
+    assert!(response.ok, "{response:?}");
+    let rows = response.result;
+    let row = rows["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == peer.0)
+        .unwrap();
+    assert_eq!(row["queue_depth"], 4);
+    assert!(row["oldest_queued_age_ms"].is_u64(), "{row}");
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn staffing_tombstones_forward_names_but_never_authors_or_admin_commands() {
+    let (mut w, room, author, dir) = fixture();
+    let old = add(&mut w, room, &dir, "departed");
+    w.state.delete_agent(old, 100).unwrap();
+    let replacement = add(&mut w, room, &dir, "departed");
+    assert!(send(&mut w, room, author, "departed", "notice").ok);
+    assert_eq!(w.state.requests().last().unwrap().agent_id, replacement);
+    let forged = call(
+        &mut w,
+        "stale-author",
+        "message.send",
+        json!({"room":room.0.to_string(),"as":old.0.to_string(),"to":[author.0.to_string()],"text":"forged"}),
+    );
+    assert!(!forged.ok);
+    let admin = call(
+        &mut w,
+        "stale-admin",
+        "agent.rename",
+        json!({"agent":old.0.to_string(),"name":"renamed"}),
+    );
+    assert!(!admin.ok);
+    w.state.delete_agent(replacement, 200).unwrap();
+    let other = w.state.create_room("remote-only").unwrap();
+    add(&mut w, other, &dir, "departed");
+    assert!(
+        !send(
+            &mut w,
+            room,
+            author,
+            "departed",
+            "must not leak across rooms"
+        )
+        .ok
+    );
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}

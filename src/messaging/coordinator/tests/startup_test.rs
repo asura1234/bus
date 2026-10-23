@@ -70,7 +70,7 @@ impl Transport for FailedLaunchNative {
 }
 
 #[test]
-fn failed_startup_reports_evidence_and_deletes_instead_of_staying_unavailable() {
+fn failed_startup_reports_evidence_and_retains_identity() {
     let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
     state.delete_agent(previous, 0).unwrap();
@@ -96,9 +96,13 @@ fn failed_startup_reports_evidence_and_deletes_instead_of_staying_unavailable() 
         .unwrap();
     worker.tick().unwrap();
     assert!(
-        worker.state.agents().next().is_none(),
-        "failed launch remains unavailable forever after native ownership expires"
+        worker.state.agents().next().is_some(),
+        "startup failure must retain the registered agent"
     );
+    assert!(worker
+        .state
+        .notices(room)
+        .any(|n| n.author == Author::Bus && n.text.starts_with("Roster change: added broken")));
     let notice = worker.state.notices(room).last().unwrap();
     for text in [
         "broken",
@@ -163,7 +167,7 @@ fn startup_timeout_is_bounded_for_every_provider_even_with_a_live_pending_termin
         worker
             .cleanup_failed_startups(&[info], &events, start + 30_000)
             .unwrap();
-        assert!(worker.state.agent(agent).is_none());
+        assert!(worker.state.agent(agent).is_some());
         assert!(worker
             .state
             .notices(room)
@@ -222,18 +226,32 @@ fn startup_hook_consumed_before_cleanup_wins_over_an_expired_poll_snapshot() {
 }
 
 #[test]
-fn startup_failure_notice_survives_restart_and_a_failed_guarded_delete_without_duplication() {
+fn startup_failure_notice_survives_restart_without_duplication_or_losing_queued_work() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
-    worker.transport = Box::new(FailedLaunchNative {
-        state_path: dir.join("state.json"),
-        close_failures: 1,
-        ..Default::default()
-    });
-    assert!(worker
+    let mut state = worker.state.clone();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "pending work".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
+    worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
-        .is_err());
-    assert!(worker.state.agent(agent).unwrap().deletion_pending);
+        .unwrap();
+    assert!(!worker.state.agent(agent).unwrap().deletion_pending);
     assert_eq!(worker.state.notices(room).count(), 1);
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
     drop(worker);
     let mut worker = Worker::open(
         dir.clone(),
@@ -246,21 +264,18 @@ fn startup_failure_notice_survives_restart_and_a_failed_guarded_delete_without_d
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
-    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.agent(agent).is_some());
     assert_eq!(worker.state.notices(room).count(), 1);
-    drop(worker);
-    let worker = reopen_saved(&dir);
     assert_eq!(
-        worker.state.notices(room).count(),
-        1,
-        "deleted author must not erase failure evidence"
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn startup_failure_is_delivered_to_the_room_orchestrator_after_broken_author_is_deleted() {
+fn startup_failure_is_delivered_with_one_blocked_digest_fact_and_identity_retained() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
     let mut state = worker.state.clone();
     let master = state.master_room().unwrap().id;
@@ -278,7 +293,7 @@ fn startup_failure_is_delivered_to_the_room_orchestrator_after_broken_author_is_
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
-    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.agent(agent).is_some());
     let request = worker
         .state
         .requests()
@@ -287,6 +302,26 @@ fn startup_failure_is_delivered_to_the_room_orchestrator_after_broken_author_is_
     assert_eq!(request.prompt.author, Author::Bus);
     assert!(request.prompt.text.contains("Startup failed"));
     assert_eq!(worker.state.notices(room).count(), 0);
+    let saved = serde_json::to_value(&worker.state).unwrap();
+    let facts = saved["room_digests"][orchestrator.0.to_string()]["facts"]
+        .as_object()
+        .unwrap();
+    assert_eq!(facts.len(), 1);
+    assert!(facts.values().next().unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("BLOCKED"));
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+        .unwrap();
+    assert_eq!(
+        worker
+            .state
+            .requests()
+            .filter(|r| r.agent_id == orchestrator)
+            .count(),
+        1
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -307,7 +342,7 @@ fn startup_watch_survives_restart_and_failed_poll_is_not_launch_failure() {
         ..Default::default()
     });
     worker.tick().unwrap();
-    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.agent(agent).is_some());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -323,7 +358,7 @@ fn startup_failure_does_not_quote_a_replacement_terminal() {
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
-    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.agent(agent).is_some());
     let text = &worker.state.notices(room).last().unwrap().text;
     assert!(text.contains("Screen unavailable"));
     assert!(
@@ -381,7 +416,7 @@ fn blocked_shell_without_the_expected_provider_still_expires() {
     worker
         .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 30_000)
         .unwrap();
-    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.agent(agent).is_some());
     assert!(worker
         .state
         .notices(room)
@@ -421,4 +456,34 @@ fn a_stuck_failed_startup_deletion_does_not_relog_pending_every_tick() {
         pending, 1,
         "an unchanged pending deletion is re-announced at info on every retry ({pending} records in 5 ticks):\n{text}"
     );
+}
+
+#[test]
+fn staffing_readiness_timeout_retains_agent_identity_and_queue() {
+    let (mut worker, agent, _, dir) = pending(Provider::Codex);
+    let info = pending_info(&worker, agent);
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 30_000)
+        .unwrap();
+    assert!(
+        worker.state.agent(agent).is_some(),
+        "slow startup was deleted at thirty seconds"
+    );
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 120_000)
+        .unwrap();
+    assert!(
+        worker.state.agent(agent).is_some(),
+        "timeout must preserve agent identity and queued work"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }

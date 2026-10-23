@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.10.11.1"
+version = "2026.10.23.1"
 min_engine_version = 3
-updated_at = "2026-10-11T00:00:00Z"
+updated_at = "2026-10-23T00:00:00Z"
 
 # "Update now" replaces the Codex UI with the package manager it runs, while the
 # node launcher keeps the pane's process looking like Codex. Without this rule
@@ -64,6 +64,17 @@ priority = 1050
 region = "osc_title"
 visible_working = true
 regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+# Codex has no SessionStart or rollout before its first prompt. Its startup
+# prompt can already be ready while OSC still carries a bootstrap spinner.
+# Require all three live footer lines, so transcript text cannot override work.
+[[rules]]
+id = "startup_prompt_idle"
+state = "idle"
+priority = 1080
+region = "bottom_non_empty_lines(3)"
+visible_idle = true
+regex = ['(?m)^\s*› Ask Codex to do anything\s*\n\s*GPT-[^\r\n]+·[^\r\n]+\n\s*\? for shortcuts[^\r\n]*\s*\z']
 
 [[rules]]
 id = "transcript_viewer"

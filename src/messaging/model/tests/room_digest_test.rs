@@ -547,3 +547,113 @@ fn room_digest_an_abandoned_digest_leaves_its_unacknowledged_facts_deliverable()
         "the READY fact was never shown; an abandoned digest must not swallow it"
     );
 }
+
+#[test]
+fn staffing_deep_or_old_queues_create_one_actionable_fact_per_backlog() {
+    for (depth, now) in [(4, 100), (1, 900_101)] {
+        let (mut s, room, orch, worker) = fixture();
+        for _ in 0..depth {
+            s.submit_message_with(
+                room,
+                Draft {
+                    text: "queued work".into(),
+                    files: vec![],
+                    recipient_ids: [worker].into(),
+                },
+                Author::Developer,
+                100,
+                true,
+            )
+            .unwrap();
+        }
+        s.observe_status(worker, RuntimeStatus::Working, now)
+            .unwrap();
+        let pressure: Vec<_> = facts(&s, orch)
+            .into_iter()
+            .filter(|f| f["text"].as_str().unwrap().contains("Queue pressure"))
+            .collect();
+        assert_eq!(pressure.len(), 1, "{pressure:?}");
+        s.observe_status(worker, RuntimeStatus::Working, now + 1)
+            .unwrap();
+        assert_eq!(facts(&s, orch).len(), 1);
+    }
+}
+
+#[test]
+fn staffing_provider_capacity_failure_is_a_blocked_digest_fact() {
+    let (mut s, room, orch, worker) = fixture();
+    let request = s
+        .submit_message_from(
+            room,
+            Draft {
+                text: "work".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Developer,
+            100,
+        )
+        .unwrap()[0];
+    s.begin_submission(request, "launch", 0).unwrap();
+    s.close_turn_with_reason(
+        request,
+        200,
+        "provider_error: model at capacity (server_overloaded)".into(),
+    )
+    .unwrap();
+    assert!(
+        facts(&s, orch)
+            .iter()
+            .any(|f| f["text"].as_str().unwrap().starts_with("BLOCKED")
+                && f["text"].as_str().unwrap().contains("server_overloaded")),
+        "{:?}",
+        facts(&s, orch)
+    );
+}
+
+#[test]
+fn staffing_queue_pressure_has_strict_thresholds_and_covers_the_orchestrator() {
+    let (mut s, room, orch, worker) = fixture();
+    for _ in 0..3 {
+        s.submit_message_with(
+            room,
+            Draft {
+                text: "queued".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Developer,
+            100,
+            true,
+        )
+        .unwrap();
+    }
+    s.observe_status(worker, RuntimeStatus::Working, 900_100)
+        .unwrap();
+    assert!(
+        facts(&s, orch).is_empty(),
+        "exactly three messages and fifteen minutes is below the threshold"
+    );
+    s.observe_status(worker, RuntimeStatus::Working, 900_101)
+        .unwrap();
+    assert_eq!(facts(&s, orch).len(), 1);
+    for _ in 0..4 {
+        s.submit_message_with(
+            room,
+            Draft {
+                text: "hub work".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Developer,
+            900_101,
+            true,
+        )
+        .unwrap();
+    }
+    s.observe_status(orch, RuntimeStatus::Working, 900_102)
+        .unwrap();
+    assert!(facts(&s, orch)
+        .iter()
+        .any(|f| f["agent"] == orch.0 && f["text"].as_str().unwrap().contains("Queue pressure")));
+}
