@@ -166,17 +166,6 @@ the wrapper remains held.
   before a new blocking wait, or run it independently. After a restart, reconcile
   the room with `bus state` plus GitHub before anything else.
 
-- **Act on durable room digests.** Bus's `Room digest:` is a separate idle turn,
-  never steering for current work. Process each fact into a next owner/action or
-  reasoned hold. A direct message to its worker, or a single-recipient verifier
-  brief referencing the fact's PR/name/head, acknowledges it. Broadcasts never
-  acknowledge facts. Deleting its worker also acknowledges it; otherwise
-  explicitly dismiss it with `bus digest ack FACT_ID`.
-  Reading, `seen`, or replying to the digest does not acknowledge facts. Old
-  unacknowledged facts return only alongside new facts, with no timer wake.
-  Ask workers to start milestone finals with `READY FOR VERIFY`, `REVIEW READY`,
-  `MERGED`, `DONE` or `BLOCKED` so Bus can retain the handoff independently.
-
 - **Secure continuation before ending a turn.** Every active item has a next
   executing owner, a live durable wait, a named dependency or an explicit
   developer hold. Never delete a worker while a required follow-up has no owner.

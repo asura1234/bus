@@ -120,21 +120,12 @@ impl BusState {
             files: Vec::new(),
             recipient_ids: Default::default(),
             submitted_at_ms: now_ms,
-            attention_origin: Some(origin.clone()),
-            broadcast: false,
-            digest_notice_agents: Default::default(),
+            attention_origin: Some(origin),
         };
         room.latest_prompt = Some(prompt.clone());
         room.notices.push(prompt);
         if !visible {
             room.unread_count = room.unread_count.saturating_add(1);
-        }
-        // An orchestrator's own provider/dialog problem belongs to the developer.
-        if self
-            .agent(origin.agent_id)
-            .is_some_and(|a| a.orchestrates.is_none())
-        {
-            self.record_digest_notice(origin.room_id, Some(origin.agent_id), id, text, now_ms);
         }
         Ok(())
     }
@@ -224,7 +215,6 @@ impl BusState {
         // prune_attention removes it only after the request leaves history.
         for (request, prompt, agent, reason) in observed {
             if let Some(reason) = reason {
-                self.record_digest_request(request, now_ms);
                 let message = if reason == "submission_unconfirmed" {
                     Self::unconfirmed_submission_message(prompt)
                 } else {

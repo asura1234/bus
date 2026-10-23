@@ -2,6 +2,29 @@
 use super::{BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus};
 
 impl BusState {
+    /// Retire only never-submitted digests from older saved sessions. Typed
+    /// requests keep their original ownership and history.
+    pub(crate) fn retire_queued_room_digests(&mut self, now_ms: u64) -> Result<bool, ModelError> {
+        let retired: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.phase == RequestPhase::Queued
+                    && request.prompt.author == super::Author::Bus
+                    && request.prompt.text.starts_with("Room digest:")
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in &retired {
+            self.recover_idle_request(*id, now_ms)?;
+            self.requests
+                .get_mut(id)
+                .ok_or(ModelError::UnknownRequest(*id))?
+                .failure_reason = Some("room_digest_retired".into());
+        }
+        Ok(!retired.is_empty())
+    }
+
     /// Capture all reasons before recovery clears the agent's last refusal.
     pub(crate) fn expire_stalled_queued_requests(
         &mut self,
@@ -111,7 +134,6 @@ impl BusState {
                     agent.actionable_error = None;
                 }
             }
-            self.record_digest_request(request, recovered_at_ms);
             return Ok(());
         }
         if !matches!(
@@ -163,7 +185,6 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
         agent.actionable_error = None;
-        self.record_digest_request(request, recovered_at_ms);
         Ok(())
     }
 }

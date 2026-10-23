@@ -467,8 +467,7 @@ impl BusState {
                 request.failure_reason = Some(reason.clone());
             }
         }
-        // Abandonment captures the digest immediately. Attach the provider
-        // outcome first, so deduplication cannot freeze a generic no-reply fact.
+        // Retain the provider outcome before abandoning the group.
         self.abandon_current_request(id, now_ms)?;
         Ok(())
     }

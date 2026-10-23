@@ -84,18 +84,11 @@ async fn open_messaging_cross_room_session_delivery_has_its_own_reply() {
             history["messages"][0]["prompt"]["text"],
             "cross-room question"
         );
-        let destination_history = f.call("room.history", json!({"room":destination.0.to_string()}));
         assert!(
-            destination_history["messages"]
+            f.call("room.history", json!({"room":destination.0.to_string()}))["messages"]
                 .as_array()
                 .unwrap()
-                .iter()
-                .all(|row| row["prompt"]["author"] == json!("bus")
-                    && row["prompt"]["text"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("Room digest:")),
-            "the conversation is not mirrored; its worker home room may receive an idle digest"
+                .is_empty()
         );
     }
 }
@@ -1065,22 +1058,7 @@ async fn worker_reply_wakes_orchestrator_once_without_waiter_and_survives_reopen
         f.stop(orch, "notice", "acknowledged", json!([]), json!([]));
         f.reopen();
         f.tick();
-        let after = f.typed(orch);
-        assert_eq!(
-            after
-                .iter()
-                .filter(|text| !text.starts_with("Room digest:"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            after
-                .iter()
-                .filter(|text| text.starts_with("Room digest:"))
-                .count(),
-            1,
-            "a transport acknowledgment is not disposition of an idle worker"
-        );
+        assert_eq!(f.typed(orch).len(), 1);
         f.assert_reply(request, "worker result");
     }
 }

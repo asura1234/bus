@@ -165,12 +165,7 @@ pub(crate) fn agent_onboarding(
          product decisions and replacement announcements; workers do not edit room notes or the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
          Bus automatically adds 'name (agent id, room R):' to agent-authored messages. \
-         Send only the body; do not add a 'from X', 'X here' or signature line. \
-         Start worker milestone finals with READY FOR VERIFY, REVIEW READY, MERGED, DONE or BLOCKED. \
-         Bus retains these and other actionable room facts independently of waiter reads. \
-         A Room digest arrives only on a clean idle turn. Act on each fact: directly message its worker, brief a verifier using its PR/name/head, \
-         delete the worker, or explicitly dismiss the fact with bus digest ack FACT_ID. \
-         Broadcasts never acknowledge facts. Reading or replying to a digest does not acknowledge it; never just reply noted.",
+         Send only the body; do not add a 'from X', 'X here' or signature line.",
         id.0,
         room.0,
         docs.display(),

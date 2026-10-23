@@ -3,7 +3,6 @@ mod agents;
 mod attention;
 mod callbacks;
 mod compactions;
-mod digests;
 mod disk_space;
 mod github;
 mod history;
@@ -52,7 +51,3 @@ pub(crate) use {
 #[cfg(test)]
 #[path = "tests/types_test.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests/room_digest_test.rs"]
-mod room_digest_tests;

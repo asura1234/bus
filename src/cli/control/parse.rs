@@ -54,11 +54,6 @@ fn cli() -> Command {
         .subcommand(room_cli())
         .subcommand(agent_cli())
         .subcommand(
-            subcommand("digest")
-                .subcommand_required(true)
-                .subcommand(subcommand("ack").arg(value_arg("fact").required(true))),
-        )
-        .subcommand(
             subcommand("send")
                 .arg(option("room"))
                 .arg(option("to"))
@@ -185,10 +180,6 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
             ("message.send", params)
         }
         "message" => parse_message(args)?,
-        "digest" => match args.subcommand() {
-            Some(("ack", args)) => ("digest.ack", json!({"fact":required(args,"fact")?})),
-            _ => return Err("unknown digest command".into()),
-        },
         "request" => match args.subcommand() {
             Some(("recover", args)) => (
                 "request.recover",

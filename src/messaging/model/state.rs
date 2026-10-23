@@ -13,8 +13,6 @@ pub(crate) struct BusState {
     pub(super) next_id: u64,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) github_watch: BTreeMap<String, crate::messaging::github::Watermark>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) room_digests: BTreeMap<AgentId, super::digests::RoomDigest>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(super) github_unavailable: BTreeSet<(RoomId, String)>,
     pub(super) next_status_revision: u64,
@@ -117,7 +115,6 @@ impl BusState {
     pub(crate) fn durable_poll_change_from(&self, previous: &Self) -> bool {
         if self.next_id != previous.next_id
             || self.github_watch != previous.github_watch
-            || self.room_digests != previous.room_digests
             || self.retired_agents != previous.retired_agents
             || self.github_unavailable != previous.github_unavailable
             || self.rooms != previous.rooms
@@ -157,7 +154,6 @@ impl BusState {
         Self {
             next_id: 1,
             github_watch: BTreeMap::new(),
-            room_digests: BTreeMap::new(),
             github_unavailable: BTreeSet::new(),
             next_status_revision: 1,
             rooms: BTreeMap::new(),

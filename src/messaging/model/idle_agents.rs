@@ -1,5 +1,5 @@
 //! Durable, code-driven notice when a work room collects idle workers.
-use super::{AgentId, BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
+use super::{BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
 
 /// How long a worker must stay idle, with no status change, before it counts.
 pub(crate) const MIN_IDLE_FOR_ALERT_MS: u64 = 60_000;
@@ -34,19 +34,10 @@ impl BusState {
                          on the open PRs, or close the ones you no longer need to save \
                          resources. Your call.",
                         idle.len(),
-                        idle.iter()
-                            .filter_map(|id| self.agent(*id).map(|a| a.name.as_str()))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        idle.join(", ")
                     );
                     let orchestrator = self.notice_orchestrator(room, None);
-                    self.post_bus_notice_about(
-                        room,
-                        orchestrator,
-                        idle.iter().copied().collect(),
-                        text,
-                        now_ms,
-                    )?;
+                    self.post_bus_notice(room, orchestrator, text, now_ms)?;
                 }
                 idle.len() > limit
             };
@@ -61,9 +52,9 @@ impl BusState {
         Ok(changed)
     }
 
-    /// Identities of `room`'s workers that pass `test`, in creation order.
+    /// Names of `room`'s workers that pass `test`, in creation order.
     /// Orchestrators live in MASTER, so never count here.
-    fn workers(&self, room: RoomId, test: impl Fn(&RoomAgent) -> bool) -> Vec<AgentId> {
+    fn workers(&self, room: RoomId, test: impl Fn(&RoomAgent) -> bool) -> Vec<String> {
         self.agents
             .values()
             .filter(|agent| {
@@ -74,7 +65,7 @@ impl BusState {
                     && self.queued_requests(agent.id).is_empty()
                     && test(agent)
             })
-            .map(|agent| agent.id)
+            .map(|agent| agent.name.clone())
             .collect()
     }
 }

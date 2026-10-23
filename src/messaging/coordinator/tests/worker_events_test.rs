@@ -619,14 +619,7 @@ fn author_waiter_printed_outcome_is_seen_once_across_restart() {
     f.reopen();
     collect(&mut f);
     assert!(f.notices().is_empty());
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(
-        calls.len(),
-        1,
-        "transport-seen must still allow one action digest"
-    );
-    assert!(calls[0].starts_with("Room digest:"));
-    assert!(calls[0].contains("abandoned"));
+    assert!(f.calls.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -1333,12 +1326,7 @@ fn a_new_background_idle_episode_wakes_once_after_the_first_notice_was_handled()
         2,
         "stable idle must not replay on restart"
     );
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(
-        calls.len(),
-        2,
-        "healthy background work only keeps its existing notifications"
-    );
+    assert_eq!(f.calls.lock().unwrap().len(), 2);
 }
 
 #[test]
