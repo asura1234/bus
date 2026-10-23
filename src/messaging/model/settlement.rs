@@ -462,12 +462,14 @@ impl BusState {
         let mut closed = self.group_members(id);
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
         closed.push(id);
-        self.abandon_current_request(id, now_ms)?;
         for request in closed {
             if let Some(request) = self.requests.get_mut(&request) {
                 request.failure_reason = Some(reason.clone());
             }
         }
+        // Abandonment captures the digest immediately. Attach the provider
+        // outcome first, so deduplication cannot freeze a generic no-reply fact.
+        self.abandon_current_request(id, now_ms)?;
         Ok(())
     }
 }

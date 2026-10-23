@@ -21,6 +21,8 @@ pub(crate) struct BusState {
     pub(super) rooms: BTreeMap<RoomId, Room>,
     #[serde(deserialize_with = "deserialize_agents")]
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) retired_agents: BTreeMap<AgentId, super::staffing::RetiredAgent>,
     pub(super) requests: BTreeMap<RequestId, Request>,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
     /// Pending, one terminal notification, or seen per shared reply.
@@ -116,6 +118,7 @@ impl BusState {
         if self.next_id != previous.next_id
             || self.github_watch != previous.github_watch
             || self.room_digests != previous.room_digests
+            || self.retired_agents != previous.retired_agents
             || self.github_unavailable != previous.github_unavailable
             || self.rooms != previous.rooms
             || self.requests != previous.requests
@@ -159,6 +162,7 @@ impl BusState {
             next_status_revision: 1,
             rooms: BTreeMap::new(),
             agents: BTreeMap::new(),
+            retired_agents: BTreeMap::new(),
             requests: BTreeMap::new(),
             queues: BTreeMap::new(),
             reply_routes: BTreeMap::new(),

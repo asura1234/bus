@@ -39,6 +39,17 @@ pub fn detect_agent_with_osc(
     osc_title: &str,
     osc_progress: &str,
 ) -> AgentDetection {
+    detect_agent_with_launch_context(agent, screen_content, osc_title, osc_progress, false)
+}
+
+/// A startup footer may override bootstrap OSC only during an owned launch.
+pub(crate) fn detect_agent_with_launch_context(
+    agent: Option<AgentKind>,
+    screen_content: &str,
+    osc_title: &str,
+    osc_progress: &str,
+    managed_launch_pending: bool,
+) -> AgentDetection {
     let Some(agent) = agent else {
         return AgentDetection {
             state: AgentState::Unknown,
@@ -48,13 +59,14 @@ pub fn detect_agent_with_osc(
             visible_working: false,
         };
     };
-    manifest::detect_with_osc(
+    manifest::detect_with_launch_context(
         agent,
         manifest::DetectionInput {
             screen: screen_content,
             osc_title,
             osc_progress,
         },
+        managed_launch_pending,
     )
 }
 

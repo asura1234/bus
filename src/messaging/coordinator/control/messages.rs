@@ -233,6 +233,10 @@ impl Worker {
         }
         match candidates.as_slice() {
             [agent] => Ok(agent.id),
+            [] if recipient_alias => self
+                .state
+                .retired_recipient(selector, room, sender_room)?
+                .ok_or_else(|| "No matching room or agent".into()),
             [] => Err("No matching room or agent".into()),
             _ => Err(format!(
                 "Ambiguous agent name {selector:?}; use an ID: {}",

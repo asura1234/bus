@@ -29,6 +29,7 @@ impl Worker {
             .state
             .agent(id)
             .is_some_and(|agent| agent.deletion_pending);
+        let removed = self.state.agent(id).ok_or("Unknown agent")?.clone();
         let mut state = self.state.clone();
         state.prepare_delete_agent(id).map_err(|e| e.to_string())?;
         self.save(state)?;
@@ -41,6 +42,7 @@ impl Worker {
         }
         let left_open: Vec<_> = self.stop_agent_terminal(id)?.into_iter().collect();
         let mut state = self.state.clone();
+        state.post_bus_notice(removed.room_id, None, format!("Roster change: removed {} (agent {}). If no live recipient matches, its old ID or name forwards to a same-name replacement or current orchestrator in room {}.", removed.name, id.0, removed.orchestrates.unwrap_or(removed.room_id).0), super::io::now_ms()).map_err(|e| e.to_string())?;
         for terminal in &left_open {
             state
                 .post_deletion_notice(
@@ -430,6 +432,11 @@ impl Worker {
             hooks.launch_id,
             prepared.adopted_session.clone(),
         )?;
+        let mut state = self.state.clone();
+        state
+            .post_roster_addition(id, super::io::now_ms())
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
         let created = self
             .transport
             .request(Method::TabCreate(schema::TabCreateParams {

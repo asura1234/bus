@@ -1,6 +1,5 @@
-//! A new provider must confirm startup, or be reported and deleted. This
-//! watches the existing native launch outcome; it never types or retries.
-use super::{dialogs, io, launch, mpsc, schema, AgentId, BusEvent, Method, ResponseResult, Worker};
+//! A new provider must confirm startup, or retain its identity and report a blocker.
+use super::{io, launch, mpsc, schema, AgentId, BusEvent, Method, ResponseResult, Worker};
 use crate::messaging::{identity, model::AgentStartup};
 
 pub(super) const STARTUP_TIMEOUT_MS: u64 = 30_000;
@@ -34,7 +33,7 @@ impl Worker {
     pub(super) fn cleanup_failed_startups(
         &mut self,
         infos: &[schema::AgentInfo],
-        events: &mpsc::Sender<BusEvent>,
+        _events: &mpsc::Sender<BusEvent>,
         now_ms: u64,
     ) -> Result<(), String> {
         let pending: Vec<_> = self
@@ -44,7 +43,7 @@ impl Worker {
                 agent
                     .startup
                     .clone()
-                    .filter(|startup| !agent.deletion_pending || startup.reported)
+                    .filter(|_| !agent.deletion_pending)
                     .map(|startup| (agent.clone(), startup))
             })
             .collect();
@@ -58,19 +57,22 @@ impl Worker {
             // Codex defers SessionStart until its first prompt. Native
             // interactive confirmation, or a provider already waiting at its
             // own startup dialog, proves it started. Preserve that help wait.
-            if !startup.reported
-                && info.is_some_and(|info| {
-                    info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
-                        && (info.interactive_ready
-                            || info.launch_pending
-                                && (info.agent_status == schema::AgentStatus::Blocked
-                                    || info.dialog_id.is_some()))
-                })
-            {
+            if info.is_some_and(|info| {
+                info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                    && (info.interactive_ready
+                        || info.launch_pending
+                            && (info.agent_status == schema::AgentStatus::Blocked
+                                || info.dialog_id.is_some()))
+            }) {
                 let mut state = self.state.clone();
                 state
                     .set_agent_startup(agent.id, None)
                     .map_err(|e| e.to_string())?;
+                if startup.reported {
+                    state
+                        .set_agent_error(agent.id, None)
+                        .map_err(|e| e.to_string())?;
+                }
                 self.save(state)?;
                 continue;
             }
@@ -88,19 +90,21 @@ impl Worker {
                     "the native provider launch ended before startup was confirmed"
                 };
                 let text = format!(
-                    "{} (agent {}). Startup failed: {reason}. Removing this agent from the room.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
+                    "BLOCKED {} (agent {}). Startup failed: {reason}. Agent identity and queued work retained. Inspect readiness or resume this agent.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
                     agent.name, agent.id.0, launch::provider_kind(agent.provider), startup.command
                 );
                 let mut state = self.state.clone();
-                dialogs::post_dialog_notice(&mut state, agent.id, true, text)?;
+                state
+                    .post_staffing_blocker(agent.id, text, now_ms)
+                    .map_err(|e| e.to_string())?;
+                state.set_agent_error(agent.id, Some(format!("Startup failed: {reason}; identity and queue retained. Inspect readiness or resume this agent."))).map_err(|e| e.to_string())?;
                 startup.reported = true;
                 state
                     .set_agent_startup(agent.id, Some(startup))
                     .map_err(|e| e.to_string())?;
-                // Reporting is durable before normal guarded deletion begins.
+                // The persisted marker deduplicates this blocker across restarts.
                 self.save(state)?;
             }
-            self.delete_agent(agent.id, events)?;
         }
         Ok(())
     }

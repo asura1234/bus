@@ -88,6 +88,7 @@ impl BusState {
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
                 startup: None,
+                queue_pressure_episode: None,
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
@@ -179,9 +180,18 @@ impl BusState {
     /// received, live or archived, stays, closed as `agent_deleted`, so the
     /// message never reads complete without it.
     pub(crate) fn delete_agent(&mut self, id: AgentId, now_ms: u64) -> Result<(), ModelError> {
-        self.agents
+        let removed = self
+            .agents
             .remove(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
+        self.retired_agents.insert(
+            id,
+            super::staffing::RetiredAgent {
+                room: removed.room_id,
+                orchestrates: removed.orchestrates,
+                name: removed.name,
+            },
+        );
         self.ack_digest_deletion(id, now_ms);
         self.queues.remove(&id);
         let shared: std::collections::BTreeSet<_> = self
@@ -237,10 +247,16 @@ impl BusState {
         id: AgentId,
         startup: Option<super::AgentStartup>,
     ) -> Result<(), ModelError> {
-        self.agents
+        let agent = self
+            .agents
             .get_mut(&id)
-            .ok_or(ModelError::UnknownAgent(id))?
-            .startup = startup;
+            .ok_or(ModelError::UnknownAgent(id))?;
+        if startup.is_none() && agent.startup.as_ref().is_some_and(|s| s.reported) {
+            // Like closing a dialog, readiness gives held work a fresh idle
+            // interval even if the runtime remained Idle throughout the hold.
+            agent.status_since_ms = agent.status_since_ms.max(agent.observed_at_ms);
+        }
+        agent.startup = startup;
         Ok(())
     }
 
@@ -495,6 +511,7 @@ impl BusState {
             self.complete_pending_final(agent, now_ms)?;
         }
         self.record_digest_idle(agent, now_ms);
+        self.record_queue_pressure(agent, now_ms);
         Ok(())
     }
 }

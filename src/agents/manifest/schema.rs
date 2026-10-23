@@ -29,6 +29,8 @@ pub(super) struct ManifestRule {
     #[serde(default)]
     pub(super) visible_idle: bool,
     #[serde(default)]
+    pub(super) managed_launch_only: bool,
+    #[serde(default)]
     pub(super) visible_blocker: bool,
     #[serde(default)]
     pub(super) visible_working: bool,

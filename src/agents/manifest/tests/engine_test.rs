@@ -22,7 +22,7 @@ impl std::ops::Deref for Detected {
 pub(super) fn detect_input(agent: AgentKind, input: DetectionInput<'_>) -> Detected {
     let detection = detect_with_osc(agent, input);
     let matched_rule = load_manifest(agent).and_then(|loaded| {
-        matched_manifest_rule(input, &loaded).map(|rule| MatchedRule {
+        matched_manifest_rule(input, &loaded, false).map(|rule| MatchedRule {
             id: rule.id.clone(),
         })
     });
@@ -34,8 +34,8 @@ pub(super) fn detect_input(agent: AgentKind, input: DetectionInput<'_>) -> Detec
 
 pub(super) fn detect_loaded(input: DetectionInput<'_>, loaded: &LoadedManifest) -> Detected {
     Detected {
-        detection: evaluate_loaded_manifest(input, loaded),
-        matched_rule: matched_manifest_rule(input, loaded).map(|rule| MatchedRule {
+        detection: evaluate_loaded_manifest(input, loaded, false),
+        matched_rule: matched_manifest_rule(input, loaded, false).map(|rule| MatchedRule {
             id: rule.id.clone(),
         }),
     }

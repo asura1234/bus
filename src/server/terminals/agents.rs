@@ -217,6 +217,7 @@ impl App {
             .terminals
             .get_mut(&terminal_id)
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
+        terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         terminal.managed_agent_args = Some(args);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {

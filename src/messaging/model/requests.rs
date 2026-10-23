@@ -71,6 +71,7 @@ impl BusState {
         request_state.foreign_turn_settled_at_ms = None;
         // Starts the idle clock for stall detection at the submission.
         request_state.progress_at_ms = Some(submitted_at_ms);
+        self.record_queue_pressure(agent_id, submitted_at_ms);
         Ok(())
     }
 
@@ -192,6 +193,9 @@ impl BusState {
         }
         match lead.phase {
             RequestPhase::Completed | RequestPhase::Abandoned => None,
+            // A reported startup failure retains its queue until recovery;
+            // it has no submission opportunity and must not expire as a stall.
+            RequestPhase::Queued if agent.startup.as_ref().is_some_and(|s| s.reported) => None,
             // A reply held for background work is known work with a
             // cap of its own; the queue behind it waits, it has not stalled.
             // Background waits with no captured text still report stalls.

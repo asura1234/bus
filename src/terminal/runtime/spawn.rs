@@ -789,7 +789,7 @@ impl TerminalRuntime {
             })?)
         };
 
-        let detect_handle = spawn_detection_task(
+        let (managed_launch_pending, detect_handle) = spawn_detection_task(
             pane_id,
             agent_detection,
             initial_state.detected_agent,
@@ -813,6 +813,7 @@ impl TerminalRuntime {
             content_seq,
             content_write_lock,
             detection_content_seq,
+            managed_launch_pending,
             preserve_processes_on_drop: false,
             compression,
             detect_handle,

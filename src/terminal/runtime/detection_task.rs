@@ -31,9 +31,9 @@ use crate::terminal::runtime::detection_process::ProcessProbeInput;
 use crate::terminal::runtime::AgentDetection;
 use crate::utils::ids::PaneId;
 use crate::utils::render::signal::RenderSignal;
-use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -157,9 +157,10 @@ pub(super) fn spawn_detection_task(
     detection_content_seq: Arc<AtomicU64>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
-) -> Option<tokio::task::AbortHandle> {
+) -> (Arc<AtomicBool>, Option<tokio::task::AbortHandle>) {
+    let managed_launch_pending = Arc::new(AtomicBool::new(false));
     if agent_detection != AgentDetection::Enabled {
-        return None;
+        return (managed_launch_pending, None);
     }
     let task = DetectionTask {
         pane_id,
@@ -167,11 +168,12 @@ pub(super) fn spawn_detection_task(
         terminal,
         state_events: events,
         detection_content_seq,
+        managed_launch_pending: managed_launch_pending.clone(),
         render_notify,
         render_dirty,
     };
     let handle = tokio::spawn(task.run(initial_agent));
-    Some(handle.abort_handle())
+    (managed_launch_pending, Some(handle.abort_handle()))
 }
 
 const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
@@ -184,6 +186,7 @@ struct DetectionTask {
     terminal: Arc<PaneTerminal>,
     state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    managed_launch_pending: Arc<AtomicBool>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 }
@@ -578,6 +581,7 @@ impl DetectionTask {
             &osc_title,
             &osc_progress,
             process_exited,
+            self.managed_launch_pending.load(Ordering::Acquire),
         ) else {
             status.pending_idle.clear();
             return;

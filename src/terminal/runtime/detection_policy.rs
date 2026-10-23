@@ -292,6 +292,7 @@ pub(super) fn detection_update_for_publish_with_osc(
     osc_title: &str,
     osc_progress: &str,
     process_exited: bool,
+    managed_launch_pending: bool,
 ) -> Option<crate::agents::AgentDetection> {
     if process_exited {
         return Some(crate::agents::AgentDetection {
@@ -303,7 +304,17 @@ pub(super) fn detection_update_for_publish_with_osc(
         });
     }
 
-    let detection = crate::agents::detect_agent_with_osc(agent, content, osc_title, osc_progress);
+    let detection = if managed_launch_pending {
+        crate::agents::detect_agent_with_launch_context(
+            agent,
+            content,
+            osc_title,
+            osc_progress,
+            true,
+        )
+    } else {
+        crate::agents::detect_agent_with_osc(agent, content, osc_title, osc_progress)
+    };
     (!detection.skip_state_update).then_some(detection)
 }
 

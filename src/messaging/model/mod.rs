@@ -15,6 +15,7 @@ mod reply_routing;
 mod requests;
 mod rooms;
 mod settlement;
+mod staffing;
 mod state;
 mod status;
 mod types;

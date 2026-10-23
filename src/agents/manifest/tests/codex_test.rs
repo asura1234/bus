@@ -484,3 +484,85 @@ fn codex_hooks_blockers_require_live_controls_and_ignore_previous_menus() {
         assert!(!result.visible_blocker, "{screen}");
     }
 }
+
+fn detect_startup_screen_with_osc(
+    agent: AgentKind,
+    screen: &str,
+    title: &str,
+    progress: &str,
+) -> AgentDetection {
+    detect_with_launch_context(
+        agent,
+        DetectionInput {
+            screen,
+            osc_title: title,
+            osc_progress: progress,
+        },
+        true,
+    )
+}
+
+#[test]
+fn staffing_codex_startup_prompt_is_ready_even_with_a_stale_working_title() {
+    let screen = "› Ask Codex to do anything\n  GPT-6.1-Sol xhigh · ~/work/libtv-app-prd-canvasbar\n  ? for shortcuts                       ⚠ 1 warning · f2 to view\n";
+    let result = detect_startup_screen_with_osc(AgentKind::Codex, screen, "⠋ Codex", "");
+    assert_eq!(
+        result.state,
+        AgentState::Idle,
+        "a live startup prompt is readiness, not working"
+    );
+    assert!(result.visible_idle);
+}
+
+#[test]
+fn staffing_codex_startup_idle_requires_live_complete_footer_and_preserves_blockers() {
+    let prompt = "› Ask Codex to do anything\n  GPT-6.1-Sol xhigh · ~/work/libtv-app\n  ? for shortcuts                       ⚠ 1 warning · f2 to view\n";
+    for screen in [
+        format!("{prompt}• Working (1s · esc to interrupt)\n"),
+        format!("• Working (1s · esc to interrupt)\n{prompt}"),
+        "› Ask Codex to do anything\n  ? for shortcuts\n".to_owned(),
+    ] {
+        assert_eq!(
+            detect_startup_screen_with_osc(AgentKind::Codex, &screen, "⠋ Codex", "").state,
+            AgentState::Working
+        );
+    }
+    let blocked = detect_startup_screen_with_osc(AgentKind::Codex, prompt, "Action Required", "");
+    assert_eq!(blocked.state, AgentState::Blocked);
+    assert!(blocked.visible_blocker);
+}
+
+#[test]
+fn codex_startup_prompt_with_the_skills_placeholder_is_ready_with_a_stale_working_title() {
+    let screen = "› Use /skills to list available skills\n  GPT-6.1-Sol xhigh · ~/work/libtv-app\n  ? for shortcuts\n";
+    let result = detect_startup_screen_with_osc(AgentKind::Codex, screen, "⠋ Codex", "");
+    assert_eq!(
+        result.state,
+        AgentState::Idle,
+        "the other empty-composer placeholder is the same live startup prompt"
+    );
+}
+
+#[test]
+fn startup_footer_does_not_override_a_spinner_outside_managed_launch() {
+    let screen =
+        "› Ask Codex to do anything\n  GPT-6.1-Sol xhigh · ~/work/libtv-app\n  ? for shortcuts\n";
+    assert_eq!(
+        detect_screen_with_osc(AgentKind::Codex, screen, "⠋ Codex", "").state,
+        AgentState::Working
+    );
+}
+
+#[test]
+fn startup_readiness_accepts_a_bare_composer_but_preserves_a_typed_draft() {
+    for (body, expected) in [
+        ("", AgentState::Idle),
+        ("inspect my changes", AgentState::Working),
+    ] {
+        let screen = format!("› {body}\n  GPT-6.1-Sol xhigh · /repo\n  ? for shortcuts\n");
+        assert_eq!(
+            detect_startup_screen_with_osc(AgentKind::Codex, &screen, "⠋ Codex", "").state,
+            expected
+        );
+    }
+}

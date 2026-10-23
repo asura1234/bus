@@ -203,9 +203,24 @@ fn validate_matcher_limits(
     Ok(())
 }
 
+// Expand the reserved composer token from the same placeholders used by the
+// dialog and prompt readers; a bare composer is also empty.
+fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    const TOKEN: &str = "{{codex_empty_composer}}";
+    if !pattern.contains(TOKEN) {
+        return Regex::new(pattern);
+    }
+    let placeholders = crate::agents::CODEX_EMPTY_COMPOSER_PLACEHOLDERS
+        .iter()
+        .map(|value| regex::escape(value))
+        .collect::<Vec<_>>()
+        .join("|");
+    Regex::new(&pattern.replace(TOKEN, &format!("(?:{placeholders})?")))
+}
+
 fn validate_regex_patterns(patterns: &[String], context: &str, field: &str) -> Result<(), String> {
     for pattern in patterns {
-        Regex::new(pattern).map_err(|err| {
+        compile_regex(pattern).map_err(|err| {
             format!("{context} contains invalid {field} pattern {pattern:?}: {err}")
         })?;
     }
@@ -272,12 +287,12 @@ fn compile_gate(gate: &ManifestGate) -> Result<CompiledGate, String> {
         regex: gate
             .regex
             .iter()
-            .map(|pattern| Regex::new(pattern).map_err(|err| err.to_string()))
+            .map(|pattern| compile_regex(pattern).map_err(|err| err.to_string()))
             .collect::<Result<_, _>>()?,
         line_regex: gate
             .line_regex
             .iter()
-            .map(|pattern| Regex::new(pattern).map_err(|err| err.to_string()))
+            .map(|pattern| compile_regex(pattern).map_err(|err| err.to_string()))
             .collect::<Result<_, _>>()?,
     })
 }

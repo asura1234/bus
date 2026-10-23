@@ -371,12 +371,8 @@ pub(crate) fn codex_question_pending(screen: &str) -> bool {
         return false;
     }
     let empty_composer = |line: &str| {
-        line.strip_prefix('›').is_some_and(|body| {
-            matches!(
-                body.trim(),
-                "" | "Ask Codex to do anything" | "Use /skills to list available skills"
-            )
-        })
+        line.strip_prefix('›')
+            .is_some_and(super::is_empty_codex_composer)
     };
     if tail.is_empty() {
         return lines[..header]
