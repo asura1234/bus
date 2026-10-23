@@ -16,7 +16,7 @@ Cell screenshots may be captured; no real-desktop screenshots are permitted.
 
 Preconditions: fake MASTER orchestrator `notify-orch` bound to `notify-work`, fake worker
 `notify-worker` in that work room; second work room `notify-other`. All room sounds off,
-legacy `feishu_waiting_notifications` false; recording bot CLI configured. Wait until fake
+legacy `feishu_waiting_notifications` false; developer sound System default with Glass installed; recording bot CLI configured. Wait until fake
 agents are idle and setup activity has settled before recording baseline effect counts.
 
 1. Open Settings and assert Feishu notifications says always on, with editable recipient and CLI path, and room sounds off. Try Enter on the Feishu row and assert it stays on. Close Settings, select notify-other and type KEEP DRAFT. Save sound and shim-call baselines.

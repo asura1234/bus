@@ -67,6 +67,7 @@ pub(super) enum Action {
     ToggleSound(SoundTarget),
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
+    CycleDeveloperSound(bool),
     AdjustCompactionLimit(bool),
     /// Raises (true) or lowers the idle agents alert by one.
     AdjustIdleAgentsAlert(bool),

@@ -259,7 +259,7 @@ impl BusUi {
             match crate::messaging::prefs::settings::update(path, |settings| {
                 settings.color_blind_mode = on
             }) {
-                Ok(saved) => self.settings = saved,
+                Ok(saved) => self.receive_settings(saved),
                 Err(error) => self.error = Some(error),
             }
         }
@@ -307,7 +307,11 @@ impl BusUi {
 
     /// The overlay row's Settings focus index, after notification settings.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings.then(|| self.feishu_field() + 3)
+        self.dev_settings.then(|| self.developer_sound_field() + 1)
+    }
+
+    pub(super) fn developer_sound_field(&self) -> usize {
+        self.feishu_field() + 3
     }
 
     pub(super) fn feishu_field(&self) -> usize {
@@ -358,6 +362,9 @@ impl BusUi {
         }
         if pending(|command| matches!(command, BusCommand::SetFeishuNotifications(_))) {
             settings.feishu_notifications = self.settings.feishu_notifications;
+        }
+        if pending(|command| matches!(command, BusCommand::SetDeveloperSoundName(_))) {
+            settings.developer_sound = self.settings.developer_sound.clone();
         }
         self.settings = settings;
     }
@@ -528,7 +535,7 @@ impl BusUi {
                 &self.snapshot.state,
             );
             for _ in &alerts {
-                crate::platform::sound::play_developer();
+                crate::platform::sound::play_developer(self.settings.developer_sound.as_deref());
             }
             if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
                 .filter(|_| alerts.is_empty() && self.ringer.allow(std::time::Instant::now()))

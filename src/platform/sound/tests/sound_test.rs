@@ -16,6 +16,33 @@ fn touch(path: &Path) {
 }
 
 #[test]
+fn developer_sound_resolves_selected_system_files_and_never_the_bundled_ding() {
+    let sounds = vec![
+        SystemSound {
+            name: "Basso".into(),
+            path: PathBuf::from("/system/Basso.aiff"),
+        },
+        SystemSound {
+            name: "Glass".into(),
+            path: PathBuf::from("/system/Glass.aiff"),
+        },
+        SystemSound {
+            name: "Ping".into(),
+            path: PathBuf::from("/system/Ping.aiff"),
+        },
+    ];
+    let resolve = super::player::resolve_developer_sound;
+    assert_eq!(resolve(Some("ping"), &sounds), Some(sounds[2].path.clone()));
+    assert_eq!(resolve(None, &sounds), Some(sounds[1].path.clone()));
+    assert_eq!(
+        resolve(Some("removed"), &sounds),
+        Some(sounds[1].path.clone())
+    );
+    assert_eq!(resolve(None, &sounds[..1]), Some(sounds[0].path.clone()));
+    assert_eq!(resolve(None, &[]), None);
+}
+
+#[test]
 fn system_sounds_list_audio_files_by_name_across_folders() {
     let root = sound_tree("list");
     let mac = root.join("System/Library/Sounds");

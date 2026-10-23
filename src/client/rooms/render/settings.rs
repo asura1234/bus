@@ -100,6 +100,15 @@ impl BusUi {
         lines.push(SoundSettingsLine::FeishuCli {
             field: self.feishu_field() + 2,
         });
+        lines.push(SoundSettingsLine::Stepper {
+            field: self.developer_sound_field(),
+            label: "Notify you sound (always on)",
+            value: self.settings.developer_sound.as_deref().map_or_else(
+                || "System default".into(),
+                |name| self.sound_label(Some(name)),
+            ),
+            adjust: Action::CycleDeveloperSound,
+        });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
@@ -222,7 +231,7 @@ impl BusUi {
         }
         view.row(
             Rect::new(x, footer, width, 1),
-            "Close (Esc) · ↑↓ move · Enter toggles · ←→ change",
+            "Close (Esc) · ↑↓ move · Enter changes · ←→ change",
             Some(Action::Cancel),
             false,
             true,
@@ -362,7 +371,7 @@ impl BusUi {
         );
     }
 
-    /// A numeric Settings row: its label, then `‹ value ›` at the right edge
+    /// A Settings stepper: its label, then `‹ value ›` at the right edge
     /// where each arrow is a click target for `adjust(false)` / `adjust(true)`.
     fn stepper_settings_row(
         &self,
@@ -374,7 +383,13 @@ impl BusUi {
         adjust: fn(bool) -> Action,
     ) {
         let selected = self.settings_field == field;
-        let choice_width = value.len() as u16 + 4;
+        let label_width = unicode_width::UnicodeWidthStr::width(label);
+        let reserved = (label_width + 1).min(usize::from(rect.width / 2));
+        let available = usize::from(rect.width).saturating_sub(reserved);
+        let value = crate::utils::text::width::truncate_end(value, available.saturating_sub(4));
+        let choice_width =
+            (unicode_width::UnicodeWidthStr::width(value.as_str()) + 4).min(available) as u16;
+        let previous_width = choice_width.min(2);
         let choice_x = rect.x + rect.width.saturating_sub(choice_width);
         view.row(
             Rect::new(
@@ -389,14 +404,19 @@ impl BusUi {
             false,
         );
         view.row(
-            Rect::new(choice_x, rect.y, 2, 1),
+            Rect::new(choice_x, rect.y, previous_width, 1),
             "‹",
             Some(adjust(false)),
             selected,
             true,
         );
         view.row(
-            Rect::new(choice_x + 2, rect.y, choice_width - 2, 1),
+            Rect::new(
+                choice_x + previous_width,
+                rect.y,
+                choice_width - previous_width,
+                1,
+            ),
             format!("{value} ›"),
             Some(adjust(true)),
             selected,

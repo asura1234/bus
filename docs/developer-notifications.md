@@ -13,11 +13,17 @@ peer messages and completed agent replies also notify when they contain an expli
 and replies to developer-authored requests. Bare phrases between agents do not trigger developer alerts;
 there, "you" names the receiving agent. Developer-authored sends never trigger alerts.
 
-A separate bundled developer sound rings once for each qualifying source, regardless of
+The selected developer system sound rings once for each qualifying source, regardless of
 visible room, focus, room sound switches, startup grace or ordinary notification cooldown.
 Only the coordinator-owning client plays it. Initial history is a baseline on start/resume;
 repeated snapshots and archive moves do not replay alerts. Ordinary room sounds keep their
-existing settings. No desktop popup is added.
+existing settings. In Settings → NOTIFICATIONS, **Notify you sound (always on)** offers
+**System default** and installed system sounds. Use Left/Right, Enter or the arrows to choose
+and preview a sound. The choice is shared and saved for later Bus sessions; there is no Off
+option. System default prefers Glass when installed, then the first installed system sound.
+A missing or unplayable selection falls back to that system default, never a bundled developer
+sound. If no system sounds are installed, Bus logs that playback is unavailable; the other
+notification routes remain active. No desktop popup is added.
 
 Feishu bot DMs are always on. A legacy `feishu_waiting_notifications: false` is read as true,
 and `bus settings feishu-notifications --off` is rejected. The Settings row says **always on**;

@@ -7,6 +7,29 @@ use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
 use crate::messaging::prefs::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
+    pub(super) fn set_developer_sound(
+        &mut self,
+        name: Option<String>,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let name = match name {
+            Some(name) => Some(
+                crate::platform::sound::find_sound(&self.system_sounds(), &name)
+                    .ok_or_else(|| format!("Unknown system sound {name:?}"))?
+                    .name
+                    .clone(),
+            ),
+            None => None,
+        };
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.developer_sound = name)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        Ok(())
+    }
+
     /// Each tick re-reads the limits, so a change made in any Bus applies here.
     pub(super) fn refresh_setting_notices(&mut self) -> Result<(), String> {
         let saved = self

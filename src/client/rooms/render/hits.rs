@@ -91,6 +91,10 @@ impl BusUi {
             Action::EditFeishuRecipient => "feishu-recipient".into(),
             Action::EditFeishuCli => "feishu-cli-path".into(),
             Action::ToggleFeishuNotifications => "feishu-notifications".into(),
+            Action::CycleDeveloperSound(next) => format!(
+                "developer-sound:{}",
+                if *next { "next" } else { "previous" }
+            ),
             Action::ToggleSound(target) => format!("sound:{}", self.sound_target(target)),
             Action::CycleSound(target, next) => format!(
                 "sound-{}:{}",

@@ -24,6 +24,64 @@ fn settings_rows(ui: &mut BusUi, rows: u16) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn developer_sound_setting_offers_system_sound_selection() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    let rows = settings_rows(&mut ui, 55);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Notify you sound (always on)")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("System default")),
+        "{rows:#?}"
+    );
+}
+
+#[test]
+fn developer_sound_setting_cycles_with_mouse_and_keyboard_without_an_off_choice() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
+    ui.action(render::Action::CycleDeveloperSound(true));
+    assert_eq!(ui.settings_field, ui.developer_sound_field());
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Glass"));
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound, None);
+    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+    assert!(ui.settings.feishu_notifications);
+    assert_eq!(
+        ui.pending
+            .iter()
+            .filter(|p| matches!(p.command, BusCommand::SetDeveloperSoundName(_)))
+            .count(),
+        4
+    );
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::SetFeishuNotifications(false))));
+}
+
+#[test]
+fn developer_sound_setting_keeps_the_latest_choice_during_an_earlier_save_echo() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
+    ui.action(render::Action::CycleDeveloperSound(true));
+    ui.action(render::Action::CycleDeveloperSound(true));
+    let earlier = crate::messaging::prefs::settings::BusSettings {
+        developer_sound: Some("Glass".into()),
+        ..Default::default()
+    };
+    ui.receive_event(BusEvent::SettingsChanged(earlier));
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+}
+
 fn queued_sound(ui: &BusUi) -> Vec<(RoomId, bool)> {
     ui.pending
         .iter()
@@ -96,6 +154,48 @@ fn settings_lists_master_sound_above_every_work_room() {
     assert!(heading < master_group && master_group < master, "{rows:#?}");
     assert!(master < rooms_group && rooms_group < all_rooms && all_rooms < first);
     assert!(first < second);
+}
+
+#[test]
+fn release_settings_keyboard_reaches_the_developer_sound_picker() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.system_sounds = Some(vec!["Ping".into()]);
+    ui.action(render::Action::Settings);
+    for _ in 0..30 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+    assert!(ui.pending.iter().any(|pending| matches!(
+        &pending.command,
+        BusCommand::SetDeveloperSoundName(Some(name)) if name == "Ping"
+    )));
+}
+
+#[test]
+fn developer_sound_picker_keeps_long_name_controls_inside_settings_list() {
+    let (mut ui, _, _) = sound_fixture(0);
+    let sound_name = "A long installed notification sound ".repeat(3);
+    ui.system_sounds = Some(vec![sound_name.clone()]);
+    ui.settings.developer_sound = Some(sound_name);
+    ui.action(render::Action::Settings);
+    ui.compute_view(100, 55);
+    let list = ui.view.settings_list;
+    let controls: Vec<_> = ui
+        .view
+        .hits
+        .iter()
+        .filter(|hit| matches!(hit.action, render::Action::CycleDeveloperSound(_)))
+        .collect();
+    assert_eq!(controls.len(), 2);
+    for control in controls {
+        assert!(
+            control.rect.x >= list.x && control.rect.right() <= list.right(),
+            "developer sound control {:?} exceeds Settings list {:?}",
+            control.rect,
+            list
+        );
+    }
 }
 
 #[test]
@@ -840,6 +940,45 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
     );
     ui.action(render::Action::TogglePerfOverlay);
     assert!(!crate::client::perf::OVERLAY.is_on());
+}
+
+#[test]
+fn developer_sound_choice_survives_color_blind_save_before_coordinator_echo() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-developer-sound-color-blind");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("settings.json");
+    crate::messaging::prefs::settings::save(
+        &path,
+        &crate::messaging::prefs::settings::BusSettings::default(),
+    )
+    .unwrap();
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.settings_path = Some(path.clone());
+    ui.system_sounds = Some(vec!["Ping".into()]);
+    ui.action(render::Action::CycleDeveloperSound(true));
+    let command_id = ui.pending.back().unwrap().id;
+    ui.action(render::Action::ToggleColorBlindMode);
+    let saved = crate::messaging::prefs::settings::update(&path, |settings| {
+        settings.developer_sound = Some("Ping".into());
+    })
+    .unwrap();
+    ui.receive_event(BusEvent::SettingsChanged(saved));
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id,
+        result: Ok(()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = command_id;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert!(ui.pending.is_empty());
+    let displayed_choice = ui.settings.developer_sound.clone();
+    let persisted_choice = crate::messaging::prefs::settings::load(&path)
+        .unwrap()
+        .developer_sound;
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(persisted_choice.as_deref(), Some("Ping"));
+    assert_eq!(displayed_choice, persisted_choice);
 }
 
 #[test]

@@ -43,6 +43,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::SetFeishuCliPath(_) => "set_feishu_cli_path",
         C::SetSidebarWidth(_) => "set_sidebar_width",
         C::SetFeishuNotifications(_) => "set_feishu_notifications",
+        C::SetDeveloperSoundName(_) => "set_developer_sound",
         C::RenameAgent(..) => "rename_agent",
         C::DeleteRoom(_) => "delete_room",
         C::DeleteAgent(_) => "delete_agent",
