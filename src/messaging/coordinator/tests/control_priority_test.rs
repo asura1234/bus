@@ -158,6 +158,52 @@ fn the_coordinator_thread_runs_at_user_interactive_qos() {
 mod control_fairness_tests;
 
 #[test]
+fn a_dequeued_control_log_caps_the_id_without_changing_the_response_id() {
+    let dir = data_dir("dequeued-log-id");
+    let worker = Worker::open(dir.clone(), Box::new(NoAgents)).unwrap();
+    let id = "r".repeat(200 * 1024);
+    let (replies, answered) = mpsc::sync_channel(2);
+    let (commands, receiver) = mpsc::sync_channel(2);
+    commands
+        .send(call(
+            &id,
+            "state",
+            json!({}),
+            Some(Instant::now() + Duration::from_secs(15)),
+            &replies,
+        ))
+        .unwrap();
+    commands.send((2, BusCommand::Shutdown)).unwrap();
+    let snapshot = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+    let (events, _) = mpsc::channel();
+    // Keep callsite interest global while other libtest threads exercise the
+    // same log site without a thread-local subscriber.
+    let _callsite_registration = tracing::Dispatch::new(tracing_subscriber::registry());
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run_filtered("bus=debug", || worker.run(receiver, events, snapshot));
+    let response = answered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let text = capture.text();
+    let record = text
+        .lines()
+        .find(|line| line.contains("bus.control.command.dequeued"))
+        .expect("dequeue diagnostic");
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        response.id, id,
+        "log truncation must not change response correlation"
+    );
+    assert!(
+        record.contains(&"r".repeat(128)),
+        "the useful ID prefix must remain"
+    );
+    assert!(
+        !record.contains(&"r".repeat(129)),
+        "dequeue record contains an uncapped {} byte ID",
+        record.len()
+    );
+}
+
+#[test]
 fn a_delete_reply_publishes_removal_before_the_following_tick() {
     struct BlockPoll {
         entered: mpsc::Sender<()>,

@@ -296,7 +296,7 @@ impl Client {
                     crate::messaging::perf::CONTROL_REQUEST.record_op(started.elapsed(), method);
                     tracing::warn!(
                         event = "bus.control.request.timeout",
-                        control_request_id = %id, method,
+                        control_request_id = %id.chars().take(128).collect::<String>(), method,
                         endpoint = if poll_budget.is_some() { "status" } else { "interactive" },
                         elapsed_ms = started.elapsed().as_millis() as u64,
                         "Coordinator deadline elapsed; the operation may still complete"

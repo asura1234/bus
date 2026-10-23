@@ -63,6 +63,8 @@ contain a PID, which can be correlated with a contemporaneous process snapshot;
 they do not identify whether a caller used `send --async` or `wait` by themselves.
 These are sampled overload snapshots, not an exhaustive connection ledger.
 Status followers use `wait.sock` with separate admission from `control.sock`.
+The timeout and dequeued records also cap their logged IDs at 128 characters;
+request validation and response correlation still use the full ID.
 
 `bus.deletion.pending` follows the durable delete intent;
 `bus.deletion.completed` follows durable agent removal and reports how many

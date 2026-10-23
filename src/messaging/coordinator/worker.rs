@@ -329,7 +329,7 @@ impl Worker {
             perf::CONTROL_QUEUE.record_op(queued, perf::control_method_label(&call.request.method));
             tracing::debug!(
                 event = "bus.control.command.dequeued",
-                control_request_id = %call.request.id,
+                control_request_id = %call.request.id.chars().take(128).collect::<String>(),
                 method = perf::control_method_label(&call.request.method),
                 queue_ms = queued.as_millis() as u64,
                 "Control command reached the coordinator"

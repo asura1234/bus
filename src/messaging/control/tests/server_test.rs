@@ -395,6 +395,58 @@ fn coordinator_deadline_logs_the_request_without_its_params() {
 }
 
 #[test]
+fn coordinator_deadline_log_caps_the_request_id_like_overload_records() {
+    let dir = TestDir::new();
+    storage_io::private_dir(&dir.0).unwrap();
+    let (listener, _socket) = bind_endpoint(&dir.0, SOCKET_NAME).unwrap();
+    let _peer = ipc::connect_local_stream(&dir.socket()).unwrap();
+    let mut client = Client::new(listener.accept().unwrap());
+    let request = Request {
+        id: "x".repeat(200 * 1024),
+        method: "state".into(),
+        params: json!({}),
+    };
+    let (tx, _rx) = mpsc::sync_channel(1);
+    let mut next = CONTROL_COMMAND_BIT;
+    assert!(client.dispatch_request(&serde_json::to_vec(&request).unwrap(), &tx, &mut next, None));
+    client.deadline = Instant::now() - Duration::from_millis(1);
+    // Keep callsite interest global while other libtest threads exercise the
+    // same log site without a thread-local subscriber.
+    let _callsite_registration = tracing::Dispatch::new(tracing_subscriber::registry());
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run_filtered("info", || {
+        assert!(client.poll(&tx, &mut next, None));
+    });
+    let text = capture.text();
+    assert!(
+        text.contains("bus.control.request.timeout"),
+        "{}",
+        &text[..text.len().min(500)]
+    );
+    assert!(
+        text.len() < 4096,
+        "timeout record carries an uncapped {} byte request id",
+        text.len()
+    );
+    assert!(
+        text.contains(&"x".repeat(128)),
+        "the useful ID prefix must remain"
+    );
+    assert!(
+        !text.contains(&"x".repeat(129)),
+        "the log ID must stop at 128 characters"
+    );
+    let State::Writing { bytes, .. } = &client.state else {
+        panic!("timeout response must be ready to write")
+    };
+    let response: Response = serde_json::from_slice(bytes).unwrap();
+    assert_eq!(
+        response.id, request.id,
+        "wire correlation keeps the full ID"
+    );
+}
+
+#[test]
 fn saturated_status_endpoint_leaves_headroom_for_an_interrupt() {
     let dir = TestDir::new();
     let (tx, rx) = mpsc::sync_channel(64);
