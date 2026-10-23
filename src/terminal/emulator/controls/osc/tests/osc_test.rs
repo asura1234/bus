@@ -749,3 +749,27 @@ fn reported_cwd_local_host_updates_from_split_osc7() {
     let remote = pane.process_pty_bytes(pane_id, 0, remote_sequence.as_bytes(), &tx, |_| None);
     assert_eq!(remote.reported_cwd, None);
 }
+#[test]
+fn shell_prompt_mark_survives_every_chunk_boundary_and_agent_transition() {
+    for mark in [b"\x1b]133;A\x07".as_slice(), b"\x1b]133;A\x1b\\".as_slice()] {
+        for split in 0..mark.len() {
+            let mut tracker = AgentOscStateTracker::default();
+            tracker.observe(&mark[..split]);
+            assert_eq!(tracker.shell_prompt_generation, 0);
+            tracker.observe(&mark[split..]);
+            assert_eq!(tracker.shell_prompt_generation, 1);
+            tracker.clear_retained();
+            tracker.observe(mark);
+            assert_eq!(tracker.shell_prompt_generation, 2);
+        }
+    }
+}
+
+#[test]
+fn shell_prompt_mark_ignores_text_other_marks_and_control_string_payloads() {
+    let mut tracker = AgentOscStateTracker::default();
+    tracker.observe(b"133;A\x1b]133;B\x07\x1b]0;133;A\x07\x1bP\x1b]133;A\x07\x1b\\");
+    assert_eq!(tracker.shell_prompt_generation, 0);
+    tracker.observe(b"\x1b]133;A\x07");
+    assert_eq!(tracker.shell_prompt_generation, 1);
+}

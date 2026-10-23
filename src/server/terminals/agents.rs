@@ -51,11 +51,26 @@ impl App {
         else {
             return;
         };
+        let returned_to_prompt = self
+            .terminal_runtimes
+            .get(&terminal_id)
+            .is_some_and(|runtime| {
+                runtime.launch_returned_to_prompt()
+                    && available_shell_name(runtime).is_some()
+                    && live_runtime_agent(runtime).is_none()
+            });
         let changed = self
             .state
             .terminals
             .get_mut(&terminal_id)
-            .is_some_and(|terminal| terminal.reconcile_managed_agent_at(Instant::now(), false));
+            .is_some_and(|terminal| {
+                if terminal.managed_agent_launch_pending() && returned_to_prompt {
+                    terminal.clear_agent_name();
+                    true
+                } else {
+                    terminal.reconcile_managed_agent_at(Instant::now(), false)
+                }
+            });
         if changed {
             self.state.mark_session_dirty();
             self.schedule_session_save();
@@ -228,6 +243,7 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
+        runtime.mark_agent_launch();
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
@@ -271,7 +287,7 @@ impl App {
             },
             AgentStartError::TargetBusy(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_busy".into(),
-                message: format!("agent target pane {target} is not an available shell"),
+                message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then add the agent again."),
             },
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
@@ -456,6 +472,9 @@ impl App {
 pub(in crate::server) fn available_shell_name(
     runtime: &crate::terminal::TerminalRuntime,
 ) -> Option<String> {
+    if runtime.waiting_for_shell_prompt() {
+        return None;
+    }
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());

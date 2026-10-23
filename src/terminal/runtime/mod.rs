@@ -5,6 +5,7 @@ mod detection_task;
 mod dialog;
 mod io;
 mod read;
+mod shell_integration;
 mod shutdown;
 mod submission;
 mod submission_clock;
@@ -159,6 +160,8 @@ pub struct TerminalRuntime {
     detection_content_seq: Arc<AtomicU64>,
     managed_launch_pending: Arc<AtomicBool>,
     preserve_processes_on_drop: bool,
+    shell_integration: Option<shell_integration::ShellIntegration>,
+    launch_prompt_generation: std::cell::Cell<u64>,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
     detect_handle: Option<tokio::task::AbortHandle>,
@@ -176,6 +179,19 @@ pub enum WheelRouting {
 mod tests;
 
 impl TerminalRuntime {
+    pub(crate) fn waiting_for_shell_prompt(&self) -> bool {
+        self.shell_integration.is_some() && self.terminal.shell_prompt_generation() == 0
+    }
+
+    pub(crate) fn mark_agent_launch(&self) {
+        self.launch_prompt_generation
+            .set(self.terminal.shell_prompt_generation());
+    }
+
+    pub(crate) fn launch_returned_to_prompt(&self) -> bool {
+        self.terminal.shell_prompt_generation() > self.launch_prompt_generation.get()
+    }
+
     pub fn apply_host_terminal_theme(&self, theme: crate::utils::theme::color::TerminalTheme) {
         self.terminal.apply_host_terminal_theme(theme);
     }

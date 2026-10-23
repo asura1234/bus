@@ -6,6 +6,10 @@ use crate::{
     utils::config::Config,
 };
 
+#[cfg(unix)]
+#[path = "launch_prompt_test.rs"]
+mod launch_prompt;
+
 fn app_with_agent() -> App {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(

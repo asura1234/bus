@@ -590,7 +590,11 @@ impl TerminalRuntime {
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
-        Self::spawn_command_builder(
+        let integration = super::shell_integration::ShellIntegration::install(
+            &mut cmd,
+            &pane_shell(shell_config.default_shell),
+        )?;
+        let mut runtime = Self::spawn_command_builder(
             pane_id,
             rows,
             cols,
@@ -608,7 +612,9 @@ impl TerminalRuntime {
                 windows_powershell_prompt_cwd_reporting,
             },
             AgentDetection::Enabled,
-        )
+        )?;
+        runtime.shell_integration = integration;
+        Ok(runtime)
     }
 
     /// Test helper: runs `command` through `/bin/sh -c` in a real PTY.
@@ -820,6 +826,8 @@ impl TerminalRuntime {
             detection_content_seq,
             managed_launch_pending,
             preserve_processes_on_drop: false,
+            shell_integration: None,
+            launch_prompt_generation: Cell::new(0),
             compression,
             detect_handle,
         })

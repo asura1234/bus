@@ -7,6 +7,16 @@ use crate::server::app::App;
 
 impl App {
     pub(in crate::server::api) fn handle_agent_list(&mut self, id: String) -> String {
+        let pending: Vec<_> = self
+            .state
+            .terminals
+            .values()
+            .filter(|terminal| terminal.managed_agent_launch_pending())
+            .filter_map(|terminal| terminal.agent_name.clone())
+            .collect();
+        for name in pending {
+            self.reconcile_managed_agent_target(&name);
+        }
         encode_success(
             id,
             ResponseResult::AgentList {
