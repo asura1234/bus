@@ -375,7 +375,7 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
 }
 
 #[test]
-fn an_unconfirmed_write_failed_at_its_bound_tells_the_developer() {
+fn operational_notice_unconfirmed_write_retains_unknown_outcome_without_chat() {
     let (mut worker, agent, room, dir, _calls) = fixture(
         Provider::ClaudeCode,
         vec![Err(TransportError {
@@ -390,37 +390,36 @@ fn an_unconfirmed_write_failed_at_its_bound_tells_the_developer() {
     assert!(worker.state.request(lost).unwrap().uncertain_outcome);
     let bound = worker.state.request(lost).unwrap().progress_at_ms.unwrap()
         + crate::messaging::model::DELIVERED_STALL_MS;
-    // The stall itself is reportable at the bound.
     let mut reported = worker.state.clone();
-    reported.notify_stalled_attention(bound).unwrap();
-    assert!(reported.master_room().is_some_and(|master| reported
-        .notices(master.id)
-        .any(|notice| notice.text.contains("submission_unconfirmed"))));
-    // The live tick runs every 500 ms: one just before the bound, one at it.
+    reported.record_stalled_errors(bound).unwrap();
+    assert!(reported
+        .master_room()
+        .is_none_or(|master| reported.notices(master.id).count() == 0));
     worker.expire_unconfirmed_submissions(bound - 1).unwrap();
     worker.expire_unconfirmed_submissions(bound).unwrap();
+    let request = worker.state.request(lost).unwrap();
+    assert_eq!(request.phase, RequestPhase::Abandoned);
     assert_eq!(
-        worker.state.request(lost).unwrap().phase,
-        RequestPhase::Abandoned
+        request.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
     );
-    let notices: Vec<_> = worker
+    assert!(request.uncertain_outcome);
+    let error = worker
         .state
-        .master_room()
-        .map(|master| {
-            worker
-                .state
-                .notices(master.id)
-                .map(|notice| notice.text.clone())
-                .collect()
-        })
-        .unwrap_or_default();
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap();
     assert!(
-        notices
-            .iter()
-            .any(|text| text.starts_with(crate::messaging::attention::TAG)
-                && text.contains("submission_unconfirmed")),
-        "a message Bus gave up on must reach the developer; notices: {notices:?}"
+        error.contains("outcome") && error.contains("unknown") && error.contains("will not retry"),
+        "{error}"
     );
+    assert!(worker.state.master_room().is_none_or(|master| worker
+        .state
+        .notices(master.id)
+        .count()
+        == 0));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

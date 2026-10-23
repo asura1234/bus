@@ -20,7 +20,6 @@ pub const AGENT_HELP: &str =
   room create NAME
   room rename ROOM NAME
   room notes ROOM --text TEXT
-  room github ROOM (--auto | --off | --repos OWNER/REPO,OWNER/REPO)
   room delete ROOM --confirm
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
@@ -38,7 +37,6 @@ pub const AGENT_HELP: &str =
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]
   message status MESSAGE_ID
   message seen REQUEST_ID --as AGENT
-  digest ack FACT_ID
   request recover REQUEST_ID --confirm
   wait --message MESSAGE_ID [--timeout SECONDS | --async] [--as AGENT]
   history --room ROOM
@@ -81,10 +79,6 @@ Bus automatically adds 'name (agent id, room R):' to agent-authored payloads.
 Send only the body: do not add a 'from X', 'X here' or signature line.
 Only the exact genuine Bus header or an identity-only name/agent ID line ending in : or here — suppresses a duplicate.
 Ordinary sentences and headers with a forged ID or room always get the real sender header.
-Worker milestone finals start with READY FOR VERIFY, REVIEW READY, MERGED, DONE or BLOCKED.
-Bus retains actionable room facts separately from waiter reads and sends one Room digest on a clean idle turn.
-Message the worker, delete it, or use digest ack FACT_ID to acknowledge a fact; delivery and replies do not.
-Only new facts re-arm the digest. Time alone never wakes a room, and deleted-worker facts remain durable.
 send --room ROOM --as AGENT --to you posts any agent's message to the developer in every room.
 It stays in that room, addressed to You, with no agent request or wait. --to human is an alias.
 Messages to you and every [waiting-on-you] always notify with a distinct sound and Feishu bot DM;

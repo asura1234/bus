@@ -120,21 +120,12 @@ impl BusState {
             files: Vec::new(),
             recipient_ids: Default::default(),
             submitted_at_ms: now_ms,
-            attention_origin: Some(origin.clone()),
-            broadcast: false,
-            digest_notice_agents: Default::default(),
+            attention_origin: Some(origin),
         };
         room.latest_prompt = Some(prompt.clone());
         room.notices.push(prompt);
         if !visible {
             room.unread_count = room.unread_count.saturating_add(1);
-        }
-        // An orchestrator's own provider/dialog problem belongs to the developer.
-        if self
-            .agent(origin.agent_id)
-            .is_some_and(|a| a.orchestrates.is_none())
-        {
-            self.record_digest_notice(origin.room_id, Some(origin.agent_id), id, text, now_ms);
         }
         Ok(())
     }
@@ -203,10 +194,7 @@ impl BusState {
         )
     }
 
-    pub(crate) fn notify_stalled_attention(
-        &mut self,
-        now_ms: u64,
-    ) -> Result<(), super::ModelError> {
+    pub(crate) fn record_stalled_errors(&mut self, now_ms: u64) -> Result<(), super::ModelError> {
         let observed: Vec<_> = self
             .requests
             .values()
@@ -224,22 +212,32 @@ impl BusState {
         // prune_attention removes it only after the request leaves history.
         for (request, prompt, agent, reason) in observed {
             if let Some(reason) = reason {
-                self.record_digest_request(request, now_ms);
                 let message = if reason == "submission_unconfirmed" {
                     Self::unconfirmed_submission_message(prompt)
                 } else {
                     format!("Agent stalled past its timeout on message {} ({reason}). Inspect: bus message status {}", prompt.0, prompt.0)
                 };
-                self.attention_episode(
-                    format!("stall:{}", request.0),
-                    Some(true),
-                    agent,
-                    &message,
-                    now_ms,
-                )?;
+                if self
+                    .attention_episodes
+                    .insert(format!("stall:{}", request.0))
+                {
+                    tracing::warn!(
+                        event = "bus.message.stalled",
+                        request_id = request.0,
+                        message_id = prompt.0,
+                        agent_id = agent.0,
+                        reason,
+                        detail = message,
+                        "Request is stalled; inspect message status"
+                    );
+                }
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn record_error_episode(&mut self, key: String) -> bool {
+        self.attention_episodes.insert(key)
     }
 
     pub(crate) fn attention_origin(&self, id: AgentId) -> Option<AttentionOrigin> {

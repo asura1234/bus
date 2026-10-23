@@ -142,7 +142,7 @@ the wrapper remains held.
   You can rely on these notifications without room polling or self-timers.
   Normal idle waits for callback settlement, so a late Stop produces one reply
   wake; persistent idle open work and confirmed exit remain visible. Blocked,
-  Resolved and failed-startup notices are unchanged.
+  Resolved notices are unchanged; startup failures remain in lifecycle state and logs.
   A live author waiter defers its own reply/outcome components and marks only
   flushed replies and exact printed event keys seen; use `wait --message ID
   --as YOUR_NAME` to resume that behavior. Idle (including background shells), other-message, exit and autonomous
@@ -165,17 +165,6 @@ the wrapper remains held.
   verifier or explicit hold reason; merged/done gets cleanup or reuse. Do cleanup
   before a new blocking wait, or run it independently. After a restart, reconcile
   the room with `bus state` plus GitHub before anything else.
-
-- **Act on durable room digests.** Bus's `Room digest:` is a separate idle turn,
-  never steering for current work. Process each fact into a next owner/action or
-  reasoned hold. A direct message to its worker, or a single-recipient verifier
-  brief referencing the fact's PR/name/head, acknowledges it. Broadcasts never
-  acknowledge facts. Deleting its worker also acknowledges it; otherwise
-  explicitly dismiss it with `bus digest ack FACT_ID`.
-  Reading, `seen`, or replying to the digest does not acknowledge facts. Old
-  unacknowledged facts return only alongside new facts, with no timer wake.
-  Ask workers to start milestone finals with `READY FOR VERIFY`, `REVIEW READY`,
-  `MERGED`, `DONE` or `BLOCKED` so Bus can retain the handoff independently.
 
 - **Secure continuation before ending a turn.** Every active item has a next
   executing owner, a live durable wait, a named dependency or an explicit

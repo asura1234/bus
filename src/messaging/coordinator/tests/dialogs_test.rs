@@ -382,7 +382,7 @@ fn the_same_blocked_screen_is_not_reported_again_after_a_flicker() {
 }
 
 #[test]
-fn a_blocked_notice_the_orchestrator_never_takes_reaches_the_developer() {
+fn an_undelivered_blocked_notice_keeps_its_failure_without_delivery_error_chat() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
     screen.lock().unwrap().dialog = true;
@@ -406,25 +406,26 @@ fn a_blocked_notice_the_orchestrator_never_takes_reaches_the_developer() {
         notice.phase,
         crate::messaging::model::RequestPhase::Abandoned
     );
-    let reason = notice.failure_reason.clone().unwrap();
-    let escalated = format!("{blocked}\nThe orchestrator did not receive this ({reason}).");
+    assert_eq!(
+        notice.failure_reason.as_deref(),
+        Some("hook_setup_unconfirmed")
+    );
+    assert!(notice.completed_at_ms.is_some());
     assert_eq!(
         sent_by(&worker, room, agent),
-        [
-            (vec![orchestrator], blocked.clone()),
-            (Vec::new(), escalated.clone())
-        ]
+        [(vec![orchestrator], blocked.clone())]
     );
-    // The open dialog is not reported again, and its end goes to the
-    // developer who was told about it.
+    // The actual dialog remains visible; its normal resolution is retained.
+    // Neither another help message nor a delivery-error message is injected.
     polls(&mut worker, 3);
+    assert!(worker.state.agent(agent).unwrap().dialog);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     screen.lock().unwrap().dialog = false;
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
         [
             (vec![orchestrator], blocked),
-            (Vec::new(), escalated),
             (Vec::new(), expected_resolved(&worker, agent))
         ]
     );

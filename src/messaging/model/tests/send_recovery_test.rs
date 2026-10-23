@@ -308,9 +308,9 @@ fn typed_recovery_requires_idle_or_both_invalidated_and_unavailable() {
 }
 
 #[test]
-fn feishu_queued_request_that_stalled_while_bus_was_down_still_tells_the_developer() {
+fn queued_request_expired_during_shutdown_preserves_failure_without_chat() {
     // Reopening a session first closes queued work whose deadline passed
-    // while Bus was down, then the first tick looks for stalled attention.
+    // while Bus was down; the failure remains available through request state.
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
     state.confirm_hook_setup(agent).unwrap();
@@ -325,16 +325,19 @@ fn feishu_queued_request_that_stalled_while_bus_was_down_still_tells_the_develop
     state
         .observe_status(agent, RuntimeStatus::Unavailable, reopened_at)
         .unwrap();
-    state.notify_stalled_attention(reopened_at + 500).unwrap();
+    state.record_stalled_errors(reopened_at + 500).unwrap();
     let master = state.ensure_master_room();
     let tagged = state
         .notices(master)
         .filter(|notice| crate::messaging::attention::text(&notice.text).is_some())
         .count();
-    assert_eq!(
-        tagged, 1,
-        "a queued message Bus closed as stalled needs the developer to resend it"
-    );
+    assert_eq!(tagged, 0, "the failure must not create unsolicited chat");
+    let failed = state.request(request).unwrap();
+    assert_eq!(failed.phase, RequestPhase::Abandoned);
+    assert_eq!(failed.failure_reason.as_deref(), Some("not_submitted"));
+    assert_eq!(failed.completed_at_ms, Some(reopened_at));
+    assert_eq!(failed.prompt.text, "queued before shutdown");
+    assert!(state.queued_requests(agent).is_empty());
 }
 
 #[test]

@@ -515,7 +515,7 @@ fn changed(worker: &Worker) -> BusState {
 }
 
 #[test]
-fn upgrade_onboarding_write_failure_logs_and_keeps_coordinator_starting() {
+fn upgrade_does_not_require_docs_writes_or_enqueue_new_work() {
     for failure in ["docs-directory", "doc-write"] {
         let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
         let waiting = queue(
@@ -573,7 +573,7 @@ fn upgrade_onboarding_write_failure_logs_and_keeps_coordinator_starting() {
         );
         let captured = String::from_utf8(log.lock().unwrap().clone()).unwrap();
         assert!(
-            captured.contains("WARN") && captured.contains("bus.onboarding.upgrade_skipped"),
+            !captured.contains("bus.onboarding.upgrade_skipped"),
             "{captured}"
         );
         drop(resumed);
@@ -582,15 +582,8 @@ fn upgrade_onboarding_write_failure_logs_and_keeps_coordinator_starting() {
         } else {
             std::fs::remove_dir(&blocked).unwrap();
         }
-        // Skipping must not mark the failed refresh as delivered: recovery retries it.
         let repaired = Worker::open(dir.clone(), Box::new(transport())).unwrap();
-        let pending = repaired.state.queued_requests(agent);
-        assert_eq!(pending.len(), 2);
-        assert_eq!(pending[1], waiting);
-        assert_eq!(
-            repaired.state.request(pending[0]).unwrap().prompt.author,
-            Author::Bus
-        );
+        assert_eq!(repaired.state.queued_requests(agent), &[waiting]);
         drop(repaired);
         std::fs::remove_dir_all(dir).unwrap();
     }

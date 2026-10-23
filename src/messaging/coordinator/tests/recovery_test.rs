@@ -122,8 +122,10 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
         );
         assert_eq!(worker.snapshot().error, None);
         let notice_room = if delete_room { RoomId(0) } else { room };
-        let notice = worker.state.notices(notice_room).last().unwrap();
-        assert!(notice.text.contains("author") && notice.text.contains(message));
+        assert!(
+            worker.state.notices(notice_room).next().is_none(),
+            "the command result carries the left-open terminal details without a chat notice"
+        );
         drop(worker);
         let recovered = JsonStore::new(dir.join("state.json"))
             .load()
@@ -131,9 +133,7 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
             .unwrap();
         assert!(recovered.agent(agent).is_none());
         assert!(recovered.request(request).is_none());
-        assert!(recovered
-            .notices(notice_room)
-            .any(|notice| notice.text.contains(message)));
+        assert!(recovered.notices(notice_room).next().is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -529,7 +529,7 @@ fn delete_keeps_an_agent_whose_restored_terminal_runs_its_own_session() {
 }
 
 #[test]
-fn left_open_deletion_notifies_orchestrator_once_without_a_composer_error() {
+fn operational_notice_deletion_keeps_logs_without_chat() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Codex,
         vec![identity_changed(), native_agents(None), identity_changed()],
@@ -565,21 +565,18 @@ fn left_open_deletion_notifies_orchestrator_once_without_a_composer_error() {
         .requests()
         .filter(|r| r.prompt.text.contains("left the terminal open"))
         .collect();
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].agent_id, orchestrator);
-    assert_eq!(notices[0].prompt.author, Author::Bus);
-    assert!(notices[0].prompt.text.contains("author") && notices[0].prompt.text.contains("pane"));
+    assert!(notices.is_empty());
+    assert!(worker
+        .state
+        .notices(room)
+        .all(|n| !n.text.starts_with("Roster change:")));
     drop(worker);
     let recovered = JsonStore::new(dir.join("state.json"))
         .load()
         .unwrap()
         .unwrap();
-    assert_eq!(
-        recovered
-            .requests()
-            .filter(|r| r.prompt.text.contains("left the terminal open"))
-            .count(),
-        1
-    );
+    assert!(recovered
+        .requests()
+        .all(|r| !r.prompt.text.contains("left the terminal open")));
     std::fs::remove_dir_all(dir).unwrap();
 }

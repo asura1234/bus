@@ -24,18 +24,6 @@ impl BusState {
         now_ms: u64,
         queue_only: bool,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_message_with_broadcast(room, draft, author, now_ms, queue_only, false)
-    }
-
-    pub(crate) fn submit_message_with_broadcast(
-        &mut self,
-        room: RoomId,
-        draft: Draft,
-        author: Author,
-        now_ms: u64,
-        queue_only: bool,
-        broadcast: bool,
-    ) -> Result<Vec<RequestId>, ModelError> {
         let original = self
             .rooms
             .get(&room)
@@ -46,7 +34,7 @@ impl BusState {
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
             .draft = draft;
-        let result = self.submit_draft_from(room, author, now_ms, queue_only, broadcast);
+        let result = self.submit_draft_from(room, author, now_ms, queue_only);
         self.rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
@@ -59,7 +47,7 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Developer, now_ms, false, false)
+        self.submit_draft_from(room, Author::Developer, now_ms, false)
     }
 
     /// Sends the developer's draft to wait for each idle agent and its own turn.
@@ -68,7 +56,7 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Developer, now_ms, true, false)
+        self.submit_draft_from(room, Author::Developer, now_ms, true)
     }
 
     fn submit_draft_from(
@@ -77,7 +65,6 @@ impl BusState {
         author: Author,
         now_ms: u64,
         queue_only: bool,
-        broadcast: bool,
     ) -> Result<Vec<RequestId>, ModelError> {
         let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
         if room_state.deletion_pending {
@@ -100,14 +87,6 @@ impl BusState {
             }
         }
 
-        let broadcast = broadcast || draft.recipient_ids.len() > 1;
-        self.ack_digest_action(
-            &author,
-            &draft.recipient_ids,
-            &draft.text,
-            broadcast,
-            now_ms,
-        );
         let prompt = Prompt {
             id: PromptId(self.allocate_id()),
             author,
@@ -116,14 +95,11 @@ impl BusState {
             recipient_ids: draft.recipient_ids,
             submitted_at_ms: now_ms,
             attention_origin: None,
-            broadcast,
-            digest_notice_agents: Default::default(),
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
         for agent_id in prompt.recipient_ids.iter().copied() {
             // End a previously healthy episode before this enqueue can cross
             // the pressure threshold again.
-            self.record_queue_pressure(agent_id, now_ms);
             let request_id = RequestId(self.allocate_id());
             self.requests.insert(
                 request_id,
@@ -157,7 +133,6 @@ impl BusState {
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
-            self.record_queue_pressure(agent_id, now_ms);
             request_ids.push(request_id);
         }
         let room_state = self

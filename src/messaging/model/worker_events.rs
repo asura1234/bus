@@ -29,6 +29,20 @@ pub(super) struct WorkerEvent {
     pub(super) route: ReplyRoute,
 }
 
+/// Cancelling retired inputs preserves history without creating replacement work.
+fn retired_automation(request: &Request) -> bool {
+    request.prompt.author == Author::Bus
+        && matches!(
+            request.failure_reason.as_deref(),
+            Some(
+                "github_watch_retired"
+                    | "room_digest_retired"
+                    | "messaging_onboarding_retired"
+                    | "operational_notice_retired"
+            )
+        )
+}
+
 impl BusState {
     pub(super) fn worker_orchestrator(&self, worker: AgentId) -> Option<AgentId> {
         let agent = self.agent(worker)?;
@@ -125,13 +139,6 @@ impl BusState {
         else {
             return;
         };
-        self.record_digest_final(
-            worker,
-            room,
-            super::digests::DigestSource::new(format!("event:{key}"), message.0),
-            text,
-            callback.occurred_at_ms,
-        );
         let summary = format!(
             "{label}; message {}.\n{}",
             message.0,
@@ -194,6 +201,7 @@ impl BusState {
             .collect();
         let requests: Vec<_> = self
             .requests()
+            .filter(|r| !retired_automation(r))
             .filter(|r| {
                 self.worker_orchestrator(r.agent_id).is_some()
                     && self
@@ -370,31 +378,28 @@ impl BusState {
             Some(episode) => format!("{class}:{}:{episode}", group.0),
             None => format!("{class}:{}", group.0),
         };
-        if self.worker_events.contains_key(&key) {
-            return;
-        }
-        let event = WorkerEvent {
-            agent: request.agent_id,
-            room: request.room_id,
-            group: Some(group),
-            message: request.prompt.id,
-            at_ms,
-            episode,
-            kind,
-            text: format!(
-                "{}; message {} (request {}).\nInspect: bus message status {}{}",
-                preview(text, &format!("bus message status {}", request.prompt.id.0)),
-                request.prompt.id.0,
-                request.id.0,
-                request.prompt.id.0,
-                detail
-                    .map(|detail| format!("\n{detail}"))
-                    .unwrap_or_default()
-            ),
-            route: ReplyRoute::Pending,
-        };
-        self.record_digest_event(&key, &event);
-        self.worker_events.insert(key, event);
+        self.worker_events
+            .entry(key)
+            .or_insert_with(|| WorkerEvent {
+                agent: request.agent_id,
+                room: request.room_id,
+                group: Some(group),
+                message: request.prompt.id,
+                at_ms,
+                episode,
+                kind,
+                text: format!(
+                    "{}; message {} (request {}).\nInspect: bus message status {}{}",
+                    preview(text, &format!("bus message status {}", request.prompt.id.0)),
+                    request.prompt.id.0,
+                    request.id.0,
+                    request.prompt.id.0,
+                    detail
+                        .map(|detail| format!("\n{detail}"))
+                        .unwrap_or_default()
+                ),
+                route: ReplyRoute::Pending,
+            });
     }
 
     /// Build retention indexes once per archive/load, without copying bodies.

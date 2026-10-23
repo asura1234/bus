@@ -2,12 +2,93 @@
 use super::{BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus};
 
 impl BusState {
+    /// Close only never-submitted notices emitted by the retired GitHub watch.
+    /// Ordinary agent/developer messages and already typed work are retained.
+    pub(crate) fn retire_queued_github_notices(&mut self, now_ms: u64) -> Result<(), ModelError> {
+        let retired: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.phase == RequestPhase::Queued
+                    && request.prompt.author == super::Author::Bus
+                    && request.prompt.text.starts_with("GitHub: ")
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in retired {
+            self.recover_idle_request(id, now_ms)?;
+            self.requests
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownRequest(id))?
+                .failure_reason = Some("github_watch_retired".into());
+        }
+        Ok(())
+    }
+
+    /// Retire only never-submitted digests from older saved sessions. Typed
+    /// requests keep their original ownership and history.
+    pub(crate) fn retire_queued_room_digests(&mut self, now_ms: u64) -> Result<bool, ModelError> {
+        let retired: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.phase == RequestPhase::Queued
+                    && request.prompt.author == super::Author::Bus
+                    && request.prompt.text.starts_with("Room digest:")
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in &retired {
+            self.recover_idle_request(*id, now_ms)?;
+            self.requests
+                .get_mut(id)
+                .ok_or(ModelError::UnknownRequest(*id))?
+                .failure_reason = Some("room_digest_retired".into());
+        }
+        Ok(!retired.is_empty())
+    }
+
+    /// Retire only never-submitted operational inputs from older versions.
+    pub(crate) fn retire_queued_operational_notices(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let retired: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.phase == RequestPhase::Queued && request.prompt.author == super::Author::Bus
+            })
+            .filter_map(|request| {
+                let text = request.prompt.text.as_str();
+                let reason = if text.starts_with("Bus messaging rules updated.") {
+                    "messaging_onboarding_retired"
+                } else if (text.starts_with("BLOCKED ") && text.contains(". Startup failed:"))
+                    || text.starts_with("Deleted agent \"")
+                {
+                    "operational_notice_retired"
+                } else {
+                    return None;
+                };
+                Some((request.id, reason))
+            })
+            .collect();
+        for (id, reason) in retired {
+            self.recover_idle_request(id, now_ms)?;
+            self.requests
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownRequest(id))?
+                .failure_reason = Some(reason.into());
+        }
+        Ok(())
+    }
+
     /// Capture all reasons before recovery clears the agent's last refusal.
     pub(crate) fn expire_stalled_queued_requests(
         &mut self,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.notify_stalled_attention(now_ms)?;
+        self.record_stalled_errors(now_ms)?;
         let stalled: Vec<_> = self
             .requests
             .values()
@@ -48,7 +129,7 @@ impl BusState {
         &mut self,
         request: RequestId,
         reason: &str,
-        now_ms: u64,
+        _now_ms: u64,
     ) -> Result<(), ModelError> {
         let Some((agent, room)) = self
             .agents
@@ -58,15 +139,14 @@ impl BusState {
         else {
             return Ok(());
         };
-        let text = format!(
-            "{}\nThe orchestrator did not receive this ({reason}).",
-            self.requests
-                .get(&request)
-                .ok_or(ModelError::UnknownRequest(request))?
-                .prompt
-                .text
+        tracing::warn!(
+            event = "bus.dialog.notice_undelivered",
+            request_id = request.0,
+            agent_id = agent.0,
+            room_id = room.0,
+            reason,
+            "Blocked-dialog notice was not delivered; inspect request and dialog state"
         );
-        self.post_bus_notice(room, None, text, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 
@@ -111,7 +191,6 @@ impl BusState {
                     agent.actionable_error = None;
                 }
             }
-            self.record_digest_request(request, recovered_at_ms);
             return Ok(());
         }
         if !matches!(
@@ -163,7 +242,6 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
         agent.actionable_error = None;
-        self.record_digest_request(request, recovered_at_ms);
         Ok(())
     }
 }

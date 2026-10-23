@@ -200,8 +200,8 @@ fn observe_exit(
     report_exit(state, agent.id, evidence)
 }
 
-/// Records the exit for open requests and the MASTER attention notice, with
-/// the saved snapshot when there is one.
+/// Records the exit for open requests and diagnostic logs; the saved snapshot
+/// remains available through lifecycle state.
 pub(super) fn report_exit(
     state: &mut BusState,
     id: AgentId,
@@ -211,32 +211,19 @@ pub(super) fn report_exit(
         state.record_worker_exit(id, io::now_ms());
     }
     let agent = state.agent(id).ok_or("Unknown agent")?;
-    let snapshot = agent.exit_snapshot.as_ref();
-    let resume = if snapshot.is_some_and(|s| s.terminal_closed == Some(true)) {
-        ""
-    } else {
-        " Inspect the machine to resume it."
-    };
-    let text = format!(
-        "Agent process exited: {} (agent {}).{resume}{}",
-        agent.name,
-        id.0,
-        snapshot
-            .map(|s| format!("\n{}", s.notice()))
-            .unwrap_or_default()
-    );
-    let key = format!(
-        "exit:{}:{}",
-        id.0,
-        agent
+    if evidence == Some(true) {
+        let name = agent.name.clone();
+        let launch = agent
             .runtime_identity
             .launch_id
-            .as_deref()
-            .unwrap_or("unknown")
-    );
-    state
-        .attention_episode(key, evidence, id, &text, io::now_ms())
-        .map_err(|error| error.to_string())
+            .clone()
+            .unwrap_or_else(|| "unknown".into());
+        let snapshot = agent.exit_snapshot.clone();
+        if state.record_error_episode(format!("exit:{}:{launch}", id.0)) {
+            tracing::warn!(event = "bus.agent.process_exited", agent_id = id.0, agent_name = name, launch_id = launch, exit_snapshot_path = ?snapshot.as_ref().and_then(|s| s.path.as_deref()), snapshot_error = ?snapshot.as_ref().and_then(|s| s.error.as_deref()), terminal_closed = ?snapshot.as_ref().and_then(|s| s.terminal_closed), "Agent process exited; inspect lifecycle state");
+        }
+    }
+    Ok(())
 }
 
 fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {

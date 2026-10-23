@@ -25,9 +25,9 @@ use support::*;
 mod poll_recovery;
 
 #[test]
-fn feishu_exit_notification_requires_explicit_matching_native_evidence() {
+fn exit_evidence_updates_lifecycle_without_developer_chat() {
     for (terminal, exited, expected) in [
-        ("terminal", true, 1),
+        ("terminal", true, 0),
         ("foreign", true, 0),
         ("terminal", false, 0),
     ] {

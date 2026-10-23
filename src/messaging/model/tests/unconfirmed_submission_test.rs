@@ -33,30 +33,28 @@ fn tagged_master_notices(state: &mut BusState) -> usize {
         .count()
 }
 
-fn assert_unknown_outcome_notice(state: &BusState) {
-    let master = state.master_room().unwrap();
-    let notice = state
-        .notices(master.id)
-        .find(|notice| notice.text.contains("submission_unconfirmed"))
-        .unwrap();
-    assert!(notice.text.contains("is unknown"));
-    assert!(notice.text.contains("may have run"));
-    assert!(notice.text.contains("before resending"));
+fn assert_unknown_outcome_failure(state: &BusState, request: RequestId) {
+    let request = state.request(request).unwrap();
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(request.uncertain_outcome);
+    assert!(request.pending_final.is_none());
 }
 
 #[test]
-fn a_failed_unconfirmed_write_still_tells_the_developer() {
+fn a_failed_unconfirmed_write_preserves_its_unknown_outcome_without_chat() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let (typed, _, bound) = uncertain_write(&mut state, room, agent);
 
-    // Left open, the write past its bound raises developer attention.
+    // Recording a stall does not close or retry an uncertain write.
     let mut open = state.clone();
-    open.notify_stalled_attention(bound).unwrap();
-    assert_eq!(
-        tagged_master_notices(&mut open),
-        1,
-        "baseline: open stall alerts"
-    );
+    open.record_stalled_errors(bound).unwrap();
+    assert_eq!(open.request(typed).unwrap().phase, RequestPhase::Submitting);
+    assert!(open.request(typed).unwrap().uncertain_outcome);
+    assert_eq!(tagged_master_notices(&mut open), 0);
 
     // The coordinator's expiry order: fail the write, then the queued sweep.
     state.fail_unconfirmed_submissions(bound).unwrap();
@@ -64,24 +62,31 @@ fn a_failed_unconfirmed_write_still_tells_the_developer() {
     assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Abandoned);
     assert_eq!(
         tagged_master_notices(&mut state),
-        1,
-        "Bus closed a message it never confirmed; the developer must learn its outcome is unknown"
+        0,
+        "the unknown outcome belongs in request and agent state, not unsolicited chat"
     );
-    assert_unknown_outcome_notice(&state);
+    assert_unknown_outcome_failure(&state, typed);
     state.fail_unconfirmed_submissions(bound + 1).unwrap();
     state.expire_stalled_queued_requests(bound + 1).unwrap();
-    assert_eq!(tagged_master_notices(&mut state), 1);
+    assert_eq!(tagged_master_notices(&mut state), 0);
+    assert_unknown_outcome_failure(&state, typed);
 }
 
 #[test]
-fn an_unconfirmed_write_already_reported_is_not_reported_twice() {
+fn recording_an_unconfirmed_stall_preserves_the_later_failure_without_chat() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
-    let (_, _, bound) = uncertain_write(&mut state, room, agent);
-    state.notify_stalled_attention(bound).unwrap();
-    assert_unknown_outcome_notice(&state);
+    let (typed, behind, bound) = uncertain_write(&mut state, room, agent);
+    state.record_stalled_errors(bound).unwrap();
+    assert_eq!(
+        stall_at(&state, typed, bound).as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert_eq!(tagged_master_notices(&mut state), 0);
     state.fail_unconfirmed_submissions(bound).unwrap();
     state.expire_stalled_queued_requests(bound).unwrap();
-    assert_eq!(tagged_master_notices(&mut state), 1);
+    assert_unknown_outcome_failure(&state, typed);
+    assert_eq!(state.next_queued_request(agent), Some(behind));
+    assert_eq!(tagged_master_notices(&mut state), 0);
 }
 
 #[test]
@@ -165,7 +170,8 @@ fn an_unconfirmed_write_waits_its_full_bound_after_the_agent_flaps_idle() {
         .is_empty());
     assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Abandoned);
     assert_eq!(state.next_queued_request(agent), Some(behind));
-    assert_unknown_outcome_notice(&state);
+    assert_unknown_outcome_failure(&state, typed);
+    assert_eq!(tagged_master_notices(&mut state), 0);
 }
 
 #[test]
@@ -303,7 +309,8 @@ fn restored_unconfirmed_write_waits_for_fresh_idle_observation_and_bound() {
         RequestPhase::Abandoned
     );
     assert_eq!(restored.next_queued_request(agent), Some(behind));
-    assert_eq!(tagged_master_notices(&mut restored), 1);
+    assert_eq!(tagged_master_notices(&mut restored), 0);
+    assert_unknown_outcome_failure(&restored, typed);
 
     let encoded = serde_json::to_vec(&restored).unwrap();
     let mut restored_again: BusState = serde_json::from_slice(&encoded).unwrap();
@@ -311,5 +318,6 @@ fn restored_unconfirmed_write_waits_for_fresh_idle_observation_and_bound() {
         .fail_unconfirmed_submissions(idle_at + DELIVERED_STALL_MS + 1)
         .unwrap();
     assert_eq!(restored_again.next_queued_request(agent), Some(behind));
-    assert_eq!(tagged_master_notices(&mut restored_again), 1);
+    assert_eq!(tagged_master_notices(&mut restored_again), 0);
+    assert_unknown_outcome_failure(&restored_again, typed);
 }

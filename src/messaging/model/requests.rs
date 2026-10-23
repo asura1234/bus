@@ -71,7 +71,6 @@ impl BusState {
         request_state.foreign_turn_settled_at_ms = None;
         // Starts the idle clock for stall detection at the submission.
         request_state.progress_at_ms = Some(submitted_at_ms);
-        self.record_queue_pressure(agent_id, submitted_at_ms);
         Ok(())
     }
 
@@ -92,7 +91,6 @@ impl BusState {
         if request_state.phase != RequestPhase::Submitting {
             return Err(ModelError::InvalidTransition);
         }
-        let delivered = matches!(&outcome, SubmissionOutcome::Confirmed { .. });
         match outcome {
             SubmissionOutcome::DefinitelyRejected { message } => {
                 if request_state.trusted_start_bound {
@@ -142,9 +140,6 @@ impl BusState {
                     .ok_or(ModelError::UnknownAgent(agent_id))?
                     .actionable_error = Some(message);
             }
-        }
-        if delivered {
-            self.mark_digest_delivered(request);
         }
         Ok(())
     }
@@ -386,13 +381,6 @@ impl BusState {
             .collect();
         for (request, agent, prompt) in unconfirmed {
             let message = Self::unconfirmed_submission_message(prompt);
-            self.attention_episode(
-                format!("stall:{}", request.0),
-                Some(true),
-                agent,
-                &message,
-                now_ms,
-            )?;
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
             self.set_agent_error(agent, Some(message))?;
             tracing::info!(

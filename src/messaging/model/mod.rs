@@ -4,9 +4,7 @@ mod attention;
 mod callbacks;
 mod compactions;
 mod developer_notifications;
-mod digests;
 mod disk_space;
-mod github;
 mod history;
 mod idle_agents;
 mod interrupts;
@@ -25,7 +23,7 @@ mod worker_notifications;
 #[cfg(test)]
 use requests::rejection_reason;
 
-pub(crate) use agents::{AGENT_DELETED, MESSAGING_RULES_VERSION};
+pub(crate) use agents::AGENT_DELETED;
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 pub(crate) use developer_notifications::new_developer_notifications;
 #[cfg(test)]
@@ -54,7 +52,3 @@ pub(crate) use {
 #[cfg(test)]
 #[path = "tests/types_test.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests/room_digest_test.rs"]
-mod room_digest_tests;

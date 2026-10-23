@@ -1,9 +1,6 @@
 //! Persisted DTOs, identities and payload representation.
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -173,11 +170,6 @@ pub(crate) struct Prompt {
     pub(crate) submitted_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) broadcast: bool,
-    /// Subjects of a Bus notice; generic notices already have their own turn.
-    #[serde(default, skip_serializing_if = "AgentRecipients::is_empty")]
-    pub(crate) digest_notice_agents: AgentRecipients,
 }
 
 fn developer_author() -> Author {
@@ -226,20 +218,6 @@ pub(crate) struct Room {
     pub(crate) id: RoomId,
     pub(crate) name: String,
     pub(crate) notes: String,
-    /// None derives repositories; an empty override disables the watch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) github_repos: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) github_discovered: BTreeSet<String>,
-    /// Head branches observed for this room, retained after worker cleanup.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) github_branches: BTreeMap<String, BTreeSet<String>>,
-    /// Member-contributed heads; older state has no attribution.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) github_member_branches: BTreeMap<String, BTreeSet<String>>,
-    /// Retired ownership remains recoverable when a head's PR is reopened.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) github_retired_branches: BTreeMap<String, BTreeSet<String>>,
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
@@ -348,8 +326,6 @@ pub(crate) struct RoomAgent {
     /// up merely because they later become unavailable. Survives restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) startup: Option<AgentStartup>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) queue_pressure_episode: Option<super::staffing::QueuePressureEpisode>,
     pub(crate) details_disclosed: bool,
     pub(crate) status: RuntimeStatus,
     pub(crate) status_revision: u64,
@@ -360,9 +336,6 @@ pub(crate) struct RoomAgent {
     /// idle, without relying on reply capture.
     #[serde(default)]
     pub(crate) busy_revision: u64,
-    /// A tagged final already represents availability for this completion.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) digest_tagged_idle_revision: Option<u64>,
     /// A numbered choice dialog is visible; answer it with `agent choose`.
     #[serde(default)]
     pub(crate) dialog: bool,
@@ -398,10 +371,6 @@ pub(crate) struct RoomAgent {
     /// in `ensure_master_room`; Bus never creates one.
     #[serde(default)]
     pub(crate) orchestrates: Option<RoomId>,
-    /// Instructions supplied at launch, or durably queued ahead of work after upgrade.
-    /// Old state has no marker and receives the current rules once.
-    #[serde(default)]
-    pub(crate) messaging_rules_version: u32,
     #[serde(default)]
     pub(crate) compactions: Compactions,
     /// The launch and spool sequence of the last compaction hook counted. State

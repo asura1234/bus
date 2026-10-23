@@ -13,8 +13,6 @@ const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 
 pub(super) struct Worker {
     pub(super) disk_space: super::disk_space::DiskSpace,
-    pub(super) github: crate::messaging::github::Runtime,
-    pub(super) github_pending: Vec<crate::messaging::github::Update>,
     pub(super) attention: super::attention::Runtime,
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
@@ -93,7 +91,15 @@ impl Worker {
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
         // Sessions saved before MASTER existed gain it here, once, before any client sees them.
         state.ensure_master_room();
-        state.recover_room_digest_facts();
+        state
+            .retire_queued_github_notices(io::now_ms())
+            .map_err(|e| e.to_string())?;
+        state
+            .retire_queued_room_digests(io::now_ms())
+            .map_err(|e| e.to_string())?;
+        state
+            .retire_queued_operational_notices(io::now_ms())
+            .map_err(|e| e.to_string())?;
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
         state
@@ -114,17 +120,9 @@ impl Worker {
                 .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
                 .map_err(|e| e.to_string())?;
         }
-        if let Err(error) =
-            super::super::orchestration::queue_upgrade_onboarding(&mut state, &data_dir)
-        {
-            tracing::warn!(event = "bus.onboarding.upgrade_skipped", %error,
-                "Upgrade onboarding skipped; coordinator startup continues");
-        }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
             disk_space: super::disk_space::DiskSpace::default(),
-            github: crate::messaging::github::Runtime::for_session(&data_dir),
-            github_pending: Vec::new(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
             state,
@@ -499,8 +497,6 @@ impl Worker {
     ) -> Result<(), String> {
         perf::COORDINATOR_LOOP.relabel("tick.disk_space");
         self.refresh_disk_space_at(std::time::Instant::now())?;
-        perf::COORDINATOR_LOOP.relabel("tick.github");
-        self.refresh_github()?;
         perf::COORDINATOR_LOOP.relabel("tick.expire");
         self.expire_queued_now()?;
         perf::COORDINATOR_LOOP.relabel("tick.poll");

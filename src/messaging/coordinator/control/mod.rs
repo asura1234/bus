@@ -225,7 +225,7 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "agent.focus" | "room.focus" | "room.create" | "room.rename" | "room.notes"
-            | "room.seen" | "room.sound" | "room.delete" | "room.history" | "room.github" => {
+            | "room.seen" | "room.sound" | "room.delete" | "room.history" => {
                 self.execute_rooms(method, p, events)
             }
             "state"
@@ -249,15 +249,6 @@ impl Worker {
             }
             "message.send" | "message.status" | "message.seen" | "request.recover" => {
                 self.execute_messages(method, p, events)
-            }
-            "digest.ack" => {
-                let fact = required(p, "fact")?
-                    .parse::<u64>()
-                    .map_err(|_| "Fact must be a numeric ID")?;
-                let mut state = self.state.clone();
-                state.ack_digest_fact(fact, super::io::now_ms())?;
-                self.save(state)?;
-                Ok(json!({"fact":fact,"acknowledged":true}))
             }
             #[cfg(feature = "dev-tools")]
             "ui.hits" => ui_hits::hits_json(),
@@ -359,20 +350,12 @@ const fn spec(
 /// one cannot ship without a tier. Dev-tier methods from `src/devtools` (the
 /// TUI driver's `ui hits` / `ui screen`) are registered in this table too.
 pub(crate) const METHODS: &[MethodSpec] = &[
-    spec("digest.ack", "digest ack", &["fact"], true, Tier::Agent),
     spec("state", "state", &[], false, Tier::Agent),
     spec("settings", "settings", &[], false, Tier::Agent),
     spec(
         "settings.feishu_notifications",
         "settings feishu-notifications",
         &["on"],
-        true,
-        Tier::Agent,
-    ),
-    spec(
-        "room.github",
-        "room github",
-        &["room", "repos"],
         true,
         Tier::Agent,
     ),

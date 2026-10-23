@@ -396,29 +396,6 @@ impl Delivery {
         let identity = self.native.lock().unwrap().add(id, room, provider);
         state.set_agent_runtime_identity(id, identity).unwrap();
         state.confirm_hook_setup(id).unwrap();
-        state
-            .observe_status(id, RuntimeStatus::Idle, io::now_ms())
-            .unwrap();
-        // Initial availability is known fixture setup, not the event under test.
-        // Explicitly dismiss only launch-idle facts; retain every real outcome.
-        state.recover_room_digest_facts();
-        let document = serde_json::to_value(&state).unwrap();
-        if let Some(records) = document["room_digests"].as_object() {
-            for record in records.values() {
-                for fact in record["facts"].as_object().unwrap().values() {
-                    if fact["text"] == "Idle with no next task"
-                        && fact["agent"]
-                            .as_u64()
-                            .and_then(|id| state.agent(AgentId(id)))
-                            .is_some_and(|a| a.busy_revision == 0)
-                    {
-                        state
-                            .ack_digest_fact(fact["id"].as_u64().unwrap(), io::now_ms())
-                            .unwrap();
-                    }
-                }
-            }
-        }
         callbacks::initialize(
             &self.dir.join(format!("callbacks/launch-{}", id.0)),
             &callbacks::Manifest {
@@ -534,11 +511,16 @@ impl Delivery {
             .with_history(Arc::clone(self.state().history()));
         self.worker_mut().save(state).unwrap();
     }
-    pub(crate) fn stall_alerts(&self) -> usize {
-        self.state()
-            .notices(self.master)
-            .filter(|n| n.text.contains("Agent stalled"))
-            .count()
+    /// One durable marker is also the guard for one structured diagnostic.
+    pub(crate) fn stall_diagnostics(&self) -> usize {
+        serde_json::to_value(self.state()).unwrap()["attention_episodes"]
+            .as_array()
+            .map_or(0, |episodes| {
+                episodes
+                    .iter()
+                    .filter(|key| key.as_str().is_some_and(|key| key.starts_with("stall:")))
+                    .count()
+            })
     }
     pub(crate) fn tick(&mut self) {
         self.worker_mut().tick().unwrap();
@@ -793,13 +775,17 @@ impl Delivery {
         self.worker = Some(worker);
         self.tick();
     }
-    pub(crate) fn stall_alerts_for(&self, request: RequestId) -> usize {
-        let message = self.state().request(request).unwrap().prompt.id.0;
-        let marker = format!("message {message} (");
-        self.state()
-            .notices(self.master)
-            .filter(|n| n.text.contains("Agent stalled") && n.text.contains(&marker))
-            .count()
+    pub(crate) fn stall_diagnostics_for(&self, request: RequestId) -> usize {
+        let marker = format!("stall:{}", request.0);
+        usize::from(
+            serde_json::to_value(self.state()).unwrap()["attention_episodes"]
+                .as_array()
+                .is_some_and(|episodes| {
+                    episodes
+                        .iter()
+                        .any(|key| key.as_str() == Some(marker.as_str()))
+                }),
+        )
     }
     /// A reply group contributes one publication per source room. The unread
     /// counters are independent observable effects, unlike map-key uniqueness.

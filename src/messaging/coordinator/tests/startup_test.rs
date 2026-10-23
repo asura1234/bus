@@ -52,9 +52,8 @@ impl Transport for FailedLaunchNative {
                 let state = JsonStore::new(self.state_path.clone()).load().unwrap().unwrap();
                 let agent = state.agents().find(|agent| agent.runtime_identity.terminal_id.as_deref() == Some(&params.expected_terminal_id)).unwrap();
                 assert!(agent.deletion_pending);
-                assert!(state.notices(agent.room_id).any(|p| p.text.contains("Startup failed"))
-                    || state.requests().any(|r| r.prompt.text.contains("Startup failed")),
-                    "notice must be durable before normal deletion starts");
+                assert!(agent.startup.as_ref().is_some_and(|startup| startup.reported),
+                    "startup failure marker must be durable before normal deletion starts");
                 if self.close_failures > 0 {
                     self.close_failures -= 1;
                     return Err(TransportError {
@@ -99,22 +98,15 @@ fn failed_startup_reports_evidence_and_retains_identity() {
         worker.state.agents().next().is_some(),
         "startup failure must retain the registered agent"
     );
-    assert!(worker
+    assert_eq!(worker.state.notices(room).count(), 0);
+    let broken = worker
         .state
-        .notices(room)
-        .any(|n| n.author == Author::Bus && n.text.starts_with("Roster change: added broken")));
-    let notice = worker.state.notices(room).last().unwrap();
-    for text in [
-        "broken",
-        "codex",
-        "bus-provider-does-not-exist",
-        "command not found",
-    ] {
-        assert!(
-            notice.text.contains(text),
-            "missing {text}: {}",
-            notice.text
-        );
+        .agents()
+        .find(|agent| agent.name == "broken")
+        .unwrap();
+    let error = broken.actionable_error.as_deref().unwrap();
+    for text in ["codex", "bus-provider-does-not-exist", "command not found"] {
+        assert!(error.contains(text), "missing {text}: {error}");
     }
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -168,12 +160,13 @@ fn startup_timeout_is_bounded_for_every_provider_even_with_a_live_pending_termin
             .cleanup_failed_startups(&[info], &events, start + 30_000)
             .unwrap();
         assert!(worker.state.agent(agent).is_some());
-        assert!(worker
-            .state
-            .notices(room)
-            .last()
+        assert_eq!(worker.state.notices(room).count(), 0);
+        let failed = worker.state.agent(agent).unwrap();
+        assert!(failed.startup.as_ref().unwrap().reported);
+        assert!(failed
+            .actionable_error
+            .as_deref()
             .unwrap()
-            .text
             .contains("within 30 seconds"));
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
@@ -226,7 +219,7 @@ fn startup_hook_consumed_before_cleanup_wins_over_an_expired_poll_snapshot() {
 }
 
 #[test]
-fn startup_failure_notice_survives_restart_without_duplication_or_losing_queued_work() {
+fn startup_failure_error_survives_restart_without_duplication_or_losing_queued_work() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
     let mut state = worker.state.clone();
     let request = state
@@ -247,7 +240,11 @@ fn startup_failure_notice_survives_restart_without_duplication_or_losing_queued_
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
     assert!(!worker.state.agent(agent).unwrap().deletion_pending);
-    assert_eq!(worker.state.notices(room).count(), 1);
+    assert_eq!(worker.state.notices(room).count(), 0);
+    let failed = worker.state.agent(agent).unwrap();
+    assert!(failed.startup.as_ref().unwrap().reported);
+    let error = failed.actionable_error.clone().unwrap();
+    assert!(error.contains("Command:") && error.contains("Last screen lines:"));
     assert_eq!(
         worker.state.request(request).unwrap().phase,
         RequestPhase::Queued
@@ -265,7 +262,10 @@ fn startup_failure_notice_survives_restart_without_duplication_or_losing_queued_
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
     assert!(worker.state.agent(agent).is_some());
-    assert_eq!(worker.state.notices(room).count(), 1);
+    assert_eq!(worker.state.notices(room).count(), 0);
+    let failed = worker.state.agent(agent).unwrap();
+    assert!(failed.startup.as_ref().unwrap().reported);
+    assert_eq!(failed.actionable_error.as_deref(), Some(error.as_str()));
     assert_eq!(
         worker.state.request(request).unwrap().phase,
         RequestPhase::Queued
@@ -275,7 +275,7 @@ fn startup_failure_notice_survives_restart_without_duplication_or_losing_queued_
 }
 
 #[test]
-fn startup_failure_is_delivered_with_one_blocked_digest_fact_and_identity_retained() {
+fn operational_notice_startup_failure_retains_error_without_chat() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
     let mut state = worker.state.clone();
     let master = state.master_room().unwrap().id;
@@ -294,34 +294,25 @@ fn startup_failure_is_delivered_with_one_blocked_digest_fact_and_identity_retain
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
     assert!(worker.state.agent(agent).is_some());
-    let request = worker
-        .state
-        .requests()
-        .find(|r| r.agent_id == orchestrator)
-        .unwrap();
-    assert_eq!(request.prompt.author, Author::Bus);
-    assert!(request.prompt.text.contains("Startup failed"));
+    assert!(worker.state.requests().all(|r| r.agent_id != orchestrator));
     assert_eq!(worker.state.notices(room).count(), 0);
-    let saved = serde_json::to_value(&worker.state).unwrap();
-    let facts = saved["room_digests"][orchestrator.0.to_string()]["facts"]
-        .as_object()
-        .unwrap();
-    assert_eq!(facts.len(), 1);
-    assert!(facts.values().next().unwrap()["text"]
-        .as_str()
+    let error = worker
+        .state
+        .agent(agent)
         .unwrap()
-        .starts_with("BLOCKED"));
+        .actionable_error
+        .as_deref()
+        .unwrap();
+    assert!(
+        error.contains("Startup failed")
+            && error.contains("Command:")
+            && error.contains("Last screen lines:"),
+        "{error}"
+    );
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
-    assert_eq!(
-        worker
-            .state
-            .requests()
-            .filter(|r| r.agent_id == orchestrator)
-            .count(),
-        1
-    );
+    assert!(worker.state.requests().all(|r| r.agent_id != orchestrator));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -359,7 +350,14 @@ fn startup_failure_does_not_quote_a_replacement_terminal() {
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
     assert!(worker.state.agent(agent).is_some());
-    let text = &worker.state.notices(room).last().unwrap().text;
+    assert_eq!(worker.state.notices(room).count(), 0);
+    let text = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap();
     assert!(text.contains("Screen unavailable"));
     assert!(
         !text.contains("command not found"),
@@ -417,12 +415,14 @@ fn blocked_shell_without_the_expected_provider_still_expires() {
         .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 30_000)
         .unwrap();
     assert!(worker.state.agent(agent).is_some());
+    assert_eq!(worker.state.notices(room).count(), 0);
     assert!(worker
         .state
-        .notices(room)
-        .last()
+        .agent(agent)
         .unwrap()
-        .text
+        .actionable_error
+        .as_deref()
+        .unwrap()
         .contains("Startup failed"));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -440,6 +440,18 @@ fn a_stuck_failed_startup_deletion_does_not_relog_pending_on_each_retry() {
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
+    let error = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap();
+    assert!(
+        error.contains("Startup failed")
+            && error.contains("Command:")
+            && error.contains("Last screen lines:")
+    );
     // Keep callsite interest global while other libtest threads exercise the
     // same log site without a thread-local subscriber.
     let _callsite_registration = tracing::Dispatch::new(tracing_subscriber::registry());

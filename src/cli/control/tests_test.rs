@@ -9,14 +9,6 @@ fn command(args: &[&str]) -> Result<ParsedCommand, String> {
 }
 
 #[test]
-fn room_digest_ack_cli_is_a_small_explicit_action() {
-    let parsed = command(&["digest", "ack", "1602"]).unwrap();
-    assert_eq!(parsed.method, "digest.ack");
-    assert_eq!(parsed.params, json!({"fact":"1602"}));
-    assert!(command(&["digest", "ack"]).is_err());
-}
-
-#[test]
 fn feishu_cli_toggle_accepts_only_on_off_and_no_destination() {
     for (flag, on) in [("--on", true), ("--off", false)] {
         let parsed = command(&["settings", "feishu-notifications", flag]).unwrap();
@@ -113,7 +105,6 @@ const SAMPLES: &[&[&str]] = &[
     &["room", "create", "r"],
     &["room", "rename", "r", "s"],
     &["room", "notes", "r", "--text", "t"],
-    &["room", "github", "r", "--auto"],
     &["room", "delete", "r", "--confirm"],
     &["history", "--room", "r"],
     &[
@@ -148,7 +139,6 @@ const SAMPLES: &[&[&str]] = &[
     &["send", "--room", "r", "--to", "a", "--text", "t"],
     &["message", "status", "1"],
     &["message", "seen", "1", "--as", "orch"],
-    &["digest", "ack", "1"],
     &["request", "recover", "1", "--confirm"],
     &["room", "focus", "r"],
     &["room", "seen", "r"],
@@ -3169,24 +3159,15 @@ fn agent_interrupt_deadline_reason_reflects_the_last_successful_read_not_one_lat
 }
 
 #[test]
-fn github_watch_room_override_has_explicit_auto_off_and_repo_choices() {
-    for (args, repos) in [
-        (vec!["--auto"], serde_json::Value::Null),
-        (vec!["--off"], json!([])),
-        (
-            vec!["--repos", "asura1234/bus,liblib-ai/libtv-app"],
-            json!(["asura1234/bus", "liblib-ai/libtv-app"]),
-        ),
-    ] {
-        let mut argv = vec!["room", "github", "7"];
-        argv.extend(args);
-        let parsed =
-            command(&argv).expect("GitHub room settings must be reachable through the CLI");
-        assert_eq!(parsed.method, "room.github");
-        assert_eq!(parsed.params, json!({"room":"7", "repos":repos}));
+fn retired_github_watch_cli_is_rejected() {
+    for mode in [vec!["--auto"], vec!["--off"], vec!["--repos", "owner/repo"]] {
+        let mut args = vec!["room", "github", "7"];
+        args.extend(mode);
+        assert!(
+            command(&args).is_err(),
+            "retired GitHub watcher must not remain a CLI operation"
+        );
     }
-    assert!(command(&["room", "github", "7"]).is_err());
-    assert!(command(&["room", "github", "7", "--auto", "--off"]).is_err());
 }
 
 #[test]
@@ -3197,4 +3178,25 @@ fn notify_you_async_rejects_both_developer_aliases() {
         ]);
         assert!(parsed.unwrap_err().contains("--async waits for agents"));
     }
+}
+
+#[test]
+fn retired_room_digest_ack_cli_is_rejected() {
+    assert!(command(&["digest", "ack", "42"]).is_err());
+}
+
+#[test]
+fn worker_human_fallback_cli_preserves_explicit_room_and_author() {
+    let parsed = command(&[
+        "send", "--room", "7", "--as", "worker", "--to", "human", "--text", "status",
+    ])
+    .unwrap();
+    assert_eq!(parsed.method, "message.send");
+    assert_eq!(parsed.params["room"], "7");
+    assert_eq!(parsed.params["as"], "worker");
+    assert_eq!(parsed.params["to"], json!(["human"]));
+    assert!(command(&[
+        "send", "--room", "7", "--as", "worker", "--to", "human", "--text", "status", "--async"
+    ])
+    .is_err());
 }

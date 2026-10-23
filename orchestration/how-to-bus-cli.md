@@ -105,21 +105,6 @@ bus agent setup-confirm "$agent_id" --confirm
 
 The `--confirm` flag is deliberately required for setup approval and deletion.
 
-## Watch a room's GitHub repositories
-
-Bus derives github.com repositories from agents' git remotes and watches owned
-PRs plus every merge into the default branch. Override the repository list or
-switch monitoring off for a work room:
-
-```sh
-bus room github ROOM --repos asura1234/bus,owner/repo
-bus room github ROOM --auto
-bus room github ROOM --off
-```
-
-`bus state` exposes `github_repos` and `github_discovered`. See the
-[GitHub watch guide](../docs/github-watch.md) for ownership, polling and notices.
-
 ## Use the MASTER room
 
 Every session has exactly one MASTER room. It holds orchestrator agents: each
@@ -298,6 +283,33 @@ two-second burst and first-action-line format; untagged direct posts use `sender
 No user setting disables these alerts, including a saved legacy Feishu off preference.
 Recipient and CLI path remain editable. See [developer notifications](../docs/developer-notifications.md).
 
+## Repository status reporting belongs to the agent and harness
+
+Bus does not discover repositories, poll a code host, interpret PR/merge-request
+state or decide the next workflow action. Use your agent and harness tools for
+GitHub, GitLab, Aliyun or another repository host.
+
+For assigned repository work, report these meaningful transitions yourself:
+
+- your PR/merge request is merged;
+- it becomes ready for review;
+- CI finishes, with its result;
+- a new merge conflict appears;
+- an upstream merge materially affects your assigned work.
+
+Include repository, PR/merge-request number, exact head when available, status
+and the next action or owner. Send one update per meaningful transition; do not
+broadcast every merge in an unrelated repository. Message the orchestrator bound
+to your room. If the room has no orchestrator, post to You from your own room:
+
+```sh
+bus send --room ROOM --as WORKER --to human --text "REPO PR #N; head SHA; STATUS; next ACTION"
+```
+
+This is an ordinary worker-authored message, not a Bus-generated notice. Check
+whether an orchestrator is bound rather than treating any send failure as a
+reason to send a second copy to You.
+
 ## Send work and wait for the reply
 
 Send a task to one agent and retain the returned message ID:
@@ -324,67 +336,6 @@ be answered. Each transport request still has its normal finite timeout;
 `wait --async` retries transport failures after a one-second pause, like
 `send --async`. Bounded waits still report transport failures immediately.
 To obtain a message ID before waiting, use plain `send`, then `wait --async`.
-
-### Durable room digests
-
-Start a worker milestone final's first line with `READY FOR VERIFY`,
-`REVIEW READY`, `MERGED`, `DONE` or `BLOCKED`, followed by the task/PR and head
-where relevant. Any non-alphanumeric boundary is valid (`DONE.`, `MERGED, #1607`);
-a tag mentioned later in the reply is ordinary prose. Bus also
-records abandoned/stalled requests, idle workers with no next task, actionable
-agent-specific Bus alerts. Generic GitHub/Bus notices already have their own
-delivery and do not also become facts. Notices about several workers record
-each subject, so retasking those workers handles the notice. These facts belong to the bound
-orchestrator and are independent of a waiter's transport `seen` state.
-Healthy background requests that still have an owner and live wait do not
-produce an action digest. Alerts about the orchestrator's own provider/dialog
-remain developer alerts. Their existing notification paths are unchanged.
-
-When the orchestrator can start a clean idle turn, Bus sends one Bus-authored,
-queue-only `Room digest: …` message in the work room. It lists the outstanding
-facts, each fact ID, age and next owner/action. It cannot steer into a running
-MASTER or notification turn. Bursts coalesce until that idle boundary, and an
-older pending message takes priority.
-
-A direct, single-recipient message from the fact's orchestrator acknowledges it
-when the recipient is its worker, or the body references its PR number, worker
-name or head SHA prefix (at least seven hex characters). For example, briefing a
-separate verifier with `verify #1602 at 870112624` handles that READY fact.
-PR and unlabelled hex keys come only from the milestone's tag line, not PRs or
-commits mentioned later in its body. A standalone `head <sha>` or `SHA: <sha>`
-metadata line also supplies a head. Unlabelled hex keys must contain a letter;
-numeric-only prefixes match only an explicit head/SHA field. A direct message
-mentioning the fact's own PR still counts even in a status aside such as
-`#1602 is waiting for a verifier`: this is an accepted trade-off of reference
-acknowledgment, which does not infer whether the message assigns verification.
-`--to all` and multi-recipient messages never acknowledge facts, including an
-All broadcast that expands to just one worker. A tagged completion has no
-separate idle-with-no-next-task fact for that same completion.
-
-Deleting its worker acknowledges a fact too, or explicitly dismiss it:
-
-```sh
-bus digest ack FACT_ID
-```
-
-Record the next owner or hold/disposition before dismissing. Reading the
-digest, returning `noted`, receiving a worker final or consuming an async wait
-does not acknowledge anything. Pending fact text is capped at 600 characters.
-Acknowledgment discards that payload and retains only an ID/source-key/agent-ID/
-ack-time tombstone for dedupe, even if the worker and its request history are
-deleted. Tombstones expire after seven days through ordinary history cleanup.
-
-The ledger and watermarks survive server and waiter restarts. The delivery
-watermark advances only when the digest is delivered; abandonment restores its
-previous value so undelivered work can be retried. Startup replays only runtime
-fact sources, treating sources at or below covered watermarks as already covered.
-Upgrades reconcile retained direct actions; erased history cannot be reconstructed.
-
-Only new facts re-arm the digest. Unacknowledged older facts are included with
-the new facts in the next digest. An unchanged digest is never periodically
-repeated, including after an hour or a restart: there is no reminder timer or
-blind room-polling loop. Initial worker availability is a fact too; assign or
-close that worker rather than leave it without a next task.
 
 To record the message as written by an agent instead of the developer, add
 `--as AGENT`. Any agent can message any other agent, across work rooms and
@@ -423,12 +374,8 @@ else. An ordinary sentence or a header with a forged ID or room always gets
 the genuine sender header. The stored chat text stays as authored;
 the delivered payload and callback matching use the same rendered text.
 
-After an upgrade, existing agents receive these current messaging rules from Bus once
-as their first pending message, before waiting work; saved custom prompts are
-preserved. New agents receive the rules at launch.
-
-If the upgrade instruction cannot be prepared, Bus logs a warning and continues
-coordinator startup. It retries the skipped refresh on a later startup.
+New agents receive Bus protocol instructions at launch. Existing conversations
+keep their saved instructions; upgrades do not insert new task turns.
 
 A message from another conversation room waits for the recipient's running
 turn to finish, then gets its own turn and reply. Same-room steering,
@@ -513,7 +460,7 @@ message; new events can join a still-queued batch during its collection window.
 Long text uses a preview and `bus message status MESSAGE_ID` or
 `bus history --room ROOM` pointer. Different workers keep their own identity.
 No room monitoring, self-timer or surviving waiter is required. Blocked,
-Resolved and failed-startup notices keep their existing behavior.
+Resolved notices keep their existing behavior. Startup failures are retained in agent state and diagnostic logs.
 
 An author's `send --async --as ORCH` renews a three-second waiter lease, so its
 reply and no-reply outcome components wait for the combined output.
