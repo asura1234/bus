@@ -40,23 +40,7 @@ impl Worker {
         let mut waits = Vec::new();
         let observed_agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in &observed_agents {
-            let info = infos
-                .iter()
-                .find(|i| {
-                    Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
-                        && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
-                        && i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
-                        && agent
-                            .runtime_identity
-                            .session_id
-                            .as_ref()
-                            .is_none_or(|expected| {
-                                i.agent_session
-                                    .as_ref()
-                                    .is_some_and(|session| &session.value == expected)
-                            })
-                })
-                .or_else(|| resume::restored_agent(&self.state, agent, &infos));
+            let info = polled_agent(&self.state, agent, &infos);
             if let Some(info) = info {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
                     || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
@@ -139,6 +123,39 @@ impl Worker {
         }
         self.apply_poll(state)
     }
+}
+
+/// A pending owned launch has no detected provider yet. It still carries the
+/// saved session and managed name; track its terminal before failure clears them.
+fn polled_agent<'a>(
+    state: &BusState,
+    agent: &RoomAgent,
+    infos: &'a [schema::AgentInfo],
+) -> Option<&'a schema::AgentInfo> {
+    infos
+        .iter()
+        .find(|i| {
+            Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+                && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
+                && (i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                    || i.agent.is_none()
+                        && i.launch_pending
+                        && i.name.as_deref()
+                            == Some(
+                                crate::messaging::identity::managed_name(agent.room_id, agent.id)
+                                    .as_str(),
+                            ))
+                && agent
+                    .runtime_identity
+                    .session_id
+                    .as_ref()
+                    .is_none_or(|expected| {
+                        i.agent_session
+                            .as_ref()
+                            .is_some_and(|session| &session.value == expected)
+                    })
+        })
+        .or_else(|| resume::restored_agent(state, agent, infos))
 }
 
 fn branch_for(cwd: &Path) -> Option<String> {

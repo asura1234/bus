@@ -219,13 +219,63 @@ fn codexup_room_outage_survives_restart_with_one_fact_and_resolves_when_provider
     assert_eq!(recovered.state.agent(agent).unwrap().wait_reason(), None);
     assert_eq!(recovered.state.room_status(room), RuntimeStatus::Idle);
     let value = serde_json::to_value(&recovered.state).unwrap();
-    assert_eq!(
+    assert!(
         value["room_digests"][orch.0.to_string()]["facts"]
             .as_object()
             .unwrap()
-            .len(),
-        0
+            .keys()
+            .all(|key| !key.starts_with("provider-block:")),
+        "a recovered provider must resolve its blocker while preserving worker availability facts"
     );
     drop(recovered);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn codexup_pending_restore_tracks_the_new_terminal_before_provider_detection() {
+    for foreign in [false, true] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let mut pending = native_info(
+            "restored-pane",
+            "codex",
+            if foreign {
+                "foreign-session"
+            } else {
+                "session"
+            },
+        );
+        pending.name = Some(format!("bus-r{}-a{}", room.0, agent.0));
+        pending.terminal_id = "restored-terminal".into();
+        pending.agent = None;
+        pending.launch_pending = true;
+        pending.interactive_ready = false;
+        worker.transport = Box::new(FakeTransport {
+            replies: vec![Ok(ResponseResult::AgentList {
+                agents: vec![pending],
+            })]
+            .into(),
+            calls: Arc::default(),
+            state_path: dir.join("state.json"),
+        });
+        worker.poll().unwrap();
+        let saved = worker.state.agent(agent).unwrap();
+        assert_eq!(
+            saved.status,
+            if foreign {
+                RuntimeStatus::Unavailable
+            } else {
+                RuntimeStatus::Launching
+            }
+        );
+        assert_eq!(
+            saved.runtime_identity.terminal_id.as_deref(),
+            Some(if foreign {
+                "terminal"
+            } else {
+                "restored-terminal"
+            })
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

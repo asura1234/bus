@@ -1,8 +1,25 @@
 //! Read only a failed launch's own pane; do not infer an outage from generic exit text.
-use super::{schema, BusState, Method, ResponseResult, RoomAgent, RuntimeStatus, Worker};
+use super::{schema, BusState, Method, ResponseResult, RoomAgent, RoomId, RuntimeStatus, Worker};
 use crate::agents::providers::launch;
 
 impl Worker {
+    pub(super) fn ensure_provider_binary(
+        &mut self,
+        room: RoomId,
+        provider: super::Provider,
+    ) -> Result<(), String> {
+        if launch::binary_available(provider) {
+            return Ok(());
+        }
+        let binary = launch::executable(provider);
+        let mut state = self.state.clone();
+        let error = state
+            .report_missing_binary(room, binary, super::io::now_ms())
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        Err(error)
+    }
+
     pub(super) fn observe_missing_binary(
         &mut self,
         state: &mut BusState,

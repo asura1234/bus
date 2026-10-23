@@ -85,7 +85,7 @@ pub(super) fn restored_agent<'a>(
     let source = identity::managed_source(agent.provider);
     let mut matches = infos.iter().filter(|info| {
         info.name.as_deref() == Some(name.as_str())
-            && info.agent.as_deref() == Some(kind)
+            && (info.agent.as_deref() == Some(kind) || info.agent.is_none() && info.launch_pending)
             && match (session, info.agent_session.as_ref()) {
                 (None, None) => true,
                 (Some(session), Some(native)) => {
