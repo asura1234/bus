@@ -71,6 +71,7 @@ impl BusState {
         request_state.foreign_turn_settled_at_ms = None;
         // Starts the idle clock for stall detection at the submission.
         request_state.progress_at_ms = Some(submitted_at_ms);
+        self.record_queue_pressure(agent_id, submitted_at_ms);
         Ok(())
     }
 

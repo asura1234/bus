@@ -10,6 +10,11 @@ pub(super) struct RetiredAgent {
     pub(super) name: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct QueuePressureEpisode {
+    id: u64,
+}
+
 impl BusState {
     pub(crate) fn post_staffing_blocker(
         &mut self,
@@ -125,28 +130,29 @@ impl BusState {
     pub(super) fn record_queue_pressure(&mut self, agent: AgentId, now: u64) {
         let (depth, age) = self.agent_queue_metrics(agent, now);
         if depth <= 3 && age.is_none_or(|age| age <= 15 * 60_000) {
+            if let Some(worker) = self.agents.get_mut(&agent) {
+                worker.queue_pressure_episode = None;
+            }
             return;
         }
         let Some(worker) = self.agent(agent).filter(|a| !a.deletion_pending) else {
             return;
         };
         let room = worker.orchestrates.unwrap_or(worker.room_id);
-        let Some(oldest) = self
-            .queued_requests(agent)
-            .iter()
-            .filter_map(|id| self.request(*id))
-            .min_by_key(|r| (r.prompt.submitted_at_ms, r.id))
-        else {
-            return;
-        };
-        let source = oldest.id.0;
+        let previous = worker.queue_pressure_episode.clone();
+        let id = previous
+            .as_ref()
+            .map_or_else(|| self.allocate_id(), |episode| episode.id);
+        let episode = QueuePressureEpisode { id };
+        if let Some(worker) = self.agents.get_mut(&agent) {
+            worker.queue_pressure_episode = Some(episode);
+        }
         let text = format!("Queue pressure: {} queued messages; oldest {}s. Reassign queued work or unblock this agent.", depth, age.unwrap_or_default() / 1000);
-        self.record_room_fact(
+        self.record_queue_pressure_fact(
             room,
-            Some(agent),
-            DigestSource::new(format!("queue:{}:{source}", agent.0), source),
+            agent,
+            DigestSource::new(format!("queue:{}:{id}", agent.0), id),
             &text,
-            "redistribute queued work or resolve the bottleneck",
             now,
         );
     }

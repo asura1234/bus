@@ -88,6 +88,7 @@ impl BusState {
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
                 startup: None,
+                queue_pressure_episode: None,
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
                 status_revision: 0,

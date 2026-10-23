@@ -121,6 +121,9 @@ impl BusState {
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
         for agent_id in prompt.recipient_ids.iter().copied() {
+            // End a previously healthy episode before this enqueue can cross
+            // the pressure threshold again.
+            self.record_queue_pressure(agent_id, now_ms);
             let request_id = RequestId(self.allocate_id());
             self.requests.insert(
                 request_id,
@@ -154,6 +157,7 @@ impl BusState {
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
+            self.record_queue_pressure(agent_id, now_ms);
             request_ids.push(request_id);
         }
         let room_state = self

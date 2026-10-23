@@ -344,6 +344,8 @@ pub(crate) struct RoomAgent {
     /// up merely because they later become unavailable. Survives restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) startup: Option<AgentStartup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) queue_pressure_episode: Option<super::staffing::QueuePressureEpisode>,
     pub(crate) details_disclosed: bool,
     pub(crate) status: RuntimeStatus,
     pub(crate) status_revision: u64,

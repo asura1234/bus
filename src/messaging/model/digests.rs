@@ -88,6 +88,38 @@ impl RoomDigest {
 }
 
 impl BusState {
+    pub(super) fn record_queue_pressure_fact(
+        &mut self,
+        room: RoomId,
+        agent: AgentId,
+        source: DigestSource,
+        text: &str,
+        at: u64,
+    ) {
+        if let Some(fact) = self
+            .notice_orchestrator(room, None)
+            .and_then(|owner| self.room_digests.get_mut(&owner))
+            .and_then(|record| record.facts.get_mut(&source.key))
+        {
+            // Keep the fact identity, delivery watermark and armed state;
+            // draining or aging one backlog must not schedule another wake.
+            let updated = text.chars().take(FACT_TEXT_LIMIT).collect::<String>();
+            if fact.text != updated {
+                fact.text = updated;
+            }
+            return;
+        }
+        // record_room_fact also honors acknowledgments of this episode.
+        self.record_room_fact(
+            room,
+            Some(agent),
+            source,
+            text,
+            "redistribute queued work or resolve the bottleneck",
+            at,
+        );
+    }
+
     pub(super) fn record_room_fact(
         &mut self,
         room: RoomId,

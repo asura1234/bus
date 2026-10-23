@@ -657,3 +657,146 @@ fn staffing_queue_pressure_has_strict_thresholds_and_covers_the_orchestrator() {
         .iter()
         .any(|f| f["agent"] == orch.0 && f["text"].as_str().unwrap().contains("Queue pressure")));
 }
+
+#[test]
+fn queue_pressure_records_one_fact_while_a_deep_backlog_drains() {
+    let (mut s, room, orch, worker) = fixture();
+    for _ in 0..8 {
+        s.submit_message_with(
+            room,
+            Draft {
+                text: "queued work".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Developer,
+            100,
+            true,
+        )
+        .unwrap();
+    }
+    let mut now = 1_000;
+    for _ in 0..4 {
+        let request = s.queued_requests(worker)[0];
+        s.begin_submission(request, "launch", 0).unwrap();
+        s.record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn".into()),
+            },
+        )
+        .unwrap();
+        s.observe_status(worker, RuntimeStatus::Working, now)
+            .unwrap();
+        s.requests.get_mut(&request).unwrap().pending_final = Some(PendingFinal {
+            callback_id: format!("final-{now}"),
+            text: "done".into(),
+            received_at_ms: now + 1,
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn".into()),
+        });
+        s.observe_status(worker, RuntimeStatus::Idle, now + 2)
+            .unwrap();
+        now += 10;
+    }
+    let pressure: Vec<_> = facts(&s, orch)
+        .into_iter()
+        .filter(|f| f["text"].as_str().unwrap().contains("Queue pressure"))
+        .collect();
+    assert_eq!(
+        pressure.len(),
+        1,
+        "one backlog produced {} pressure facts: {pressure:?}",
+        pressure.len()
+    );
+}
+
+#[test]
+fn queue_pressure_updates_without_rearming_and_restarts_only_after_a_healthy_queue() {
+    fn drain(s: &mut BusState, worker: AgentId, at: u64) {
+        let request = s.queued_requests(worker)[0];
+        s.begin_submission(request, "launch", 0).unwrap();
+        s.record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn".into()),
+            },
+        )
+        .unwrap();
+        s.requests.get_mut(&request).unwrap().pending_final = Some(PendingFinal {
+            callback_id: format!("processed-{at}"),
+            text: "processed".into(),
+            received_at_ms: at,
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn".into()),
+        });
+        s.complete_pending_final(worker, at).unwrap();
+    }
+    let (mut s, room, orch, worker) = fixture();
+    let enqueue = |s: &mut BusState, at| {
+        s.submit_message_with(
+            room,
+            Draft {
+                text: "queued work".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Developer,
+            at,
+            true,
+        )
+        .unwrap();
+    };
+    let pressure = |s: &BusState| {
+        facts(s, orch)
+            .into_iter()
+            .filter(|f| f["text"].as_str().unwrap().starts_with("Queue pressure"))
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..6 {
+        enqueue(&mut s, 100);
+    }
+    let first = pressure(&s)[0].clone();
+    let fact_id = first["id"].as_u64().unwrap();
+    s.observe_status(orch, RuntimeStatus::Idle, 200).unwrap();
+    assert!(s.queue_room_digest(orch, 200).unwrap());
+    assert!(!s.room_digest_armed(orch));
+    drain(&mut s, worker, 300);
+    s = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+    s.observe_status(worker, RuntimeStatus::Working, 10_000)
+        .unwrap();
+    let updated = pressure(&s);
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0]["id"], first["id"]);
+    assert_eq!(updated[0]["at_ms"], first["at_ms"]);
+    assert!(updated[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("5 queued messages; oldest 9s"));
+    assert!(
+        !s.room_digest_armed(orch),
+        "updating the backlog must not wake its owner again"
+    );
+    s.ack_digest_fact(fact_id, 10_001).unwrap();
+    s = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+    s.recover_room_digest_facts();
+    s.observe_status(worker, RuntimeStatus::Working, 10_002)
+        .unwrap();
+    assert!(
+        pressure(&s).is_empty(),
+        "an acknowledged episode must survive restart without resurfacing"
+    );
+    while s.queued_requests(worker).len() > 3 {
+        drain(&mut s, worker, 20_000);
+    }
+    enqueue(&mut s, 30_000);
+    let next = pressure(&s);
+    assert_eq!(next.len(), 1);
+    assert_ne!(
+        next[0]["id"], first["id"],
+        "crossing the threshold after recovery starts a new episode"
+    );
+    assert!(s.room_digest_armed(orch));
+}
