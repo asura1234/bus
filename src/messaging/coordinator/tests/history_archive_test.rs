@@ -553,11 +553,12 @@ fn audit_orphaned_history(remove_room: bool) {
 fn audit_delete_cannot_commit_without_a_durable_identity_tombstone() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "keep on failed delete");
-    worker.store.fail_history_once();
-    let (events, _) = mpsc::channel();
-    assert!(worker
-        .command(BusCommand::DeleteAgent(agent), &events)
-        .is_err());
+    worker.state.prepare_delete_agent(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let mut deleted = worker.state.clone();
+    deleted.delete_agent(agent, io::now_ms()).unwrap();
+    worker.store.fail_once_at(SaveStage::TempWrite);
+    assert!(worker.save(deleted).is_err());
     drop(worker);
     let saved = JsonStore::new(dir.join("state.json"))
         .load()
@@ -568,3 +569,6 @@ fn audit_delete_cannot_commit_without_a_durable_identity_tombstone() {
     assert_eq!(saved.agent_label(agent), "author");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[path = "retired_history_test.rs"]
+mod retired_history;

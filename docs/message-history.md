@@ -7,15 +7,28 @@ requests as `room_deleted`. Neither operation erases the audit record. Context
 clear and provider compaction do not remove Bus messages.
 
 Deleted participants render as `NAME [deleted]` in history and message status.
-Historical identities cannot be recipients or resumed runtimes. Room history
+Retired identities are never resumed runtimes. Stale recipient IDs may forward
+under the original-room rules; live names take precedence. Room history
 accepts a deleted room's numeric ID, or its name when unambiguous. An old archive
 that lacks identity tombstones remains readable with `Agent ID [deleted]` as the
 fallback; Bus cannot infer erased names.
 
-Settled requests and notices move out of `state.json` after ten minutes. Identity
-tombstones go directly to `history.jsonl`, which is synced before the corresponding
-state save. Startup compaction removes duplicate crash copies and an uncommitted
-torn tail, preserving every logical message. It never filters by live room,
+Settled requests and notices move out of `state.json` after ten minutes. One
+`RetiredAgent` per removed ID in `state.retired_agents` supplies both routing and
+history labels. Normal deletion stores the original room and orchestrates binding,
+plus optional provider/CWD metadata; old records without those metadata fields load
+with `None` defaults. Known room numbers round-trip unchanged.
+
+Legacy `agent_deleted` archive entries are read into that canonical map. An existing
+canonical room/orchestrates/name wins exactly; only missing rendering metadata is
+filled. Legacy-only entries without a recorded home room render their name but must
+never forward, even if they contain an orchestrates field. They are excluded from
+name/roster matching. Compaction defers removing legacy identity lines until the
+merged canonical records are durable in `state.json`, including after failed or
+stale-state saves. New writes never create a parallel archive identity record.
+
+Startup compaction removes duplicate crash copies and an uncommitted torn tail,
+preserving every logical message. It never filters by live room,
 agent, or age. Empty-session cleanup also preserves sessions with audit history.
 
 Routing and digest acknowledgement metadata are separate from messages. Completed
@@ -25,16 +38,18 @@ retain their source. Digest acknowledgement discards its capped summary, while
 the full original message/reply stays in the archive.
 
 Permanent retention cannot have a fixed total disk limit for an unlimited number
-of messages. The archive grows linearly with unique requests, notices and deleted
-identities, plus retry duplicates that startup compaction removes. The active
-state retains live work, recent settled records and recent/pending routing data.
+of messages. The archive grows linearly with unique requests and notices, plus
+retry duplicates that startup compaction removes. Active message bodies retain a
+ten-minute settled window; routing data retains its recent/pending window. The
+canonical map retains one compact record per removed ID while stale-ID forwarding
+is supported. Message archival and pruning never prune that identity map.
 Snapshots share the archive rather than cloning message bodies; the current
 implementation still indexes the full archive in memory and scans it at startup.
 A cold disk index would be needed to bound total RAM independently of session
 length. There is deliberately no archive rotation that discards audit content.
 
 State format 3 accepts formats 1 and 2 on upgrade. Older binaries do not understand
-the new identity tombstones; do not downgrade against the upgraded data directory.
+the new room archive records or legacy rendering-only identities; do not downgrade against the upgraded data directory.
 
 ## Recovery from older versions
 

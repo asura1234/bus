@@ -2,9 +2,8 @@
 //! `state.json`. The coordinator appends them to `history.jsonl`; in memory they
 //! sit behind one `Arc`, so cloning the state for a save or a UI snapshot copies
 //! only the live part.
-use super::{AgentId, Prompt, PromptId, Provider, Request, RequestId, RoomId};
+use super::{AgentId, Prompt, PromptId, Request, RequestId, RoomId};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A settled request or a notice older than this is archived.
@@ -15,7 +14,6 @@ pub(crate) const HISTORY_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct History {
     pub(super) requests: BTreeMap<RequestId, Arc<Request>>,
-    pub(super) agents: BTreeMap<AgentId, DeletedAgent>,
     pub(super) rooms: BTreeMap<RoomId, String>,
     /// Per room, in id order.
     pub(super) notices: BTreeMap<RoomId, BTreeMap<PromptId, Arc<Prompt>>>,
@@ -27,20 +25,15 @@ pub(crate) enum Archived {
     #[serde(rename = "request")]
     Request(Box<Request>),
     #[serde(rename = "agent_deleted")]
-    Agent(DeletedAgent),
+    LegacyAgent {
+        id: AgentId,
+        #[serde(flatten)]
+        agent: super::staffing::RetiredAgent,
+    },
     #[serde(rename = "room_deleted")]
     Room { id: RoomId, name: String },
     #[serde(rename = "notice")]
     Notice { room: RoomId, prompt: Prompt },
-}
-
-/// Only historical identity, never a runtime that can be selected or resumed.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub(crate) struct DeletedAgent {
-    pub(crate) id: AgentId,
-    pub(crate) name: String,
-    pub(crate) provider: Provider,
-    pub(crate) cwd: PathBuf,
 }
 
 fn settled_at_ms(request: &Request) -> u64 {
@@ -53,7 +46,6 @@ impl History {
     pub(crate) fn len(&self) -> usize {
         self.requests.len()
             + self.notices.values().map(BTreeMap::len).sum::<usize>()
-            + self.agents.len()
             + self.rooms.len()
     }
 
@@ -68,7 +60,6 @@ impl History {
                     prompt: Prompt::clone(prompt),
                 })
             }))
-            .chain(self.agents.values().cloned().map(Archived::Agent))
             .chain(self.rooms.iter().map(|(id, name)| Archived::Room {
                 id: *id,
                 name: name.clone(),
@@ -99,12 +90,6 @@ impl History {
                     })
             }))
             .chain(
-                self.agents
-                    .iter()
-                    .filter(|(id, _)| !older.agents.contains_key(id))
-                    .map(|(_, agent)| Archived::Agent(agent.clone())),
-            )
-            .chain(
                 self.rooms
                     .iter()
                     .filter(|(id, _)| !older.rooms.contains_key(id))
@@ -117,7 +102,7 @@ impl History {
 
     pub(crate) fn contains(&self, item: &Archived) -> bool {
         match item {
-            Archived::Agent(agent) => self.agents.contains_key(&agent.id),
+            Archived::LegacyAgent { .. } => false,
             Archived::Room { id, .. } => self.rooms.contains_key(id),
             Archived::Request(request) => self.requests.contains_key(&request.id),
             Archived::Notice { room, prompt } => self
@@ -129,8 +114,8 @@ impl History {
 
     pub(crate) fn insert(&mut self, item: Archived) {
         match item {
-            Archived::Agent(agent) => {
-                self.agents.insert(agent.id, agent);
+            Archived::LegacyAgent { .. } => {
+                unreachable!("legacy identities must migrate into state before history indexing")
             }
             Archived::Room { id, name } => {
                 self.rooms.insert(id, name);
@@ -284,16 +269,12 @@ impl super::BusState {
             })
     }
 
-    pub(crate) fn deleted_agent(&self, id: AgentId) -> Option<&DeletedAgent> {
-        self.history.agents.get(&id)
-    }
-
     pub(crate) fn agent_label(&self, id: AgentId) -> String {
         if let Some(agent) = self.agent(id) {
             return agent.name.clone();
         }
         let name = self
-            .deleted_agent(id)
+            .retired_agent(id)
             .map(|a| a.name.clone())
             .unwrap_or_else(|| format!("Agent {}", id.0));
         format!("{name} [deleted]")

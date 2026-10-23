@@ -145,19 +145,13 @@ impl BusState {
         self.retired_agents.insert(
             id,
             super::staffing::RetiredAgent {
-                room: removed.room_id,
+                room: Some(removed.room_id),
                 orchestrates: removed.orchestrates,
-                name: removed.name.clone(),
+                name: removed.name,
+                provider: Some(removed.provider),
+                cwd: Some(removed.cwd),
             },
         );
-        std::sync::Arc::make_mut(&mut self.history).insert(super::Archived::Agent(
-            super::history::DeletedAgent {
-                id,
-                name: removed.name.clone(),
-                provider: removed.provider,
-                cwd: removed.cwd.clone(),
-            },
-        ));
         self.queues.remove(&id);
         for request in self.requests.values_mut() {
             if request.agent_id == id && !request.settled() {

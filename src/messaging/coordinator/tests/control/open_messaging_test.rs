@@ -614,3 +614,22 @@ fn retired_orchestrator_id_keeps_its_work_room_when_its_name_is_reused_elsewhere
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn retired_numeric_id_keeps_replacement_ambiguity_after_storage_roundtrip() {
+    let (mut w, room, author, dir) = fixture();
+    let old = add(&mut w, room, &dir, "owner");
+    w.state.delete_agent(old, 100).unwrap();
+    add(&mut w, room, &dir, "owner");
+    add(&mut w, room, &dir, "owner");
+    w.save(w.state.clone()).unwrap();
+    w.state = w.store.load().unwrap().unwrap();
+    let response = send(&mut w, room, author, &old.0.to_string(), "late notice");
+    assert!(!response.ok);
+    assert!(error_message(&response).contains("Ambiguous replacement"));
+    let response = send(&mut w, room, author, "owner", "live ambiguity");
+    assert!(!response.ok);
+    assert!(error_message(&response).contains("Ambiguous"));
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}

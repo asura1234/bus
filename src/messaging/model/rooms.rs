@@ -110,6 +110,7 @@ impl BusState {
     /// Whether the session holds anything beyond its MASTER room.
     pub(crate) fn has_work(&self) -> bool {
         !self.agents.is_empty()
+            || !self.retired_agents.is_empty()
             || self
                 .rooms
                 .values()

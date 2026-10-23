@@ -173,7 +173,7 @@ impl History {
             let provider_kind = state
                 .agent(*agent_id)
                 .map(|a| a.provider)
-                .or_else(|| state.deleted_agent(*agent_id).map(|a| a.provider));
+                .or_else(|| state.retired_agent(*agent_id).and_then(|a| a.provider));
             let request = exchange.requests.get(agent_id).copied();
             // A group's messages share one reply per room, shown under that
             // room's newest visible message even when the group spans MASTER.
@@ -430,7 +430,11 @@ fn link_scope(state: &BusState, author: &Author) -> LinkScope {
         Author::Agent(id) => state
             .agent(*id)
             .map(|agent| agent.cwd.as_path())
-            .or_else(|| state.deleted_agent(*id).map(|agent| agent.cwd.as_path()))
+            .or_else(|| {
+                state
+                    .retired_agent(*id)
+                    .and_then(|agent| agent.cwd.as_deref())
+            })
             .map(Arc::from),
         Author::Developer | Author::Bus => None,
     };

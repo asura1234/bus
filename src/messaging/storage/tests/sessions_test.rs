@@ -208,3 +208,28 @@ fn audit_session_with_only_master_messages_cannot_be_discarded_as_empty() {
     assert!(!registry.discard_if_empty(&session.id).unwrap());
     assert!(session.root.join("history.jsonl").exists());
 }
+
+#[test]
+fn retired_only_session_cannot_be_discarded_after_legacy_identity_migration() {
+    let fixture = Fixture::new("retired-only");
+    let registry = fixture.registry();
+    let session = registry.create().unwrap();
+    let mut state = BusState::new();
+    state.ensure_master_room();
+    let store = JsonStore::new(session.root.join("state.json"));
+    store.save(&state).unwrap();
+    std::fs::write(session.root.join("history.jsonl"),
+        "{\"agent_deleted\":{\"id\":99,\"name\":\"legacy identity\",\"provider\":\"codex\",\"cwd\":\"/repo\"}}\n").unwrap();
+    let migrated = store.load().unwrap().unwrap();
+    store.save(&migrated).unwrap();
+    assert!(store.compact_history().unwrap());
+    assert!(!registry.discard_if_empty(&session.id).unwrap());
+    assert_eq!(
+        store
+            .load()
+            .unwrap()
+            .unwrap()
+            .agent_label(crate::messaging::model::AgentId(99)),
+        "legacy identity [deleted]"
+    );
+}
