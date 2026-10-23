@@ -842,7 +842,8 @@ bus history --room "$room_id"
 
 Messages and requests are retained after agent/room deletion and provider context
 clears, with no seven-day expiry. Deleted participants show `NAME [deleted]`.
-`history --room ID` also reads a deleted room; names work when unambiguous.
+`history --room ID` also reads a deleted room. Live room names resolve first;
+deleted names are a fallback when unambiguous among deleted rooms.
 `message status ID` continues to return archived requests and posted notices.
 Storage and recovery limits are documented in the repository file
 `docs/message-history.md`.

@@ -9,7 +9,8 @@ clear and provider compaction do not remove Bus messages.
 Deleted participants render as `NAME [deleted]` in history and message status.
 Retired identities are never resumed runtimes. Stale recipient IDs may forward
 under the original-room rules; live names take precedence. Room history
-accepts a deleted room's numeric ID, or its name when unambiguous. An old archive
+accepts a deleted room's numeric ID. Live room names resolve first; deleted names
+are a fallback when unambiguous among deleted rooms. An old archive
 that lacks identity tombstones remains readable with `Agent ID [deleted]` as the
 fallback; Bus cannot infer erased names.
 
@@ -34,7 +35,10 @@ agent, or age. Empty-session cleanup also preserves sessions with audit history.
 Routing and digest acknowledgement metadata are separate from messages. Completed
 routing metadata can expire after seven days, with a persisted recovery floor
 preventing old records from becoming new notifications. Pending notifications
-retain their source. Digest acknowledgement discards its capped summary, while
+retain their source. Formats 1 and 2 acquire this floor during loading, before
+the first tick or history command; event reconstruction independently rejects
+settled records below it, including records still inline in `state.json`.
+Digest acknowledgement discards its capped summary, while
 the full original message/reply stays in the archive.
 
 Permanent retention cannot have a fixed total disk limit for an unlimited number
@@ -44,9 +48,11 @@ ten-minute settled window; routing data retains its recent/pending window. The
 canonical map retains one compact record per removed ID while stale-ID forwarding
 is supported. Message archival and pruning never prune that identity map.
 Snapshots share the archive rather than cloning message bodies; the current
-implementation still indexes the full archive in memory and scans it at startup.
-A cold disk index would be needed to bound total RAM independently of session
-length. There is deliberately no archive rotation that discards audit content.
+implementation still indexes the full archive in memory. Startup, per-tick
+archive and delivery passes, and history rendering scan the merged archive, so
+their costs also grow with lifetime history. This growth is accepted for now.
+A cold disk index would be needed to bound total RAM and avoid repeated full
+archive scans. There is deliberately no rotation that discards audit content.
 
 State format 3 accepts formats 1 and 2 on upgrade. Older binaries do not understand
 the new room archive records or legacy rendering-only identities; do not downgrade against the upgraded data directory.
