@@ -698,3 +698,27 @@ fn upgrade_onboarding_is_signed_by_bus_not_the_developer() {
     );
     std::fs::remove_dir_all(data).unwrap();
 }
+
+#[test]
+fn version_three_agents_receive_the_peer_sop_once_across_reload() {
+    let data = temp_root("peer-sop-upgrade");
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let old = state
+        .create_agent(room, "existing", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    state
+        .create_agent(room, "current", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let mut value = serde_json::to_value(&state).unwrap();
+    // Version 3 is the deployed onboarding before the peer SOP shipped.
+    value["agents"][old.0.to_string()]["messaging_rules_version"] = serde_json::json!(3);
+    let mut state: BusState = serde_json::from_value(value).unwrap();
+    queue_upgrade_onboarding(&mut state, &data).unwrap();
+    assert_eq!(state.requests().count(), 1);
+    let saved = serde_json::to_value(&state).unwrap();
+    let mut reloaded: BusState = serde_json::from_value(saved).unwrap();
+    queue_upgrade_onboarding(&mut reloaded, &data).unwrap();
+    assert_eq!(reloaded.requests().count(), 1);
+    std::fs::remove_dir_all(data).unwrap();
+}

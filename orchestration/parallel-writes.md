@@ -135,10 +135,14 @@ do not add a new per-PR merge OK.
   changed paths, commit/head, checks and any outstanding locks or blockers.
 - Use the PR peers named in your brief: send each pushed head to the verifier
   and reviewers; verifiers send `VERIFIED` or defects with `file:line` directly
-  to the owner. Owners merge through `auto-merge-pr` on its exact-head gates.
-  Finals still go to the orchestrator. Keep the room-notes roster current on
-  replacement, with one verifier per 1–2 PRs. Send only the message body; Bus
-  adds the header, so do not sign messages.
+  to the owner. Owners use `auto-merge-pr`'s owner-run path: at most two fix
+  rounds, no out-of-goal repairs, no unresolved FLAG/developer decision, and
+  re-measure against its 3000-line split threshold before merge. Send follow-ups,
+  flags and exhausted-budget blockers to the orchestrator in finals.
+- Report a missing or replaced peer to the orchestrator, which owns room notes,
+  the roster and verifier allocation. Workers do not edit the notes or roster.
+  Finals still go to the orchestrator. Send only the message body; Bus adds
+  the header, so do not sign messages.
 
 ## Clean up after integration
 

@@ -29,7 +29,11 @@ flowchart TD
         web[web-dev: implement in web monorepo]
     end
 
-    build --> joint[claude-review + codex-review: joint review of all three diffs against the spec]
+    desktop --> verifydesktop[verify-desktop: verify desktop head]
+    app --> verifywebapp[verify-web-app: verify web and app heads]
+    web --> verifywebapp
+    verifydesktop --> joint[claude-review + codex-review: joint review of all three diffs against the spec]
+    verifywebapp --> joint
     joint --> consistent{Consistent and ready?}
     consistent -- spec gap --> revisespec[spec-writer: correct the shared spec]
     revisespec --> reapprove{Developer approves corrected spec?}:::developer
@@ -40,7 +44,8 @@ flowchart TD
     nextfix --> overbudget{"next_fix_round > 2?"}
     overbudget -- no --> countfix["Orchestrator: record this PR's fix_round = next_fix_round"]
     countfix --> fixes[Owning dev: address-review-comments, approved spec correction or developer feedback; push]
-    fixes --> joint
+    fixes --> reverify[Assigned verifiers: re-verify each repaired head]
+    reverify --> joint
     overbudget -- yes --> hold[Orchestrator: hold this PR and dependent steps; report cause and plan; keep independent work moving]
     consistent -- yes --> prs[Each dev: open its repo PR]
     prs --> test[Developer: test on all three]:::developer
@@ -61,6 +66,8 @@ flowchart TD
 | desktop-dev | claude | implement | libtv-desktop, feat/share-gallery |
 | app-dev | codex | implement | libtv-app, feat/share-gallery |
 | web-dev | cursor | implement | web monorepo, feat/share-gallery |
+| verify-web-app | codex | verify web and app PRs | read-only, web and app worktrees |
+| verify-desktop | claude | verify desktop PR | read-only, desktop worktree |
 | claude-review, codex-review | claude, codex | joint review-pr | read-only, all three repos |
 
 ## Gates
@@ -100,26 +107,47 @@ Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
 room's bound orchestrator, and names or IDs can reach agents in any room.
 
 PR peers: `<PR/task> → owner <name/ID> → verifier <name/ID> → reviewer(s) <name/ID>`.
-Fill every peer before dispatch; list all required reviewers. Carry the exact
-head, worktree, acceptance checklist and explicit holds in the brief. Keep this
-roster in the room notes and update affected briefs whenever an agent is
-replaced. Assign one verifier per 1–2 PRs, adding verifiers as the PR count grows.
+Use these peers from your brief. If one is missing or replaced, message the
+orchestrator; it owns staffing, room notes, the roster and verifier allocation.
+Workers do not edit room notes or the roster. The brief carries the exact head,
+worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
+inherited `fix_round`, recorded merge authority and explicit holds.
 
-Message these peers directly. The verifier sends `VERIFIED <PR> @<full SHA>`
+Message peers directly. The verifier sends `VERIFIED <PR/task> @<full SHA>`
 with evidence, or defects with `file:line` and reproduction, straight to the
-owner. Reviewers send their verdicts and findings to the owner. The owner
-re-sends the full head SHA to verifier and reviewers on every push and gets
-current-head evidence before merging through `auto-merge-pr` under recorded
-authority and holds. This does not extend a workflow that ends at PR creation.
+owner (the PR author). Use the task key and worktree head before a PR exists.
+Reviewers send verdicts and findings to the owner. The owner re-sends the full
+head to verifier and reviewers on every push and gets current-head evidence.
 
-Before editing shared files, message their owners and follow
-[Parallel writes](../parallel-writes.md); supply its resolved absolute session
-path and the ownership map in each parallel brief. Finals still go to the
-orchestrator; after peer-started work, also send the milestone report directly
-to `--to orchestrator`. Staffing and recovery, dialogs, product decisions and
-announcing replacements stay with the orchestrator, which updates the roster
-and tells every affected peer the replacement's name/ID before work resumes.
+If you own a PR, use the owner-run path in `auto-merge-pr` and enforce these
+checks before every repair batch and merge, including inside `merge-pr`:
 
-For this three-PR example, use two verifiers: one for web and app, and another
-for desktop. Give each repository's brief its owner, assigned verifier and both
-joint reviewers; the joint review does not replace per-PR verification.
+- Carry the inherited fix-round counter and record each batch in the PR repair
+  log. Allow at most **2 fix rounds** across review, verification, gates, bots
+  and developer feedback. If another repair is needed after round 2, stop and
+  send a final with the count, cause and plan to the orchestrator.
+- Never fix a finding outside the PR's locked goal in this PR. Exclude it and
+  report it in the final as a follow-up for the orchestrator to decide and record.
+- Re-measure added plus removed lines against the pinned PR base, excluding
+  `plans/`, after each push and **before merging**. At **3000 lines**, stop
+  and send a final to the orchestrator for splitting; do not merge.
+- Hand back **anything FLAGGED or needing a developer decision** to the
+  orchestrator in a final. Stop this PR's merge path until it is resolved;
+  owners do not adjudicate those items themselves.
+- Merge only with exact-head `VERIFIED`, every required reviewer Ready, gates
+  and requested acceptance passing, comments adjudicated, recorded authority,
+  no unresolved FLAG/decision and no explicit hold. This does not extend a
+  workflow that ends at PR creation or waive a draft-only hold.
+
+Before editing shared files, message their owners and read the installed
+[Parallel writes](../parallel-writes.md) at the resolved absolute session path
+and ownership map supplied in your brief. Finals still go to the orchestrator;
+after peer-started work, also send the milestone report to `--to orchestrator`.
+Staffing and recovery, dialogs, product decisions and replacement announcements
+stay with the orchestrator. It updates the roster/briefs and tells affected
+peers the replacement's name/ID before work resumes.
+
+For this three-PR example, `verify-web-app` verifies web and app, and
+`verify-desktop` verifies desktop. Each brief names the repository owner, its
+assigned verifier and both joint reviewers; joint review does not replace
+per-PR verification. The orchestrator maintains these assignments.

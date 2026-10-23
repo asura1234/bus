@@ -152,6 +152,7 @@ Make direct peer messaging the normal path for each PR's implementation,
 verification, review and merge loop. The orchestrator staffs the team and keeps
 the room's plan current; it does not relay each head, verdict or shared-file
 request. Routine progress can continue while the orchestrator is unavailable.
+The PR owner is its author; these are the same role throughout this SOP.
 
 Before work starts, put the PR's **owner, verifier and reviewer** names and IDs
 in every worker brief, with the PR (or task key until it exists), worktree,
@@ -163,16 +164,22 @@ verifiers instead of making one verifier the room's hub.
 1. **Owner → peers:** send the PR, exact full head SHA, worktree and checks to
    the assigned verifier and reviewers. On **every push**, re-send the new head
    and the delta to those peers; a verdict for an old head does not prove it.
-2. **Verifier → owner:** send `VERIFIED <PR> @<full SHA>` with the acceptance
+2. **Verifier → owner:** send `VERIFIED <PR/task> @<full SHA>` with the acceptance
    evidence, or defects with `file:line`, reproduction and the affected head,
    straight to the owner. Re-verify each new head. Reviewers likewise send their
    verdict and findings directly to the owner in their assigned review lanes.
-3. **Owner → merge:** collect peer findings into the bounded repair batch,
-   carry the workflow's fix-round counter, and use
-   [auto-merge-pr](workflows/auto-merge-pr.md) when exact-head verification,
-   required reviews, gates and requested acceptance pass and comments are
-   adjudicated. Reuse the recorded workflow authority and honor explicit holds;
-   peer messaging grants no new merge authority or acceptance waiver.
+3. **Owner → merge:** use the owner-run variant of
+   [auto-merge-pr](workflows/auto-merge-pr.md). Before every repair, exclude all
+   findings outside the locked goal and report them to the orchestrator in the
+   final as follow-ups. Any FLAG or developer decision stops this PR's merge
+   path and goes to the orchestrator for triage. Carry the inherited fix-round
+   counter: at most two repair batches, then stop and send a final if another
+   repair is needed. Re-measure added plus removed lines against the PR base,
+   excluding `plans/`, after pushes and before merge; at **3000 lines**, stop
+   and hand splitting back to the orchestrator. Merge only with exact-head
+   `VERIFIED`, required reviews Ready, gates and requested acceptance passing,
+   comments adjudicated, no unresolved FLAG/decision, and no explicit hold.
+   Reuse recorded authority; peer messaging grants no new authority or waiver.
 4. **Shared-file owners → each other:** message before editing, even in separate
    worktrees. Agree who applies which edits and in what order, using the
    ownership map and grant/release protocol in [Parallel writes](parallel-writes.md).
@@ -187,13 +194,25 @@ verifiers instead of making one verifier the room's hub.
    there. Send only the body; Bus adds the header, so never sign messages.
 
 The orchestrator retains **staffing and recovery, dialogs, product decisions,
-and announcing replacements**. It resolves staffing gaps, unavailable agents
+and announcing replacements**, including room notes, the roster and verifier
+allocation. Workers use the peers in their brief and message the orchestrator
+when a peer is missing or replaced; they do not edit room notes or the roster,
+or assign verifiers. The orchestrator resolves staffing gaps, unavailable agents
 and escalations, handles dialogs under existing authority, and takes unresolved
 product decisions to the developer. Whenever an agent is replaced, it updates
 the room-notes roster and affected briefs and announces the new name/ID to all
 of that agent's PR peers and shared-file owners before work resumes. Peers then
 message the replacement directly. Do not route routine technical exchanges
 through the orchestrator or one room-wide verifier.
+
+For a peer-handled `READY FOR VERIFY`, the brief already names the verifier.
+When the orchestrator records that roster assignment, it records
+`verifier <name> engaged by owner` with the PR/head and acknowledges the READY
+fact using `bus digest ack FACT_ID`. It does not dispatch the verification a
+second time. Updating notes alone does not clear a fact; the explicit ack
+completes the existing digest protocol. A verifier's direct message referencing
+the PR does not currently acknowledge it; that code change is a separate
+follow-up. If no verifier is assigned, staff one or record a hold before ack.
 
 ## Process every result
 
@@ -398,12 +417,15 @@ Run checks and remediation as a bounded loop:
    the checklist exposes an enumeration miss: have the investigator expand the
    list and recheck that entire category, then give the updated list to the author, reviewers and
    verifier. Do not fix only the reported instance.
-3. For each open or flagged issue, have the owner collect recommendations
-   directly from every reviewer, add its own recommendation and run the
+3. For an in-goal technical issue without a FLAG, have the owner collect
+   recommendations directly from every reviewer, add its own and run the
    `best-of-n` skill and apply its top-ranked recommendation. Technical
    disagreement alone does not call for permission. If an issue reaches the
-   developer decision boundary below, hold that part and ask in MASTER while
-   independent work continues. Turn remaining nonblocking work into follow-up
+   developer decision boundary below, or any item is FLAGGED, the owner stops
+   this PR and sends a final to the orchestrator for triage. The orchestrator
+   asks in MASTER when a developer decision is needed; independent work continues.
+   Owners exclude out-of-goal findings and report them in finals for the
+   orchestrator to decide and record. Turn remaining nonblocking work into follow-up
    steps with its recommendations and acceptance checks.
 4. Count one fix round as one consolidated set of fixes followed by gates and
    concurrent review, verification and bot review of its new head. Allow at most

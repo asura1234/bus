@@ -187,8 +187,9 @@ the wrapper remains held.
 - **Keep PR peers connected.** Name owner, verifier and reviewer in every brief
   and the live room-notes roster; update both on replacement. Assign one verifier
   per 1–2 PRs. Exchange heads and verdicts directly, coordinate
-  [shared files](parallel-writes.md) before editing, and use `auto-merge-pr`.
-  Finals still go to the orchestrator. Follow the
+  [shared files](parallel-writes.md) before editing, and have owners merge through
+  `auto-merge-pr`'s guarded owner-run path. Staffing and finals stay with the
+  orchestrator. *Why:* peer loops keep progress moving. Follow the
   [peer messaging SOP](orchestrator-guide.md#open-peer-messaging).
 - **Parallelism is king.** Whenever a change must land in several places,
   split it across agents running in parallel; order only dependent steps.
@@ -218,15 +219,15 @@ the wrapper remains held.
   one (workflow-create) that holds the follow-up steps. *Why:*
   follow-ups kept in an agent's context or deferred without a record get lost;
   the workflow file is the executable plan.
-- **Resolve review issues through the author.** For each open or flagged issue
-  in a review round, poll the author and every reviewer for a recommendation and
-  forward all recommendations to the author to run the `best-of-n` skill. Have
-  the author apply its top-ranked recommendation; technical disagreement alone
-  is not a permission question. Put remaining nonblocking work into executable
-  follow-up steps. Ask only at the decision boundary above, holding just the
-  affected work while other work continues.
-  Before polling, you may reject an issue outside the locked goal; record it
-  in the deferred list when it is real.
+- **Resolve review issues through the author.** Peers send findings and
+  recommendations straight to the PR owner (the author). For in-goal technical
+  disagreements without a FLAG, the author collects recommendations and runs
+  `best-of-n`, then applies its top-ranked option. Owners never fix out-of-goal
+  findings in the PR: they report them in finals as follow-ups for you to decide
+  and record in the deferred list. Any FLAG or developer decision stops the
+  owner's merge path and goes to you in a final for triage; unresolved items
+  cannot merge. Ask the developer only at the decision boundary above, holding
+  the affected PR while independent work continues.
   *Why:* the author adjudicates technical approaches and keeps fixes moving.
 - **Own the PR's scope.** Lock the goal from the developer's own words (the
   originating request or issue) before any fan-out: have the author run
