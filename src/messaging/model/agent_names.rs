@@ -1,5 +1,5 @@
 //! Agent names are unique among current agents throughout a Bus session.
-use super::{state::normalized_name, AgentId, BusState, ModelError};
+use super::{state::normalized_name, AgentId, Author, BusState, ModelError};
 use std::collections::BTreeSet;
 
 impl BusState {
@@ -43,6 +43,15 @@ impl BusState {
             while !reserved.insert(name.clone()) {
                 name = format!("{base}-{suffix}");
                 suffix += 1;
+            }
+            // Old request formats can lack the send-time snapshot. Capture
+            // the same identity their renderer used before this roster edit.
+            for request in self.requests.values_mut() {
+                if request.prompt.author == Author::Agent(agent.id)
+                    && request.sender_identity.is_none()
+                {
+                    request.sender_identity = Some((old.clone(), agent.room_id));
+                }
             }
             agent.name = name.clone();
             renamed.push((agent.room_id, agent.id, old, name));
