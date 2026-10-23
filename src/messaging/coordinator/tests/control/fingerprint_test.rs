@@ -163,3 +163,33 @@ fn unavailable_dialog_snapshots_do_not_resolve_an_existing_help_notice() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn captured_dialog_fingerprint_redrawing_is_a_definite_no_write() {
+    struct Redrawing;
+    impl crate::messaging::native::Transport for Redrawing {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::AgentDialogChoose(_)));
+            Err(TransportError {
+                code: Some("dialog_redrawing".into()),
+                message: "No keys were sent while the frame was incomplete".into(),
+                definitely_rejected: true,
+            })
+        }
+    }
+    let (mut worker, agent, dir) = launched_worker();
+    worker.transport = Box::new(Redrawing);
+    let fresh = fingerprint(&worker, agent, now_ms());
+    let error = worker.choose_dialog_option(agent, 1, &fresh).unwrap_err();
+    assert!(
+        error.starts_with("No keys were sent (dialog_redrawing)"),
+        "{error}"
+    );
+    assert!(!error.contains("uncertain"));
+    // The native rejection permits a fresh observation, not replaying the
+    // already consumed fingerprint after a different dialog appears.
+    let error = worker.choose_dialog_option(agent, 1, &fresh).unwrap_err();
+    assert!(error.contains("already used"), "{error}");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

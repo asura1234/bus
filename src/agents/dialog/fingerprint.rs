@@ -1,4 +1,4 @@
-//! Content-free diagnostics for an observation and its guarded write.
+//! Hashed-component diagnostics for an observation and its guarded write.
 use super::Dialog;
 use sha2::{Digest, Sha256};
 
@@ -50,7 +50,7 @@ pub(crate) fn trace(
     tracing::debug!(
         event = "bus.dialog.fingerprint", phase, pane, content_revision, synchronized_output,
         dialog_present = true, expected_digest = log_expected_digest, expected_digest_valid,
-        digest_matches = expected_digest.is_none_or(|expected| expected == digest),
+        digest_matches = expected_digest.map(|expected| expected == digest),
         dialog_digest = %digest, dialog_id = %dialog.id(), kind = ?dialog.kind,
         selected = ?dialog.selected(), option_count = dialog.options.len(),
         text_hash = %hash(&dialog.text), options_hash = %hash(&options),

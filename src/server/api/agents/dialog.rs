@@ -82,6 +82,13 @@ impl App {
         let (keys, reason) =
             match runtime.try_choose_dialog_option(&params.expected_dialog_digest, params.option) {
                 Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
+                Ok(crate::terminal::runtime::DialogChoice::Redrawing) => {
+                    return encode_error(
+                        id,
+                        "dialog_redrawing",
+                        "No keys were sent; dialog is redrawing; observe it again",
+                    );
+                }
                 Ok(crate::terminal::runtime::DialogChoice::Stale) => {
                     (Vec::new(), Some("stale_or_changed_dialog"))
                 }
@@ -158,6 +165,13 @@ impl App {
             params.skip,
         ) {
             Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::terminal::runtime::DialogChoice::Redrawing) => {
+                return encode_error(
+                    id,
+                    "dialog_redrawing",
+                    "No keys were sent; dialog is redrawing; observe it again",
+                );
+            }
             Ok(crate::terminal::runtime::DialogChoice::Stale) => {
                 (Vec::new(), Some("stale_or_changed_dialog"))
             }

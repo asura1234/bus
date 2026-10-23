@@ -9,36 +9,33 @@ const CODEX_MOVED: &str =
     include_str!("../../../../../tests/fixtures/dialog-fingerprint/codex-selection-moved.ansi");
 const CLAUDE_BEFORE: &str =
     include_str!("../../../../../tests/fixtures/dialog-fingerprint/claude-question-1.ansi");
-const CLAUDE_AFTER: &str =
-    include_str!("../../../../../tests/fixtures/dialog-fingerprint/claude-question-2.ansi");
 const CLAUDE_MOVED: &str =
     include_str!("../../../../../tests/fixtures/dialog-fingerprint/claude-selection-moved.ansi");
 
 #[tokio::test]
 async fn captured_dialog_fingerprints_ignore_unrelated_redraws() {
-    for (before, after) in [(CODEX_BEFORE, CODEX_AFTER), (CLAUDE_BEFORE, CLAUDE_AFTER)] {
-        let (mut app, mut writes) =
-            app_with_dialog_sized(before.as_bytes(), Some("session"), 134, 45);
-        let observed = observe_dialog(&mut app);
-        let dialog = observed.dialog.as_ref().unwrap();
-        let pane = app.state.workspaces[0].tabs[0].root_pane;
-        app.lookup_runtime_sender(0, pane)
-            .unwrap()
-            .test_process_pty_bytes(format!("\x1b[2J\x1b[H{after}").as_bytes());
-        let current = observe_dialog(&mut app);
-        assert_ne!(observed.content_revision, current.content_revision);
-        assert_eq!(dialog.id, current.dialog.as_ref().unwrap().id);
-        assert_eq!(dialog.digest, current.dialog.as_ref().unwrap().digest);
-        let accepted = chosen(&choose(
-            &mut app,
-            &observed,
-            Some("session"),
-            &dialog.digest,
-            1,
-        ));
-        assert!(accepted.written);
-        assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\r"));
-    }
+    assert_ne!(CODEX_BEFORE, CODEX_AFTER, "redraw evidence must differ");
+    let (before, after) = (CODEX_BEFORE, CODEX_AFTER);
+    let (mut app, mut writes) = app_with_dialog_sized(before.as_bytes(), Some("session"), 134, 45);
+    let observed = observe_dialog(&mut app);
+    let dialog = observed.dialog.as_ref().unwrap();
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{after}").as_bytes());
+    let current = observe_dialog(&mut app);
+    assert_ne!(observed.content_revision, current.content_revision);
+    assert_eq!(dialog.id, current.dialog.as_ref().unwrap().id);
+    assert_eq!(dialog.digest, current.dialog.as_ref().unwrap().digest);
+    let accepted = chosen(&choose(
+        &mut app,
+        &observed,
+        Some("session"),
+        &dialog.digest,
+        1,
+    ));
+    assert!(accepted.written);
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\r"));
 }
 
 #[tokio::test]
@@ -92,6 +89,10 @@ async fn captured_dialog_fingerprint_logs_explain_selection_only_staleness() {
             .lines()
             .find(|line| line.contains("phase=\"observe\"") && line.contains("text_hash="))
             .unwrap();
+        assert!(
+            !observed_line.contains("digest_matches="),
+            "observe is not a comparison: {log}"
+        );
         let guarded_line = log
             .lines()
             .find(|line| line.contains("phase=\"choose\""))
@@ -218,5 +219,21 @@ fn run_logging_test_alone(name: &str) -> bool {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")),
+        "expected exactly one successful child test: {stdout}"
+    );
     true
+}
+
+#[path = "synchronized_redraw_test.rs"]
+mod captured_dialog_fingerprint_redraw;
+
+#[test]
+fn captured_dialog_fingerprint_logging_harness_rejects_zero_tests() {
+    let result = std::panic::catch_unwind(|| run_logging_test_alone("missing_child_test"));
+    assert!(result.is_err(), "zero matched child tests must not pass");
 }

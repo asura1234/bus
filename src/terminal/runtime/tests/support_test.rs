@@ -107,6 +107,22 @@ impl TerminalRuntime {
         self.compression.wake();
     }
 
+    /// A detached PTY chunk writer for tests that finish a frame while the
+    /// server's guarded write is waiting. Uses the same content lock and seq.
+    pub(crate) fn test_pty_writer(&self) -> impl Fn(&[u8]) + Send + 'static {
+        let terminal = self.terminal.clone();
+        let lock = self.content_write_lock.clone();
+        let seq = self.content_seq.clone();
+        let pane = self.pane_id;
+        move |bytes| {
+            let _guard = lock.lock().unwrap_or_else(|error| error.into_inner());
+            seq.fetch_add(1, Ordering::AcqRel);
+            let (tx, _rx) = mpsc::channel(1);
+            let _ = terminal.process_pty_bytes(pane, 0, bytes, &tx, |_| None);
+            seq.fetch_add(1, Ordering::Release);
+        }
+    }
+
     pub(crate) fn test_with_scrollback_bytes(
         cols: u16,
         rows: u16,

@@ -320,6 +320,11 @@ impl Worker {
                 ))
             }
             Ok(_) => return Err("Unexpected native dialog response; outcome is uncertain".into()),
+            Err(error) if error.code.as_deref() == Some("dialog_redrawing") => {
+                return Err(
+                    "No keys were sent (dialog_redrawing); observe the dialog again".into(),
+                );
+            }
             Err(error) => {
                 return Err(format!(
                     "Dialog answer outcome is uncertain: {}",
