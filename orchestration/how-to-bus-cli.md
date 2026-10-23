@@ -591,7 +591,7 @@ settings retain precedence. Update shared provider installations separately whil
 their agents are stopped.
 
 When a launch reports a missing provider command, Bus records one `BLOCKED` notice
-and digest fact per room/provider outage, naming the binary. Affected agents and
+per room/provider outage, naming the binary. Affected agents and
 their tasks remain saved. Once the provider works again, run:
 
 ```sh

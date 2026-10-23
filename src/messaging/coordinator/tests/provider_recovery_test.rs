@@ -173,14 +173,9 @@ fn room_resume_preserves_the_session_queue_and_capture_and_refuses_an_unsafe_clo
 }
 
 #[test]
-fn room_outage_survives_restart_with_one_fact_and_resolves_when_provider_recovers() {
+fn room_outage_survives_restart_with_one_notice_and_resolves_when_provider_recovers() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
-    let master = state.master_room().unwrap().id;
-    let orch = state
-        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
-        .unwrap();
-    state.bind_orchestrator(orch, room).unwrap();
     state.report_missing_binary(room, "codex", 100).unwrap();
     state.block_missing_binary(agent, "codex", 101).unwrap();
     worker.save(state).unwrap();
@@ -195,14 +190,15 @@ fn room_outage_survives_restart_with_one_fact_and_resolves_when_provider_recover
             .count(),
         1
     );
-    let value = serde_json::to_value(state).unwrap();
     assert_eq!(
-        value["room_digests"][orch.0.to_string()]["facts"]
-            .as_object()
-            .unwrap()
-            .len(),
-        1
+        state.agent(agent).unwrap().missing_binary.as_deref(),
+        Some("codex")
     );
+    assert!(state
+        .room(room)
+        .unwrap()
+        .missing_provider_binaries
+        .contains("codex"));
     assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
     let mut ready = native_info("pane", "codex", "session");
     ready.name = Some(format!("bus-r{}-a{}", room.0, agent.0));
@@ -218,14 +214,25 @@ fn room_outage_survives_restart_with_one_fact_and_resolves_when_provider_recover
     recovered.poll().unwrap();
     assert_eq!(recovered.state.agent(agent).unwrap().wait_reason(), None);
     assert_eq!(recovered.state.room_status(room), RuntimeStatus::Idle);
-    let value = serde_json::to_value(&recovered.state).unwrap();
-    assert!(
-        value["room_digests"][orch.0.to_string()]["facts"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .all(|key| !key.starts_with("provider-block:")),
-        "a recovered provider must resolve its blocker while preserving worker availability facts"
+    assert!(recovered
+        .state
+        .agent(agent)
+        .unwrap()
+        .missing_binary
+        .is_none());
+    assert!(recovered
+        .state
+        .room(room)
+        .unwrap()
+        .missing_provider_binaries
+        .is_empty());
+    assert_eq!(
+        recovered
+            .state
+            .notices(room)
+            .filter(|p| p.text.starts_with("BLOCKED"))
+            .count(),
+        1
     );
     drop(recovered);
     std::fs::remove_dir_all(dir).unwrap();
@@ -464,14 +471,9 @@ fn room_resume_keeps_the_saved_pane_while_the_provider_binary_is_missing() {
 }
 
 #[test]
-fn deleting_the_last_missing_binary_holder_resolves_the_room_fact() {
+fn deleting_the_last_missing_binary_holder_clears_the_room_outage() {
     let (worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
-    let master = state.master_room().unwrap().id;
-    let orch = state
-        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
-        .unwrap();
-    state.bind_orchestrator(orch, room).unwrap();
     let second = state
         .create_agent(room, "second", Provider::Codex, dir.clone(), None)
         .unwrap();
@@ -489,12 +491,7 @@ fn deleting_the_last_missing_binary_holder_resolves_the_room_fact() {
         .unwrap()
         .missing_provider_binaries
         .is_empty());
-    let value = serde_json::to_value(&state).unwrap();
-    assert!(value["room_digests"][orch.0.to_string()]["facts"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .all(|key| !key.starts_with("provider-block:")));
+    assert_ne!(state.room_status(room), RuntimeStatus::Blocked);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -21,8 +21,7 @@ impl BusState {
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
         if record.missing_provider_binaries.insert(binary.into()) {
-            let prompt = self.post_bus_notice(room, None, text.clone(), now)?;
-            self.record_provider_block(room, binary, prompt, &text, now);
+            self.post_bus_notice(room, None, text.clone(), now)?;
         }
         Ok(text)
     }
@@ -44,7 +43,7 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn clear_missing_binary(&mut self, id: AgentId, now: u64) -> Result<(), ModelError> {
+    pub(crate) fn clear_missing_binary(&mut self, id: AgentId) -> Result<(), ModelError> {
         let agent = self
             .agents
             .get_mut(&id)
@@ -53,19 +52,17 @@ impl BusState {
             agent.actionable_error = None;
         }
         let (room, binary) = (agent.room_id, agent.provider.executable());
-        self.clear_unheld_missing_binary(room, binary, now);
+        self.clear_unheld_missing_binary(room, binary);
         Ok(())
     }
 
-    pub(crate) fn clear_unheld_missing_binary(&mut self, room: RoomId, binary: &str, now: u64) {
+    pub(crate) fn clear_unheld_missing_binary(&mut self, room: RoomId, binary: &str) {
         if !self
             .agents()
             .any(|a| a.room_id == room && a.missing_binary.as_deref() == Some(binary))
         {
             if let Some(room_state) = self.rooms.get_mut(&room) {
-                if room_state.missing_provider_binaries.remove(binary) {
-                    self.resolve_provider_block(room, binary, now);
-                }
+                room_state.missing_provider_binaries.remove(binary);
             }
         }
     }

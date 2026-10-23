@@ -52,7 +52,7 @@ impl Worker {
             .collect();
         let mut state = self.state.clone();
         for binary in recovered {
-            state.clear_unheld_missing_binary(room, &binary, super::io::now_ms());
+            state.clear_unheld_missing_binary(room, &binary);
         }
         self.save(state)?;
         Ok(json!({"room_id":room, "agents":results}))
@@ -160,7 +160,7 @@ impl Worker {
         // marker would suppress both startup settlement and a second outage.
         let mut state = self.state.clone();
         state
-            .clear_missing_binary(agent.id, super::io::now_ms())
+            .clear_missing_binary(agent.id)
             .map_err(|e| e.to_string())?;
         state
             .set_agent_error(agent.id, None)

@@ -26,7 +26,7 @@ impl Worker {
         if info.is_some_and(|i| i.interactive_ready) {
             self.missing_binary_checked.remove(&agent.id);
             state
-                .clear_missing_binary(agent.id, super::io::now_ms())
+                .clear_missing_binary(agent.id)
                 .map_err(|e| e.to_string())?;
             return Ok((false, None));
         }
