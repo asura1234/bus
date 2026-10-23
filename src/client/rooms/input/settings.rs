@@ -3,6 +3,20 @@ use super::super::{forms::Form, render::SoundTarget, BusUi, Effect};
 use crate::messaging::coordinator::BusCommand;
 
 impl BusUi {
+    pub(super) fn cycle_developer_sound(&mut self, forward: bool) {
+        self.settings_field = self.developer_sound_field();
+        let choice = next_sound_choice(
+            self.settings.developer_sound.as_deref(),
+            self.system_sounds.as_deref().unwrap_or_default(),
+            forward,
+        );
+        if self.sound_config.is_some() {
+            crate::platform::sound::play_developer(choice.as_deref());
+        }
+        self.settings.developer_sound = choice.clone();
+        self.queue(BusCommand::SetDeveloperSoundName(choice), Effect::None);
+    }
+
     pub(super) fn open_feishu_setting(&mut self, cli: bool) {
         let text = if cli {
             self.settings.feishu_cli_path.clone().unwrap_or_default()
@@ -135,21 +149,11 @@ impl BusUi {
             // Mixed sounds cycle from Default.
             SoundTarget::AllRooms => self.all_rooms_sound().1.flatten(),
         };
-        let mut choices: Vec<Option<String>> = vec![None];
-        choices.extend(self.system_sounds.iter().flatten().cloned().map(Some));
-        let index = choices
-            .iter()
-            .position(|choice| match (choice, &current) {
-                (Some(choice), Some(current)) => choice.eq_ignore_ascii_case(current),
-                (choice, current) => choice.is_none() && current.is_none(),
-            })
-            .unwrap_or(0);
-        let next = if forward {
-            (index + 1) % choices.len()
-        } else {
-            (index + choices.len() - 1) % choices.len()
-        };
-        let choice = choices.swap_remove(next);
+        let choice = next_sound_choice(
+            current.as_deref(),
+            self.system_sounds.as_deref().unwrap_or_default(),
+            forward,
+        );
         if let Some(config) = &self.sound_config {
             crate::platform::sound::play_named(choice.as_deref(), config);
         }
@@ -219,4 +223,21 @@ impl BusUi {
             };
         }
     }
+}
+
+fn next_sound_choice(current: Option<&str>, sounds: &[String], forward: bool) -> Option<String> {
+    let index = current
+        .and_then(|current| {
+            sounds
+                .iter()
+                .position(|sound| sound.eq_ignore_ascii_case(current))
+        })
+        .map_or(0, |index| index + 1);
+    let len = sounds.len() + 1;
+    let next = if forward {
+        (index + 1) % len
+    } else {
+        (index + len - 1) % len
+    };
+    next.checked_sub(1).map(|index| sounds[index].clone())
 }

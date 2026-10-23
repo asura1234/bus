@@ -24,7 +24,7 @@ class Run(helper.Run):
         return self.command("effects", "--kind", "sound").get("effects", [])
 
     def mandatory(self):
-        return [effect for effect in self.sounds() if "bus-developer-alert-" in str(effect)]
+        return [effect for effect in self.sounds() if Path(effect["target"]).name == "Glass.aiff"]
 
     def delivered(self, text):
         self.until(lambda: any(text in call[7] for call in self.calls()), text)
@@ -127,12 +127,11 @@ class Run(helper.Run):
         sent = self.post_room("notify-work", "notify-worker", "notify-orch", "Ordinary room sound")
         self.command("wait", "--message", sent["result"]["message_id"], "--timeout", "20s")
         self.until(lambda: any("bus-sound-" in str(effect) for effect in self.sounds()), "ordinary room sound recorder")
-        assert all("bus-developer-alert-" in str(effect) for effect in self.mandatory())
         self.assert_bot()
         self.no_popup()
         (self.root / "calls.json").write_text(json.dumps(self.calls(), indent=2))
         (self.root / "sound-effects.json").write_text(json.dumps(self.sounds(), indent=2))
-        self.step(5, "human alias notified from third room; mixed recipients, queue, async, missing author and Feishu off rejected without new alerts; ordinary bus-sound target differs from mandatory bus-developer-alert target; bot argv and no terminal popup verified")
+        self.step(5, "human alias notified from third room; mixed recipients, queue, async, missing author and Feishu off rejected without new alerts; ordinary bus-sound target differs from mandatory system Glass.aiff target; bot argv and no terminal popup verified")
 
 
 def main():

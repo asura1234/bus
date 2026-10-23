@@ -32,23 +32,42 @@ pub(super) const AUDIO_PLAYER_POLL_INTERVAL: Duration = Duration::from_millis(25
 
 pub(super) static SOUND_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Mandatory developer alerts have their own bundled cue, independent of normal sound config.
-pub(crate) fn play_developer() {
+/// Mandatory developer alerts use only installed system sounds, independently of room config.
+pub(crate) fn play_developer(name: Option<&str>) {
     if sound_playback_disabled_by_env() {
         return;
     }
-    std::thread::spawn(|| {
-        let id = SOUND_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "bus-developer-alert-{}-{id}.mp3",
-            std::process::id()
-        ));
-        if let Err(err) =
-            play_bytes_at(include_bytes!("../../../assets/sounds/developer.mp3"), path)
-        {
-            warn!(err = %err, "developer alert playback failed");
+    let name = name.map(str::to_owned);
+    std::thread::spawn(move || {
+        let sounds = system_sounds();
+        let mut paths: Vec<_> = resolve_developer_sound(name.as_deref(), &sounds)
+            .into_iter()
+            .chain(resolve_developer_sound(None, &sounds))
+            .collect();
+        paths.dedup();
+        if paths.is_empty() {
+            warn!("no installed system sound available for developer alerts");
+        }
+        for path in paths {
+            match play_file(&path) {
+                Ok(()) => return,
+                Err(err) => {
+                    warn!(path = %path.display(), %err, "developer system sound playback failed")
+                }
+            }
         }
     });
+}
+
+/// A missing selection falls back to Glass, then the first installed sound.
+pub(super) fn resolve_developer_sound(
+    name: Option<&str>,
+    sounds: &[SystemSound],
+) -> Option<PathBuf> {
+    name.and_then(|name| find_sound(sounds, name))
+        .or_else(|| find_sound(sounds, "Glass"))
+        .or_else(|| sounds.first())
+        .map(|sound| sound.path.clone())
 }
 
 pub(super) static SOUND_DONE: &[u8] = include_bytes!("../../../assets/sounds/done.mp3");
@@ -95,10 +114,7 @@ pub(super) fn play_file(path: &Path) -> Result<(), String> {
 
 pub(super) fn play_bytes(data: &[u8]) -> Result<(), String> {
     // Write to a temp file because the supported audio players need a file path.
-    play_bytes_at(data, temp_sound_path())
-}
-
-fn play_bytes_at(data: &[u8], tmp: PathBuf) -> Result<(), String> {
+    let tmp = temp_sound_path();
     let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
     file.write_all(data).map_err(|e| e.to_string())?;
     drop(file);

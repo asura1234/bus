@@ -15,6 +15,10 @@ use crate::messaging::storage::{io, sessions as local_sessions};
 #[path = "tests/disk_settings_test.rs"]
 mod disk_settings_tests;
 
+#[cfg(test)]
+#[path = "tests/developer_sound_test.rs"]
+mod developer_sound_tests;
+
 pub(crate) const MIN_COMPACTIONS_PER_AGENT: u32 = 1;
 pub(crate) const MAX_COMPACTIONS_PER_AGENT: u32 = 100;
 pub(crate) const MIN_IDLE_AGENTS_ALERT: u32 = 1;
@@ -45,6 +49,8 @@ pub(crate) struct BusSettings {
     pub(crate) feishu_notifications: bool,
     pub(crate) feishu_recipient: String,
     pub(crate) feishu_cli_path: Option<String>,
+    /// Installed system sound for mandatory developer alerts; None uses the system default.
+    pub(crate) developer_sound: Option<String>,
     /// MASTER's sound in every session; it rings by default.
     pub(crate) master_sound: SoundPref,
     /// The last All rooms choice: set on every work room at once, and what
@@ -84,6 +90,7 @@ impl Default for BusSettings {
             feishu_notifications: true,
             feishu_recipient: DEFAULT_FEISHU_RECIPIENT.into(),
             feishu_cli_path: None,
+            developer_sound: None,
             master_sound: SoundPref {
                 enabled: true,
                 name: None,

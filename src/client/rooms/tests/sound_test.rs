@@ -24,6 +24,62 @@ fn settings_rows(ui: &mut BusUi, rows: u16) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn developer_sound_setting_offers_system_sound_selection() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    let rows = settings_rows(&mut ui, 55);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Notify you sound (always on)")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("System default")),
+        "{rows:#?}"
+    );
+}
+
+#[test]
+fn developer_sound_setting_cycles_with_mouse_and_keyboard_without_an_off_choice() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
+    ui.action(render::Action::CycleDeveloperSound(true));
+    assert_eq!(ui.settings_field, ui.developer_sound_field());
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Glass"));
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound, None);
+    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+    assert!(ui.settings.feishu_notifications);
+    assert_eq!(
+        ui.pending
+            .iter()
+            .filter(|p| matches!(p.command, BusCommand::SetDeveloperSoundName(_)))
+            .count(),
+        4
+    );
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::SetFeishuNotifications(false))));
+}
+
+#[test]
+fn developer_sound_setting_keeps_the_latest_choice_during_an_earlier_save_echo() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
+    ui.action(render::Action::CycleDeveloperSound(true));
+    ui.action(render::Action::CycleDeveloperSound(true));
+    let mut earlier = crate::messaging::prefs::settings::BusSettings::default();
+    earlier.developer_sound = Some("Glass".into());
+    ui.receive_event(BusEvent::SettingsChanged(earlier));
+    assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
+}
+
 fn queued_sound(ui: &BusUi) -> Vec<(RoomId, bool)> {
     ui.pending
         .iter()

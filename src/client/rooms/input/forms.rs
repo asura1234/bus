@@ -199,6 +199,7 @@ impl BusUi {
                 field if field == self.feishu_field() + 1 => self.open_feishu_setting(false),
                 field if field == self.feishu_field() + 2 => self.open_feishu_setting(true),
                 field if field == self.feishu_field() => self.toggle_feishu_notifications(),
+                field if field == self.developer_sound_field() => self.cycle_developer_sound(true),
                 field if Some(field) == self.perf_overlay_field() => self.toggle_perf_overlay(),
                 field => {
                     if let Some(target) = targets.get(field - 1) {
@@ -217,6 +218,8 @@ impl BusUi {
                     self.adjust_disk_threshold(false, code == KeyCode::Right);
                 } else if self.settings_field == self.sidebar_width_field() {
                     self.adjust_sidebar_width(code == KeyCode::Right);
+                } else if self.settings_field == self.developer_sound_field() {
+                    self.cycle_developer_sound(code == KeyCode::Right);
                 } else if let Some(target) = self
                     .settings_field
                     .checked_sub(1)

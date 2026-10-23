@@ -100,6 +100,15 @@ impl BusUi {
         lines.push(SoundSettingsLine::FeishuCli {
             field: self.feishu_field() + 2,
         });
+        lines.push(SoundSettingsLine::Stepper {
+            field: self.developer_sound_field(),
+            label: "Notify you sound (always on)",
+            value: self.settings.developer_sound.as_deref().map_or_else(
+                || "System default".into(),
+                |name| self.sound_label(Some(name)),
+            ),
+            adjust: Action::CycleDeveloperSound,
+        });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
@@ -222,7 +231,7 @@ impl BusUi {
         }
         view.row(
             Rect::new(x, footer, width, 1),
-            "Close (Esc) · ↑↓ move · Enter toggles · ←→ change",
+            "Close (Esc) · ↑↓ move · Enter changes · ←→ change",
             Some(Action::Cancel),
             false,
             true,

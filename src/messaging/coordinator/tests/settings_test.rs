@@ -70,6 +70,42 @@ fn call(worker: &mut Worker, id: &str, method: &str, params: Value) -> ControlRe
 }
 
 #[test]
+fn developer_sound_setting_is_saved_for_later_sessions_and_rejects_non_system_choices() {
+    let root = root("developer-sound");
+    let mut first = session(&root, "first");
+    let (events, receiver) = mpsc::channel();
+    first
+        .command(
+            BusCommand::SetDeveloperSoundName(Some("glass".into())),
+            &events,
+        )
+        .unwrap();
+    assert!(receiver.try_iter().any(|event| matches!(event, BusEvent::SettingsChanged(saved) if saved.developer_sound.as_deref() == Some("Glass"))));
+    let later = session(&root, "later");
+    assert_eq!(later.settings_json()["developer_sound"], "Glass");
+    assert_eq!(later.settings_json()["feishu_waiting_notifications"], true);
+    let path = root.join("settings.json");
+    let before = std::fs::read(&path).unwrap();
+    for name in ["Default", "Off", "/tmp/custom.wav"] {
+        assert!(first
+            .command(
+                BusCommand::SetDeveloperSoundName(Some(name.into())),
+                &events
+            )
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+    first
+        .command(BusCommand::SetDeveloperSoundName(None), &events)
+        .unwrap();
+    assert_eq!(settings::load(&path).unwrap().developer_sound, None);
+    assert!(settings::load(&path).unwrap().feishu_notifications);
+    drop(later);
+    drop(first);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn master_and_all_rooms_sounds_carry_into_every_later_session() {
     let root = root("carry");
     let mut first = session(&root, "first");
@@ -222,6 +258,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
         shown.result["settings"],
         json!({
             "color_blind_mode": false,
+            "developer_sound": null,
             "feishu_waiting_notifications": true,
             "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",
             "feishu_cli_path": null,
