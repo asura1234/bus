@@ -25,7 +25,6 @@ mod worker_notifications;
 #[cfg(test)]
 use requests::rejection_reason;
 
-pub(crate) use agents::AGENT_DELETED;
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 pub(crate) use developer_notifications::new_developer_notifications;
 pub(crate) use error::ModelError;

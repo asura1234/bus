@@ -572,3 +572,55 @@ fn audit_delete_cannot_commit_without_a_durable_identity_tombstone() {
 
 #[path = "retired_history_test.rs"]
 mod retired_history;
+
+#[test]
+fn audit_retired_digest_metadata_keeps_the_full_source_reply() {
+    use std::io::Write;
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = queue(&mut worker, room, agent, "legacy source task");
+    let text = format!("DONE {}", "audit payload ".repeat(150));
+    let mut state = worker.state.clone();
+    state.finish_for_test(request, &text, io::now_ms());
+    worker.save(state).unwrap();
+    let path = dir.join("state.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    document["version"] = serde_json::json!(2);
+    document["state"]["room_digests"] = serde_json::json!({agent.0.to_string(): {
+        "armed": false, "watermark": 99, "pending_watermark": null,
+        "facts": {"final:legacy": {"id":99, "source_id":request.0,
+            "room":room.0, "agent":agent.0, "agent_name":"author",
+            "at_ms":io::now_ms(), "text":"capped summary",
+            "next_action":"verify", "acknowledged_at_ms":io::now_ms()}}
+    }});
+    drop(worker);
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let store = JsonStore::new(path.clone());
+    let mut loaded = store.load().unwrap().unwrap();
+    assert!(serde_json::to_value(&loaded)
+        .unwrap()
+        .get("room_digests")
+        .is_none());
+    let future = io::now_ms() + 2 * HISTORY_RETENTION_MS;
+    loaded.archive(future);
+    loaded.delete_agent(agent, future + 1).unwrap();
+    store.save(&loaded).unwrap();
+    // Exercise an actual crash-copy compaction, not only its no-op path.
+    let history = std::fs::read(dir.join("history.jsonl")).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("history.jsonl"))
+        .unwrap()
+        .write_all(&history)
+        .unwrap();
+    let reopened = JsonStore::new(path.clone());
+    reopened.load().unwrap();
+    assert!(reopened.compact_history().unwrap());
+    let saved = JsonStore::new(path).load().unwrap().unwrap();
+    let source = saved.request(request).unwrap();
+    assert_eq!(source.prompt.text, "legacy source task");
+    assert_eq!(source.phase, RequestPhase::Completed);
+    assert_eq!(source.pending_final.as_ref().unwrap().text, text);
+    assert!(saved.agent(agent).is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}

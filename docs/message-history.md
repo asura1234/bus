@@ -32,14 +32,15 @@ Startup compaction removes duplicate crash copies and an uncommitted torn tail,
 preserving every logical message. It never filters by live room,
 agent, or age. Empty-session cleanup also preserves sessions with audit history.
 
-Routing and digest acknowledgement metadata are separate from messages. Completed
+Transient routing metadata is separate from messages. Completed
 routing metadata can expire after seven days, with a persisted recovery floor
 preventing old records from becoming new notifications. Pending notifications
 retain their source. Formats 1 and 2 acquire this floor during loading, before
 the first tick or history command; event reconstruction independently rejects
 settled records below it, including records still inline in `state.json`.
-Digest acknowledgement discards its capped summary, while
-the full original message/reply stays in the archive.
+Automatic digests are retired. Legacy acknowledgement/summary metadata never
+replaces the full original message/reply, which stays readable through upgrade
+and compaction.
 
 Permanent retention cannot have a fixed total disk limit for an unlimited number
 of messages. The archive grows linearly with unique requests and notices, plus

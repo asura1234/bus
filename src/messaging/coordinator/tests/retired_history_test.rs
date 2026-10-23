@@ -225,12 +225,7 @@ fn retired_legacy_only_missing_room_never_forwards_or_masks_known_history() {
             .unwrap(),
         Some(replacement)
     );
-    state
-        .post_roster_addition(replacement, io::now_ms())
-        .unwrap();
-    let notice = &state.notices(room).last().unwrap().text;
-    assert!(notice.contains(&agent.0.to_string()), "{notice}");
-    assert!(!notice.contains("999999"), "{notice}");
+    assert!(state.notices(room).next().is_none());
     store.save(&state).unwrap();
     store.compact_history().unwrap();
     let reloaded = JsonStore::new(dir.join("state.json"))
