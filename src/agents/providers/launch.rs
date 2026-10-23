@@ -217,27 +217,18 @@ pub(crate) fn extend_generated_args(
         ProviderKind::Cursor => Some("--disable-auto-update"),
         ProviderKind::ClaudeCode => None,
     };
-    let supplied = flag.filter(|flag| {
-        argument_positions(provider, args)
-            .into_iter()
-            .any(|index| args[index] == *flag)
-    });
+    let supplied = flag.filter(|flag| arguments::contains_flag(provider, args, &[*flag]));
     let capture = capture
         .into_iter()
         .filter(|arg| Some(arg.as_str()) != supplied);
-    // Prefix the complete user sequence when a token could be the literal
-    // boundary. This also avoids splitting an option from a value named `--`.
-    if args.iter().any(|arg| arg == "--") {
-        args.splice(0..0, capture);
-    } else {
-        args.extend(capture);
-    }
+    let position = arguments::generated_args_position(provider, args);
+    args.splice(position..position, capture);
 }
 
 fn codex_update_check_disabled(args: &[String]) -> bool {
     // Codex config overrides are ordered. An earlier `false` must not mask a
     // later `true` when deciding whether our final safety override is present.
-    argument_positions(ProviderKind::Codex, args)
+    arguments::runtime_option_positions(ProviderKind::Codex, args)
         .into_iter()
         .filter_map(|index| match args[index].as_str() {
             "-c" | "--config" => args.get(index + 1).map(String::as_str),

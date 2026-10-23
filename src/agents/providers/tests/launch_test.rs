@@ -140,19 +140,39 @@ fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
     );
     assert_eq!(
         launch_args(Provider::Cursor, &format!("--resume={id}")).unwrap(),
-        (owned(&["--resume", id, "--disable-auto-update"]), Some(id.into()))
+        (
+            owned(&["--resume", id, "--disable-auto-update"]),
+            Some(id.into())
+        )
     );
     assert_eq!(
         launch_args(Provider::Codex, &format!("resume {id} -m gpt-test")).unwrap(),
         (
-            owned(&["resume", id, "-m", "gpt-test", "--no-daemon", "-c", "check_for_update_on_startup=false"]),
+            owned(&[
+                "resume",
+                id,
+                "-m",
+                "gpt-test",
+                "--no-daemon",
+                "-c",
+                "check_for_update_on_startup=false"
+            ]),
             Some(id.into())
         )
     );
     // A later "resume" is an option value, not the subcommand.
     assert_eq!(
         launch_args(Provider::Codex, "--model resume").unwrap(),
-        (owned(&["--model", "resume", "--no-daemon", "-c", "check_for_update_on_startup=false"]), None)
+        (
+            owned(&[
+                "--model",
+                "resume",
+                "--no-daemon",
+                "-c",
+                "check_for_update_on_startup=false"
+            ]),
+            None
+        )
     );
     for (provider, input) in [
         (Provider::ClaudeCode, "--resume"),
@@ -202,7 +222,10 @@ fn codex_launches_host_their_own_runtime_so_hooks_inherit_launch_env() {
         vec!["--no-daemon", "-c", "check_for_update_on_startup=false"]
     );
     assert!(runtime_args(Provider::ClaudeCode).is_empty());
-    assert_eq!(runtime_args(Provider::Cursor), vec!["--disable-auto-update"]);
+    assert_eq!(
+        runtime_args(Provider::Cursor),
+        vec!["--disable-auto-update"]
+    );
     assert!(validate_args(Provider::Codex, &["--no-daemon".into()]).is_ok());
 }
 
@@ -212,13 +235,23 @@ fn codex_launch_does_not_duplicate_an_explicit_private_runtime_option() {
         launch_args(Provider::Codex, "--yolo --no-daemon")
             .unwrap()
             .0,
-        vec!["--yolo", "--no-daemon", "-c", "check_for_update_on_startup=false"]
+        vec![
+            "--yolo",
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false"
+        ]
     );
     assert_eq!(
         launch_args(Provider::Codex, "'first prompt' --no-daemon")
             .unwrap()
             .0,
-        vec!["first prompt", "--no-daemon", "-c", "check_for_update_on_startup=false"]
+        vec![
+            "first prompt",
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false"
+        ]
     );
 }
 
@@ -226,13 +259,31 @@ fn codex_launch_does_not_duplicate_an_explicit_private_runtime_option() {
 fn codex_capture_runtime_precedes_a_literal_argument_tail() {
     let (args, adopted) = launch_args(Provider::Codex, "-- '--yolo literal prompt'").unwrap();
     assert_eq!(adopted, None);
-    assert_eq!(args, ["--no-daemon", "-c", "check_for_update_on_startup=false", "--", "--yolo literal prompt"]);
+    assert_eq!(
+        args,
+        [
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false",
+            "--",
+            "--yolo literal prompt"
+        ]
+    );
 }
 
 #[test]
 fn generated_args_do_not_split_an_option_from_a_value_named_separator() {
     let (args, _) = launch_args(Provider::Codex, "--model '--'").unwrap();
-    assert_eq!(args, ["--no-daemon", "-c", "check_for_update_on_startup=false", "--model", "--"]);
+    assert_eq!(
+        args,
+        [
+            "--model",
+            "--",
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false"
+        ]
+    );
 }
 
 #[test]
@@ -257,10 +308,19 @@ fn launch_args_adoption_distinguishes_selectors_from_literal_option_values() {
     assert_eq!(
         launch_args(Provider::Codex, &format!("--yolo -c key=value resume {id}")).unwrap(),
         (
-            vec!["resume", id, "--yolo", "-c", "key=value", "--no-daemon", "-c", "check_for_update_on_startup=false"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            vec![
+                "resume",
+                id,
+                "--yolo",
+                "-c",
+                "key=value",
+                "--no-daemon",
+                "-c",
+                "check_for_update_on_startup=false"
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
             Some(id.into())
         )
     );
@@ -402,18 +462,30 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
         let expected: Vec<&str> = if enabled {
             vec![
                 "--yolo",
-                "--no-daemon",
-                "-c",
-                "check_for_update_on_startup=false",
                 "-c",
                 "developer_instructions=\"--ask-for-approval\"",
                 "--sandbox",
                 "workspace-write",
+                "--no-daemon",
+                "-c",
+                "check_for_update_on_startup=false",
                 "--",
                 "--approve-for-me",
             ]
         } else {
-            ["--no-daemon", "-c", "check_for_update_on_startup=false"].into_iter().chain(original).collect()
+            vec![
+                "--ask-for-approval",
+                "on-request",
+                "-c",
+                "developer_instructions=\"--ask-for-approval\"",
+                "--sandbox",
+                "workspace-write",
+                "--no-daemon",
+                "-c",
+                "check_for_update_on_startup=false",
+                "--",
+                "--approve-for-me",
+            ]
         };
         assert_eq!(prepared.args, expected, "enabled={enabled}");
         assert_eq!(
@@ -428,7 +500,10 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
 fn cursor_disables_updates_on_new_and_adopted_launches() {
     for input in ["", "--resume=160d1f8b-9023-44b8-9bc7-24333effb185"] {
         let (args, _) = launch_args(Provider::Cursor, input).unwrap();
-        assert!(args.iter().any(|arg| arg == "--disable-auto-update"), "{args:?}");
+        assert!(
+            args.iter().any(|arg| arg == "--disable-auto-update"),
+            "{args:?}"
+        );
     }
 }
 
@@ -477,5 +552,46 @@ fn repeated_runtime_defaults_do_not_duplicate_update_arguments_or_consume_litera
         );
         assert_eq!(args, once, "{provider:?}");
         assert_eq!(&args[args.len() - literal.len()..], literal);
+    }
+}
+
+#[test]
+fn codex_update_suppression_overrides_explicit_enable_before_literal_prompt() {
+    for prefix in ["", "--vendor-option value "] {
+        for config in [
+            "-c check_for_update_on_startup=true",
+            "--config check_for_update_on_startup=true",
+            "--config=check_for_update_on_startup=true",
+        ] {
+            let (mut args, _) = launch_args(
+                Provider::Codex,
+                &format!("{prefix}{config} -- 'initial prompt'"),
+            )
+            .unwrap();
+            let separator = args.iter().position(|arg| arg == "--").unwrap();
+            let update_values: Vec<_> = args[..separator]
+                .iter()
+                .filter_map(|arg| {
+                    arg.strip_prefix("check_for_update_on_startup=")
+                        .or_else(|| arg.strip_prefix("--config=check_for_update_on_startup="))
+                })
+                .collect();
+            assert_eq!(&args[separator..], ["--", "initial prompt"]);
+            assert_eq!(
+                update_values.last().copied(),
+                Some("false"),
+                "the effective startup-update setting must stay disabled: {args:?}"
+            );
+            let once = args.clone();
+            crate::agents::providers::launch::extend_generated_args(
+                Provider::Codex,
+                &mut args,
+                runtime_args(Provider::Codex),
+            );
+            assert_eq!(
+                args, once,
+                "native startup must not duplicate runtime defaults"
+            );
+        }
     }
 }
