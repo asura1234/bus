@@ -533,7 +533,13 @@ fn unstarted_resume_replays_saved_options() {
     std::fs::write(&path, r#"["--model","gpt-test"]"#).unwrap();
     assert_eq!(
         fixture.load().unwrap().args,
-        ["--model", "gpt-test", "--no-daemon", "-c", "check_for_update_on_startup=false"]
+        [
+            "--model",
+            "gpt-test",
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false"
+        ]
     );
 }
 
@@ -547,7 +553,15 @@ fn resume_does_not_duplicate_an_explicit_private_runtime_option() {
         r#"["--yolo","--no-daemon"]"#,
     )
     .unwrap();
-    assert_eq!(fixture.load().unwrap().args, ["--yolo", "--no-daemon", "-c", "check_for_update_on_startup=false"]);
+    assert_eq!(
+        fixture.load().unwrap().args,
+        [
+            "--yolo",
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false"
+        ]
+    );
 }
 
 #[test]
@@ -638,7 +652,8 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
                 // The shared app-server daemon runs hooks with the env of
                 // whichever pane started it, misrouting this launch's callbacks.
                 Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),
-                Provider::Cursor => crate::agents::providers::launch::runtime_args(Provider::Cursor),
+                Provider::Cursor =>
+                    crate::agents::providers::launch::runtime_args(Provider::Cursor),
             }
         );
         assert_eq!(fixture.plan, original);
@@ -1157,7 +1172,14 @@ fn unstarted_resume_preserves_literal_initial_input_with_capture_options_before_
     .unwrap();
     assert_eq!(
         fixture.load().unwrap().args,
-        ["--no-daemon", "-c", "check_for_update_on_startup=false", "--yolo", "--", "first prompt"]
+        [
+            "--yolo",
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false",
+            "--",
+            "first prompt"
+        ]
     );
 }
 

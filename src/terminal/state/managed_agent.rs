@@ -92,7 +92,6 @@ impl TerminalState {
         })
     }
 
-
     pub fn managed_agent_interactive_ready(&self) -> bool {
         self.managed_agent
             .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))

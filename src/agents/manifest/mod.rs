@@ -62,7 +62,6 @@ fn evaluate_loaded_manifest(
     }
 }
 
-
 pub fn should_skip_state_update(agent: AgentKind, screen_content: &str) -> bool {
     detect_with_osc(
         agent,
