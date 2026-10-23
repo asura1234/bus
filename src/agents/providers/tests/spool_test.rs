@@ -85,6 +85,151 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn held_append_lock_keeps_hooks_durable_and_replays_before_submission_boundary() {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-held-lock");
+        initialize(
+            &dir,
+            &Manifest {
+                routing_key: RoutingKey(1),
+                provider: Provider::Cursor,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        let lease = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(dir.join("append.lock"))
+            .unwrap();
+        lease.lock().unwrap();
+        let value = json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":"before","text":"final"});
+        for _ in 0..2 {
+            append(&dir, "launch", Provider::Cursor, value.clone(), &[], false)
+                .expect("a held lock must defer publication, not discard the hook");
+        }
+        let pending: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("pending-"))
+            .collect();
+        assert_eq!(
+            pending.len(),
+            2,
+            "both attempts must survive their hook process"
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(pending[0].path()).unwrap())
+                .unwrap()["value"],
+            value
+        );
+        assert!(
+            records(&dir).unwrap().is_empty(),
+            "polling must not wait for a held append lock"
+        );
+        drop(lease);
+        // No writer is left to retry: the boundary must recover both envelopes
+        // and deduplicate them before fencing a new submission.
+        assert_eq!(boundary(&dir).unwrap(), 1);
+        let captured = records(&dir).unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1.value, value);
+        assert_eq!(captured[0].1.sequence, 1);
+        append(&dir, "launch", Provider::Cursor,
+            json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":"after","text":"new final"}), &[], false).unwrap();
+        assert_eq!(records(&dir).unwrap()[1].1.sequence, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn polling_replays_exited_writer_and_retries_failed_publication() {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-retry");
+        initialize(
+            &dir,
+            &Manifest {
+                routing_key: RoutingKey(1),
+                provider: Provider::Cursor,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        // A publication IO failure happens after staging; removing the fault
+        // lets the normal consumer recover without another callback invocation.
+        std::fs::create_dir(dir.join("sequence")).unwrap();
+        let value = json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":"t","text":"final"});
+        assert!(append(&dir, "launch", Provider::Cursor, value.clone(), &[], false).is_err());
+        std::fs::remove_dir(dir.join("sequence")).unwrap();
+        let captured = records(&dir).unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1.value, value);
+        assert_eq!(boundary(&dir).unwrap(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn staged_hooks_with_equal_capture_milliseconds_follow_file_write_order() {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-write-order");
+        initialize(
+            &dir,
+            &Manifest {
+                routing_key: RoutingKey(1),
+                provider: Provider::Cursor,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        let lease =
+            crate::agents::providers::spool::try_append_lock(&dir.join("append.lock")).unwrap();
+        for text in ["first", "second"] {
+            append(&dir, "launch", Provider::Cursor,
+                json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":text,"text":text}), &[], false).unwrap();
+        }
+        let pending: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("pending-"))
+            .collect();
+        for entry in pending {
+            let mut record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap();
+            let first = record["value"]["text"] == "first";
+            record["at_ms"] = json!(1_000);
+            std::fs::write(entry.path(), serde_json::to_vec(&record).unwrap()).unwrap();
+            let path = dir.join(if first {
+                "pending-z.json"
+            } else {
+                "pending-a.json"
+            });
+            std::fs::rename(entry.path(), &path).unwrap();
+            // Explicit timestamps avoid a wall-clock race while representing
+            // two ordered writes that share a capture millisecond.
+            let stamp = std::time::UNIX_EPOCH
+                + std::time::Duration::from_nanos(if first {
+                    1_000_000_000
+                } else {
+                    1_000_500_000
+                });
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(stamp))
+                .unwrap();
+        }
+        drop(lease);
+        let captured = records(&dir).unwrap();
+        assert_eq!(
+            captured
+                .iter()
+                .map(|(_, record)| record.value["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        assert_eq!(boundary(&dir).unwrap(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn codex_requires_real_turn_binding_and_rejects_notify() {
         assert!(parse(
             Provider::Codex,
@@ -179,7 +324,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(records(&dir).unwrap().len(), 12);
-        assert!(append(&dir, "wrong-launch", Provider::Cursor, json!({}), &[], false).is_err());
+        assert!(append(
+            &dir,
+            "wrong-launch",
+            Provider::Cursor,
+            json!({}),
+            &[],
+            false
+        )
+        .is_err());
         assert_eq!(
             parse(
                 Provider::Cursor,
@@ -221,7 +374,15 @@ mod tests {
             json!({"agent_id":9,"provider":"claude_code","launch_id":"launch"})
         );
         let payload = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p","last_assistant_message":"reply"});
-        append(&dir, "launch", Provider::ClaudeCode, payload.clone(), &[], false).unwrap();
+        append(
+            &dir,
+            "launch",
+            Provider::ClaudeCode,
+            payload.clone(),
+            &[],
+            false,
+        )
+        .unwrap();
         let captured = records(&dir).unwrap();
         assert_eq!(captured.len(), 1);
         let wire: serde_json::Value =
@@ -258,15 +419,42 @@ mod tests {
         // A restart that resumes the same conversation sends identical bytes; while
         // the exited process's record is still pending, it must not swallow this one.
         let start = json!({"hook_event_name":"SessionStart","session_id":"s","source":"resume"});
-        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old, false).unwrap();
-        append(&dir, "launch", Provider::ClaudeCode, start.clone(), &old, false).unwrap();
+        append(
+            &dir,
+            "launch",
+            Provider::ClaudeCode,
+            start.clone(),
+            &old,
+            false,
+        )
+        .unwrap();
+        append(
+            &dir,
+            "launch",
+            Provider::ClaudeCode,
+            start.clone(),
+            &old,
+            false,
+        )
+        .unwrap();
         append(&dir, "launch", Provider::ClaudeCode, start, &new, false).unwrap();
         // Other callbacks keep the existing one-record-per-payload dedupe.
         let stop = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p","last_assistant_message":"reply"});
-        append(&dir, "launch", Provider::ClaudeCode, stop.clone(), &old, false).unwrap();
+        append(
+            &dir,
+            "launch",
+            Provider::ClaudeCode,
+            stop.clone(),
+            &old,
+            false,
+        )
+        .unwrap();
         append(&dir, "launch", Provider::ClaudeCode, stop, &new, false).unwrap();
         let captured = records(&dir).unwrap();
-        let reporters: Vec<_> = captured.iter().map(|(_, record)| record.reporter.clone()).collect();
+        let reporters: Vec<_> = captured
+            .iter()
+            .map(|(_, record)| record.reporter.clone())
+            .collect();
         assert_eq!(reporters, vec![old.to_vec(), new.to_vec(), old.to_vec()]);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -288,7 +476,11 @@ mod tests {
             "manifest":{"agent_id":1,"provider":"codex","launch_id":"launch"},
             "value":{"hook_event_name":"SessionStart","session_id":"s","source":"startup","transcript_path":"/tmp/r.jsonl"}
         });
-        std::fs::write(dir.join("event-legacy.json"), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        std::fs::write(
+            dir.join("event-legacy.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
         let captured = records(&dir).unwrap();
         assert_eq!(captured.len(), 1);
         assert!(captured[0].1.reporter.is_empty());
@@ -297,8 +489,7 @@ mod tests {
 
     #[test]
     fn neutral_spool_rejects_provider_mismatch_and_sequence_overflow_without_events() {
-        let dir =
-            crate::utils::test_temp::unique_temp_path("bus-neutral-spool-overflow");
+        let dir = crate::utils::test_temp::unique_temp_path("bus-neutral-spool-overflow");
         initialize(
             &dir,
             &Manifest {
@@ -312,8 +503,14 @@ mod tests {
         assert_eq!(boundary(&dir).unwrap(), 0);
         std::fs::write(dir.join("sequence"), u64::MAX.to_string()).unwrap();
         assert!(append(&dir, "launch", Provider::Cursor, json!({}), &[], false).is_err());
-        assert_eq!(boundary(&dir).unwrap(), u64::MAX);
-        assert!(records(&dir).unwrap().is_empty());
+        // Overflow cannot publish, but the hook's durable input is retained and
+        // the boundary fails closed instead of allowing a new submission.
+        assert!(boundary(&dir).is_err());
+        assert!(records(&dir).is_err());
+        assert!(!std::fs::read_dir(&dir)
+            .unwrap()
+            .map(Result::unwrap)
+            .any(|e| e.file_name().to_string_lossy().starts_with("event-")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

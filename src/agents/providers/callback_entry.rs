@@ -34,7 +34,7 @@ pub(crate) fn dispatch(
     let _diagnostics_lease = diagnostics_dir
         .as_ref()
         .filter(|dir| dir.is_dir())
-        .and_then(|dir| spool::append_lock(&dir.join("diagnostics.lock")).ok());
+        .and_then(|dir| spool::try_append_lock(&dir.join("diagnostics.lock")).ok());
     if _diagnostics_lease.is_some() {
         if let Some(dir) = diagnostics_dir {
             logging::init_file_logging_at(dir, "hook.log", logging_options);
@@ -47,11 +47,11 @@ pub(crate) fn dispatch(
     if let Err(error) = writeln!(io::stdout().lock(), "{{}}") {
         panic!("failed printing to stdout: {error}");
     }
-    if let Err(error) = result {
+    if let Err(error) = &result {
         tracing::warn!(event = "bus.callback.capture_failed", error_kind = ?error.kind(), "Provider hook capture failed");
         eprintln!("Bus callback: {error}");
     }
-    Some(Ok(()))
+    Some(result)
 }
 
 fn capture(args: &[String], input: impl Read) -> io::Result<()> {

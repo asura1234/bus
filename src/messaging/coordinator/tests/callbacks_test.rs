@@ -208,6 +208,37 @@ mod orchestrator_turn_routing {
     }
 
     #[test]
+    fn later_uncontended_hooks_preserve_staged_turn_report_order() {
+        let mut bus = bus();
+        let spool = bus.dir.join("callbacks/orch");
+        let lease = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(spool.join("append.lock"))
+            .unwrap();
+        lease.lock().unwrap();
+        for value in [
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"first","prompt":"first background turn"}),
+            json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"first","last_assistant_message":"First completed report."}),
+        ] {
+            callbacks::append(&spool, "orch", Provider::ClaudeCode, value, &[], false).unwrap();
+        }
+        drop(lease);
+        // The next turn begins after the earlier hooks returned successfully.
+        // A busy poller has not yet drained their durable staged envelopes.
+        bus.hooks(&[
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"second","prompt":"second background turn"}),
+            json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"second","last_assistant_message":"Second completed report."}),
+        ]);
+        assert_eq!(
+            bus.notices(bus.room),
+            ["First completed report.", "Second completed report."],
+            "publication after contention must preserve actual report order"
+        );
+    }
+
+    #[test]
     fn a_background_turn_while_a_developer_message_waits_reports_in_the_work_room_and_the_developer_reply_stays_in_master(
     ) {
         let mut bus = bus();
