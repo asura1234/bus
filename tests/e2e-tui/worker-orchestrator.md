@@ -21,7 +21,7 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    `Orchestrator`. Wait for its message to settle. Click `room:qa-work` and
    inspect history and the orchestrator's terminal → one normal worker-authored
    work-room message addressed to the bound orchestrator, delivered into its
-   session with the `qa-worker (agent ID, room ROOM_ID):` attribution header,
+   session with the `qa-worker (room ROOM_ID):` attribution header,
    with a `fake reply:` answering that text; both message and reply
    show in the work-room chat. MASTER history remains empty.
 2. Fixture: send `WOC name ready` the same way, targeting `libtv-app master` by
@@ -53,8 +53,8 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    and submits to the orchestrator.
 
 6. Fixture: send `qa-worker here —` followed by a newline and `WOC already
-   identified` to `orchestrator` as `qa-worker` → its reply echoes exactly that
-   authored text with no second sender header.
+   identified` to `orchestrator` as `qa-worker` → its reply carries one canonical `qa-worker (room ROOM_ID):` header followed
+   by `WOC already identified`, without the legacy identity line.
 
 **Evidence:** CLI receipts and status/history JSON, orchestrator terminal text,
 picker and chat snapshots. The driver trace records every action; no real

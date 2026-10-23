@@ -110,7 +110,7 @@ the wrapper remains held.
   is enabled. Routine progress stays untagged. *Why:* an explicit request makes
   it clear when the developer needs to act.
 
-- **Let Bus identify the sender.** Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
+- **Let Bus identify the sender.** Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for shared names. Send only the body; do not add a "from X", "X here" or signature line.
   Include this instruction in every worker brief. Agents can message any agent
   across rooms; `--to orchestrator` names their home room's bound orchestrator.
 

@@ -375,14 +375,38 @@ named `orchestrator` takes precedence. With no matching member and no binding,
 Bus reports `This room has no bound orchestrator`. Other orchestrators, MASTER peers and workers in any
 room are reachable by name or ID.
 
-Bus automatically prepends `name (agent id, room R):` to every agent-authored
-payload it delivers, using the sender's home room ID. Send only the message
-body: do not add a "from X", "X here" or signature line. Bus suppresses a duplicate
-header only when the first line is the exact Bus header with this sender's own name, ID and home room, or a short identity-only
-line: the sender's name or `agent ID` followed by `:` or ` here —` and nothing
-else. An ordinary sentence or a header with a forged ID or room always gets
-the genuine sender header. The stored chat text stays as authored;
-the delivered payload and callback matching use the same rendered text.
+Bus prepends exactly one sender line to agent-authored payloads: `name:` for
+same-room delivery, and `name (room R):` when the conversation or recipient
+crosses rooms or involves MASTER. A shared name includes `(agent ID)` to
+disambiguate. Batched agent messages use `[N/M at HH:MM]` without repeating the
+sender; developer/Bus messages without an inner header retain their sender in
+the batch marker.
+
+Send only the message body: do not add a "from X", "X here" or signature line.
+An exact current or legacy Bus header with this sender's own name, ID and home
+room, or a short identity-only line (`name:` or `agent ID here —`), is normalized
+to the genuine current header. Ordinary sentences and headers with a forged ID
+or room keep their content and receive the real header. Stored chat text stays
+as authored; delivered payloads and callback matching use the same frozen text.
+
+Every CLI agent selector accepts a name or numeric ID, including `--as`,
+`agent dialog/choose/answer/read/delete/interrupt/rename/setup-confirm/clear`, and
+the dev commands `focus/details`. Agent commands accept `--room ROOM` as their
+conversation scope and `--as AGENT` for the sender's home-room fallback. Without
+context, names resolve globally. Ambiguity lists candidate names, IDs and rooms;
+use an ID to disambiguate. `agent interrupt --room ROOM` with no AGENT stops the
+room; with AGENT it selects that agent using ROOM as context.
+
+```sh
+bus agent list
+bus agent list --room "$room_id"
+bus agent dialog reviewer --room "$room_id" --as owner
+```
+
+`agent list` emits JSON mapping rows with `name`, `id` and `room`. Message,
+request and digest fact selectors remain numeric resource IDs; an agent-valued
+`--as` on message/wait commands uses the same shared name/ID resolver with the
+resource's conversation room.
 
 New agents receive Bus protocol instructions at launch. Existing conversations
 keep their saved instructions; upgrades do not insert new task turns.
@@ -949,7 +973,7 @@ as the agent list even when its provider still reports idle.
 
 Once an agent has been blocked for about a second, on a dialog, a question, a trust
 prompt or any other screen it cannot pass alone, Bus posts one notice in its
-work room, signed `bus`: `bus → ORCHESTRATOR: AGENT (agent N). Blocked, needs
+work room, signed `bus`: `bus → ORCHESTRATOR: AGENT. Blocked, needs
 help to continue.` when the room has an orchestrator, delivered and waking it
 like any message, or `bus → You: …` when it has none. The notice names the agent and includes `Inspect: bus agent dialog AGENT`,
 but no options or fingerprint: look at the agent's terminal with that command (or
@@ -1091,7 +1115,7 @@ Reliable callers should also follow these rules:
 
 1. Parse the JSON response and require `ok: true`; do not infer success from
    human-readable terminal output.
-2. Capture room, agent, message, and request IDs and prefer IDs in later calls.
+2. Capture room, message, request and fact IDs. Use agent names for readability, or IDs to disambiguate shared names.
 3. Use `--to all` only when broadcasting is intentional.
 4. Use `wait` when a program needs completion; do not treat `send` as completion.
    Orchestrators receive terminal event notifications without periodic polling.
