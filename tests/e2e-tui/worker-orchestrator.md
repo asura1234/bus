@@ -39,10 +39,11 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    both reach that unrelated MASTER orchestrator, receive distinct replies in
    `qa-work`, and carry the worker's attribution. Send without `--as` to
    `orchestrator` in a newly created unbound room → clear missing-binding error,
-   no history row. Add agents named `duplicate` to MASTER (bound to a new `qa-duplicate` room)
-   and `qa-other`; send
-   to `duplicate` from `qa-worker` → an ambiguity error lists both IDs and rooms,
-   without adding a request or history row.
+   no history row. Add an agent named `duplicate` to MASTER (bound to a new `qa-duplicate` room)
+   then try to add the same name in `qa-other` → the add is rejected with the
+   existing owner ID and MASTER room; no second agent is created. Send to
+   `duplicate` from `qa-worker` → the unique existing owner receives the message
+   globally in the `qa-work` conversation.
 5. In `qa-work`, press Ctrl+P → the picker lists `qa-worker` and `libtv-app
    master`, and excludes `other-orch`. Click All → only `qa-worker` is checked,
    All shows checked, and the orchestrator remains unchecked. Click All again →

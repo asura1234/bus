@@ -87,7 +87,7 @@ another worker's changes are safe to stash without checking with their owner.
 
 ## Worker brief messaging rule
 
-Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for shared or numeric names. Send only the body; do not add a "from X", "X here" or signature line.
+Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for numeric or historical names. Send only the body; do not add a "from X", "X here" or signature line.
 Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
 room's bound orchestrator, and names or IDs can reach agents in any room.
 

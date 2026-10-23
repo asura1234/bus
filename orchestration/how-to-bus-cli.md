@@ -354,12 +354,10 @@ form is `send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
 [--as AGENT] [--queue] [--async]`. The message, history and reply stay in the
 conversation room chosen by `--room`.
 
-An exact numeric agent ID always resolves globally, even if a local agent has
-that ID as its name. A name first resolves among agents in the selected
-conversation room (`--room`), then in the sender's home room, then among all
-agents. If several agents match at the chosen level, Bus errors and lists each candidate's name, ID and room; select an ID to disambiguate.
-Without `--as`, the selected conversation room supplies both local scopes.
-`--as` uses the same ID/name resolver, with the selected room as its local scope.
+Names and numeric agent IDs resolve globally across every room, including
+MASTER. An exact existing numeric ID wins over a numeric name. `--room` chooses
+the conversation; it never narrows the current agent-name namespace. `--as`
+identifies the author using the same shared name/ID resolver.
 
 A worker can message its orchestrator before being assigned any work:
 
@@ -377,8 +375,8 @@ room are reachable by name or ID.
 
 Bus prepends exactly one sender line to agent-authored payloads: `name:` for
 same-room delivery, and `name (room R):` when the conversation or recipient
-crosses rooms or involves MASTER. A shared or numeric name includes `(agent ID)` to
-disambiguate. Batched agent messages use `[N/M at HH:MM]` without repeating the
+crosses rooms or involves MASTER. Numeric names and historical names retained from before a rename include
+`(agent ID)` so the sender can still be addressed unambiguously. Batched agent messages use `[N/M at HH:MM]` without repeating the
 sender; developer/Bus messages without an inner header retain their sender in
 the batch marker.
 
@@ -389,13 +387,14 @@ to the genuine current header. Ordinary sentences and headers with a forged ID
 or room keep their content and receive the real header. Stored chat text stays
 as authored; delivered payloads and callback matching use the same frozen text.
 
-Every CLI agent selector accepts a name or numeric ID, including `--as`,
-`agent dialog/choose/answer/read/delete/interrupt/rename/setup-confirm/clear`, and
-the dev commands `focus/details`. Agent commands accept `--room ROOM` as their
-conversation scope and `--as AGENT` for the sender's home-room fallback. Without
-context, names resolve globally. Ambiguity lists candidate names, IDs and rooms;
-use an ID to disambiguate. `agent interrupt --room ROOM` with no AGENT stops the
-room; with AGENT it selects that agent using ROOM as context.
+Every CLI agent selector accepts a globally unique current name or numeric ID,
+including `--as`, `agent dialog/choose/answer/read/delete/interrupt/rename/setup-confirm/clear`,
+and the dev commands `focus/details`. The selector commands also accept optional
+`--room ROOM` and `--as AGENT` context; names remain global. Exact target IDs do
+not require resolving that optional author context. For interrupt, `--room`
+chooses the conversation for the receipt and follow-up text, while the interrupt
+notice stays in the target agent's room where its turn ran.
+`agent interrupt --room ROOM` without AGENT stops that room's eligible agents.
 
 ```sh
 bus agent list
@@ -403,10 +402,9 @@ bus agent list --room "$room_id"
 bus agent dialog reviewer --room "$room_id" --as owner
 ```
 
-`agent list` emits JSON mapping rows with `name`, `id` and `room`. Message,
-request and digest fact selectors remain numeric resource IDs; an agent-valued
-`--as` on message/wait commands uses the same shared name/ID resolver with the
-resource's conversation room.
+`agent list` emits JSON mapping rows with `name`, `id` and `room`. Message
+and request selectors remain numeric resource IDs; an agent-valued
+`--as` on message/wait commands uses the same global name/ID resolver.
 
 New agents receive Bus protocol instructions at launch. Existing conversations
 keep their saved instructions; upgrades do not insert new task turns.
