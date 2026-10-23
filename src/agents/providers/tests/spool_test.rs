@@ -85,6 +85,88 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn held_append_lock_keeps_hooks_durable_and_replays_before_submission_boundary() {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-held-lock");
+        initialize(
+            &dir,
+            &Manifest {
+                routing_key: RoutingKey(1),
+                provider: Provider::Cursor,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        let lease = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(dir.join("append.lock"))
+            .unwrap();
+        lease.lock().unwrap();
+        let value = json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":"before","text":"final"});
+        for _ in 0..2 {
+            append(&dir, "launch", Provider::Cursor, value.clone(), &[], false)
+                .expect("a held lock must defer publication, not discard the hook");
+        }
+        let pending: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("pending-"))
+            .collect();
+        assert_eq!(
+            pending.len(),
+            2,
+            "both attempts must survive their hook process"
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(pending[0].path()).unwrap())
+                .unwrap()["value"],
+            value
+        );
+        assert!(
+            records(&dir).unwrap().is_empty(),
+            "polling must not wait for a held append lock"
+        );
+        drop(lease);
+        // No writer is left to retry: the boundary must recover both envelopes
+        // and deduplicate them before fencing a new submission.
+        assert_eq!(boundary(&dir).unwrap(), 1);
+        let captured = records(&dir).unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1.value, value);
+        assert_eq!(captured[0].1.sequence, 1);
+        append(&dir, "launch", Provider::Cursor,
+            json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":"after","text":"new final"}), &[], false).unwrap();
+        assert_eq!(records(&dir).unwrap()[1].1.sequence, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn polling_replays_exited_writer_and_retries_failed_publication() {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-retry");
+        initialize(
+            &dir,
+            &Manifest {
+                routing_key: RoutingKey(1),
+                provider: Provider::Cursor,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        // A publication IO failure happens after staging; removing the fault
+        // lets the normal consumer recover without another callback invocation.
+        std::fs::create_dir(dir.join("sequence")).unwrap();
+        let value = json!({"hook_event_name":"afterAgentResponse","conversation_id":"s","generation_id":"t","text":"final"});
+        assert!(append(&dir, "launch", Provider::Cursor, value.clone(), &[], false).is_err());
+        std::fs::remove_dir(dir.join("sequence")).unwrap();
+        let captured = records(&dir).unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1.value, value);
+        assert_eq!(boundary(&dir).unwrap(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn codex_requires_real_turn_binding_and_rejects_notify() {
         assert!(parse(
             Provider::Codex,
@@ -312,8 +394,12 @@ mod tests {
         assert_eq!(boundary(&dir).unwrap(), 0);
         std::fs::write(dir.join("sequence"), u64::MAX.to_string()).unwrap();
         assert!(append(&dir, "launch", Provider::Cursor, json!({}), &[], false).is_err());
-        assert_eq!(boundary(&dir).unwrap(), u64::MAX);
-        assert!(records(&dir).unwrap().is_empty());
+        // Overflow cannot publish, but the hook's durable input is retained and
+        // the boundary fails closed instead of allowing a new submission.
+        assert!(boundary(&dir).is_err());
+        assert!(records(&dir).is_err());
+        assert!(!std::fs::read_dir(&dir).unwrap().map(Result::unwrap)
+            .any(|e| e.file_name().to_string_lossy().starts_with("event-")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

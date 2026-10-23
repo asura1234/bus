@@ -260,7 +260,10 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
             .unwrap();
         child.stdin.take().unwrap().write_all(&input).unwrap();
         let output = child.wait_with_output().unwrap();
-        assert!(output.status.success());
+        assert!(
+            !output.status.success(),
+            "a failed capture must not report success"
+        );
         assert_eq!(output.stdout, b"{}\n");
         assert!(String::from_utf8_lossy(&output.stderr).contains(error));
     }
@@ -285,5 +288,99 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
         "{log}"
     );
     assert!(!log.contains("bus.callback.spooled"), "{log}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn held_spool_and_diagnostics_locks_leave_a_durable_hook_before_success() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir =
+        std::env::temp_dir().join(format!("bus-cli-held-spool-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        r#"{"agent_id":2,"provider":"codex","launch_id":"launch"}"#,
+    )
+    .unwrap();
+    let locks: Vec<_> = ["append.lock", "diagnostics.lock"]
+        .into_iter()
+        .map(|name| {
+            let file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .read(true)
+                .write(true)
+                .open(dir.join(name))
+                .unwrap();
+            file.lock().unwrap();
+            file
+        })
+        .collect();
+    let payload = serde_json::json!({"hook_event_name":"Stop","session_id":"session",
+        "turn_id":"turn","transcript_path":"/tmp/held-spool.jsonl","last_assistant_message":"durable reply"});
+    let invoke = || {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bus"))
+            .args(["--bus-callback", "codex-hook"])
+            .env("BUS_DATA_DIR", dir.join("scratch-data"))
+            .env("BUS_CALLBACK_DIR", &dir)
+            .env("BUS_LAUNCH_ID", "launch")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let output = invoke();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"{}\n");
+    let pending: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(Result::unwrap)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("pending-"))
+        .collect();
+    assert_eq!(
+        pending.len(),
+        1,
+        "success while the lock is held requires a durable envelope"
+    );
+    let staged: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(pending[0].path()).unwrap()).unwrap();
+    assert_eq!(staged["value"], payload);
+    assert!(
+        !dir.join("sequence").exists(),
+        "the held lock must still fence publication"
+    );
+    drop(locks);
+    // The first process is gone; a retry can publish and deduplicate its envelope.
+    assert!(invoke().status.success());
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(!files
+        .iter()
+        .any(|e| e.file_name().to_string_lossy().starts_with("pending-")));
+    let events: Vec<_> = files
+        .iter()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("event-"))
+        .collect();
+    assert_eq!(events.len(), 1);
+    let event: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(events[0].path()).unwrap()).unwrap();
+    assert_eq!(event["sequence"], 1);
+    assert_eq!(event["value"], payload);
     std::fs::remove_dir_all(dir).unwrap();
 }

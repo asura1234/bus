@@ -20,7 +20,7 @@ pub(super) fn private_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn lock(path: &Path) -> io::Result<File> {
+pub(crate) fn try_append_lock(path: &Path) -> io::Result<File> {
     if !path.exists() {
         match fs::create_private_state_file(path) {
             Ok(file) => file.sync_all()?,
@@ -37,10 +37,15 @@ fn lock(path: &Path) -> io::Result<File> {
 pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
-        match lock(path) {
+        match try_append_lock(path) {
             Ok(file) => return Ok(file),
-            Err(error) if std::time::Instant::now() >= deadline => return Err(error),
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => return Err(error),
         }
     }
 }

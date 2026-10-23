@@ -14,7 +14,8 @@ use std::{
 #[path = "spool/files.rs"]
 mod files;
 pub(crate) use super::parse;
-pub(crate) use files::append_lock;
+use files::append_lock;
+pub(crate) use files::try_append_lock;
 
 #[path = "spool/parsed_event.rs"]
 mod parsed_event;
@@ -69,6 +70,8 @@ pub(crate) fn initialize(dir: &Path, manifest: &Manifest) -> io::Result<()> {
 
 pub(crate) fn boundary(dir: &Path) -> io::Result<u64> {
     let _lease = append_lock(&dir.join("append.lock"))?;
+    // A staged hook predates this submission even if its publisher was busy.
+    publish_pending(dir)?;
     read_counter(dir)
 }
 
@@ -92,7 +95,6 @@ pub(crate) fn append(
     if manifest.launch_id != launch || manifest.provider != provider {
         return Err(io::Error::other("Bus callback launch identity mismatch"));
     }
-    let _lease = append_lock(&dir.join("append.lock"))?;
     // Identical hooks share one spool file, so a hook retry counts once. A session
     // start also keys on its process chain: a restart resuming the same conversation
     // sends the exited process's bytes, and must not be folded into its record.
@@ -102,38 +104,103 @@ pub(crate) fn append(
         } else {
             digest(&serde_json::to_vec(&(launch, &value))?)
         };
-    let path = dir.join(format!("event-{id}.json"));
-    if path.exists() {
-        tracing::debug!(event = "bus.callback.duplicate", callback_id = %id, "Callback already spooled");
-        return Ok(());
-    }
-    let sequence = read_counter(dir)?
-        .checked_add(1)
-        .ok_or_else(|| io::Error::other("Bus callback sequence overflow"))?;
-    // Reserve durably before publishing. Gaps after a crash are harmless.
-    files::atomic_write(&dir.join("sequence"), sequence.to_string().as_bytes())?;
     let record = Record {
         id,
-        sequence,
+        sequence: 0,
         at_ms: now_ms(),
         manifest,
         value,
         reporter: reporter.to_vec(),
         nested_provider,
     };
-    files::atomic_write(&path, &serde_json::to_vec(&record)?)?;
-    tracing::info!(event = "bus.callback.spooled", callback_id = %record.id,
-        agent_id = record.manifest.routing_key.0, provider = ?provider, launch_id = launch,
-        sequence, kind = parse(provider, &record.value).map_or("invalid", |p| p.kind()),
-        "Provider callback persisted");
-    Ok(())
+    // Each attempt has its own name: another publisher must never unlink a
+    // duplicate retry's newer write. No shared lock precedes this durable copy.
+    static NEXT_PENDING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let pending = loop {
+        let candidate = dir.join(format!(
+            "pending-{}-{}.json",
+            std::process::id(),
+            NEXT_PENDING.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        // A previous process with a recycled pid may have left this name behind.
+        if !candidate.try_exists()? {
+            break candidate;
+        }
+    };
+    files::atomic_write(&pending, &serde_json::to_vec(&record)?)?;
+    try_publish_pending(dir, Some(&pending))
 }
 
 pub(crate) fn records(dir: &Path) -> io::Result<Vec<(PathBuf, Record)>> {
+    // Retry envelopes left by exited hook processes without blocking the poller.
+    try_publish_pending(dir, None)?;
+    read_records(dir, "event-")
+}
+
+fn try_publish_pending(dir: &Path, own: Option<&Path>) -> io::Result<()> {
+    let _lease = match try_append_lock(&dir.join("append.lock")) {
+        Ok(lease) => lease,
+        // The event is already durable. A later hook, poll or boundary retries it.
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if let Some(path) = own {
+        // Hooks do not drain a backlog within their provider's five-second budget.
+        // A consumer may already have published this envelope while we staged it.
+        match std::fs::read(path) {
+            Ok(bytes) => publish_record(dir, path, serde_json::from_slice(&bytes)?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    } else {
+        publish_pending(dir)
+    }
+}
+
+// Caller holds append.lock; sequence allocation and duplicate publication remain
+// serialized, with the same event wire format and acknowledgement path as before.
+fn publish_pending(dir: &Path) -> io::Result<()> {
+    let mut pending = read_records(dir, "pending-")?;
+    pending.sort_by(|a, b| (a.1.at_ms, &a.0).cmp(&(b.1.at_ms, &b.0)));
+    for (staged, record) in pending {
+        publish_record(dir, &staged, record)?;
+    }
+    Ok(())
+}
+
+fn publish_record(dir: &Path, staged: &Path, mut record: Record) -> io::Result<()> {
+    // A malformed staged record must not turn its id into an arbitrary path.
+    if record.id.is_empty() || !record.id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(io::Error::other("Invalid Bus callback id"));
+    }
+    let path = dir.join(format!("event-{}.json", record.id));
+    if path.exists() {
+        tracing::debug!(event = "bus.callback.duplicate", callback_id = %record.id, "Callback already spooled");
+    } else {
+        record.sequence = read_counter(dir)?
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("Bus callback sequence overflow"))?;
+        // Reserve durably before publishing. Gaps after a crash are harmless.
+        files::atomic_write(
+            &dir.join("sequence"),
+            record.sequence.to_string().as_bytes(),
+        )?;
+        files::atomic_write(&path, &serde_json::to_vec(&record)?)?;
+        tracing::info!(event = "bus.callback.spooled", callback_id = %record.id,
+                agent_id = record.manifest.routing_key.0, provider = ?record.manifest.provider,
+                launch_id = %record.manifest.launch_id, sequence = record.sequence,
+                kind = parse(record.manifest.provider, &record.value).map_or("invalid", |p| p.kind()),
+                "Provider callback persisted");
+    }
+    // A failed publication keeps its durable input for the next retry.
+    std::fs::remove_file(staged)
+}
+
+fn read_records(dir: &Path, prefix: &str) -> io::Result<Vec<(PathBuf, Record)>> {
     let mut result = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        if !entry.file_name().to_string_lossy().starts_with("event-")
+        if !entry.file_name().to_string_lossy().starts_with(prefix)
             || entry.path().extension().is_none_or(|e| e != "json")
         {
             continue;

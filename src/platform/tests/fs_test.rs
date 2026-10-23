@@ -63,7 +63,10 @@ fn exclusive_file_lock_is_released_on_drop() {
     let path = dir.join("lock");
     create_private_state_file(&path).unwrap();
     let lease = lock_file(&path).unwrap();
-    assert!(lock_file(&path).is_err());
+    assert_eq!(
+        lock_file(&path).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
     drop(lease);
     assert!(lock_file(&path).is_ok());
     assert!(lock_file(&dir.join("missing")).is_err());

@@ -87,7 +87,10 @@ pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
         .read(true)
         .write(true)
         .open(path)?;
-    file.try_lock().map_err(io::Error::other)?;
+    file.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
+        std::fs::TryLockError::Error(error) => error,
+    })?;
     Ok(file)
 }
 
