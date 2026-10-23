@@ -117,6 +117,29 @@ pub struct AgentDialogChooseParams {
     pub expected_session_id: Option<String>,
     pub expected_dialog_digest: String,
     pub option: u32,
+    /// Automatic UI actions separate navigation from confirmation. Omission
+    /// preserves ordinary choose behavior for existing callers.
+    #[serde(default, skip_serializing_if = "AgentDialogChoiceAction::is_choose")]
+    pub action: AgentDialogChoiceAction,
+}
+
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDialogChoiceAction {
+    #[default]
+    Choose,
+    /// Send only navigation arrows, never confirmation.
+    Focus,
+    /// Send Enter only if the requested option is already visibly selected.
+    Confirm,
+}
+
+impl AgentDialogChoiceAction {
+    fn is_choose(&self) -> bool {
+        *self == Self::Choose
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

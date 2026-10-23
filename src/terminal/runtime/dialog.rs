@@ -72,6 +72,20 @@ impl TerminalRuntime {
         expected_digest: &str,
         option: u32,
     ) -> Result<DialogChoice, String> {
+        self.try_control_dialog_option(
+            expected_digest,
+            option,
+            crate::protocol::api::schema::AgentDialogChoiceAction::Choose,
+        )
+    }
+
+    pub(crate) fn try_control_dialog_option(
+        &self,
+        expected_digest: &str,
+        option: u32,
+        action: crate::protocol::api::schema::AgentDialogChoiceAction,
+    ) -> Result<DialogChoice, String> {
+        use crate::protocol::api::schema::AgentDialogChoiceAction as Action;
         let (_content_write_guard, dialog) =
             match self.lock_observed_dialog(expected_digest, "choose") {
                 Ok(observed) => observed,
@@ -80,10 +94,25 @@ impl TerminalRuntime {
         let Some(keys) = dialog.keys_for(option) else {
             return Ok(DialogChoice::Unreachable);
         };
+        // Automation never schedules a delayed Enter. A later observation
+        // must prove that the same dialog redrew with the target selected.
+        let keys = match action {
+            Action::Choose => keys,
+            Action::Focus => match keys.split_last() {
+                Some((&"enter", moves))
+                    if moves.iter().all(|key| matches!(*key, "up" | "down")) =>
+                {
+                    moves.to_vec()
+                }
+                _ => return Ok(DialogChoice::Unreachable),
+            },
+            Action::Confirm if keys == ["enter"] => keys,
+            Action::Confirm => return Ok(DialogChoice::Unreachable),
+        };
         let encode = |key: &str| self.encode_dialog_key(key);
         match keys.split_last() {
             // Moves then Enter: confirm only after the TUI redrew the selection.
-            Some((enter, moves)) if !moves.is_empty() => {
+            Some((enter, moves)) if action == Action::Choose && !moves.is_empty() => {
                 let moves: Vec<u8> = moves.iter().flat_map(|key| encode(key)).collect();
                 self.io
                     .queue_user_input_submission(

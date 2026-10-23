@@ -44,6 +44,9 @@ impl Worker {
         state
             .set_dialog_notice(id, None)
             .map_err(|error| error.to_string())?;
+        state
+            .set_automatic_dialog_answer(id, None)
+            .map_err(|error| error.to_string())?;
         self.save(state)?;
         self.dialog_seen.remove(&id);
         Ok(())
@@ -71,16 +74,20 @@ impl Worker {
             let Some(agent) = self.state.agent(id) else {
                 continue;
             };
-            if !steady || agent.deletion_pending {
+            // A coherent close retires an automatic reservation immediately;
+            // ordinary help notices keep their existing steady-poll policy.
+            if agent.deletion_pending
+                || !(steady || wait.is_none() && agent.automatic_dialog_answer.is_some())
+            {
                 continue;
             }
             let notice = agent.dialog_notice.clone();
-            if wait.is_none() && notice.is_none() {
+            if wait.is_none() && notice.is_none() && agent.automatic_dialog_answer.is_none() {
                 continue;
             }
             // Native ids change with question/command text and options, but
             // ignore selection redraws. A changed id needs another answer.
-            let starts = wait.is_some();
+            let mut verified_shape = wait.clone();
             if wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
                 // AgentList metadata can outlive an answer or manual close.
                 // Never open a pending panel or send keys while verifying.
@@ -91,7 +98,11 @@ impl Worker {
                         continue;
                     };
                     if current.dialog.is_none() && !current.pending_question {
-                        self.finish_closed_dialog(id)?;
+                        if steady {
+                            self.finish_closed_dialog(id)?;
+                        } else {
+                            self.clear_automatic_dialog_answer(id)?;
+                        }
                         continue;
                     }
                     // Missing list metadata can be an unreadable redraw. An
@@ -100,6 +111,7 @@ impl Worker {
                         continue;
                     }
                     if let Some(dialog) = current.dialog {
+                        verified_shape = Some(dialog.id.clone());
                         if wait.as_deref() != Some(BLOCKED)
                             && wait.as_deref() != Some(dialog.id.as_str())
                         {
@@ -109,9 +121,15 @@ impl Worker {
                     }
                 }
             }
+            if !steady {
+                continue;
+            }
             if wait.is_none() {
                 // Keep the existing fallback for agents without a bound pane.
                 self.finish_closed_dialog(id)?;
+                continue;
+            }
+            if self.auto_answer_dialog(id, verified_shape.as_deref())? {
                 continue;
             }
             if notice == wait {
@@ -123,11 +141,7 @@ impl Worker {
                 continue;
             }
             let mut state = self.state.clone();
-            let to = if starts {
-                post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?
-            } else {
-                None
-            };
+            let to = post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;
             state
                 .set_dialog_notice(id, wait)
                 .map_err(|error| error.to_string())?;
@@ -205,3 +219,7 @@ pub(super) fn post_dialog_notice(
 #[cfg(test)]
 #[path = "tests/dialogs_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/auto_ui_test.rs"]
+mod auto_ui_tests;

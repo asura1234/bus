@@ -1,0 +1,29 @@
+{
+  "id": "6105abde0622e6a34d10c0743d1ad884f13286da890fb7882cf0618c7fbf83a8",
+  "digest": "26eb64c2851d6b24a370223ba0c9ae0a8731ab2efe83de0dcfd2f93bf660c8f1",
+  "kind": "choice",
+  "hint": null,
+  "text": "Giving this request a little extra thought\nIf you'd rather not wait, retry with a faster model. It may be less capable of handling complex requests.",
+  "options": [
+    {
+      "number": 1,
+      "label": "Retry with a faster model",
+      "selected": true,
+      "free_text": false
+    },
+    {
+      "number": 2,
+      "label": "Dismiss and keep waiting",
+      "selected": false,
+      "free_text": false
+    },
+    {
+      "number": 3,
+      "label": "Learn more",
+      "selected": false,
+      "free_text": false
+    }
+  ],
+  "free_text": null,
+  "tabs": []
+}

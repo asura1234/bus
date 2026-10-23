@@ -352,6 +352,9 @@ pub(crate) struct RoomAgent {
     /// Who was told about the reported dialog, so its resolution follows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dialog_notice_to: Option<DialogNoticeTo>,
+    /// Identity-bound native UI episode reserved before an automatic answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) automatic_dialog_answer: Option<String>,
     pub(crate) actionable_error: Option<String>,
     /// The update failure the agent's terminal reported, shown as
     /// `actionable_error`. Saved, so the error still clears once the update is
