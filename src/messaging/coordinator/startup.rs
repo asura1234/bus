@@ -24,7 +24,6 @@ impl Worker {
                         .ok_or("Cannot describe the provider launch command")?,
                     started_at_ms,
                     reported: false,
-                    preserve_on_failure: false,
                 }),
             )
             .map_err(|e| e.to_string())?;
@@ -115,7 +114,6 @@ impl Worker {
                 // The persisted marker deduplicates this blocker across restarts.
                 self.save(state)?;
             }
-
         }
         Ok(())
     }

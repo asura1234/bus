@@ -296,10 +296,8 @@ pub(super) const MASTER_ROOM_ID: RoomId = RoomId(0);
 pub(crate) struct AgentStartup {
     pub(crate) command: String,
     pub(crate) started_at_ms: u64,
-    /// Saved with the notice before deletion to prevent duplicate reports.
+    /// A reported startup failure holds its queue until readiness confirms recovery.
     pub(crate) reported: bool,
-    #[serde(default)]
-    pub(crate) preserve_on_failure: bool,
 }
 
 /// Where an agent's blocked notice went.

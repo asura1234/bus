@@ -162,6 +162,9 @@ impl Worker {
         state
             .clear_missing_binary(agent.id, super::io::now_ms())
             .map_err(|e| e.to_string())?;
+        state
+            .set_agent_error(agent.id, None)
+            .map_err(|e| e.to_string())?;
         self.save(state)?;
         self.report_adopted_session(
             agent.id,
@@ -191,7 +194,6 @@ impl Worker {
             .and_then(|a| a.startup.clone())
             .ok_or("Resume startup was not saved")?;
         startup.started_at_ms = super::io::now_ms();
-        startup.preserve_on_failure = true;
         state
             .set_agent_startup(id, Some(startup))
             .map_err(|e| e.to_string())?;

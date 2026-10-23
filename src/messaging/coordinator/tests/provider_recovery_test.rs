@@ -164,7 +164,7 @@ fn room_resume_preserves_the_session_queue_and_capture_and_refuses_an_unsafe_clo
                 saved.runtime_identity.terminal_id.as_deref(),
                 Some("new-terminal")
             );
-            assert!(saved.startup.as_ref().unwrap().preserve_on_failure);
+            assert!(!saved.startup.as_ref().unwrap().reported);
         }
         drop(launched);
         drop(worker);
@@ -341,6 +341,7 @@ fn room_blocker_from_a_failed_add_clears_once_room_resume_runs_with_no_held_agen
 fn resumed_agent_after_binary_outage_reports_a_failed_startup() {
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "retained failed-resume task");
     let hooks = dir.join(".codex/hooks.json");
     let document = merge_hooks(
         json!({}),
@@ -365,15 +366,37 @@ fn resumed_agent_after_binary_outage_reports_a_failed_startup() {
         .unwrap();
     let saved = worker.state.agent(agent).unwrap();
     assert!(
-        saved.startup.is_none(),
-        "the failed resume launch must be settled, not left pending"
+        saved.startup.as_ref().is_some_and(|s| s.reported),
+        "master's reported watch settles the failed resume and holds its queue"
     );
-    assert!(
+    assert_eq!(
+        saved.runtime_identity.session_id.as_deref(),
+        Some("session")
+    );
+    assert_eq!(saved.runtime_identity.launch_id.as_deref(), Some("launch"));
+    assert!(saved
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .contains("Startup failed"));
+    worker
+        .cleanup_failed_startups(&[], &std::sync::mpsc::channel().0, u64::MAX)
+        .unwrap();
+    worker
+        .expire_queued_requests(io::now_ms() + 180_000)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert_eq!(
         worker
             .state
             .notices(room)
-            .any(|n| n.text.contains("Startup failed")),
-        "a failed resume after an outage must be reported"
+            .filter(|n| n.text.contains("Startup failed"))
+            .count(),
+        1,
+        "a reported failed resume must not post duplicate notices"
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -474,4 +497,88 @@ fn deleting_the_last_missing_binary_holder_resolves_the_room_fact() {
         .all(|key| !key.starts_with("provider-block:")));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+struct GenericStartupRecovery(RecoveryNative);
+impl Transport for GenericStartupRecovery {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if let Method::PaneRead(p) = method {
+            return Ok(ResponseResult::PaneRead { read: serde_json::from_value(json!({
+                "pane_id":p.pane_id, "workspace_id":"w1", "tab_id":"t1", "source":"recent", "format":"text",
+                "revision":1, "text":"Provider startup failed before readiness\n", "truncated":false, "returned_lines":1
+            })).unwrap() });
+        }
+        self.0.request(method)
+    }
+}
+
+#[test]
+fn confirmed_room_resume_clears_the_previous_startup_error() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    for refuse_close in [false, true] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let request = queue(&mut worker, room, agent, "retained generic failure task");
+        let hooks = dir.join(".codex/hooks.json");
+        let document = merge_hooks(
+            json!({}),
+            HookContract::for_provider(Provider::Codex),
+            &std::env::current_exe().unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+        std::fs::write(&hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+        let mut state = worker.state.clone();
+        state
+            .set_agent_error(
+                agent,
+                Some("Startup failed: prior launch; identity and queue retained".into()),
+            )
+            .unwrap();
+        state
+            .set_agent_startup(
+                agent,
+                Some(crate::messaging::model::AgentStartup {
+                    command: "codex".into(),
+                    started_at_ms: 1,
+                    reported: true,
+                }),
+            )
+            .unwrap();
+        worker.save(state).unwrap();
+        worker.transport = Box::new(GenericStartupRecovery(RecoveryNative {
+            starts: Arc::default(),
+            refuse_close,
+        }));
+        let result = worker.resume_room(room).unwrap();
+        assert_eq!(
+            result["agents"][0]["outcome"],
+            if refuse_close { "blocked" } else { "resuming" }
+        );
+        let saved = worker.state.agent(agent).unwrap();
+        assert!(saved.missing_binary.is_none());
+        if refuse_close {
+            assert!(saved
+                .actionable_error
+                .as_deref()
+                .unwrap()
+                .contains("prior launch"));
+            assert!(saved.startup.as_ref().unwrap().reported);
+        } else {
+            assert!(
+                saved.actionable_error.is_none(),
+                "a confirmed explicit relaunch must clear the prior startup error"
+            );
+            assert!(!saved.startup.as_ref().unwrap().reported);
+        }
+        assert_eq!(
+            saved.runtime_identity.session_id.as_deref(),
+            Some("session")
+        );
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
