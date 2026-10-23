@@ -323,6 +323,7 @@ impl Worker {
         &mut self,
         call: crate::messaging::control::server::ControlCall,
         events: &mpsc::Sender<BusEvent>,
+        snapshots: &Mutex<Arc<BusSnapshot>>,
     ) {
         if call
             .deadline
@@ -344,6 +345,13 @@ impl Worker {
             started.elapsed(),
             perf::control_method_label(&call.request.method),
         );
+        // Publish even a failed mutation's durable pending state before its
+        // reply. The following tick can block on native IO or callbacks.
+        if control_dispatch::is_mutation(&call.request.method) {
+            if let Ok(mut shared) = snapshots.lock() {
+                *shared = self.timed_snapshot();
+            }
+        }
         // A disconnected client does not cancel or replay a committed action.
         let _ = call.reply.try_send(response);
     }
@@ -385,7 +393,7 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
-                    self.serve_control(call, &events);
+                    self.serve_control(call, &events, &snapshots);
                 }
                 Ok((id, command)) => {
                     let submitting =
