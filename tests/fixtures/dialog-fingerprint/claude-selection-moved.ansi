@@ -1,0 +1,45 @@
+[0mClaude Code's fullscreen renderer didn't finish starting last time on this machine, so this launch is using the classic renderer. It w[0m
+[0mill try fullscreen again next launch; /tui default keeps the classic renderer.[0m
+[0mu[0m▐▛███▛█[0m   [0mClaude[0m [0mCode[0m [0mv2.1.309[0m
+[0m▝▜██████▀[0m  [0mOpus[0m [0m5.5[0m [0m(1M[0m [0mcontext)[0m [0mwith[0m [0mmedium[0m [0meffort[0m [0m·[0m [0mClaude[0m [0mTeam[0m
+[0m [0m▝▝[0m   [0m▝▝[0m   [0m/private/tmp/bus-stale-dialog-claude[0m
+[0m
+[0m
+[0m❯ Terminal UI capture only. Do not edit files, run commands, use skills, or delegate. Use AskUserQuestion now with a single question[0m
+[0m  Which capture mode should Bus use? and two options Plain screen and ANSI screen. Wait for my answer.[0m
+[0m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+[0m ☐ Capture[0m
+[0m
+[0mWhich capture mode should Bus use?[0m
+[0m
+[0m  1. Plain screen[0m
+[0m  [0m   Capture the terminal[0m [0mscreen as plain text without[0m [0mANSI[0m [0mescape[0m [0mcodes.[0m
+[0m❯[0m [0m2. ANSI[0m [0mscreen[0m
+[0m  [0m  [0m [0mCapture the terminal screen including[0m [0mANSI escape[0m [0mcodes[0m [0m(colors,[0m [0mstyles).[0m
+[0m  [0m3.[0m [0mType[0m [0msomething.[0m
+[0m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+[0m  [0m4.[0m [0mChat[0m [0mabout[0m [0mthis[0m
+[0m
+[0mEnter[0m [0mto[0m [0mselect[0m [0m·[0m [0m↑/↓[0m [0mto[0m [0mnavigate[0m [0m·[0m [0mEsc[0m [0mto[0m [0mcancel[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m

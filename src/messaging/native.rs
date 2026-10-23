@@ -107,7 +107,7 @@ fn classify_error(error: ApiClientError) -> TransportError {
     // withdrew a paste it never submitted. Every other failure, including an IO
     // error after partial send, leaves submission ownership intact.
     let definitely_rejected = matches!(&error, ApiClientError::ErrorResponse(response) if matches!(response.error.code.as_str(),
-        "agent_not_idle" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request")
+        "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request")
         || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN);
     TransportError {
         code: match &error {
@@ -216,6 +216,9 @@ mod tests {
         );
         for (code, rejected) in [
             ("agent_not_idle", true),
+            ("dialog_redrawing", true),
+            ("dialog_observation_unavailable", false),
+            ("dialog_write_failed", false),
             ("invalid_request", true),
             ("unknown_method", true),
             ("agent_prompt_not_shown", true),

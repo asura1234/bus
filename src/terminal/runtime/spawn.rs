@@ -13,6 +13,7 @@ use crate::terminal::runtime::read::{pty_read_callback, PtyReadContext};
 use crate::terminal::runtime::AgentDetection;
 use crate::terminal::runtime::TerminalRuntime;
 use crate::utils::ids::PaneId;
+use crate::utils::logging::pane_spawn_started;
 use crate::utils::render::signal::RenderSignal;
 use bytes::Bytes;
 use portable_pty::native_pty_system;
@@ -710,12 +711,7 @@ impl TerminalRuntime {
         initial_state: SpawnInitialState<'_>,
         agent_detection: AgentDetection,
     ) -> std::io::Result<Self> {
-        crate::utils::logging::pane_spawn_started(
-            pane_id.raw(),
-            rows,
-            cols,
-            scrollback_limit_bytes,
-        );
+        pane_spawn_started(pane_id.raw(), rows, cols, scrollback_limit_bytes);
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
         let terminal = initialize_pane_terminal(
@@ -812,6 +808,8 @@ impl TerminalRuntime {
             kitty_keyboard_flags,
             content_seq,
             content_write_lock,
+            #[cfg(test)]
+            dialog_wait_test: Mutex::default(),
             detection_content_seq,
             managed_launch_pending,
             preserve_processes_on_drop: false,

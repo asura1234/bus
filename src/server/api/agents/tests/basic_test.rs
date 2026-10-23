@@ -306,3 +306,6 @@ fn agent_rename_does_not_replace_the_pane_label() {
         );
     }
 }
+
+#[path = "fingerprint_test.rs"]
+mod fingerprint_tests;

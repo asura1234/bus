@@ -320,6 +320,11 @@ impl Worker {
                 ))
             }
             Ok(_) => return Err("Unexpected native dialog response; outcome is uncertain".into()),
+            Err(error) if error.code.as_deref() == Some("dialog_redrawing") => {
+                return Err(
+                    "No keys were sent (dialog_redrawing); observe the dialog again".into(),
+                );
+            }
             Err(error) => {
                 return Err(format!(
                     "Dialog answer outcome is uncertain: {}",
@@ -328,11 +333,22 @@ impl Worker {
             }
         };
         self.record_dialog_answer(id, option)?;
+        self.settle_written_dialog_answer(id, option, skip, keys, &claims)
+    }
+
+    fn settle_written_dialog_answer(
+        &mut self,
+        id: AgentId,
+        option: Option<u32>,
+        skip: bool,
+        keys: Vec<String>,
+        claims: &DialogFingerprintClaims,
+    ) -> Result<Value, String> {
         let (outcome, after) = self.settle_dialog_answer(
-            &pane_id,
-            &terminal_id,
-            session_id.as_deref(),
-            &claims,
+            &claims.pane_id,
+            &claims.terminal_id,
+            claims.session_id.as_deref(),
+            claims,
             option.is_some(),
         );
         if outcome == "closed" {

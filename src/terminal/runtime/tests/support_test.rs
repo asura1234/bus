@@ -75,8 +75,46 @@ mod shutdown;
 #[path = "spawn_test.rs"]
 mod spawn;
 
+#[derive(Default)]
+pub(super) struct DialogWaitTest {
+    timeout: Option<std::time::Duration>,
+    observed: Option<std::sync::mpsc::Sender<()>>,
+}
+
 #[cfg(test)]
 impl TerminalRuntime {
+    /// Arm a one-shot signal for the first unfinished frame the guard sees.
+    /// Only this runtime's tests receive the generous completion budget.
+    pub(crate) fn test_observe_dialog_redraw(
+        &self,
+        timeout: std::time::Duration,
+    ) -> std::sync::mpsc::Receiver<()> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        *self.dialog_wait_test.lock().unwrap() = DialogWaitTest {
+            timeout: Some(timeout),
+            observed: Some(sender),
+        };
+        receiver
+    }
+
+    pub(super) fn test_dialog_wait_timeout(
+        &self,
+        default: std::time::Duration,
+    ) -> std::time::Duration {
+        self.dialog_wait_test
+            .lock()
+            .unwrap()
+            .timeout
+            .unwrap_or(default)
+    }
+
+    pub(super) fn test_signal_dialog_redraw(&self) {
+        let sender = self.dialog_wait_test.lock().unwrap().observed.take();
+        if let Some(sender) = sender {
+            let _ = sender.send(());
+        }
+    }
+
     pub(crate) fn test_with_channel(cols: u16, rows: u16) -> (Self, mpsc::Receiver<Bytes>) {
         Self::test_with_channel_and_scrollback_bytes(cols, rows, 0, &[], 4)
     }
@@ -105,6 +143,22 @@ impl TerminalRuntime {
             .process_pty_bytes(self.pane_id, 0, bytes, &tx, |_| None);
         self.content_seq.fetch_add(1, Ordering::Release);
         self.compression.wake();
+    }
+
+    /// A detached PTY chunk writer for tests that finish a frame while the
+    /// server's guarded write is waiting. Uses the same content lock and seq.
+    pub(crate) fn test_pty_writer(&self) -> impl Fn(&[u8]) + Send + 'static {
+        let terminal = self.terminal.clone();
+        let lock = self.content_write_lock.clone();
+        let seq = self.content_seq.clone();
+        let pane = self.pane_id;
+        move |bytes| {
+            let _guard = lock.lock().unwrap_or_else(|error| error.into_inner());
+            seq.fetch_add(1, Ordering::AcqRel);
+            let (tx, _rx) = mpsc::channel(1);
+            let _ = terminal.process_pty_bytes(pane, 0, bytes, &tx, |_| None);
+            seq.fetch_add(1, Ordering::Release);
+        }
     }
 
     pub(crate) fn test_with_scrollback_bytes(
@@ -149,6 +203,7 @@ impl TerminalRuntime {
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 content_seq: Arc::new(AtomicU64::new(0)),
                 content_write_lock: Arc::new(Mutex::new(())),
+                dialog_wait_test: Mutex::default(),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),
                 preserve_processes_on_drop: true,

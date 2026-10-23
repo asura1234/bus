@@ -11,6 +11,8 @@ pub(crate) enum DialogChoice {
     Sent(Vec<String>),
     /// The visible dialog no longer matches the caller's observation.
     Stale,
+    /// No coherent completed frame arrived before the bounded redraw wait.
+    Redrawing,
     /// The option does not exist or the current selection is not visible.
     Unreachable,
     /// Text answering needs a free-text question or field.
@@ -25,6 +27,25 @@ pub(crate) enum DialogChoice {
 }
 
 impl TerminalRuntime {
+    /// Log only hashes and metadata from the exact snapshot being checked.
+    pub(crate) fn trace_dialog_fingerprint(
+        &self,
+        dialog: Option<&crate::agents::dialog::Dialog>,
+        phase: &str,
+        expected_digest: Option<&str>,
+        content_revision: u64,
+        synchronized_output: bool,
+    ) {
+        crate::agents::dialog::trace_fingerprint(
+            dialog,
+            phase,
+            expected_digest,
+            content_revision,
+            self.pane_id.raw(),
+            synchronized_output,
+        );
+    }
+
     /// Open only the live Codex queue under the same lock as terminal updates.
     pub(crate) fn try_open_pending_codex_question(&self) -> Result<(), String> {
         let _guard = self
@@ -51,15 +72,11 @@ impl TerminalRuntime {
         expected_digest: &str,
         option: u32,
     ) -> Result<DialogChoice, String> {
-        let _content_write_guard = match self.content_write_lock.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped())
-            .filter(|dialog| dialog.digest() == expected_digest)
-        else {
-            return Ok(DialogChoice::Stale);
-        };
+        let (_content_write_guard, dialog) =
+            match self.lock_observed_dialog(expected_digest, "choose") {
+                Ok(observed) => observed,
+                Err(reason) => return Ok(reason),
+            };
         let Some(keys) = dialog.keys_for(option) else {
             return Ok(DialogChoice::Unreachable);
         };
@@ -87,6 +104,59 @@ impl TerminalRuntime {
         Ok(DialogChoice::Sent(
             keys.into_iter().map(str::to_owned).collect(),
         ))
+    }
+
+    /// The content lock spans a PTY chunk, not a synchronized frame. Release
+    /// it while waiting so the PTY reader can complete its repaint, then keep
+    /// it through parse, exact-digest check and key enqueueing.
+    fn lock_observed_dialog(
+        &self,
+        expected_digest: &str,
+        phase: &str,
+    ) -> Result<(std::sync::MutexGuard<'_, ()>, crate::agents::dialog::Dialog), DialogChoice> {
+        use std::time::{Duration, Instant};
+        let timeout = Duration::from_millis(40);
+        #[cfg(test)]
+        let timeout = self.test_dialog_wait_timeout(timeout);
+        let deadline = Instant::now() + timeout;
+        loop {
+            let guard = self
+                .content_write_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let synchronized = self.synchronized_output_active();
+            let revision = self.content_seq();
+            if synchronized || !revision.is_multiple_of(2) {
+                drop(guard);
+                #[cfg(test)]
+                self.test_signal_dialog_redraw();
+                if Instant::now() >= deadline {
+                    tracing::debug!(
+                        event = "bus.dialog.redrawing",
+                        phase,
+                        pane = self.pane_id.raw(),
+                        content_revision = revision,
+                        synchronized_output = synchronized,
+                        "No completed dialog frame before the guarded-write deadline"
+                    );
+                    return Err(DialogChoice::Redrawing);
+                }
+                std::thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+            let dialog = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped());
+            self.trace_dialog_fingerprint(
+                dialog.as_ref(),
+                phase,
+                Some(expected_digest),
+                revision,
+                false,
+            );
+            return dialog
+                .filter(|dialog| dialog.digest() == expected_digest)
+                .map(|dialog| (guard, dialog))
+                .ok_or(DialogChoice::Stale);
+        }
     }
 
     fn encode_dialog_key(&self, key: &str) -> Vec<u8> {
@@ -134,15 +204,11 @@ impl TerminalRuntime {
             text.as_deref(),
             skip,
         )?;
-        let _content_write_guard = match self.content_write_lock.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi_unwrapped())
-            .filter(|dialog| dialog.digest() == expected_digest)
-        else {
-            return Ok(DialogChoice::Stale);
-        };
+        let (_content_write_guard, dialog) =
+            match self.lock_observed_dialog(expected_digest, "answer") {
+                Ok(observed) => observed,
+                Err(reason) => return Ok(reason),
+            };
         let Some(input) = dialog.input.as_ref() else {
             return self.answer_free_text_option(&dialog, text, skip);
         };

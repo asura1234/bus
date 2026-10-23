@@ -1,0 +1,45 @@
+[0m
+[0m  >_ [0;1mOpenAI Codex[0m (v0.164.0)[0m
+[0m     /private/tmp/bus-stale-dialog-codex[0m
+[0m  permissions: [0;1mYOLO mode[0m
+[0m
+[0m  To get started, describe a task or try one of these commands:[0m
+[0m
+[0m  /init - create an AGENTS.md file with instructions for Codex[0m
+[0m  /status - show current session configuration[0m
+[0m  /permissions - choose what Codex is allowed to do[0m
+[0m  /model - choose what model and reasoning effort to use[0m
+[0m  /review - review any changes and find issues[0m
+[0m
+[0m
+[0;1m› [0mTerminal UI capture only. Do not edit files, use skills, or delegate. Call request_user_input_async once with title Which capture[0m
+[0m  mode should Bus use? and options Plain screen and ANSI screen. Then continue working by running sleep 180, leaving the question[0m
+[0m  unanswered. Reply done only after the sleep.[0m
+[0m
+[0m
+[0m• I’ll open the capture-mode question, then run the 180-second sleep without answering it.[0m
+[0m
+[0m• Which capture mode should Bus use?[0m
+[0m
+[0m  • Plain screen[0m
+[0m  • ANSI screen[0m
+[0m
+[0m• The sleep is still running; the question remains unanswered.[0m
+[0m
+[0m• Still waiting for the 180-second sleep to finish.[0m
+[0m
+[0m
+[0m
+[0m• Working (2m 31s • [0;1mesc[0m to interrupt) · 1 background terminal running · /ps to view · /stop to close[0m
+[0m
+[0m• Queued follow-up inputs[0m
+[0m
+[0m
+[0m  Which capture mode should Bus use?[0m
+[0m
+[0m    1. Plain screen[0m
+[0m  [0;1;7m› 2. ANSI screen[0m
+[0m    3. Other[0m
+[0m
+[0m  [0;1menter[0m submit   [0;1m⌃][0m skip   [0;1m⇧→[0m main prompt[0m
+[0m

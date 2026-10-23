@@ -82,6 +82,13 @@ impl App {
         let (keys, reason) =
             match runtime.try_choose_dialog_option(&params.expected_dialog_digest, params.option) {
                 Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
+                Ok(crate::terminal::runtime::DialogChoice::Redrawing) => {
+                    return encode_error(
+                        id,
+                        "dialog_redrawing",
+                        "No keys were sent; dialog is redrawing; observe it again",
+                    );
+                }
                 Ok(crate::terminal::runtime::DialogChoice::Stale) => {
                     (Vec::new(), Some("stale_or_changed_dialog"))
                 }
@@ -158,6 +165,13 @@ impl App {
             params.skip,
         ) {
             Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::terminal::runtime::DialogChoice::Redrawing) => {
+                return encode_error(
+                    id,
+                    "dialog_redrawing",
+                    "No keys were sent; dialog is redrawing; observe it again",
+                );
+            }
             Ok(crate::terminal::runtime::DialogChoice::Stale) => {
                 (Vec::new(), Some("stale_or_changed_dialog"))
             }
@@ -208,6 +222,7 @@ fn dialog_observation(
     let pending_question = agent.agent.as_deref() == Some("codex")
         && crate::agents::dialog::codex_question_pending(&screen);
     let dialog = crate::agents::dialog::parse(&screen);
+    runtime.trace_dialog_fingerprint(dialog.as_ref(), "observe", None, content_revision, false);
     tracing::debug!(
         event = "bus.dialog.observed",
         terminal_id = %agent.terminal_id,
