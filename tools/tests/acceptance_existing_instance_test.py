@@ -373,5 +373,32 @@ class EndToEndReportTests(unittest.TestCase):
         self.assertTrue(row["last_status"]["complete"])
 
 
+class EndToEndBackgroundReplyTests(unittest.TestCase):
+    def test_background_result_requires_the_later_turn_and_retains_the_interim(self):
+        interim = {"text": "INTERIM_FINAL_TOKEN", "provider_session_id": "session",
+                   "provider_turn_id": "initial-turn", "received_at_ms": 10}
+        request = {"shell_hold": {"interim": interim}}
+        reply = {"text": "FINAL_TOKEN", "provider_session_id": "session",
+                 "provider_turn_id": "wake-turn", "received_at_ms": 20}
+        before = json.dumps(request, sort_keys=True)
+        self.assertEqual(e2e.verify_background_reply(request, reply),
+                         {"interim": interim, "final": reply})
+        self.assertEqual(json.dumps(request, sort_keys=True), before)
+
+    def test_background_result_rejects_interim_notices_and_unrelated_turns(self):
+        interim = {"text": "INTERIM_FINAL_TOKEN", "provider_session_id": "session",
+                   "provider_turn_id": "initial-turn", "received_at_ms": 10}
+        reply = {"text": "FINAL_TOKEN", "provider_session_id": "session",
+                 "provider_turn_id": "wake-turn", "received_at_ms": 20}
+        for change in ({"text": "INTERIM_FINAL_TOKEN"}, {"text": "Sleep finished."},
+                       {"provider_turn_id": "initial-turn"}, {"provider_session_id": "other"},
+                       {"received_at_ms": 9}):
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                e2e.verify_background_reply({"shell_hold": {"interim": interim}},
+                                            {**reply, **change})
+        with self.assertRaises(AssertionError):
+            e2e.verify_background_reply({}, reply)
+
+
 if __name__ == "__main__":
     unittest.main()
