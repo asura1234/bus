@@ -742,19 +742,17 @@ async fn recorded_native_resume(label: &str, kind: crate::agents::AgentKind) -> 
 
 #[test]
 fn native_resume_runtime_defaults_preserve_literal_tails_and_owned_capture_extras() {
-    use crate::messaging::coordinator::resume::LaunchExtras;
     for label in ["codex", "cursor", "claude", "pi"] {
         let plan = crate::agents::resume::catalog::AgentResumePlan {
             agent: label.into(),
             argv: vec![label.into(), "--".into(), "literal --no-daemon".into()],
             dedupe_key: "saved".into(),
         };
-        let extras = LaunchExtras {
-            args: vec!["--capture-marker".into()],
-            env: vec![("CAPTURE_MARKER".into(), "owned".into())],
-            ..Default::default()
-        };
-        let (argv, env) = super::resume_launch_inputs(&plan, extras);
+        let (argv, env) = super::native_resume_launch_inputs_for_test(
+            &plan,
+            vec!["--capture-marker".into()],
+            vec![("CAPTURE_MARKER".into(), "owned".into())],
+        );
         assert_eq!(argv[0], label);
         assert_eq!(
             env.iter().find(|(k, _)| k == "CAPTURE_MARKER").unwrap().1,

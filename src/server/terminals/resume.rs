@@ -465,6 +465,22 @@ fn terminal_resume_identity_for_test(
 }
 
 #[cfg(test)]
+fn native_resume_launch_inputs_for_test(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+) -> (Vec<String>, Vec<(String, String)>) {
+    resume_launch_inputs(
+        plan,
+        LaunchExtras {
+            args,
+            env,
+            ..Default::default()
+        },
+    )
+}
+
+#[cfg(test)]
 fn native_resume_is_empty_for_test(
     terminal: &crate::terminal::TerminalState,
     plan: &crate::agents::resume::catalog::AgentResumePlan,
