@@ -68,6 +68,7 @@ edit or submit the draft in the agent's pane.
 Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by an agent; --to all then skips it.
+Current agent names are unique across all rooms, including MASTER; add/rename reject duplicates.
 Any agent can message any other agent across rooms. IDs resolve globally; names prefer
 the conversation --room, then its home room, then all rooms, with candidate IDs and rooms on ambiguity.
 Only when no live candidate matches, removed recipient IDs/names forward to a unique same-name

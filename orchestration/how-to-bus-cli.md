@@ -78,7 +78,7 @@ session. Bus rejects relative paths.
 ## Create a room and add an agent
 
 Every control command emits one JSON object. The examples below use `jq` to
-capture IDs, because numeric IDs remain unambiguous even when names are reused.
+capture IDs, because IDs stay stable when an agent is renamed or replaced.
 
 ```sh
 room_id=$(bus room create "feature-work" | jq -r '.result.room_id')
@@ -90,6 +90,16 @@ agent_id=$(bus agent add \
   --pwd "$(pwd)" \
   | jq -r '.result.agent_id')
 ```
+
+Current agent names are unique across every room in a session, including MASTER.
+Names are case-sensitive and surrounding whitespace is trimmed. Creation and rename
+reject a name already used by another current agent, reporting its ID and room.
+A name becomes available after its agent is fully deleted; historical identities remain.
+
+When resuming an older session with duplicates, the lowest-ID agent keeps its name.
+Later duplicates receive `NAME-ID` (or a numbered suffix if that name is taken).
+Existing distinct names, IDs, provider sessions, room bindings and queued work stay
+intact. Each rename is recorded once in its home room history before clients connect.
 
 Supported providers are `claude`, `codex`, and `cursor`. `--pwd` selects the
 agent's working directory. Use `--args STRING` for provider-specific launch
