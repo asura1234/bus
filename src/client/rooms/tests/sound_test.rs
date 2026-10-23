@@ -157,6 +157,32 @@ fn settings_lists_master_sound_above_every_work_room() {
 }
 
 #[test]
+fn developer_sound_picker_keeps_long_name_controls_inside_settings_list() {
+    let (mut ui, _, _) = sound_fixture(0);
+    let sound_name = "A long installed notification sound ".repeat(3);
+    ui.system_sounds = Some(vec![sound_name.clone()]);
+    ui.settings.developer_sound = Some(sound_name);
+    ui.action(render::Action::Settings);
+    ui.compute_view(100, 55);
+    let list = ui.view.settings_list;
+    let controls: Vec<_> = ui
+        .view
+        .hits
+        .iter()
+        .filter(|hit| matches!(hit.action, render::Action::CycleDeveloperSound(_)))
+        .collect();
+    assert_eq!(controls.len(), 2);
+    for control in controls {
+        assert!(
+            control.rect.x >= list.x && control.rect.right() <= list.right(),
+            "developer sound control {:?} exceeds Settings list {:?}",
+            control.rect,
+            list
+        );
+    }
+}
+
+#[test]
 fn settings_keyboard_and_mouse_toggle_room_sound() {
     let (mut ui, master, rooms) = sound_fixture(2);
     ui.action(render::Action::Settings);
