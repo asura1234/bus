@@ -502,6 +502,7 @@ fn staffing_codex_startup_idle_requires_live_complete_footer_and_preserves_block
     let prompt = "› Ask Codex to do anything\n  GPT-6.1-Sol xhigh · ~/work/libtv-app\n  ? for shortcuts                       ⚠ 1 warning · f2 to view\n";
     for screen in [
         format!("{prompt}• Working (1s · esc to interrupt)\n"),
+        format!("• Working (1s · esc to interrupt)\n{prompt}"),
         "› Ask Codex to do anything\n  ? for shortcuts\n".to_owned(),
     ] {
         assert_eq!(
