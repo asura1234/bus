@@ -60,10 +60,12 @@ impl Worker {
             .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(3));
         let waited = self.reply_waiters.keys().copied().collect();
         let mut state = self.state.clone();
-        if state
-            .route_worker_replies(super::io::now_ms(), &waited)
-            .map_err(|e| e.to_string())?
-        {
+        let now_ms = super::io::now_ms();
+        let mut changed = state
+            .route_worker_replies(now_ms, &waited)
+            .map_err(|e| e.to_string())?;
+        changed |= self.prepare_orchestrator_inboxes(&mut state, now_ms);
+        if changed {
             self.save(state)?;
         }
         self.expire_queued_now()?;
@@ -164,6 +166,28 @@ impl Worker {
             self.deliver_request(&agent, waited, steer_unbound)?;
         }
         Ok(())
+    }
+
+    fn prepare_orchestrator_inboxes(&self, state: &mut super::BusState, now_ms: u64) -> bool {
+        let mut changed = false;
+        let inboxes: Vec<_> = state
+            .agents()
+            .filter(|a| a.orchestrates.is_some())
+            .map(|a| a.id)
+            .collect();
+        for agent in inboxes {
+            changed |= state.prioritize_orchestrator_dialogs(agent);
+            // A submit hook can precede the native Working observation. Do not
+            // split an autonomous turn during that existing grace period.
+            if self
+                .own_turns
+                .get(&agent)
+                .is_none_or(|at| at.elapsed() >= OWN_TURN_GRACE)
+            {
+                changed |= state.release_orchestrator_inbox(agent, now_ms).is_some();
+            }
+        }
+        changed
     }
 
     fn deliver_request(
