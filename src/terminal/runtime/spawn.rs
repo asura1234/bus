@@ -83,14 +83,6 @@ impl PaneLaunchEnv {
         }
     }
 
-    fn is_agent_launch(&self) -> bool {
-        // Only explicitly supplied per-launch identity opts in, never an
-        // identity inherited by a Bus started inside an agent.
-        self.extra
-            .iter()
-            .any(|(key, value)| key == "BUS_LAUNCH_ID" && !value.is_empty())
-    }
-
     pub(crate) fn with_identity(
         mut self,
         workspace_id: String,
@@ -598,14 +590,11 @@ impl TerminalRuntime {
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
-        let mut integration = if launch_env.is_agent_launch() {
-            super::shell_integration::ShellIntegration::install(
-                &mut cmd,
-                &pane_shell(shell_config.default_shell),
-            )?
-        } else {
-            None
-        };
+        let mut integration = super::shell_integration::ShellIntegration::install_for_agent_launch(
+            &mut cmd,
+            &pane_shell(shell_config.default_shell),
+            launch_env,
+        )?;
         let mut runtime = Self::spawn_command_builder(
             pane_id,
             rows,

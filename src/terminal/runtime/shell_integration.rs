@@ -16,8 +16,17 @@ impl Drop for ShellIntegration {
 }
 
 impl ShellIntegration {
-    pub(super) fn install(cmd: &mut CommandBuilder, shell: &str) -> io::Result<Option<Self>> {
-        if !cfg!(unix) {
+    pub(super) fn install_for_agent_launch(
+        cmd: &mut CommandBuilder,
+        shell: &str,
+        launch_env: &super::spawn::PaneLaunchEnv,
+    ) -> io::Result<Option<Self>> {
+        // Only explicit per-launch identity opts in, never an inherited server identity.
+        let agent_launch = launch_env
+            .extra
+            .iter()
+            .any(|(key, value)| key == "BUS_LAUNCH_ID" && !value.is_empty());
+        if !cfg!(unix) || !agent_launch {
             return Ok(None);
         }
         let name = Path::new(shell).file_name().and_then(|name| name.to_str());
