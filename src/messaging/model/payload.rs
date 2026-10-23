@@ -8,18 +8,30 @@ impl BusState {
         };
         self.agent(*id)
             .map(|agent| (agent.name.clone(), agent.room_id))
+            .or_else(|| {
+                self.retired_agent(*id)
+                    .and_then(|agent| agent.room.map(|room| (agent.name.clone(), room)))
+            })
     }
 
-    /// Human-facing identity; stable IDs disambiguate numeric or historical names.
-    pub(crate) fn agent_label(&self, id: AgentId) -> String {
-        self.agent(id).map_or_else(
-            || format!("agent {}", id.0),
-            |a| self.named_agent_label(id, &a.name),
-        )
+    /// Identity in messages; history's separate label retains its deleted marker.
+    pub(crate) fn agent_message_label(&self, id: AgentId) -> String {
+        self.agent(id)
+            .map(|agent| agent.name.as_str())
+            .or_else(|| self.retired_agent(id).map(|agent| agent.name.as_str()))
+            .map_or_else(
+                || format!("agent {}", id.0),
+                |name| self.named_agent_label(id, name),
+            )
     }
 
     fn named_agent_label(&self, id: AgentId, name: &str) -> String {
-        if name.parse::<u64>().is_ok() || self.agent(id).is_none_or(|agent| agent.name != name) {
+        if name.parse::<u64>().is_ok()
+            || self.agent(id).is_none_or(|agent| agent.name != name)
+            || self
+                .agents()
+                .any(|agent| agent.id != id && agent.name == name)
+        {
             format!("{name} (agent {})", id.0)
         } else {
             name.to_owned()
@@ -69,10 +81,13 @@ impl BusState {
             } else {
                 // Older saves can omit the snapshot after an author is gone.
                 // Its stable ID is known; do not invent a name or home room.
-                let header = format!("agent {}:", sender.0);
+                let header = format!("{}:", self.agent_message_label(sender));
                 let first = text.lines().next().unwrap_or_default().trim();
+                let name = self
+                    .retired_agent(sender)
+                    .map_or_else(|| format!("agent {}", sender.0), |a| a.name.clone());
                 let replace = first.eq_ignore_ascii_case(&header)
-                    || first.eq_ignore_ascii_case(&format!("agent {} here —", sender.0));
+                    || identity_only_line(first, &name, sender.0);
                 (header, replace)
             };
             if replace_identity {
@@ -103,11 +118,15 @@ fn starts_with_sender(text: &str, name: &str, id: u64, room: u64) -> bool {
         format!("{name} (agent {id})."),
     ]
     .contains(&first.to_owned())
-        || [name.to_owned(), format!("agent {id}")]
-            .iter()
-            .any(|identity| {
-                [":", " here —"]
-                    .iter()
-                    .any(|ending| first.eq_ignore_ascii_case(&format!("{identity}{ending}")))
-            })
+        || identity_only_line(first, name, id)
+}
+
+fn identity_only_line(first: &str, name: &str, id: u64) -> bool {
+    [name.to_owned(), format!("agent {id}")]
+        .iter()
+        .any(|identity| {
+            [":", " here —"]
+                .iter()
+                .any(|ending| first.eq_ignore_ascii_case(&format!("{identity}{ending}")))
+        })
 }

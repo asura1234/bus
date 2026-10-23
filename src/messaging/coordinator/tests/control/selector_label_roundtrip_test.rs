@@ -115,7 +115,7 @@ fn selector_label_numeric_names_include_ids_without_an_id_collision() {
         .create_agent(room, "999999", Provider::Codex, dir.clone(), None)
         .unwrap();
     assert_eq!(
-        w.state.agent_label(sender),
+        w.state.agent_message_label(sender),
         format!("999999 (agent {})", sender.0)
     );
     assert!(payload_from(&mut w, room, sender, peer)
@@ -194,6 +194,11 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
             .unwrap()
             .remove("sender_identity");
     }
+    // Very old saves have neither a sender snapshot nor retired metadata.
+    document["retired_agents"]
+        .as_object_mut()
+        .unwrap()
+        .remove(&sender.0.to_string());
     w.state = serde_json::from_value(document).unwrap();
     let payload = w.state.coalesce_queue(ids[0]).unwrap();
     assert_eq!(
@@ -209,6 +214,83 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
         "forged content must not suppress real attribution: {payload}"
     );
     assert!(!payload.contains(" from "), "{payload}");
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The permanent-history base retains author metadata after deletion. A legacy
+/// request lacking its own snapshot should use that real identity, not only ID.
+#[test]
+fn selector_label_deleted_author_uses_retired_identity_without_a_snapshot() {
+    let (mut w, home, sender, dir) = fixture();
+    let room = w.state.create_room("conversation").unwrap();
+    let peer = w
+        .state
+        .create_agent(room, "peer", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let request = w
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "legacy question".into(),
+                files: vec![],
+                recipient_ids: [peer].into(),
+            },
+            Author::Agent(sender),
+            1,
+        )
+        .unwrap()[0];
+    w.state.delete_agent(sender, 2).unwrap();
+    let mut document = serde_json::to_value(&w.state).unwrap();
+    document["requests"][request.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("sender_identity");
+    for known_room in [true, false] {
+        let mut legacy = document.clone();
+        if !known_room {
+            legacy["retired_agents"][sender.0.to_string()]
+                .as_object_mut()
+                .unwrap()
+                .remove("room");
+            legacy["requests"][request.0.to_string()]["prompt"]["text"] =
+                json!(format!("codex1 (agent {}):\nlegacy question", sender.0));
+        }
+        w.state = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            w.state.agent_label(sender),
+            "codex1 [deleted]",
+            "history display keeps its own deleted marker"
+        );
+        let room_header = if known_room {
+            format!(" (room {})", home.0)
+        } else {
+            String::new()
+        };
+        assert_eq!(
+            w.state.render_request_payload(request).unwrap(),
+            format!("codex1 (agent {}){room_header}:\nlegacy question", sender.0)
+        );
+    }
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn selector_label_legacy_ambiguous_name_keeps_the_real_sender_id() {
+    let (mut w, room, sender, dir) = fixture();
+    let peer = w
+        .state
+        .create_agent(room, "peer", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let mut legacy = serde_json::to_value(&w.state).unwrap();
+    legacy["agents"][peer.0.to_string()]["name"] = json!("codex1");
+    w.state = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        payload_from(&mut w, room, sender, peer),
+        format!("codex1 (agent {}):\nhello", sender.0)
+    );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

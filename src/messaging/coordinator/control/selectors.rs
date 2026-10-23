@@ -15,7 +15,23 @@ impl Worker {
         if let Some(id) = self.exact_agent(selector) {
             return Ok(id);
         }
-        let named = self.state.agents().find(|a| a.name == selector);
+        // Normal names are globally unique. Retain the ambiguity guard for
+        // legacy state read directly through the storage/recovery boundary.
+        let candidates: Vec<_> = self.state.agents().filter(|a| a.name == selector).collect();
+        let named = match candidates.as_slice() {
+            [] => None,
+            [agent] => Some(*agent),
+            _ => {
+                return Err(format!(
+                    "Ambiguous agent name {selector:?}; use an ID: {}",
+                    candidates
+                        .iter()
+                        .map(|a| format!("{} (agent {}, room {})", a.name, a.id.0, a.room_id.0))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        };
         // Preserve the reserved alias: a real conversation/home member wins;
         // otherwise it means the sender's bound orchestrator, never a foreign
         // agent that happens to have the reserved name.

@@ -31,7 +31,7 @@ impl Worker {
                 && agent.dialog_notice_to != Some(DialogNoticeTo::Developer);
             let text = format!(
                 "{}. Resolved; dialog is gone; previous blocked notice needs no action",
-                state.agent_label(id)
+                state.agent_message_label(id)
             );
             post_dialog_notice(&mut state, id, to_orchestrator, text)?;
         }
@@ -154,7 +154,7 @@ fn post_blocked(
     let agent = state.agent(id).ok_or("Unknown agent")?;
     let text = format!(
         "{}. {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
-        state.agent_label(id),
+        state.agent_message_label(id),
         state.agent_cli_selector(id)
     );
     if state.is_developer_attention_author(agent.room_id, &Author::Agent(id)) {
