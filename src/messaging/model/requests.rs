@@ -617,10 +617,10 @@ impl BusState {
     /// Use the persisted dialog routing identity, never sender-authored text.
     /// Keep FIFO order within each class and give each notice its own turn.
     pub(crate) fn prioritize_orchestrator_dialogs(&mut self, agent: AgentId) -> bool {
-        if !self
+        if self
             .agents
             .get(&agent)
-            .is_some_and(|a| a.orchestrates.is_some())
+            .is_none_or(|a| a.orchestrates.is_none())
         {
             return false;
         }

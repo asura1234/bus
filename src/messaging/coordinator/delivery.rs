@@ -179,10 +179,10 @@ impl Worker {
             changed |= state.prioritize_orchestrator_dialogs(agent);
             // A submit hook can precede the native Working observation. Do not
             // split an autonomous turn during that existing grace period.
-            if !self
+            if self
                 .own_turns
                 .get(&agent)
-                .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE)
+                .is_none_or(|at| at.elapsed() >= OWN_TURN_GRACE)
             {
                 changed |= state.release_orchestrator_inbox(agent, now_ms).is_some();
             }
