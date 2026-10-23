@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 
 EXPORTER = Path(__file__).resolve().parents[1] / "deleted_messages.py"
 
@@ -108,3 +110,19 @@ def test_failed_send_followed_by_status_retains_only_unconfirmed_intent(tmp_path
     unconfirmed = [entry for entry in exports if entry["kind"] == "unconfirmed_send_command"]
     assert len(unconfirmed) == 1
     assert unconfirmed[0]["record"]["text"] == "unaccepted body"
+
+
+@pytest.mark.parametrize("follow_ok", [True, False])
+def test_async_follow_result_preserves_its_explicit_accepted_receipt(tmp_path, follow_ok):
+    receipt = {"message_id": 22193, "request_ids": [22194], "stage": "queued"}
+    result = {"message_id": 22193, "requests": [], "complete": follow_ok,
+              "send_receipt": receipt}
+    exports = run_exporter(
+        tmp_path,
+        "bus send --async --room 877 --as 21829 --to 23485 --text 'accepted before follow'",
+        [{"ok": follow_ok, "result": result}],
+    )
+    accepted = [entry for entry in exports if entry["kind"] == "receipt_linked_send"]
+    assert len(accepted) == 1
+    assert accepted[0]["receipt"] == result
+    assert accepted[0]["record"]["text"] == "accepted before follow"

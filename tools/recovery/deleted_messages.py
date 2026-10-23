@@ -51,13 +51,19 @@ def decoded_objects(value):
 def receipts(value):
     """Identify send receipts, including posted sends with no request IDs.
 
-    Status responses also contain message_id, but have requests instead of the
-    request_ids array that message.send returns. They cannot confirm a send.
+    Bare status responses have requests instead of message.send's request_ids.
+    The CLI also preserves an explicit send_receipt while following --async,
+    including when the follow-up fails after the original send was accepted.
     """
     for obj in decoded_objects(value):
         result = obj.get("result", {})
-        if (obj.get("ok") is True and isinstance(result, dict) and "message_id" in result
-                and isinstance(result.get("request_ids"), list)):
+        if not isinstance(result, dict):
+            continue
+        receipt = result.get("send_receipt", result)
+        if (isinstance(receipt, dict) and "message_id" in receipt
+                and isinstance(receipt.get("request_ids"), list)
+                and result.get("message_id") == receipt["message_id"]
+                and (obj.get("ok") is True or "send_receipt" in result)):
             yield result
 
 
