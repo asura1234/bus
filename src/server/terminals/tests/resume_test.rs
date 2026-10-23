@@ -603,11 +603,11 @@ async fn pending_agent_resume_shell_spawn_failure_keeps_saved_conversation() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_restored_codex_resume_keeps_its_command_for_a_relaunch_after_an_update() {
+async fn a_restored_codex_resume_starts_its_terminal_runtime() {
     use std::os::unix::fs::PermissionsExt;
     let _env = test_support::ProcessEnvironment::enter(None, None);
     let mut app = test_app();
-    let workspace = crate::server::workspaces::Workspace::test_new("restored-update");
+    let workspace = crate::server::workspaces::Workspace::test_new("restored-runtime");
     let pane_id = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
     app.state.view.pane_infos = workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 30));

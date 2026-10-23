@@ -90,8 +90,8 @@ impl Worker {
             }
             if let Some(info) = info {
                 update_polled_metadata(&mut state, agent, info, &mut self.branch_checks)?;
-                // The terminal could not install the agent's own update and
-                // left its chooser for a person; show why until it is over.
+                // Preserve the native compatibility error until an observation
+                // clears it, without changing unrelated agent errors.
                 state
                     .observe_update_error(agent.id, info.update_error.clone())
                     .map_err(|e| e.to_string())?;
