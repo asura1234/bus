@@ -88,6 +88,17 @@ impl RoomDigest {
 }
 
 impl BusState {
+    pub(super) fn has_unacknowledged_queue_pressure(&self, agent: AgentId, episode: u64) -> bool {
+        let key = format!("queue:{}:{episode}", agent.0);
+        self.agent(agent)
+            .and_then(|worker| {
+                self.notice_orchestrator(worker.orchestrates.unwrap_or(worker.room_id), None)
+            })
+            .and_then(|owner| self.room_digests.get(&owner))
+            .and_then(|record| record.facts.get(&key))
+            .is_some_and(|fact| fact.acknowledged_at_ms.is_none())
+    }
+
     pub(super) fn record_queue_pressure_fact(
         &mut self,
         room: RoomId,

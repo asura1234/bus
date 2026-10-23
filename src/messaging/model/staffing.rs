@@ -130,7 +130,13 @@ impl BusState {
     pub(super) fn record_queue_pressure(&mut self, agent: AgentId, now: u64) {
         let (depth, age) = self.agent_queue_metrics(agent, now);
         if depth <= 3 && age.is_none_or(|age| age <= 15 * 60_000) {
-            if let Some(worker) = self.agents.get_mut(&agent) {
+            // Brief recovery must not create a new fact on the next crossing
+            // while the owner still has this bottleneck to acknowledge.
+            let unacknowledged = self
+                .agent(agent)
+                .and_then(|worker| worker.queue_pressure_episode.as_ref())
+                .is_some_and(|episode| self.has_unacknowledged_queue_pressure(agent, episode.id));
+            if let Some(worker) = self.agents.get_mut(&agent).filter(|_| !unacknowledged) {
                 worker.queue_pressure_episode = None;
             }
             return;
