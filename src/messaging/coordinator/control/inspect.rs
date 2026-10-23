@@ -73,7 +73,7 @@ impl Worker {
                 Ok(json!({"stage":"queued"}))
             }
             "agent.read" => self.control_read(
-                self.scoped_agent(p)?,
+                self.control_agent(p)?,
                 optional_text(p, "source")?,
                 optional_u32(p, "lines")?,
             ),

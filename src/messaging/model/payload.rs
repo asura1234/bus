@@ -10,7 +10,7 @@ impl BusState {
             .map(|agent| (agent.name.clone(), agent.room_id))
     }
 
-    /// Human-facing identity; stable IDs disambiguate shared or numeric names.
+    /// Human-facing identity; stable IDs disambiguate numeric or historical names.
     pub(crate) fn agent_label(&self, id: AgentId) -> String {
         self.agent(id).map_or_else(
             || format!("agent {}", id.0),
@@ -19,7 +19,7 @@ impl BusState {
     }
 
     pub(super) fn named_agent_label(&self, id: AgentId, name: &str) -> String {
-        if name.parse::<u64>().is_ok() || self.agents().any(|a| a.id != id && a.name == name) {
+        if name.parse::<u64>().is_ok() || self.agent(id).is_none_or(|agent| agent.name != name) {
             format!("{name} (agent {})", id.0)
         } else {
             name.to_owned()
@@ -31,10 +31,7 @@ impl BusState {
         let Some(agent) = self.agent(id) else {
             return id.0.to_string();
         };
-        if self.agents().any(|a| a.id != id && a.name == agent.name)
-            || agent.name.parse::<u64>().is_ok()
-            || agent.name.starts_with('-')
-        {
+        if agent.name.parse::<u64>().is_ok() || agent.name.starts_with('-') {
             return id.0.to_string();
         }
         format!("'{}'", agent.name.replace('\'', "'\\''"))
@@ -53,7 +50,7 @@ impl BusState {
                 .sender_identity
                 .clone()
                 .or_else(|| self.message_sender(&request.prompt.author));
-            if let Some((name, room)) = identity {
+            let (header, replace_identity) = if let Some((name, room)) = identity {
                 let label = self.named_agent_label(sender, &name);
                 let crosses_rooms = request.room_id != room
                     || self
@@ -68,17 +65,26 @@ impl BusState {
                 } else {
                     format!("{label}:")
                 };
-                if starts_with_sender(&text, &name, sender.0, room.0) {
-                    text = text
-                        .split_once('\n')
-                        .map_or(String::new(), |(_, body)| body.to_owned());
-                }
-                text = if text.is_empty() {
-                    header
-                } else {
-                    format!("{header}\n{text}")
-                };
+                (header, starts_with_sender(&text, &name, sender.0, room.0))
+            } else {
+                // Older saves can omit the snapshot after an author is gone.
+                // Its stable ID is known; do not invent a name or home room.
+                let header = format!("agent {}:", sender.0);
+                let first = text.lines().next().unwrap_or_default().trim();
+                let replace = first.eq_ignore_ascii_case(&header)
+                    || first.eq_ignore_ascii_case(&format!("agent {} here —", sender.0));
+                (header, replace)
+            };
+            if replace_identity {
+                text = text
+                    .split_once('\n')
+                    .map_or(String::new(), |(_, body)| body.to_owned());
             }
+            text = if text.is_empty() {
+                header
+            } else {
+                format!("{header}\n{text}")
+            };
         }
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)

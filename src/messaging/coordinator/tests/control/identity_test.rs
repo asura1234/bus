@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn identity_scoped_agent_commands_use_conversation_then_home_then_global() {
+fn identity_agent_commands_resolve_names_globally_in_every_conversation() {
     struct Refusing;
     impl Transport for Refusing {
         fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
@@ -28,14 +28,14 @@ fn identity_scoped_agent_commands_use_conversation_then_home_then_global() {
     .into_iter()
     .enumerate()
     {
-        let (mut w, room, agent, dir) = fixture();
+        let (mut w, _room, agent, dir) = fixture();
         w.transport = Box::new(Refusing);
         let other = w.state.create_room("other").unwrap();
         let twin = w
             .state
-            .create_agent(other, "codex1", Provider::Codex, dir.clone(), None)
+            .create_agent(other, "foreign-peer", Provider::Codex, dir.clone(), None)
             .unwrap();
-        let params = json!({"agent":"codex1", "room":room.0.to_string(), "confirm":true, "name":"codex1", "on":true, "option":"1", "fingerprint":"invalid", "text":"answer", "source":"visible"});
+        let params = json!({"agent":"codex1", "room":other.0.to_string(), "confirm":true, "name":"codex1", "on":true, "option":"1", "fingerprint":"invalid", "text":"answer", "source":"visible"});
         let fields = method_spec(method).unwrap().fields;
         let mut by_name = params.as_object().unwrap().clone();
         by_name.retain(|key, _| fields.contains(&key.as_str()) || key == "room");
@@ -50,7 +50,7 @@ fn identity_scoped_agent_commands_use_conversation_then_home_then_global() {
         );
         assert!(
             w.state.agent(twin).is_some(),
-            "must not operate on the foreign twin"
+            "must not operate on the conversation room peer"
         );
         if method == "agent.delete" {
             assert!(w.state.agent(agent).is_none());
@@ -103,48 +103,32 @@ fn identity_agent_list_exposes_name_id_and_room() {
 }
 
 #[test]
-fn identity_shared_resolver_falls_back_to_sender_home_and_lists_scoped_candidates() {
+fn identity_shared_resolver_finds_each_unique_name_in_any_room() {
     let (mut w, home, sender, dir) = fixture();
     let conversation = w.state.create_room("conversation").unwrap();
     let elsewhere = w.state.create_room("elsewhere").unwrap();
-    let home_peer = w
-        .state
-        .create_agent(home, "peer", Provider::Codex, dir.clone(), None)
-        .unwrap();
-    let remote_peer = w
-        .state
-        .create_agent(elsewhere, "peer", Provider::Codex, dir.clone(), None)
-        .unwrap();
-    let context = json!({"room":conversation.0.to_string(),"as":"codex1","agent":"peer"});
-    assert_eq!(w.scoped_agent(&context).unwrap(), home_peer);
-    let local_peer = w
-        .state
-        .create_agent(conversation, "peer", Provider::Codex, dir.clone(), None)
-        .unwrap();
-    assert_eq!(w.scoped_agent(&context).unwrap(), local_peer);
-    let duplicate = w
-        .state
-        .create_agent(conversation, "peer", Provider::Codex, dir.clone(), None)
-        .unwrap();
-    let error = w.scoped_agent(&context).unwrap_err();
-    for id in [local_peer, duplicate] {
-        assert!(
-            error.contains(&format!("agent {}, room {}", id.0, conversation.0)),
-            "{error}"
-        );
+    for (room, name) in [
+        (home, "home-peer"),
+        (conversation, "conversation-peer"),
+        (elsewhere, "remote-peer"),
+    ] {
+        let peer = w
+            .state
+            .create_agent(room, name, Provider::Codex, dir.clone(), None)
+            .unwrap();
+        for context in [home, conversation, elsewhere] {
+            let named = json!({"room":context.0.to_string(),"as":"codex1","agent":name});
+            let numeric = json!({"room":context.0.to_string(),"as":sender.0.to_string(),"agent":peer.0.to_string()});
+            assert_eq!(w.control_agent(&named), Ok(peer));
+            assert_eq!(w.control_agent(&numeric), Ok(peer));
+        }
     }
-    assert!(
-        !error.contains(&format!("agent {}, room {}", remote_peer.0, elsewhere.0)),
-        "{error}"
-    );
-    let numeric = json!({"room":conversation.0.to_string(),"as":sender.0.to_string(),"agent":remote_peer.0.to_string()});
-    assert_eq!(w.scoped_agent(&numeric).unwrap(), remote_peer);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn identity_headers_use_names_and_disambiguate_only_shared_names() {
+fn identity_headers_prefer_unique_names_and_disambiguate_reused_historical_names() {
     let (mut w, room, sender, dir) = fixture();
     let peer = w
         .state
@@ -167,16 +151,31 @@ fn identity_headers_use_names_and_disambiguate_only_shared_names() {
         w.state.render_request_payload(id).unwrap()
     };
     assert_eq!(send_payload(&mut w, "hello"), "codex1:\nhello");
+    assert_eq!(send_payload(&mut w, "codex1:\nhello"), "codex1:\nhello");
+    assert_eq!(
+        send_payload(&mut w, "codex1 (room 999):\nhello"),
+        "codex1:\ncodex1 (room 999):\nhello"
+    );
+    let historical = w
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "before rename".into(),
+                files: vec![],
+                recipient_ids: [peer].into(),
+            },
+            Author::Agent(sender),
+            2,
+        )
+        .unwrap()[0];
+    w.state.rename_agent(sender, "renamed-sender").unwrap();
     w.state
         .create_agent(room, "codex1", Provider::Codex, dir.clone(), None)
         .unwrap();
     assert_eq!(
-        send_payload(&mut w, "codex1:\nhello"),
-        format!("codex1 (agent {}):\nhello", sender.0)
-    );
-    assert_eq!(
-        send_payload(&mut w, "codex1 (room 999):\nhello"),
-        format!("codex1 (agent {}):\ncodex1 (room 999):\nhello", sender.0)
+        w.state.render_request_payload(historical).unwrap(),
+        format!("codex1 (agent {}):\nbefore rename", sender.0)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -217,7 +216,7 @@ fn identity_interrupt_preserves_receipt_context_and_target_room_notice() {
     let (mut w, home, target, dir) = fixture();
     let conversation = w.state.create_room("conversation").unwrap();
     w.state
-        .create_agent(home, "owner", Provider::Codex, dir.clone(), None)
+        .create_agent(home, "home-owner", Provider::Codex, dir.clone(), None)
         .unwrap();
     let author = w
         .state

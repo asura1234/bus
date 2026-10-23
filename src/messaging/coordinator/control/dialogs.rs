@@ -50,18 +50,18 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "agent.dialog.observe" => {
-                let agent = self.scoped_agent(p)?;
+                let agent = self.control_agent(p)?;
                 self.observe_dialog(agent)
             }
             "agent.dialog.choose" => {
-                let agent = self.scoped_agent(p)?;
+                let agent = self.control_agent(p)?;
                 let option = required(p, "option")?
                     .parse::<u32>()
                     .map_err(|_| "Option must be a number")?;
                 self.choose_dialog_option(agent, option, required(p, "fingerprint")?)
             }
             "agent.dialog.answer" => {
-                let agent = self.scoped_agent(p)?;
+                let agent = self.control_agent(p)?;
                 let text = if p["text"].is_null() {
                     None
                 } else {

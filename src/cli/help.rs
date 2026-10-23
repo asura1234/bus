@@ -71,16 +71,16 @@ wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by an agent; --to all then skips it.
 Current agent names are unique across all rooms, including MASTER; add/rename reject duplicates.
 Every AGENT selector accepts a name or numeric ID. agent list prints name -> id -> room rows.
-Agent commands with an AGENT selector accept optional --room ROOM and --as AGENT for name resolution.
-Any agent can message any other agent across rooms. IDs resolve globally; names prefer
-the conversation --room, then its home room, then all rooms, with candidate IDs and rooms on ambiguity.
+Agent commands with an AGENT selector accept optional --room ROOM and --as AGENT for conversation context.
+Any agent can message any other agent across rooms. Names and exact IDs resolve globally;
+an existing numeric ID wins over a numeric name. --room chooses the conversation, not a name scope.
 Only when no live candidate matches, removed recipient IDs/names forward to a unique same-name
 replacement in the original room, or that room's current orchestrator. Removed orchestrators
 forward through the work room they orchestrated. Authors and administrative commands never forward.
 The case-insensitive --to orchestrator alias names the sender's home-room orchestrator.
 All still covers conversation-room members only. Cross-room messages wait for a new turn.
 Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER.
-IDs appear in headers only when names are shared or numeric; batch markers carry position and time.
+IDs appear in headers only for numeric or historical names; batch markers carry position and time.
 Send only the body: do not add a 'from X', 'X here' or signature line.
 An exact genuine current/legacy header or an identity-only name/agent ID line is normalized to this header.
 Ordinary sentences and headers with a forged ID or room always get the real sender header.

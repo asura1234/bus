@@ -3,8 +3,8 @@ use super::{optional_text, required, AgentId, RoomId, Worker};
 use serde_json::Value;
 
 impl Worker {
-    /// Exact IDs are global; names prefer the conversation, then sender's room. The reserved
-    /// alias belongs only to `--to`, after real local names have had precedence.
+    /// Exact IDs and unique names are global. Conversation/home rooms matter
+    /// only for the reserved recipient alias and removed-recipient forwarding.
     pub(super) fn resolve_agent(
         &self,
         room: Option<RoomId>,
@@ -15,44 +15,36 @@ impl Worker {
         if let Some(id) = self.exact_agent(selector) {
             return Ok(id);
         }
-        let mut candidates: Vec<_> = self.state.agents().filter(|a| a.name == selector).collect();
-        if let Some(scope) = [room, sender_room]
-            .into_iter()
-            .flatten()
-            .find(|scope| candidates.iter().any(|a| a.room_id == *scope))
+        let named = self.state.agents().find(|a| a.name == selector);
+        // Preserve the reserved alias: a real conversation/home member wins;
+        // otherwise it means the sender's bound orchestrator, never a foreign
+        // agent that happens to have the reserved name.
+        if recipient_alias
+            && selector.eq_ignore_ascii_case("orchestrator")
+            && named.is_none_or(|a| Some(a.room_id) != room && Some(a.room_id) != sender_room)
         {
-            candidates.retain(|a| a.room_id == scope);
-        } else if recipient_alias && selector.eq_ignore_ascii_case("orchestrator") {
             return self
                 .state
                 .orchestrator_of(sender_room.ok_or("This room has no bound orchestrator")?)
                 .map(|a| a.id)
                 .ok_or_else(|| "This room has no bound orchestrator".into());
         }
-        if candidates.is_empty() && recipient_alias {
+        if let Some(agent) = named {
+            return Ok(agent.id);
+        }
+        if recipient_alias {
             if let (Some(room), Some(home)) = (room, sender_room) {
                 if let Some(id) = self.state.retired_recipient(selector, room, home)? {
                     return Ok(id);
                 }
             }
         }
-        match candidates.as_slice() {
-            [agent] => Ok(agent.id),
-            [] => Err(format!("No agent matches {selector:?}")),
-            _ => Err(format!(
-                "Ambiguous agent name {selector:?}; use an ID: {}",
-                candidates
-                    .iter()
-                    .map(|a| format!("{} (agent {}, room {})", a.name, a.id.0, a.room_id.0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        }
+        Err(format!("No agent matches {selector:?}"))
     }
 
-    /// Agent commands have optional conversation and sender context. Without
-    /// either, names are global; exact IDs remain global in every context.
-    pub(super) fn scoped_agent(&self, p: &Value) -> Result<AgentId, String> {
+    /// Optional context is validated for named targets; it never narrows the
+    /// global namespace. An exact ID needs no author lookup.
+    pub(super) fn control_agent(&self, p: &Value) -> Result<AgentId, String> {
         let room = optional_text(p, "room")?
             .map(|s| self.control_room(s))
             .transpose()?;
@@ -60,18 +52,14 @@ impl Worker {
         if let Some(id) = self.exact_agent(selector) {
             return Ok(id);
         }
-        let author = optional_text(p, "as")
+        optional_text(p, "as")
             .and_then(|value| {
                 value
                     .map(|s| self.resolve_agent(room, room, s, false))
                     .transpose()
             })
             .map_err(|error| format!("--as: {error}"))?;
-        let home = author
-            .and_then(|id| self.state.agent(id))
-            .map(|a| a.room_id)
-            .or(room);
-        self.resolve_agent(room, home, selector, false)
+        self.resolve_agent(None, None, selector, false)
     }
 
     fn exact_agent(&self, selector: &str) -> Option<AgentId> {

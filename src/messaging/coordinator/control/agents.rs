@@ -24,18 +24,18 @@ impl Worker {
                 )
             }
             "agent.details" => self.control_command(BusCommand::SetDetails(
-                self.scoped_agent(p)?,
+                self.control_agent(p)?,
                 p.get("on")
                     .and_then(Value::as_bool)
                     .ok_or("Details must be on or off")?,
             )),
             "agent.rename" => self.control_command(BusCommand::RenameAgent(
-                self.scoped_agent(p)?,
+                self.control_agent(p)?,
                 required(p, "name")?.into(),
             )),
-            "agent.delete" => self.control_command(BusCommand::DeleteAgent(self.scoped_agent(p)?)),
+            "agent.delete" => self.control_command(BusCommand::DeleteAgent(self.control_agent(p)?)),
             "agent.setup-confirm" => {
-                self.control_command(BusCommand::CompleteHookSetup(self.scoped_agent(p)?))
+                self.control_command(BusCommand::CompleteHookSetup(self.control_agent(p)?))
             }
             "agent.add" => {
                 let provider = match required(p, "provider")? {
@@ -75,7 +75,7 @@ impl Worker {
                 })
             }
             "agent.clear" => {
-                let agent = self.scoped_agent(p)?;
+                let agent = self.control_agent(p)?;
                 self.control_clear(agent)
             }
             "agent.interrupt" => self.control_interrupt(p),
@@ -162,7 +162,7 @@ impl Worker {
     ) -> Result<Value, String> {
         let (room, agent) = match (optional_text(p, "agent")?, optional_text(p, "room")?) {
             (Some(_), _) => {
-                let id = self.scoped_agent(p)?;
+                let id = self.control_agent(p)?;
                 (
                     self.state.agent(id).ok_or("Unknown agent")?.room_id,
                     Some(id),

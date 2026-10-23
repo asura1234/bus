@@ -77,14 +77,15 @@ fn assert_global_names_legacy_sender(snapshot: Option<&str>, submitted: Option<&
         worker.state.request(request).unwrap().sender_identity,
         Some((snapshot.unwrap_or("author").into(), room))
     );
-    let expected = submitted.map(str::to_owned).unwrap_or_else(|| {
-        format!(
-            "{} (agent {}, room {}):\nlegacy question",
-            snapshot.unwrap_or("author"),
-            author.0,
-            room.0
-        )
-    });
+    // Current names are unique, but the old queued author's name may now
+    // belong to the survivor. Preserve that historical name with its real ID.
+    // Same-room payloads use the compact header; frozen payloads stay exact.
+    let expected = submitted
+        .map(str::to_owned)
+        .unwrap_or_else(|| match snapshot {
+            Some(name) => format!("{name} (agent {}):\nlegacy question", author.0),
+            None => format!("author (agent {}):\nlegacy question", author.0),
+        });
     assert_eq!(
         worker.state.render_request_payload(request).unwrap(),
         expected,

@@ -228,7 +228,11 @@ fn open_messaging_queued_attribution_survives_sender_rename_and_deletion() {
         serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     assert_eq!(
         restored.render_request_payload(id).unwrap(),
-        format!("codex1 (room {}):\nqueued question", home.0)
+        // A historical sender keeps its old name and stable ID after deletion.
+        format!(
+            "codex1 (agent {}) (room {}):\nqueued question",
+            author.0, home.0
+        )
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
