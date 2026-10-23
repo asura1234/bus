@@ -63,8 +63,6 @@ pub(super) enum Action {
     ToggleFreezeNotifications,
     EditFeishuRecipient,
     EditFeishuCli,
-    #[cfg(feature = "dev-tools")]
-    SimulateFreeze,
     /// Dev builds only: the live performance overlay.
     TogglePerfOverlay,
     ToggleSound(SoundTarget),
@@ -160,8 +158,6 @@ pub(super) enum SoundTarget {
 
 /// One row of the Settings form's sound-notification list.
 pub(super) enum SoundSettingsLine {
-    #[cfg(feature = "dev-tools")]
-    FreezeTest,
     Freeze {
         field: usize,
     },

@@ -50,9 +50,6 @@ The recorder adds these bounded diagnostics:
 `BUS_PERF_CAPTURE_MS=0` disables stack sampling. Existing perf recording
 configuration still applies. New record kinds and fields are additive JSONL.
 
-Dev-tools builds expose a Settings action, “Test freeze recovery notification
-(3.5 s)”, for scratch terminal tests. Release builds do not contain the action.
-
 Control overload emits `bus.control.admission.rejected` at most once per second
 per endpoint. Each record names `interactive` or `status`, its active/limit
 counts, reading/waiting/writing/closing counts, outstanding status queue permits,

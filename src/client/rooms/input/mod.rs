@@ -579,8 +579,6 @@ impl BusUi {
             }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::TogglePerfOverlay => self.toggle_perf_overlay(),
-            #[cfg(feature = "dev-tools")]
-            Action::SimulateFreeze => std::thread::sleep(std::time::Duration::from_millis(3500)),
             Action::ToggleFreezeNotifications => self.toggle_freeze_notifications(),
             Action::EditFeishuRecipient => self.open_feishu_setting(false),
             Action::EditFeishuCli => self.open_feishu_setting(true),
