@@ -1317,7 +1317,9 @@ fn run_soak() {
         .all(|r| r.phase == RequestPhase::Completed));
     assert_eq!(
         f.state().room(f.work).unwrap().unread_count as usize,
-        completed
+        completed,
+        "work-room notices: {:?}",
+        f.state().notices(f.work).collect::<Vec<_>>()
     );
     assert_eq!(f.stall_alerts(), round);
     f.assert_publications();
@@ -1575,4 +1577,41 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
     f.stop(orch, "next", "next answer", json!([]), json!([]));
     f.elapse(31_000);
     f.assert_reply(next, "next answer");
+}
+
+#[tokio::test]
+async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() {
+    let mut f = Delivery::new(&[Provider::ClaudeCode], true);
+    let orch = f.agents[0];
+    let lead = f.send(orch, f.master, "first", false, None);
+    f.tick();
+    f.start(orch, "shared", "first");
+    let folded = f.send(orch, f.master, "folded followup", false, None);
+    f.tick();
+    assert_eq!(f.state().request(folded).unwrap().group, Some(lead));
+    assert!(!f.state().request(folded).unwrap().trusted_start_bound);
+    f.stop(
+        orch,
+        "shared",
+        "combined answer",
+        json!([{"id":"wait","type":"shell","status":"running","command":"sleep 3600"}]),
+        json!([]),
+    );
+    let next = f.send(orch, f.work, "new room", true, None);
+    // The production grace allows a separate submit hook to arrive. Once it
+    // expires, a genuinely folded member shares the captured old answer.
+    tokio::time::sleep(std::time::Duration::from_millis(3_100)).await;
+    f.tick();
+    assert_eq!(
+        f.typed(orch).last().unwrap(),
+        "new room",
+        "folded steering blocked the inbox"
+    );
+    f.assert_reply(lead, "combined answer");
+    f.assert_reply(folded, "combined answer");
+    assert_eq!(f.state().request(next).unwrap().group, None);
+    f.start(orch, "new", "new room");
+    f.stop(orch, "new", "new answer", json!([]), json!([]));
+    f.elapse(31_000);
+    f.assert_reply(next, "new answer");
 }

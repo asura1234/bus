@@ -116,11 +116,6 @@ impl BusState {
         if request.phase != RequestPhase::Active
             || !request.trusted_start_bound
             || !request.awaiting_background
-            || self.group_members(id).iter().any(|member| {
-                self.requests.get(member).is_some_and(|member| {
-                    !member.settled() && member.steered && !member.trusted_start_bound
-                })
-            })
         {
             return None;
         }
