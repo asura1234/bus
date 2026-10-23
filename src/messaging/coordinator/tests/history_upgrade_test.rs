@@ -99,6 +99,10 @@ fn real_format_2_snapshot_first_start_preserves_archive_without_old_wakes() {
     }
     let history = std::fs::read(dir.join("history.jsonl")).unwrap();
     let cutoff = io::now_ms() - 7 * 24 * 60 * 60_000;
+    // The incident's 22-record cohort is fixed at capture time, rather than
+    // growing as newer rows age. The loaded routing floor below still uses now.
+    // Captured at 2026-10-23T17:29:16+08:00.
+    let incident_cutoff = 1_792_747_756_000_u64 - 7 * 24 * 60 * 60_000;
     let old: Vec<Request> = std::str::from_utf8(&history)
         .unwrap()
         .lines()
@@ -113,7 +117,7 @@ fn real_format_2_snapshot_first_start_preserves_archive_without_old_wakes() {
             r.phase == RequestPhase::Completed
                 && matches!(r.prompt.author, Author::Agent(_))
                 && r.pending_final.is_some()
-                && r.completed_at_ms.is_some_and(|at| at < cutoff)
+                && r.completed_at_ms.is_some_and(|at| at < incident_cutoff)
         })
         .collect();
     assert_eq!(old.len(), 22, "verify the actual incident fixture");
