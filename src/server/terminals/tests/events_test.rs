@@ -92,14 +92,8 @@ mod codex_self_update_listing {
         }
     }
 
-    /// A Codex Bus started with `agent.start`, after Bus chose "Update now" in
-    /// its 0.162 chooser.
-    fn started_codex_after_choosing_its_update() -> (
-        App,
-        tokio::sync::mpsc::Receiver<bytes::Bytes>,
-        crate::utils::ids::TerminalId,
-        crate::utils::ids::PaneId,
-    ) {
+    #[tokio::test]
+    async fn codexup_all_provider_never_selects_update_now_even_for_native_agents() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::utils::config::Config::default(),
@@ -139,32 +133,12 @@ mod codex_self_update_listing {
             .unwrap()
             .test_process_pty_bytes(CHOOSER);
         app.handle_internal_event(state_changed(pane, AgentState::Blocked));
-        assert_eq!(
-            writes.try_recv().unwrap(),
-            bytes::Bytes::from_static(b"\r"),
-            "Bus chose Update now"
-        );
-        (app, writes, terminal_id, pane)
-    }
-
-    #[tokio::test]
-    async fn a_started_codex_installing_its_chosen_update_is_listed_working_not_launch_pending() {
-        let (mut app, _writes, terminal_id, pane) = started_codex_after_choosing_its_update();
-
-        // The install runs: the chooser is gone, the updater line is on screen.
-        app.terminal_runtimes
-            .get(&terminal_id)
-            .unwrap()
-            .test_process_pty_bytes(
-                b"\x1b[2J\x1b[HUpdating Codex via `npm install -g @openai/codex`...\r\n",
-            );
-        app.handle_internal_event(state_changed(pane, AgentState::Working));
-        let info = app.agent_info(0, pane).unwrap();
-        assert_eq!(info.dialog_id, None);
-        assert_eq!(info.agent_status, schema::AgentStatus::Working);
         assert!(
-            !info.launch_pending,
-            "the coordinator reads a launch-pending agent as Launching, not Working"
+            writes.try_recv().is_err(),
+            "Bus must never choose Update now"
         );
+        let info = app.agent_info(0, pane).unwrap();
+        assert_eq!(info.agent_status, schema::AgentStatus::Blocked);
+        assert!(info.dialog_id.is_some());
     }
 }

@@ -104,10 +104,8 @@ all = [
   { regex = ['Press enter to continue\s*\z'] },
 ]
 
-# Bus answers this chooser itself for agents it launched: it picks "Update
-# now", and once Codex exits types the same launch command again; without the
-# success line it leaves the next chooser for a person
-# (src/server/terminals/self_update.rs). Codex 0.162 draws
+# This chooser stays blocked for an operator. Bus never selects an update.
+# Codex 0.162 draws
 # "Update available ·" with an "enter continue · esc skip" footer; older
 # releases drew "Update available!" with "Press enter to continue".
 [[rules]]
@@ -116,7 +114,6 @@ state = "blocked"
 priority = 950
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true
-auto_update = { choose = "Update now", success = "Update ran successfully" }
 contains = ["Update available", "Update now"]
 regex = ['Skip\s+until\s+next\s+version']
 any = [

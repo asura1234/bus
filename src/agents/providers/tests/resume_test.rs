@@ -128,7 +128,7 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
                 vec!["--settings".to_owned(), path.to_string_lossy().into_owned()]
             ),
             ProviderKind::Codex => assert_eq!(args, codex::launch::runtime_args()),
-            ProviderKind::Cursor => assert!(args.is_empty()),
+            ProviderKind::Cursor => assert_eq!(args, cursor::launch::runtime_args()),
         }
     }
 }

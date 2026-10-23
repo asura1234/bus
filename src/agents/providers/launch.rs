@@ -76,6 +76,18 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
     }
 }
 
+/// Updaters share an installation across panes. Respect an explicit Claude
+/// environment setting; user/project settings can also override inherited env.
+pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
+    match provider {
+        ProviderKind::ClaudeCode => vec![(
+            "DISABLE_AUTOUPDATER".into(),
+            std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
+        )],
+        ProviderKind::Codex | ProviderKind::Cursor => Vec::new(),
+    }
+}
+
 /// A run-scoped permission choice, kept separate from saved user options.
 /// Inspect option positions so a literal prompt or option value is not
 /// mistaken for an explicit bypass. Provider aliases suppress our copy too.
@@ -174,20 +186,26 @@ pub(crate) fn launch_args(
     Ok((args, adopted))
 }
 
-/// Preserve user argv and omit a generated duplicate: Codex rejects a repeated
-/// --no-daemon even though the caller is entitled to supply it explicitly.
+/// Preserve user argv and omit duplicate single-use runtime flags. Literal
+/// tails and option values are not flags.
 pub(crate) fn extend_generated_args(
     provider: ProviderKind,
     args: &mut Vec<String>,
     capture: Vec<String>,
 ) {
-    let private_runtime = provider == ProviderKind::Codex
-        && argument_positions(provider, args)
+    let flag = match provider {
+        ProviderKind::Codex => Some("--no-daemon"),
+        ProviderKind::Cursor => Some("--disable-auto-update"),
+        ProviderKind::ClaudeCode => None,
+    };
+    let supplied = flag.filter(|flag| {
+        argument_positions(provider, args)
             .into_iter()
-            .any(|index| args[index] == "--no-daemon");
+            .any(|index| args[index] == *flag)
+    });
     let capture = capture
         .into_iter()
-        .filter(|arg| !private_runtime || arg != "--no-daemon");
+        .filter(|arg| Some(arg.as_str()) != supplied);
     // Prefix the complete user sequence when a token could be the literal
     // boundary. This also avoids splitting an option from a value named `--`.
     if args.iter().any(|arg| arg == "--") {

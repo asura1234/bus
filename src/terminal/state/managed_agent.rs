@@ -92,15 +92,6 @@ impl TerminalState {
         })
     }
 
-    /// Ends a managed launch that stopped at the agent's own update chooser
-    /// once Bus chose the update: Bus now owns the install and the relaunch,
-    /// so the agent lists as running instead of still launching.
-    pub fn finish_managed_launch_for_update(&mut self) {
-        if let Some(managed) = self.managed_agent.as_mut() {
-            managed.phase = ManagedAgentPhase::Active;
-        }
-        self.sync_managed_launch_pending();
-    }
 
     pub fn managed_agent_interactive_ready(&self) -> bool {
         self.managed_agent
@@ -232,7 +223,6 @@ impl TerminalState {
         self.agent_name = None;
         self.agent_name_owner = None;
         self.update_managed_agent(None);
-        self.managed_agent_args = None;
     }
 
     pub(super) fn reconcile_agent_name_owner(

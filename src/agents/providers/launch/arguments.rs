@@ -267,6 +267,7 @@ fn cursor_arity(name: &str) -> Option<usize> {
         | "--trust"
         | "--plan"
         | "--continue"
+        | "--disable-auto-update"
         | "--skip-worktree-setup"
         | "--stream-partial-output"
         | "-p"

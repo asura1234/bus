@@ -140,7 +140,7 @@ fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
     );
     assert_eq!(
         launch_args(Provider::Cursor, &format!("--resume={id}")).unwrap(),
-        (owned(&["--resume", id]), Some(id.into()))
+        (owned(&["--resume", id, "--disable-auto-update"]), Some(id.into()))
     );
     assert_eq!(
         launch_args(Provider::Codex, &format!("resume {id} -m gpt-test")).unwrap(),
@@ -202,7 +202,7 @@ fn codex_launches_host_their_own_runtime_so_hooks_inherit_launch_env() {
         vec!["--no-daemon", "-c", "check_for_update_on_startup=false"]
     );
     assert!(runtime_args(Provider::ClaudeCode).is_empty());
-    assert!(runtime_args(Provider::Cursor).is_empty());
+    assert_eq!(runtime_args(Provider::Cursor), vec!["--disable-auto-update"]);
     assert!(validate_args(Provider::Codex, &["--no-daemon".into()]).is_ok());
 }
 
@@ -421,5 +421,13 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
             saved,
             "effective permissions must not replace the saved user options"
         );
+    }
+}
+
+#[test]
+fn codexup_all_provider_cursor_disables_updates_on_new_and_adopted_launches() {
+    for input in ["", "--resume=160d1f8b-9023-44b8-9bc7-24333effb185"] {
+        let (args, _) = launch_args(Provider::Cursor, input).unwrap();
+        assert!(args.iter().any(|arg| arg == "--disable-auto-update"), "{args:?}");
     }
 }

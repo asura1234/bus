@@ -644,10 +644,6 @@ async fn a_restored_codex_resume_keeps_its_command_for_a_relaunch_after_an_updat
 
     assert!(app.start_pending_agent_resumes(true));
     assert!(app.terminal_runtimes.get(&terminal_id).is_some());
-    assert_eq!(
-        app.state.terminals[&terminal_id].managed_agent_args,
-        Some(vec!["resume".to_string(), "saved-session".to_string()])
-    );
     for (_, runtime) in app.terminal_runtimes.drain() {
         runtime.shutdown();
     }

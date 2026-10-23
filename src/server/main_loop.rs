@@ -644,15 +644,6 @@ impl HeadlessServer {
         if self
             .app
             .state
-            .next_self_update_deadline()
-            .is_some_and(|deadline| now >= deadline)
-        {
-            changed |= self.app.supervise_self_updates(now);
-        }
-
-        if self
-            .app
-            .state
             .next_pending_agent_notification_deadline()
             .is_some_and(|deadline| now >= deadline)
         {

@@ -154,7 +154,9 @@ fn claude_adapter_settings_are_per_launch_preserve_user_hooks_and_need_no_projec
     let mut expected = initial;
     expected.extend(["--settings".into(), settings.to_string_lossy().into_owned()]);
     assert_eq!(result.args, expected);
-    assert_eq!(result.env, spec.hooks.env());
+    let mut expected_env = spec.hooks.env();
+    expected_env.extend(launch::runtime_env(ProviderKind::ClaudeCode));
+    assert_eq!(result.env, expected_env);
     let document: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
     assert_eq!(document["custom"], 42);
     assert_eq!(document["hooks"]["Stop"][0], user_hook);
@@ -201,4 +203,26 @@ fn claude_capture_settings_precede_a_literal_argument_tail() {
             "--dangerously-skip-permissions literal prompt",
         ])
     );
+}
+
+#[test]
+fn codexup_all_provider_claude_disables_updates_without_overriding_explicit_env() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("DISABLE_AUTOUPDATER");
+    for setting in [None, Some("0"), Some("1")] {
+        match setting {
+            Some(value) => std::env::set_var("DISABLE_AUTOUPDATER", value),
+            None => std::env::remove_var("DISABLE_AUTOUPDATER"),
+        }
+        let fixture = Fixture::new();
+        let result = prepare(&fixture.spec(), fixture.0.clone(), Vec::new(), None).unwrap();
+        let actual = result.env.get("DISABLE_AUTOUPDATER").map(String::as_str);
+        let expected = setting.unwrap_or("1");
+        // Restore first so a red assertion cannot pollute other tests.
+        match &old {
+            Some(value) => std::env::set_var("DISABLE_AUTOUPDATER", value),
+            None => std::env::remove_var("DISABLE_AUTOUPDATER"),
+        }
+        assert_eq!(actual, Some(expected));
+    }
 }

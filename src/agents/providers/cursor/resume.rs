@@ -17,5 +17,5 @@ pub(crate) fn capture_args(
         HookContract::for_provider(ProviderKind::Cursor),
         &hooks.binary,
     )?;
-    Ok((path, Vec::new(), rebound))
+    Ok((path, super::launch::runtime_args(), rebound))
 }

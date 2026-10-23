@@ -147,7 +147,7 @@ pub(crate) fn load(
         prompt,
     );
     let mut env = hooks.env();
-    let env = ["BUS_LAUNCH_ID", "BUS_CALLBACK_DIR"]
+    let mut env: Vec<_> = ["BUS_LAUNCH_ID", "BUS_CALLBACK_DIR"]
         .map(|key| {
             (
                 key.to_owned(),
@@ -156,6 +156,9 @@ pub(crate) fn load(
             )
         })
         .into();
+    env.extend(crate::agents::providers::launch::runtime_env(
+        agent.provider,
+    ));
     Ok(LaunchExtras {
         env,
         args,

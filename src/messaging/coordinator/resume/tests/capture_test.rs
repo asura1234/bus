@@ -412,7 +412,7 @@ impl Fixture {
 
     /// Callback capture env for the saved launch.
     fn expected_env(&self) -> Vec<(String, String)> {
-        [
+        let mut env: Vec<_> = [
             ("BUS_LAUNCH_ID", "owned-launch".to_owned()),
             (
                 "BUS_CALLBACK_DIR",
@@ -423,7 +423,9 @@ impl Fixture {
             ),
         ]
         .map(|(key, value)| (key.to_owned(), value))
-        .into()
+        .into();
+        env.extend(crate::agents::providers::launch::runtime_env(self.provider));
+        env
     }
 }
 
@@ -636,7 +638,7 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
                 // The shared app-server daemon runs hooks with the env of
                 // whichever pane started it, misrouting this launch's callbacks.
                 Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),
-                Provider::Cursor => vec![],
+                Provider::Cursor => crate::agents::providers::launch::runtime_args(Provider::Cursor),
             }
         );
         assert_eq!(fixture.plan, original);
@@ -1114,7 +1116,7 @@ fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched
                 "--settings".into(),
                 fixture.hook_path().to_string_lossy().into_owned(),
             ],
-            Provider::Cursor => Vec::new(),
+            Provider::Cursor => crate::agents::providers::launch::runtime_args(Provider::Cursor),
         });
         assert_eq!(
             fixture.load().unwrap().args,
