@@ -43,7 +43,6 @@ pub(crate) struct BusSettings {
         deserialize_with = "mandatory_notifications"
     )]
     pub(crate) feishu_notifications: bool,
-    pub(crate) freeze_notifications: bool,
     pub(crate) feishu_recipient: String,
     pub(crate) feishu_cli_path: Option<String>,
     /// MASTER's sound in every session; it rings by default.
@@ -83,7 +82,6 @@ impl Default for BusSettings {
         Self {
             color_blind_mode: false,
             feishu_notifications: true,
-            freeze_notifications: true,
             feishu_recipient: DEFAULT_FEISHU_RECIPIENT.into(),
             feishu_cli_path: None,
             master_sound: SoundPref {
@@ -278,6 +276,35 @@ mod tests {
         );
         assert!(value.get("feishu_user_id").is_none());
         assert!(value.get("feishu_chat_id").is_none());
+    }
+
+    #[test]
+    fn legacy_freeze_preference_is_dropped_without_changing_developer_alerts_or_sound() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-retired-freeze-setting");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        for old_value in [false, true] {
+            let old = serde_json::json!({
+                "freeze_notifications": old_value,
+                "feishu_waiting_notifications": false,
+                "feishu_recipient": "ou_saved",
+                "master_sound": {"enabled": false, "name": "Glass"},
+                "sidebar_width": 35
+            });
+            std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+            let loaded = load(&path).unwrap();
+            assert!(loaded.feishu_notifications);
+            assert_eq!(loaded.feishu_recipient, "ou_saved");
+            assert!(!loaded.master_sound.enabled);
+            assert_eq!(loaded.master_sound.name.as_deref(), Some("Glass"));
+            assert_eq!(loaded.sidebar_width, 35);
+            save(&path, &loaded).unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert!(saved.get("freeze_notifications").is_none());
+            assert_eq!(load(&path).unwrap(), loaded);
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

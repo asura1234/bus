@@ -1,13 +1,10 @@
 # Freeze recovery diagnostics
 
-Bus records UI stalls in its session's `perf/client.jsonl`. After a UI
-iteration lasting more than 3 seconds returns, Bus sends a terminal
-notification: `Bus froze for N.N s at HH:MM; details: bus perf`. The time is
-the local start time of the stall on macOS/Unix; non-Unix targets currently
-use UTC. Alerts default on and can be disabled in
-Settings → Freeze recovery notifications. They never enter room history or
-the composer, and are limited to one per minute. Terminal notification
-presentation depends on the host terminal's notification support and settings.
+Bus records UI stalls in its session's `perf/client.jsonl`. Stalls and their
+recovery remain diagnostic records: they do not emit user or terminal
+notifications, enter room history or change the composer. Settings has no
+freeze-notification toggle or deliberate-freeze action. The developer
+performance overlay remains available in dev-tools builds.
 
 The recorder adds these bounded diagnostics:
 
@@ -49,9 +46,6 @@ The recorder adds these bounded diagnostics:
 
 `BUS_PERF_CAPTURE_MS=0` disables stack sampling. Existing perf recording
 configuration still applies. New record kinds and fields are additive JSONL.
-
-Dev-tools builds expose a Settings action, “Test freeze recovery notification
-(3.5 s)”, for scratch terminal tests. Release builds do not contain the action.
 
 Control overload emits `bus.control.admission.rejected` at most once per second
 per endpoint. Each record names `interactive` or `status`, its active/limit

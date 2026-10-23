@@ -121,7 +121,6 @@ pub(super) async fn run_client_loop(
             }
         };
 
-        super::freeze_alert::flush_pending().map_err(ClientError::HostOutput)?;
         let now = std::time::Instant::now();
         if matches!(event, ClientLoopEvent::Timer) {
             perf::TIMER_LAG.record(now.saturating_duration_since(timer_deadline));

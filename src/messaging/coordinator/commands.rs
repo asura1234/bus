@@ -55,7 +55,6 @@ impl Worker {
                 return self.set_feishu_recipient(recipient, events);
             }
             C::SetFeishuCliPath(path) => return self.set_feishu_cli_path(path, events),
-            C::SetFreezeNotifications(on) => return self.set_freeze_notifications(on, events),
             C::SetSidebarWidth(width) => return self.set_sidebar_width(width, events),
             C::SetFeishuNotifications(on) => return self.set_feishu_notifications(on, events),
             C::SetNotes(id, text) => state.set_room_notes(id, &text),

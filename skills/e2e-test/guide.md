@@ -64,7 +64,7 @@ you saw. You do not decide what the product should do, and you never change the 
   Both `[waiting-on-you]` and `[waiting_on_you]` and existing whole phrases qualify.
   Run a recording shim on a closed inherited PATH; assert its argv and a two-second burst.
   Feishu notifications is default on with editable recipient and optional CLI path.
-  Developer messages emit no terminal popup; freeze recovery retains its own toggle.
+  Developer messages emit no terminal popup; freezes are recorded only in diagnostics.
   Room sound effects keep their existing behavior regardless of focus.
 - Fake agents answer each delivered prompt a moment later with `fake reply: <prompt>`. The
   echo adds find matches and pushes history, so let deliveries settle (`bus history` shows

@@ -186,7 +186,6 @@ impl BusUi {
                 super::super::render::SoundSettingsLine::Sound { field, .. }
                 | super::super::render::SoundSettingsLine::Stepper { field, .. }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
-                | super::super::render::SoundSettingsLine::Freeze { field }
                 | super::super::render::SoundSettingsLine::FeishuRecipient { field }
                 | super::super::render::SoundSettingsLine::FeishuCli { field }
                 | super::super::render::SoundSettingsLine::Feishu { field }

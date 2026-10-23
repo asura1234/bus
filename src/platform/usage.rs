@@ -13,8 +13,6 @@ pub(crate) fn perf_hooks() -> PerfHooks {
     PerfHooks {
         sample: self_usage,
         machine: super::machine_usage::sample,
-        local_hm,
-        notification: None,
         capture_stacks,
     }
 }
@@ -279,18 +277,3 @@ pub(crate) fn capture_stacks(_pid: u32, _out: &Path) -> bool {
 #[cfg(test)]
 #[path = "tests/usage_test.rs"]
 mod usage_test;
-
-/// Only the recorder calls this, with the stall's start wall time.
-pub(crate) fn local_hm(seconds: i64) -> (u8, u8) {
-    #[cfg(unix)]
-    {
-        let seconds = seconds as libc::time_t;
-        let mut local: libc::tm = unsafe { std::mem::zeroed() };
-        if !unsafe { libc::localtime_r(&seconds, &mut local) }.is_null() {
-            return (local.tm_hour as u8, local.tm_min as u8);
-        }
-    }
-    let utc = time::OffsetDateTime::from_unix_timestamp(seconds)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-    (utc.hour(), utc.minute())
-}

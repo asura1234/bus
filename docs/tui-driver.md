@@ -108,7 +108,7 @@ qualify only in developer conversations, not peer traffic. Feishu notifications 
 optional CLI path remain shared settings, and bursts combine over two seconds.
 Use a closed PATH recording shim to assert argv. Developer sends emit no alerts,
 and these alerts emit no terminal OSC. See [developer notifications](developer-notifications.md).
-Recovered freezes retain their separate notification setting and terminal effect.
+Freezes are recorded only in diagnostics and emit no terminal notification.
 
 Mandatory developer sounds record an `afplay` target named `bus-developer-alert-*.mp3`,
 independent of room sound switches, focus and normal cooldown. Ordinary room sounds

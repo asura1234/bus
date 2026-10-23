@@ -843,33 +843,7 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
 }
 
 #[test]
-fn freeze_notifications_default_on_and_toggle_without_changing_composer() {
-    let (mut ui, master, _) = sound_fixture(0);
-    ui.open_room(master);
-    ui.locals
-        .get_mut(&master)
-        .unwrap()
-        .text
-        .insert("keep draft");
-    ui.action(render::Action::Settings);
-    assert!(settings_rows(&mut ui, 40)
-        .iter()
-        .any(|row| row.contains("[x] Freeze recovery notifications")));
-    ui.settings_field = ui.freeze_field();
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(!ui.settings.freeze_notifications);
-    assert_eq!(ui.locals[&master].text.text, "keep draft");
-    assert!(ui
-        .pending
-        .iter()
-        .any(|p| matches!(p.command, BusCommand::SetFreezeNotifications(false))));
-    assert!(settings_rows(&mut ui, 40)
-        .iter()
-        .any(|row| row.contains("[ ] Freeze recovery notifications")));
-}
-
-#[test]
-fn feishu_notifications_stay_on_without_changing_draft_or_freeze() {
+fn feishu_notifications_stay_on_without_changing_draft() {
     let (mut ui, master, _) = sound_fixture(0);
     ui.open_room(master);
     ui.locals
@@ -881,7 +855,6 @@ fn feishu_notifications_stay_on_without_changing_draft_or_freeze() {
     ui.settings_field = ui.feishu_field();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.settings.feishu_notifications);
-    assert!(ui.settings.freeze_notifications);
     assert_eq!(ui.locals[&master].text.text, "KEEP DRAFT");
     assert!(!ui
         .pending

@@ -128,7 +128,6 @@ class Run:
         self.command("press", "f6")
         self.command("click", "--hit", "settings")
         self.command("wait", "--text", "Feishu notifications (always on)")
-        self.command("wait", "--text", "[x] Freeze recovery notifications")
         screen = str(self.command("snapshot"))
         assert "ou_ca1b530d792419a044e281f998ce68dc" in screen and "lark-cli path: PATH" in screen
         assert "Developer message notifications" not in screen
@@ -136,7 +135,7 @@ class Run:
         self.command("press", "esc")
         self.command("click", "--hit", "room:notify-work")
         self.command("type", "KEEP DRAFT")
-        self.step(1, "Default Feishu/freeze checked, recipient/PATH visible, old toggle absent; settings-default.png captured for visual inspection")
+        self.step(1, "Default Feishu always on, recipient/PATH visible, retired toggles absent; settings-default.png captured for visual inspection")
 
         self.post("Routine progress")
         self.post("[needs_developer_attention] Internal notice only")
@@ -168,13 +167,13 @@ class Run:
         self.command("click", "--hit", "feishu-notifications")
         self.command("wait", "--text", "Feishu notifications (always on)")
         assert self.state()["settings"]["feishu_waiting_notifications"] is True
-        assert self.state()["settings"]["freeze_notifications"] is True
+        assert "freeze_notifications" not in self.state()["settings"]
         self.capture("settings-mandatory")
         self.post(TAG + " Mandatory delivery")
         self.until(lambda: len(self.sends()) == 4, "mandatory delivery after toggle attempt")
         self.quiet()
         assert len(self.sends()) == 4
-        self.step(4, "UI toggle could not disable delivery; saved preference and freeze remain true; mandatory tag delivered; settings-mandatory.png captured for inspection")
+        self.step(4, "UI toggle could not disable delivery; saved preference true and freeze setting absent; mandatory tag delivered; settings-mandatory.png captured for inspection")
 
         self.edit_setting("feishu-recipient", "ou_fake_recipient")
         self.command("wait", "--text", "Recipient open_id: ou_fake_recipient")

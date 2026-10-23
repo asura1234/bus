@@ -322,7 +322,6 @@ fn feishu_upgrade_starts_mandatory_dms_and_ignores_legacy_off_choice() {
         r#"{
   "color_blind_mode": false,
   "feishu_notifications": false,
-  "freeze_notifications": true,
   "developer_notifications": true,
   "feishu_notifications_generation": 0,
   "master_sound": { "enabled": true, "name": null },

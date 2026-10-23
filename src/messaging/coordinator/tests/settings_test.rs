@@ -223,7 +223,6 @@ fn dev_settings_show_and_set_the_global_sounds() {
         json!({
             "color_blind_mode": false,
             "feishu_waiting_notifications": true,
-            "freeze_notifications": true,
             "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",
             "feishu_cli_path": null,
             "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
@@ -278,31 +277,7 @@ fn sidebar_width_is_saved_clamped_and_announced_to_the_ui() {
 }
 
 #[test]
-fn freeze_notifications_are_saved_and_announced_to_the_ui() {
-    let root = root("freeze-notifications");
-    let mut worker = session(&root, "freeze-notifications");
-    let (events, receiver) = mpsc::channel();
-    assert!(
-        settings::load(&root.join("settings.json"))
-            .unwrap()
-            .freeze_notifications
-    );
-    for on in [false, true] {
-        worker
-            .command(BusCommand::SetFreezeNotifications(on), &events)
-            .unwrap();
-        assert!(
-            matches!(receiver.recv().unwrap(), BusEvent::SettingsChanged(settings) if settings.freeze_notifications == on)
-        );
-        let saved = settings::load(&root.join("settings.json")).unwrap();
-        assert_eq!(saved.freeze_notifications, on);
-        assert!(saved.master_sound.enabled);
-    }
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn feishu_notifications_cannot_be_disabled_or_change_freeze_or_sound() {
+fn feishu_notifications_cannot_be_disabled_or_change_sound() {
     let root = root("developer-notifications");
     let mut worker = session(&root, "developer-notifications");
     let (events, receiver) = mpsc::channel();
@@ -329,7 +304,6 @@ fn feishu_notifications_cannot_be_disabled_or_change_freeze_or_sound() {
         assert!(echoes[0].feishu_notifications);
         let saved = settings::load(&root.join("settings.json")).unwrap();
         assert!(saved.feishu_notifications);
-        assert!(saved.freeze_notifications);
         assert!(saved.master_sound.enabled);
     }
     std::fs::remove_dir_all(root).unwrap();
