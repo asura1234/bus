@@ -302,7 +302,7 @@ fn freeze_notifications_are_saved_and_announced_to_the_ui() {
 }
 
 #[test]
-fn feishu_notifications_are_saved_without_changing_freeze_or_sound() {
+fn feishu_notifications_cannot_be_disabled_or_change_freeze_or_sound() {
     let root = root("developer-notifications");
     let mut worker = session(&root, "developer-notifications");
     let (events, receiver) = mpsc::channel();
@@ -311,9 +311,12 @@ fn feishu_notifications_are_saved_without_changing_freeze_or_sound() {
             .unwrap()
             .feishu_notifications
     );
-    for on in [false, true] {
+    assert!(worker
+        .command(BusCommand::SetFeishuNotifications(false), &events)
+        .is_err());
+    {
         worker
-            .command(BusCommand::SetFeishuNotifications(on), &events)
+            .command(BusCommand::SetFeishuNotifications(true), &events)
             .unwrap();
         let echoes: Vec<_> = receiver
             .try_iter()
@@ -323,9 +326,9 @@ fn feishu_notifications_are_saved_without_changing_freeze_or_sound() {
             })
             .collect();
         assert_eq!(echoes.len(), 1);
-        assert_eq!(echoes[0].feishu_notifications, on);
+        assert!(echoes[0].feishu_notifications);
         let saved = settings::load(&root.join("settings.json")).unwrap();
-        assert_eq!(saved.feishu_notifications, on);
+        assert!(saved.feishu_notifications);
         assert!(saved.freeze_notifications);
         assert!(saved.master_sound.enabled);
     }

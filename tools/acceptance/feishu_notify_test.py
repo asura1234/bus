@@ -127,7 +127,7 @@ class Run:
         self.command("wait", "--state", "agents.*.status == idle", "--timeout", "20s")
         self.command("press", "f6")
         self.command("click", "--hit", "settings")
-        self.command("wait", "--text", "[x] Feishu notifications")
+        self.command("wait", "--text", "Feishu notifications (always on)")
         self.command("wait", "--text", "[x] Freeze recovery notifications")
         screen = str(self.command("snapshot"))
         assert "ou_ca1b530d792419a044e281f998ce68dc" in screen and "lark-cli path: PATH" in screen
@@ -141,42 +141,40 @@ class Run:
         self.post("Routine progress")
         self.post("[needs_developer_attention] Internal notice only")
         self.quiet()
-        assert not self.calls(), self.calls()
+        assert len(self.calls()) == 1, self.calls()
+        assert self.calls()[0][7] == "notify-orch to you: Routine progress\nnotify-orch to you: Internal notice only"
         self.post(TAG + "\nApprove access\nPRIVATE attachment /tmp/secret")
-        self.until(lambda: len(self.sends()) == 1, "one underscore-tag BOT DM")
-        args = self.sends()[0]
+        self.until(lambda: len(self.sends()) == 2, "one underscore-tag BOT DM")
+        args = self.sends()[-1]
         assert args[5] == "ou_ca1b530d792419a044e281f998ce68dc" and args[7] == "notify-orch is waiting on you: Approve access", args
         self.quiet()
-        assert len(self.sends()) == 1
+        assert len(self.sends()) == 2
         self.no_popup()
         self.command("wait", "--text", "KEEP DRAFT")
-        self.step(2, "Untagged and attention-only posts sent nothing; underscore --to human produced one exact BOT action-line DM, no private body/attachment/popup; draft preserved")
+        self.step(2, "Untagged direct posts notified; underscore --to human produced one exact BOT action-line DM, no private body/attachment/popup; draft preserved")
 
         long_action = "Full action 界 " * 100
         self.post("[waiting-on-you] " + long_action)
         self.post("Routine progress")
         self.post("WAITING ON YOU: Second update")
-        self.until(lambda: len(self.sends()) == 2, "one coalesced burst")
-        assert self.sends()[-1][7] == f"notify-orch is waiting on you: {long_action.strip()}\nnotify-orch is waiting on you: Second update", self.sends()
+        self.until(lambda: len(self.sends()) == 3, "one coalesced burst")
+        assert self.sends()[-1][7] == f"notify-orch is waiting on you: {long_action.strip()}\nnotify-orch to you: Routine progress\nnotify-orch is waiting on you: Second update", self.sends()
         self.quiet()
-        assert len(self.sends()) == 2
+        assert len(self.sends()) == 3
         self.assert_bot()
-        self.step(3, "Full long Unicode action and uppercase whole phrase coalesced into one second DM, each formatted line preserved; no duplicate or untagged member; all argv explicitly BOT/user-id/plain-text")
+        self.step(3, "Full long Unicode action and uppercase whole phrase coalesced into one second DM, each formatted line preserved; untagged direct member included without duplicates; all argv explicitly BOT/user-id/plain-text")
 
         self.command("click", "--hit", "settings")
         self.command("click", "--hit", "feishu-notifications")
-        self.command("wait", "--text", "[ ] Feishu notifications")
-        assert self.state()["settings"]["feishu_waiting_notifications"] is False
+        self.command("wait", "--text", "Feishu notifications (always on)")
+        assert self.state()["settings"]["feishu_waiting_notifications"] is True
         assert self.state()["settings"]["freeze_notifications"] is True
-        self.capture("settings-off")
-        self.post(TAG + " Disabled history")
+        self.capture("settings-mandatory")
+        self.post(TAG + " Mandatory delivery")
+        self.until(lambda: len(self.sends()) == 4, "mandatory delivery after toggle attempt")
         self.quiet()
-        assert len(self.sends()) == 2
-        self.command("click", "--hit", "feishu-notifications")
-        self.command("wait", "--text", "[x] Feishu notifications")
-        self.quiet()
-        assert len(self.sends()) == 2
-        self.step(4, "UI off persisted false while freeze stayed true; disabled tag and re-enable produced no DM; settings-off.png captured for inspection")
+        assert len(self.sends()) == 4
+        self.step(4, "UI toggle could not disable delivery; saved preference and freeze remain true; mandatory tag delivered; settings-mandatory.png captured for inspection")
 
         self.edit_setting("feishu-recipient", "ou_fake_recipient")
         self.command("wait", "--text", "Recipient open_id: ou_fake_recipient")
@@ -186,18 +184,18 @@ class Run:
         assert saved["feishu_recipient"] == "ou_fake_recipient" and saved["feishu_cli_path"] == str(self.cli), saved
         self.capture("settings-edited")
         self.post("still waiting on you: Configured action")
-        self.until(lambda: len(self.sends()) == 3, "configured destination")
+        self.until(lambda: len(self.sends()) == 5, "configured destination")
         assert self.sends()[-1][5] == "ou_fake_recipient" and self.sends()[-1][7] == "notify-orch is waiting on you: Configured action"
         self.step(5, "UI recipient/CLI override persisted, configured phrase sent to ou_fake_recipient; settings-edited.png captured for inspection")
 
         (self.bin / "mode").write_text("fail")
         self.post(TAG + " Failure action")
-        self.until(lambda: len(self.sends()) == 4, "failed send invocation")
+        self.until(lambda: len(self.sends()) == 6, "failed send invocation")
         self.until(lambda: self.state()["settings"]["feishu"]["error"] is not None, "failure status")
         error = self.state()["settings"]["feishu"]["error"]
         assert "exit code Some(7)" in error, error
         self.quiet()
-        assert len(self.sends()) == 4 and self.command("status")["bus_pid"] == self.session["bus_pid"]
+        assert len(self.sends()) == 6 and self.command("status")["bus_pid"] == self.session["bus_pid"]
         self.no_popup()
         self.assert_bot()
         log_root = Path(self.session["data_dir"]) / "herdr-config"

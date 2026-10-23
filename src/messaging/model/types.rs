@@ -304,6 +304,10 @@ pub(crate) enum RoomKind {
 pub(crate) const MASTER_ROOM_NAME: &str = "MASTER";
 /// The `send --to` selector for a message to the developer; no agent may take it.
 pub(crate) const DEVELOPER_RECIPIENT: &str = "human";
+
+pub(crate) fn is_developer_recipient(selector: &str) -> bool {
+    selector.eq_ignore_ascii_case("you") || selector.eq_ignore_ascii_case(DEVELOPER_RECIPIENT)
+}
 /// Never produced by the ID allocator, which starts at 1, so adding MASTER to a
 /// saved session neither collides with nor renumbers anything.
 pub(super) const MASTER_ROOM_ID: RoomId = RoomId(0);
@@ -770,7 +774,7 @@ impl std::fmt::Display for ModelError {
             ),
             Self::ReservedAgentName => write!(
                 formatter,
-                "The name {DEVELOPER_RECIPIENT} is reserved for messages to the developer"
+                "The names you and {DEVELOPER_RECIPIENT} are reserved for messages to the developer"
             ),
             Self::OrchestratorOutsideMaster(agent) => write!(
                 formatter,

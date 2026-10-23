@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use {
     super::{
         AgentId, AgentRuntimeIdentity, Author, BusState, Compactions, DialogNoticeTo, Draft,
-        ModelError, Provider, RequestPhase, RoomId, RuntimeStatus, DEVELOPER_RECIPIENT,
-        UNBOUND_SETTLE_MS,
+        ModelError, Provider, RequestPhase, RoomId, RuntimeStatus, UNBOUND_SETTLE_MS,
     },
     crate::messaging::model::RoomAgent,
 };
@@ -518,7 +517,7 @@ impl BusState {
 
 fn agent_name(name: &str) -> Result<String, ModelError> {
     let name = normalized_name(name)?;
-    if name.eq_ignore_ascii_case(DEVELOPER_RECIPIENT) {
+    if super::is_developer_recipient(&name) {
         return Err(ModelError::ReservedAgentName);
     }
     Ok(name)

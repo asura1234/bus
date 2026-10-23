@@ -9,6 +9,7 @@ pub use catalog::DEFAULT_SOUND_NAME;
 #[cfg(test)]
 #[cfg(not(any(windows, target_os = "macos")))]
 use player::linux_audio_players;
+pub(crate) use player::play_developer;
 pub use player::play_named;
 #[cfg(test)]
 use player::resolve_sound;

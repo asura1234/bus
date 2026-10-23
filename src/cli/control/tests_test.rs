@@ -3188,3 +3188,13 @@ fn github_watch_room_override_has_explicit_auto_off_and_repo_choices() {
     assert!(command(&["room", "github", "7"]).is_err());
     assert!(command(&["room", "github", "7", "--auto", "--off"]).is_err());
 }
+
+#[test]
+fn notify_you_async_rejects_both_developer_aliases() {
+    for recipient in ["you", "YOU", "human"] {
+        let parsed = command(&[
+            "send", "--room", "7", "--to", recipient, "--text", "x", "--as", "a1", "--async",
+        ]);
+        assert!(parsed.unwrap_err().contains("--async waits for agents"));
+    }
+}

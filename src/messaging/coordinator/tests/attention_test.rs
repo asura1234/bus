@@ -170,21 +170,23 @@ fn feishu_full_unicode_action_reaches_cli_without_truncation() {
 }
 
 #[test]
-fn feishu_untagged_and_disabled_messages_never_send_or_replay() {
+fn feishu_direct_messages_notify_and_legacy_off_cannot_silence_or_replay() {
     let mut f = Fixture::new();
     f.post("[needs_developer_attention] Approve access");
     f.flush();
-    assert!(f.calls().is_empty());
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(f.calls()[0][7], "orch to you: Approve access");
     f.settings(|s| s.feishu_notifications = false);
-    f.post("[waiting_on_you] disabled");
+    f.post("[waiting_on_you] mandatory");
     f.flush();
+    assert_eq!(f.calls().len(), 2);
     f.settings(|s| s.feishu_notifications = true);
     f.flush();
-    assert!(f.calls().is_empty());
+    assert_eq!(f.calls().len(), 2);
 }
 
 #[test]
-fn feishu_bursts_coalesce_and_toggle_cancels_pending() {
+fn feishu_bursts_coalesce_and_disable_is_rejected_without_losing_pending() {
     let mut f = Fixture::new();
     f.post("[waiting_on_you] first");
     f.now += 1900;
@@ -199,9 +201,9 @@ fn feishu_bursts_coalesce_and_toggle_cancels_pending() {
         "orch is waiting on you: first\norch is waiting on you: second"
     );
     f.post("[waiting_on_you] cancelled");
-    f.worker.set_feishu_notifications(false, &f.events).unwrap();
+    assert!(f.worker.set_feishu_notifications(false, &f.events).is_err());
     f.flush();
-    assert_eq!(f.calls().len(), 1);
+    assert_eq!(f.calls().len(), 2);
 }
 
 #[test]
@@ -301,15 +303,17 @@ fn feishu_startup_history_and_destination_changes_do_not_replay() {
     f.post("[waiting_on_you] old destination");
     f.settings(|s| s.feishu_recipient = "ou_new".into());
     f.flush();
-    assert!(f.calls().is_empty());
-    f.post("[waiting_on_you] new action");
-    f.flush();
     assert_eq!(f.calls().len(), 1);
     assert_eq!(f.calls()[0][5], "ou_new");
+    assert_eq!(f.calls()[0][7], "orch is waiting on you: old destination");
+    f.post("[waiting_on_you] new action");
+    f.flush();
+    assert_eq!(f.calls().len(), 2);
+    assert_eq!(f.calls()[1][5], "ou_new");
 }
 
 #[test]
-fn feishu_upgrade_starts_waiting_dms_and_preserves_new_off_choice() {
+fn feishu_upgrade_starts_mandatory_dms_and_ignores_legacy_off_choice() {
     // Every settings.json written before waiting DMs serialized the old
     // default-off `feishu_notifications` and the removed popup toggle.
     let mut f = Fixture::new();
@@ -341,5 +345,33 @@ fn feishu_upgrade_starts_waiting_dms_and_preserves_new_off_choice() {
     f.settings(|s| s.feishu_notifications = false);
     f.post("[waiting_on_you] Disabled after upgrade");
     f.flush();
-    assert_eq!(f.calls().len(), 1, "new off choice must survive reloads");
+    assert_eq!(
+        f.calls().len(),
+        2,
+        "legacy off cannot disable developer alerts"
+    );
+}
+
+#[test]
+fn notify_you_legacy_off_cannot_disable_worker_notifications() {
+    let mut f = Fixture::new();
+    f.settings(|s| s.feishu_notifications = false);
+    let mut state = f.worker.state.clone();
+    let room = state
+        .rooms()
+        .find(|r| r.kind == crate::messaging::model::RoomKind::Work)
+        .unwrap()
+        .id;
+    let sender = state
+        .create_agent(room, "worker", Provider::Codex, f.root.clone(), None)
+        .unwrap();
+    state
+        .post_to_developer(room, sender, "Decide release timing".into(), vec![], f.now)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.pump();
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(f.calls()[0][7], "worker to you: Decide release timing");
+    assert!(f.worker.set_feishu_notifications(false, &f.events).is_err());
 }

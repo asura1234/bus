@@ -263,12 +263,40 @@ bus send --room master --as claude-orch --to human \
 ```
 
 The message shows in MASTER history as written by that agent, addressed to
-you; it counts as unread and rings like a reply. It goes to no agent, so it
+you; it counts as unread and triggers the mandatory developer alert. It goes to no agent, so it
 has no requests and nothing to `wait` on: `send` returns its `message_id`
 with `"request_ids": []` and `"stage": "posted"`. `--file PATH` attaches files
-as for any send. `--to human` needs `--as` naming an agent in MASTER, works
-only with `--room master`, cannot be combined with agent recipients or
-`--queue`, and no agent may be named `human`.
+as for any send. `human` is a compatibility alias for `you`; both work from every room.
+
+### Reach the developer from any room
+
+Any worker or orchestrator can address the developer when something needs their attention:
+
+```sh
+bus send --room ROOM --as AGENT --to you --text "Please decide the release date."
+bus send --room ROOM --as AGENT --to you --text "[waiting-on-you] Approve access."
+```
+
+`@you` means the developer; use `--to you` in the CLI. Use it or `[waiting-on-you]`
+for things only the developer can do or decide. The message stays in the selected
+conversation room, with the usual agent attribution and a **You** recipient.
+No copy is moved to MASTER. Agent names or IDs work for `--as`, including senders
+from another room. `you` and `human` are case-insensitive reserved names.
+
+These posts create no agent requests: the result has `request_ids: []` and `stage: posted`.
+`--as AGENT` is required; mixed developer/agent recipients, `--queue` and `--async`
+are rejected. The developer cannot send to themselves.
+
+Every agent post to you, plus every agent message or final with an explicit `@you`,
+`[waiting-on-you]` or `[waiting_on_you]` marker, always notifies the developer, from every
+room and sender. The legacy whole phrase `waiting on you` qualifies only in developer-addressed
+notices and replies to developer-authored requests. In peer traffic a bare phrase does not trigger developer alerts
+because "you" refers to the receiving agent. Developer-authored sends never notify.
+The bundled developer-alert sound is distinct from ordinary room sounds and ignores
+room switches and normal notification cooldown. Feishu bot DMs use the existing
+two-second burst and first-action-line format; untagged direct posts use `sender to you: text`.
+No user setting disables these alerts, including a saved legacy Feishu off preference.
+Recipient and CLI path remain editable. See [developer notifications](../docs/developer-notifications.md).
 
 ## Send work and wait for the reply
 

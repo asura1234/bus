@@ -295,3 +295,24 @@ fn control_without_a_recorded_session_still_emits_one_json_error() {
         .contains("No local Bus session"));
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn notify_you_help_explains_developer_recipient_and_mandatory_notifications() {
+    let home = isolated_home("notify-you-help");
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .arg("--help")
+        .env("BUS_DATA_DIR", &home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    for phrase in [
+        "--to you",
+        "[waiting-on-you]",
+        "every room",
+        "always notify",
+    ] {
+        assert!(help.contains(phrase), "missing {phrase}: {help}");
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}

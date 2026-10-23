@@ -37,8 +37,11 @@ pub(crate) const DEFAULT_FEISHU_RECIPIENT: &str = "ou_ca1b530d792419a044e281f998
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
-    // The old forwarding toggle is a different preference; do not inherit its off default.
-    #[serde(rename = "feishu_waiting_notifications")]
+    // Read the legacy toggle for compatibility; developer alerts are mandatory.
+    #[serde(
+        rename = "feishu_waiting_notifications",
+        deserialize_with = "mandatory_notifications"
+    )]
     pub(crate) feishu_notifications: bool,
     pub(crate) freeze_notifications: bool,
     pub(crate) feishu_recipient: String,
@@ -66,6 +69,13 @@ pub(crate) struct BusSettings {
     /// narrow terminal.
     #[serde(deserialize_with = "deserialize_sidebar_width")]
     pub(crate) sidebar_width: u16,
+}
+
+fn mandatory_notifications<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    let _ = bool::deserialize(deserializer)?;
+    Ok(true)
 }
 
 impl Default for BusSettings {

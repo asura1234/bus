@@ -1,4 +1,5 @@
 use super::*;
+use crate::messaging::model::RoomKind;
 
 #[test]
 fn dev_room_notes_replace_and_clear_the_room_notes() {

@@ -1,38 +1,45 @@
-# Feishu waiting-on-you notifications
+# Developer notifications
 
-Bus sends a bot DM through `lark-cli` for a new developer-addressed MASTER message
-containing `[waiting-on-you]` or `[waiting_on_you]`, or the whole phrase `waiting on you`
-(including `still waiting on you` and `WAITING ON YOU`). Matching is case-insensitive.
-Agent-addressed posts, work rooms, untagged progress and internal attention notices
-without a waiting marker stay quiet. `[needs_developer_attention]` retains its Bus badge.
+Any worker or orchestrator may address the developer in any room with
+`bus send --room ROOM --as AGENT --to you --text TEXT`. `human` remains an alias.
+The agent-authored message stays in that conversation room, displays **You** as
+recipient, and creates no agent request. Use @you or [waiting-on-you] for things only
+the developer can do or decide.
 
-**Settings → Feishu notifications** is on by default, independently of **Freeze recovery
-notifications**. The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
-Click **Recipient open_id** to edit it. Click **lark-cli path** to override the executable;
-an empty field uses `lark-cli` from PATH. Changes persist with other shared settings.
-The new waiting-DM preference is stored as `feishu_waiting_notifications`. The old
-forwarding toggle does not disable it on upgrade; turning the new toggle off persists
-that choice across restarts. Bus stores no credentials. Configure bot authentication
-in lark-cli itself; sends explicitly
-use `--as bot`, never the user identity. The equivalent toggle command is
-`bus settings feishu-notifications --on` / `--off`.
+Every direct agent message to you notifies, including untagged messages. Agent-authored
+peer messages and completed agent replies also notify when they contain an explicit `@you`,
+`[waiting-on-you]` or `[waiting_on_you]` marker (case-insensitive). The legacy whole phrase
+`waiting on you`, including `still waiting on you`, qualifies only in direct developer notices
+and replies to developer-authored requests. Bare phrases between agents do not trigger developer alerts;
+there, "you" names the receiving agent. Developer-authored sends never trigger alerts.
 
-A fixed two-second window combines a burst into one DM. Its plain text is
-`orchestrator name is waiting on you: action`, taking the first line or bullet after
-the tag or phrase (on the same or following nonempty line), preserving the full
-action line. Markdown closing markers are skipped. No additional body or attachment
-paths are added. Each tagged message in a burst contributes its own formatted line,
-joined by newlines in one DM. Untagged messages do not join it. Recognized attention routing markers are
-removed first; line endings and terminal controls are filtered.
+A separate bundled developer sound rings once for each qualifying source, regardless of
+visible room, focus, room sound switches, startup grace or ordinary notification cooldown.
+Only the coordinator-owning client plays it. Initial history is a baseline on start/resume;
+repeated snapshots and archive moves do not replay alerts. Ordinary room sounds keep their
+existing settings. No desktop popup is added.
 
-The coordinator detects messages regardless of the visible room, terminal or focus.
-A single background worker runs `lark-cli im +messages-send --as bot --user-id OPEN_ID
---text TEXT --idempotency-key KEY --format json` without a shell, with a ten-second
-timeout and cancellation. Failures (missing CLI, authentication, network, invalid
-response, timeout) log a warning and never block or crash Bus. There are no automatic
-retries. Toggle or destination changes clear pending notifications; disabled and startup
-history is not replayed. Archive moves and repeated snapshots do not replay a message.
+Feishu bot DMs are always on. A legacy `feishu_waiting_notifications: false` is read as true,
+and `bus settings feishu-notifications --off` is rejected. The Settings row says **always on**;
+it cannot toggle this route. Freeze recovery notifications keep their separate toggle.
+The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
+Click **Recipient open_id** to edit it; **lark-cli path** overrides the executable,
+with an empty field using `lark-cli` from PATH. Bus stores no credentials.
+Configure bot authentication in lark-cli; sends explicitly use `--as bot`.
 
-Developer message notifications no longer emit OSC host-terminal popups. Freeze recovery
-notifications keep their existing host-terminal behavior. Room sounds, unread counts and
-composer drafts keep their existing behavior. There is no Feishu reply channel.
+A fixed two-second window combines every qualifying message in a burst into one DM.
+Tagged messages contribute `sender is waiting on you: action`, taking the first line
+or bullet after the marker (same or following nonempty line), with Markdown closing
+markers skipped and the full action line preserved. Untagged direct posts contribute
+`sender to you: first line`. Additional body lines and attachment paths are never added.
+Routing markers and terminal controls are filtered. Each source contributes its own line.
+
+The coordinator runs `lark-cli im +messages-send --as bot --user-id OPEN_ID --text TEXT
+--idempotency-key KEY --format json` in one background worker without a shell, with a
+ten-second timeout and cancellation. Failures log a warning and never block or crash Bus;
+there are no automatic retries. Destination edits preserve pending messages, using the new
+destination for the next send; an in-flight send completes with its captured destination.
+There is no Feishu reply channel.
+
+Tests use only scratch sessions, fake providers, a closed PATH recording bot CLI and
+recorded sound effects. They never play audio, send real Feishu or automate the desktop.
