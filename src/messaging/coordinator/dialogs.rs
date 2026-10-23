@@ -77,7 +77,7 @@ impl Worker {
             // A coherent close retires an automatic reservation immediately;
             // ordinary help notices keep their existing steady-poll policy.
             if agent.deletion_pending
-                || (!steady && !(wait.is_none() && agent.automatic_dialog_answer.is_some()))
+                || !(steady || wait.is_none() && agent.automatic_dialog_answer.is_some())
             {
                 continue;
             }
