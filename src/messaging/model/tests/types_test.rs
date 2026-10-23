@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use super::*;
 
+#[path = "global_agent_names_test.rs"]
+mod global_agent_names_tests;
+
 #[path = "send_recovery_test.rs"]
 mod send_recovery_tests;
 
