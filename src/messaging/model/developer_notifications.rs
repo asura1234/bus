@@ -1,6 +1,8 @@
 //! Shared developer alert sources: explicit notices and tagged agent messages in every room.
 use super::{Author, BusState, Prompt, PromptId, RequestId, RequestPhase};
-use crate::messaging::attention::{plain_line, waiting_action};
+use crate::messaging::attention::{
+    has_you_mention, plain_line, waiting_action, waiting_tag_action,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Eq, Ord, PartialEq, PartialOrd)]
@@ -13,6 +15,7 @@ struct Message<'a> {
     sender: &'a str,
     text: &'a str,
     directed: bool,
+    developer_context: bool,
     at_ms: u64,
 }
 
@@ -29,12 +32,17 @@ pub(crate) fn new_developer_notifications(previous: &BusState, next: &BusState) 
         .into_iter()
         .filter_map(|(_, message)| {
             let sender = plain_line(message.sender);
-            if let Some(action) = waiting_action(message.text) {
+            let action = if message.developer_context {
+                waiting_action(message.text)
+            } else {
+                waiting_tag_action(message.text)
+            };
+            if let Some(action) = action {
                 Some(format!(
                     "{sender} is waiting on you: {}",
                     plain_line(action)
                 ))
-            } else if message.directed {
+            } else if message.directed || has_you_mention(message.text) {
                 let line = plain_line(message.text.trim_start());
                 let line = if line.is_empty() {
                     "Attached files"
@@ -86,6 +94,7 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
                             .map_or("Bus", |a| a.name.as_str()),
                         text: crate::messaging::attention::text(&reply.text).unwrap_or(&reply.text),
                         directed: false,
+                        developer_context: request.prompt.author == Author::Developer,
                         at_ms: request.completed_at_ms.unwrap_or(reply.received_at_ms),
                     },
                 );
@@ -117,6 +126,7 @@ fn insert_prompt<'a>(
             sender,
             text: crate::messaging::attention::text(&prompt.text).unwrap_or(&prompt.text),
             directed,
+            developer_context: prompt.recipient_ids.is_empty(),
             at_ms: prompt.submitted_at_ms,
         },
     );

@@ -7,9 +7,11 @@ recipient, and creates no agent request. Use @you or [waiting-on-you] for things
 the developer can do or decide.
 
 Every direct agent message to you notifies, including untagged messages. Agent-authored
-peer messages and completed agent replies also notify when they contain `[waiting-on-you]`,
-`[waiting_on_you]` or the whole phrase `waiting on you` (case-insensitive, including
-`still waiting on you`). Developer-authored sends never trigger alerts.
+peer messages and completed agent replies also notify when they contain an explicit `@you`,
+`[waiting-on-you]` or `[waiting_on_you]` marker (case-insensitive). The legacy whole phrase
+`waiting on you`, including `still waiting on you`, qualifies only in direct developer notices
+and replies to developer-authored requests. Bare phrases between agents do not trigger developer alerts;
+there, "you" names the receiving agent. Developer-authored sends never trigger alerts.
 
 A separate bundled developer sound rings once for each qualifying source, regardless of
 visible room, focus, room sound switches, startup grace or ordinary notification cooldown.

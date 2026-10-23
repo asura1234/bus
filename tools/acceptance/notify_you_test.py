@@ -96,15 +96,18 @@ class Run(helper.Run):
         self.command("wait", "--message", tagged["result"]["message_id"], "--timeout", "20s")
         self.until(lambda: len(self.mandatory()) > sounds, "tagged peer mandatory sound")
         self.delivered("notify-worker is waiting on you: Choose rollout")
+        mentioned = self.post_room("notify-work", "notify-worker", "notify-orch", "@you Please choose rollout")
+        self.command("wait", "--message", mentioned["result"]["message_id"], "--timeout", "20s")
+        self.delivered("notify-worker to you: @you Please choose rollout")
         self.quiet()
         sounds, calls = len(self.mandatory()), len(self.calls())
-        for sender, text in [("notify-worker", "Routine peer progress"), (None, "[waiting-on-you] Developer send fake:raw-reply done")]:
+        for sender, text in [("notify-worker", "PR is pushed; still waiting on you for the next task"), (None, "[waiting-on-you] Developer send fake:raw-reply done")]:
             sent = self.post_room("notify-work", sender, "notify-orch", text)
             self.command("wait", "--message", sent["result"]["message_id"], "--timeout", "20s")
         self.quiet()
         assert len(self.mandatory()) == sounds and len(self.calls()) == calls
         self.command("wait", "--text", "KEEP DRAFT")
-        self.step(4, "Tagged peer send notified with focus out and muted rooms; untagged peer send and developer-authored tagged prompt produced no mandatory sound or bot call; KEEP DRAFT preserved")
+        self.step(4, "Tagged peer send and explicit @you notified with focus out and muted rooms; untagged peer waiting phrase and developer-authored tagged prompt produced no mandatory sound or bot call; KEEP DRAFT preserved")
 
         self.post_room("notify-other", "notify-worker", "human", "Alias delivery")
         self.delivered("notify-worker to you: Alias delivery")

@@ -103,7 +103,8 @@ on macOS only: on Linux and Windows Bus uses other programs the recorder does
 not stand in for, so `start` refuses there.
 
 Agent messages addressed to `you` (or `human`) and all waiting-tagged agent messages
-notify from every room and sender. Feishu notifications are mandatory; recipient and
+notify from every room and sender. Explicit `@you` mentions also qualify. Bare waiting phrases
+qualify only in developer conversations, not peer traffic. Feishu notifications are mandatory; recipient and
 optional CLI path remain shared settings, and bursts combine over two seconds.
 Use a closed PATH recording shim to assert argv. Developer sends emit no alerts,
 and these alerts emit no terminal OSC. See [developer notifications](developer-notifications.md).

@@ -612,3 +612,87 @@ fn notify_you_forwarded_worker_reply_and_ack_do_not_repeat_the_alert() {
     policy.observe(&forwarded, &next, 9000);
     assert!(policy.take(12000).is_none());
 }
+
+#[test]
+fn untagged_waiting_phrase_between_agents_does_not_alert_the_developer() {
+    let (mut before, _, work, orchestrator) = fixture();
+    let worker = before
+        .create_agent(work, "worker", Provider::Codex, "/tmp".into(), None)
+        .unwrap();
+    let mut next = before.clone();
+    // "you" here is the orchestrator the worker addresses, not the developer.
+    next.submit_message_from(
+        work,
+        crate::messaging::model::Draft {
+            text: "PR is pushed; still waiting on you for the next task".into(),
+            files: vec![],
+            recipient_ids: [orchestrator].into(),
+        },
+        Author::Agent(worker),
+        1,
+    )
+    .unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert_eq!(policy.take(3000), None);
+}
+
+#[test]
+fn untagged_waiting_phrase_in_a_worker_final_to_an_agent_does_not_alert_the_developer() {
+    let (mut before, _, work, orchestrator) = fixture();
+    let worker = before
+        .create_agent(work, "worker", Provider::Codex, "/tmp".into(), None)
+        .unwrap();
+    let request = before
+        .submit_message_from(
+            work,
+            crate::messaging::model::Draft {
+                text: "Rebase and report".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Agent(orchestrator),
+            1,
+        )
+        .unwrap()[0];
+    let mut value = serde_json::to_value(&before).unwrap();
+    let item = &mut value["requests"][request.0.to_string()];
+    item["phase"] = serde_json::json!("completed");
+    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"BLOCKED: waiting on you to pick the base branch", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_at_ms"] = serde_json::json!(2);
+    let next: BusState = serde_json::from_value(value).unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert_eq!(policy.take(3000), None);
+}
+
+#[test]
+fn explicit_you_mention_in_peer_traffic_alerts_but_partial_tokens_do_not() {
+    let (mut before, _, work, orchestrator) = fixture();
+    let worker = before
+        .create_agent(work, "worker", Provider::Codex, "/tmp".into(), None)
+        .unwrap();
+    for (text, alerts) in [
+        ("@you Please choose the rollout", true),
+        ("(@YOU) choose", true),
+        ("Ask @yourself", false),
+        ("dev@you.example", false),
+        ("@you_all", false),
+    ] {
+        let mut next = before.clone();
+        next.submit_message_from(
+            work,
+            crate::messaging::model::Draft {
+                text: text.into(),
+                files: vec![],
+                recipient_ids: [orchestrator].into(),
+            },
+            Author::Agent(worker),
+            1,
+        )
+        .unwrap();
+        let mut policy = enabled();
+        policy.observe(&before, &next, 1000);
+        assert_eq!(policy.take(3000).is_some(), alerts, "{text}");
+    }
+}
