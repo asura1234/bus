@@ -13,12 +13,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const POLL_MS: u64 = 90_000;
+pub(crate) const FAILURE_ALERT_POLLS: u32 = 3;
 pub(crate) const LOOKBACK_MS: u64 = 86_400_000;
 pub(crate) const OVERLAP_MS: u64 = 120_000;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct Watermark {
+    /// Saved with notices so retrying a failed save cannot count a poll twice.
+    pub(crate) consecutive_failures: u32,
     /// Completed scan start; subsequent pages are bounded by updatedAt.
     pub(crate) merged_since_ms: u64,
     /// Fixed initial merge-time floor, independent of updated-at page movement.

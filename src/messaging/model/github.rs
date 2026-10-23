@@ -95,6 +95,7 @@ impl BusState {
                 match result {
                     Ok(page) => {
                         let mark = self.github_watch.entry(repo.clone()).or_default();
+                        mark.consecutive_failures = 0;
                         for pr in &page.open {
                             mark.head_prs
                                 .entry(pr.branch.clone())
@@ -127,10 +128,22 @@ impl BusState {
                         }
                     }
                     Err(failure) => {
+                        let mark = self.github_watch.entry(repo.clone()).or_default();
+                        mark.consecutive_failures = mark
+                            .consecutive_failures
+                            .saturating_add(1)
+                            .min(github::FAILURE_ALERT_POLLS);
+                        if mark.consecutive_failures < github::FAILURE_ALERT_POLLS {
+                            return Ok(());
+                        }
                         for scope in scopes {
                             let room = RoomId(scope.room);
                             if self.github_unavailable.insert((room, repo.clone())) {
-                                self.github_notice(room,true,format!("GitHub: {repo} watch unavailable ({}) — retrying in the background. Check gh installation / gh auth login.",failure.reason),now)?;
+                                self.github_notice(
+                                    room, true,
+                                    format!("GitHub: {repo} watch unavailable after {} consecutive failed polls ({}) — retrying in the background.", github::FAILURE_ALERT_POLLS, failure.reason),
+                                    now,
+                                )?;
                             }
                         }
                     }

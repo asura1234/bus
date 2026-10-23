@@ -30,7 +30,7 @@ impl Source for Fake {
         self.release.lock().unwrap().recv().unwrap();
         if self.fail {
             Err(Failure {
-                reason: "not logged in",
+                reason: "not logged in".into(),
                 retry_at_ms: Some(900_000),
             })
         } else {
@@ -151,4 +151,147 @@ fn github_watch_account_rate_limit_reset_pauses_every_repository() {
         first,
         "polled again before the account-wide rate-limit reset: {fetched:?}"
     );
+}
+
+#[test]
+fn github_watch_failed_gh_response_preserves_bounded_network_and_http_errors() {
+    let query = Query {
+        repo: "o/r".into(),
+        watermark: Watermark::default(),
+        now_ms: 1,
+    };
+    let failure = parse_response(
+        &query,
+        false,
+        "",
+        "error connecting to api.github.com\nlookup api.github.com: no such host",
+    )
+    .unwrap_err();
+    assert!(
+        failure
+            .reason
+            .contains("lookup api.github.com: no such host"),
+        "lost gh stderr: {failure:?}"
+    );
+    let failure = parse_response(&query, false, "HTTP/2.0 503 Service Unavailable\r\nRetry-After: 4\r\n\r\n{\"message\":\"upstream temporarily unavailable\"}", "").unwrap_err();
+    assert!(
+        failure.reason.contains("503 Service Unavailable"),
+        "lost HTTP status: {failure:?}"
+    );
+    assert!(
+        failure.reason.contains("upstream temporarily unavailable"),
+        "lost HTTP body: {failure:?}"
+    );
+    assert_eq!(failure.retry_at_ms, Some(4001));
+    let failure = parse_response(&query, false, "", &"故障".repeat(100_000)).unwrap_err();
+    assert!(
+        failure.reason.chars().count() <= 512,
+        "unbounded diagnostic"
+    );
+    assert!(
+        failure.reason.contains("故障"),
+        "real error replaced by generic text"
+    );
+}
+
+#[test]
+fn github_watch_bounded_error_reaches_the_warning_and_unavailable_notice() {
+    // Multiple dispatchers keep this shared callsite's interest independent
+    // from concurrently running test threads without a default subscriber.
+    let _registration = tracing::Dispatch::new(tracing_subscriber::registry());
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || Capture(writer.clone()))
+        .finish();
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let query = Query {
+        repo: "o/r".into(),
+        watermark: Watermark::default(),
+        now_ms: 1,
+    };
+    let failure = parse_response(
+        &query,
+        false,
+        "",
+        &format!("DNS lookup failed\n{}", "故障".repeat(100_000)),
+    )
+    .unwrap_err();
+    assert_eq!(failure.reason.chars().count(), 512);
+    assert!(failure.reason.ends_with('…'));
+    assert!(!failure.reason.contains('\n'));
+    let mut state = crate::messaging::model::BusState::new();
+    let room = state.create_room("watch").unwrap();
+    let update = Update::Repo {
+        repo: query.repo,
+        scopes: vec![Scope {
+            room: room.0,
+            ..Default::default()
+        }],
+        result: Err(failure.clone()),
+        at_ms: 1,
+    };
+    let (tx, rx) = mpsc::channel();
+    tx.send(update.clone()).unwrap();
+    drop(tx);
+    let mut runtime = Runtime {
+        pending: Some(rx),
+        ..Runtime::default()
+    };
+    runtime.tick(Vec::new(), &BTreeMap::new(), 1);
+    let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    assert!(
+        logs.contains(&failure.reason),
+        "warning lost the real bounded error: {logs}"
+    );
+    assert!(logs.len() < 2500, "unbounded warning row");
+    for now in 1..=3 {
+        state.apply_github(&update, now).unwrap();
+    }
+    let notice = state.notices(room).next().unwrap();
+    assert!(
+        notice.text.contains(&failure.reason),
+        "alert lost the real bounded error"
+    );
+    assert!(notice.text.chars().count() < 750);
+}
+
+#[test]
+fn github_watch_graphql_and_invalid_json_errors_keep_the_real_response_detail() {
+    let query = Query {
+        repo: "o/r".into(),
+        watermark: Watermark::default(),
+        now_ms: 1,
+    };
+    let failure = parse_response(
+        &query,
+        true,
+        "{\"errors\":[{\"message\":\"fixture rate limit exceeded\"}]}",
+        "",
+    )
+    .unwrap_err();
+    assert!(failure.reason.contains("fixture rate limit exceeded"));
+    let failure =
+        parse_response(&query, true, "<html>fixture gateway failure</html>", "").unwrap_err();
+    assert!(failure.reason.contains("fixture gateway failure"));
+    let failure = parse_response(
+        &query,
+        false,
+        "",
+        "gh auth login: fixture credentials rejected",
+    )
+    .unwrap_err();
+    assert!(failure.reason.contains("fixture credentials rejected"));
 }

@@ -61,10 +61,14 @@ repository per 90-second round, shared across rooms, with open and merged PR pag
 advanced in subsequent rounds. Long scans therefore take more than one round.
 GitHub rate-limit resets and retry-after headers delay retries; other failures
 back off up to 24 minutes. Missing gh, authentication problems and unavailable
-repositories are logged, with one unavailable notice per room/repository pair per
-outage. Only a successful poll of that repository clears its flag; another
-healthy repository cannot rearm the same outage. A later outage is reported again.
-No raw CLI error output is posted to rooms.
+repositories are logged on each failed poll. An actionable unavailable notice waits
+for 3 consecutive failed polls of that repository (about 9 minutes after the first
+failure with the normal backoff), allowing two retry opportunities for transient
+faults. Failure streaks survive restart and reset on any successful poll of that
+repository. Each room/repository pair receives one notice per outage; another
+healthy repository cannot rearm it. A later persistent outage is reported again.
+Warnings and unavailable notices include the actual gh stderr or failed HTTP
+response, capped at 512 Unicode characters and normalized to one line.
 
 Observation cursors and their notices are saved together in `state.json`. Restart
 resumes pagination and suppresses already reported merges and PR-state edges.

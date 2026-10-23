@@ -78,15 +78,17 @@ fn github_watch_reports_unavailable_once_per_room_even_after_restart_and_validat
             ..Default::default()
         }],
         result: Err(crate::messaging::github::source::Failure {
-            reason: "not logged in",
+            reason: "not logged in".into(),
             retry_at_ms: None,
         }),
         at_ms: 1,
     };
-    state.apply_github(&update, 1).unwrap();
+    for now in 1..=3 {
+        state.apply_github(&update, now).unwrap();
+    }
     let mut state: BusState =
         serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
-    state.apply_github(&update, 2).unwrap();
+    state.apply_github(&update, 4).unwrap();
     assert_eq!(state.notices(room).count(), 1);
     state
         .set_github_repos(room, &serde_json::json!(["Owner/Repo"]))
@@ -186,26 +188,28 @@ fn github_watch_recovery_rearms_a_new_outage_after_restart() {
     let room = state.create_room("work").unwrap();
     let mut update = merged_update(room, "fix/theirs");
     let failure = crate::messaging::github::source::Failure {
-        reason: "not logged in",
+        reason: "not logged in".into(),
         retry_at_ms: None,
     };
     if let Update::Repo { result, .. } = &mut update {
         *result = Err(failure.clone());
     }
-    state.apply_github(&update, 1).unwrap();
-    state.apply_github(&update, 2).unwrap();
+    for now in 1..=3 {
+        state.apply_github(&update, now).unwrap();
+    }
     assert_eq!(state.notices(room).count(), 1);
     if let Update::Repo { result, .. } = &mut update {
         *result = Ok(Page::default());
     }
-    state.apply_github(&update, 3).unwrap();
+    state.apply_github(&update, 4).unwrap();
     let mut state: BusState =
         serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
     if let Update::Repo { result, .. } = &mut update {
         *result = Err(failure);
     }
-    state.apply_github(&update, 4).unwrap();
-    state.apply_github(&update, 5).unwrap();
+    for now in 5..=7 {
+        state.apply_github(&update, now).unwrap();
+    }
     assert_eq!(
         state.notices(room).count(),
         2,
@@ -226,7 +230,7 @@ fn github_watch_one_failing_repo_beside_a_healthy_repo_reports_its_outage_once()
         repo: "o/gone".into(),
         scopes: scope(),
         result: Err(crate::messaging::github::source::Failure {
-            reason: "GitHub repository unavailable",
+            reason: "GitHub repository unavailable".into(),
             retry_at_ms: None,
         }),
         at_ms: 1,
@@ -343,7 +347,7 @@ fn github_watch_outages_recover_per_repo_and_persist_per_room() {
         }],
         result: if failed {
             Err(crate::messaging::github::source::Failure {
-                reason: "not logged in",
+                reason: "not logged in".into(),
                 retry_at_ms: None,
             })
         } else {
@@ -351,9 +355,11 @@ fn github_watch_outages_recover_per_repo_and_persist_per_room() {
         },
         at_ms: 1,
     };
-    state.apply_github(&update(a, "o/one", true), 1).unwrap();
-    state.apply_github(&update(a, "o/two", true), 2).unwrap();
-    state.apply_github(&update(b, "o/one", true), 3).unwrap();
+    for _ in 0..3 {
+        state.apply_github(&update(a, "o/one", true), 1).unwrap();
+        state.apply_github(&update(a, "o/two", true), 2).unwrap();
+        state.apply_github(&update(b, "o/one", true), 3).unwrap();
+    }
     assert_eq!(state.notices(a).count(), 2);
     assert_eq!(state.notices(b).count(), 1);
     assert!(state
@@ -1007,4 +1013,73 @@ fn github_watch_an_upgraded_room_keeps_its_open_pr_head_after_worker_cleanup() {
         state.room(room).unwrap().github_branches["o/r"].contains("fix/shared"),
         "the first scan after upgrade purged the head of a PR it was reporting as open"
     );
+}
+
+#[test]
+fn github_watch_alerts_after_three_consecutive_repo_failures_and_resets_on_success() {
+    let (mut state, room, _) = bound_room();
+    let failed = |repo: &str| Update::Repo {
+        repo: repo.into(),
+        scopes: vec![Scope {
+            room: room.0,
+            ..Default::default()
+        }],
+        result: Err(crate::messaging::github::source::Failure {
+            reason: "lookup api.github.com: no such host".into(),
+            retry_at_ms: None,
+        }),
+        at_ms: 1,
+    };
+    let healthy = |repo: &str| Update::Repo {
+        repo: repo.into(),
+        scopes: vec![Scope {
+            room: room.0,
+            ..Default::default()
+        }],
+        result: Ok(Page::default()),
+        at_ms: 1,
+    };
+    let alerts = |s: &BusState| {
+        s.requests()
+            .filter(|r| r.prompt.text.contains("watch unavailable"))
+            .count()
+    };
+    state.apply_github(&failed("o/a"), 1).unwrap();
+    state.apply_github(&failed("o/b"), 2).unwrap();
+    state.apply_github(&failed("o/a"), 3).unwrap();
+    assert_eq!(
+        alerts(&state),
+        0,
+        "a transient failure interrupted the orchestrator"
+    );
+    state.apply_github(&healthy("o/a"), 4).unwrap();
+    state.apply_github(&failed("o/a"), 5).unwrap();
+    state.apply_github(&failed("o/b"), 6).unwrap();
+    assert_eq!(
+        alerts(&state),
+        0,
+        "success failed to reset the streak or repos shared a streak"
+    );
+    state.apply_github(&healthy("o/b"), 7).unwrap();
+    state.apply_github(&failed("o/a"), 8).unwrap();
+    let mut state: BusState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    state.apply_github(&failed("o/a"), 9).unwrap();
+    assert_eq!(
+        alerts(&state),
+        1,
+        "third consecutive failure must alert, even across restart"
+    );
+    assert!(state.requests().any(|r| r
+        .prompt
+        .text
+        .contains("lookup api.github.com: no such host")));
+    state.apply_github(&failed("o/a"), 10).unwrap();
+    assert_eq!(alerts(&state), 1, "same outage re-alerted");
+    state.apply_github(&healthy("o/a"), 11).unwrap();
+    state.apply_github(&failed("o/a"), 12).unwrap();
+    state.apply_github(&failed("o/a"), 13).unwrap();
+    assert_eq!(alerts(&state), 1, "recovered outage bypassed threshold");
+    state.apply_github(&failed("o/a"), 14).unwrap();
+    assert_eq!(alerts(&state), 2, "new persistent outage suppressed");
 }
