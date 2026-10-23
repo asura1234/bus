@@ -2332,7 +2332,6 @@ fn agent_interrupt_names_one_agent_or_one_room_with_optional_text_and_author() {
     assert_eq!(parsed.params, json!({"room": "lab", "text": "pause"}));
     for args in [
         &["agent", "interrupt"][..],
-        &["agent", "interrupt", "worker", "--room", "lab"][..],
         &["agent", "interrupt", "worker", "--text", " "][..],
     ] {
         assert!(command(args).is_err(), "must reject {args:?}");
@@ -3199,4 +3198,51 @@ fn worker_human_fallback_cli_preserves_explicit_room_and_author() {
         "send", "--room", "7", "--as", "worker", "--to", "human", "--text", "status", "--async"
     ])
     .is_err());
+}
+
+#[test]
+fn identity_every_agent_cli_entry_accepts_names_ids_and_scoping() {
+    for selector in ["reviewer", "21546"] {
+        for tail in [
+            vec!["read"],
+            vec!["dialog"],
+            vec!["choose", "--option", "1", "--fingerprint", "fp"],
+            vec!["answer", "--text", "yes", "--fingerprint", "fp"],
+            vec!["delete", "--confirm"],
+            vec!["setup-confirm", "--confirm"],
+            vec!["clear"],
+            vec!["interrupt"],
+            vec!["rename", "reviewer"],
+        ] {
+            let mut argv = vec!["agent", tail[0], selector];
+            argv.extend_from_slice(&tail[1..]);
+            argv.extend_from_slice(&["--room", "work", "--as", "owner"]);
+            let parsed = command(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+            assert_eq!(parsed.params["agent"], selector);
+            assert_eq!(parsed.params["room"], "work");
+            assert_eq!(parsed.params["as"], "owner");
+        }
+    }
+    assert_eq!(
+        command(&["agent", "list", "--room", "work"])
+            .unwrap()
+            .method,
+        "agent.list"
+    );
+}
+
+#[test]
+fn identity_send_wait_and_message_seen_accept_names_or_ids_as_authors() {
+    for selector in ["reviewer", "21546"] {
+        for argv in [
+            vec![
+                "send", "--room", "work", "--to", selector, "--as", selector, "--text", "body",
+            ],
+            vec!["wait", "--message", "99", "--as", selector],
+            vec!["message", "seen", "42", "--as", selector],
+        ] {
+            let parsed = command(&argv).unwrap();
+            assert_eq!(parsed.params["as"], selector);
+        }
+    }
 }

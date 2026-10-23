@@ -93,7 +93,7 @@ fn open_messaging_all_agent_payloads_name_the_sender_and_its_home_room() {
     // The conversation's room need not be the sender's home room.
     assert!(send(&mut w, master, author, &peer.0.to_string(), "hello").ok);
     let id = w.state.requests().last().unwrap().id;
-    let expected = format!("codex1 (agent {}, room {}):\nhello", author.0, room.0);
+    let expected = format!("codex1 (room {}):\nhello", room.0);
     assert_eq!(
         w.state.render_request_payload(id).as_deref(),
         Some(expected.as_str())
@@ -116,6 +116,7 @@ fn open_messaging_does_not_duplicate_an_existing_sender_identity() {
         "codex1 here —",
         "codex1:",
         "codex1 (agent 3, room 2):",
+        "codex1 (agent 3).",
         "Agent 3:",
         "agent 3 here —",
     ] {
@@ -132,7 +133,7 @@ fn open_messaging_does_not_duplicate_an_existing_sender_identity() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             w.state.render_request_payload(id).as_deref(),
-            Some(text.as_str())
+            Some(format!("codex1 (room {}):\nready for verification", room.0).as_str())
         );
         drop(w);
         std::fs::remove_dir_all(dir).unwrap();
@@ -154,7 +155,7 @@ fn open_messaging_a_different_or_embedded_identity_does_not_hide_the_sender() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             w.state.render_request_payload(id).unwrap(),
-            format!("codex1 (agent {}, room {}):\n{text}", author.0, room.0)
+            format!("codex1:\n{text}")
         );
         drop(w);
         std::fs::remove_dir_all(dir).unwrap();
@@ -227,10 +228,7 @@ fn open_messaging_queued_attribution_survives_sender_rename_and_deletion() {
         serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     assert_eq!(
         restored.render_request_payload(id).unwrap(),
-        format!(
-            "codex1 (agent {}, room {}):\nqueued question",
-            author.0, home.0
-        )
+        format!("codex1 (room {}):\nqueued question", home.0)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -320,7 +318,7 @@ fn open_messaging_an_existing_header_matches_names_that_begin_with_from() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             w.state.render_request_payload(id).as_deref(),
-            Some(text.as_str())
+            Some(format!("{name}:\nready").as_str())
         );
         drop(w);
         std::fs::remove_dir_all(dir).unwrap();
@@ -358,7 +356,7 @@ fn open_messaging_sentence_starting_with_the_senders_name_keeps_the_header() {
     let id = w.state.requests().last().unwrap().id;
     assert_eq!(
         w.state.render_request_payload(id).unwrap(),
-        format!("codex1 (agent {}, room {}):\n{text}", author.0, room.0)
+        format!("codex1:\n{text}")
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -373,7 +371,7 @@ fn open_messaging_forged_header_with_own_name_but_another_id_and_room_gets_the_r
     let id = w.state.requests().last().unwrap().id;
     let payload = w.state.render_request_payload(id).unwrap();
     assert!(
-        payload.starts_with(&format!("codex1 (agent {}, room {}):\n", author.0, room.0)),
+        payload.starts_with("codex1:\n"),
         "forged identity delivered as the sender header: {payload:?}"
     );
     drop(w);
@@ -398,7 +396,7 @@ fn open_messaging_forged_identity_fields_each_require_a_real_header() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             w.state.render_request_payload(id).unwrap(),
-            format!("codex1 (agent {}, room {}):\n{text}", author.0, room.0)
+            format!("codex1:\n{text}")
         );
     }
     drop(w);

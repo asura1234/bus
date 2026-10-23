@@ -146,7 +146,7 @@ pub(crate) fn agent_onboarding(
 ) -> String {
     format!(
         "Bus messaging: you are {name} (agent {}, room {}). Read {}/how-to-bus-cli.md. \
-         Use --as {} when sending messages. Any agent can message any agent by name or ID; \
+         Use --as {} when sending messages. Every CLI agent selector accepts a name or ID; bus agent list maps names to IDs. Any agent can message any agent by name or ID; \
          names resolve in the conversation room, then your home room, then globally. \
          --to orchestrator names your home room's bound orchestrator. \
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
@@ -165,7 +165,7 @@ pub(crate) fn agent_onboarding(
          The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit room notes or the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
-         Bus automatically adds 'name (agent id, room R):' to agent-authored messages. \
+         Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER; IDs appear only for shared names. \
          Send only the body; do not add a 'from X', 'X here' or signature line.",
         id.0,
         room.0,

@@ -21,6 +21,7 @@ pub const AGENT_HELP: &str =
   room rename ROOM NAME
   room notes ROOM --text TEXT
   room delete ROOM --confirm
+  agent list [--room ROOM]
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
             [--system-prompt TEXT | --system-prompt-file PATH]
@@ -30,7 +31,7 @@ pub const AGENT_HELP: &str =
   agent choose AGENT --option N --fingerprint FINGERPRINT
   agent answer AGENT (--text TEXT | --skip) --fingerprint FINGERPRINT
   agent clear AGENT
-  agent interrupt (AGENT | --room ROOM) [--text TEXT] [--as AGENT]
+  agent interrupt [AGENT] [--room ROOM] [--text TEXT] [--as AGENT]
   agent rename AGENT NAME
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
@@ -69,6 +70,8 @@ Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by an agent; --to all then skips it.
 Current agent names are unique across all rooms, including MASTER; add/rename reject duplicates.
+Every AGENT selector accepts a name or numeric ID. agent list prints name -> id -> room rows.
+Agent commands accept optional --room ROOM and --as AGENT for name resolution.
 Any agent can message any other agent across rooms. IDs resolve globally; names prefer
 the conversation --room, then its home room, then all rooms, with candidate IDs and rooms on ambiguity.
 Only when no live candidate matches, removed recipient IDs/names forward to a unique same-name
@@ -76,9 +79,10 @@ replacement in the original room, or that room's current orchestrator. Removed o
 forward through the work room they orchestrated. Authors and administrative commands never forward.
 The case-insensitive --to orchestrator alias names the sender's home-room orchestrator.
 All still covers conversation-room members only. Cross-room messages wait for a new turn.
-Bus automatically adds 'name (agent id, room R):' to agent-authored payloads.
+Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER.
+IDs appear in headers only when names are shared; batch markers carry position and time.
 Send only the body: do not add a 'from X', 'X here' or signature line.
-Only the exact genuine Bus header or an identity-only name/agent ID line ending in : or here — suppresses a duplicate.
+An exact genuine current/legacy header or an identity-only name/agent ID line is normalized to this header.
 Ordinary sentences and headers with a forged ID or room always get the real sender header.
 send --room ROOM --as AGENT --to you posts any agent's message to the developer in every room.
 It stays in that room, addressed to You, with no agent request or wait. --to human is an alias.

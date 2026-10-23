@@ -87,12 +87,8 @@ impl BusState {
         agent: AgentId,
         now_ms: u64,
     ) -> Result<PromptId, ModelError> {
-        let name = self
-            .agents
-            .get(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?
-            .name
-            .clone();
+        self.agent(agent).ok_or(ModelError::UnknownAgent(agent))?;
+        let name = self.agent_label(agent);
         let id = PromptId(self.allocate_id());
         self.rooms
             .get_mut(&room)

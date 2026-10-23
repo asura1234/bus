@@ -6,6 +6,8 @@ use serde_json::json;
 mod agents_tests;
 #[path = "dialogs_test.rs"]
 mod dialogs_tests;
+#[path = "identity_test.rs"]
+mod identity_tests;
 #[path = "inspect_test.rs"]
 mod inspect_tests;
 #[path = "messages_test.rs"]
