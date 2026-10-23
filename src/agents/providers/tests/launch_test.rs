@@ -425,9 +425,57 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
 }
 
 #[test]
-fn codexup_all_provider_cursor_disables_updates_on_new_and_adopted_launches() {
+fn cursor_disables_updates_on_new_and_adopted_launches() {
     for input in ["", "--resume=160d1f8b-9023-44b8-9bc7-24333effb185"] {
         let (args, _) = launch_args(Provider::Cursor, input).unwrap();
         assert!(args.iter().any(|arg| arg == "--disable-auto-update"), "{args:?}");
+    }
+}
+
+#[test]
+fn repeated_runtime_defaults_do_not_duplicate_update_arguments_or_consume_literal_text() {
+    for last in [
+        "-c",
+        "--config",
+        "--config=check_for_update_on_startup=true",
+    ] {
+        let mut args = vec![
+            "-c".into(),
+            "check_for_update_on_startup=false".into(),
+            last.into(),
+        ];
+        if last != "--config=check_for_update_on_startup=true" {
+            args.push("check_for_update_on_startup=true".into());
+        }
+        crate::agents::providers::launch::extend_generated_args(
+            Provider::Codex,
+            &mut args,
+            runtime_args(Provider::Codex),
+        );
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["-c", "check_for_update_on_startup=false"]
+        );
+    }
+    for provider in [Provider::Codex, Provider::Cursor] {
+        let mut args = vec![
+            "--".into(),
+            "--disable-auto-update".into(),
+            "check_for_update_on_startup=false".into(),
+        ];
+        let literal = args.clone();
+        crate::agents::providers::launch::extend_generated_args(
+            provider,
+            &mut args,
+            runtime_args(provider),
+        );
+        let once = args.clone();
+        crate::agents::providers::launch::extend_generated_args(
+            provider,
+            &mut args,
+            runtime_args(provider),
+        );
+        assert_eq!(args, once, "{provider:?}");
+        assert_eq!(&args[args.len() - literal.len()..], literal);
     }
 }

@@ -649,3 +649,122 @@ async fn a_restored_codex_resume_keeps_its_command_for_a_relaunch_after_an_updat
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_restored_codex_pane_resumes_with_startup_update_checks_disabled() {
+    let (command, _) = recorded_native_resume("codex", crate::agents::AgentKind::Codex).await;
+    assert!(
+        command.contains("check_for_update_on_startup=false"),
+        "a Bus restart relaunched Codex with its updater enabled: {command:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_restored_claude_pane_resumes_with_its_updater_disabled() {
+    let (_, env) = recorded_native_resume("claude", crate::agents::AgentKind::Claude).await;
+    assert_eq!(env.trim(), "1", "a Bus restart enabled Claude's updater");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_restored_cursor_pane_resumes_with_its_updater_disabled() {
+    let (command, _) = recorded_native_resume("cursor", crate::agents::AgentKind::Cursor).await;
+    assert!(command.contains("--disable-auto-update"), "{command}");
+}
+
+#[cfg(unix)]
+async fn recorded_native_resume(label: &str, kind: crate::agents::AgentKind) -> (String, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("restored-no-update");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 30));
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    // A shell that records the typed resume command instead of running it.
+    let dir = crate::utils::test_temp::unique_temp_path("bus-resume-recording-shell");
+    std::fs::create_dir_all(&dir).unwrap();
+    let typed = dir.join("typed");
+    let env = dir.join("env");
+    let shell = dir.join("sh");
+    std::fs::write(
+        &shell,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$DISABLE_AUTOUPDATER\" > '{}'\nexec head -n 1 > '{}'\n",
+            env.display(),
+            typed.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    app.state.default_shell = shell.to_string_lossy().into_owned();
+    app.state.shell_mode = crate::utils::config::ShellModeConfig::NonLogin;
+    let session = crate::agents::resume::catalog::PersistedAgentSession {
+        source: format!("herdr:{label}"),
+        agent: label.into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("saved-session").unwrap(),
+    };
+    let plan =
+        crate::agents::resume::catalog::plan(&session.source, &session.agent, &session.session_ref)
+            .unwrap();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("saved-worker".into(), kind);
+    terminal.set_persisted_agent_session(session);
+    terminal.pending_agent_resume_plan = Some(plan);
+
+    assert!(app.start_pending_agent_resumes(true));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let command = loop {
+        if let Ok(text) = std::fs::read_to_string(&typed) {
+            if text.ends_with('\n') {
+                break text;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "resume command was not typed"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    for (_, runtime) in app.terminal_runtimes.drain() {
+        runtime.shutdown();
+    }
+    let env = std::fs::read_to_string(env).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    (command, env)
+}
+
+#[test]
+fn native_resume_runtime_defaults_preserve_literal_tails_and_owned_capture_extras() {
+    use crate::messaging::coordinator::resume::LaunchExtras;
+    for label in ["codex", "cursor", "claude", "pi"] {
+        let plan = crate::agents::resume::catalog::AgentResumePlan {
+            agent: label.into(),
+            argv: vec![label.into(), "--".into(), "literal --no-daemon".into()],
+            dedupe_key: "saved".into(),
+        };
+        let extras = LaunchExtras {
+            args: vec!["--capture-marker".into()],
+            env: vec![("CAPTURE_MARKER".into(), "owned".into())],
+            ..Default::default()
+        };
+        let (argv, env) = super::resume_launch_inputs(&plan, extras);
+        assert_eq!(argv[0], label);
+        assert_eq!(
+            env.iter().find(|(k, _)| k == "CAPTURE_MARKER").unwrap().1,
+            "owned"
+        );
+        assert!(argv.iter().any(|a| a == "--capture-marker"));
+        if label != "pi" {
+            assert_eq!(&argv[argv.len() - 2..], ["--", "literal --no-daemon"]);
+        } else {
+            assert_eq!(&argv[..3], plan.argv);
+        }
+    }
+}

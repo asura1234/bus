@@ -76,6 +76,15 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
     }
 }
 
+pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
+    match label {
+        "codex" => Some(ProviderKind::Codex),
+        "claude" => Some(ProviderKind::ClaudeCode),
+        "cursor" => Some(ProviderKind::Cursor),
+        _ => None,
+    }
+}
+
 /// Updaters share an installation across panes. Respect an explicit Claude
 /// environment setting; user/project settings can also override inherited env.
 pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
@@ -191,8 +200,18 @@ pub(crate) fn launch_args(
 pub(crate) fn extend_generated_args(
     provider: ProviderKind,
     args: &mut Vec<String>,
-    capture: Vec<String>,
+    mut capture: Vec<String>,
 ) {
+    if provider == ProviderKind::Codex && codex_update_check_disabled(args) {
+        let mut index = 0;
+        while index + 1 < capture.len() {
+            if capture[index] == "-c" && capture[index + 1] == "check_for_update_on_startup=false" {
+                capture.drain(index..index + 2);
+            } else {
+                index += 1;
+            }
+        }
+    }
     let flag = match provider {
         ProviderKind::Codex => Some("--no-daemon"),
         ProviderKind::Cursor => Some("--disable-auto-update"),
@@ -213,6 +232,22 @@ pub(crate) fn extend_generated_args(
     } else {
         args.extend(capture);
     }
+}
+
+fn codex_update_check_disabled(args: &[String]) -> bool {
+    // Codex config overrides are ordered. An earlier `false` must not mask a
+    // later `true` when deciding whether our final safety override is present.
+    argument_positions(ProviderKind::Codex, args)
+        .into_iter()
+        .filter_map(|index| match args[index].as_str() {
+            "-c" | "--config" => args.get(index + 1).map(String::as_str),
+            arg => arg.strip_prefix("--config="),
+        })
+        .filter_map(|value| value.split_once('='))
+        .filter(|(key, _)| key.trim() == "check_for_update_on_startup")
+        .map(|(_, value)| value.trim())
+        .next_back()
+        == Some("false")
 }
 
 pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(), String> {

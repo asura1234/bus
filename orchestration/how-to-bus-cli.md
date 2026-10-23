@@ -585,8 +585,10 @@ cannot read an exited agent; read the snapshot file instead.
 
 ### Recover a room after a provider outage
 
-Bus disables Codex's startup update checks for managed launches and resumes. Update
-shared provider installations separately while their agents are stopped.
+Bus disables startup updates for Codex, Claude Code and Cursor on fresh launches and
+resumes, including restored panes outside rooms. Explicit Claude updater environment
+settings retain precedence. Update shared provider installations separately while
+their agents are stopped.
 
 When a launch reports a missing provider command, Bus records one `BLOCKED` notice
 and digest fact per room/provider outage, naming the binary. Affected agents and

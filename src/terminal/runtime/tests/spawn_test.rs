@@ -492,3 +492,34 @@ fn pane_terminal_allows_explicit_no_color_override() {
     let output = capture_shell_output("printf '%s' \"${NO_COLOR-unset}\"", &[("NO_COLOR", "1")]);
     assert_eq!(output, "1");
 }
+
+#[test]
+fn native_pane_defaults_disable_claude_updates_and_keep_explicit_settings() {
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let old = std::env::var_os("DISABLE_AUTOUPDATER");
+    std::env::remove_var("DISABLE_AUTOUPDATER");
+    let mut cmd = CommandBuilder::new("shell");
+    apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+    let default = cmd.get_env("DISABLE_AUTOUPDATER").map(|v| v.to_owned());
+    std::env::set_var("DISABLE_AUTOUPDATER", "0");
+    let mut inherited = CommandBuilder::new("shell");
+    apply_pane_launch_env(&mut inherited, &PaneLaunchEnv::default());
+    let inherited = inherited
+        .get_env("DISABLE_AUTOUPDATER")
+        .map(|v| v.to_owned());
+    let mut explicit = CommandBuilder::new("shell");
+    apply_pane_launch_env(
+        &mut explicit,
+        &PaneLaunchEnv::from_extra(vec![("DISABLE_AUTOUPDATER".into(), "user".into())]),
+    );
+    let explicit = explicit
+        .get_env("DISABLE_AUTOUPDATER")
+        .map(|v| v.to_owned());
+    match old {
+        Some(v) => std::env::set_var("DISABLE_AUTOUPDATER", v),
+        None => std::env::remove_var("DISABLE_AUTOUPDATER"),
+    }
+    assert_eq!(default.as_deref(), Some(std::ffi::OsStr::new("1")));
+    assert_eq!(inherited.as_deref(), Some(std::ffi::OsStr::new("0")));
+    assert_eq!(explicit.as_deref(), Some(std::ffi::OsStr::new("user")));
+}
