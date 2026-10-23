@@ -169,10 +169,10 @@ human-typed Claude turns are identified from matching session/turn transcript
 metadata and do not become continuations of an unrelated Bus request. Bus-submitted
 input and already-bound folded turns retain ownership.
 
-The four enabled `orchestrator_inbox_*` regressions prove early cross-room admission,
+The enabled `orchestrator_inbox_*` regressions prove early cross-room admission,
 source-room attribution and replay/restart safety, real dialog priority while a
 live turn stays uninterrupted, direct human input followed by a no-Stop interrupt,
-and a textless background Stop. Each reproduced RED on `4e30f80e` before the fix.
+and a textless background Stop. The original four reproduced RED on `4e30f80e` before the fix. A further red-first folded-steering guard proves that members with no separate submit hook share their captured answer after the ordinary steering grace, allowing the next room to proceed.
 
 Both the ordinary two-cycle guard and the official timed soak now run an additional
 orchestrator burst per cycle: 28 queued messages alternate MASTER and the work room,
@@ -182,3 +182,10 @@ checks distinct replies and visible publication counts, and reopens the coordina
 four times with explicit provider startup hooks. Each burst proves 30 additional
 requests (held input, blocked notice, and 28 queued inputs). The original twelve-agent
 load and stall-alert phases retain their independent counts and assertions.
+
+The timed soak also asserts one ordinary Bus-authored idle-worker notice per aged
+stall cycle, separate from its deliberate MASTER stall alert. Its unread oracle
+counts those notices as well as the 25 load requests; the independent publication
+oracle and negative duplicate-publication control remain active. A diagnostic
+one-cycle replay proved the former 26-versus-25 count was an ordinary 11-idle-worker
+notice, rather than an extra reply.

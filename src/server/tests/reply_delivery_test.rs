@@ -1315,15 +1315,26 @@ fn run_soak() {
         .state()
         .requests()
         .all(|r| r.phase == RequestPhase::Completed));
+    let notices: Vec<_> = f.state().notices(f.work).collect();
+    assert_eq!(
+        notices.len(),
+        round,
+        "one idle-worker notice per aged stall cycle: {notices:?}"
+    );
+    assert!(
+        notices.iter().all(
+            |notice| notice.author == crate::messaging::model::Author::Bus
+                && notice.text.starts_with("You have 11 idle agents (")
+        ),
+        "unexpected work-room notices: {notices:?}"
+    );
     assert_eq!(
         f.state().room(f.work).unwrap().unread_count as usize,
-        completed,
-        "work-room notices: {:?}",
-        f.state().notices(f.work).collect::<Vec<_>>()
+        completed + notices.len()
     );
     assert_eq!(f.stall_alerts(), round);
     f.assert_publications();
-    eprintln!("reply soak: {completed} completed requests, {round} rounds, 12 agents, {:?}, {} intentional alerts, no repeated alerts", began.elapsed(), f.stall_alerts());
+    eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} intentional stall alerts, {} idle-worker notices, no repeated alerts", round * 30, began.elapsed(), f.stall_alerts(), notices.len());
 }
 
 /// Negative control: the contract must notice a second visible publication,
