@@ -40,6 +40,9 @@ DEV_TOOLS_FEATURES = ("--features", "dev-tools")
 DEV_TOOLS_TEST_TARGETS = ("cli", "tui-driver")
 # The driver's own unit tests live in the bus binary under this module path.
 DEV_TOOLS_UNIT_PREFIX = "devtools::"
+# The default rustc wrapper injects flags outside Cargo's cache key. Normal and
+# coverage builds may share one target, so instrumentation must use RUSTFLAGS.
+COVERAGE_BUILD_FLAGS = ("--no-rustc-wrapper",)
 ARCHITECTURE_TESTS = (
     "tools/tests/ui_hot_path_test.py",
     "tools/tests/import_boundaries_test.py",
@@ -152,9 +155,11 @@ def save_state(value: dict) -> None:
 def rust_test(
     *targets: str, fresh: bool = False, in_process_server: bool | None = None
 ) -> int:
+    stage = "unit" if fresh else "integration"
+    env = child_env(LLVM_PROFILE_FILE_NAME=f"{ROOT.name}-{stage}-%p-%m.profraw")
     # --no-report already preserves profiles and rejects --no-clean. Reset just the raw
     # profiles once per round, keeping the instrumented build cache warm.
-    if fresh and run("cargo", "llvm-cov", "clean", "--profraw-only"):
+    if fresh and run("cargo", "llvm-cov", "clean", "--profraw-only", env=env):
         return 1
     argv = [
         "cargo",
@@ -162,6 +167,7 @@ def rust_test(
         "nextest" if shutil.which("cargo-nextest") else "test",
         "--locked",
         "--no-report",
+        *COVERAGE_BUILD_FLAGS,
         *targets,
     ]
     if shutil.which("cargo-nextest"):
@@ -186,7 +192,7 @@ def rust_test(
         elif in_process_server is True:
             # cargo-llvm-cov test accepts a libtest substring before the `--` delimiter.
             argv.append(IN_PROCESS_SERVER_TESTS)
-    return run(*argv)
+    return run(*argv, env=env)
 
 
 def file_lengths() -> int:
@@ -261,31 +267,72 @@ def llvm_cov_target(env) -> Path:
     return ROOT / env.get("CARGO_TARGET_DIR", "target") / "llvm-cov-target"
 
 
+def unit_profraw_files(target: Path) -> list[Path]:
+    return sorted(
+        path for path in target.glob("*.profraw")
+        if path.name.startswith(f"{ROOT.name}-unit-")
+        and path.is_file() and path.stat().st_size > 0
+    )
+
+
+def require_unit_profraw(value: dict) -> None:
+    target = llvm_cov_target(os.environ).resolve()
+    names = value.get("unit_profraw", [])
+    if not isinstance(names, list) or not names:
+        raise ValueError(
+            "unit profraw is missing: the Rust unit run produced no coverage profiles; "
+            "an uninstrumented cached binary may have been reused. Rerun the complete gate"
+        )
+    if value.get("profile_target") != str(target):
+        raise ValueError("unit profraw target changed; rerun unit and integration")
+    for name in names:
+        if (
+            not isinstance(name, str) or Path(name).name != name
+            or not name.startswith(f"{ROOT.name}-unit-") or not name.endswith(".profraw")
+        ):
+            raise ValueError("invalid unit profraw evidence; rerun the complete gate")
+        path = target / name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f"unit profraw is missing or empty: {path}; rerun the complete gate")
+
+
 def unit() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     # Never let a failed/new round reuse yesterday's successful report.
     for name in ("rust.lcov", "summary.json"):
         (OUTPUT / name).unlink(missing_ok=True)
-    value = {"head": head(), "unit": False, "integration": False}
+    target = llvm_cov_target(os.environ)
+    value = {
+        "head": head(), "unit": False, "integration": False,
+        "profile_target": str(target.resolve()), "unit_profraw": [],
+    }
     save_state(value)
     rust = rust_test("--bin", "bus", fresh=True, in_process_server=False)
+    # Checkpoint before CLI/Python/integration can create their own profiles.
+    value["unit_profraw"] = [path.name for path in unit_profraw_files(target)]
+    if not value["unit_profraw"]:
+        print(
+            "Rust unit run produced no unit profraw; coverage cannot accept an "
+            "uninstrumented cached test binary", file=sys.stderr,
+        )
     cli = run(
         "cargo",
         "llvm-cov",
         "run",
         "--locked",
         "--no-report",
+        *COVERAGE_BUILD_FLAGS,
         "--bin",
         "bus",
         "--",
         "--help",
+        env=child_env(LLVM_PROFILE_FILE_NAME=f"{ROOT.name}-cli-%p-%m.profraw"),
     )
-    target = llvm_cov_target(os.environ)
     test_env = child_env(
         BUS_TEST_BINARY=str(
             target / "debug" / ("bus.exe" if os.name == "nt" else "bus")
         ),
-        LLVM_PROFILE_FILE=str(target / f"{ROOT.name}-%p-%11m.profraw"),
+        LLVM_PROFILE_FILE=str(target / f"{ROOT.name}-cli-%p-%m.profraw"),
     )
     tests = [str(path.relative_to(ROOT)) for path in python_files() if is_test(path)]
     if not tests:
@@ -293,7 +340,7 @@ def unit() -> int:
     # Python here is developer and agent tooling, not the product: its tests
     # must pass, but a percentage target would only reward coverage-only tests.
     python = run(sys.executable, "-m", "pytest", "-q", *tests, env=test_env)
-    value["unit"] = not (rust or cli or python)
+    value["unit"] = not (rust or cli or python or not value["unit_profraw"])
     save_state(value)
     return int(not value["unit"])
 
@@ -410,6 +457,7 @@ def check_percent(label: str, covered: int, total: int, threshold: float) -> dic
 
 def coverage() -> int:
     value = state()
+    require_unit_profraw(value)
     if not (value["unit"] and value["integration"]):
         raise ValueError(
             "coverage requires successful unit and integration checks from this round"
@@ -434,9 +482,37 @@ def coverage() -> int:
             "Rust", *rust_lines(OUTPUT / "rust.lcov"), policy["rust_line_percent"]
         ),
     }
+    reference = float(policy["rust_line_percent"])
+    reference_kind = "policy minimum (no successful local report yet)"
+    previous = OUTPUT / "last-successful.json"
+    if previous.exists():
+        prior = json.loads(previous.read_text(encoding="utf-8"))["rust"]
+        percent = prior["percent"]
+        if type(percent) not in (int, float) or not 0 <= percent <= 100 or prior["pass"] is not True:
+            raise ValueError(f"invalid successful coverage reference: {previous}")
+        reference = percent
+        reference_kind = "last successful local report"
+    measured = summary["rust"]
+    measured["reference_percent"] = reference
+    measured["reference_kind"] = reference_kind
+    drop = reference - measured["percent"]
+    if drop > 20:
+        measured["failure"] = (
+            f"Rust coverage dropped by {drop:.2f} percentage points from {reference:.2f}% "
+            f"({reference_kind}); more than 20 points suggests missing instrumentation "
+            "or an incomplete test run. Inspect unit profraw and rerun the complete gate"
+        )
+        measured["pass"] = False
+    rendered = json.dumps(summary, indent=2) + "\n"
     (OUTPUT / "summary.json").write_text(
-        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+        rendered, encoding="utf-8"
     )
+    if "failure" in measured:
+        raise ValueError(measured["failure"])
+    if measured["pass"]:
+        pending = OUTPUT / "last-successful.json.tmp"
+        pending.write_text(rendered, encoding="utf-8")
+        pending.replace(previous)
     return int(not summary["rust"]["pass"])
 
 
