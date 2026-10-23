@@ -545,7 +545,7 @@ async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visibl
         &runtime.terminal.detection_text(),
     ));
     let (events, mut received) = mpsc::channel(8);
-    let detector = crate::terminal::runtime::detection_task::spawn_detection_task(
+    let (_, detector) = crate::terminal::runtime::detection_task::spawn_detection_task(
         PaneId::from_raw(0),
         AgentDetection::Enabled,
         Some(AgentKind::Codex),
@@ -553,11 +553,10 @@ async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visibl
         runtime.terminal.clone(),
         events,
         Arc::new(AtomicU64::new(0)),
-        Arc::new(AtomicBool::new(false)),
         Arc::new(Notify::new()),
         Arc::new(RenderSignal::new()),
-    )
-    .unwrap();
+    );
+    let detector = detector.unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), received.recv()).await;
     let after_viewer_clear = if result.is_err() {
         runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");

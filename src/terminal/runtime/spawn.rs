@@ -789,8 +789,7 @@ impl TerminalRuntime {
             })?)
         };
 
-        let managed_launch_pending = Arc::new(AtomicBool::new(false));
-        let detect_handle = spawn_detection_task(
+        let (managed_launch_pending, detect_handle) = spawn_detection_task(
             pane_id,
             agent_detection,
             initial_state.detected_agent,
@@ -798,7 +797,6 @@ impl TerminalRuntime {
             terminal.clone(),
             events.clone(),
             detection_content_seq.clone(),
-            managed_launch_pending.clone(),
             render_notify.clone(),
             render_dirty.clone(),
         );

@@ -155,12 +155,12 @@ pub(super) fn spawn_detection_task(
     terminal: Arc<PaneTerminal>,
     events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
-    managed_launch_pending: Arc<AtomicBool>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
-) -> Option<tokio::task::AbortHandle> {
+) -> (Arc<AtomicBool>, Option<tokio::task::AbortHandle>) {
+    let managed_launch_pending = Arc::new(AtomicBool::new(false));
     if agent_detection != AgentDetection::Enabled {
-        return None;
+        return (managed_launch_pending, None);
     }
     let task = DetectionTask {
         pane_id,
@@ -168,12 +168,12 @@ pub(super) fn spawn_detection_task(
         terminal,
         state_events: events,
         detection_content_seq,
-        managed_launch_pending,
+        managed_launch_pending: managed_launch_pending.clone(),
         render_notify,
         render_dirty,
     };
     let handle = tokio::spawn(task.run(initial_agent));
-    Some(handle.abort_handle())
+    (managed_launch_pending, Some(handle.abort_handle()))
 }
 
 const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
