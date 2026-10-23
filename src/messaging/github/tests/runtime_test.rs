@@ -199,11 +199,22 @@ fn github_watch_bounded_error_reaches_the_warning_and_unavailable_notice() {
     // Multiple dispatchers keep this shared callsite's interest independent
     // from concurrently running test threads without a default subscriber.
     let _registration = tracing::Dispatch::new(tracing_subscriber::registry());
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
     let logs = Arc::new(Mutex::new(Vec::new()));
+    let writer = logs.clone();
     let subscriber = tracing_subscriber::fmt()
         .without_time()
         .with_ansi(false)
-        .with_writer(logs.clone())
+        .with_writer(move || Capture(writer.clone()))
         .finish();
     let _subscriber = tracing::subscriber::set_default(subscriber);
     let query = Query {
