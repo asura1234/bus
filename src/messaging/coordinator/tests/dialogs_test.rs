@@ -188,7 +188,7 @@ fn worker(
 /// notice to the developer has no recipients.
 fn sent_by(worker: &Worker, room: RoomId, about: AgentId) -> Vec<(Vec<AgentId>, String)> {
     let name = &worker.state.agent(about).unwrap().name;
-    let prefix = format!("{name} (agent {}).", about.0);
+    let prefix = format!("{name}.");
     let mut sent: BTreeMap<PromptId, (Vec<AgentId>, String)> = worker
         .state
         .requests()
@@ -218,18 +218,16 @@ fn sent_by(worker: &Worker, room: RoomId, about: AgentId) -> Vec<(Vec<AgentId>, 
 
 fn expected_resolved(worker: &Worker, id: AgentId) -> String {
     format!(
-        "{} (agent {}). Resolved; dialog is gone; previous blocked notice needs no action",
-        worker.state.agent(id).unwrap().name,
-        id.0
+        "{}. Resolved; dialog is gone; previous blocked notice needs no action",
+        worker.state.agent(id).unwrap().name
     )
 }
 
 fn expected_blocked(worker: &Worker, id: AgentId) -> String {
     let body = format!(
-        "{} (agent {}). Blocked, needs help to continue.\nInspect: bus agent dialog {}",
+        "{}. Blocked, needs help to continue.\nInspect: bus agent dialog '{}'",
         worker.state.agent(id).unwrap().name,
-        id.0,
-        id.0
+        worker.state.agent(id).unwrap().name
     );
     let agent = worker.state.agent(id).unwrap();
     if worker
@@ -683,9 +681,7 @@ fn blocked_notice_identifies_worker_and_exact_inspection_command() {
     let messages = sent_by(&worker, room, agent);
     assert_eq!(messages[0].0, vec![orchestrator.unwrap()]);
     assert!(messages[0].1.contains("builder"), "{}", messages[0].1);
-    assert!(messages[0]
-        .1
-        .contains(&format!("bus agent dialog {}", agent.0)));
+    assert!(messages[0].1.contains("bus agent dialog 'builder'"));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
