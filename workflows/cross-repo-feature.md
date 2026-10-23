@@ -4,6 +4,10 @@
 agent per repository works in parallel from a shared spec, a joint review
 checks they agree, then each repository gets its own PR. -->
 
+Each repository uses the **owner-run variant** of `auto-merge-pr`. Its PR owner
+carries the inherited fix-round counter in the PR repair log and reports it in
+finals; the orchestrator mirrors status and handles shared product decisions.
+
 ## Goal
 
 "Share to gallery" works the same in libtv-desktop, libtv-app and the web
@@ -20,7 +24,7 @@ flowchart TD
     start([Developer: share to gallery everywhere]):::developer --> spec
     spec[spec-writer: shared spec and API contract] --> agree{Developer approves spec?}:::developer
     agree -- no --> spec
-    agree -- yes --> initround["Orchestrator: record each new PR's fix_round = 0; retain counters on resume"]
+    agree -- yes --> initround["Each owner: record own new PR's fix_round = 0; carry counter on resume"]
     initround --> build
 
     subgraph build [Parallel, one agent per repo]
@@ -39,14 +43,14 @@ flowchart TD
     revisespec --> reapprove{Developer approves corrected spec?}:::developer
     reapprove -- no --> revisespec
     reapprove -- yes --> queuefix
-    consistent -- repo issues --> queuefix[Orchestrator: send each affected PR to its fix-budget gate]
-    queuefix --> nextfix["Orchestrator: next_fix_round = this PR's fix_round + 1"]
+    consistent -- repo issues --> queuefix[Affected owners: send own PR to its fix-budget gate]
+    queuefix --> nextfix["Owner: next_fix_round = this PR's fix_round + 1"]
     nextfix --> overbudget{"next_fix_round > 2?"}
-    overbudget -- no --> countfix["Orchestrator: record this PR's fix_round = next_fix_round"]
+    overbudget -- no --> countfix["Owner: record this PR's fix_round = next_fix_round"]
     countfix --> fixes[Owning dev: address-review-comments, approved spec correction or developer feedback; push]
     fixes --> reverify[Assigned verifiers: re-verify each repaired head]
     reverify --> joint
-    overbudget -- yes --> hold[Orchestrator: hold this PR and dependent steps; report cause and plan; keep independent work moving]
+    overbudget -- yes --> hold[Owner: stop this PR and dependent steps; final with count, cause and plan to orchestrator]
     consistent -- yes --> prs[Each dev: open its repo PR]
     prs --> test[Developer: test on all three]:::developer
     test -- problem --> queuefix
@@ -85,7 +89,7 @@ flowchart TD
 
 - Reviewers flag any behavior that differs between repositories; the spec
   decides, and a spec gap goes to the developer.
-- Follow the binding orchestrator rules. Track at most two
+- Owners follow the owner-run variant and carry their own counter. Track at most two
   fix rounds per PR, including spec corrections and developer-test feedback;
   the initial review uses no round. A PR needing a third fix is held with its
   cause and plan reported; independent work continues. The second repaired

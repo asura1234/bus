@@ -29,7 +29,7 @@ flowchart TD
 
     subgraph round [Review and repair]
         review["Peers: review, verify and bot checks concurrently on exact head"] --> scope{"Any finding outside locked goal?"}
-        scope -- yes --> defer["Owner: exclude from PR; send final to orchestrator as a follow-up"]
+        scope -- yes --> defer["Owner: exclude from PR; record for the final report as a follow-up"]
         defer --> flag
         scope -- no --> flag{"Anything FLAGGED or needing a developer decision?"}
         flag -- yes --> handback["Owner: stop this PR's merge path; final to orchestrator"]
@@ -53,9 +53,25 @@ flowchart TD
     measure --> big{"Total changed lines >= 3000?"}
     big -- yes --> split["Owner: stop; final to orchestrator for split-pr and recovery"]
     bigfix -- yes --> split
-    big -- no --> hold{"Explicit hold or unresolved FLAG/developer decision?"}
+    big -- no --> hold{"Unresolved FLAG, other developer decision or non-manual hold?"}
     hold -- yes --> handback
-    hold -- no --> merge["Owner: merge-pr under recorded authority; enforce scope, FLAG, budget and size gates throughout"]
+    hold -- no --> manualhold{"Explicit manual-test hold?"}
+    manualhold -- yes --> holdmerge["Owner: merge-pr --hold-before-merge within the inherited fix budget"]
+    holdmerge --> holdready{"Ready and holding at the pinned head?"}
+    holdready -- no --> holdrepairs{"Repairs required?"}
+    holdrepairs -- yes --> feedback["Owner: queue preparation or manual-test feedback"]
+    holdrepairs -- no --> handback
+    holdready -- yes --> manualtest["Developer: manual test and merge approval"]:::developer
+    manualtest --> approved{"Approved?"}
+    approved -- no --> feedback
+    feedback --> feedbackok{"Feedback within locked goal and no FLAG/developer decision?"}
+    feedbackok -- no --> handback
+    feedbackok -- yes --> budget
+    approved -- yes --> approvalhead{"Approval matches the current head?"}
+    approvalhead -- no --> review
+    approvalhead -- yes --> release["Owner: record tested head and approval; release only its manual-test hold"]
+    release --> measure
+    manualhold -- no --> merge["Owner: merge-pr under recorded authority; enforce scope, FLAG, budget and size gates throughout"]
     merge --> mergedok{"PR merged?"}
     mergedok -- no --> more{"More repairs required?"}
     more -- yes --> scope
@@ -77,6 +93,7 @@ flowchart TD
     classDef start fill:#dbeafe,stroke:#1d4ed8
     classDef success fill:#dcfce7,stroke:#15803d
     classDef failure fill:#fee2e2,stroke:#b91c1c
+    classDef developer fill:#fde2e4,stroke:#c9184a
 ```
 
 An approved workflow authorizes its path through review and merge on the exact
@@ -85,6 +102,17 @@ are adjudicated, and no explicit hold exists. Reuse that kickoff approval as the
 start answer; do not ask for per-PR merge OK. A draft-only, manual-test or other
 developer hold remains binding. Clarify missing intent or authority only for the
 affected part; keep independent work moving.
+
+For an explicit **manual-test hold**, the owner runs `merge-pr --hold-before-merge`
+within the inherited fix-round budget. Once it is ready and holding, the
+developer tests that exact head and approves or rejects the merge. Approval
+releases only that head's manual-test hold: recheck size, current-head gates,
+FLAGs and other holds before merging. If the head changes, its approval does
+not carry over; review and obtain manual acceptance for the new head. Rejected
+manual-test feedback and repairs found during preparation enter the same
+fix-round budget gate after the scope/FLAG checks. No third fix round starts.
+Other hold types still hand back to the orchestrator; a manual-test approval
+does not clear them or authorize a goal change.
 
 The loop driver records `fix_round = 0` once per new PR in its repair log and
 reuses the counter on resumes and when entering from another workflow. The
@@ -167,8 +195,8 @@ You handle these yourself:
 | Role | Model | Does |
 |---|---|---|
 | Orchestrator | any | Supplies goal/base, named peers, counter, authority and holds; owns staffing, dialogs, recovery and replacement announcements. Maintains room notes/roster and mirrors repair state from finals. Decides out-of-goal follow-ups and every FLAG, asking the developer for product decisions. In orchestrator-run mode drives the same gates; in owner-run mode receives handbacks and finals without relaying routine peer findings. Approves splits and dispatches cleanup outside the PR worktree. |
-| Developer | - | Approves the workflow goal and authority or declares a hold; supplies the PR goal and non-goals when none is locked; optionally runs the manual test and merge approval while merge-pr holds; recovers from "PR merge blocked". |
-| Owner / author | any | Drives the owner-run variant, receives peer findings directly, excludes out-of-goal repairs, hands FLAG/developer decisions back, records at most two fix rounds and re-measures against the 3000-line threshold. Runs address-review-comments, best-of-n for admitted technical issues, and merge-pr under every exact-head gate and hold; sends milestone finals to the orchestrator. Commits reviewer tests before split/merge. Reports flaky tests without fixing unrelated code in this PR; continues only when a permitted rerun passes. |
+| Developer | - | Approves the workflow goal and authority or declares a hold; supplies the PR goal and non-goals when none is locked. Under a manual-test hold, tests the pinned head while merge-pr holds and approves its merge or supplies feedback that enters the inherited fix-round budget. Recovers from "PR merge blocked". |
+| Owner / author | any | Drives the owner-run variant, receives peer findings directly, excludes out-of-goal repairs, hands FLAG/developer decisions back, records at most two fix rounds and re-measures against the 3000-line threshold. Runs address-review-comments, best-of-n for admitted technical issues, and merge-pr under every exact-head gate and hold. Prepares manual-test holds with merge-pr --hold-before-merge, records exact-head approval and routes rejected feedback through the budget gate; other holds go to the orchestrator. Sends milestone finals, commits reviewer tests before split/merge, and reports flaky tests without fixing unrelated code in this PR; continues only when a permitted rerun passes. |
 | Verifier | any | Checks the named PR/task on each pushed head; sends VERIFIED or defects with file:line directly to the owner and a final to the orchestrator. |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |
 
