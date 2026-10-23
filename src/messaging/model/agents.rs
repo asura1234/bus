@@ -58,6 +58,7 @@ impl BusState {
                 dialog_answered: false,
                 dialog_answer: None,
                 dialog_notice_to: None,
+                automatic_dialog_answer: None,
                 actionable_error: None,
                 update_error: None,
                 current_request: None,
@@ -387,6 +388,18 @@ impl BusState {
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?
             .dialog_notice_to = to;
+        Ok(())
+    }
+
+    pub(crate) fn set_automatic_dialog_answer(
+        &mut self,
+        agent: AgentId,
+        episode: Option<String>,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .automatic_dialog_answer = episode;
         Ok(())
     }
 

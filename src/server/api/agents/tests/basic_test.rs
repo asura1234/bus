@@ -169,6 +169,7 @@ fn choose(
             expected_session_id: session.map(str::to_owned),
             expected_dialog_digest: digest.into(),
             option,
+            action: Default::default(),
         },
     )
 }
@@ -309,3 +310,6 @@ fn agent_rename_does_not_replace_the_pane_label() {
 
 #[path = "fingerprint_test.rs"]
 mod fingerprint_tests;
+
+#[path = "auto_ui_test.rs"]
+mod automatic_ui;

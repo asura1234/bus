@@ -220,6 +220,47 @@ impl Worker {
         }))
     }
 
+    /// Only a fresh complete observation of the same known UI shape can
+    /// authorise an automatic choice. Never infer it from the returned text.
+    pub(in crate::messaging::coordinator) fn observe_allowlisted_fingerprint(
+        &mut self,
+        id: AgentId,
+        expected_shape: &str,
+    ) -> Result<Option<(String, u32)>, String> {
+        let observation = self.observe_dialog(id)?;
+        let Some(fingerprint) = observation["fingerprint"].as_str() else {
+            return Ok(None);
+        };
+        let claims = decode_dialog_fingerprint(fingerprint)?;
+        let dialog = &observation["dialog"];
+        let options = dialog["options"].as_array();
+        let actionable = options.is_some_and(|options| {
+            options.len() == 3
+                && options.iter().enumerate().all(|(index, row)| {
+                    row["number"].as_u64() == Some(index as u64 + 1)
+                        && !row["free_text"].as_bool().unwrap_or(false)
+                })
+                && options.iter().filter(|row| row["selected"] == true).count() == 1
+        });
+        if claims.session_id.is_none()
+            || claims.dialog_shape != expected_shape
+            || claims.options != 3
+            || claims.free_text.is_some()
+            || dialog["kind"] != "choice"
+            || !actionable
+            || dialog["tabs"]
+                .as_array()
+                .is_some_and(|tabs| !tabs.is_empty())
+        {
+            return Ok(None);
+        }
+        let selected = options
+            .and_then(|rows| rows.iter().find(|row| row["selected"] == true))
+            .and_then(|row| row["number"].as_u64())
+            .ok_or("Missing selection")? as u32;
+        Ok(Some((fingerprint.to_owned(), selected)))
+    }
+
     /// Answers the observed dialog once: the fingerprint is spent before any
     /// key is written, so a lost response can never answer a second dialog.
     pub(in crate::messaging::coordinator) fn choose_dialog_option(
@@ -242,6 +283,18 @@ impl Worker {
         self.send_dialog_answer(id, None, text, skip, fingerprint)
     }
 
+    /// Automatic UI replies are settled by later ordinary polls, so one
+    /// slow redraw cannot hold the entire coordinator for the CLI wait loop.
+    pub(in crate::messaging::coordinator) fn choose_automatic_dialog_option(
+        &mut self,
+        id: AgentId,
+        option: u32,
+        fingerprint: &str,
+        action: schema::AgentDialogChoiceAction,
+    ) -> Result<Value, String> {
+        self.write_dialog_answer(id, Some(option), None, false, fingerprint, Some(action))
+    }
+
     pub(in crate::messaging::coordinator) fn send_dialog_answer(
         &mut self,
         id: AgentId,
@@ -249,6 +302,18 @@ impl Worker {
         text: Option<&str>,
         skip: bool,
         fingerprint: &str,
+    ) -> Result<Value, String> {
+        self.write_dialog_answer(id, option, text, skip, fingerprint, None)
+    }
+
+    fn write_dialog_answer(
+        &mut self,
+        id: AgentId,
+        option: Option<u32>,
+        text: Option<&str>,
+        skip: bool,
+        fingerprint: &str,
+        automatic: Option<schema::AgentDialogChoiceAction>,
     ) -> Result<Value, String> {
         let claims = decode_dialog_fingerprint(fingerprint)?;
         let age_ms =
@@ -287,6 +352,7 @@ impl Worker {
                 expected_session_id: session_id.clone(),
                 expected_dialog_digest: claims.dialog_digest.clone(),
                 option,
+                action: automatic.unwrap_or_default(),
             }),
             None => Method::AgentDialogAnswer(schema::AgentDialogAnswerParams {
                 target: pane_id.clone(),
@@ -332,7 +398,12 @@ impl Worker {
                 ))
             }
         };
-        self.record_dialog_answer(id, option)?;
+        if automatic != Some(schema::AgentDialogChoiceAction::Focus) {
+            self.record_dialog_answer(id, option)?;
+        }
+        if automatic.is_some() {
+            return Ok(json!({"agent_id": id, "option": option, "keys": keys, "outcome": "sent"}));
+        }
         self.settle_written_dialog_answer(id, option, skip, keys, &claims)
     }
 

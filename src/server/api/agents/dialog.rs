@@ -79,30 +79,39 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &params.target);
         };
-        let (keys, reason) =
-            match runtime.try_choose_dialog_option(&params.expected_dialog_digest, params.option) {
-                Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
-                Ok(crate::terminal::runtime::DialogChoice::Redrawing) => {
-                    return encode_error(
-                        id,
-                        "dialog_redrawing",
-                        "No keys were sent; dialog is redrawing; observe it again",
-                    );
-                }
-                Ok(crate::terminal::runtime::DialogChoice::Stale) => {
-                    (Vec::new(), Some("stale_or_changed_dialog"))
-                }
-                Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
-                    (Vec::new(), Some("option_missing_or_selection_not_visible"))
-                }
-                Ok(
-                    crate::terminal::runtime::DialogChoice::NotQuestion
-                    | crate::terminal::runtime::DialogChoice::Unskippable
-                    | crate::terminal::runtime::DialogChoice::FreeTextDraft
-                    | crate::terminal::runtime::DialogChoice::Focused(_),
-                ) => (Vec::new(), Some("not_a_free_text_question")),
-                Err(error) => return encode_error(id, "dialog_write_failed", error),
+        let choice =
+            if params.action == crate::protocol::api::schema::AgentDialogChoiceAction::Choose {
+                runtime.try_choose_dialog_option(&params.expected_dialog_digest, params.option)
+            } else {
+                runtime.try_control_dialog_option(
+                    &params.expected_dialog_digest,
+                    params.option,
+                    params.action,
+                )
             };
+        let (keys, reason) = match choice {
+            Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::terminal::runtime::DialogChoice::Redrawing) => {
+                return encode_error(
+                    id,
+                    "dialog_redrawing",
+                    "No keys were sent; dialog is redrawing; observe it again",
+                );
+            }
+            Ok(crate::terminal::runtime::DialogChoice::Stale) => {
+                (Vec::new(), Some("stale_or_changed_dialog"))
+            }
+            Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
+                (Vec::new(), Some("option_missing_or_selection_not_visible"))
+            }
+            Ok(
+                crate::terminal::runtime::DialogChoice::NotQuestion
+                | crate::terminal::runtime::DialogChoice::Unskippable
+                | crate::terminal::runtime::DialogChoice::FreeTextDraft
+                | crate::terminal::runtime::DialogChoice::Focused(_),
+            ) => (Vec::new(), Some("not_a_free_text_question")),
+            Err(error) => return encode_error(id, "dialog_write_failed", error),
+        };
         let Some(observation) = dialog_observation(&agent, runtime) else {
             return encode_error(
                 id,
