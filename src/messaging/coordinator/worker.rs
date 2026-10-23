@@ -92,6 +92,9 @@ impl Worker {
         // Sessions saved before MASTER existed gain it here, once, before any client sees them.
         state.ensure_master_room();
         state
+            .upgrade_agent_names(io::now_ms())
+            .map_err(|e| e.to_string())?;
+        state
             .retire_queued_github_notices(io::now_ms())
             .map_err(|e| e.to_string())?;
         state

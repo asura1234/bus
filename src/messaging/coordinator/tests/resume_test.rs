@@ -1,6 +1,184 @@
 use super::*;
 
 #[test]
+fn global_names_resume_preserves_legacy_sender_identity_without_a_snapshot() {
+    assert_global_names_legacy_sender(None, None);
+}
+
+#[test]
+fn global_names_resume_keeps_existing_sender_snapshot() {
+    assert_global_names_legacy_sender(Some("captured-author"), None);
+}
+
+#[test]
+fn global_names_resume_keeps_submitted_payload() {
+    assert_global_names_legacy_sender(None, Some("already submitted payload"));
+}
+
+fn assert_global_names_legacy_sender(snapshot: Option<&str>, submitted: Option<&str>) {
+    use crate::messaging::model::{Author, Draft};
+
+    let (mut worker, first, _, dir, calls) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    let room = state.create_room("legacy").unwrap();
+    let author = state
+        .create_agent(room, "second-author", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let recipient = state
+        .create_agent(room, "recipient", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let request = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "legacy question".into(),
+                files: vec![],
+                recipient_ids: [recipient].into(),
+            },
+            Author::Agent(author),
+            io::now_ms(),
+        )
+        .unwrap()[0];
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["agents"][author.0.to_string()]["name"] = json!("author");
+    if let Some(name) = snapshot {
+        document["requests"][request.0.to_string()]["sender_identity"] = json!([name, room]);
+    } else {
+        document["requests"][request.0.to_string()]
+            .as_object_mut()
+            .unwrap()
+            .remove("sender_identity");
+    }
+    document["requests"][request.0.to_string()]["submitted_payload"] = json!(submitted);
+    worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    drop(worker);
+    let mut worker = Worker::open(
+        dir.clone(),
+        Box::new(FakeTransport {
+            replies: vec![].into(),
+            calls,
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(worker.state.agent(first).unwrap().name, "author");
+    assert_eq!(
+        worker.state.agent(author).unwrap().name,
+        format!("author-{}", author.0)
+    );
+    assert_eq!(
+        worker.state.request(request).unwrap().prompt.author,
+        Author::Agent(author)
+    );
+    assert!(worker.state.queued_requests(recipient).contains(&request));
+    assert_eq!(
+        worker.state.request(request).unwrap().sender_identity,
+        Some((snapshot.unwrap_or("author").into(), room))
+    );
+    let expected = submitted.map(str::to_owned).unwrap_or_else(|| {
+        format!(
+            "{} (agent {}, room {}):\nlegacy question",
+            snapshot.unwrap_or("author"),
+            author.0,
+            room.0
+        )
+    });
+    assert_eq!(
+        worker.state.render_request_payload(request).unwrap(),
+        expected,
+        "migration must preserve the historical sender name of a legacy queued message"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn global_names_resume_repairs_duplicates_once_preserving_ids_binding_and_queue() {
+    let (mut worker, first, _, dir, calls) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    let side = state.create_room("side").unwrap();
+    let second = state
+        .create_agent(side, "second", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let reserved = format!("author-{}", second.0);
+    let third = state
+        .create_agent(side, &reserved, Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let master = state.master_room().unwrap().id;
+    let orchestrator = state
+        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(orchestrator, side).unwrap();
+    worker.save(state).unwrap();
+    let request = queue(&mut worker, side, second, "retained work");
+    let original_request = worker.state.request(request).unwrap().clone();
+    let identity = worker.state.agent(first).unwrap().runtime_identity.clone();
+    let mut document = serde_json::to_value(&worker.state).unwrap();
+    for id in [second, orchestrator] {
+        document["agents"][id.0.to_string()]["name"] = json!("author");
+    }
+    worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    drop(worker);
+    let open = || {
+        Worker::open(
+            dir.clone(),
+            Box::new(FakeTransport {
+                replies: vec![].into(),
+                calls: Arc::clone(&calls),
+                state_path: dir.join("state.json"),
+            }),
+        )
+        .unwrap()
+    };
+    let worker = open();
+    assert_eq!(worker.state.agent(first).unwrap().name, "author");
+    assert_eq!(
+        worker.state.agent(second).unwrap().name,
+        format!("{reserved}-2")
+    );
+    assert_eq!(worker.state.agent(third).unwrap().name, reserved);
+    assert_eq!(
+        worker.state.agent(orchestrator).unwrap().name,
+        format!("author-{}", orchestrator.0)
+    );
+    assert_eq!(
+        worker.state.agent(first).unwrap().runtime_identity,
+        identity
+    );
+    assert_eq!(worker.state.orchestrator_of(side).unwrap().id, orchestrator);
+    assert_eq!(worker.state.request(request).unwrap(), &original_request);
+    assert!(worker.state.queued_requests(second).contains(&request));
+    let notices: Vec<_> = worker
+        .state
+        .notices(side)
+        .filter(|p| p.text.contains("Agent renamed"))
+        .map(|p| p.text.clone())
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].contains(&format!("{reserved}-2")));
+    drop(worker);
+    let worker = open();
+    assert_eq!(
+        worker.state.agent(second).unwrap().name,
+        format!("{reserved}-2")
+    );
+    assert_eq!(
+        worker
+            .state
+            .notices(side)
+            .filter(|p| p.text.contains("Agent renamed"))
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn reply_capture_diagnostics_record_loaded_ownership_before_restart_observations() {
     let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");

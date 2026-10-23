@@ -1,5 +1,4 @@
 //! Agents operations for the messaging state.
-use super::state::normalized_name;
 use crate::messaging::prefs::colors;
 use std::path::PathBuf;
 use {
@@ -27,7 +26,7 @@ impl BusState {
             Some(room) if room.deletion_pending => return Err(ModelError::DeletionPending),
             Some(_) => {}
         }
-        let name = agent_name(name)?;
+        let name = self.available_agent_name(name, None)?;
         let neighbors = || {
             self.agents
                 .values()
@@ -113,7 +112,10 @@ impl BusState {
     }
 
     pub(crate) fn rename_agent(&mut self, id: AgentId, name: &str) -> Result<(), ModelError> {
-        let name = agent_name(name)?;
+        if !self.agents.contains_key(&id) {
+            return Err(ModelError::UnknownAgent(id));
+        }
+        let name = self.available_agent_name(name, Some(id))?;
         self.agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
@@ -470,12 +472,4 @@ impl BusState {
         }
         Ok(())
     }
-}
-
-fn agent_name(name: &str) -> Result<String, ModelError> {
-    let name = normalized_name(name)?;
-    if super::is_developer_recipient(&name) {
-        return Err(ModelError::ReservedAgentName);
-    }
-    Ok(name)
 }

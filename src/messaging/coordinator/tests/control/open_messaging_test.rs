@@ -48,35 +48,37 @@ fn open_messaging_reaches_other_workers_orchestrators_and_master_agents() {
 }
 
 #[test]
-fn open_messaging_ambiguous_global_names_list_candidates() {
+fn open_messaging_global_name_collision_is_rejected_before_routing() {
     let (mut w, room, author, dir) = fixture();
     let other = w.state.create_room("other").unwrap();
     let master = w.state.master_room().unwrap().id;
-    let a = add(&mut w, other, &dir, "duplicate");
-    let b = add(&mut w, master, &dir, "duplicate");
-    let response = send(&mut w, room, author, "duplicate", "question");
-    let error = error_message(&response);
-    assert!(error.contains("Ambiguous"), "{error}");
-    for (id, room) in [(a, other), (b, master)] {
-        assert!(
-            error.contains(&format!("duplicate (agent {}, room {})", id.0, room.0)),
-            "{error}"
-        );
-    }
-    assert_eq!(w.state.requests().count(), 0);
+    let owner = add(&mut w, other, &dir, "unique-peer");
+    let error = w
+        .state
+        .create_agent(master, "unique-peer", Provider::Codex, dir.clone(), None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(&format!("agent {} in room {}", owner.0, other.0)),
+        "{error}"
+    );
+    assert!(send(&mut w, room, author, "unique-peer", "question").ok);
+    assert_eq!(w.state.requests().last().unwrap().agent_id, owner);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn open_messaging_local_name_wins_but_an_exact_id_wins_over_a_numeric_name() {
+fn open_messaging_unique_names_route_globally_and_exact_ids_win_over_numeric_names() {
     let (mut w, room, author, dir) = fixture();
     let other = w.state.create_room("other").unwrap();
-    let remote = add(&mut w, other, &dir, "same");
-    let local = add(&mut w, room, &dir, "same");
+    let remote = add(&mut w, other, &dir, "remote");
+    let local = add(&mut w, room, &dir, "local");
     add(&mut w, room, &dir, &remote.0.to_string());
-    assert!(send(&mut w, room, author, "same", "local").ok);
+    assert!(send(&mut w, room, author, "local", "local").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, local);
+    assert!(send(&mut w, room, author, "remote", "remote").ok);
+    assert_eq!(w.state.requests().last().unwrap().agent_id, remote);
     assert!(send(&mut w, room, author, &remote.0.to_string(), "id").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, remote);
     drop(w);
@@ -160,26 +162,44 @@ fn open_messaging_a_different_or_embedded_identity_does_not_hide_the_sender() {
 }
 
 #[test]
-fn open_messaging_names_prefer_the_conversation_but_alias_uses_home_binding() {
+fn open_messaging_unique_names_are_global_but_alias_uses_home_binding() {
     let (mut w, home, author, dir) = fixture();
     let conversation = w.state.create_room("conversation").unwrap();
     let master = w.state.master_room().unwrap().id;
     let orch = add(&mut w, master, &dir, "own-orch");
     w.state.bind_orchestrator(orch, home).unwrap();
-    let home_peer = add(&mut w, home, &dir, "peer");
-    let conversation_peer = add(&mut w, conversation, &dir, "peer");
+    let home_peer = add(&mut w, home, &dir, "home-peer");
+    let conversation_peer = add(&mut w, conversation, &dir, "conversation-peer");
     assert!(send(&mut w, conversation, author, "ORCHESTRATOR", "blocker").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, orch);
-    assert!(send(&mut w, conversation, author, "peer", "conversation name").ok);
+    assert!(
+        send(
+            &mut w,
+            conversation,
+            author,
+            "conversation-peer",
+            "conversation name"
+        )
+        .ok
+    );
     assert_eq!(
         w.state.requests().last().unwrap().agent_id,
         conversation_peer
     );
     w.state
-        .rename_agent(conversation_peer, "elsewhere")
+        .rename_agent(conversation_peer, "renamed-peer")
         .unwrap();
-    add(&mut w, master, &dir, "peer");
-    assert!(send(&mut w, conversation, author, "peer", "home fallback").ok);
+    assert!(
+        !send(
+            &mut w,
+            conversation,
+            author,
+            "conversation-peer",
+            "old name"
+        )
+        .ok
+    );
+    assert!(send(&mut w, conversation, author, "home-peer", "home peer").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, home_peer);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -305,15 +325,17 @@ fn open_messaging_an_existing_header_matches_names_that_begin_with_from() {
 }
 
 #[test]
-fn open_messaging_orchestrator_names_its_bound_rooms_worker_despite_a_same_named_worker_elsewhere()
-{
+fn open_messaging_orchestrator_names_its_worker_after_a_cross_room_collision_is_rejected() {
     let (mut w, room, _, dir) = fixture();
     let other = w.state.create_room("other").unwrap();
     let master = w.state.master_room().unwrap().id;
     let orch = add(&mut w, master, &dir, "room-orch");
     w.state.bind_orchestrator(orch, room).unwrap();
     let own = add(&mut w, room, &dir, "impl");
-    add(&mut w, other, &dir, "impl");
+    assert!(w
+        .state
+        .create_agent(other, "impl", Provider::Codex, dir.clone(), None)
+        .is_err());
     let response = send(&mut w, room, orch, "impl", "start the task");
     assert!(
         response.ok,
@@ -381,29 +403,20 @@ fn open_messaging_forged_identity_fields_each_require_a_real_header() {
 }
 
 #[test]
-fn open_messaging_conversation_member_wins_over_master_name_and_ambiguity_stays_local() {
+fn open_messaging_member_name_keeps_its_owner_after_duplicate_additions_are_rejected() {
     let (mut w, room, _, dir) = fixture();
     let master = w.state.master_room().unwrap().id;
     let orch = add(&mut w, master, &dir, "orch");
     w.state.bind_orchestrator(orch, room).unwrap();
     let local = add(&mut w, room, &dir, "impl");
-    let remote = add(&mut w, master, &dir, "impl");
-    assert!(send(&mut w, room, orch, "impl", "local dispatch").ok);
-    assert_eq!(w.state.requests().last().unwrap().agent_id, local);
-    let second = add(&mut w, room, &dir, "impl");
-    let response = send(&mut w, room, orch, "impl", "ambiguous");
-    let error = error_message(&response);
-    assert!(error.contains("Ambiguous"), "{error}");
-    for id in [local, second] {
-        assert!(
-            error.contains(&format!("agent {}, room {}", id.0, room.0)),
-            "{error}"
-        );
+    for target in [master, room] {
+        assert!(w
+            .state
+            .create_agent(target, "impl", Provider::Codex, dir.clone(), None)
+            .is_err());
+        assert!(send(&mut w, room, orch, "impl", "dispatch").ok);
+        assert_eq!(w.state.requests().last().unwrap().agent_id, local);
     }
-    assert!(
-        !error.contains(&format!("agent {}, room {}", remote.0, master.0)),
-        "wrong scope: {error}"
-    );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -414,13 +427,18 @@ fn staffing_stale_id_forwards_only_to_same_room_replacement_or_its_orchestrator(
     let old = add(&mut w, room, &dir, "owner");
     w.state.delete_agent(old, 100).unwrap();
     let other = w.state.create_room("other-room").unwrap();
-    add(&mut w, other, &dir, "owner");
+    let remote = add(&mut w, other, &dir, "owner");
     let master = w.state.master_room().unwrap().id;
     let orch = add(&mut w, master, &dir, "orch");
     w.state.bind_orchestrator(orch, room).unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "merge notice");
     assert!(response.ok, "{response:?}");
     assert_eq!(w.state.requests().last().unwrap().agent_id, orch);
+    assert!(w
+        .state
+        .create_agent(room, "owner", Provider::Codex, dir.clone(), None)
+        .is_err());
+    w.state.rename_agent(remote, "elsewhere-owner").unwrap();
     let replacement = add(&mut w, room, &dir, "owner");
     let state: BusState = serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     w.state = state;

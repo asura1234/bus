@@ -502,31 +502,33 @@ fn dev_send_as_allows_agents_from_other_rooms() {
 }
 
 #[test]
-fn dev_send_as_an_ambiguous_room_agent_name_never_falls_back_to_the_orchestrator() {
+fn dev_send_as_a_unique_worker_name_never_changes_to_the_orchestrator() {
     let (mut worker, room, _codex, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
-    for _ in 0..2 {
-        worker
-            .state
-            .create_agent(room, "dev", Provider::Codex, dir.clone(), None)
-            .unwrap();
-    }
-    let orchestrator = worker
+    let author = worker
+        .state
+        .create_agent(room, "dev", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    assert!(worker
         .state
         .create_agent(master, "dev", Provider::ClaudeCode, dir.clone(), None)
+        .is_err());
+    let orchestrator = worker
+        .state
+        .create_agent(master, "room-orch", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
     worker.state.bind_orchestrator(orchestrator, room).unwrap();
     let sent = call(
         &mut worker,
-        "as-ambiguous",
+        "as-unique",
         "message.send",
         json!({"room":"test","to":["codex1"],"text":"x","as":"dev"}),
     );
-    assert!(
-        error_message(&sent).contains("Ambiguous"),
-        "an ambiguous author must not resolve to the orchestrator: {sent:?}"
+    assert!(sent.ok, "{sent:?}");
+    assert_eq!(
+        worker.state.requests().last().unwrap().prompt.author,
+        crate::messaging::model::Author::Agent(author)
     );
-    assert_eq!(worker.state.requests().count(), 0);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

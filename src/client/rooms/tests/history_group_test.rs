@@ -374,7 +374,13 @@ fn returning_to_a_room_reuses_layout_until_width_changes() {
     let second = state.create_room("second").unwrap();
     for room in [first, second] {
         let agent = state
-            .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+            .create_agent(
+                room,
+                &format!("worker-{}", room.0),
+                Provider::Codex,
+                "/project".into(),
+                None,
+            )
             .unwrap();
         let request = state
             .submit_message_from(
@@ -436,7 +442,13 @@ fn rebuild_counts_only_markdown_laid_out_afresh_across_room_switches() {
     for name in ["first", "second"] {
         let room = state.create_room(name).unwrap();
         let agent = state
-            .create_agent(room, "agent", Provider::Codex, "/project".into(), None)
+            .create_agent(
+                room,
+                &format!("agent-{name}"),
+                Provider::Codex,
+                "/project".into(),
+                None,
+            )
             .unwrap();
         state.set_draft_recipients(room, [agent]).unwrap();
         for i in 0..3 {

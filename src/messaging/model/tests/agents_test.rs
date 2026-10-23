@@ -7,14 +7,23 @@ fn agent_color_assignment_maximizes_room_separation_and_reserves_you() {
     let room = state.create_room("colors").unwrap();
     // Independent reference calculation over the readable 17-step sRGB grid,
     // using Euclidean Oklab distance with [102, 255, 102] already occupied.
-    for expected in [
+    for (i, expected) in [
         [221, 0, 255],
         [170, 119, 51],
         [255, 204, 255],
         [0, 136, 255],
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let id = state
-            .create_agent(room, "agent", Provider::Codex, "/repo".into(), None)
+            .create_agent(
+                room,
+                &format!("agent-{i}"),
+                Provider::Codex,
+                "/repo".into(),
+                None,
+            )
             .unwrap();
         assert_eq!(serialized_agent_color(&state, id), expected);
     }
@@ -51,9 +60,15 @@ fn agent_colors_stay_readable_and_distinct_for_many_agents() {
     let mut state = BusState::new();
     let room = state.create_room("many agents").unwrap();
     let mut occupied = BTreeSet::from([[102, 255, 102]]);
-    for _ in 0..32 {
+    for i in 0..32 {
         let id = state
-            .create_agent(room, "agent", Provider::Codex, "/repo".into(), None)
+            .create_agent(
+                room,
+                &format!("agent-{i}"),
+                Provider::Codex,
+                "/repo".into(),
+                None,
+            )
             .unwrap();
         let color = serialized_agent_color(&state, id);
         assert!(occupied.insert(color), "color was reused: {color:?}");

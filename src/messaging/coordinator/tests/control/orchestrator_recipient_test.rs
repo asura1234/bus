@@ -119,10 +119,10 @@ fn worker_to_orchestrator_broadcast_still_targets_members_only() {
 }
 
 #[test]
-fn worker_to_orchestrator_member_names_and_ambiguity_take_precedence() {
+fn worker_to_orchestrator_member_names_take_precedence_and_duplicates_are_rejected() {
     for name in ["orchestrator", "same-name"] {
         let (mut worker, room, _, dir) = fixture();
-        bound(&mut worker, room, &dir, name);
+        bound(&mut worker, room, &dir, "bound-orch");
         let member = worker
             .state
             .create_agent(room, name, Provider::Codex, dir.clone(), None)
@@ -135,20 +135,10 @@ fn worker_to_orchestrator_member_names_and_ambiguity_take_precedence() {
         );
         assert!(sent.ok, "{sent:?}");
         assert_eq!(worker.state.requests().next().unwrap().agent_id, member);
-        worker
+        assert!(worker
             .state
             .create_agent(room, name, Provider::Codex, dir.clone(), None)
-            .unwrap();
-        let ambiguous = call(
-            &mut worker,
-            "ambiguous",
-            "message.send",
-            json!({"room":"test","as":"codex1","to":[name],"text":"hi"}),
-        );
-        assert!(
-            error_message(&ambiguous).contains("Ambiguous"),
-            "{ambiguous:?}"
-        );
+            .is_err());
         assert_eq!(worker.state.requests().count(), 1);
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
