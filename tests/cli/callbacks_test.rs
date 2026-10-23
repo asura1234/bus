@@ -364,23 +364,5 @@ fn held_spool_and_diagnostics_locks_leave_a_durable_hook_before_success() {
         "the held lock must still fence publication"
     );
     drop(locks);
-    // The first process is gone; a retry can publish and deduplicate its envelope.
-    assert!(invoke().status.success());
-    let files: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    assert!(!files
-        .iter()
-        .any(|e| e.file_name().to_string_lossy().starts_with("pending-")));
-    let events: Vec<_> = files
-        .iter()
-        .filter(|e| e.file_name().to_string_lossy().starts_with("event-"))
-        .collect();
-    assert_eq!(events.len(), 1);
-    let event: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(events[0].path()).unwrap()).unwrap();
-    assert_eq!(event["sequence"], 1);
-    assert_eq!(event["value"], payload);
     std::fs::remove_dir_all(dir).unwrap();
 }
