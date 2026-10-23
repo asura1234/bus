@@ -487,3 +487,72 @@ fn staffing_readiness_timeout_retains_agent_identity_and_queue() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn startup_failure_keeps_queued_work_past_the_queued_stall_window() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let mut state = worker.state.clone();
+    let submitted = io::now_ms();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "pending work".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            submitted,
+            true,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    worker
+        .expire_queued_requests(submitted + 10 * 60 * 1000)
+        .unwrap();
+    let after = worker.state.request(request).unwrap();
+    assert_eq!(
+        after.phase,
+        RequestPhase::Queued,
+        "work the startup blocker says is retained was closed: {:?}",
+        after.failure_reason
+    );
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .starts_with("Startup failed"));
+    // Confirmation releases the hold with a fresh opportunity to dispatch,
+    // even when Idle did not change during the failed launch.
+    let recovered = submitted + 11 * 60_000;
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, recovered)
+        .unwrap();
+    worker.state.set_agent_startup(agent, None).unwrap();
+    worker.expire_queued_requests(recovered).unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    worker
+        .expire_queued_requests(recovered + crate::messaging::model::QUEUED_STALL_MS + 1)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned,
+        "confirmed startup must release the hold on normal queue expiry"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
