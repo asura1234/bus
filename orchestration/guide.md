@@ -242,8 +242,9 @@ line starts with `READY FOR VERIFY`, `REVIEW READY`, `MERGED`, `DONE` or
 agent-specific Bus alerts. Generic GitHub/Bus notices retain their own delivery;
 only notices with agent subjects also become action facts. A coalesced `Room digest:`
 arrives only on a clean idle turn and names each fact's age and next owner.
-Treat it as an action list: directly dispatch to the worker, brief a verifier
-referencing its PR/name/head, close it, or record a
+Treat it as an action list: directly dispatch to the worker in the fact's
+conversation room, brief a verifier in that same room referencing its PR (#N) or
+head SHA (7+ hex characters), close it, or record a
 disposition and run `bus digest ack FACT_ID`. Delivery, waiter `seen` and a
 reply such as "noted" leave the fact unacknowledged; broadcasts never acknowledge
 facts. Tagged completions do not create a duplicate idle fact. Pending text is
