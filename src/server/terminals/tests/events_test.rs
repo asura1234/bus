@@ -93,7 +93,7 @@ mod codex_self_update_listing {
     }
 
     #[tokio::test]
-    async fn codexup_all_provider_never_selects_update_now_even_for_native_agents() {
+    async fn never_selects_update_now_even_for_native_agents() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::utils::config::Config::default(),

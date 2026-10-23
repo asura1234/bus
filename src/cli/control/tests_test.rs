@@ -3285,7 +3285,7 @@ fn identity_send_wait_and_message_seen_accept_names_or_ids_as_authors() {
 }
 
 #[test]
-fn codexup_room_resume_is_a_control_command() {
+fn room_resume_is_a_control_command() {
     let parsed = command(&["agent", "resume", "--room", "8259"]).unwrap();
     assert_eq!(parsed.method, "agent.resume");
     assert_eq!(parsed.params, json!({"room":"8259"}));

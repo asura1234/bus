@@ -72,7 +72,7 @@ fn codex_prompt_reference_is_short_escaped_and_skipped_for_adopted_threads() {
 }
 
 #[test]
-fn codexup_launch_disables_startup_update_checks() {
+fn launch_disables_startup_update_checks() {
     let argv = launch::runtime_args();
     assert!(
         argv.windows(2)

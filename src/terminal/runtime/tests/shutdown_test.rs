@@ -50,7 +50,7 @@ fn shutdown_liveness_treats_missing_process_as_gone() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn codexup_close_reaps_installer_after_its_session_leader_exits() {
+async fn close_reaps_installer_after_its_session_leader_exits() {
     let marker = std::env::temp_dir().join(format!(
         "bus-orphan-{}-{}",
         std::process::id(),

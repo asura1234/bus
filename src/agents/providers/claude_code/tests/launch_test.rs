@@ -206,7 +206,7 @@ fn claude_capture_settings_precede_a_literal_argument_tail() {
 }
 
 #[test]
-fn codexup_all_provider_claude_disables_updates_without_overriding_explicit_env() {
+fn claude_disables_updates_without_overriding_explicit_env() {
     let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
     let old = std::env::var_os("DISABLE_AUTOUPDATER");
     for setting in [None, Some("0"), Some("1")] {
