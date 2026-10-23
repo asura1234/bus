@@ -186,7 +186,7 @@ fn one_refresh_persists_both_setting_notices_and_rearms_both_latches() {
 
     std::fs::write(
         r.worker.settings_path.as_ref().unwrap(),
-        json!({"max_compactions_per_agent": 6, "idle_agents_alert": 2}).to_string(),
+        json!({"max_compactions_per_agent": 6, "idle_agents_alert": 3}).to_string(),
     )
     .unwrap();
     refresh(&mut r.worker);
@@ -205,12 +205,15 @@ fn one_refresh_persists_both_setting_notices_and_rearms_both_latches() {
 }
 
 #[test]
-fn more_idle_workers_than_the_default_posts_one_bus_alert_to_the_orchestrator() {
-    let mut r = setup(true, 8);
-    idle(&mut r.worker, &r.workers[..7]);
+fn reaching_the_default_threshold_posts_one_bus_alert_to_the_orchestrator() {
+    let mut r = setup(true, 7);
+    idle(&mut r.worker, &r.workers[..6]);
     refresh(&mut r.worker);
-    assert!(alerts(&r.worker, r.room).is_empty(), "7 is not more than 7");
-    idle(&mut r.worker, &r.workers[7..]);
+    assert!(
+        alerts(&r.worker, r.room).is_empty(),
+        "6 is below the default of 7"
+    );
+    idle(&mut r.worker, &r.workers[6..]);
     refresh(&mut r.worker);
     let posted = alerts(&r.worker, r.room);
     assert_eq!(posted.len(), 1);
@@ -218,7 +221,7 @@ fn more_idle_workers_than_the_default_posts_one_bus_alert_to_the_orchestrator() 
     assert_eq!(posted[0].recipient_ids, [r.orchestrator.unwrap()].into());
     assert_eq!(
         posted[0].text,
-        "You have 8 idle agents (w0, w1, w2, w3, w4, w5, w6, w7). \
+        "You have 7 idle agents (w0, w1, w2, w3, w4, w5, w6). \
          Either put them to work in parallel on the open PRs, or close the ones \
          you no longer need to save resources. Your call."
     );
@@ -248,7 +251,7 @@ fn a_room_without_an_orchestrator_alerts_the_developer() {
 #[test]
 fn only_idle_workers_without_an_open_or_queued_message_count() {
     let mut r = setup(true, 9);
-    limit(&mut r.worker, 1);
+    limit(&mut r.worker, 2);
     let w = r.workers.clone();
     idle(&mut r.worker, &w);
     // w0 stays idle. Every other worker is excluded in its own way.
@@ -315,7 +318,7 @@ fn only_idle_workers_without_an_open_or_queued_message_count() {
 #[test]
 fn the_orchestrator_never_counts_as_an_idle_agent() {
     let mut r = setup(true, 1);
-    limit(&mut r.worker, 1);
+    limit(&mut r.worker, 2);
     let orchestrator = r.orchestrator.unwrap();
     idle(&mut r.worker, &[r.workers[0], orchestrator]);
     refresh(&mut r.worker);
@@ -329,7 +332,7 @@ fn the_orchestrator_never_counts_as_an_idle_agent() {
 fn an_agent_counts_only_after_sixty_seconds_continuously_idle() {
     assert_eq!(MIN_IDLE_FOR_ALERT_MS, 60_000);
     let mut r = setup(true, 2);
-    limit(&mut r.worker, 1);
+    limit(&mut r.worker, 2);
     let w = r.workers.clone();
     observe(&mut r.worker, &w, RuntimeStatus::Idle, 59_000);
     refresh(&mut r.worker);
@@ -347,7 +350,7 @@ fn an_agent_counts_only_after_sixty_seconds_continuously_idle() {
 #[test]
 fn any_status_change_restarts_the_idle_timer() {
     let mut r = setup(true, 2);
-    limit(&mut r.worker, 1);
+    limit(&mut r.worker, 2);
     let w = r.workers.clone();
     observe(&mut r.worker, &w, RuntimeStatus::Idle, 120_000);
     observe(&mut r.worker, &[w[1]], RuntimeStatus::Working, 30_000);
@@ -358,7 +361,7 @@ fn any_status_change_restarts_the_idle_timer() {
 }
 
 #[test]
-fn falling_to_the_setting_rearms_and_the_latch_survives_a_restart() {
+fn only_falling_below_the_setting_rearms_and_the_latch_survives_a_restart() {
     let mut r = setup(true, 3);
     limit(&mut r.worker, 2);
     let w = r.workers.clone();
@@ -380,6 +383,19 @@ fn falling_to_the_setting_rearms_and_the_latch_survives_a_restart() {
     );
 
     observe(&mut r.worker, &[w[2]], RuntimeStatus::Working, 0);
+    refresh(&mut r.worker);
+    assert!(
+        r.worker.state.room(r.room).unwrap().idle_alert_sent,
+        "at threshold stays latched"
+    );
+    idle(&mut r.worker, &[w[2]]);
+    refresh(&mut r.worker);
+    assert_eq!(
+        alerts(&r.worker, r.room).len(),
+        1,
+        "rising above threshold cannot refire"
+    );
+    observe(&mut r.worker, &w[1..], RuntimeStatus::Working, 0);
     refresh(&mut r.worker);
     assert!(!r.worker.state.room(r.room).unwrap().idle_alert_sent);
     r = reopen(r);
@@ -412,9 +428,10 @@ fn an_agent_idle_under_a_minute_holds_the_episode_open() {
     r.worker.save(state).unwrap();
     refresh(&mut r.worker);
     assert!(r.worker.state.room(r.room).unwrap().idle_alert_sent);
-    // Deleting a worker does bring the room back to its limit.
+    // Deleting two workers brings the count below the threshold.
     let mut state = r.worker.state.clone();
     state.prepare_delete_agent(w[2]).unwrap();
+    state.prepare_delete_agent(w[1]).unwrap();
     r.worker.save(state).unwrap();
     refresh(&mut r.worker);
     assert!(!r.worker.state.room(r.room).unwrap().idle_alert_sent);
@@ -478,5 +495,103 @@ fn settings_command_saves_publishes_and_applies_the_idle_agents_alert() {
         assert_eq!(r.worker.state, before);
         assert_eq!(std::fs::read(&path).unwrap(), config);
     }
+    cleanup(r);
+}
+
+#[test]
+fn every_allowed_setting_alerts_at_the_threshold_and_never_below() {
+    for threshold in 1..=10 {
+        let mut r = setup(true, threshold as usize);
+        limit(&mut r.worker, threshold);
+        let w = r.workers.clone();
+        idle(&mut r.worker, &w[..w.len() - 1]);
+        refresh(&mut r.worker);
+        assert!(alerts(&r.worker, r.room).is_empty(), "below {threshold}");
+        idle(&mut r.worker, &w[w.len() - 1..]);
+        refresh(&mut r.worker);
+        let posted = alerts(&r.worker, r.room);
+        assert_eq!(posted.len(), 1, "at {threshold}");
+        refresh(&mut r.worker);
+        assert_eq!(alerts(&r.worker, r.room), posted, "one notice per episode");
+        cleanup(r);
+    }
+}
+
+#[test]
+fn every_allowed_setting_rearms_only_below_the_threshold() {
+    for threshold in 1..=10u32 {
+        let mut r = setup(true, threshold as usize + 1);
+        limit(&mut r.worker, threshold);
+        let w = r.workers.clone();
+        idle(&mut r.worker, &w);
+        refresh(&mut r.worker);
+        assert_eq!(alerts(&r.worker, r.room).len(), 1, "fires at {threshold}");
+        observe(&mut r.worker, &w[..1], RuntimeStatus::Working, 0);
+        refresh(&mut r.worker);
+        assert!(
+            r.worker.state.room(r.room).unwrap().idle_alert_sent,
+            "{threshold}: at threshold stays latched"
+        );
+        observe(&mut r.worker, &w[..2], RuntimeStatus::Working, 0);
+        refresh(&mut r.worker);
+        assert!(
+            !r.worker.state.room(r.room).unwrap().idle_alert_sent,
+            "{threshold}: below rearms"
+        );
+        idle(&mut r.worker, &w);
+        refresh(&mut r.worker);
+        assert_eq!(
+            alerts(&r.worker, r.room).len(),
+            2,
+            "{threshold}: refires after rearm"
+        );
+        cleanup(r);
+    }
+}
+
+#[test]
+fn changing_the_tui_setting_updates_the_threshold_without_a_restart() {
+    let mut r = setup(true, 2);
+    idle(&mut r.worker, &r.workers.clone());
+    let (events, _) = mpsc::channel();
+    refresh(&mut r.worker);
+    assert!(alerts(&r.worker, r.room).is_empty());
+
+    r.worker
+        .command(BusCommand::SetIdleAgentsAlert(2), &events)
+        .unwrap();
+    assert_eq!(alerts(&r.worker, r.room).len(), 1, "lowering applies now");
+    r.worker
+        .command(BusCommand::SetIdleAgentsAlert(2), &events)
+        .unwrap();
+    assert_eq!(
+        alerts(&r.worker, r.room).len(),
+        1,
+        "unchanged stays latched"
+    );
+
+    r.worker
+        .command(BusCommand::SetIdleAgentsAlert(3), &events)
+        .unwrap();
+    assert!(!r.worker.state.room(r.room).unwrap().idle_alert_sent);
+    r.worker
+        .command(BusCommand::SetIdleAgentsAlert(2), &events)
+        .unwrap();
+    assert_eq!(alerts(&r.worker, r.room).len(), 2, "a new episode fires");
+    cleanup(r);
+}
+
+#[test]
+fn reaching_the_threshold_requires_exactly_sixty_seconds_idle() {
+    let mut r = setup(true, 1);
+    let mut state = r.worker.state.clone();
+    state
+        .observe_status(r.workers[0], RuntimeStatus::Idle, 20)
+        .unwrap();
+    assert!(!state.notify_idle_agents(1, 60_019).unwrap());
+    assert!(!state.room(r.room).unwrap().idle_alert_sent);
+    assert!(state.notify_idle_agents(1, 60_020).unwrap());
+    r.worker.save(state).unwrap();
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
     cleanup(r);
 }

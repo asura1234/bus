@@ -54,7 +54,7 @@ pub(crate) struct BusSettings {
     /// Notify the room when a worker reaches this many compactions.
     #[serde(deserialize_with = "deserialize_compaction_limit")]
     pub(crate) max_compactions_per_agent: u32,
-    /// Notify the room when more than this many of its workers sit idle.
+    /// Notify the room when this many of its workers have sat idle for 60 seconds.
     #[serde(deserialize_with = "deserialize_idle_agents_alert")]
     pub(crate) idle_agents_alert: u32,
     #[serde(deserialize_with = "deserialize_disk_free_gb")]

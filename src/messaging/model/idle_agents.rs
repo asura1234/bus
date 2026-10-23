@@ -5,9 +5,9 @@ use super::{BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
 pub(crate) const MIN_IDLE_FOR_ALERT_MS: u64 = 60_000;
 
 impl BusState {
-    /// One Bus notice per episode for each work room with more than `limit`
-    /// idle workers. The room's latch clears only once its workers are really
-    /// back to the limit: a worker idle under the minimum, or whose status is
+    /// One Bus notice per episode when a work room reaches `limit` idle
+    /// workers. The room's latch clears only once its workers are really
+    /// below the limit: a worker idle under the minimum, or whose status is
     /// unknown (every agent is Unavailable right after a restart, then
     /// Launching), still holds the episode open, so restarts never re-alert.
     pub(crate) fn notify_idle_agents(
@@ -25,10 +25,10 @@ impl BusState {
         let mut changed = false;
         for (room, sent) in rooms {
             let latch = if sent {
-                self.workers(room, may_be_idle).len() > limit
+                self.workers(room, may_be_idle).len() >= limit
             } else {
                 let idle = self.workers(room, |agent| finished(agent, now_ms));
-                if idle.len() > limit {
+                if idle.len() >= limit {
                     let text = format!(
                         "You have {} idle agents ({}). Either put them to work in parallel \
                          on the open PRs, or close the ones you no longer need to save \
@@ -39,7 +39,7 @@ impl BusState {
                     let orchestrator = self.notice_orchestrator(room, None);
                     self.post_bus_notice(room, orchestrator, text, now_ms)?;
                 }
-                idle.len() > limit
+                idle.len() >= limit
             };
             if latch != sent {
                 self.rooms
