@@ -51,8 +51,9 @@ impl BusTransport {
             id: format!("bus:{}:{}", std::process::id(), self.next_id),
             method,
         };
-        let shell_deadline = Instant::now() + Duration::from_secs(5);
         let started = Instant::now();
+        let shell_deadline = started + Duration::from_secs(5);
+        let prompt_deadline = started + crate::protocol::api::AGENT_START_TIMEOUT;
         let method_name = crate::protocol::api::api_method_name(&request.method);
         let _span =
             tracing::debug_span!("bus.api", api_request_id = %request.id, method = method_name)
@@ -65,11 +66,18 @@ impl BusTransport {
                 .unwrap_or(Duration::from_secs(3));
             let response = send(&self.client, &request, timeout)
                 .and_then(crate::protocol::api::client::parse_response_value);
-            // AgentStart can be rejected while the login shell is running startup
-            // children. This precise rejection occurs before any PTY input or
+            // Both shell-start rejections precede PTY input. Integrated shells
+            // get the startup watchdog budget for their first prompt; ordinary
+            // busy shells keep their five-second window. These occur before
             // managed launch mutation. Never retry a timeout, input failure,
             // readiness failure after launch, or any prompt submission.
-            if retry_shell_start(&request.method, &response, Instant::now() < shell_deadline) {
+            let deadline = if matches!(&response, Err(ApiClientError::ErrorResponse(response)) if response.error.code == "agent_shell_starting")
+            {
+                prompt_deadline
+            } else {
+                shell_deadline
+            };
+            if retry_shell_start(&request.method, &response, Instant::now() < deadline) {
                 tracing::debug!(
                     event = "bus.api.retry",
                     reason = "shell_starting",
@@ -99,7 +107,7 @@ fn retry_shell_start(
 ) -> bool {
     before_deadline
         && matches!(method, Method::AgentStart(_))
-        && matches!(response, Err(ApiClientError::ErrorResponse(response)) if response.error.code == "agent_pane_busy")
+        && matches!(response, Err(ApiClientError::ErrorResponse(response)) if matches!(response.error.code.as_str(), "agent_pane_busy" | "agent_shell_starting"))
 }
 
 fn classify_error(error: ApiClientError) -> TransportError {
@@ -124,6 +132,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shell_prompt_wait_retries_through_a_seven_second_startup() {
+        let started = Instant::now();
+        let mut client = BusTransport::new(ConnectionTarget::SocketPath("unused".into()));
+        let outcome = client.request_using(
+            Method::AgentStart(crate::protocol::api::schema::AgentStartParams {
+                name: "slow".into(), kind: "codex".into(), pane_id: "w1:p1".into(),
+                args: vec![], timeout_ms: None,
+            }),
+            |_, request, _| {
+                Ok(if started.elapsed() < Duration::from_secs(7) {
+                    serde_json::json!({"id":request.id,"error":{"code":"agent_shell_starting","message":"waiting for first prompt"}})
+                } else {
+                    serde_json::json!({"id":request.id,"result":{"type":"ok"}})
+                })
+            },
+        );
+        assert!(
+            outcome.is_ok(),
+            "slow healthy shell was rejected: {outcome:?}"
+        );
+        assert!(started.elapsed() >= Duration::from_secs(7));
+    }
+
+    #[test]
     fn shell_retry_never_repeats_uncertain_start_or_prompt_or_exceeds_deadline() {
         let start = Method::AgentStart(crate::protocol::api::schema::AgentStartParams {
             name: "live".into(),
@@ -134,6 +166,7 @@ mod tests {
         });
         for code in [
             "agent_pane_busy",
+            "agent_shell_starting",
             "timeout",
             "agent_start_input_failed",
             "agent_not_ready",
@@ -149,7 +182,7 @@ mod tests {
             ));
             assert_eq!(
                 retry_shell_start(&start, &error, true),
-                code == "agent_pane_busy"
+                matches!(code, "agent_pane_busy" | "agent_shell_starting")
             );
             assert!(!retry_shell_start(&start, &error, false));
             assert!(!retry_shell_start(

@@ -1,11 +1,12 @@
-//! Private startup shims, sourced only by shells Bus launches. User files stay
-//! untouched and run before the prompt hook is installed.
+//! Private startup hooks for panes explicitly created for an agent launch.
 use portable_pty::CommandBuilder;
 use std::io;
 use std::path::{Path, PathBuf};
 
 pub(super) struct ShellIntegration {
     directory: PathBuf,
+    shell_name: String,
+    shell_pid: Option<u32>,
 }
 
 impl Drop for ShellIntegration {
@@ -35,13 +36,44 @@ impl ShellIntegration {
             builder.mode(0o700);
         }
         builder.create(&directory)?;
-        let integration = Self { directory };
+        let integration = Self {
+            directory,
+            shell_name: name.unwrap_or_default().into(),
+            shell_pid: None,
+        };
         if name == Some("zsh") {
             integration.zsh(cmd)?;
         } else {
             integration.bash(cmd, shell)?;
         }
         Ok(Some(integration))
+    }
+
+    pub(super) fn bind_shell(&mut self, pid: Option<u32>) {
+        self.shell_pid = pid;
+    }
+
+    pub(super) fn shell_still_foreground(&self, job: &crate::platform::ForegroundJob) -> bool {
+        let Some(pid) = self.shell_pid else {
+            return false;
+        };
+        job.process_group_id == pid
+            && job.processes.iter().any(|process| {
+                process.pid == pid
+                    && self.matches_shell_name(&process.name)
+                    // exec -a can keep the interpreter's kernel name while
+                    // changing argv0; it no longer owns the original hook.
+                    && process.argv0.as_deref()
+                        .or_else(|| process.argv.as_ref()?.first().map(String::as_str))
+                        .is_none_or(|argv0| self.matches_shell_name(argv0))
+            })
+    }
+
+    fn matches_shell_name(&self, name: &str) -> bool {
+        Path::new(name)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.trim_start_matches('-') == self.shell_name)
     }
 
     fn zsh(&self, cmd: &mut CommandBuilder) -> io::Result<()> {
@@ -51,35 +83,14 @@ impl ShellIntegration {
             if original.is_some() { "1" } else { "0" },
         );
         cmd.env("__BUS_ZDOTDIR", original.unwrap_or_default());
-        cmd.env("__BUS_SHELL_DIR", &self.directory);
         cmd.env("ZDOTDIR", &self.directory);
-        for file in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] {
-            let mut script = String::from(ZSH_RESTORE);
-            if file == ".zshenv" {
-                // These parameters are private to the initial shell, including
-                // while the user's startup code spawns children.
-                script.push_str("typeset +x __BUS_ZDOTDIR_SET __BUS_ZDOTDIR __BUS_SHELL_DIR\n");
-            }
-            script.push_str(&format!("if [[ -r ${{ZDOTDIR-$HOME}}/{file} ]]; then source \"${{ZDOTDIR-$HOME}}/{file}\"; fi\n"));
-            match file {
-                ".zshrc" => {
-                    script.push_str("if [[ ! -o login ]]; then\n");
-                    script.push_str(ZSH_PROMPT);
-                    script.push_str("else\n");
-                    script.push_str(ZSH_SAVE);
-                    script.push_str("fi\n");
-                }
-                ".zlogin" => script.push_str(ZSH_PROMPT),
-                _ => script.push_str(ZSH_SAVE),
-            }
-            std::fs::write(self.directory.join(file), script)?;
-        }
-        Ok(())
+        std::fs::write(self.directory.join(".zshenv"), ZSH_ENV)
     }
 
     fn bash(&self, cmd: &mut CommandBuilder, shell: &str) -> io::Result<()> {
-        // Interactive login bash ignores --rcfile. Run its normal login files
-        // from the rcfile instead, with login_shell set before they execute.
+        // --rcfile starts a non-login interactive bash. In login mode we source
+        // its profile files manually; this does not set login_shell or run
+        // .bash_logout. Only agent-launch panes use this limited emulation.
         let login = cmd.is_default_prog();
         let rcfile = self.directory.join("bashrc");
         std::fs::write(
@@ -102,28 +113,29 @@ impl ShellIntegration {
     }
 }
 
-const ZSH_RESTORE: &str = r#"if [[ $__BUS_ZDOTDIR_SET == 1 ]]; then
+const ZSH_ENV: &str = r#"if [[ $__BUS_ZDOTDIR_SET == 1 ]]; then
     ZDOTDIR=$__BUS_ZDOTDIR
 else
     unset ZDOTDIR
 fi
-"#;
-const ZSH_SAVE: &str = r#"__BUS_ZDOTDIR_SET=${+ZDOTDIR}
-__BUS_ZDOTDIR=${ZDOTDIR-}
-ZDOTDIR=$__BUS_SHELL_DIR
-"#;
-const ZSH_PROMPT: &str = r#"function __bus_prompt_ready() {
+unset __BUS_ZDOTDIR_SET __BUS_ZDOTDIR
+if [[ -r ${ZDOTDIR-$HOME}/.zshenv ]]; then source "${ZDOTDIR-$HOME}/.zshenv"; fi
+function __bus_prompt_ready() {
     local __bus_status=$?
     builtin printf '\033]133;A\007'
     return $__bus_status
 }
+function __bus_first_prompt() {
+    precmd_functions=(${precmd_functions:#__bus_first_prompt} __bus_prompt_ready)
+    unfunction __bus_first_prompt
+    __bus_prompt_ready
+}
 typeset -ga precmd_functions
-precmd_functions=(${precmd_functions:#__bus_prompt_ready} __bus_prompt_ready)
+precmd_functions+=(__bus_first_prompt)
 "#;
 const BASH_RC: &str = r#"if [[ -r $HOME/.bashrc ]]; then source "$HOME/.bashrc"; fi
 "#;
-const BASH_LOGIN: &str = r#"shopt -s login_shell
-if [[ -r /etc/profile ]]; then source /etc/profile; fi
+const BASH_LOGIN: &str = r#"if [[ -r /etc/profile ]]; then source /etc/profile; fi
 for __bus_profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
     if [[ -r $__bus_profile ]]; then source "$__bus_profile"; break; fi
 done
@@ -134,6 +146,8 @@ const BASH_PROMPT: &str = r#"__bus_prompt_ready() {
     builtin printf '\033]133;A\007'
     return "$__bus_status"
 }
+# The private hook function is not exported; neither may its invocation be.
+export -n PROMPT_COMMAND
 if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) &&
     [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
     PROMPT_COMMAND+=(__bus_prompt_ready)

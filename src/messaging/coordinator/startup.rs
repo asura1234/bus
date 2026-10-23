@@ -2,7 +2,8 @@
 use super::{io, launch, mpsc, schema, AgentId, BusEvent, Method, ResponseResult, Worker};
 use crate::messaging::{identity, model::AgentStartup};
 
-pub(super) const STARTUP_TIMEOUT_MS: u64 = 30_000;
+pub(super) const STARTUP_TIMEOUT_MS: u64 =
+    crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
 const SCREEN_LINES: u32 = 6;
 
 impl Worker {

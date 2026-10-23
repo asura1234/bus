@@ -78,6 +78,7 @@ fn target_nofile_soft_limit(
     (current < target).then_some(target)
 }
 
+#[cfg(test)]
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
     crate::platform::available_pane_shell_from_job(child_pid, foreground_job(child_pid)?)
 }
