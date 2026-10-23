@@ -377,7 +377,7 @@ room are reachable by name or ID.
 
 Bus prepends exactly one sender line to agent-authored payloads: `name:` for
 same-room delivery, and `name (room R):` when the conversation or recipient
-crosses rooms or involves MASTER. A shared name includes `(agent ID)` to
+crosses rooms or involves MASTER. A shared or numeric name includes `(agent ID)` to
 disambiguate. Batched agent messages use `[N/M at HH:MM]` without repeating the
 sender; developer/Bus messages without an inner header retain their sender in
 the batch marker.
@@ -1115,7 +1115,7 @@ Reliable callers should also follow these rules:
 
 1. Parse the JSON response and require `ok: true`; do not infer success from
    human-readable terminal output.
-2. Capture room, message, request and fact IDs. Use agent names for readability, or IDs to disambiguate shared names.
+2. Capture room, message, request and fact IDs. Use agent names for readability, or IDs to disambiguate shared or numeric names.
 3. Use `--to all` only when broadcasting is intentional.
 4. Use `wait` when a program needs completion; do not treat `send` as completion.
    Orchestrators receive terminal event notifications without periodic polling.

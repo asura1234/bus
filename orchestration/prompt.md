@@ -76,7 +76,7 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 
 ## Rules
 
-- Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for shared names. Send only the body; do not add a "from X", "X here" or signature line.
+- Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for shared or numeric names. Send only the body; do not add a "from X", "X here" or signature line.
 
 - The rules in {{DOCS}}/orchestrator-rules.md are binding; read them before
   kickoff.

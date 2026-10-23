@@ -119,7 +119,7 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 | --- | --- |
 | `open_messaging_cross_room_session_delivery_has_its_own_reply` | MASTER/work peers receive attributed messages across rooms, bind the exact native payload after restart and return their own reply in the conversation room. |
 | `open_messaging_pending_cross_room_messages_do_not_coalesce` | An unavailable recipient's pending messages from different rooms keep separate turns and replies. |
-| `worker_message_typed_into_orchestrator_names_its_worker_and_room` | The exact `name (room R):` payload survives restart and matches the provider callback; IDs appear only for shared names. |
+| `worker_message_typed_into_orchestrator_names_its_worker_and_room` | The exact `name (room R):` payload survives restart and matches the provider callback; IDs appear only for shared or numeric names. |
 | `numbered_native_draft_edits_never_publish_blocked_or_resolved_notices` | Editing a numbered Claude native composer must not become a series of false dialog IDs and Blocked/Resolved notices, in MASTER or a work room, including restart. |
 | `numbered_codex_native_draft_edits_never_publish_blocked_notices` | Editing a numbered Codex composer above its model footer must not request dialog attention in MASTER or a work room. Adopted red-first from the Claude review. |
 | `dialog_episodes_publish_once_despite_detection_flaps_and_restart` | Two real episodes with the same menu each publish one Blocked and one Resolved; synchronized redraws with missing detection, selection changes, status flapping and coordinator reload cannot repeat or prematurely resolve them. |

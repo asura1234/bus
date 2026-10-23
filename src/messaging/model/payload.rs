@@ -10,7 +10,7 @@ impl BusState {
             .map(|agent| (agent.name.clone(), agent.room_id))
     }
 
-    /// Human-facing identity; stable numeric IDs are useful only for shared names.
+    /// Human-facing identity; stable IDs disambiguate shared or numeric names.
     pub(crate) fn agent_label(&self, id: AgentId) -> String {
         self.agent(id).map_or_else(
             || format!("agent {}", id.0),
@@ -19,7 +19,7 @@ impl BusState {
     }
 
     pub(super) fn named_agent_label(&self, id: AgentId, name: &str) -> String {
-        if self.agents().any(|a| a.id != id && a.name == name) {
+        if name.parse::<u64>().is_ok() || self.agents().any(|a| a.id != id && a.name == name) {
             format!("{name} (agent {})", id.0)
         } else {
             name.to_owned()

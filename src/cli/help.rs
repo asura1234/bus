@@ -80,7 +80,7 @@ forward through the work room they orchestrated. Authors and administrative comm
 The case-insensitive --to orchestrator alias names the sender's home-room orchestrator.
 All still covers conversation-room members only. Cross-room messages wait for a new turn.
 Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER.
-IDs appear in headers only when names are shared; batch markers carry position and time.
+IDs appear in headers only when names are shared or numeric; batch markers carry position and time.
 Send only the body: do not add a 'from X', 'X here' or signature line.
 An exact genuine current/legacy header or an identity-only name/agent ID line is normalized to this header.
 Ordinary sentences and headers with a forged ID or room always get the real sender header.
