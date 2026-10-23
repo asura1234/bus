@@ -655,7 +655,9 @@ message tells you to look at its terminal.
 A message sent to an idle agent starts a new turn and group, as before. When
 messages piled up while the agent could not take them (it was launching,
 blocked, or finishing another turn), Bus sends them as one prompt, in order,
-each part headed `[N/M from SENDER at HH:MM]`, and they form one group.
+each part headed `[N/M at HH:MM]` for agent-authored messages, whose inner
+payload carries the sender header. Developer/Bus parts retain
+`[N/M from SENDER at HH:MM]`. The parts form one group.
 
 Add `--queue` to wait for the agent to become idle and give the message a turn
 of its own, with its own reply. A `--queue` message is never typed into a
@@ -710,10 +712,16 @@ result then includes its `message_id`; follow it with `wait`. When Claude Code
 is interrupted before it answered, it puts the interrupted prompt back into its
 input box; Bus clears it before typing the next message.
 
-`--room ROOM` instead stops every working or blocked agent in the room except
-the `--as` agent, and returns one entry per agent under `agents`; `--text` then
-goes to every agent that stopped. The generic form is
-`agent interrupt (AGENT | --room ROOM) [--text TEXT] [--as AGENT]`.
+With AGENT, optional `--room ROOM` chooses the conversation for the receipt
+and follow-up text; the interrupt notice stays in the target agent's room.
+Without AGENT, `--room ROOM` stops every working or blocked agent in that room
+except the `--as` agent, returning one entry per agent under `agents`; `--text`
+then goes to every agent that stopped. The forms are:
+
+```sh
+bus agent interrupt AGENT [--room ROOM] [--text TEXT] [--as AGENT]
+bus agent interrupt --room ROOM [--text TEXT] [--as AGENT]
+```
 
 Interrupting kills no process and keeps the provider context; to start a fresh
 context, use `agent clear` once the agent is idle.
@@ -1113,7 +1121,9 @@ Reliable callers should also follow these rules:
 
 1. Parse the JSON response and require `ok: true`; do not infer success from
    human-readable terminal output.
-2. Capture room, message, request and fact IDs. Use agent names for readability, or IDs to disambiguate shared or numeric names.
+2. Capture room, message and request IDs. Use globally unique current agent
+   names for readability; numeric or historical names include the sender ID
+   when needed to address that identity unambiguously.
 3. Use `--to all` only when broadcasting is intentional.
 4. Use `wait` when a program needs completion; do not treat `send` as completion.
    Orchestrators receive terminal event notifications without periodic polling.
