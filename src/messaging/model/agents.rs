@@ -87,12 +87,10 @@ impl BusState {
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
                 startup: None,
-                queue_pressure_episode: None,
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
                 busy_revision: 0,
-                digest_tagged_idle_revision: None,
                 dialog: false,
                 dialog_notice: None,
                 dialog_answered: false,
@@ -191,7 +189,6 @@ impl BusState {
                 name: removed.name,
             },
         );
-        self.ack_digest_deletion(id, now_ms);
         self.queues.remove(&id);
         let shared: std::collections::BTreeSet<_> = self
             .requests()
@@ -509,8 +506,6 @@ impl BusState {
         if gone {
             self.complete_pending_final(agent, now_ms)?;
         }
-        self.record_digest_idle(agent, now_ms);
-        self.record_queue_pressure(agent, now_ms);
         Ok(())
     }
 }

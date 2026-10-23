@@ -9,14 +9,6 @@ fn command(args: &[&str]) -> Result<ParsedCommand, String> {
 }
 
 #[test]
-fn room_digest_ack_cli_is_a_small_explicit_action() {
-    let parsed = command(&["digest", "ack", "1602"]).unwrap();
-    assert_eq!(parsed.method, "digest.ack");
-    assert_eq!(parsed.params, json!({"fact":"1602"}));
-    assert!(command(&["digest", "ack"]).is_err());
-}
-
-#[test]
 fn feishu_cli_toggle_accepts_only_on_off_and_no_destination() {
     for (flag, on) in [("--on", true), ("--off", false)] {
         let parsed = command(&["settings", "feishu-notifications", flag]).unwrap();
@@ -147,7 +139,6 @@ const SAMPLES: &[&[&str]] = &[
     &["send", "--room", "r", "--to", "a", "--text", "t"],
     &["message", "status", "1"],
     &["message", "seen", "1", "--as", "orch"],
-    &["digest", "ack", "1"],
     &["request", "recover", "1", "--confirm"],
     &["room", "focus", "r"],
     &["room", "seen", "r"],
@@ -3187,4 +3178,9 @@ fn notify_you_async_rejects_both_developer_aliases() {
         ]);
         assert!(parsed.unwrap_err().contains("--async waits for agents"));
     }
+}
+
+#[test]
+fn retired_room_digest_ack_cli_is_rejected() {
+    assert!(command(&["digest", "ack", "42"]).is_err());
 }

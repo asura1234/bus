@@ -11,8 +11,6 @@ use {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct BusState {
     pub(super) next_id: u64,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) room_digests: BTreeMap<AgentId, super::digests::RoomDigest>,
     pub(super) next_status_revision: u64,
     pub(super) rooms: BTreeMap<RoomId, Room>,
     #[serde(deserialize_with = "deserialize_agents")]
@@ -112,7 +110,6 @@ impl BusState {
     /// other model change still needs an atomic save before delivery resumes.
     pub(crate) fn durable_poll_change_from(&self, previous: &Self) -> bool {
         if self.next_id != previous.next_id
-            || self.room_digests != previous.room_digests
             || self.retired_agents != previous.retired_agents
             || self.rooms != previous.rooms
             || self.requests != previous.requests
@@ -150,7 +147,6 @@ impl BusState {
     pub(crate) fn new() -> Self {
         Self {
             next_id: 1,
-            room_digests: BTreeMap::new(),
             next_status_revision: 1,
             rooms: BTreeMap::new(),
             agents: BTreeMap::new(),

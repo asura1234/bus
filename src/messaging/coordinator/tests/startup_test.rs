@@ -275,7 +275,7 @@ fn startup_failure_notice_survives_restart_without_duplication_or_losing_queued_
 }
 
 #[test]
-fn startup_failure_is_delivered_with_one_blocked_digest_fact_and_identity_retained() {
+fn startup_failure_delivers_one_blocker_and_retains_identity() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
     let mut state = worker.state.clone();
     let master = state.master_room().unwrap().id;
@@ -303,14 +303,7 @@ fn startup_failure_is_delivered_with_one_blocked_digest_fact_and_identity_retain
     assert!(request.prompt.text.contains("Startup failed"));
     assert_eq!(worker.state.notices(room).count(), 0);
     let saved = serde_json::to_value(&worker.state).unwrap();
-    let facts = saved["room_digests"][orchestrator.0.to_string()]["facts"]
-        .as_object()
-        .unwrap();
-    assert_eq!(facts.len(), 1);
-    assert!(facts.values().next().unwrap()["text"]
-        .as_str()
-        .unwrap()
-        .starts_with("BLOCKED"));
+    assert!(saved.get("room_digests").is_none());
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();

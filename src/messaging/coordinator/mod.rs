@@ -16,8 +16,8 @@ mod reply_routing_tests;
 #[path = "tests/retired_github_watch_test.rs"]
 mod retired_github_watch_tests;
 #[cfg(test)]
-#[path = "tests/room_digest_test.rs"]
-mod room_digest_tests;
+#[path = "tests/retired_room_digest_test.rs"]
+mod retired_room_digest_tests;
 mod startup;
 mod storage;
 mod worker;

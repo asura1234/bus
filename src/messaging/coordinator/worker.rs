@@ -94,7 +94,9 @@ impl Worker {
         state
             .retire_queued_github_notices(io::now_ms())
             .map_err(|e| e.to_string())?;
-        state.recover_room_digest_facts();
+        state
+            .retire_queued_room_digests(io::now_ms())
+            .map_err(|e| e.to_string())?;
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
         state
