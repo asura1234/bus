@@ -149,6 +149,20 @@ pub(crate) fn agent_onboarding(
          Use --as {} when sending messages. Any agent can message any agent by name or ID; \
          names resolve in the conversation room, then your home room, then globally. \
          --to orchestrator names your home room's bound orchestrator. \
+         Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
+         For verification, send VERIFIED with the PR/task and exact head or defects with file:line straight to the owner. \
+         If you own a PR, re-send the head to verifier and reviewers on every push and use auto-merge-pr's owner-run path: \
+         carry the inherited fix-round count, allow at most 2 fix rounds, then stop and send a final to the orchestrator if another repair is needed; \
+         never fix a finding outside the locked goal in this PR; report it in the final as a follow-up for the orchestrator; \
+         after pushes and before merging, re-measure added plus removed lines against the PR base, excluding plans/; \
+         at the 3000-line split threshold stop and send a final to the orchestrator; \
+         hand back anything FLAGGED or needing a developer decision to the orchestrator in a final and do not merge while unresolved. \
+         Merge only with exact-head VERIFIED, all required reviewers Ready, gates and requested acceptance passing, \
+         comments adjudicated, recorded authority and no explicit hold. Enforce these checks during merge-pr too. \
+         Message shared-file owners before editing; follow {}/parallel-writes.md. \
+         Finals still go to the orchestrator, including after peer-started work. \
+         The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
+         product decisions and replacement announcements; workers do not edit room notes or the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
          Bus automatically adds 'name (agent id, room R):' to agent-authored messages. \
          Send only the body; do not add a 'from X', 'X here' or signature line. \
@@ -160,7 +174,8 @@ pub(crate) fn agent_onboarding(
         id.0,
         room.0,
         docs.display(),
-        id.0
+        id.0,
+        docs.display()
     )
 }
 

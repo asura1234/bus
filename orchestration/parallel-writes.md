@@ -38,8 +38,9 @@ Acceptance items: <checklist item IDs and checks>
 Ownership:
   <worker A>: <directory/** or exact files>
   <worker B>: <directory/** or exact files>
-Shared files: <X>: ask <orchestrator> before writing; wait for grant/release
-  or <X>: sole owner <worker>; send proposed edits to that owner
+Shared files: <X>: ask <named lock owner> before writing; wait for grant/release
+  or <X>: sole owner <worker>; message that owner before editing
+PR peers: <PR/task> → owner <name/ID> → verifier <name/ID> → reviewer(s) <name/ID>
 Checks / build outputs: <worker>: <commands>; <worktree>/target; <build slot/artifacts>
 Build slots: <literal absolute slot-1 path>; <literal absolute slot-2 path>
 Integration: <agent>; <merge, stack or rebase order>; conflicts: <agent>
@@ -49,18 +50,23 @@ Cleanup: <agent>; <worktrees and target dirs>; <checkpoint>
 
 ## Shared files and Git operations
 
-Give a shared file one owner who applies the others' proposed edits, or tell
-each writer: **"Ask me before writing file X and wait."** The orchestrator
-grants only one writer access at a time and records the holder in the map.
-The holder reports its edits and releases the file before the next grant. A
-read or a request is not a write grant. Shared schemas, lockfiles, generated
-files and ownership-map edits follow the same policy.
+Owners whose work touches the same file **message each other before editing**,
+including across separate worktrees. Exchange paths, intended edits and heads;
+agree who applies the edits and their order. Give the file one owner who applies
+the others' proposed edits, or name a lock owner in the map who grants only one
+writer access at a time. Ask that owner and wait for an explicit grant; record
+the holder in the map. The holder reports its edits and releases the file before
+the next grant. A read or request is not a write grant. Shared schemas,
+lockfiles and generated files follow the same policy. Ownership-map changes
+still need orchestrator approval; routine grants and releases go directly
+between the named peers, following the
+[peer messaging SOP](orchestrator-guide.md#open-peer-messaging).
 
 Parallel writes do not mean parallel mutations of the same Git index. On a
 shared branch, name one agent to commit, or serialize commit access through
-the orchestrator. Stage explicit owned files or owned hunks, inspect the staged
-diff and commit only that work. Never absorb another worker's changes into a
-commit, stash, reset or cleanup.
+the named integration owner. Stage explicit owned files or owned hunks, inspect
+the staged diff and commit only that work. Never absorb another worker's changes
+into a commit, stash, reset or cleanup.
 
 ## When worktrees are needed
 
@@ -116,15 +122,27 @@ do not add a new per-PR merge OK.
   map before editing. If either is missing, ask the orchestrator.
 - Write only inside your assigned area, including when using subagents. Request
   an ownership change before touching another area.
-- Ask the orchestrator before writing a shared file and wait for the grant, or
-  send proposed edits to its sole owner. Report completion and release the lock.
+- Message affected shared-file owners before editing. Send proposed edits to
+  the sole owner, or ask the named lock owner and wait for the grant. Report
+  completion directly to those peers and release the lock.
 - On a conflict or unexpected overlapping edit, stop writing the affected file,
   preserve your work and report the paths, branch/head and conflicting changes
-  to the orchestrator. Wait for the named integration/file owner; do not resolve
+  directly to the named integration/file owner and affected peers. Escalate
+  ownership changes or unresolved conflicts to the orchestrator; do not resolve
   it by discarding, resetting or overwriting someone else's work.
 - Commit only your own files or owned hunks, with the granted commit access.
   Inspect the staged diff; leave other workers' changes untouched. Report your
   changed paths, commit/head, checks and any outstanding locks or blockers.
+- Use the PR peers named in your brief: send each pushed head to the verifier
+  and reviewers; verifiers send `VERIFIED` or defects with `file:line` directly
+  to the owner. Owners use `auto-merge-pr`'s owner-run path: at most two fix
+  rounds, no out-of-goal repairs, no unresolved FLAG/developer decision, and
+  re-measure against its 3000-line split threshold before merge. Send follow-ups,
+  flags and exhausted-budget blockers to the orchestrator in finals.
+- Report a missing or replaced peer to the orchestrator, which owns room notes,
+  the roster and verifier allocation. Workers do not edit the notes or roster.
+  Finals still go to the orchestrator. Send only the message body; Bus adds
+  the header, so do not sign messages.
 
 ## Clean up after integration
 
