@@ -66,7 +66,10 @@ fn fixture_shell_with_launch_identity(
     let mut extra = vec![
         ("HOME".into(), dir.display().to_string()),
         ("ZDOTDIR".into(), dir.display().to_string()),
-        ("PATH".into(), "/usr/bin:/bin".into()),
+        (
+            "PATH".into(),
+            format!("{}/bin:/usr/bin:/bin", dir.display()),
+        ),
         ("PROMPT_COMMAND".into(), String::new()),
         ("ENV".into(), String::new()),
         ("BASH_ENV".into(), String::new()),
@@ -294,7 +297,7 @@ async fn launch_prompt_rc_that_execs_another_shell_still_becomes_available() {
             crate::utils::config::ShellModeConfig::NonLogin,
             &dir,
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + Duration::from_secs(12);
         while available_shell_name(&runtime).is_none() {
             assert!(
             std::time::Instant::now() < deadline,
@@ -447,6 +450,222 @@ async fn launch_prompt_bash_login_limitation_is_confined_to_agent_panes() {
         }
         assert_eq!(dir.join("logout-ran").exists(), !agent_launch);
         drop(runtime);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+fn install_fallback_provider(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    let file = dir.join("bin/codex");
+    std::fs::write(
+        &file,
+        "#!/bin/sh\nprintf 'FALLBACK_PROVIDER_RUNNING\\n'\nread -r unused\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn app_with_fallback_runtime(runtime: TerminalRuntime) -> (App, String) {
+    let mut app = app_with_agent();
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.terminal_runtimes.insert(terminal_id, runtime);
+    let target = app.public_pane_id(0, pane).unwrap();
+    (app, target)
+}
+
+fn fallback_runtime(app: &App) -> &TerminalRuntime {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].terminal_id(pane).unwrap();
+    app.terminal_runtimes.get(terminal_id).unwrap()
+}
+
+fn try_fallback_launch(
+    app: &mut App,
+    target: &str,
+) -> Result<(), crate::protocol::api::schema::ErrorBody> {
+    app.start_agent(crate::protocol::api::schema::AgentStartParams {
+        name: "fallback".into(),
+        kind: "codex".into(),
+        pane_id: target.into(),
+        args: vec![
+            "--no-daemon".into(),
+            "-c".into(),
+            "check_for_update_on_startup=false".into(),
+        ],
+        timeout_ms: None,
+    })
+    .map(|_| ())
+    .map_err(|error| app.agent_start_error_body(error))
+}
+
+async fn assert_fallback_launch(runtime: TerminalRuntime, started: std::time::Instant) {
+    let (mut app, target) = app_with_fallback_runtime(runtime);
+    loop {
+        // Check before AgentStart records its prompt-generation baseline.
+        assert!(
+            !fallback_runtime(&app).launch_returned_to_prompt(),
+            "this case must launch without a prompt mark"
+        );
+        match try_fallback_launch(&mut app, &target) {
+            Ok(()) => break,
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.code.as_str(),
+                        "agent_shell_starting" | "agent_pane_busy"
+                    ),
+                    "{error:?}"
+                );
+                assert!(
+                    started.elapsed() < Duration::from_secs(12),
+                    "fallback never launched: {error:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+    assert!(started.elapsed() >= Duration::from_secs(8));
+    eprintln!("fallback accepted input after {:?}", started.elapsed());
+    wait_for_text(fallback_runtime(&app), "FALLBACK_PROVIDER_RUNNING").await;
+}
+
+#[tokio::test]
+async fn launch_prompt_fallback_after_same_name_shell_handoff() {
+    // Adopted reviewer probe, plus the same handoff from a login profile.
+    for mode in [
+        crate::utils::config::ShellModeConfig::NonLogin,
+        crate::utils::config::ShellModeConfig::Login,
+    ] {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-bash-exec-bash");
+        std::fs::create_dir_all(&dir).unwrap();
+        install_fallback_provider(&dir);
+        let (file, command) = if mode == crate::utils::config::ShellModeConfig::Login {
+            (".bash_profile", "/bin/bash -l -i")
+        } else {
+            (".bashrc", "/bin/bash --norc -i")
+        };
+        std::fs::write(dir.join(file), format!("PATH=\"$HOME/bin:/usr/bin:/bin\"\nif [ -z \"$BUS_TEST_HANDOFF\" ]; then export BUS_TEST_HANDOFF=1; exec {command}; fi\nPS1='READY> '\n")).unwrap();
+        let started = std::time::Instant::now();
+        let runtime = fixture_shell("/bin/bash", mode, &dir);
+        assert_fallback_launch(runtime, started).await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn launch_prompt_fallback_after_zsh_precmd_assignment() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-zsh-precmd-assign");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fallback_provider(&dir);
+    std::fs::write(
+        dir.join(".zshrc"),
+        "function my_title() { :; }\nprecmd_functions=(my_title)\nPS1='READY> '\n",
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_text(&runtime, "READY>").await;
+    assert_fallback_launch(runtime, started).await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_fallback_waits_for_output_to_settle() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-zsh-noisy-startup");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fallback_provider(&dir);
+    // Builtins only: the legacy foreground-process gate already says available.
+    // Resetting precmd_functions removes the mark, and output remains active past 8 s.
+    std::fs::write(dir.join(".zshrc"), "precmd_functions=()\nfor i in {1..200}; do printf 'RC_PROGRESS %s\\n' $i; read -r -k 1 -t 0.05 unused; done\nPS1='READY> '\n").unwrap();
+    let started = std::time::Instant::now();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_text(&runtime, "RC_PROGRESS").await;
+    let (mut app, target) = app_with_fallback_runtime(runtime);
+    while !fallback_runtime(&app)
+        .recent_unwrapped_text(100)
+        .contains("READY>")
+    {
+        assert!(started.elapsed() < Duration::from_secs(15));
+        let error = try_fallback_launch(&mut app, &target)
+            .expect_err("Bus typed while startup output was still active");
+        assert_eq!(error.code, "agent_shell_starting");
+        assert!(!fallback_runtime(&app)
+            .recent_unwrapped_text(100)
+            .contains("codex"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(started.elapsed() >= Duration::from_secs(10));
+    let quiet_started = std::time::Instant::now();
+    loop {
+        assert!(
+            !fallback_runtime(&app).launch_returned_to_prompt(),
+            "the rc must not emit a prompt mark"
+        );
+        match try_fallback_launch(&mut app, &target) {
+            Ok(()) => break,
+            Err(error) => {
+                assert!(
+                    quiet_started.elapsed() < Duration::from_secs(3),
+                    "{error:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+    assert!(quiet_started.elapsed() >= Duration::from_millis(400));
+    wait_for_text(fallback_runtime(&app), "FALLBACK_PROVIDER_RUNNING").await;
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_mark_is_a_fast_path_without_waiting_for_the_fallback() {
+    for shell in ["/bin/bash", "/bin/zsh"] {
+        if !std::path::Path::new(shell).exists() {
+            continue;
+        }
+        let dir = crate::utils::test_temp::unique_temp_path("bus-mark-fast-path");
+        std::fs::create_dir_all(&dir).unwrap();
+        install_fallback_provider(&dir);
+        let rc = if shell.ends_with("bash") {
+            ".bashrc"
+        } else {
+            ".zshrc"
+        };
+        std::fs::write(dir.join(rc), "PS1='READY> '\n").unwrap();
+        let started = std::time::Instant::now();
+        let runtime = fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
+        wait_for_text(&runtime, "READY>").await;
+        assert!(
+            runtime.launch_returned_to_prompt(),
+            "fixture must emit the mark"
+        );
+        let (mut app, target) = app_with_fallback_runtime(runtime);
+        try_fallback_launch(&mut app, &target)
+            .expect("the prompt mark must bypass fallback and quiet waits");
+        wait_for_text(fallback_runtime(&app), "FALLBACK_PROVIDER_RUNNING").await;
+        assert!(started.elapsed() < Duration::from_secs(4));
+        eprintln!(
+            "marked {shell} accepted input and ran the provider after {:?}",
+            started.elapsed()
+        );
+        drop(app);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

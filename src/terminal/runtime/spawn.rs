@@ -615,7 +615,7 @@ impl TerminalRuntime {
             AgentDetection::Enabled,
         )?;
         if let Some(integration) = integration.as_mut() {
-            integration.bind_shell(runtime.child_pid());
+            integration.start_wait();
         }
         runtime.shell_integration = integration;
         Ok(runtime)

@@ -53,7 +53,7 @@ impl BusTransport {
         };
         let started = Instant::now();
         let shell_deadline = started + Duration::from_secs(5);
-        let prompt_deadline = started + crate::protocol::api::AGENT_START_TIMEOUT;
+        let startup_deadline = started + crate::protocol::api::AGENT_START_TIMEOUT;
         let method_name = crate::protocol::api::api_method_name(&request.method);
         let _span =
             tracing::debug_span!("bus.api", api_request_id = %request.id, method = method_name)
@@ -67,13 +67,13 @@ impl BusTransport {
             let response = send(&self.client, &request, timeout)
                 .and_then(crate::protocol::api::client::parse_response_value);
             // Both shell-start rejections precede PTY input. Integrated shells
-            // get the startup watchdog budget for their first prompt; ordinary
+            // get the startup watchdog budget to settle their output; ordinary
             // busy shells keep their five-second window. These occur before
             // managed launch mutation. Never retry a timeout, input failure,
             // readiness failure after launch, or any prompt submission.
             let deadline = if matches!(&response, Err(ApiClientError::ErrorResponse(response)) if response.error.code == "agent_shell_starting")
             {
-                prompt_deadline
+                startup_deadline
             } else {
                 shell_deadline
             };

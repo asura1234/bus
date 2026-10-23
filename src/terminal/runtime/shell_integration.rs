@@ -1,12 +1,14 @@
 //! Private startup hooks for panes explicitly created for an agent launch.
 use portable_pty::CommandBuilder;
+use std::cell::Cell;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub(super) struct ShellIntegration {
     directory: PathBuf,
-    shell_name: String,
-    shell_pid: Option<u32>,
+    started_at: Instant,
+    observed_output: Cell<(u64, Instant)>,
 }
 
 impl Drop for ShellIntegration {
@@ -14,6 +16,11 @@ impl Drop for ShellIntegration {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
+
+// Preserve the measured seven-second builtin rc; leave one second of headroom.
+const PROMPT_FALLBACK_WINDOW: Duration = Duration::from_secs(8);
+// Five native retry intervals, and ten 50-ms progress ticks in the noisy-rc probe.
+const OUTPUT_QUIET_PERIOD: Duration = Duration::from_millis(500);
 
 impl ShellIntegration {
     pub(super) fn install_for_agent_launch(
@@ -45,10 +52,11 @@ impl ShellIntegration {
             builder.mode(0o700);
         }
         builder.create(&directory)?;
+        let started_at = Instant::now();
         let integration = Self {
             directory,
-            shell_name: name.unwrap_or_default().into(),
-            shell_pid: None,
+            started_at,
+            observed_output: Cell::new((0, started_at)),
         };
         if name == Some("zsh") {
             integration.zsh(cmd)?;
@@ -58,31 +66,22 @@ impl ShellIntegration {
         Ok(Some(integration))
     }
 
-    pub(super) fn bind_shell(&mut self, pid: Option<u32>) {
-        self.shell_pid = pid;
+    pub(super) fn start_wait(&mut self) {
+        self.started_at = Instant::now();
+        self.observed_output.set((0, self.started_at));
     }
 
-    pub(super) fn shell_still_foreground(&self, job: &crate::platform::ForegroundJob) -> bool {
-        let Some(pid) = self.shell_pid else {
-            return false;
-        };
-        job.process_group_id == pid
-            && job.processes.iter().any(|process| {
-                process.pid == pid
-                    && self.matches_shell_name(&process.name)
-                    // exec -a can keep the interpreter's kernel name while
-                    // changing argv0; it no longer owns the original hook.
-                    && process.argv0.as_deref()
-                        .or_else(|| process.argv.as_ref()?.first().map(String::as_str))
-                        .is_none_or(|argv0| self.matches_shell_name(argv0))
-            })
-    }
-
-    fn matches_shell_name(&self, name: &str) -> bool {
-        Path::new(name)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.trim_start_matches('-') == self.shell_name)
+    pub(super) fn waiting_for_quiet_fallback(&self, content_seq: u64) -> bool {
+        let now = Instant::now();
+        let (previous_seq, mut quiet_since) = self.observed_output.get();
+        // Observe the existing PTY sequence rather than adding work to its reader.
+        // Starting the clock when a change is observed is conservatively late.
+        if content_seq != previous_seq || !content_seq.is_multiple_of(2) {
+            quiet_since = now;
+            self.observed_output.set((content_seq, now));
+        }
+        now.duration_since(self.started_at) < PROMPT_FALLBACK_WINDOW
+            || now.duration_since(quiet_since) < OUTPUT_QUIET_PERIOD
     }
 
     fn zsh(&self, cmd: &mut CommandBuilder) -> io::Result<()> {

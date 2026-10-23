@@ -13,7 +13,7 @@ use std::path::PathBuf;
 /// The provider's input box never showed a pasted prompt as typed, so the
 /// server sent no Enter and cleared the paste: a definite non-delivery.
 pub(crate) const AGENT_PROMPT_NOT_SHOWN: &str = "agent_prompt_not_shown";
-/// One budget for waiting on an agent pane's first shell prompt and confirming
+/// One budget for an agent pane's shell startup to settle and for confirming
 /// provider startup. Ordinary busy-shell retries retain their shorter window.
 pub(crate) const AGENT_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub(crate) const AGENT_PROMPT_NOT_SHOWN_MESSAGE: &str =

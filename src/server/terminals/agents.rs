@@ -296,7 +296,7 @@ impl App {
             },
             AgentStartError::ShellStarting(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_shell_starting".into(),
-                message: format!("agent target pane {target} has not reached its shell prompt. Answer any shell startup question in the terminal, then add the agent again."),
+                message: format!("agent target pane {target} is still settling its shell startup output. Wait briefly or answer any shell startup question in the terminal, then add the agent again."),
             },
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
@@ -481,22 +481,13 @@ impl App {
 pub(in crate::server) fn available_shell_name(
     runtime: &crate::terminal::TerminalRuntime,
 ) -> Option<String> {
+    if runtime.waiting_for_shell_prompt() {
+        return None;
+    }
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());
     }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        let pid = runtime.child_pid()?;
-        let job = crate::agents::foreground_job(pid)?;
-        // Prompt ownership and the legacy process gate use the same snapshot:
-        // a startup child handing back the terminal cannot bypass the mark.
-        if runtime.shell_prompt_required_for_job(&job) {
-            return None;
-        }
-        crate::platform::available_pane_shell_from_job(pid, job)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     crate::platform::available_pane_shell(runtime.child_pid()?)
 }
 

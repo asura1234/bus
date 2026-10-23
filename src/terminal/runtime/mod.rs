@@ -180,23 +180,10 @@ mod tests;
 
 impl TerminalRuntime {
     pub(crate) fn waiting_for_shell_prompt(&self) -> bool {
-        if self.shell_integration.is_none() || self.terminal.shell_prompt_generation() > 0 {
-            return false;
-        }
-        self.child_pid()
-            .and_then(crate::agents::foreground_job)
-            .is_none_or(|job| self.shell_prompt_required_for_job(&job))
-    }
-
-    pub(crate) fn shell_prompt_required_for_job(
-        &self,
-        job: &crate::platform::ForegroundJob,
-    ) -> bool {
         self.terminal.shell_prompt_generation() == 0
-            && self
-                .shell_integration
-                .as_ref()
-                .is_some_and(|integration| integration.shell_still_foreground(job))
+            && self.shell_integration.as_ref().is_some_and(|integration| {
+                integration.waiting_for_quiet_fallback(self.content_seq())
+            })
     }
 
     pub(crate) fn mark_agent_launch(&self) {
