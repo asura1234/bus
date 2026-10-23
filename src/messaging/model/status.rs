@@ -11,6 +11,8 @@ impl RoomAgent {
             Some("deletion_pending")
         } else if self.session_binding_invalidated {
             Some("session_invalidated")
+        } else if self.missing_binary.is_some() {
+            Some("provider_binary_missing")
         } else if !self.hook_setup_confirmed {
             Some("hook_setup_unconfirmed")
         } else if self.status != RuntimeStatus::Idle {
@@ -38,7 +40,7 @@ impl RoomAgent {
     /// whatever its provider reports (Codex reports Idle while it waits on an
     /// approval). Agent rows and room status both use it, so they agree.
     pub(crate) fn shown_status(&self) -> RuntimeStatus {
-        if self.dialog {
+        if self.dialog || self.missing_binary.is_some() {
             RuntimeStatus::Blocked
         } else {
             self.status
@@ -54,6 +56,12 @@ impl BusState {
     /// provider is not running, so the room cannot progress without help; an
     /// agent being deleted does not count.
     pub(crate) fn room_status(&self, room: RoomId) -> RuntimeStatus {
+        if self
+            .room(room)
+            .is_some_and(|r| !r.missing_provider_binaries.is_empty())
+        {
+            return RuntimeStatus::Blocked;
+        }
         let mut status = RuntimeStatus::Idle;
         for agent in self.agents().filter(|agent| agent.room_id == room) {
             match agent.shown_status() {

@@ -38,8 +38,8 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rebound = Vec::new();
         let mut waits = Vec::new();
-        let dir = &self.data_dir;
-        for agent in self.state.agents() {
+        let observed_agents: Vec<_> = self.state.agents().cloned().collect();
+        for agent in &observed_agents {
             let info = infos
                 .iter()
                 .find(|i| {
@@ -75,7 +75,18 @@ impl Worker {
                 }
             }
             let status = polled_status(agent, info);
-            observe_exit(self.transport.as_mut(), dir, &mut state, agent, info)?;
+            let (missing, exit_evidence) =
+                self.observe_missing_binary(&mut state, agent, status, info)?;
+            if !missing {
+                observe_exit(
+                    self.transport.as_mut(),
+                    &self.data_dir,
+                    &mut state,
+                    agent,
+                    info,
+                    exit_evidence,
+                )?;
+            }
             confirm_interactive_agent(&mut state, agent, info)?;
             let observed_at_ms = io::now_ms();
             state
@@ -150,6 +161,7 @@ fn observe_exit(
     state: &mut BusState,
     agent: &RoomAgent,
     info: Option<&schema::AgentInfo>,
+    exit_evidence: Option<bool>,
 ) -> Result<(), String> {
     if agent.deletion_pending {
         return Ok(());
@@ -168,20 +180,7 @@ fn observe_exit(
     ) {
         _ if saved => Some(true),
         (Some(_), _, _) => Some(false),
-        (None, Some(pane), Some(terminal)) => {
-            match transport.request(Method::PaneGet(schema::PaneTarget {
-                pane_id: pane.clone(),
-            })) {
-                Ok(ResponseResult::PaneInfo { pane: evidence })
-                    if evidence.pane_id == *pane
-                        && evidence.terminal_id == *terminal
-                        && evidence.agent_process_exited =>
-                {
-                    Some(true)
-                }
-                _ => None,
-            }
-        }
+        (None, Some(_), Some(_)) => exit_evidence,
         _ => None,
     };
     if evidence == Some(true) {

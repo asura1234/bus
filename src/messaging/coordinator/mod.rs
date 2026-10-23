@@ -10,6 +10,8 @@ mod expiry;
 #[path = "tests/operational_notice_retirement_test.rs"]
 mod operational_notice_retirement_tests;
 mod poll;
+mod provider_failure;
+mod recovery;
 #[cfg(test)]
 #[path = "tests/reply_delivery_support_test.rs"]
 pub(crate) mod reply_delivery_support;

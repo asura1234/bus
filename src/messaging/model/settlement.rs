@@ -248,6 +248,7 @@ impl BusState {
     fn settle_candidate(&self, agent: AgentId) -> Option<&Request> {
         let agent_state = self.agents.get(&agent)?;
         if agent_state.deletion_pending
+            || agent_state.missing_binary.is_some()
             || agent_state.session_binding_invalidated
             || agent_state.dialog
             || !matches!(

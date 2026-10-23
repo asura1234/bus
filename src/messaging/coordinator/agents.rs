@@ -396,6 +396,15 @@ impl Worker {
                 return Ok(());
             }
         }
+        if !launch::binary_available(input.provider) {
+            let binary = launch::executable(input.provider);
+            let mut state = self.state.clone();
+            let error = state
+                .report_missing_binary(input.room, binary, super::io::now_ms())
+                .map_err(|e| e.to_string())?;
+            self.save(state)?;
+            return Err(error);
+        }
         let (mut prepared, hooks) = self.prepare_provider_launch(&input, id)?;
         self.prepare_agent_prompt(
             &input,
@@ -550,7 +559,7 @@ impl Worker {
         Ok(identity)
     }
 
-    fn report_adopted_session(
+    pub(super) fn report_adopted_session(
         &mut self,
         id: AgentId,
         provider: Provider,

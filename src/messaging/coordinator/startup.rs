@@ -24,6 +24,7 @@ impl Worker {
                         .ok_or("Cannot describe the provider launch command")?,
                     started_at_ms,
                     reported: false,
+                    preserve_on_failure: false,
                 }),
             )
             .map_err(|e| e.to_string())?;
@@ -48,6 +49,9 @@ impl Worker {
             })
             .collect();
         for (agent, mut startup) in pending {
+            if agent.missing_binary.is_some() {
+                continue;
+            }
             let name = identity::managed_name(agent.room_id, agent.id);
             let info = infos.iter().find(|info| {
                 Some(info.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
@@ -111,6 +115,7 @@ impl Worker {
                 // The persisted marker deduplicates this blocker across restarts.
                 self.save(state)?;
             }
+
         }
         Ok(())
     }
@@ -120,7 +125,20 @@ impl Worker {
             .unwrap_or_else(|error| format!("> Screen unavailable: {error}"))
     }
 
-    fn read_startup_screen(&mut self, id: AgentId) -> Result<String, String> {
+    pub(super) fn read_startup_screen(&mut self, id: AgentId) -> Result<String, String> {
+        let identity = &self
+            .state
+            .agent(id)
+            .ok_or("Unknown agent")?
+            .runtime_identity;
+        let pane = identity.pane_id.clone().ok_or("No launch pane")?;
+        let terminal = identity.terminal_id.clone().ok_or("No launch terminal")?;
+        self.verify_startup_pane(&pane, &terminal)?;
+        self.read_verified_startup_screen(id)
+    }
+
+    /// Caller has just verified PaneGet against this launch's terminal identity.
+    pub(super) fn read_verified_startup_screen(&mut self, id: AgentId) -> Result<String, String> {
         let identity = self
             .state
             .agent(id)
@@ -129,7 +147,6 @@ impl Worker {
             .clone();
         let pane = identity.pane_id.ok_or("No launch pane")?;
         let terminal = identity.terminal_id.ok_or("No launch terminal")?;
-        self.verify_startup_pane(&pane, &terminal)?;
         let result = self
             .transport
             .request(Method::PaneRead(schema::PaneReadParams {

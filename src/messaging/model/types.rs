@@ -218,6 +218,8 @@ pub(crate) struct Room {
     pub(crate) id: RoomId,
     pub(crate) name: String,
     pub(crate) notes: String,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) missing_provider_binaries: BTreeSet<String>,
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
@@ -296,6 +298,8 @@ pub(crate) struct AgentStartup {
     pub(crate) started_at_ms: u64,
     /// Saved with the notice before deletion to prevent duplicate reports.
     pub(crate) reported: bool,
+    #[serde(default)]
+    pub(crate) preserve_on_failure: bool,
 }
 
 /// Where an agent's blocked notice went.
@@ -361,6 +365,9 @@ pub(crate) struct RoomAgent {
     /// over after a coordinator restart, and only that error is cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) update_error: Option<String>,
+    /// A shared provider outage holds work until an explicit room resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) missing_binary: Option<String>,
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
     pub(crate) hook_setup_confirmed: bool,

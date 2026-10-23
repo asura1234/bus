@@ -268,6 +268,12 @@ pub(crate) fn saved_options(provider: ProviderKind, spool: &Path) -> Result<Vec<
     Ok(options)
 }
 
+pub(crate) fn binary_available(provider: ProviderKind) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join(executable(provider)).is_file())
+    })
+}
+
 pub(crate) fn project_root(cwd: &Path) -> PathBuf {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -301,10 +307,7 @@ pub(crate) fn prepare(
 ) -> Result<PreparedLaunch, String> {
     let cwd = canonical_directory(&spec.cwd)?;
     let (mut args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
-    let available = std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join(executable(spec.provider)).is_file())
-    });
-    if !available {
+    if !binary_available(spec.provider) {
         return Err(format!(
             "{} is not installed on PATH",
             executable(spec.provider)

@@ -61,6 +61,7 @@ impl BusState {
                 automatic_dialog_answer: None,
                 actionable_error: None,
                 update_error: None,
+                missing_binary: None,
                 current_request: None,
                 hook_setup_confirmed: false,
                 session_binding_invalidated: false,

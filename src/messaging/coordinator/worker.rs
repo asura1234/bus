@@ -25,6 +25,7 @@ pub(super) struct Worker {
     pub(super) last_command_id: u64,
     pub(super) error: Option<String>,
     pub(super) poll_failures: u32,
+    pub(super) missing_binary_checked: BTreeMap<AgentId, Option<String>>,
     pub(super) storage_pause: Option<StoragePause>,
     pub(super) branch_checks: BTreeMap<AgentId, std::time::Instant>,
     /// Each agent's latest dialog wait and how many polls it has held.
@@ -137,6 +138,7 @@ impl Worker {
             last_command_id: 0,
             error: None,
             poll_failures: 0,
+            missing_binary_checked: BTreeMap::new(),
             storage_pause: None,
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
