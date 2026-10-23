@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 import traceback
 
-import feishu_notify_test as helper
+if __package__:
+    from . import feishu_notify_test as helper
+else:
+    import feishu_notify_test as helper
 
 helper.DOC = "tests/e2e-tui/notify-you.md"
 
