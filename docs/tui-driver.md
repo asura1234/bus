@@ -102,17 +102,17 @@ image (`fixture clipboard-image`), never your clipboard. Sessions therefore run
 on macOS only: on Linux and Windows Bus uses other programs the recorder does
 not stand in for, so `start` refuses there.
 
-Developer-addressed MASTER messages with `[waiting-on-you]`, `[waiting_on_you]` or
-their case-insensitive whole-phrase equivalents send bot Feishu DMs through lark-cli,
-regardless of visible room or focus. The default-on Feishu notifications setting,
-recipient and optional CLI path are shared settings. Bursts combine over two seconds.
-Use a closed PATH recording shim to assert argv; these messages emit no terminal OSC.
-See [Feishu notifications](developer-notifications.md). Recovered freezes retain their
-separate Freeze recovery notifications setting and terminal effect.
+Agent messages addressed to `you` (or `human`) and all waiting-tagged agent messages
+notify from every room and sender. Feishu notifications are mandatory; recipient and
+optional CLI path remain shared settings, and bursts combine over two seconds.
+Use a closed PATH recording shim to assert argv. Developer sends emit no alerts,
+and these alerts emit no terminal OSC. See [developer notifications](developer-notifications.md).
+Recovered freezes retain their separate notification setting and terminal effect.
 
-A new agent reply (or agent notice) in a room whose sound is on still plays
-that room's sound (`afplay`); MASTER's sound starts on, work rooms' off.
-Host focus does not gate these sounds. Agent-pane toasts keep their own setting.
+Mandatory developer sounds record an `afplay` target named `bus-developer-alert-*.mp3`,
+independent of room sound switches, focus and normal cooldown. Ordinary room sounds
+record `bus-sound-*.mp3` or a selected system sound. Nothing is played by the recorder.
+Initial history and repeated snapshots do not replay alerts.
 
 Output: every verb prints one JSON line on stdout, except `journey` (one
 line per step, then the result), `bus` (Bus's own output) and
