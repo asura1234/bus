@@ -4,6 +4,30 @@ use super::{AgentNameOwner, ManagedAgent, ManagedAgentPhase, TerminalState};
 use crate::agents::{AgentKind, AgentState};
 
 impl TerminalState {
+    pub(crate) fn bind_managed_launch_pending(
+        &mut self,
+        signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        if let Some(previous) = self.managed_launch_pending_signal.replace(signal) {
+            previous.store(false, std::sync::atomic::Ordering::Release);
+        }
+        self.sync_managed_launch_pending();
+    }
+
+    fn update_managed_agent(&mut self, managed: Option<ManagedAgent>) {
+        self.managed_agent = managed;
+        self.sync_managed_launch_pending();
+    }
+
+    fn sync_managed_launch_pending(&self) {
+        if let Some(signal) = &self.managed_launch_pending_signal {
+            signal.store(
+                self.managed_agent_launch_pending(),
+                std::sync::atomic::Ordering::Release,
+            );
+        }
+    }
+
     pub fn set_managed_agent_launch_session(
         &mut self,
         session: crate::agents::resume::catalog::PersistedAgentSession,
@@ -49,14 +73,14 @@ impl TerminalState {
             agent_label: crate::agents::agent_label(kind).to_string(),
             session_ref: None,
         });
-        self.managed_agent = Some(ManagedAgent {
+        self.update_managed_agent(Some(ManagedAgent {
             kind,
             phase: ManagedAgentPhase::Pending {
                 ready_after: Some(now.checked_add(settle_delay).unwrap_or(now)),
                 deadline: now.checked_add(timeout).unwrap_or(now),
                 observed_expected: false,
             },
-        });
+        }));
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
@@ -75,6 +99,7 @@ impl TerminalState {
         if let Some(managed) = self.managed_agent.as_mut() {
             managed.phase = ManagedAgentPhase::Active;
         }
+        self.sync_managed_launch_pending();
     }
 
     pub fn managed_agent_interactive_ready(&self) -> bool {
@@ -120,10 +145,10 @@ impl TerminalState {
         }
         if managed.phase == ManagedAgentPhase::Blocked {
             if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
-                self.managed_agent = Some(ManagedAgent {
+                self.update_managed_agent(Some(ManagedAgent {
                     kind: managed.kind,
                     phase: ManagedAgentPhase::Active,
-                });
+                }));
                 self.managed_agent_launch_session = None;
                 return true;
             }
@@ -136,10 +161,10 @@ impl TerminalState {
         } = managed.phase
         {
             if known_agent == Some(managed.kind) && self.state == AgentState::Blocked {
-                self.managed_agent = Some(ManagedAgent {
+                self.update_managed_agent(Some(ManagedAgent {
                     kind: managed.kind,
                     phase: ManagedAgentPhase::Blocked,
-                });
+                }));
                 return true;
             }
             if now >= deadline {
@@ -148,34 +173,34 @@ impl TerminalState {
             }
             if ready_after.is_none_or(|ready_after| now >= ready_after) {
                 if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
-                    self.managed_agent = Some(ManagedAgent {
+                    self.update_managed_agent(Some(ManagedAgent {
                         kind: managed.kind,
                         phase: ManagedAgentPhase::Active,
-                    });
+                    }));
                     self.managed_agent_launch_session = None;
                     return true;
                 }
                 if ready_after.is_some() {
-                    self.managed_agent = Some(ManagedAgent {
+                    self.update_managed_agent(Some(ManagedAgent {
                         kind: managed.kind,
                         phase: ManagedAgentPhase::Pending {
                             ready_after: None,
                             deadline,
                             observed_expected,
                         },
-                    });
+                    }));
                     return true;
                 }
             }
             if observed_expected != previous_observed_expected {
-                self.managed_agent = Some(ManagedAgent {
+                self.update_managed_agent(Some(ManagedAgent {
                     kind: managed.kind,
                     phase: ManagedAgentPhase::Pending {
                         ready_after,
                         deadline,
                         observed_expected,
                     },
-                });
+                }));
                 return true;
             }
         }
@@ -188,10 +213,10 @@ impl TerminalState {
             agent_label: crate::agents::agent_label(kind).to_string(),
             session_ref: None,
         });
-        self.managed_agent = Some(ManagedAgent {
+        self.update_managed_agent(Some(ManagedAgent {
             kind,
             phase: ManagedAgentPhase::Active,
-        });
+        }));
     }
 
     pub fn clear_agent_name(&mut self) {
@@ -206,7 +231,7 @@ impl TerminalState {
         }
         self.agent_name = None;
         self.agent_name_owner = None;
-        self.managed_agent = None;
+        self.update_managed_agent(None);
         self.managed_agent_args = None;
     }
 

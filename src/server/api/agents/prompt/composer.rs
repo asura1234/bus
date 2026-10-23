@@ -260,10 +260,7 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
         body.push_str(line);
     }
     let mut body = body.trim().to_owned();
-    if matches!(
-        body.as_str(),
-        "Ask Codex to do anything" | "Use /skills to list available skills" | "Ask anything"
-    ) {
+    if crate::agents::is_empty_codex_composer(&body) || body == "Ask anything" {
         body.clear();
     }
     if kind == AgentKind::Cursor

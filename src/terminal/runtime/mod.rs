@@ -152,6 +152,7 @@ pub struct TerminalRuntime {
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
     detection_content_seq: Arc<AtomicU64>,
+    managed_launch_pending: Arc<AtomicBool>,
     preserve_processes_on_drop: bool,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
@@ -185,6 +186,10 @@ impl TerminalRuntime {
     pub(crate) fn current_size(&self) -> (u16, u16) {
         let (rows, cols, _, _) = self.current_size.get();
         (rows, cols)
+    }
+
+    pub(crate) fn managed_launch_pending_signal(&self) -> Arc<AtomicBool> {
+        self.managed_launch_pending.clone()
     }
 
     pub(crate) fn content_seq(&self) -> u64 {

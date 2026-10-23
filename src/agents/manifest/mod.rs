@@ -27,14 +27,26 @@ pub struct DetectionInput<'a> {
 }
 
 pub fn detect_with_osc(agent: AgentKind, input: DetectionInput<'_>) -> AgentDetection {
+    detect_with_launch_context(agent, input, false)
+}
+
+pub(crate) fn detect_with_launch_context(
+    agent: AgentKind,
+    input: DetectionInput<'_>,
+    managed_launch_pending: bool,
+) -> AgentDetection {
     let Some(loaded) = load_manifest(agent) else {
         return idle_fallback();
     };
-    evaluate_loaded_manifest(input, &loaded)
+    evaluate_loaded_manifest(input, &loaded, managed_launch_pending)
 }
 
-fn evaluate_loaded_manifest(input: DetectionInput<'_>, loaded: &LoadedManifest) -> AgentDetection {
-    let Some(rule) = matched_manifest_rule(input, loaded) else {
+fn evaluate_loaded_manifest(
+    input: DetectionInput<'_>,
+    loaded: &LoadedManifest,
+    managed_launch_pending: bool,
+) -> AgentDetection {
+    let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending) else {
         return idle_fallback();
     };
     let state = rule
@@ -67,7 +79,7 @@ pub(crate) fn auto_update(agent: AgentKind, screen: &str) -> Option<AutoUpdate> 
         osc_title: "",
         osc_progress: "",
     };
-    let update = matched_manifest_rule(input, &loaded)?
+    let update = matched_manifest_rule(input, &loaded, false)?
         .auto_update
         .as_ref()?;
     Some(AutoUpdate {
@@ -91,10 +103,12 @@ pub fn should_skip_state_update(agent: AgentKind, screen_content: &str) -> bool 
 fn matched_manifest_rule<'a>(
     input: DetectionInput<'_>,
     loaded: &'a LoadedManifest,
+    managed_launch_pending: bool,
 ) -> Option<&'a ManifestRule> {
     let mut matched: Option<&ManifestRule> = None;
     for (rule, compiled_rule) in loaded.manifest.rules.iter().zip(&loaded.compiled_rules) {
-        if compiled_rule_matches(compiled_rule, region(input, &rule.region))
+        if (!rule.managed_launch_only || managed_launch_pending)
+            && compiled_rule_matches(compiled_rule, region(input, &rule.region))
             && matched.is_none_or(|previous| previous.priority < rule.priority)
         {
             matched = Some(rule);

@@ -70,11 +70,12 @@ regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
 # Require all three live footer lines, and never override visible working text.
 [[rules]]
 id = "startup_prompt_idle"
+managed_launch_only = true
 state = "idle"
 priority = 1080
 region = "whole_recent"
 visible_idle = true
-regex = ['(?m)^\s*› Ask Codex to do anything\s*\n\s*GPT-[^\r\n]+·[^\r\n]+\n\s*\? for shortcuts[^\r\n]*\s*\z']
+regex = ['(?m)^[ \t]*›[ \t]*{{codex_empty_composer}}[ \t]*\r?\n[ \t]*GPT-[^\r\n]+·[^\r\n]+\r?\n[ \t]*\? for shortcuts[^\r\n]*\s*\z']
 not = [{ line_regex = ['(?i)^\s*[•◦]\s+\S.*esc to interrupt'] }]
 
 [[rules]]

@@ -13,6 +13,7 @@ pub(crate) mod title;
 mod codex_activity_tests;
 
 mod catalog;
+mod composer;
 mod detect;
 mod identify;
 #[cfg(test)]
@@ -20,7 +21,10 @@ pub use identify::identify_agent;
 
 pub(crate) use self::catalog::parse_canonical_agent_label;
 pub use self::catalog::{agent_label, interactive_agent_executable, parse_agent_label, AgentKind};
-pub(crate) use self::detect::session_identity_only_integration;
+pub(crate) use self::composer::{is_empty_codex_composer, CODEX_EMPTY_COMPOSER_PLACEHOLDERS};
+pub(crate) use self::detect::{
+    detect_agent_with_launch_context, session_identity_only_integration,
+};
 pub use self::detect::{
     detect_agent_with_osc, should_skip_state_update, AgentDetection, AgentState,
 };

@@ -31,9 +31,9 @@ use crate::terminal::runtime::detection_process::ProcessProbeInput;
 use crate::terminal::runtime::AgentDetection;
 use crate::utils::ids::PaneId;
 use crate::utils::render::signal::RenderSignal;
-use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -155,6 +155,7 @@ pub(super) fn spawn_detection_task(
     terminal: Arc<PaneTerminal>,
     events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    managed_launch_pending: Arc<AtomicBool>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> Option<tokio::task::AbortHandle> {
@@ -167,6 +168,7 @@ pub(super) fn spawn_detection_task(
         terminal,
         state_events: events,
         detection_content_seq,
+        managed_launch_pending,
         render_notify,
         render_dirty,
     };
@@ -184,6 +186,7 @@ struct DetectionTask {
     terminal: Arc<PaneTerminal>,
     state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    managed_launch_pending: Arc<AtomicBool>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 }
@@ -578,6 +581,7 @@ impl DetectionTask {
             &osc_title,
             &osc_progress,
             process_exited,
+            self.managed_launch_pending.load(Ordering::Acquire),
         ) else {
             status.pending_idle.clear();
             return;
