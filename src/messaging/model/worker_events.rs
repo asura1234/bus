@@ -202,7 +202,7 @@ impl BusState {
         let requests: Vec<_> = self
             .requests()
             .filter(|r| !retired_automation(r))
-            .filter(|r| self.routing_source(r))
+            .filter(|r| self.event_backfill_source(r))
             .filter(|r| {
                 self.worker_orchestrator(r.agent_id).is_some()
                     && self

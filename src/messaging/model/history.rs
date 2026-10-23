@@ -148,11 +148,18 @@ impl History {
 pub(crate) const DIALOG_ANSWER_TTL_MS: u64 = 60 * 60 * 1000;
 
 impl super::BusState {
+    /// Establish the recovery boundary before any routing/event pass can run.
+    pub(crate) fn advance_routing_floor(&mut self, now_ms: u64) {
+        self.routing_before_ms = self
+            .routing_before_ms
+            .max(now_ms.saturating_sub(HISTORY_RETENTION_MS));
+    }
+
     /// Moves settled requests and old notices into permanent history and prunes
     /// only transient routing and dedupe metadata. True when anything changed.
     pub(crate) fn archive(&mut self, now_ms: u64) -> bool {
         let before = self.routing_before_ms;
-        self.routing_before_ms = before.max(now_ms.saturating_sub(HISTORY_RETENTION_MS));
+        self.advance_routing_floor(now_ms);
         let pending = self.retain_unrouted_worker_replies() | self.retain_worker_outcomes(now_ms);
         let moved = self.archive_settled(now_ms.saturating_sub(ARCHIVE_AFTER_MS));
         let spent = self.drop_spent_ids(now_ms);
@@ -183,9 +190,13 @@ impl super::BusState {
     }
 
     pub(super) fn routing_source(&self, request: &Request) -> bool {
-        !request.settled()
-            || settled_at_ms(request) >= self.routing_before_ms
-            || self.requests.contains_key(&request.id)
+        self.event_backfill_source(request) || self.requests.contains_key(&request.id)
+    }
+
+    /// Inline sources may still owe live delivery, but that must not resurrect
+    /// expired outcome events during upgrade or before the first archive pass.
+    pub(super) fn event_backfill_source(&self, request: &Request) -> bool {
+        !request.settled() || settled_at_ms(request) >= self.routing_before_ms
     }
 
     /// Settled requests no agent, queue or open group refers to, and notices,

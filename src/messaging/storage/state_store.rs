@@ -531,12 +531,15 @@ impl JsonStore {
                 found: version,
             });
         }
-        let document = serde_json::from_value::<StoredDocument>(value).map_err(|source| {
+        let mut document = serde_json::from_value::<StoredDocument>(value).map_err(|source| {
             StoreError::Corrupt {
                 path: self.path.clone(),
                 source,
             }
         })?;
+        if version < STORE_VERSION {
+            document.state.advance_routing_floor(super::io::now_ms());
+        }
         self.journal_state().verified = fingerprint;
         Ok(Some((document.state, document.journal_seq)))
     }
