@@ -121,6 +121,7 @@ class BusQualityTest(unittest.TestCase):
                     quality, "python_files", return_value=[root / "scripts/one_test.py"]
                 ),
                 patch.object(quality, "rust_test", return_value=0) as rust_test,
+                patch.object(quality, "unit_profraw_files", return_value=[Path("unit.profraw")]),
                 patch.object(quality, "run", return_value=0) as run,
                 patch.dict(os.environ, {"BUS_TEST_BINARY": "/stale/bus"}),
             ):
@@ -359,6 +360,7 @@ class BusQualityTest(unittest.TestCase):
                     ),
                     patch.object(quality, "run", return_value=0),
                     patch.object(quality, "rust_lines", return_value=(rust, 100)),
+                    patch.object(quality, "require_unit_profraw"),
                 ):
                     self.assertEqual(quality.coverage(), expected)
                     summary = json.loads((root / "summary.json").read_text())
