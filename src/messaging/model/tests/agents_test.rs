@@ -90,7 +90,7 @@ fn agent_colors_survive_rename_neighbor_deletion_and_restart() {
     state.delete_agent(first, 0).unwrap();
     let reloaded: BusState = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
     assert_eq!(serialized_agent_color(&reloaded, second), original);
-    assert_eq!(reloaded, state);
+    assert_eq!(reloaded.agents, state.agents);
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn accessible_agent_colors_persist_beside_standard_colors() {
     let reloaded: BusState = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
     assert_eq!(serialized_agent_color(&reloaded, second), standard);
     assert_eq!(serialized_accessible_color(&reloaded, second), accessible);
-    assert_eq!(reloaded, state);
+    assert_eq!(reloaded.agents, state.agents);
 }
 
 #[test]
@@ -184,8 +184,14 @@ fn deletion_cleans_owned_state_preserves_neighbors_and_never_reuses_ids() {
     let unaffected = state.agent(other).unwrap().clone();
     state.delete_agent(agent, 0).unwrap();
     assert_eq!(state.agent(other), Some(&unaffected));
-    assert!(state.request(request).is_none());
-    assert!(state.request(queued).is_none());
+    assert_eq!(
+        state.request(request).unwrap().failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+    assert_eq!(
+        state.request(queued).unwrap().failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
     assert!(state.queued_requests(agent).is_empty());
     assert_eq!(
         state.room(room).unwrap().draft.recipient_ids,

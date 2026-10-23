@@ -287,7 +287,10 @@ fn deletion_preserves_foreign_recipient(active: bool) {
     }
     w.state.delete_room(home, 10).unwrap();
     assert!(w.state.agent(peer).is_some());
-    assert!(w.state.request(removed).is_none());
+    assert_eq!(
+        w.state.request(removed).unwrap().failure_reason.as_deref(),
+        Some("room_deleted")
+    );
     assert!(w.state.request(kept).is_some());
     assert_eq!(w.state.agent(peer).unwrap().current_request, None);
     assert_eq!(w.state.queued_requests(peer), &[kept]);

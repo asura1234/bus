@@ -191,3 +191,20 @@ fn discarding_never_removes_a_session_with_a_live_coordinator() {
     assert!(!registry.discard_if_empty(&empty.id).unwrap());
     assert!(empty.root.exists());
 }
+
+#[test]
+fn audit_session_with_only_master_messages_cannot_be_discarded_as_empty() {
+    let fixture = Fixture::new("audit");
+    let registry = fixture.registry();
+    let session = registry.create().unwrap();
+    let mut state = BusState::new();
+    let master = state.ensure_master_room();
+    state
+        .post_bus_notice(master, None, "permanent audit record".into(), 1)
+        .unwrap();
+    let store = JsonStore::new(session.root.join("state.json"));
+    state.archive(700_000);
+    store.save(&state).unwrap();
+    assert!(!registry.discard_if_empty(&session.id).unwrap());
+    assert!(session.root.join("history.jsonl").exists());
+}

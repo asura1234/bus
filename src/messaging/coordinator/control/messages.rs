@@ -359,6 +359,12 @@ impl Worker {
             .filter(|r| r.prompt.id == message)
             .collect::<Vec<_>>();
         if requests.is_empty() {
+            if let Some(prompt) = self.state.notice(message) {
+                return Ok(
+                    json!({"message_id": message, "prompt": prompt, "files": prompt.files,
+                    "complete": true, "stage": "posted", "waiting_on_dialog": [], "requests": []}),
+                );
+            }
             return Err("Unknown message ID".into());
         }
         let recipient_order = &requests[0].prompt.recipient_ids;
@@ -369,7 +375,7 @@ impl Worker {
                 .unwrap_or(usize::MAX)
         });
         Ok(
-            json!({"message_id":message,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
+            json!({"message_id":message,"prompt":requests[0].prompt,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);
             let outcomes = self.state.worker_outcomes_for(r);
             let worker_events = self.state.worker_events_for(r);
@@ -383,7 +389,7 @@ impl Worker {
                 .or_else(|| r.failure_reason.clone())
                 .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
         }).collect::<Vec<_>>()}),
         )
     }

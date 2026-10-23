@@ -223,14 +223,14 @@ impl Worker {
         Ok(())
     }
 
-    /// Before serving anything, drops expired history from the file, so the
+    /// Before serving anything, deduplicates crash copies in history, so the
     /// rewrite never runs on the UI thread or between commands.
     fn compact_history(&self) {
         match self.store.compact_history() {
             Ok(true) => tracing::info!(
                 event = "bus.history.compacted",
                 entries = self.state.history().len(),
-                "Bus history rewritten without expired entries"
+                "Bus history rewritten without duplicate crash copies"
             ),
             Ok(false) => {}
             Err(error) => tracing::warn!(

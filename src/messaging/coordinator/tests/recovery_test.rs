@@ -38,7 +38,15 @@ fn delete_closes_the_idle_shell_left_when_the_provider_exited() {
         };
         worker.command(command, &events).unwrap();
         assert!(worker.state.agent(agent).is_none());
-        assert!(worker.state.request(request).is_none());
+        assert_eq!(
+            worker
+                .state
+                .request(request)
+                .unwrap()
+                .failure_reason
+                .as_deref(),
+            Some("agent_deleted")
+        );
         assert_eq!(
             *calls.lock().unwrap(),
             vec![
@@ -83,7 +91,15 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
         };
         worker.command(command, &events).unwrap();
         assert!(worker.state.agent(agent).is_none());
-        assert!(worker.state.request(request).is_none());
+        assert_eq!(
+            worker
+                .state
+                .request(request)
+                .unwrap()
+                .failure_reason
+                .as_deref(),
+            Some("agent_deleted")
+        );
         assert_eq!(worker.state.room(room).is_none(), delete_room);
         // Never an unguarded close: the pane now holds foreign work.
         assert_eq!(
@@ -132,7 +148,14 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
             .unwrap()
             .unwrap();
         assert!(recovered.agent(agent).is_none());
-        assert!(recovered.request(request).is_none());
+        assert_eq!(
+            recovered
+                .request(request)
+                .unwrap()
+                .failure_reason
+                .as_deref(),
+            Some("agent_deleted")
+        );
         assert!(recovered.notices(notice_room).next().is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -286,9 +309,15 @@ fn delete_last_room_stays_empty_after_restart_and_ignores_late_callbacks() {
             .collect::<Vec<_>>(),
         [RoomKind::Master]
     );
-    assert!(!recovered.state.has_work());
+    assert!(
+        recovered.state.has_work(),
+        "audit history prevents empty-session cleanup"
+    );
     assert_eq!(recovered.state.agents().count(), 0);
-    assert_eq!(recovered.state.requests().count(), 0);
+    assert!(recovered
+        .state
+        .requests()
+        .all(|r| matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)));
     assert!(!recovered.state.is_pristine());
     assert_eq!(
         *calls.lock().unwrap(),
@@ -403,7 +432,15 @@ fn delete_leaves_open_an_owned_terminal_whose_provider_session_moved() {
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
     assert!(worker.state.agent(agent).is_none());
-    assert!(worker.state.request(request).is_none());
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_deleted")
+    );
     assert_eq!(
         *calls.lock().unwrap(),
         vec!["pane.close_if_identity", "agent.list", "agent.get"]
@@ -478,7 +515,15 @@ fn delete_leaves_open_a_restored_terminal_whose_provider_session_moved() {
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
     assert!(worker.state.agent(agent).is_none());
-    assert!(worker.state.request(request).is_none());
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_deleted")
+    );
     assert_eq!(
         *calls.lock().unwrap(),
         vec![

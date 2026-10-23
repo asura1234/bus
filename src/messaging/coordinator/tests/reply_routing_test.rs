@@ -844,8 +844,8 @@ fn reply_routing_old_recovered_reply_is_released_once_delivered() {
     f.reopen();
     f.worker.submit_ready().unwrap();
     assert!(
-        f.worker.state.request(source).is_none(),
-        "a delivered reply follows ordinary retention again"
+        f.worker.state.request(source).is_some(),
+        "a delivered reply stays in the permanent audit archive"
     );
     assert_eq!(f.calls.lock().unwrap().len(), 1, "no second wake");
 }
@@ -872,8 +872,8 @@ fn reply_routing_expired_seen_reply_does_not_reappear_from_append_only_history()
         io::now_ms() - 8 * 24 * 60 * 60_000,
     );
     f.worker.save(state).unwrap();
-    // First archive appends this source. Expiring it later removes the model
-    // entry, while disk compaction normally waits until the next Bus start.
+    // First archive appends this source. Expiring routing metadata later
+    // must not make that permanent source become new work on restart.
     f.worker.archive_history(io::now_ms()).unwrap();
     assert!(
         f.call(
@@ -883,14 +883,14 @@ fn reply_routing_expired_seen_reply_does_not_reappear_from_append_only_history()
         .ok
     );
     f.worker.archive_history(io::now_ms()).unwrap();
-    assert!(f.worker.state.request(source).is_none());
+    assert!(f.worker.state.request(source).is_some());
     f.reopen();
     f.worker.submit_ready().unwrap();
     assert!(
         f.calls.lock().unwrap().is_empty(),
         "expired seen history must never become a pending reply again"
     );
-    assert!(f.worker.state.request(source).is_none());
+    assert!(f.worker.state.request(source).is_some());
 }
 
 #[test]
@@ -919,7 +919,7 @@ fn reply_routing_pending_group_survives_after_its_developer_lead_expires() {
     }
     f.worker.save(state).unwrap();
     f.worker.archive_history(io::now_ms()).unwrap();
-    assert!(f.worker.state.request(lead).is_none());
+    assert!(f.worker.state.request(lead).is_some());
     assert!(f.worker.state.request(member).is_some());
     f.reopen();
     f.worker.submit_ready().unwrap();

@@ -2,18 +2,21 @@
 //! `state.json`. The coordinator appends them to `history.jsonl`; in memory they
 //! sit behind one `Arc`, so cloning the state for a save or a UI snapshot copies
 //! only the live part.
-use super::{Prompt, PromptId, Request, RequestId, RoomId};
+use super::{AgentId, Prompt, PromptId, Provider, Request, RequestId, RoomId};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A settled request or a notice older than this is archived.
 pub(crate) const ARCHIVE_AFTER_MS: u64 = 10 * 60 * 1000;
-/// Archived history older than this is dropped.
+/// Retention for transient routing/dedupe metadata, never message history.
 pub(crate) const HISTORY_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct History {
     pub(super) requests: BTreeMap<RequestId, Arc<Request>>,
+    pub(super) agents: BTreeMap<AgentId, DeletedAgent>,
+    pub(super) rooms: BTreeMap<RoomId, String>,
     /// Per room, in id order.
     pub(super) notices: BTreeMap<RoomId, BTreeMap<PromptId, Arc<Prompt>>>,
 }
@@ -23,26 +26,21 @@ pub(crate) struct History {
 pub(crate) enum Archived {
     #[serde(rename = "request")]
     Request(Box<Request>),
+    #[serde(rename = "agent_deleted")]
+    Agent(DeletedAgent),
+    #[serde(rename = "room_deleted")]
+    Room { id: RoomId, name: String },
     #[serde(rename = "notice")]
     Notice { room: RoomId, prompt: Prompt },
 }
 
-impl Archived {
-    /// When the item settled, which retention counts from: a request's
-    /// reply (or its send time when it closed without one), a notice's post.
-    pub(crate) fn settled_at_ms(&self) -> u64 {
-        match self {
-            Self::Request(request) => settled_at_ms(request),
-            Self::Notice { prompt, .. } => prompt.submitted_at_ms,
-        }
-    }
-
-    pub(crate) fn room(&self) -> RoomId {
-        match self {
-            Self::Request(request) => request.room_id,
-            Self::Notice { room, .. } => *room,
-        }
-    }
+/// Only historical identity, never a runtime that can be selected or resumed.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct DeletedAgent {
+    pub(crate) id: AgentId,
+    pub(crate) name: String,
+    pub(crate) provider: Provider,
+    pub(crate) cwd: PathBuf,
 }
 
 fn settled_at_ms(request: &Request) -> u64 {
@@ -53,7 +51,10 @@ fn settled_at_ms(request: &Request) -> u64 {
 
 impl History {
     pub(crate) fn len(&self) -> usize {
-        self.requests.len() + self.notices.values().map(BTreeMap::len).sum::<usize>()
+        self.requests.len()
+            + self.notices.values().map(BTreeMap::len).sum::<usize>()
+            + self.agents.len()
+            + self.rooms.len()
     }
 
     /// Every item, requests first, each in id order.
@@ -66,6 +67,11 @@ impl History {
                     room: *room,
                     prompt: Prompt::clone(prompt),
                 })
+            }))
+            .chain(self.agents.values().cloned().map(Archived::Agent))
+            .chain(self.rooms.iter().map(|(id, name)| Archived::Room {
+                id: *id,
+                name: name.clone(),
             }))
     }
 
@@ -92,10 +98,27 @@ impl History {
                         prompt: Prompt::clone(prompt),
                     })
             }))
+            .chain(
+                self.agents
+                    .iter()
+                    .filter(|(id, _)| !older.agents.contains_key(id))
+                    .map(|(_, agent)| Archived::Agent(agent.clone())),
+            )
+            .chain(
+                self.rooms
+                    .iter()
+                    .filter(|(id, _)| !older.rooms.contains_key(id))
+                    .map(|(id, name)| Archived::Room {
+                        id: *id,
+                        name: name.clone(),
+                    }),
+            )
     }
 
     pub(crate) fn contains(&self, item: &Archived) -> bool {
         match item {
+            Archived::Agent(agent) => self.agents.contains_key(&agent.id),
+            Archived::Room { id, .. } => self.rooms.contains_key(id),
             Archived::Request(request) => self.requests.contains_key(&request.id),
             Archived::Notice { room, prompt } => self
                 .notices
@@ -106,6 +129,12 @@ impl History {
 
     pub(crate) fn insert(&mut self, item: Archived) {
         match item {
+            Archived::Agent(agent) => {
+                self.agents.insert(agent.id, agent);
+            }
+            Archived::Room { id, name } => {
+                self.rooms.insert(id, name);
+            }
             Archived::Request(request) => {
                 self.requests.insert(request.id, Arc::new(*request));
             }
@@ -134,16 +163,23 @@ impl History {
 pub(crate) const DIALOG_ANSWER_TTL_MS: u64 = 60 * 60 * 1000;
 
 impl super::BusState {
-    /// Moves settled requests and old notices into the archive and drops what
-    /// no longer needs keeping. True when anything changed.
+    /// Moves settled requests and old notices into permanent history and prunes
+    /// only transient routing and dedupe metadata. True when anything changed.
     pub(crate) fn archive(&mut self, now_ms: u64) -> bool {
+        let before = self.routing_before_ms;
+        self.routing_before_ms = before.max(now_ms.saturating_sub(HISTORY_RETENTION_MS));
         let pending = self.retain_unrouted_worker_replies() | self.retain_worker_outcomes(now_ms);
         let moved = self.archive_settled(now_ms.saturating_sub(ARCHIVE_AFTER_MS));
-        let expired = self.drop_history_before(now_ms.saturating_sub(HISTORY_RETENTION_MS));
         let spent = self.drop_spent_ids(now_ms);
         let routes = self.reply_routes.len();
+        let (event_groups, _) = self.worker_pending_sources();
         let retained: std::collections::BTreeSet<_> = self
             .requests()
+            .filter(|r| {
+                self.routing_source(r)
+                    || self.reply_delivery_pending(r)
+                    || event_groups.contains(&r.group.unwrap_or(r.id))
+            })
             .flat_map(|r| [r.id, r.group.unwrap_or(r.id)])
             .collect();
         self.reply_routes.retain(|id, route| {
@@ -153,7 +189,18 @@ impl super::BusState {
                     .is_some_and(|notice| retained.contains(&notice))
         });
         let events = self.prune_worker_events(now_ms);
-        pending | moved | expired | spent | events | (routes != self.reply_routes.len())
+        pending
+            | moved
+            | spent
+            | events
+            | (routes != self.reply_routes.len())
+            | (before != self.routing_before_ms)
+    }
+
+    pub(super) fn routing_source(&self, request: &Request) -> bool {
+        !request.settled()
+            || settled_at_ms(request) >= self.routing_before_ms
+            || self.requests.contains_key(&request.id)
     }
 
     /// Settled requests no agent, queue or open group refers to, and notices,
@@ -214,82 +261,56 @@ impl super::BusState {
         true
     }
 
-    fn drop_history_before(&mut self, cutoff: u64) -> bool {
-        // A pending or queued wake still owns its original reply, including the full text
-        // behind a long-reply pointer. Ordinary history retention must not erase
-        // it while the orchestrator's terminal remains unavailable.
-        let (event_groups, event_messages) = self.worker_pending_sources();
-        let pinned: std::collections::BTreeSet<_> = self
-            .requests()
-            .filter(|r| {
-                self.reply_delivery_pending(r) || event_groups.contains(&r.group.unwrap_or(r.id))
-            })
-            .map(|r| r.id)
-            .collect();
-        self.drop_history_where(|_, _, at, id, prompt| {
-            at < cutoff
-                && id.is_none_or(|id| !pinned.contains(&id))
-                && !event_messages.contains(&prompt)
-        })
-    }
-
-    /// Drops a deleted room's archived requests and notices.
-    pub(super) fn drop_history_of_room(&mut self, room: RoomId) {
-        self.drop_history_where(|of, _, _, _, _| of == room);
-    }
-
-    /// Drops a deleted agent's archived requests.
-    pub(super) fn drop_history_of_agent(&mut self, agent: super::AgentId) {
-        self.drop_history_where(|_, of, _, _, _| of == Some(agent));
-    }
-
-    /// Drops archived items for which `drop(room, request agent, settled at)` holds.
-    fn drop_history_where(
-        &mut self,
-        drop: impl Fn(RoomId, Option<super::AgentId>, u64, Option<RequestId>, PromptId) -> bool,
-    ) -> bool {
-        let requests: Vec<RequestId> = self
-            .history
-            .requests
-            .values()
-            .filter(|request| {
-                drop(
-                    request.room_id,
-                    Some(request.agent_id),
-                    settled_at_ms(request),
-                    Some(request.id),
-                    request.prompt.id,
-                )
-            })
-            .map(|request| request.id)
-            .collect();
-        let notices: Vec<(RoomId, PromptId)> = self
-            .history
-            .notices
-            .iter()
-            .flat_map(|(room, notices)| {
-                notices
-                    .values()
-                    .filter(|prompt| drop(*room, None, prompt.submitted_at_ms, None, prompt.id))
-                    .map(|prompt| (*room, prompt.id))
-            })
-            .collect();
-        if requests.is_empty() && notices.is_empty() {
-            return false;
-        }
-        let history = Arc::make_mut(&mut self.history);
-        for id in requests {
-            history.requests.remove(&id);
-        }
-        for (room, id) in notices {
-            if let Some(room_notices) = history.notices.get_mut(&room) {
-                room_notices.remove(&id);
-                if room_notices.is_empty() {
-                    history.notices.remove(&room);
-                }
+    /// A deleted room's notices must leave the live room before it is removed.
+    pub(super) fn archive_room_notices(&mut self, room: RoomId) {
+        if let Some(live) = self.rooms.get_mut(&room) {
+            let history = Arc::make_mut(&mut self.history);
+            for prompt in live.notices.drain(..) {
+                history.insert(Archived::Notice { room, prompt });
             }
         }
-        true
+    }
+
+    pub(crate) fn notice(&self, id: PromptId) -> Option<&Prompt> {
+        self.rooms
+            .values()
+            .flat_map(|r| &r.notices)
+            .find(|p| p.id == id)
+            .or_else(|| {
+                self.history
+                    .notices
+                    .values()
+                    .find_map(|room| room.get(&id).map(Arc::as_ref))
+            })
+    }
+
+    pub(crate) fn deleted_agent(&self, id: AgentId) -> Option<&DeletedAgent> {
+        self.history.agents.get(&id)
+    }
+
+    pub(crate) fn agent_label(&self, id: AgentId) -> String {
+        if let Some(agent) = self.agent(id) {
+            return agent.name.clone();
+        }
+        let name = self
+            .deleted_agent(id)
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| format!("Agent {}", id.0));
+        format!("{name} [deleted]")
+    }
+
+    pub(crate) fn history_room_name(&self, id: RoomId) -> Option<&str> {
+        self.room(id)
+            .map(|r| r.name.as_str())
+            .or_else(|| self.history.rooms.get(&id).map(String::as_str))
+    }
+
+    pub(crate) fn history_rooms(&self) -> impl Iterator<Item = (RoomId, &str)> {
+        self.history
+            .rooms
+            .iter()
+            .filter(|(id, _)| self.room(**id).is_none())
+            .map(|(id, name)| (*id, name.as_str()))
     }
 
     /// Spent fingerprints past their lifetime, and callback ids and provider

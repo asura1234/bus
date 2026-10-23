@@ -18,6 +18,9 @@ pub(crate) struct BusState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) retired_agents: BTreeMap<AgentId, super::staffing::RetiredAgent>,
     pub(super) requests: BTreeMap<RequestId, Request>,
+    /// Recovery floor for transient routing metadata; old audit records remain readable.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) routing_before_ms: u64,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
     /// Pending, one terminal notification, or seen per shared reply.
     /// Kept outside the immutable request archive so acknowledgements
@@ -56,6 +59,10 @@ pub(crate) struct BusState {
     /// `state.json`; shared so cloning the state does not copy them.
     #[serde(skip)]
     pub(super) history: Arc<History>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, RoomAgent>, D::Error>
@@ -112,6 +119,7 @@ impl BusState {
         if self.next_id != previous.next_id
             || self.retired_agents != previous.retired_agents
             || self.rooms != previous.rooms
+            || self.routing_before_ms != previous.routing_before_ms
             || self.requests != previous.requests
             || self.queues != previous.queues
             || self.reply_routes != previous.reply_routes
@@ -152,6 +160,7 @@ impl BusState {
             agents: BTreeMap::new(),
             retired_agents: BTreeMap::new(),
             requests: BTreeMap::new(),
+            routing_before_ms: 0,
             queues: BTreeMap::new(),
             reply_routes: BTreeMap::new(),
             worker_events: BTreeMap::new(),

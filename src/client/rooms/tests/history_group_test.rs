@@ -478,3 +478,52 @@ fn rebuild_counts_only_markdown_laid_out_afresh_across_room_switches() {
     assert_eq!(rendered(&mut history, rooms[0], 80), 0, "switch back");
     assert_eq!(rendered(&mut history, rooms[0], 60), 3, "new width");
 }
+
+#[test]
+fn audit_history_renders_deleted_sender_recipient_and_reply_by_name() {
+    let mut state = BusState::default();
+    let room = state.create_room("audit").unwrap();
+    let author = state
+        .create_agent(room, "sender", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let recipient = state
+        .create_agent(room, "reviewer", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let request = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "original task".into(),
+                files: vec![],
+                recipient_ids: [recipient].into(),
+            },
+            crate::messaging::model::Author::Agent(author),
+            1,
+        )
+        .unwrap()[0];
+    state.finish_for_test(request, "original verdict", 2);
+    state.delete_agent(author, 3).unwrap();
+    state.delete_agent(recipient, 4).unwrap();
+    let mut history = History::default();
+    let text = history
+        .lines(
+            &state,
+            state.room(room).unwrap(),
+            100,
+            1,
+            5,
+            &mut Default::default(),
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for expected in [
+        "sender [deleted]",
+        "reviewer [deleted]",
+        "original task",
+        "original verdict",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+}

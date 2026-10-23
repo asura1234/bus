@@ -7,12 +7,13 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use super::journal::JournalOp;
 use super::journal::{push_coalesced, replay, JournalDocument, JournalEntry};
-use crate::messaging::model::{Archived, BusState, History, HISTORY_RETENTION_MS};
+use crate::messaging::model::{Archived, BusState, History};
 use std::sync::Arc;
 
-/// Version 2 keeps settled history in `history.jsonl`; a version 1 file, which
-/// still holds it inline, loads as is and is archived from on.
-pub(crate) const STORE_VERSION: u64 = 2;
+/// Version 3 adds permanent deleted-identity records to the version 2 archive.
+/// Version 1 inline history still loads and is archived from then on.
+pub(crate) const STORE_VERSION: u64 = 3;
+const ARCHIVED_HISTORY_VERSION: u64 = 2;
 const INLINE_HISTORY_VERSION: u64 = 1;
 
 #[derive(Debug)]
@@ -193,7 +194,7 @@ impl JsonStore {
     }
 
     /// Rewrites `history.jsonl` without the entries the last load dropped
-    /// (expired, of deleted rooms or agents, duplicated, or a torn last line).
+    /// (duplicate crash copies or an uncommitted torn last line).
     /// True when it rewrote the file. Only the coordinator, which owns the
     /// data directory, may call it.
     pub(crate) fn compact_history(&self) -> Result<bool, StoreError> {
@@ -226,9 +227,8 @@ impl JsonStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Reads `history.jsonl`, keeping what `state` can still show: entries
-    /// younger than the retention, of rooms and agents that still exist, and
-    /// not also live in `state` (a crash between an append and its save).
+    /// Reads every committed archive record, regardless of age or live owners.
+    /// A duplicate in state.json wins after a crash between append and save.
     /// A torn last line is skipped; any other unreadable line is corruption.
     fn load_history(&self, state: &BusState) -> Result<Arc<History>, StoreError> {
         let path = self.history_path();
@@ -237,8 +237,6 @@ impl JsonStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(source) => return Err(StoreError::Io { path, source }),
         };
-        let cutoff = super::io::now_ms().saturating_sub(HISTORY_RETENTION_MS);
-        let (event_groups, event_messages) = state.worker_pending_sources();
         let mut history = History::default();
         let mut stale = false;
         let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
@@ -262,25 +260,13 @@ impl JsonStore {
                     })
                 }
             };
-            let pinned_reply = matches!(&item, Archived::Request(request) if state.reply_delivery_pending(request));
-            let pinned_event = match &item {
-                Archived::Request(r) => event_groups.contains(&r.group.unwrap_or(r.id)),
-                Archived::Notice { prompt, .. } => event_messages.contains(&prompt.id),
+            let kept = match &item {
+                Archived::Request(request) => state.request(request.id).is_none(),
+                Archived::Notice { room, prompt } => {
+                    state.notices(*room).all(|live| live.id != prompt.id)
+                }
+                Archived::Agent(_) | Archived::Room { .. } => true,
             };
-            let kept = (item.settled_at_ms() >= cutoff || pinned_reply || pinned_event)
-                && state.room(item.room()).is_some()
-                && match &item {
-                    // A deleted recipient's open request stays as its failure.
-                    Archived::Request(request) => {
-                        (state.agent(request.agent_id).is_some()
-                            || request.failure_reason.as_deref()
-                                == Some(crate::messaging::model::AGENT_DELETED))
-                            && state.request(request.id).is_none()
-                    }
-                    Archived::Notice { room, prompt } => {
-                        state.notices(*room).all(|live| live.id != prompt.id)
-                    }
-                };
             stale |= !kept || history.contains(&item);
             if kept {
                 history.insert(item);
@@ -480,7 +466,13 @@ impl JsonStore {
                     "missing numeric Bus state version",
                 )),
             })?;
-        if version != STORE_VERSION && version != INLINE_HISTORY_VERSION {
+        if ![
+            STORE_VERSION,
+            ARCHIVED_HISTORY_VERSION,
+            INLINE_HISTORY_VERSION,
+        ]
+        .contains(&version)
+        {
             return Err(StoreError::UnsupportedVersion {
                 path: self.path.clone(),
                 found: version,

@@ -114,16 +114,11 @@ impl History {
             ),
             (" → ".into(), Tone::Muted),
         ];
-        for (index, agent) in prompt
-            .recipient_ids
-            .iter()
-            .filter_map(|id| state.agent(*id))
-            .enumerate()
-        {
+        for (index, id) in prompt.recipient_ids.iter().enumerate() {
             if index > 0 {
                 header.push((", ".into(), Tone::Muted));
             }
-            header.push((agent.name.clone(), Tone::Agent(agent.id)));
+            header.push((state.agent_label(*id), Tone::Agent(*id)));
         }
         if prompt.recipient_ids.is_empty() {
             header.push(("You".into(), Tone::You));
@@ -175,9 +170,10 @@ impl History {
         let prompt = exchange.prompt;
         let mut replied = false;
         for agent_id in &prompt.recipient_ids {
-            let Some(agent) = state.agent(*agent_id) else {
-                continue;
-            };
+            let provider_kind = state
+                .agent(*agent_id)
+                .map(|a| a.provider)
+                .or_else(|| state.deleted_agent(*agent_id).map(|a| a.provider));
             let request = exchange.requests.get(agent_id).copied();
             // A group's messages share one reply per room, shown under that
             // room's newest visible message even when the group spans MASTER.
@@ -222,10 +218,10 @@ impl History {
                 .is_developer_attention_author(room.id, &Author::Agent(*agent_id))
                 .then(|| crate::messaging::attention::text(text))
                 .flatten();
-            let mut reply_header = vec![
-                (agent.name.clone(), Tone::Agent(agent.id)),
-                (format!("  {}", provider(agent.provider)), Tone::Muted),
-            ];
+            let mut reply_header = vec![(state.agent_label(*agent_id), Tone::Agent(*agent_id))];
+            if let Some(kind) = provider_kind {
+                reply_header.push((format!("  {}", provider(kind)), Tone::Muted));
+            }
             if attention.is_some() {
                 reply_header.push(("  [Needs developer]".into(), Tone::Text));
             }
@@ -425,16 +421,17 @@ fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
         Author::Developer => "You".into(),
         Author::Bus => crate::messaging::model::BUS_SENDER.into(),
-        Author::Agent(id) => state
-            .agent(*id)
-            .map(|agent| agent.name.clone())
-            .unwrap_or_else(|| "Agent".into()),
+        Author::Agent(id) => state.agent_label(*id),
     }
 }
 
 fn link_scope(state: &BusState, author: &Author) -> LinkScope {
     let cwd = match author {
-        Author::Agent(id) => state.agent(*id).map(|agent| Arc::from(agent.cwd.as_path())),
+        Author::Agent(id) => state
+            .agent(*id)
+            .map(|agent| agent.cwd.as_path())
+            .or_else(|| state.deleted_agent(*id).map(|agent| agent.cwd.as_path()))
+            .map(Arc::from),
         Author::Developer | Author::Bus => None,
     };
     LinkScope {
