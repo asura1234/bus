@@ -184,6 +184,12 @@ the wrapper remains held.
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the developer.
+- **Keep PR peers connected.** Name owner, verifier and reviewer in every brief
+  and the live room-notes roster; update both on replacement. Assign one verifier
+  per 1–2 PRs. Exchange heads and verdicts directly, coordinate
+  [shared files](parallel-writes.md) before editing, and use `auto-merge-pr`.
+  Finals still go to the orchestrator. Follow the
+  [peer messaging SOP](orchestrator-guide.md#open-peer-messaging).
 - **Parallelism is king.** Whenever a change must land in several places,
   split it across agents running in parallel; order only dependent steps.
   *Why:* finding and fixing one place at a time creates repeated review loops.

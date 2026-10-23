@@ -149,6 +149,14 @@ pub(crate) fn agent_onboarding(
          Use --as {} when sending messages. Any agent can message any agent by name or ID; \
          names resolve in the conversation room, then your home room, then globally. \
          --to orchestrator names your home room's bound orchestrator. \
+         Your brief names your PR owner, verifier and reviewer; message these peers directly. \
+         Verifiers send VERIFIED with the exact head or defects with file:line straight to the owner. \
+         Owners re-send the head to peers on every push and merge through auto-merge-pr on its gates and recorded authority. \
+         Message shared-file owners before editing; follow {}/parallel-writes.md. \
+         Finals still go to the orchestrator, including after peer-started work. \
+         Keep the room-notes PR -> owner -> verifier -> reviewer roster current whenever an agent is replaced; \
+         use one verifier per 1-2 PRs, not one room-wide hub. \
+         Staffing and recovery, dialogs, product decisions and announcing replacements stay with the orchestrator. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
          Bus automatically adds 'name (agent id, room R):' to agent-authored messages. \
          Send only the body; do not add a 'from X', 'X here' or signature line. \
@@ -160,7 +168,8 @@ pub(crate) fn agent_onboarding(
         id.0,
         room.0,
         docs.display(),
-        id.0
+        id.0,
+        docs.display()
     )
 }
 

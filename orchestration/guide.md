@@ -124,6 +124,8 @@ that works, with short lines:
    developer must give, at the top; left out when nothing waits on the developer.
 3. `Now:` what is running, and which agent runs it.
 4. `DONE / OPEN:` a checklist of the workflow's steps, `[x]` done, `[ ]` open.
+5. `PR peers:` the live `PR → owner → verifier → reviewer` roster, using agent
+   names and IDs. Update it and affected briefs whenever an agent is replaced.
 
 ```sh
 bus room notes "$room_id" --text "Workflow: ~/bus-data/workflows/pr-123.md
@@ -131,6 +133,7 @@ WAITING ON YOU:
 - Approve claude-dev's push of feat/gallery (bus agent dialog claude-dev)
 - Pick a gallery list: native list or RN lib (both pass benchmarks)
 Now: review round 2 (claude-review, codex-review)
+PR peers: #123 → claude-dev (11) → codex-verify (12) → claude-review (13), codex-review (14)
 DONE / OPEN:
 [x] Spec agreed
 [x] Implement gallery (claude-dev)
@@ -142,6 +145,55 @@ DONE / OPEN:
 
 `room notes` replaces the whole field, so always send the full board. Update it
 when the state changes, not on every message.
+
+## Open peer messaging
+
+Make direct peer messaging the normal path for each PR's implementation,
+verification, review and merge loop. The orchestrator staffs the team and keeps
+the room's plan current; it does not relay each head, verdict or shared-file
+request. Routine progress can continue while the orchestrator is unavailable.
+
+Before work starts, put the PR's **owner, verifier and reviewer** names and IDs
+in every worker brief, with the PR (or task key until it exists), worktree,
+branch, acceptance checklist and current head. List every required reviewer.
+Keep the same `PR → owner → verifier → reviewer` roster in the room notes.
+Assign **one verifier per 1–2 PRs**; distribute more PRs across additional
+verifiers instead of making one verifier the room's hub.
+
+1. **Owner → peers:** send the PR, exact full head SHA, worktree and checks to
+   the assigned verifier and reviewers. On **every push**, re-send the new head
+   and the delta to those peers; a verdict for an old head does not prove it.
+2. **Verifier → owner:** send `VERIFIED <PR> @<full SHA>` with the acceptance
+   evidence, or defects with `file:line`, reproduction and the affected head,
+   straight to the owner. Re-verify each new head. Reviewers likewise send their
+   verdict and findings directly to the owner in their assigned review lanes.
+3. **Owner → merge:** collect peer findings into the bounded repair batch,
+   carry the workflow's fix-round counter, and use
+   [auto-merge-pr](workflows/auto-merge-pr.md) when exact-head verification,
+   required reviews, gates and requested acceptance pass and comments are
+   adjudicated. Reuse the recorded workflow authority and honor explicit holds;
+   peer messaging grants no new merge authority or acceptance waiver.
+4. **Shared-file owners → each other:** message before editing, even in separate
+   worktrees. Agree who applies which edits and in what order, using the
+   ownership map and grant/release protocol in [Parallel writes](parallel-writes.md).
+   If ownership must change or a conflict cannot be resolved within the map,
+   bring that part to the orchestrator while independent work continues.
+5. **Finals → orchestrator:** direct peer messages supplement final reports.
+   Still send milestone finals and blockers to the orchestrator, including the
+   PR/head, peer verdicts, evidence and next owner or hold. Start milestone
+   finals with `READY FOR VERIFY`, `REVIEW READY`, `MERGED`, `DONE` or `BLOCKED`.
+   A peer-started turn replies to that peer, so also send the milestone report
+   to `--to orchestrator`; a reply to an orchestrator-started task already goes
+   there. Send only the body; Bus adds the header, so never sign messages.
+
+The orchestrator retains **staffing and recovery, dialogs, product decisions,
+and announcing replacements**. It resolves staffing gaps, unavailable agents
+and escalations, handles dialogs under existing authority, and takes unresolved
+product decisions to the developer. Whenever an agent is replaced, it updates
+the room-notes roster and affected briefs and announces the new name/ID to all
+of that agent's PR peers and shared-file owners before work resumes. Peers then
+message the replacement directly. Do not route routine technical exchanges
+through the orchestrator or one room-wide verifier.
 
 ## Process every result
 
@@ -341,13 +393,13 @@ Run checks and remediation as a bounded loop:
    its table in this same round, rather than waiting for review to finish.
    Keep the head unchanged while the checks run. Results for an older head do
    not prove a later fix.
-2. Collect all findings before sending one consolidated fix brief to the author
-   to run `address-review-comments`. A finding outside the checklist exposes an
-   enumeration miss: have the investigator expand the list and recheck that
-   entire category, then give the updated list to the author, reviewers and
+2. Have peers send findings directly to the owner, who collects them before
+   running one consolidated `address-review-comments` batch. A finding outside
+   the checklist exposes an enumeration miss: have the investigator expand the
+   list and recheck that entire category, then give the updated list to the author, reviewers and
    verifier. Do not fix only the reported instance.
-3. For each open or flagged issue, poll the author and every reviewer for a
-   recommendation. Forward all recommendations to the author to run the
+3. For each open or flagged issue, have the owner collect recommendations
+   directly from every reviewer, add its own recommendation and run the
    `best-of-n` skill and apply its top-ranked recommendation. Technical
    disagreement alone does not call for permission. If an issue reaches the
    developer decision boundary below, hold that part and ask in MASTER while
@@ -481,6 +533,20 @@ Manual-test/approval holds still apply. An explicit instruction to leave a PR
 as a draft or not merge it remains a hold.
 
 ## Evidence behind the result and continuation rules
+
+The **room 8259 (`libtv-app master`) 36-hour record** supplied for this SOP
+contains **366 agent-to-agent messages**. Verification, review and merge loops
+ran directly between peers, covering **10 merges overnight**. Shared-file owners
+coordinated with each other, and the room kept merging during the orchestrator's
+**5-hour usage limit**. This supports making peer loops standard while retaining
+staffing, recovery and product decisions with the orchestrator.
+
+The working briefs were `temp/bugs/briefs/bus-messaging.md` and `verify.md` in
+the main `libtv-app` checkout. They named PR groups, required verifier defects
+with `file:line` to go directly to the owner, required re-verification of each
+pushed head, and kept final reports with the orchestrator. Their trial-era
+restriction on addressing MASTER is superseded by current Bus messaging:
+`--to orchestrator` reaches the sender's home room's bound orchestrator.
 
 The **2026-10-22 room 877 disk incident** left only **893 MB free**, with roughly
 **81 GB** in per-run Cargo targets. The immediate coordination used

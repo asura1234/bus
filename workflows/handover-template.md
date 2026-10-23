@@ -26,6 +26,11 @@ What's ongoing now must preserve the details that only you know.
 the immediate objective, acceptance criteria, scope boundaries, and who owns
 any shared files or related work.>
 
+**PR peers and replacements:** <For each PR, give owner, verifier and every
+reviewer by name/ID, current head and pending verdicts; name shared-file owners
+and outstanding grants. The orchestrator updates the room-notes roster and
+affected briefs and announces your replacement to these peers before it resumes.>
+
 **Running or half-done work:** <Describe unfinished edits, partial results,
 background processes, and why each is incomplete; distinguish completed
 commands from commands still in flight. Say whether you are at a safe
@@ -85,3 +90,24 @@ another worker's changes are safe to stash without checking with their owner.
 Bus automatically adds `name (agent id, room R):` to agent-authored messages. Send only the body; do not add a "from X", "X here" or signature line.
 Use `--as YOUR_AGENT_ID` when messaging; `--to orchestrator` reaches your home
 room's bound orchestrator, and names or IDs can reach agents in any room.
+
+PR peers: `<PR/task> → owner <name/ID> → verifier <name/ID> → reviewer(s) <name/ID>`.
+Fill every peer before dispatch; list all required reviewers. Carry the exact
+head, worktree, acceptance checklist and explicit holds in the brief. Keep this
+roster in the room notes and update affected briefs whenever an agent is
+replaced. Assign one verifier per 1–2 PRs, adding verifiers as the PR count grows.
+
+Message these peers directly. The verifier sends `VERIFIED <PR> @<full SHA>`
+with evidence, or defects with `file:line` and reproduction, straight to the
+owner. Reviewers send their verdicts and findings to the owner. The owner
+re-sends the full head SHA to verifier and reviewers on every push and gets
+current-head evidence before merging through `auto-merge-pr` under recorded
+authority and holds. This does not extend a workflow that ends at PR creation.
+
+Before editing shared files, message their owners and follow
+[Parallel writes](../parallel-writes.md); supply its resolved absolute session
+path and the ownership map in each parallel brief. Finals still go to the
+orchestrator; after peer-started work, also send the milestone report directly
+to `--to orchestrator`. Staffing and recovery, dialogs, product decisions and
+announcing replacements stay with the orchestrator, which updates the roster
+and tells every affected peer the replacement's name/ID before work resumes.
