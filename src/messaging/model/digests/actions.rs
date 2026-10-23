@@ -24,9 +24,10 @@ impl BusState {
             .facts
             .iter()
             .filter(|(_, fact)| {
-                fact.room == room
-                    && (fact.agent.is_some_and(|id| recipients.contains(&id))
-                        || references_fact(text, fact))
+                // Directly assigning the worker is explicit action even from MASTER.
+                // A peer reference needs the fact's own conversation context.
+                fact.agent.is_some_and(|id| recipients.contains(&id))
+                    || (fact.room == room && references_fact(text, fact))
             })
             .map(|(key, _)| key.clone())
             .collect();

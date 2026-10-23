@@ -92,7 +92,7 @@ impl BusState {
                 summary
             ));
         }
-        text.push_str("\nAct on each fact: directly message its worker in this room, brief another agent here referencing its PR (#N) or head SHA (7+ characters), close the worker, or explicitly dismiss it with bus digest ack FACT_ID. Reading this digest or replying to it does not acknowledge facts. No repeated wake is scheduled without new facts.");
+        text.push_str("\nAct on each fact: directly message its worker from any room, brief another agent in this fact's room referencing its PR (#N) or head SHA (7+ characters), close the worker, or explicitly dismiss it with bus digest ack FACT_ID. Reading this digest or replying to it does not acknowledge facts. No repeated wake is scheduled without new facts.");
         let request = self.submit_message_with(
             room,
             Draft {

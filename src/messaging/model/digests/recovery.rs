@@ -168,10 +168,10 @@ impl BusState {
                         .iter()
                         .filter(|(author, room, agent, at, text)| {
                             author == orchestrator
-                                && *room == fact.room
                                 && *at > fact.at_ms
                                 && (Some(*agent) == fact.agent
-                                    || super::actions::references_fact(text, fact))
+                                    || (*room == fact.room
+                                        && super::actions::references_fact(text, fact)))
                         })
                         .map(|(_, _, _, at, _)| *at)
                         .min()

@@ -168,7 +168,7 @@ pub(crate) fn agent_onboarding(
          Send only the body; do not add a 'from X', 'X here' or signature line. \
          Start worker milestone finals with READY FOR VERIFY, REVIEW READY, MERGED, DONE or BLOCKED. \
          Bus retains these and other actionable room facts independently of waiter reads. \
-         A Room digest arrives only on a clean idle turn. Act on each fact: directly message its worker in the fact's conversation room, brief a verifier in that same room using its PR (#N) or head SHA (7+ hex characters), \
+         A Room digest arrives only on a clean idle turn. Act on each fact: directly message its worker from any room, brief a verifier in the fact's conversation room using its PR (#N) or head SHA (7+ hex characters), \
          delete the worker, or explicitly dismiss the fact with bus digest ack FACT_ID. \
          Broadcasts never acknowledge facts. Reading or replying to a digest does not acknowledge it; never just reply noted.",
         id.0,

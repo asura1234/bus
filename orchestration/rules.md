@@ -168,9 +168,9 @@ the wrapper remains held.
 
 - **Act on durable room digests.** Bus's `Room digest:` is a separate idle turn,
   never steering for current work. Process each fact into a next owner/action or
-  reasoned hold. A direct message to its worker in the fact's conversation room,
-  or a single-recipient verifier brief in that same room referencing the fact's
-  PR (#N) or head SHA (7+ hex characters), acknowledges it. Broadcasts never
+  reasoned hold. A direct message to its worker from any room,
+  or a single-recipient verifier brief in the fact's conversation room
+  referencing the fact's PR (#N) or head SHA (7+ hex characters), acknowledges it. Broadcasts never
   acknowledge facts. Deleting its worker also acknowledges it; otherwise
   explicitly dismiss it with `bus digest ack FACT_ID`.
   Reading, `seen`, or replying to the digest does not acknowledge facts. Old

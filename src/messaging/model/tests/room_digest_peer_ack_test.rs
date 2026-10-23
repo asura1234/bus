@@ -206,3 +206,29 @@ fn room_digest_peer_brief_rejects_short_and_embedded_identity_tokens() {
         assert_eq!(facts(&s, orch).len(), 1, "{text}");
     }
 }
+
+#[test]
+fn room_digest_direct_worker_assignment_from_master_still_acknowledges() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(&mut s, room, orch, worker, "READY FOR VERIFY #1602");
+    let master = s.ensure_master_room();
+    brief(&mut s, master, orch, worker, "Next task from MASTER");
+    assert!(
+        facts(&s, orch).is_empty(),
+        "#145 direct-worker action must remain cross-room"
+    );
+}
+
+#[test]
+fn room_digest_recovered_direct_worker_assignment_from_master_still_acknowledges() {
+    let (mut s, room, orch, worker) = fixture();
+    complete(&mut s, room, orch, worker, "READY FOR VERIFY #1602");
+    s.room_digests.clear();
+    let master = s.ensure_master_room();
+    brief(&mut s, master, orch, worker, "Next task from MASTER");
+    s.recover_room_digest_facts();
+    assert!(
+        facts(&s, orch).is_empty(),
+        "replay must preserve cross-room direct-worker action"
+    );
+}
