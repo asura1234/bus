@@ -321,19 +321,6 @@ impl BusState {
         if let Some(agent) = self.agents.get_mut(&agent) {
             agent.actionable_error = Some(error);
         }
-        tracing::info!(
-            event = "bus.message.recovered",
-            request_id = id.0,
-            agent_id = agent.0,
-            reason = if provider_error.is_some() {
-                "provider_error"
-            } else if unavailable {
-                AGENT_UNAVAILABLE
-            } else {
-                "reply_not_captured"
-            },
-            "Finished turn released"
-        );
         Some(id)
     }
 
@@ -381,13 +368,6 @@ impl BusState {
             member.phase = RequestPhase::Abandoned;
             member.completed_at_ms = Some(now_ms);
             member.failure_reason = Some("reply_not_captured".to_owned());
-            tracing::info!(
-                event = "bus.message.recovered",
-                request_id = member.id.0,
-                agent_id = agent.0,
-                reason = "reply_not_captured",
-                "Typed-in message not found in the recovered turn"
-            );
         }
         let request = self.requests.get_mut(&id)?;
         request.turn_ended_at_ms = None;

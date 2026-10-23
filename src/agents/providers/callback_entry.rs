@@ -10,6 +10,10 @@ use std::{
 /// can tell the pane's own agent from a provider that agent started.
 pub(crate) const BUS_SERVER_PID_ENV_VAR: &str = "HERDR_SERVER_PID";
 
+#[cfg(test)]
+#[path = "tests/callback_metadata_test.rs"]
+mod metadata_tests;
+
 /// Process composition supplies the inherited spool log root and logging policy.
 pub(crate) fn dispatch(
     args: &[String],
@@ -75,6 +79,7 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
     }
     let value = serde_json::from_slice(&bytes)?;
     let parsed = spool::parse(provider, &value);
+    observe_payload(provider, &value, &parsed);
     if matches!(parsed, Ok(spool::Parsed::Ignore)) {
         tracing::debug!(event = "bus.callback.ignored", provider = ?provider,
             reason = "not_interactive_or_unhandled", "Hook does not represent a terminal reply");
@@ -101,6 +106,79 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         &reporter,
         nested_provider,
     )
+}
+
+/// Retain the evidence that disappears when an ignored/invalid hook is discarded.
+/// Only field shapes and bounded correlation tokens are safe here, never text,
+/// paths, arbitrary event names or the parser's payload-derived error string.
+fn observe_payload(
+    provider: ProviderKind,
+    value: &serde_json::Value,
+    parsed: &Result<spool::Parsed, String>,
+) {
+    let hook_event = match value
+        .get("hook_event_name")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(
+            event @ ("SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure" | "sessionStart"
+            | "beforeSubmitPrompt" | "afterAgentResponse" | "stop"),
+        ) => event,
+        Some(_) => "other",
+        None => "missing_or_invalid",
+    };
+    let token = |key| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| {
+                !text.is_empty()
+                    && text.len() <= 128
+                    && text
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
+            })
+    };
+    let session_id = token("session_id").or_else(|| token("conversation_id"));
+    let turn_id = token("turn_id")
+        .or_else(|| token("prompt_id"))
+        .or_else(|| token("generation_id"));
+    let final_value = value.get(if provider == ProviderKind::Cursor {
+        "text"
+    } else {
+        "last_assistant_message"
+    });
+    let final_state = match final_value {
+        None => "missing",
+        Some(serde_json::Value::Null) => "null",
+        Some(serde_json::Value::String(text)) if text.is_empty() => "empty",
+        Some(serde_json::Value::String(_)) => "text",
+        Some(_) => "invalid_type",
+    };
+    let final_bytes = final_value
+        .and_then(serde_json::Value::as_str)
+        .map(str::len);
+    let transcript_present = value
+        .get("transcript_path")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|path| !path.is_empty());
+    let parse_outcome = match parsed {
+        Ok(spool::Parsed::Ignore) => "ignored",
+        Ok(_) => "parsed",
+        Err(_) => "invalid",
+    };
+    tracing::info!(
+        event = "bus.callback.payload_shape",
+        ?provider,
+        hook_event,
+        ?session_id,
+        ?turn_id,
+        transcript_present,
+        final_state,
+        ?final_bytes,
+        parse_outcome,
+        "Provider hook correlation metadata"
+    );
 }
 
 /// Whether more than one provider runs between this hook and its pane's shell, the

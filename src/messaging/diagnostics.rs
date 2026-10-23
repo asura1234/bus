@@ -32,6 +32,14 @@ pub(crate) fn request(state: &BusState, id: RequestId, event: &'static str, reas
         pane_id = ?agent.and_then(|a| a.runtime_identity.pane_id.as_deref()),
         session_id = ?request.provider_session_id, turn_id = ?request.provider_turn_id,
         boundary = ?request.submission_boundary,
+        completed_at_ms = ?request.completed_at_ms,
+        status = ?agent.map(|a| a.status), group = ?request.group,
+        start_bound = request.trusted_start_bound, steered = request.steered,
+        uncertain_outcome = request.uncertain_outcome,
+        turn_ended_at_ms = ?request.turn_ended_at_ms,
+        progress_at_ms = ?request.progress_at_ms,
+        pending_final_bytes = ?request.pending_final.as_ref().map(|answer| answer.text.len()),
+        held_reply_bytes = ?request.shell_hold.as_ref().map(|hold| hold.interim.text.len()),
         elapsed_ms = super::storage::io::now_ms().saturating_sub(request.prompt.submitted_at_ms),
         "Bus delivery"
     );
