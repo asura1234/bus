@@ -99,6 +99,13 @@ impl PaneLaunchEnv {
 }
 
 pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
+    // Native agent.start uses an existing pane shell, so establish Claude's
+    // updater default before that shell starts. Explicit pane env wins below.
+    for (key, value) in crate::agents::providers::launch::runtime_env(
+        crate::agents::providers::ProviderKind::ClaudeCode,
+    ) {
+        cmd.env(key, value);
+    }
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }

@@ -1,6 +1,9 @@
 //! Persisted DTOs, identities and payload representation.
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -218,6 +221,8 @@ pub(crate) struct Room {
     pub(crate) id: RoomId,
     pub(crate) name: String,
     pub(crate) notes: String,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) missing_provider_binaries: BTreeSet<String>,
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
@@ -294,7 +299,7 @@ pub(super) const MASTER_ROOM_ID: RoomId = RoomId(0);
 pub(crate) struct AgentStartup {
     pub(crate) command: String,
     pub(crate) started_at_ms: u64,
-    /// Saved with the notice before deletion to prevent duplicate reports.
+    /// A reported startup failure holds its queue until readiness confirms recovery.
     pub(crate) reported: bool,
 }
 
@@ -361,6 +366,9 @@ pub(crate) struct RoomAgent {
     /// over after a coordinator restart, and only that error is cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) update_error: Option<String>,
+    /// A shared provider outage holds work until an explicit room resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) missing_binary: Option<String>,
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
     pub(crate) hook_setup_confirmed: bool,

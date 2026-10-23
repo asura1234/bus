@@ -11,6 +11,7 @@ mod history;
 mod idle_agents;
 mod interrupts;
 mod payload;
+mod provider_failure;
 mod recovery;
 mod reply_routing;
 mod requests;

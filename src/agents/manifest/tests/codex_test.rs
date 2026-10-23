@@ -177,7 +177,7 @@ fn codex_startup_update_requires_complete_live_chooser() {
 }
 
 #[test]
-fn codex_0_162_update_chooser_blocks_and_asks_bus_to_update() {
+fn codex_0_162_update_chooser_blocks_for_an_operator() {
     // Codex 0.162 dropped the "!" and the "Press enter to continue" footer.
     // Missing it left the agent Idle, so a queued message's Enter picked
     // "Update now" and Codex exited under the message.
@@ -189,9 +189,6 @@ fn codex_0_162_update_chooser_blocks_and_asks_bus_to_update() {
         Some("startup_update")
     );
     assert!(result.visible_blocker);
-    let update = auto_update(AgentKind::Codex, chooser).unwrap();
-    assert_eq!(update.choose, "Update now");
-    assert_eq!(update.success, "Update ran successfully");
 
     for screen in [
         format!("{chooser}\n› Ask Codex to do anything\n"),
@@ -202,14 +199,11 @@ fn codex_0_162_update_chooser_blocks_and_asks_bus_to_update() {
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("startup_update")
         );
-        assert!(auto_update(AgentKind::Codex, &screen).is_none());
     }
-    assert!(auto_update(AgentKind::Codex, "› Ask Codex to do anything\n").is_none());
-    assert!(auto_update(AgentKind::Claude, chooser).is_none());
 }
 
 #[test]
-fn auto_update_needs_both_the_option_and_the_success_text() {
+fn legacy_automatic_update_actions_are_rejected() {
     for table in [
         r#"auto_update = { choose = "Update now" }"#,
         r#"auto_update = { choose = "", success = "done" }"#,
@@ -224,7 +218,7 @@ fn auto_update_needs_both_the_option_and_the_success_text() {
         "[[rules]]\nid = \"update\"\nstate = \"blocked\"\ncontains = [\"update\"]\n\
          auto_update = { choose = \"Update now\", success = \"done\" }\n",
     );
-    assert!(parse_manifest(&valid).is_ok());
+    assert!(parse_manifest(&valid).is_err());
 }
 
 #[test]

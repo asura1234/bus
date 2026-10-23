@@ -586,6 +586,28 @@ it left it open, `null` before it tried), and each request in
 `bus message status` carries its agent's `exit_snapshot`. `bus agent read`
 cannot read an exited agent; read the snapshot file instead.
 
+### Recover a room after a provider outage
+
+Bus disables startup updates for Codex, Claude Code and Cursor on fresh launches and
+resumes, including restored panes outside rooms. Explicit Claude updater environment
+settings retain precedence. Update shared provider installations separately while
+their agents are stopped.
+
+When a launch reports a missing provider command, Bus records one `BLOCKED` notice
+per room/provider outage, naming the binary. Affected agents and
+their tasks remain saved. Once the provider works again, run:
+
+```sh
+bus agent resume --room ROOM
+```
+
+This relaunches unavailable agents with their saved provider sessions, saved options
+and capture hooks. It skips providers still running or launching, preserves queued
+work and never replays an already typed task. Inspect each returned agent's
+`outcome` (`resuming`, `skipped` or `blocked`); an unconfirmed close, missing session
+or invalidated ownership needs inspection before another launch. A retry does not
+interrupt a provider which already recovered.
+
 ### Stalled messages
 
 A message stalls when it stops moving while its agent is not working or

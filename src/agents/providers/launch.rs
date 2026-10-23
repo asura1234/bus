@@ -76,6 +76,27 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
     }
 }
 
+pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
+    match label {
+        "codex" => Some(ProviderKind::Codex),
+        "claude" => Some(ProviderKind::ClaudeCode),
+        "cursor" => Some(ProviderKind::Cursor),
+        _ => None,
+    }
+}
+
+/// Updaters share an installation across panes. Respect an explicit Claude
+/// environment setting; user/project settings can also override inherited env.
+pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
+    match provider {
+        ProviderKind::ClaudeCode => vec![(
+            "DISABLE_AUTOUPDATER".into(),
+            std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
+        )],
+        ProviderKind::Codex | ProviderKind::Cursor => Vec::new(),
+    }
+}
+
 /// A run-scoped permission choice, kept separate from saved user options.
 /// Inspect option positions so a literal prompt or option value is not
 /// mistaken for an explicit bypass. Provider aliases suppress our copy too.
@@ -174,27 +195,50 @@ pub(crate) fn launch_args(
     Ok((args, adopted))
 }
 
-/// Preserve user argv and omit a generated duplicate: Codex rejects a repeated
-/// --no-daemon even though the caller is entitled to supply it explicitly.
+/// Preserve user argv and omit duplicate single-use runtime flags. Literal
+/// tails and option values are not flags.
 pub(crate) fn extend_generated_args(
     provider: ProviderKind,
     args: &mut Vec<String>,
-    capture: Vec<String>,
+    mut capture: Vec<String>,
 ) {
-    let private_runtime = provider == ProviderKind::Codex
-        && argument_positions(provider, args)
-            .into_iter()
-            .any(|index| args[index] == "--no-daemon");
+    if provider == ProviderKind::Codex && codex_update_check_disabled(args) {
+        let mut index = 0;
+        while index + 1 < capture.len() {
+            if capture[index] == "-c" && capture[index + 1] == "check_for_update_on_startup=false" {
+                capture.drain(index..index + 2);
+            } else {
+                index += 1;
+            }
+        }
+    }
+    let flag = match provider {
+        ProviderKind::Codex => Some("--no-daemon"),
+        ProviderKind::Cursor => Some("--disable-auto-update"),
+        ProviderKind::ClaudeCode => None,
+    };
+    let supplied = flag.filter(|flag| arguments::contains_flag(provider, args, &[*flag]));
     let capture = capture
         .into_iter()
-        .filter(|arg| !private_runtime || arg != "--no-daemon");
-    // Prefix the complete user sequence when a token could be the literal
-    // boundary. This also avoids splitting an option from a value named `--`.
-    if args.iter().any(|arg| arg == "--") {
-        args.splice(0..0, capture);
-    } else {
-        args.extend(capture);
-    }
+        .filter(|arg| Some(arg.as_str()) != supplied);
+    let position = arguments::generated_args_position(provider, args);
+    args.splice(position..position, capture);
+}
+
+fn codex_update_check_disabled(args: &[String]) -> bool {
+    // Codex config overrides are ordered. An earlier `false` must not mask a
+    // later `true` when deciding whether our final safety override is present.
+    arguments::runtime_option_positions(ProviderKind::Codex, args)
+        .into_iter()
+        .filter_map(|index| match args[index].as_str() {
+            "-c" | "--config" => args.get(index + 1).map(String::as_str),
+            arg => arg.strip_prefix("--config="),
+        })
+        .filter_map(|value| value.split_once('='))
+        .filter(|(key, _)| key.trim() == "check_for_update_on_startup")
+        .map(|(_, value)| value.trim())
+        .next_back()
+        == Some("false")
 }
 
 pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(), String> {
@@ -268,6 +312,15 @@ pub(crate) fn saved_options(provider: ProviderKind, spool: &Path) -> Result<Vec<
     Ok(options)
 }
 
+pub(crate) fn binary_available(provider: ProviderKind) -> bool {
+    executable_available(executable(provider))
+}
+
+pub(crate) fn executable_available(binary: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(binary).is_file()))
+}
+
 pub(crate) fn project_root(cwd: &Path) -> PathBuf {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -301,10 +354,7 @@ pub(crate) fn prepare(
 ) -> Result<PreparedLaunch, String> {
     let cwd = canonical_directory(&spec.cwd)?;
     let (mut args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
-    let available = std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join(executable(spec.provider)).is_file())
-    });
-    if !available {
+    if !binary_available(spec.provider) {
         return Err(format!(
             "{} is not installed on PATH",
             executable(spec.provider)

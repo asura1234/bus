@@ -44,7 +44,7 @@ fn process_exit_keeps_a_foreign_persisted_session() {
     );
 }
 #[test]
-fn feishu_process_exit_requires_explicit_latch_and_excludes_self_update() {
+fn feishu_process_exit_requires_explicit_latch() {
     let mut terminal = test_terminal();
     terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     assert!(!terminal.attention_process_exited());
@@ -57,39 +57,12 @@ fn feishu_process_exit_requires_explicit_latch_and_excludes_self_update() {
         Instant::now(),
     );
     assert!(terminal.attention_process_exited());
-    let now = Instant::now();
-    for phase in [
-        SelfUpdatePhase::Installing {
-            deadline: now,
-            interrupted: false,
-        },
-        SelfUpdatePhase::Relaunching {
-            failure: None,
-            next_try: now,
-            deadline: now,
-        },
-        SelfUpdatePhase::Stuck("waiting".into()),
-    ] {
-        terminal.self_update = Some(SelfUpdate {
-            name: "codex".into(),
-            kind: AgentKind::Codex,
-            args: Vec::new(),
-            session: None,
-            success: "updated".into(),
-            phase,
-        });
-        assert!(
-            !terminal.attention_process_exited(),
-            "automatic update exit is not developer attention"
-        );
-    }
-    terminal.self_update = None;
     terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     assert!(!terminal.attention_process_exited());
 }
 
 #[test]
-fn feishu_automatic_update_relaunch_does_not_report_the_previous_process_exit() {
+fn feishu_new_managed_launch_does_not_report_the_previous_process_exit() {
     let mut terminal = test_terminal();
     let now = Instant::now();
     terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
@@ -108,20 +81,12 @@ fn feishu_automatic_update_relaunch_does_not_report_the_previous_process_exit() 
         Duration::from_secs(3),
         Duration::from_secs(30),
     );
-    terminal.self_update = Some(SelfUpdate {
-        name: "codex".into(),
-        kind: AgentKind::Codex,
-        args: Vec::new(),
-        session: None,
-        success: "updated".into(),
-        phase: SelfUpdatePhase::Relaunched,
-    });
 
     assert!(terminal.managed_agent_launch_pending());
     assert!(terminal.effective_agent_label().is_none());
     assert!(
         !terminal.attention_process_exited(),
-        "the automatic update exit must stay suppressed until the new process is detected"
+        "the previous exit must stay suppressed until the new process is detected"
     );
     terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     terminal.set_detected_state_with_screen_signals_at(

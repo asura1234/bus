@@ -18,5 +18,5 @@ pub(crate) fn capture_args(
         &hooks.binary,
     )?;
     // The shared app-server daemon would inherit a different pane's hook env.
-    Ok((path, vec!["--no-daemon".into()], rebound))
+    Ok((path, super::launch::runtime_args(), rebound))
 }

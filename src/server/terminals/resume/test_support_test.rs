@@ -8,13 +8,14 @@ pub(crate) struct ProcessEnvironment {
 impl ProcessEnvironment {
     pub(crate) fn enter(root: Option<&Path>, session: Option<&str>) -> Self {
         let guard = crate::utils::config::test_config_env_lock().lock().unwrap();
-        let previous = ["BUS_DATA_DIR", "HERDR_SESSION"]
+        let previous = ["BUS_DATA_DIR", "HERDR_SESSION", "DISABLE_AUTOUPDATER"]
             .into_iter()
             .map(|key| (key, std::env::var_os(key)))
             .collect();
         for (key, value) in [
             ("BUS_DATA_DIR", root.map(|root| root.as_os_str())),
             ("HERDR_SESSION", session.map(std::ffi::OsStr::new)),
+            ("DISABLE_AUTOUPDATER", None),
         ] {
             if let Some(value) = value {
                 std::env::set_var(key, value);

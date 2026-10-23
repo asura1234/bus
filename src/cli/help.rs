@@ -31,6 +31,7 @@ pub const AGENT_HELP: &str =
   agent choose AGENT --option N --fingerprint FINGERPRINT
   agent answer AGENT (--text TEXT | --skip) --fingerprint FINGERPRINT
   agent clear AGENT
+  agent resume --room ROOM
   agent interrupt [AGENT] [--room ROOM] [--text TEXT] [--as AGENT]
   agent rename AGENT NAME
   agent setup-confirm AGENT --confirm

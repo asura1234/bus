@@ -7,7 +7,11 @@ use std::path::Path;
 
 /// Each launch hosts its own runtime so hooks inherit that launch's environment.
 pub(crate) fn runtime_args() -> Vec<String> {
-    vec!["--no-daemon".into()]
+    vec![
+        "--no-daemon".into(),
+        "-c".into(),
+        "check_for_update_on_startup=false".into(),
+    ]
 }
 
 pub(crate) fn resume_args(session: &str) -> Vec<String> {

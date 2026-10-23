@@ -457,10 +457,9 @@ pub fn session_processes(child_pid: u32) -> Vec<u32> {
         return Vec::new();
     }
 
-    let target_session = unsafe { libc::getsid(child_pid as libc::c_int) };
-    if target_session <= 0 {
-        return Vec::new();
-    }
+    // The PTY child started with setsid(): its PID is the stable session ID.
+    // It may already be reaped while its updater children still own that session.
+    let target_session = child_pid as libc::pid_t;
 
     all_pids()
         .into_iter()

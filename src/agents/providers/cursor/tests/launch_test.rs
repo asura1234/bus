@@ -19,7 +19,7 @@ fn cursor_adoption_accepts_separate_and_attached_resume_at_any_position() {
         assert_eq!(input, args(&["--model", "sonnet"]));
     }
     assert_eq!(launch::resume_args(id), args(&["--resume", id]));
-    assert!(launch::runtime_args().is_empty());
+    assert_eq!(launch::runtime_args(), args(&["--disable-auto-update"]));
     for input in [
         "--resume",
         "--resume=",

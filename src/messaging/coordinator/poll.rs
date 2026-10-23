@@ -38,25 +38,9 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rebound = Vec::new();
         let mut waits = Vec::new();
-        let dir = &self.data_dir;
-        for agent in self.state.agents() {
-            let info = infos
-                .iter()
-                .find(|i| {
-                    Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
-                        && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
-                        && i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
-                        && agent
-                            .runtime_identity
-                            .session_id
-                            .as_ref()
-                            .is_none_or(|expected| {
-                                i.agent_session
-                                    .as_ref()
-                                    .is_some_and(|session| &session.value == expected)
-                            })
-                })
-                .or_else(|| resume::restored_agent(&self.state, agent, &infos));
+        let observed_agents: Vec<_> = self.state.agents().cloned().collect();
+        for agent in &observed_agents {
+            let info = polled_agent(&self.state, agent, &infos);
             if let Some(info) = info {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
                     || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
@@ -75,7 +59,18 @@ impl Worker {
                 }
             }
             let status = polled_status(agent, info);
-            observe_exit(self.transport.as_mut(), dir, &mut state, agent, info)?;
+            let (missing, exit_evidence) =
+                self.observe_missing_binary(&mut state, agent, status, info)?;
+            if !missing {
+                observe_exit(
+                    self.transport.as_mut(),
+                    &self.data_dir,
+                    &mut state,
+                    agent,
+                    info,
+                    exit_evidence,
+                )?;
+            }
             confirm_interactive_agent(&mut state, agent, info)?;
             let observed_at_ms = io::now_ms();
             state
@@ -95,8 +90,8 @@ impl Worker {
             }
             if let Some(info) = info {
                 update_polled_metadata(&mut state, agent, info, &mut self.branch_checks)?;
-                // The terminal could not install the agent's own update and
-                // left its chooser for a person; show why until it is over.
+                // Preserve the native compatibility error until an observation
+                // clears it, without changing unrelated agent errors.
                 state
                     .observe_update_error(agent.id, info.update_error.clone())
                     .map_err(|e| e.to_string())?;
@@ -130,6 +125,39 @@ impl Worker {
     }
 }
 
+/// A pending owned launch has no detected provider yet. It still carries the
+/// saved session and managed name; track its terminal before failure clears them.
+fn polled_agent<'a>(
+    state: &BusState,
+    agent: &RoomAgent,
+    infos: &'a [schema::AgentInfo],
+) -> Option<&'a schema::AgentInfo> {
+    infos
+        .iter()
+        .find(|i| {
+            Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+                && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
+                && (i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                    || i.agent.is_none()
+                        && i.launch_pending
+                        && i.name.as_deref()
+                            == Some(
+                                crate::messaging::identity::managed_name(agent.room_id, agent.id)
+                                    .as_str(),
+                            ))
+                && agent
+                    .runtime_identity
+                    .session_id
+                    .as_ref()
+                    .is_none_or(|expected| {
+                        i.agent_session
+                            .as_ref()
+                            .is_some_and(|session| &session.value == expected)
+                    })
+        })
+        .or_else(|| resume::restored_agent(state, agent, infos))
+}
+
 fn branch_for(cwd: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["-C"])
@@ -150,6 +178,7 @@ fn observe_exit(
     state: &mut BusState,
     agent: &RoomAgent,
     info: Option<&schema::AgentInfo>,
+    exit_evidence: Option<bool>,
 ) -> Result<(), String> {
     if agent.deletion_pending {
         return Ok(());
@@ -157,10 +186,10 @@ fn observe_exit(
     // The saved exit of this launch stands once Bus closed the pane that
     // showed it, so later requests still learn the worker exited.
     let saved = info.is_none()
-        && agent
-            .exit_snapshot
-            .as_ref()
-            .is_some_and(|s| s.launch_id == agent.runtime_identity.launch_id);
+        && agent.exit_snapshot.as_ref().is_some_and(|s| {
+            s.launch_id == agent.runtime_identity.launch_id
+                && Some(s.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+        });
     let evidence = match (
         info,
         agent.runtime_identity.pane_id.as_ref(),
@@ -168,20 +197,7 @@ fn observe_exit(
     ) {
         _ if saved => Some(true),
         (Some(_), _, _) => Some(false),
-        (None, Some(pane), Some(terminal)) => {
-            match transport.request(Method::PaneGet(schema::PaneTarget {
-                pane_id: pane.clone(),
-            })) {
-                Ok(ResponseResult::PaneInfo { pane: evidence })
-                    if evidence.pane_id == *pane
-                        && evidence.terminal_id == *terminal
-                        && evidence.agent_process_exited =>
-                {
-                    Some(true)
-                }
-                _ => None,
-            }
-        }
+        (None, Some(_), Some(_)) => exit_evidence,
         _ => None,
     };
     if evidence == Some(true) {

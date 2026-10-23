@@ -196,7 +196,16 @@ impl App {
         let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
-        let args = params.args;
+        let mut args = params.args;
+        let launch =
+            crate::agents::providers::launch::native_provider(crate::agents::agent_label(kind));
+        if let Some(provider) = launch {
+            crate::agents::providers::launch::extend_generated_args(
+                provider,
+                &mut args,
+                crate::agents::providers::launch::runtime_args(provider),
+            );
+        }
         let mut argv = vec![crate::agents::interactive_agent_executable(kind).to_string()];
         argv.extend(args.iter().cloned());
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
@@ -219,7 +228,6 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
-        terminal.managed_agent_args = Some(args);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
@@ -405,26 +413,10 @@ impl App {
             terminal_title: pane.terminal_title,
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
-            // An install that ignored Bus's interrupt waits on a person to stop
-            // it; its screen still reads as working.
-            agent_status: match &terminal.self_update {
-                Some(crate::terminal::SelfUpdate {
-                    phase: crate::terminal::SelfUpdatePhase::Stuck(_),
-                    ..
-                }) => crate::protocol::api::schema::AgentStatus::Blocked,
-                _ => pane.agent_status,
-            },
+            agent_status: pane.agent_status,
             screen_detection_skipped: false,
             dialog_id: dialog.map(|(id, _)| id),
-            update_error: match &terminal.self_update {
-                Some(crate::terminal::SelfUpdate {
-                    phase:
-                        crate::terminal::SelfUpdatePhase::Failed(error)
-                        | crate::terminal::SelfUpdatePhase::Stuck(error),
-                    ..
-                }) => Some(error.clone()),
-                _ => None,
-            },
+            update_error: None,
             state_labels: pane.state_labels,
             tokens: pane.tokens,
             agent_session: pane.agent_session,
@@ -532,6 +524,48 @@ pub(in crate::server) enum AgentRenameError {
 #[cfg(test)]
 mod tests {
     use super::valid_agent_name;
+
+    #[tokio::test]
+    async fn native_provider_starts_disable_updates_without_capture_ownership() {
+        for (label, flag) in [
+            ("codex", "check_for_update_on_startup=false"),
+            ("cursor", "--disable-auto-update"),
+        ] {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let _tx = tx;
+            let mut app = crate::server::app::App::new(
+                &crate::utils::config::Config::default(),
+                crate::server::app::AppPolicy::TEST,
+                None,
+                rx,
+                crate::server::api::EventHub::default(),
+            );
+            let workspace = crate::server::workspaces::Workspace::test_new("native-start");
+            let pane = workspace.tabs[0].root_pane;
+            let terminal = workspace.terminal_id(pane).cloned().unwrap();
+            app.state.workspaces = vec![workspace];
+            app.state.ensure_test_terminals();
+            app.state.active = Some(0);
+            let (runtime, mut writes) =
+                crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 30, 8);
+            app.terminal_runtimes.insert(terminal, runtime);
+            let pane_id = app.public_pane_id(0, pane).unwrap();
+            let result = app.start_agent(crate::protocol::api::schema::AgentStartParams {
+                name: "native-worker".into(),
+                kind: label.into(),
+                pane_id,
+                args: vec![],
+                timeout_ms: None,
+            });
+            assert!(result.is_ok());
+            let bytes = writes.try_recv().unwrap();
+            let command = String::from_utf8_lossy(&bytes);
+            assert!(
+                command.contains(flag),
+                "{label} started without update suppression: {command}"
+            );
+        }
+    }
 
     #[test]
     fn agent_names_use_a_small_cli_safe_grammar() {

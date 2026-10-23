@@ -79,6 +79,10 @@ impl Worker {
                 self.control_clear(agent)
             }
             "agent.interrupt" => self.control_interrupt(p),
+            "agent.resume" => {
+                let room = self.control_room(required(p, "room")?)?;
+                self.resume_room(room)
+            }
             _ => Err("Unknown method".into()),
         }
     }

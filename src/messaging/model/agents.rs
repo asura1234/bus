@@ -61,6 +61,7 @@ impl BusState {
                 automatic_dialog_answer: None,
                 actionable_error: None,
                 update_error: None,
+                missing_binary: None,
                 current_request: None,
                 hook_setup_confirmed: false,
                 session_binding_invalidated: false,
@@ -143,6 +144,9 @@ impl BusState {
             .agents
             .remove(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
+        if let Some(binary) = removed.missing_binary {
+            self.clear_unheld_missing_binary(removed.room_id, &binary);
+        }
         self.retired_agents.insert(
             id,
             super::staffing::RetiredAgent {

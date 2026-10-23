@@ -6,7 +6,7 @@ use super::super::{
 use std::path::Path;
 
 pub(crate) fn runtime_args() -> Vec<String> {
-    Vec::new()
+    vec!["--disable-auto-update".into()]
 }
 
 pub(crate) fn resume_args(session: &str) -> Vec<String> {

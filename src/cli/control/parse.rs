@@ -324,6 +324,7 @@ fn agent_cli() -> Command {
         )
         .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
         .subcommand(subcommand("clear").arg(value_arg("agent").required(true)))
+        .subcommand(subcommand("resume").arg(option("room")))
         .subcommand(
             subcommand("interrupt")
                 .arg(value_arg("agent").required_unless_present("room"))
@@ -349,7 +350,7 @@ fn agent_cli() -> Command {
         )
         .subcommand(subcommand("list").arg(value_arg("room").long("room")));
     command.mut_subcommands(|sub| {
-        if matches!(sub.get_name(), "add" | "list" | "interrupt") {
+        if matches!(sub.get_name(), "add" | "list" | "interrupt" | "resume") {
             sub
         } else {
             sub.arg(value_arg("room").long("room"))
@@ -368,6 +369,7 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
             ("agent.list", params)
         }
         Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
+        Some(("resume", args)) => ("agent.resume", json!({"room": required(args, "room")?})),
         Some(("clear", args)) => ("agent.clear", json!({"agent": required(args, "agent")?})),
         Some(("interrupt", args)) => {
             // `text` is the CLI's own follow-up send; it never reaches
@@ -418,7 +420,7 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
         _ => return Err("unknown agent command".into()),
     };
     if let Some((sub, args)) = args.subcommand() {
-        if sub != "add" && sub != "list" {
+        if !matches!(sub, "add" | "list" | "resume") {
             for field in ["room", "as"] {
                 if let Some(value) = args.get_one::<String>(field) {
                     params[field] = json!(value);

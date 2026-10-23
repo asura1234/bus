@@ -37,11 +37,13 @@ pub(crate) fn prepare(
         &mut args,
         vec!["--settings".into(), settings.to_string_lossy().into_owned()],
     );
+    let mut env = spec.hooks.env();
+    env.extend(super::super::launch::runtime_env(ProviderKind::ClaudeCode));
     Ok(PreparedLaunch {
         cwd,
         args,
         adopted_session,
-        env: spec.hooks.env(),
+        env,
     })
 }
 

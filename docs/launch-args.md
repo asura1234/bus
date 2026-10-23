@@ -38,6 +38,19 @@ quit its UI or use `bus stop`, then resume with the desired setting.
 Without this startup flag, launch behavior and orchestrators' handling of
 worker permission dialogs are unchanged.
 
+## Provider updates
+
+Bus disables provider self-updates on fresh room launches and saved-session
+resumes: Codex gets `-c check_for_update_on_startup=false`, Cursor gets
+`--disable-auto-update`, and Claude gets `DISABLE_AUTOUPDATER=1` when that
+environment setting is absent. An explicit inherited Claude setting is retained;
+Claude user/project settings can override the inherited environment. Bus does
+not modify user configuration or the shared provider installation.
+
+Update providers outside Bus after closing their panes. An update chooser
+remains blocked for an operator; Bus never selects “Update now”, interrupts an
+installer on a timer, or relaunches a provider to complete its update.
+
 ## Per-agent arguments
 
 The add-agent form's **Additional launch args** field and `bus agent add --args`

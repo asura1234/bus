@@ -244,6 +244,7 @@ impl Worker {
             | "agent.delete"
             | "agent.setup-confirm"
             | "agent.add"
+            | "agent.resume"
             | "agent.clear"
             | "agent.interrupt" => self.execute_agents(method, p, events),
             "agent.dialog.observe" | "agent.dialog.choose" | "agent.dialog.answer" => {
@@ -433,6 +434,13 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         "agent.clear",
         "agent clear",
         &["agent", "room", "as"],
+        true,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.resume",
+        "agent resume --room",
+        &["room"],
         true,
         Tier::Agent,
     ),

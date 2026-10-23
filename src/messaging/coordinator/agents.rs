@@ -396,6 +396,7 @@ impl Worker {
                 return Ok(());
             }
         }
+        self.ensure_provider_binary(input.room, input.provider)?;
         let (mut prepared, hooks) = self.prepare_provider_launch(&input, id)?;
         self.prepare_agent_prompt(
             &input,
@@ -550,7 +551,7 @@ impl Worker {
         Ok(identity)
     }
 
-    fn report_adopted_session(
+    pub(super) fn report_adopted_session(
         &mut self,
         id: AgentId,
         provider: Provider,

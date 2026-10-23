@@ -218,7 +218,7 @@ Files are split by ownership, not by helper.
     two-second burst. A cancellable background worker sends one bot DM through a bounded
     lark-cli subprocess to the configured recipient; errors are logged without retries.
     Internal attention notices and badges remain independent of outbound delivery. The native
-    `PaneInfo.agent_process_exited` reports explicit exits outside self-update;
+    `PaneInfo.agent_process_exited` reports explicit process exits;
     missing agents and API failures do not establish a crash.
   - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER
     prompt placeholders; compiled-in copies are the only defaults in every build

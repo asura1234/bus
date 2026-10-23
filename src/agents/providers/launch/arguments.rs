@@ -4,17 +4,15 @@ use super::super::ProviderKind;
 
 /// Known option values and literal tails are not flags, even after opaque syntax.
 pub(super) fn contains_flag(provider: ProviderKind, args: &[String], aliases: &[&str]) -> bool {
-    permission_option_spans(provider, args)
+    option_spans(provider, args)
+        .0
         .iter()
         .any(|&(start, _)| aliases.contains(&args[start].as_str()))
 }
 
 /// Only effective yolo argv is changed; callers retain the saved user options.
 pub(super) fn remove_codex_approval_options(args: &mut Vec<String>) {
-    for (start, end) in permission_option_spans(ProviderKind::Codex, args)
-        .into_iter()
-        .rev()
-    {
+    for (start, end) in option_spans(ProviderKind::Codex, args).0.into_iter().rev() {
         let arg = &args[start];
         if arg == "--approve-for-me"
             || arg == "--ask-for-approval"
@@ -28,7 +26,7 @@ pub(super) fn remove_codex_approval_options(args: &mut Vec<String>) {
 
 // Permission flags may follow opaque syntax. Inspect subsequent known spans
 // without treating their values as flags; admission/resume stay conservative.
-fn permission_option_spans(provider: ProviderKind, args: &[String]) -> Vec<(usize, usize)> {
+fn option_spans(provider: ProviderKind, args: &[String]) -> (Vec<(usize, usize)>, usize) {
     let mut spans = Vec::new();
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -43,7 +41,22 @@ fn permission_option_spans(provider: ProviderKind, args: &[String]) -> Vec<(usiz
             index = end;
         }
     }
-    spans
+    (spans, index)
+}
+
+/// Runtime defaults follow all user options, before the actual literal tail.
+/// Known option values named `--` stay attached to their options.
+pub(super) fn generated_args_position(provider: ProviderKind, args: &[String]) -> usize {
+    option_spans(provider, args).1
+}
+
+/// Runtime defaults recognize known flags after opaque options as permissions do.
+pub(super) fn runtime_option_positions(provider: ProviderKind, args: &[String]) -> Vec<usize> {
+    option_spans(provider, args)
+        .0
+        .into_iter()
+        .map(|(start, _)| start)
+        .collect()
 }
 
 /// Option positions plus the first positional command/prompt. Later options
@@ -267,6 +280,7 @@ fn cursor_arity(name: &str) -> Option<usize> {
         | "--trust"
         | "--plan"
         | "--continue"
+        | "--disable-auto-update"
         | "--skip-worktree-setup"
         | "--stream-partial-output"
         | "-p"

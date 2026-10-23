@@ -280,12 +280,11 @@ impl App {
             }
             None => plan,
         };
-        let mut argv = plan.argv;
-        argv.extend(extras.args);
+        let (argv, env) = resume_launch_inputs(&plan, extras);
         let resume_command = shell_command_from_argv(&argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
-            .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, extras.env))
+            .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
         else {
             return false;
         };
@@ -341,12 +340,6 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
-            // What Bus types again if the agent updates itself and exits.
-            terminal.managed_agent_args =
-                crate::server::terminals::self_update::managed_relaunch_args(
-                    terminal.managed_agent_kind(),
-                    &argv,
-                );
         }
         true
     }
@@ -375,6 +368,29 @@ impl App {
         }
         true
     }
+}
+
+fn resume_launch_inputs(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    extras: LaunchExtras,
+) -> (Vec<String>, Vec<(String, String)>) {
+    use crate::agents::providers::launch;
+    let mut argv = plan.argv.clone();
+    let mut env = extras.env;
+    if let Some(provider) = launch::native_provider(&plan.agent) {
+        // Runtime safety is independent of room capture ownership. Keep the
+        // executable outside argument insertion around a literal `--` tail.
+        let mut args = argv.split_off(1);
+        launch::extend_generated_args(provider, &mut args, extras.args);
+        launch::extend_generated_args(provider, &mut args, launch::runtime_args(provider));
+        argv.extend(args);
+        let mut defaults = launch::runtime_env(provider);
+        defaults.extend(env);
+        env = defaults;
+    } else {
+        argv.extend(extras.args);
+    }
+    (argv, env)
 }
 
 fn derived_pending_agent_resume_pane_infos(
@@ -446,6 +462,22 @@ fn terminal_resume_identity_for_test(
 ) {
     let facts = terminal_resume_facts(terminal);
     (facts.agent_name, facts.managed_agent, facts.session)
+}
+
+#[cfg(test)]
+fn native_resume_launch_inputs_for_test(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+) -> (Vec<String>, Vec<(String, String)>) {
+    resume_launch_inputs(
+        plan,
+        LaunchExtras {
+            args,
+            env,
+            ..Default::default()
+        },
+    )
 }
 
 #[cfg(test)]

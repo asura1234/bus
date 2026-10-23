@@ -369,9 +369,11 @@ pub fn process_environment(pid: u32) -> Option<Vec<u8>> {
 }
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {
-    let Some(session_id) = process_session_id(child_pid) else {
+    if child_pid == 0 {
         return Vec::new();
-    };
+    }
+    // portable-pty starts this child with setsid; keep the ID after it exits.
+    let session_id = child_pid as i32;
 
     let mut pids = Vec::new();
     for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
