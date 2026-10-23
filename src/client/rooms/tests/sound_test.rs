@@ -74,8 +74,10 @@ fn developer_sound_setting_keeps_the_latest_choice_during_an_earlier_save_echo()
     ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
     ui.action(render::Action::CycleDeveloperSound(true));
     ui.action(render::Action::CycleDeveloperSound(true));
-    let mut earlier = crate::messaging::prefs::settings::BusSettings::default();
-    earlier.developer_sound = Some("Glass".into());
+    let earlier = crate::messaging::prefs::settings::BusSettings {
+        developer_sound: Some("Glass".into()),
+        ..Default::default()
+    };
     ui.receive_event(BusEvent::SettingsChanged(earlier));
     assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
 }

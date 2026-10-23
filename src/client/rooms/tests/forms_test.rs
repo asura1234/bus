@@ -238,13 +238,13 @@ fn settings_sidebar_width_mouse_controls_respect_the_allowed_range() {
 }
 
 #[test]
-fn settings_footer_advertises_enter_as_the_only_toggle_key() {
+fn settings_footer_advertises_enter_as_the_action_key() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::Settings);
 
     let screen = room_screen(&mut ui, 100, 30);
 
-    assert!(screen.contains("Enter toggles"), "{screen}");
+    assert!(screen.contains("Enter changes"), "{screen}");
     assert!(!screen.contains("Space"), "{screen}");
 }
 
