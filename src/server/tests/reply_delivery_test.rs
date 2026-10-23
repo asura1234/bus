@@ -899,11 +899,14 @@ async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter()
     );
     f.tick();
     let typed = f.typed(orch);
-    assert_eq!(typed.len(), 1);
-    assert!(typed[0].contains("autonomous result"));
+    assert_eq!(typed.len(), 1, "typed payloads: {typed:#?}");
+    assert!(
+        typed[0].contains("autonomous result"),
+        "typed payloads: {typed:#?}"
+    );
     assert!(
         !typed[0].contains("owned result"),
-        "a live waiter owns the original reply"
+        "a live waiter owns the original reply; typed payloads: {typed:#?}"
     );
     f.assert_reply(request, "owned result");
 }
