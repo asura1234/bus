@@ -252,23 +252,24 @@ content-free reason and hold decision. At info level,
 the request, sender kind and captured-reply size to explain a held final;
 these events never log commands or message text.
 
-MASTER carries progress, questions and blockers; work details stay in the work
-room. Whatever started its turn, an orchestrator sends MASTER these itself,
-briefly:
+### Who to message
 
-- a progress report when a step or milestone finishes or fails (a PR merged, a
-  task done, a gate failed);
-- every question or decision for you;
-- every blocker that waits on you (a dialog you must approve, a destructive
-  action);
-- anything that changes the plan.
+- **Worker:** Send progress, acknowledgements, hand-offs and finals to your
+  orchestrator (`--to orchestrator`). Send review and verification results
+  directly to the PR owner. Contact the developer only for something only they
+  can do: grant authorization (such as Figma login), unlock or plug in a device,
+  approve a destructive or outward-facing action, or make a product decision.
+  Use `[waiting-on-you]` and state the action or decision needed. Never send
+  status or “I’m ready/waiting” messages to the developer.
+- **Orchestrator:** Absorb worker progress into room notes. Send the developer
+  in MASTER only milestones (merged or failed), blockers or decisions with
+  `[waiting-on-you]`, and plan changes. Never relay routine worker acknowledgements.
 
-Routine dialog approvals, worker hand-offs, step-by-step details and "nothing
-is waiting on you" notes stay in the work room. To post in MASTER:
+To post a milestone in MASTER as an orchestrator:
 
 ```sh
 bus send --room master --as claude-orch --to human \
-  --text "Gate passed. Please restart Bus and run the smoke test."
+  --text "Merged PR #N. [waiting-on-you] Please restart Bus and run the smoke test."
 ```
 
 The message shows in MASTER history as written by that agent, addressed to
@@ -277,17 +278,15 @@ has no requests and nothing to `wait` on: `send` returns its `message_id`
 with `"request_ids": []` and `"stage": "posted"`. `--file PATH` attaches files
 as for any send. `human` is a compatibility alias for `you`; both work from every room.
 
-### Reach the developer from any room
+#### Reach the developer from any room
 
-Any worker or orchestrator can address the developer when something needs their attention:
+For a developer-only request from any room:
 
 ```sh
-bus send --room ROOM --as AGENT --to you --text "Please decide the release date."
 bus send --room ROOM --as AGENT --to you --text "[waiting-on-you] Approve access."
 ```
 
-`@you` means the developer; use `--to you` in the CLI. Use it or `[waiting-on-you]`
-for things only the developer can do or decide. The message stays in the selected
+`@you` means the developer; use `--to you` in the CLI. The message stays in the selected
 conversation room, with the usual agent attribution and a **You** recipient.
 No copy is moved to MASTER. Agent names or IDs work for `--as`, including senders
 from another room. `you` and `human` are case-insensitive reserved names.
@@ -331,16 +330,10 @@ For assigned repository work, report these meaningful transitions yourself:
 
 Include repository, PR/merge-request number, exact head when available, status
 and the next action or owner. Send one update per meaningful transition; do not
-broadcast every merge in an unrelated repository. Message the orchestrator bound
-to your room. If the room has no orchestrator, post to You from your own room:
-
-```sh
-bus send --room ROOM --as WORKER --to human --text "REPO PR #N; head SHA; STATUS; next ACTION"
-```
-
-This is an ordinary worker-authored message, not a Bus-generated notice. Check
-whether an orchestrator is bound rather than treating any send failure as a
-reason to send a second copy to You.
+broadcast every merge in an unrelated repository. Route reports according to
+[Who to message](#who-to-message): workers report to their orchestrator, not the
+developer. A missing orchestrator or send failure is not permission to send routine
+status to the developer. These are agent-authored reports, not Bus-generated notices.
 
 ## Send work and wait for the reply
 
