@@ -461,10 +461,7 @@ impl Worker {
                     // The client settles a command only once a snapshot shows
                     // it; do not make that wait for this loop's poll tick.
                     busy.stage("snapshot");
-                    let snapshot = self.timed_snapshot();
-                    if let Ok(mut shared) = snapshots.lock() {
-                        *shared = snapshot;
-                    }
+                    self.publish_snapshot(&snapshots);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -496,10 +493,7 @@ impl Worker {
                 next_poll = std::time::Instant::now() + self.poll_interval();
             }
             busy.stage("snapshot");
-            let snapshot = self.timed_snapshot();
-            if let Ok(mut shared) = snapshots.lock() {
-                *shared = snapshot;
-            }
+            self.publish_snapshot(&snapshots);
         }
     }
 
@@ -511,6 +505,13 @@ impl Worker {
                 operation,
                 full_saves: self.store.writes() - before,
             });
+        }
+    }
+
+    fn publish_snapshot(&self, snapshots: &Mutex<Arc<BusSnapshot>>) {
+        let snapshot = self.timed_snapshot();
+        if let Ok(mut shared) = snapshots.lock() {
+            *shared = snapshot;
         }
     }
 
