@@ -64,4 +64,5 @@ Esc            Cancel
 
 Quit
 Ctrl+Q         Save, stop the agents and the server, quit
-Ctrl+Shift+Q   Force quit only after an unsaved warning";
+               After an unsaved warning: press again within 5s to force quit
+               and risk losing edits; wait 5s, then Ctrl+Q retries saving";

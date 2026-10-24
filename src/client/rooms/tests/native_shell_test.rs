@@ -539,6 +539,124 @@ fn ctrl_q_exits_the_client_only_after_bus_saved() {
 }
 
 #[test]
+fn ctrl_q_after_unsaved_warning_forces_exit_from_terminal_bytes() {
+    for view in ["room", "terminal"] {
+        let (mut ui, room, agent) = fixture();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("unsaved draft");
+        ui.text_changed(room);
+        if view == "terminal" {
+            ui.open_terminal(agent);
+        }
+        ui.request_quit();
+        ui.quitting = Some(std::time::Instant::now() - std::time::Duration::from_secs(6));
+        ui.tick();
+        assert!(ui.quitting.is_none());
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(b"\x11");
+        assert!(
+            outcome.detach,
+            "Ctrl+Q after the warning must force quit from {view}"
+        );
+        assert!(
+            !shell.bus_exit_ready(),
+            "force quit must not claim saves succeeded"
+        );
+    }
+}
+
+#[test]
+fn ctrl_q_before_warning_keeps_waiting_without_restarting_save_timeout() {
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("unsaved draft");
+    ui.text_changed(room);
+    let mut shell = shell_with(ui);
+    assert!(!shell.handle_input_bytes(b"\x11").detach);
+    let started = std::time::Instant::now() - std::time::Duration::from_secs(4);
+    shell.bus.as_mut().unwrap().quitting = Some(started);
+    assert!(!shell.handle_input_bytes(b"\x11").detach);
+    assert_eq!(shell.bus.as_ref().unwrap().quitting, Some(started));
+    assert!(shell.bus.as_ref().unwrap().force_exit_until.is_none());
+}
+
+#[test]
+fn ctrl_q_after_expired_warning_retries_failed_save_and_can_confirm_next_warning() {
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("retained draft");
+    ui.text_changed(room);
+    ui.request_quit();
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: 1,
+        result: Err("disk full".into()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.tick();
+    assert_eq!(ui.failed.len(), 1);
+    // Input must check the deadline even if no timer tick expired the hint yet.
+    ui.force_exit_until = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    let mut shell = shell_with(ui);
+    assert!(!shell.handle_input_bytes(b"\x11").detach);
+    let ui = shell.bus.as_mut().unwrap();
+    assert!(ui.failed.is_empty());
+    assert!(ui.quitting.is_some());
+    assert!(ui.force_exit_until.is_none());
+    assert!(ui.error.is_none());
+    assert!(matches!(&ui.pending.front().unwrap().command,
+        BusCommand::SetDraftText(id, text) if *id == room && text == "retained draft"));
+    ui.quitting = Some(std::time::Instant::now() - std::time::Duration::from_secs(6));
+    ui.tick();
+    assert!(shell.handle_input_bytes(b"\x11").detach);
+}
+
+#[test]
+fn quit_warning_expires_visibly_and_repeat_or_release_never_confirms() {
+    use crossterm::event::KeyEventKind;
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("retained draft");
+    ui.text_changed(room);
+    ui.request_quit();
+    ui.quitting = Some(std::time::Instant::now() - std::time::Duration::from_secs(6));
+    ui.tick();
+    let mut shell = shell_with(ui);
+    for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+        let mut key = TerminalKey::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        key.kind = kind;
+        let outcome = shell.handle_raw_events(vec![RawInputEvent::Key(key)]);
+        assert!(!outcome.detach);
+        assert!(outcome.requests.is_empty());
+        assert!(shell.bus.as_ref().unwrap().quitting.is_none());
+        assert!(shell.bus.as_ref().unwrap().force_exit_until.is_some());
+    }
+    let ui = shell.bus.as_mut().unwrap();
+    ui.force_exit_until = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    assert!(ui.tick(), "expiry must repaint the warning and sidebar");
+    assert!(ui.force_exit_until.is_none());
+    let screen = room_screen(ui, 120, 40);
+    assert!(!screen.contains("within 5s"));
+    assert!(!screen.contains("May lose unsaved edits"));
+    assert!(screen.contains("Ctrl+Q retries saving"));
+    assert!(!shell.handle_input_bytes(b"\x11").detach);
+    assert!(shell.bus.as_ref().unwrap().quitting.is_some());
+}
+
+#[test]
 fn ctrl_c_release_and_modified_copy_chords_do_not_quit_bus() {
     let (mut ui, _, _) = fixture();
     let mut released = TerminalKey::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
@@ -820,13 +938,16 @@ fn completed_shutdown_exits_only_after_its_exact_success_and_snapshot() {
         command_id: id,
         result: Ok(()),
     });
-    ui.settle();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.settle());
     assert!(!ui.exit_ready);
+    assert!(!capture.text().contains("bus.quit.saved"));
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.last_command_id = id;
     ui.receive_snapshot(Arc::new(snapshot));
-    ui.settle();
+    capture.run(|| ui.settle());
     assert!(ui.exit_ready);
+    assert_eq!(capture.text().matches("bus.quit.saved").count(), 1);
 }
 
 #[test]

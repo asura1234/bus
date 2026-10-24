@@ -1286,6 +1286,11 @@ attached UI loses its server and exits without saving drafts, so quit the UI
 with Ctrl+Q instead, which saves first and then stops the server itself.
 A destructive command without `--confirm` fails and names the missing flag.
 
+If saving fails or takes more than five seconds, the UI shows an unsaved warning.
+Press Ctrl+Q again within five seconds of that warning to force quit; unsaved
+edits may be lost. To retry saving, wait for that confirmation window to expire,
+then press Ctrl+Q. Repeating Ctrl+Q before a warning keeps waiting for the save.
+
 Deletion closes an agent's terminal only while the running server still
 attributes it to that agent. After its provider exited, Bus has usually closed
 that terminal already (see Provider exits); otherwise deletion closes the shell

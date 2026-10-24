@@ -16,6 +16,11 @@ use std::{
     sync::Arc,
 };
 
+const QUIT_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const QUIT_FORCE_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+const QUIT_UNSAVED_NOTICE: &str = "Unsaved changes or slow storage. Press Ctrl+Q again within 5s to force quit; unsaved edits may be lost. Wait 5s, then Ctrl+Q retries saving.";
+const QUIT_RETRY_NOTICE: &str = "Unsaved changes or slow storage. Ctrl+Q retries saving.";
+
 #[cfg(test)]
 #[path = "tests/focus_test.rs"]
 mod focus_tests;
@@ -121,7 +126,7 @@ pub(in crate::client) struct BusUi {
     pub(super) detail_at: (u16, u16),
     pub(super) seed_first_room: bool,
     pub(super) quitting: Option<std::time::Instant>,
-    pub(super) force_exit_available: bool,
+    pub(super) force_exit_until: Option<std::time::Instant>,
     /// The daemon runs with `--yolo`, as its connect capabilities report.
     pub(super) yolo: bool,
     pub exit_ready: bool,
@@ -231,7 +236,7 @@ impl BusUi {
             detail_at: (0, 0),
             seed_first_room,
             quitting: None,
-            force_exit_available: false,
+            force_exit_until: None,
             yolo: false,
             exit_ready: false,
             history_search: None,
@@ -608,7 +613,16 @@ impl BusUi {
                                 local.saved_recipient_generation = generation;
                             }
                         }
-                        Effect::Shutdown => self.exit_ready = true,
+                        Effect::Shutdown => {
+                            tracing::info!(
+                                event = "bus.quit.saved",
+                                command_id = pending.id,
+                                last_command_id = self.snapshot.last_command_id,
+                                elapsed_ms = ?self.quitting.map(|started| started.elapsed().as_millis() as u64),
+                                "Quit shutdown acknowledged after pending commands settled"
+                            );
+                            self.exit_ready = true;
+                        }
                         _ => {}
                     }
                     if let Effect::Submit(room, generation) = pending.effect {
@@ -680,13 +694,48 @@ impl BusUi {
             }
         }
         self.settle();
-        if self.quitting.is_some_and(|started| {
-            started.elapsed() > std::time::Duration::from_secs(5) || !self.failed.is_empty()
-        }) && !self.exit_ready
+        let now = std::time::Instant::now();
+        if self.force_exit_until.is_some_and(|until| now >= until) {
+            self.force_exit_until = None;
+            if self.error.as_deref() == Some(QUIT_UNSAVED_NOTICE) {
+                self.error = Some(QUIT_RETRY_NOTICE.into());
+            }
+            changed = true;
+        }
+        if let Some(started) = self
+            .quitting
+            .filter(|started| {
+                now.duration_since(*started) > QUIT_SAVE_TIMEOUT || !self.failed.is_empty()
+            })
+            .filter(|_| !self.exit_ready)
         {
+            let pending = self.pending.front();
+            let failed = self.failed.first();
+            tracing::warn!(
+                event = "bus.quit.warning",
+                reason = if self.failed.is_empty() { "save_timeout" } else { "failed_command" },
+                elapsed_ms = now.duration_since(started).as_millis() as u64,
+                pending_count = self.pending.len(),
+                failed_count = self.failed.len(),
+                pending_command_id = ?pending.map(|pending| pending.id),
+                pending_command = ?pending.map(|pending| crate::messaging::perf::command_name(&pending.command)),
+                pending_enqueued = pending.is_some_and(|pending| pending.enqueued),
+                pending_result = match pending.and_then(|pending| pending.result.as_ref()) {
+                    None => "waiting",
+                    Some(Ok(())) => "ok",
+                    Some(Err(_)) => "error",
+                },
+                pending_snapshot_ack = pending.is_some_and(|pending| self.snapshot.last_command_id >= pending.id),
+                failed_command_id = ?failed.map(|pending| pending.id),
+                failed_command = ?failed.map(|pending| crate::messaging::perf::command_name(&pending.command)),
+                storage_paused = self.failed.iter().chain(self.pending.iter()).any(storage_paused),
+                last_command_id = self.snapshot.last_command_id,
+                snapshot_error_present = self.snapshot.error.is_some(),
+                "Quit waiting for saves; force-exit confirmation available for 5s"
+            );
             self.quitting = None;
-            self.force_exit_available = true;
-            self.error=Some("Unsaved changes or slow storage. Ctrl+Q retries saving; Ctrl+Shift+Q exits and may lose unsaved edits.".into());
+            self.force_exit_until = Some(now + QUIT_FORCE_WINDOW);
+            self.error = Some(QUIT_UNSAVED_NOTICE.into());
             changed = true;
         }
         // Confirmation must reach the worker even while an earlier Submit is
@@ -768,6 +817,24 @@ impl BusUi {
         true
     }
     pub(super) fn request_quit(&mut self) {
+        // Repeated presses while saving must not postpone the warning.
+        if self.quitting.is_some() {
+            return;
+        }
+        tracing::info!(
+            event = "bus.quit.requested",
+            pending_count = self.pending.len(),
+            failed_count = self.failed.len(),
+            last_command_id = self.snapshot.last_command_id,
+            "Save and quit requested"
+        );
+        self.force_exit_until = None;
+        if matches!(
+            self.error.as_deref(),
+            Some(QUIT_UNSAVED_NOTICE | QUIT_RETRY_NOTICE)
+        ) {
+            self.error = None;
+        }
         self.quitting = Some(std::time::Instant::now());
         let failed = std::mem::take(&mut self.failed);
         for pending in failed {
@@ -824,6 +891,80 @@ mod tests {
         snapshot.revision += 1;
         ui.receive_snapshot(Arc::new(snapshot));
         ui.settle();
+    }
+
+    #[test]
+    fn quit_timeout_logs_pending_snapshot_ack_without_draft_contents() {
+        let (mut ui, room) = ui();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("PRIVATE_DRAFT");
+        ui.text_changed(room);
+        let pending = ui.pending.front_mut().unwrap();
+        pending.enqueued = true;
+        pending.result = Some(Ok(()));
+        ui.request_quit();
+        ui.quitting = Some(std::time::Instant::now() - std::time::Duration::from_secs(6));
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| {
+            ui.tick();
+            ui.tick();
+        });
+        let logs = capture.text();
+        assert_eq!(logs.matches("bus.quit.warning").count(), 1, "{logs}");
+        for expected in [
+            "reason=\"save_timeout\"",
+            "pending_count=1",
+            "failed_count=0",
+            "pending_command=Some(\"set_draft_text\")",
+            "pending_enqueued=true",
+            "pending_result=\"ok\"",
+            "pending_snapshot_ack=false",
+            "last_command_id=0",
+        ] {
+            assert!(logs.contains(expected), "missing {expected}: {logs}");
+        }
+        assert!(!logs.contains("PRIVATE_"), "{logs}");
+        assert!(!ui.exit_ready);
+    }
+
+    #[test]
+    fn quit_failed_save_logs_failure_branch_without_error_contents() {
+        let (mut ui, room) = ui();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("PRIVATE_DRAFT");
+        ui.text_changed(room);
+        ui.request_quit();
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id: 1,
+            result: Err("Storage paused; PRIVATE_ERROR".into()),
+        });
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot.last_command_id = 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| {
+            ui.tick();
+            ui.tick();
+        });
+        let logs = capture.text();
+        assert_eq!(logs.matches("bus.quit.warning").count(), 1, "{logs}");
+        for expected in [
+            "reason=\"failed_command\"",
+            "failed_count=1",
+            "failed_command_id=Some(1)",
+            "failed_command=Some(\"set_draft_text\")",
+            "storage_paused=true",
+        ] {
+            assert!(logs.contains(expected), "missing {expected}: {logs}");
+        }
+        assert!(!logs.contains("PRIVATE_"), "{logs}");
+        assert!(!ui.exit_ready);
     }
 
     #[test]

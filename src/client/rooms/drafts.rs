@@ -269,7 +269,7 @@ impl BusUi {
     /// already being sent stays intact.
     pub(super) fn clear_composer(&mut self) -> bool {
         if self.quitting.is_some()
-            || self.force_exit_available
+            || self.force_exit_until.is_some()
             || self.deletion.is_some()
             || self.alert.is_some()
             || self.form.is_some()
