@@ -74,6 +74,11 @@ Repeated acceptance uses the entire default Rust test suite at default Nextest
 parallelism, with no retries, under normal concurrent build-slot load. Existing
 ignored manual soak/scaling profiles and real-provider acceptance are separate
 checks; an unrun check is never counted as passed. Per-head execution results
-belong in the validation report. The send-latency state-file assertion has its
-own failure mechanism and must not be attributed to native confirmation time
-without evidence.
+belong in the validation report. The send-latency test has a different mechanism: a command snapshot can be
+published before the initial archive tick finishes. That tick can independently
+replace `state.json`, so metadata sampled around Enter cannot identify a blocking
+composer save. Test-only receipts sample the real store's full-save counter
+inside serialized UI command handlers and periodic ticks. The test requires zero full saves for
+draft/send handlers, one exact submitted draft, and an observed archive save as
+a positive control. Its progress ceiling permits scheduling delay; it is not a
+real-provider latency benchmark.

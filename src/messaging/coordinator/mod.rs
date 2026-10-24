@@ -216,6 +216,15 @@ pub(crate) struct BusSnapshot {
     pub(crate) error: Option<String>,
 }
 
+/// Full saves performed inside one serialized coordinator operation.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct TestSaveObservation {
+    pub(crate) command_id: Option<u64>,
+    pub(crate) operation: &'static str,
+    pub(crate) full_saves: u64,
+}
+
 pub(crate) struct BusHandle {
     _control: Option<control::Server>,
     commands: mpsc::SyncSender<(u64, BusCommand)>,
@@ -258,6 +267,20 @@ impl BusHandle {
         data_dir: PathBuf,
         seed: &BusState,
     ) -> (Self, mpsc::SyncSender<(u64, BusCommand)>) {
+        let (handle, commands, _) = Self::start_for_test_observing_saves(data_dir, seed);
+        (handle, commands)
+    }
+
+    /// The same fixture with full-save counts for UI handlers and periodic ticks.
+    #[cfg(test)]
+    pub(crate) fn start_for_test_observing_saves(
+        data_dir: PathBuf,
+        seed: &BusState,
+    ) -> (
+        Self,
+        mpsc::SyncSender<(u64, BusCommand)>,
+        mpsc::Receiver<TestSaveObservation>,
+    ) {
         struct NoAgents;
         impl Transport for NoAgents {
             fn request(
@@ -273,6 +296,8 @@ impl BusHandle {
             .unwrap();
         let mut worker = Worker::open(data_dir, Box::new(NoAgents)).unwrap();
         worker.dev_enabled = true;
+        let (save_tx, save_rx) = mpsc::channel();
+        worker.test_save_observations = Some(save_tx);
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
         let (event_tx, events) = mpsc::channel();
@@ -286,6 +311,7 @@ impl BusHandle {
                 events,
             },
             commands,
+            save_rx,
         )
     }
 
