@@ -240,25 +240,7 @@ fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() 
         bus_state(&session)["agents"][0]["runtime_identity"]["session_id"],
         original_session
     );
-    let (code, sent) = parse(scratch_bus(
-        &session,
-        &[
-            "send",
-            "--room",
-            "bus",
-            "--to",
-            "dot-worker",
-            "--text",
-            "after restart",
-        ],
-    ));
-    assert_eq!(code, 0, "{sent}");
-    let message = sent["result"]["message_id"].to_string();
-    let replied = session.ok(&["wait", "--message", &message, "--timeout", "30s"]);
-    assert_eq!(
-        replied["message"]["result"]["requests"][0]["reply"]["text"],
-        "fake reply: after restart"
-    );
+    // DOT-01 covers provider continuation; this regression owns persisted room state.
     for room in bus_state(&session)["rooms"].as_array().unwrap() {
         if matches!(room["name"].as_str(), Some("unseen" | "MASTER")) {
             assert_eq!(room["unseen_to_developer"], true);
