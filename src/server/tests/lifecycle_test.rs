@@ -373,3 +373,57 @@ async fn post_render_native_resume_progresses_during_repaints_with_or_without_th
         shutdown_test_runtimes(&mut server);
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_without_pending_resume_does_not_derive_resume_geometry() {
+    let (mut server, terminal_id) = restored_native_server_for_restart();
+    let plan = server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .pending_agent_resume_plan
+        .take();
+    assert!(plan.is_some());
+    let now = Instant::now();
+    server.app.pending_agent_resume_deadline = Some(now);
+    let (mut needs_render, mut needs_full_render) = (true, true);
+    assert!(server.render_pending_loop_work(now, &mut needs_render, &mut needs_full_render));
+    assert_eq!(
+        server
+            .app
+            .resume_geometry_derivations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a normal repaint must not derive resume geometry without a pending plan"
+    );
+    assert!(!needs_render && !needs_full_render);
+    assert!(server.app.pending_agent_resume_deadline.is_none());
+
+    // Positive control: the observer records real layout work when a pending
+    // plan exists, rather than asserting only a helper's unchanged false return.
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .pending_agent_resume_plan = plan;
+    needs_render = true;
+    needs_full_render = true;
+    assert!(server.render_pending_loop_work(
+        now + Duration::from_secs(1),
+        &mut needs_render,
+        &mut needs_full_render,
+    ));
+    assert!(
+        server
+            .app
+            .resume_geometry_derivations
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+    );
+    shutdown_test_runtimes(&mut server);
+}

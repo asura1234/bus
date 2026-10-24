@@ -207,6 +207,9 @@ impl App {
         tab: &crate::server::workspaces::Tab,
         terminal_area: Rect,
     ) -> Vec<crate::server::workspaces::layout::PaneInfo> {
+        #[cfg(test)]
+        self.resume_geometry_derivations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut pane_infos = derived_pending_agent_resume_pane_infos(
             tab,
             terminal_area,
