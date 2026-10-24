@@ -193,7 +193,10 @@ impl App {
         request: crate::protocol::api::schema::Request,
         respond_to: std::sync::mpsc::Sender<String>,
     ) -> bool {
-        self.handle_deferred_agent_api_request_at(request, respond_to, std::time::Instant::now())
+        let started = self
+            .test_prompt_clock(&request.method)
+            .map_or_else(std::time::Instant::now, |clock| clock.now());
+        self.handle_deferred_agent_api_request_at(request, respond_to, started)
     }
 
     pub(super) fn handle_deferred_agent_api_request_at(
@@ -206,7 +209,12 @@ impl App {
             return false;
         };
         let hard_deadline = started + budget;
-        if std::time::Instant::now() >= hard_deadline {
+        #[cfg(test)]
+        let test_clock = self.test_prompt_clock(&request.method);
+        let now = std::time::Instant::now();
+        #[cfg(test)]
+        let now = test_clock.as_ref().map_or(now, |clock| clock.now());
+        if now >= hard_deadline {
             // No lookup, paste or Enter has run. Queue latency cannot turn
             // definite non-delivery into a fresh native submission window.
             let _ = respond_to.send(encode_error(
@@ -237,14 +245,17 @@ impl App {
                 std::thread::spawn(move || {
                     // A blocked native writer must not extend the RPC forever.
                     // Timeout stays uncertain: Enter may already have been sent.
-                    let response = complete_agent_prompt(
-                        id,
-                        agent,
-                        hard_deadline,
-                        started,
-                        std::time::Instant::now(),
-                        |timeout| completion.recv_timeout(timeout),
-                    );
+                    let now = std::time::Instant::now();
+                    #[cfg(test)]
+                    let now = test_clock.as_ref().map_or(now, |clock| clock.now());
+                    let response =
+                        complete_agent_prompt(id, agent, hard_deadline, started, now, |timeout| {
+                            #[cfg(test)]
+                            let timeout = test_clock
+                                .as_ref()
+                                .map_or(timeout, |clock| clock.wait_timeout(timeout));
+                            completion.recv_timeout(timeout)
+                        });
                     let _ = respond_to.send(response);
                 });
             }

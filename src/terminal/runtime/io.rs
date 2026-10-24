@@ -16,10 +16,19 @@ pub(super) enum PaneRuntimeIo {
     TestChannel {
         sender: mpsc::Sender<Bytes>,
         resize_tx: watch::Sender<(u16, u16, u32, u32)>,
+        clock: super::submission_clock::SubmissionClock,
     },
 }
 
 impl PaneRuntimeIo {
+    pub(super) fn submission_clock(&self) -> super::submission_clock::SubmissionClock {
+        #[cfg(test)]
+        if let Self::TestChannel { clock, .. } = self {
+            return clock.clone();
+        }
+        super::submission_clock::SubmissionClock::default()
+    }
+
     pub(super) fn shutdown(&self) {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.shutdown(),
