@@ -485,6 +485,10 @@ impl BusUi {
     }
 
     fn focus_sound_setting(&mut self, target: super::render::SoundTarget) {
+        if target == super::render::SoundTarget::Developer {
+            self.settings_field = self.developer_sound_field();
+            return;
+        }
         if let Some(index) = self
             .sound_settings_targets()
             .iter()
@@ -577,7 +581,6 @@ impl BusUi {
                 self.focus_sound_setting(target);
                 self.cycle_sound(target, forward);
             }
-            Action::CycleDeveloperSound(forward) => self.cycle_developer_sound(forward),
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::TogglePerfOverlay => self.toggle_perf_overlay(),
             Action::EditFeishuRecipient => self.open_feishu_setting(false),

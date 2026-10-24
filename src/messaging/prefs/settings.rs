@@ -49,8 +49,10 @@ pub(crate) struct BusSettings {
     pub(crate) feishu_notifications: bool,
     pub(crate) feishu_recipient: String,
     pub(crate) feishu_cli_path: Option<String>,
-    /// Installed system sound for mandatory developer alerts; None uses the system default.
+    /// Installed developer-alert sound; None uses the system default.
     pub(crate) developer_sound: Option<String>,
+    /// Default on for settings written before the sound had a checkbox.
+    pub(crate) developer_sound_enabled: bool,
     /// MASTER's sound in every session; it rings by default.
     pub(crate) master_sound: SoundPref,
     /// The last All rooms choice: set on every work room at once, and what
@@ -91,6 +93,7 @@ impl Default for BusSettings {
             feishu_recipient: DEFAULT_FEISHU_RECIPIENT.into(),
             feishu_cli_path: None,
             developer_sound: None,
+            developer_sound_enabled: true,
             master_sound: SoundPref {
                 enabled: true,
                 name: None,

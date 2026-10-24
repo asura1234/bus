@@ -32,7 +32,7 @@ pub(super) const AUDIO_PLAYER_POLL_INTERVAL: Duration = Duration::from_millis(25
 
 pub(super) static SOUND_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Mandatory developer alerts use only installed system sounds, independently of room config.
+/// Developer-alert audio and previews use only installed system sounds, independently of room config.
 pub(crate) fn play_developer(name: Option<&str>) {
     if sound_playback_disabled_by_env() {
         return;

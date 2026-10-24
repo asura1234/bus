@@ -29,11 +29,7 @@ fn developer_sound_setting_offers_system_sound_selection() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.action(render::Action::Settings);
     let rows = settings_rows(&mut ui, 55);
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("Notify you sound (always on)")),
-        "{rows:#?}"
-    );
+    assert!(rows.iter().any(|row| row.contains("[x] You")), "{rows:#?}");
     assert!(
         rows.iter().any(|row| row.contains("System default")),
         "{rows:#?}"
@@ -41,7 +37,7 @@ fn developer_sound_setting_offers_system_sound_selection() {
 }
 
 #[test]
-fn developer_sound_setting_cycles_with_mouse_and_keyboard_without_an_off_choice() {
+fn developer_sound_setting_cycles_with_mouse_and_keyboard() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.action(render::Action::Settings);
     ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
@@ -50,7 +46,7 @@ fn developer_sound_setting_cycles_with_mouse_and_keyboard_without_an_off_choice(
         .view
         .hits
         .iter()
-        .find(|hit| hit.action == render::Action::CycleDeveloperSound(true))
+        .find(|hit| hit.action == render::Action::CycleSound(render::SoundTarget::Developer, true))
         .unwrap()
         .rect;
     pointer(
@@ -63,7 +59,7 @@ fn developer_sound_setting_cycles_with_mouse_and_keyboard_without_an_off_choice(
     assert_eq!(ui.settings.developer_sound.as_deref(), Some("Glass"));
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(ui.settings.developer_sound, None);
     key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
     assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
@@ -82,11 +78,72 @@ fn developer_sound_setting_cycles_with_mouse_and_keyboard_without_an_off_choice(
 }
 
 #[test]
+fn developer_sound_checkbox_toggles_with_mouse_and_enter_but_space_is_inert() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    assert!(settings_rows(&mut ui, 55)
+        .iter()
+        .any(|row| row.contains("[x] You")));
+    let checkbox = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::ToggleSound(render::SoundTarget::Developer))
+        .unwrap()
+        .rect;
+    pointer(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        checkbox.x,
+        checkbox.y,
+    );
+    assert_eq!(ui.settings_field, ui.developer_sound_field());
+    assert!(!ui.settings.developer_sound_enabled);
+    assert!(settings_rows(&mut ui, 55)
+        .iter()
+        .any(|row| row.contains("[ ] You")));
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+    assert!(!ui.settings.developer_sound_enabled);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.settings.developer_sound_enabled);
+    assert!(ui.settings.feishu_notifications);
+    let toggles: Vec<_> = ui
+        .pending
+        .iter()
+        .filter_map(|p| match p.command {
+            BusCommand::SetDeveloperSoundEnabled(on) => Some(on),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(toggles, [false, true]);
+}
+
+#[test]
+fn developer_sound_checkbox_keeps_latest_toggle_during_earlier_save_echo() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::ToggleSound(render::SoundTarget::Developer));
+    ui.action(render::Action::ToggleSound(render::SoundTarget::Developer));
+    ui.receive_event(BusEvent::SettingsChanged(
+        crate::messaging::prefs::settings::BusSettings {
+            developer_sound_enabled: false,
+            ..Default::default()
+        },
+    ));
+    assert!(ui.settings.developer_sound_enabled);
+}
+
+#[test]
 fn developer_sound_setting_keeps_the_latest_choice_during_an_earlier_save_echo() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
-    ui.action(render::Action::CycleDeveloperSound(true));
-    ui.action(render::Action::CycleDeveloperSound(true));
+    ui.action(render::Action::CycleSound(
+        render::SoundTarget::Developer,
+        true,
+    ));
+    ui.action(render::Action::CycleSound(
+        render::SoundTarget::Developer,
+        true,
+    ));
     let earlier = crate::messaging::prefs::settings::BusSettings {
         developer_sound: Some("Glass".into()),
         ..Default::default()
@@ -159,7 +216,7 @@ fn settings_lists_master_sound_above_every_work_room() {
     };
     let master_group = below("MASTER");
     let you_group = below("YOU");
-    let developer_sound = position("Notify you sound (always on)");
+    let developer_sound = position("[x] You");
     let master = position("[x] # MASTER");
     let rooms_group = below("ROOMS");
     let all_rooms = position("[ ] All rooms");
@@ -189,7 +246,7 @@ fn release_settings_keyboard_reaches_the_developer_sound_picker() {
     ui.action(render::Action::Settings);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     assert_eq!(ui.settings_field, 1);
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
     assert!(ui.pending.iter().any(|pending| matches!(
         &pending.command,
@@ -216,7 +273,12 @@ fn developer_sound_picker_keeps_long_name_controls_inside_settings_list() {
         .view
         .hits
         .iter()
-        .filter(|hit| matches!(hit.action, render::Action::CycleDeveloperSound(_)))
+        .filter(|hit| {
+            matches!(
+                hit.action,
+                render::Action::CycleSound(render::SoundTarget::Developer, _)
+            )
+        })
         .collect();
     assert_eq!(controls.len(), 2);
     for control in controls {
@@ -483,11 +545,7 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
     );
     assert_eq!(ui.settings_field, ui.developer_sound_field());
     assert!(rows.iter().any(|row| row.ends_with("YOU")), "{rows:#?}");
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("Notify you sound (always on)")),
-        "{rows:#?}"
-    );
+    assert!(rows.iter().any(|row| row.contains("[x] You")), "{rows:#?}");
 }
 
 #[test]
@@ -1017,7 +1075,10 @@ fn developer_sound_choice_survives_color_blind_save_before_coordinator_echo() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.settings_path = Some(path.clone());
     ui.system_sounds = Some(vec!["Ping".into()]);
-    ui.action(render::Action::CycleDeveloperSound(true));
+    ui.action(render::Action::CycleSound(
+        render::SoundTarget::Developer,
+        true,
+    ));
     let command_id = ui.pending.back().unwrap().id;
     ui.action(render::Action::ToggleColorBlindMode);
     let saved = crate::messaging::prefs::settings::update(&path, |settings| {

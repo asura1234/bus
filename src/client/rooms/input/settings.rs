@@ -3,20 +3,6 @@ use super::super::{forms::Form, render::SoundTarget, BusUi, Effect};
 use crate::messaging::coordinator::BusCommand;
 
 impl BusUi {
-    pub(super) fn cycle_developer_sound(&mut self, forward: bool) {
-        self.settings_field = self.developer_sound_field();
-        let choice = next_sound_choice(
-            self.settings.developer_sound.as_deref(),
-            self.system_sounds.as_deref().unwrap_or_default(),
-            forward,
-        );
-        if self.sound_config.is_some() {
-            crate::platform::sound::play_developer(choice.as_deref());
-        }
-        self.settings.developer_sound = choice.clone();
-        self.queue(BusCommand::SetDeveloperSoundName(choice), Effect::None);
-    }
-
     pub(super) fn open_feishu_setting(&mut self, cli: bool) {
         let text = if cli {
             self.settings.feishu_cli_path.clone().unwrap_or_default()
@@ -116,6 +102,11 @@ impl BusUi {
 
     pub(super) fn toggle_sound(&mut self, target: SoundTarget) {
         match target {
+            SoundTarget::Developer => {
+                let enabled = !self.settings.developer_sound_enabled;
+                self.settings.developer_sound_enabled = enabled;
+                self.queue(BusCommand::SetDeveloperSoundEnabled(enabled), Effect::None);
+            }
             SoundTarget::Room(room) => {
                 if let Some(enabled) = self
                     .snapshot
@@ -142,6 +133,7 @@ impl BusUi {
     /// the system sounds) and plays it as a preview.
     pub(in crate::client::rooms) fn cycle_sound(&mut self, target: SoundTarget, forward: bool) {
         let current = match target {
+            SoundTarget::Developer => self.settings.developer_sound.clone(),
             SoundTarget::Room(room) => match self.snapshot.state.room(room) {
                 Some(room) => room.sound_name.clone(),
                 None => return,
@@ -155,9 +147,17 @@ impl BusUi {
             forward,
         );
         if let Some(config) = &self.sound_config {
-            crate::platform::sound::play_named(choice.as_deref(), config);
+            if target == SoundTarget::Developer {
+                crate::platform::sound::play_developer(choice.as_deref());
+            } else {
+                crate::platform::sound::play_named(choice.as_deref(), config);
+            }
         }
         let command = match target {
+            SoundTarget::Developer => {
+                self.settings.developer_sound = choice.clone();
+                BusCommand::SetDeveloperSoundName(choice)
+            }
             SoundTarget::Room(room) => BusCommand::SetRoomSoundName(room, choice),
             SoundTarget::AllRooms => {
                 self.settings.room_sound.name = choice.clone();

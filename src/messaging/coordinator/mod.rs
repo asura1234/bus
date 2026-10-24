@@ -90,6 +90,7 @@ pub(crate) enum BusCommand {
     SetFeishuNotifications(bool),
     /// Installed system sound for developer alerts; None selects the system default.
     SetDeveloperSoundName(Option<String>),
+    SetDeveloperSoundEnabled(bool),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),

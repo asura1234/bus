@@ -1221,6 +1221,7 @@ fn the_dev_performance_overlay_turns_on_updates_and_turns_off() {
     let session = Session::start("overlay");
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
     session.ok(&["click", "--text", "Settings"]);
+    session.ok(&["scroll", "--text", "[x] You", "--down", "10"]);
     session.ok(&["wait", "--text", "[ ] Performance overlay"]);
     assert!(overlay_matches(&session).is_empty(), "off by default");
 

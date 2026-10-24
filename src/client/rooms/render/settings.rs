@@ -32,14 +32,9 @@ impl BusUi {
             .map(|room| SoundTarget::Room(room.id));
         let mut lines = vec![
             SoundSettingsLine::Heading("YOU"),
-            SoundSettingsLine::Stepper {
+            SoundSettingsLine::Sound {
                 field: self.developer_sound_field(),
-                label: "Notify you sound (always on)",
-                value: self.settings.developer_sound.as_deref().map_or_else(
-                    || "System default".into(),
-                    |name| self.sound_label(Some(name)),
-                ),
-                adjust: Action::CycleDeveloperSound,
+                target: SoundTarget::Developer,
             },
             SoundSettingsLine::Empty(""),
         ];
@@ -127,6 +122,14 @@ impl BusUi {
         target: SoundTarget,
     ) -> Option<(String, Option<bool>, String)> {
         match target {
+            SoundTarget::Developer => Some((
+                "You".into(),
+                Some(self.settings.developer_sound_enabled),
+                self.settings.developer_sound.as_deref().map_or_else(
+                    || "System default".into(),
+                    |name| self.sound_label(Some(name)),
+                ),
+            )),
             SoundTarget::Room(room) => {
                 let room = self.snapshot.state.room(room)?;
                 Some((

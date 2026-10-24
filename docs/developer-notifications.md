@@ -13,15 +13,20 @@ peer messages and completed agent replies also notify when they contain an expli
 and replies to developer-authored requests. Bare phrases between agents do not trigger developer alerts;
 there, "you" names the receiving agent. Developer-authored sends never trigger alerts.
 
-The selected developer system sound rings once for each qualifying source, regardless of
-visible room, focus, room sound switches, startup grace or ordinary notification cooldown.
+When the You sound checkbox is enabled, the selected system sound rings once for each
+qualifying source, regardless of visible room, focus, room sound switches, startup grace
+or ordinary notification cooldown.
 Only the coordinator-owning client plays it. Initial history is a baseline on start/resume;
 repeated snapshots and archive moves do not replay alerts. Ordinary room sounds keep their
-existing settings. In Settings → Sound notifications → YOU, the first row,
-**Notify you sound (always on)**, offers
-**System default** and installed system sounds. Use Left/Right, Enter or the arrows to choose
-and preview a sound. The choice is shared and saved for later Bus sessions; there is no Off
-option. System default prefers Glass when installed, then the first installed system sound.
+existing settings. In Settings → Sound notifications → YOU, the first row is **You**,
+with the same checkbox and sound controls as the room rows. Enter or a checkbox click toggles
+only developer-alert audio; Feishu and other alerts are unchanged. It defaults on, including
+settings saved before the checkbox existed. Left/Right and the arrows choose and preview
+**System default** or an installed system sound, even while the checkbox is off.
+The name remains in `developer_sound`, and the checkbox is saved beside it as
+`developer_sound_enabled`. `bus state` and `bus settings` expose
+`developer_sound: {enabled, name}`, with a null name for System default.
+System default prefers Glass when installed, then the first installed system sound.
 A missing or unplayable selection falls back to that system default, never a bundled developer
 sound. If no system sounds are installed, Bus logs that playback is unavailable; the other
 notification routes remain active. No desktop popup is added.

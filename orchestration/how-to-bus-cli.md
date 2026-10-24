@@ -288,12 +288,17 @@ room and sender. The legacy whole phrase `waiting on you` qualifies only in deve
 notices and replies to developer-authored requests. In peer traffic a bare phrase does not trigger developer alerts
 because "you" refers to the receiving agent. Developer-authored sends never notify.
 The developer-alert system sound is configured separately from ordinary room sounds and ignores
-room switches and normal notification cooldown. In Settings, **Notify you sound (always on)**
-offers System default and installed system sounds; the arrows, Left/Right or Enter choose and
-preview a sound, saved across sessions. System default prefers Glass, then another installed
-sound; missing selections fall back to it. There is no Off choice. Feishu bot DMs use the existing
-two-second burst and first-action-line format; untagged direct posts use `sender to you: text`.
-No user setting disables these alerts, including a saved legacy Feishu off preference.
+room switches and normal notification cooldown when enabled. In Settings → Sound notifications →
+YOU, **You** has the same checkbox and sound controls as room rows. Click the checkbox or use
+Enter to toggle developer-alert audio; Left/Right or the arrows choose and preview System default
+or installed system sounds. The checkbox defaults on for existing setups and is saved as
+`developer_sound_enabled` beside the existing `developer_sound` name. Unchecking silences only
+this audio; Feishu and other alerts continue. `bus state` and `bus settings` expose
+`developer_sound: {enabled, name}`, with null for the System default name.
+System default prefers Glass, then another installed sound; missing selections fall back to it.
+Feishu bot DMs use the existing two-second burst and first-action-line format; untagged direct
+posts use `sender to you: text`. Feishu notifications remain mandatory, including with a saved
+legacy Feishu off preference.
 Recipient and CLI path remain editable. See [developer notifications](../docs/developer-notifications.md).
 
 ## Repository status reporting belongs to the agent and harness
@@ -1228,7 +1233,8 @@ Non-goals: UI changes"
 Settings that are not tied to one room are shared by every Bus session:
 color-blind mode, MASTER's sound (`master_sound`), the last `All rooms` sound
 which new work rooms start with (`room_sound`), and the developer alert's system
-sound (`developer_sound`, null for System default). They live in `settings.json` beside the session
+sound name (`developer_sound`, null for System default) and its on/off checkbox
+(`developer_sound_enabled`, default true). They live in `settings.json` beside the session
 registry (`~/.local/share/bus/settings.json`). A change made in any Bus, from
 the UI or the CLI, is what every Bus launched or resumed afterwards starts with:
 at launch MASTER takes `master_sound`, and each room created later takes

@@ -314,7 +314,7 @@ impl BusUi {
         1
     }
 
-    /// Room sound fields follow the always-on developer sound selector.
+    /// Room sound fields follow the developer sound checkbox.
     pub(super) fn room_sound_field(&self, index: usize) -> usize {
         self.developer_sound_field() + 1 + index
     }
@@ -370,6 +370,9 @@ impl BusUi {
         }
         if pending(|command| matches!(command, BusCommand::SetDeveloperSoundName(_))) {
             settings.developer_sound = self.settings.developer_sound.clone();
+        }
+        if pending(|command| matches!(command, BusCommand::SetDeveloperSoundEnabled(_))) {
+            settings.developer_sound_enabled = self.settings.developer_sound_enabled;
         }
         self.settings = settings;
     }
@@ -539,8 +542,12 @@ impl BusUi {
                 &previous.state,
                 &self.snapshot.state,
             );
-            for _ in &alerts {
-                crate::platform::sound::play_developer(self.settings.developer_sound.as_deref());
+            if self.settings.developer_sound_enabled {
+                for _ in &alerts {
+                    crate::platform::sound::play_developer(
+                        self.settings.developer_sound.as_deref(),
+                    );
+                }
             }
             if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
                 .filter(|_| alerts.is_empty() && self.ringer.allow(std::time::Instant::now()))
