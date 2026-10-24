@@ -490,6 +490,26 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
     );
 }
 
+#[test]
+fn settings_scroll_keeps_both_group_heading_and_focused_first_row_visible() {
+    let (mut ui, _, _) = sound_fixture(12);
+    ui.dev_settings = true;
+    ui.action(render::Action::Settings);
+    settings_rows(&mut ui, 24);
+    for _ in 0..ui.perf_overlay_field().unwrap() {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    let rows = settings_rows(&mut ui, 24);
+    assert!(
+        rows.iter().any(|row| row.ends_with("DEVELOPER")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("Performance overlay")),
+        "{rows:#?}"
+    );
+}
+
 mod ring_decisions {
     use super::super::super::ring::{
         new_message_should_ring, ringing_room, Ringer, RING_COOLDOWN, STARTUP_GRACE,

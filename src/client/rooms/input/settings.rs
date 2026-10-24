@@ -199,13 +199,13 @@ impl BusUi {
             return;
         };
         // Bring a group heading into view along with its first row.
-        let line = match line.checked_sub(1).map(|above| &lines[above]) {
+        let heading = match line.checked_sub(1).map(|above| &lines[above]) {
             Some(super::super::render::SoundSettingsLine::Heading(_)) => line - 1,
             _ => line,
         };
         let height = usize::from(self.view.settings_list.height.max(1));
-        if line < self.settings_scroll {
-            self.settings_scroll = line;
+        if heading < self.settings_scroll {
+            self.settings_scroll = heading;
         } else if line >= self.settings_scroll + height {
             self.settings_scroll = line + 1 - height;
         }
