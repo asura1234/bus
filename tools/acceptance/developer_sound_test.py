@@ -146,7 +146,7 @@ class Run(helper.Run):
         self.command("type", "KEEP DRAFT")
         self.command("focus", "out")
         count = len(self.sounds())
-        self.post("Choose release timing")
+        self.post("[waiting-on-you] Choose release timing")
         self.until(lambda: len(self.sounds()) == count + 1, "one Glass developer alert")
         assert self.sounds()[-1]["target"] == self.sound_path("Glass")
         self.quiet()
