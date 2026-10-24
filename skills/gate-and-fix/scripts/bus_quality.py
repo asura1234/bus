@@ -152,11 +152,18 @@ def save_state(value: dict) -> None:
     (OUTPUT / "state.json").write_text(json.dumps(value), encoding="utf-8")
 
 
+def profile_file_name(stage: str) -> str:
+    # LLVM locks and online-merges four slots per binary instead of retaining
+    # one multi-megabyte profile for every nextest/CLI process. Keep lanes
+    # separate so CLI or integration cannot substitute for unit evidence.
+    return f"{ROOT.name}-{stage}-%4m.profraw"
+
+
 def rust_test(
     *targets: str, fresh: bool = False, in_process_server: bool | None = None
 ) -> int:
     stage = "unit" if fresh else "integration"
-    env = child_env(LLVM_PROFILE_FILE_NAME=f"{ROOT.name}-{stage}-%p-%m.profraw")
+    env = child_env(LLVM_PROFILE_FILE_NAME=profile_file_name(stage))
     # --no-report already preserves profiles and rejects --no-clean. Reset just the raw
     # profiles once per round, keeping the instrumented build cache warm.
     if fresh and run("cargo", "llvm-cov", "clean", "--profraw-only", env=env):
@@ -326,13 +333,13 @@ def unit() -> int:
         "bus",
         "--",
         "--help",
-        env=child_env(LLVM_PROFILE_FILE_NAME=f"{ROOT.name}-cli-%p-%m.profraw"),
+        env=child_env(LLVM_PROFILE_FILE_NAME=profile_file_name("cli")),
     )
     test_env = child_env(
         BUS_TEST_BINARY=str(
             target / "debug" / ("bus.exe" if os.name == "nt" else "bus")
         ),
-        LLVM_PROFILE_FILE=str(target / f"{ROOT.name}-cli-%p-%m.profraw"),
+        LLVM_PROFILE_FILE=str(target / profile_file_name("cli")),
     )
     tests = [str(path.relative_to(ROOT)) for path in python_files() if is_test(path)]
     if not tests:

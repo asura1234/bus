@@ -76,6 +76,11 @@ replace `rebase-origin-main` or PR creation.
   20 percentage points from the last successful local report (the policy floor is the reference
   until one exists). Failed measurements never replace that reference. Rerun the complete gate
   after correcting instrumentation; CLI or integration profiles alone cannot waive missing units.
+- Raw profile filenames use a four-slot LLVM online-merge pool (`%4m`) per instrumented
+  binary and lane, without a per-process `%p` component. The runtime locks each selected
+  slot while merging counters, bounding raw-file growth without discarding executions.
+  Unit, integration and CLI prefixes stay separate; fresh-round cleanup and the required
+  unit-profile checkpoint still prevent stale or CLI-only profiles from passing coverage.
 - Rust coverage includes host-compiled first-party `src/` executable lines. Vendor/dependencies,
   build.rs, generated files from `lint-policy.toml`'s `generated_files`, `tests/` and inline
   `#[cfg(test)] mod` bodies are excluded. Host-inactive platform code is outside LLVM's inventory.
