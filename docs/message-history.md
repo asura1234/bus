@@ -20,14 +20,6 @@ history labels. Normal deletion stores the original room and orchestrates bindin
 plus optional provider/CWD metadata; old records without those metadata fields load
 with `None` defaults. Known room numbers round-trip unchanged.
 
-Legacy `agent_deleted` archive entries are read into that canonical map. An existing
-canonical room/orchestrates/name wins exactly; only missing rendering metadata is
-filled. Legacy-only entries without a recorded home room render their name but must
-never forward, even if they contain an orchestrates field. They are excluded from
-name/roster matching. Compaction defers removing legacy identity lines until the
-merged canonical records are durable in `state.json`, including after failed or
-stale-state saves. New writes never create a parallel archive identity record.
-
 Startup compaction removes duplicate crash copies and an uncommitted torn tail,
 preserving every logical message. It never filters by live room,
 agent, or age. Empty-session cleanup also preserves sessions with audit history.
@@ -56,7 +48,7 @@ A cold disk index would be needed to bound total RAM and avoid repeated full
 archive scans. There is deliberately no rotation that discards audit content.
 
 State format 3 accepts formats 1 and 2 on upgrade. Older binaries do not understand
-the new room archive records or legacy rendering-only identities; do not downgrade against the upgraded data directory.
+the new room archive records; do not downgrade against the upgraded data directory.
 
 ## Recovery from older versions
 

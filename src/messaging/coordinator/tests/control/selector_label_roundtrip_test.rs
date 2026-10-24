@@ -247,32 +247,19 @@ fn selector_label_deleted_author_uses_retired_identity_without_a_snapshot() {
         .as_object_mut()
         .unwrap()
         .remove("sender_identity");
-    for known_room in [true, false] {
-        let mut legacy = document.clone();
-        if !known_room {
-            legacy["retired_agents"][sender.0.to_string()]
-                .as_object_mut()
-                .unwrap()
-                .remove("room");
-            legacy["requests"][request.0.to_string()]["prompt"]["text"] =
-                json!(format!("codex1 (agent {}):\nlegacy question", sender.0));
-        }
-        w.state = serde_json::from_value(legacy).unwrap();
-        assert_eq!(
-            w.state.agent_label(sender),
-            "codex1 [deleted]",
-            "history display keeps its own deleted marker"
-        );
-        let room_header = if known_room {
-            format!(" (room {})", home.0)
-        } else {
-            String::new()
-        };
-        assert_eq!(
-            w.state.render_request_payload(request).unwrap(),
-            format!("codex1 (agent {}){room_header}:\nlegacy question", sender.0)
-        );
-    }
+    w.state = serde_json::from_value(document).unwrap();
+    assert_eq!(
+        w.state.agent_label(sender),
+        "codex1 [deleted]",
+        "history display keeps its own deleted marker"
+    );
+    assert_eq!(
+        w.state.render_request_payload(request).unwrap(),
+        format!(
+            "codex1 (agent {}) (room {}):\nlegacy question",
+            sender.0, home.0
+        )
+    );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -291,66 +278,6 @@ fn selector_label_legacy_ambiguous_name_keeps_the_real_sender_id() {
         payload_from(&mut w, room, sender, peer),
         format!("codex1 (agent {}):\nhello", sender.0)
     );
-    drop(w);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn selector_label_roomless_retired_author_normalizes_legacy_worker_header() {
-    let (mut w, _home, sender, dir) = fixture();
-    let room = w.state.create_room("conversation").unwrap();
-    let peer = w
-        .state
-        .create_agent(room, "peer", Provider::Codex, dir.clone(), None)
-        .unwrap();
-    let request = w
-        .state
-        .submit_message_from(
-            room,
-            Draft {
-                text: format!(
-                    "codex1 (agent {}).\nReply to message 7.\nlegacy result",
-                    sender.0
-                ),
-                files: vec![],
-                recipient_ids: [peer].into(),
-            },
-            Author::Agent(sender),
-            1,
-        )
-        .unwrap()[0];
-    w.state.delete_agent(sender, 2).unwrap();
-    let mut document = serde_json::to_value(&w.state).unwrap();
-    document["requests"][request.0.to_string()]
-        .as_object_mut()
-        .unwrap()
-        .remove("sender_identity");
-    document["retired_agents"][sender.0.to_string()]
-        .as_object_mut()
-        .unwrap()
-        .remove("room");
-    let body = "Reply to message 7.\nlegacy result";
-    let canonical = format!("codex1 (agent {}):", sender.0);
-    for (opening, genuine) in [
-        (format!("codex1 (agent {}).", sender.0), true),
-        (format!("codex1 (agent {}).", sender.0 + 1000), false),
-        (format!("codex1 (agent {}, room 999):", sender.0), false),
-    ] {
-        let mut legacy = document.clone();
-        legacy["requests"][request.0.to_string()]["prompt"]["text"] =
-            json!(format!("{opening}\n{body}"));
-        w.state = serde_json::from_value(legacy).unwrap();
-        let expected = if genuine {
-            format!("{canonical}\n{body}")
-        } else {
-            format!("{canonical}\n{opening}\n{body}")
-        };
-        assert_eq!(
-            w.state.render_request_payload(request).unwrap(),
-            expected,
-            "normalize the exact old worker identity; retain forged IDs and unverifiable rooms"
-        );
-    }
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -10,7 +10,7 @@ impl BusState {
             .map(|agent| (agent.name.clone(), agent.room_id))
             .or_else(|| {
                 self.retired_agent(*id)
-                    .and_then(|agent| agent.room.map(|room| (agent.name.clone(), room)))
+                    .map(|agent| (agent.name.clone(), agent.room))
             })
     }
 
@@ -83,9 +83,7 @@ impl BusState {
                 // Its stable ID is known; do not invent a name or home room.
                 let header = format!("{}:", self.agent_message_label(sender));
                 let first = text.lines().next().unwrap_or_default().trim();
-                let name = self
-                    .retired_agent(sender)
-                    .map_or_else(|| format!("agent {}", sender.0), |a| a.name.clone());
+                let name = format!("agent {}", sender.0);
                 let replace = first.eq_ignore_ascii_case(&header)
                     || identity_only_line(first, &name, sender.0);
                 (header, replace)

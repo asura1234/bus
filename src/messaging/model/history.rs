@@ -24,12 +24,6 @@ pub(crate) struct History {
 pub(crate) enum Archived {
     #[serde(rename = "request")]
     Request(Box<Request>),
-    #[serde(rename = "agent_deleted")]
-    LegacyAgent {
-        id: AgentId,
-        #[serde(flatten)]
-        agent: super::staffing::RetiredAgent,
-    },
     #[serde(rename = "room_deleted")]
     Room { id: RoomId, name: String },
     #[serde(rename = "notice")]
@@ -102,7 +96,6 @@ impl History {
 
     pub(crate) fn contains(&self, item: &Archived) -> bool {
         match item {
-            Archived::LegacyAgent { .. } => false,
             Archived::Room { id, .. } => self.rooms.contains_key(id),
             Archived::Request(request) => self.requests.contains_key(&request.id),
             Archived::Notice { room, prompt } => self
@@ -114,9 +107,6 @@ impl History {
 
     pub(crate) fn insert(&mut self, item: Archived) {
         match item {
-            Archived::LegacyAgent { .. } => {
-                unreachable!("legacy identities must migrate into state before history indexing")
-            }
             Archived::Room { id, name } => {
                 self.rooms.insert(id, name);
             }
