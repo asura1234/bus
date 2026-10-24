@@ -1,4 +1,5 @@
 //! Coordinator worker ownership.
+use super::storage::remove_spooled;
 use super::{
     control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
@@ -414,7 +415,19 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
+                    let read = !control_dispatch::is_mutation(&call.request.method);
+                    let revision = self.revision;
+                    let error = self.error.clone();
                     self.serve_control(call, &events, &snapshots);
+                    // Unchanged reads need no notification scan or copied UI state.
+                    // Due polls still run, so a follower flood cannot stop delivery.
+                    if read
+                        && self.revision == revision
+                        && self.error == error
+                        && std::time::Instant::now() < next_poll
+                    {
+                        continue;
+                    }
                 }
                 Ok((id, command)) => {
                     let submitting =
@@ -748,17 +761,6 @@ fn next_command(
             }
         }
     }
-}
-
-fn remove_spooled(dir: &Path, paths: &[PathBuf]) -> Result<(), String> {
-    for path in paths {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())
 }
 
 /// Reads are answered after this tick, without suppressing its delivery. A

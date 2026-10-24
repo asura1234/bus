@@ -2,6 +2,55 @@ use std::path::PathBuf;
 
 use super::*;
 
+#[test]
+fn observation_snapshots_share_callback_dedupe_keys_and_keep_consumption_independent() {
+    let mut document = serde_json::to_value(BusState::new()).unwrap();
+    document["consumed_callbacks"] = serde_json::Value::Object(
+        (0..14_000)
+            .map(|id| (format!("spent-callback-{id:05}"), serde_json::Value::Null))
+            .collect(),
+    );
+    let state: BusState = serde_json::from_value(document).unwrap();
+    let mut snapshot = state.clone();
+    assert_eq!(
+        state.consumed_callbacks.keys().next().unwrap().as_ptr(),
+        snapshot.consumed_callbacks.keys().next().unwrap().as_ptr(),
+        "poll and control snapshots must not allocate copies of retained callback keys"
+    );
+
+    let callback = ProviderCallback {
+        callback_id: "new-callback".into(),
+        sequence: 1,
+        occurred_at_ms: 1,
+        agent_id: AgentId(999),
+        launch_id: "new-launch".into(),
+        provider_session_id: None,
+        provider_turn_id: None,
+        provider_prompt_id: None,
+        prompt_payload: None,
+        kind: CallbackEventKind::PromptStarted,
+    };
+    assert_eq!(
+        snapshot.accept_callback(callback.clone()),
+        CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest)
+    );
+    let consumed = snapshot.clone();
+    assert_eq!(
+        snapshot.accept_callback(callback),
+        CallbackDisposition::Rejected(CallbackRejection::DuplicateCallback)
+    );
+    assert_eq!(
+        consumed.consumed_callbacks.keys().next().unwrap().as_ptr(),
+        snapshot.consumed_callbacks.keys().next().unwrap().as_ptr(),
+        "a duplicate callback must not copy or rewrite retained dedupe keys"
+    );
+    assert!(!state.consumed_callbacks.contains_key("new-callback"));
+    let reloaded: BusState =
+        serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
+    assert_eq!(reloaded, snapshot);
+    assert_eq!(reloaded.consumed_callbacks.len(), 14_001);
+}
+
 #[path = "global_agent_names_test.rs"]
 mod global_agent_names_tests;
 

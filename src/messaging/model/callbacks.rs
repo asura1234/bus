@@ -84,6 +84,13 @@ impl BusState {
     fn accept_callback_unrecorded(&mut self, callback: ProviderCallback) -> CallbackDisposition {
         if self
             .consumed_callbacks
+            .get(&callback.callback_id)
+            .and_then(Option::as_ref)
+            == Some(&callback.launch_id)
+        {
+            return CallbackDisposition::Rejected(CallbackRejection::DuplicateCallback);
+        }
+        if std::sync::Arc::make_mut(&mut self.consumed_callbacks)
             .insert(
                 callback.callback_id.clone(),
                 Some(callback.launch_id.clone()),
