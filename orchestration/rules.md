@@ -186,8 +186,14 @@ the wrapper remains held.
 - **Assign write ownership before parallel work.** Give each agent a directory
   or file area in its brief; agents write only there. Lock shared files to one
   writer at a time, or give them one owner. Use separate worktrees and branches
-  for heavy overlap or conflicting gates/builds; control their integration.
-  Follow [Parallel writes](parallel-writes.md).
+  for parallel authors with heavy overlap or conflicting gates/builds; control
+  their integration. Follow [Parallel writes](parallel-writes.md).
+- **Keep reviews and investigations in the author's feature worktree.** Only
+  test additions may change repository content in these roles; reuse the owner's
+  binary/target and build slot, save probe patches and remove your additions
+  before handoff. Never create review/diagnostic clones or build main; before a
+  fix exists, create its feature worktree with `worktree-new`. Follow the full
+  [review and investigation rules](parallel-writes.md#reviews-and-investigations).
 - **Give every parallel worker the installed write guide.** Each brief tells
   the worker to read the absolute session `docs/parallel-writes.md` path and
   includes its ownership map; resolve the path before sending the brief.

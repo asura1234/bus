@@ -86,7 +86,7 @@ Fixed criteria for the plan verdict: it is 可执行 (Ready) when this round's `
 
 ## PR code-review round format
 
-The artifact is written to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. The reviewer is read-only over production code, with write access limited to test files (probe tests stay in the working tree and are not committed; see code-review-guide "Verification boundary"); with a related plan, record its goal verbatim; without a plan, record the branch-level locked goal verbatim.
+The artifact is written to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. The reviewer is read-only over production code, with write access limited to test files (save a test-only probe patch and remove your additions before handoff; see code-review-guide "Probe test lifecycle"); with a related plan, record its goal verbatim; without a plan, record the branch-level locked goal verbatim.
 
 For `review-pr --scope`, use `temp/review-pr/<branch>/scopes/<SCOPE_HASH>/<reviewer>/round-NN/review.md`
 and the identical PR template below. Add the following two header fields before `**审查者**`:

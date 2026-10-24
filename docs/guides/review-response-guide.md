@@ -1,6 +1,6 @@
 # Review Response Guide (Author Side)
 
-`/review-plan` and `/review-pr` are **problem production**: the reviewer lists problems in the plan or the code as evidence-backed findings; a PR reviewer may also write tests that prove a problem and leave uncommitted red tests behind. This guide serves the opposite side — **adjudicating and remediating review comments**: once the author has one or more compatible review.md files, the author decides, finding by finding, how each should be handled.
+`/review-plan` and `/review-pr` are **problem production**: the reviewer lists problems in the plan or the code as evidence-backed findings; a PR reviewer may also write tests that prove a problem, save a test-only patch and remove their additions before handoff. This guide serves the opposite side — **adjudicating and remediating review comments**: once the author has one or more compatible review.md files, the author decides, finding by finding, how each should be handled.
 
 **Core stance: reviewer and author are peer judges in a convergence process, with different responsibilities but no relationship of obedience.** The reviewer judges from their own context where a problem lies, and may suggest a repair along the way; the author judges from their own context, independently, whether the problem holds and how it should be repaired, and owns the actual patch; the next-round reviewer then judges whether the result meets the goal and invariants. Review is input, not command; the convergence criterion is evidence and final behavior, not whether the author followed the reviewer's original proposal.
 
@@ -16,7 +16,7 @@ Every finding must be **verified against reality** before adjudication, and the 
 2. **No performative agreement**: do not skip verification because the reviewer's wording is confident, or because multiple lanes raised it. Multiple lanes independently raising the same problem is **stronger evidence** (worth verifying first), but N lanes can share the same misreading — corroboration raises priority, it does not replace verification.
 3. **Adjudicate the problem claim and the repair suggestion separately**: a finding's problem claim is a claim to be verified; the "possible fix" is only a candidate starting point offered by the reviewer, not a specification, and it does not automatically become correct because the problem is confirmed. The author first, without relying on that suggestion, independently derives from source, tests, the goal, and the architecture SOT the **root cause, the post-repair postcondition, the true Owner, and the upper-level invariants that must be preserved**; then treats the reviewer's suggestion as one candidate and, by its actual quality, adopts it as-is, adjusts it, or replaces it with a better solution. A suggestion that removes a local symptom but breaks upper-level invariants such as lifecycle, visibility, ownership, or adjacent state transitions is still a wrong repair; copying it merely because the finding itself holds is forbidden.
 4. **Rank conflicts by credibility**: actual behavior of source and tests > official documentation > plan text / PR description / commit message / review wording.
-5. **The author side does modify the repository, but only for verified APPLY classes (valid-issue / partial)**; non-APPLY comments never modify the repository (the reviewer's own tests are still landed or removed, see "Taking ownership of PR reviewer tests"), and land as REJECT (no developer action needed, one line of record) or FLAG (handed to the developer for decision, see the "Not adopted" section below) according to their **fixed disposition** — scope expansion / over-engineering / pure contradiction of an established decision and the like are fixed REJECT (not adopted, **not escalated**), while genuine open choices / lane conflicts are fixed FLAG (escalated). plan/pr land through `commit-and-push` by default. When a genuine open choice is met while judging **whether a review should be adopted**, it must be escalated rather than decided unilaterally.
+5. **The author side does modify the repository, but only for verified APPLY classes (valid-issue / partial)**; non-APPLY comments never modify the repository (saved reviewer probe patches are still adjudicated and legacy additions cleaned up, see "Taking ownership of PR reviewer tests"), and land as REJECT (no developer action needed, one line of record) or FLAG (handed to the developer for decision, see the "Not adopted" section below) according to their **fixed disposition** — scope expansion / over-engineering / pure contradiction of an established decision and the like are fixed REJECT (not adopted, **not escalated**), while genuine open choices / lane conflicts are fixed FLAG (escalated). plan/pr land through `commit-and-push` by default. When a genuine open choice is met while judging **whether a review should be adopted**, it must be escalated rather than decided unilaterally.
 6. **Claim is true ≠ applying it is safe; manual-test protection applies only to PR dispositions that already have that evidence.** address-review-comments in PR mode usually runs **after manual testing** — the questioned behavior has already been manually verified to work by the author (code-review-guide "Review context: existing behavior is a verified baseline"). So a PR finding "holding" does not mean "changing it accordingly" is safe: whenever the repair would change verified runtime behavior, the adoption bar is positive evidence (a reachable input + a wrong output that manual testing missed); if that cannot be produced, go strengthen-with-test or FLAG. A PR that is truly abandon-level is still decided by the developer according to the review verdict, not salvaged finding by finding by this process.
 7. **GOAL & SCOPE GATE — every deduped finding and sync item must pass it, before any APPLY or repair design.** Judge against the established goal (plan: `## Goal`; pr: the consistent locked goal recorded by every lane): (a) the repair request exceeds the goal (→ scope-change); (a′) it advances an explicit non-goal (skip if none, → scope-change); (b) it overturns, expands, shrinks, or redefines the goal (→ violates-stated-goal); (c) it adds speculative robustness for failure modes outside the goal contract (→ over-engineering / robustness-not-in-goal); (d) in an incremental round it targets unchanged content for the first time, with no relationship to the delta (→ review-scope-violation). Any hit is REJECT and must not be APPLY. For a PR, (a) is judged by code-review-guide "Goal-relevance admission", **which also covers incidental defects that really exist in the diff but whose repair request does not serve the goal**; only the developer changes the goal.
    Pointing out a delivery shortfall against the goal, or a PR's secondary purpose, is still adjudicated as usual and is not a goal change. The reachable-input + wrong-output exemption and the ambiguous-provenance exemption of (c)(d) apply only to those two questions and **do not exempt (a)/(a′)/(b)**. A real defect can also be out of scope; Good Samaritan, a red test, multiple lanes agreeing, or a previous APPLY cannot supply the authorization. A repair request confirmed to be outside the goal is fixed REJECT(scope-change), and must not be turned into APPLY-SAFE, strengthen-with-test, or FLAG because it is "useful". A real out-of-goal defect goes to the deferred list as a follow-up PR candidate (see scope-change below); the author never creates the issue, split, revert, or goal change itself.
@@ -40,7 +40,7 @@ Whoever gathers the evidence, the following do not change:
 - A truth assessment judges only the **problem claim**, it does not verify the reviewer's repair suggestion. APPLY likewise means only "this problem should be fixed", not "the reviewer's solution should be implemented"; the repair direction must be derived independently by main from the same first-party context, and main is responsible for it.
 - **Every disposition in the ledger must carry a first-party citation** (`path:line`, a section name, or a command and its output). This is the only credential the developer can spot-check for "was it really verified" — being unable to write a citation means it was not verified, which is more direct than any process boundary.
 - **Delegated subagents are read-only on the repository and Git**: they do not write business files, do not add/commit/push, do not output a disposition, and do not expand the review surface along the way. How many to delegate and how to group them is main's call, but they must not cite each other's findings.
-- **Do not touch the repository before every claim is adjudicated.** Any repair would turn reviewer claims that are not yet adjudicated into write operations prematurely.
+- **Do not make repair writes before every claim is adjudicated.** Main may temporarily apply/remove test-only probe additions to verify evidence as specified in "Taking ownership of PR reviewer tests"; production edits and repairs still wait for unified adjudication.
 
 ### Bounded verification: establish the facts and the goal relationship, then rule on scope independently
 
@@ -145,39 +145,37 @@ Verifying a single comment is only the foundation. With multiple lanes in parall
 
 ## Taking ownership of PR reviewer tests
 
-Tests left by the reviewer are regression evidence pending adjudication, including new files that still run red and new cases in existing test files. They are identified
-from the working tree as well as from the test paths cited in findings: every uncommitted new test file or new case the review rounds left counts, including a
-green probe that opened no finding (review-pr records it only under "本轮探索区域 / 运行的测试"). The author first reconciles each
-test with its claim, its actual assertion, and its worktree hunk; red by itself is not worktree pollution, and does not automatically prove the reviewer's
-expectation correct. Whether to adopt is still decided by the same verification and adjudication rules, and tests are not modified before every claim is adjudicated.
+Reviewer probes arrive as saved test-only patches in ignored round artifacts, including green probes with no finding. Reviewers use the feature
+author's worktree, tell the owner the exact test paths before writing, and remove only their additions before handoff; they never create a separate
+review clone, worktree or target. See [Parallel writes](../../orchestration/parallel-writes.md#reviews-and-investigations).
 
-Before adopting or rewriting a probe, apply [code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates). The "adds coverage" decisions below use that behavioral criterion.
+Inventory each patch, its test paths/cases, claim or "no finding", command and red/green result. Also identify any legacy reviewer additions still
+in the working tree; distinguish them from owner changes before touching them. Red output alone neither proves the expectation correct nor
+requires adopting the test. Independently reconcile the assertion with first-party behavior and the goal. To verify a claim, main may temporarily
+apply only the test additions, run them narrowly with the owner's target and room build slot, then remove only those additions and restore the
+pre-probe state. This evidence step permits no production edits, assertion weakening or repair before unified adjudication.
 
-For an APPLY repair, the author takes over the corresponding test and adds it to the repair allowlist, and after fixing the root cause runs it narrowly to prove red turns green; adopted
-green coverage cases are kept as well. Tests should follow code-review-guide "Probe test naming and ownership", renaming them by actual
-behavior or merging them into existing test files when needed; never manufacture green by deleting the test, changing it to skip/todo, weakening a valid assertion, or mocking out the behavior under test.
-When the original assertion really is wrong, the rewrite must have independent first-party evidence and be explained in triage.
+The author chooses whether to adopt/rewrite each probe or leave its patch unadopted, recording the choice and reason in triage.md. Apply
+[code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates)
+and "Probe test naming and ownership" to adopted tests. For APPLY, prove the root cause fixed using the original probe or an independently
+justified replacement regression, narrowly confirming red turns green. Never manufacture green by deleting valid assertions, skipping tests or
+mocking out the behavior; a wrong assertion needs first-party evidence and a triage explanation. Leaving the original patch unadopted does not
+remove this repair-evidence obligation.
 
-**No reviewer-added test stays uncommitted.** The worktree is shared: a leftover probe makes it dirty, so split-pr PREFLIGHT fails and
-worktree-close stops to ask before discarding. Every reviewer-added test file or case ends the run in exactly one of these states, and the outcome is recorded per test in triage.md:
+Every probe ends in one of these recorded states:
 
-- **committed**, as its own test or integrated into an existing test (renamed / merged per "Probe test naming and ownership"), green;
-- **removed**, with the reason recorded in triage.md.
+- **adopted**, committed green as a normal test or integrated into an existing test;
+- **unadopted**, saved with its assertion, output and reason in ignored evidence, with no reviewer additions left in repository content.
 
-Which one follows from the claim's disposition; the disposition itself is unchanged by this rule, and landing a test is not a repair:
+This applies to green probes, non-APPLY claims and probes with no finding as well. A red FLAG probe stays unadopted evidence for the developer;
+committing it red or rewriting it to choose behavior would decide for them. Clean up legacy leftover probes by removing only the reviewer's
+unadopted additions, never the author's or another reviewer's work. Removal cannot manufacture green for an admitted APPLY problem, and scoped
+runs never adopt a patch outside the chunk's test allowlist.
 
-- APPLY: committed with the repair, red turned green as above.
-- REJECT or HOUSEKEEPING: a green test is committed when it adds coverage. A red test for a claim that does not hold is rewritten to assert the
-  correct (current, verified) behavior and committed when it still adds coverage; otherwise it is folded into an existing test or removed.
-- No finding (a green probe the reviewer kept without a finding): committed when it adds coverage, otherwise folded into an existing test or removed.
-- FLAG: a green test that pins current behavior is committed when it adds coverage; a red test is removed and its path, assertion, and red output go
-  into the FLAG item's evidence, so the developer can restore it if they rule for the change. Committing it red or rewritten would decide for the developer.
-- Removal is never a way to manufacture green for an APPLY claim, and a scoped run removes a probe outside the chunk's test allowlist rather than expanding it.
-
-PR mode by default has `commit-and-push` commit and push these tests together with the repair, or on their own when there is no APPLY; a test coming from the reviewer,
-already dirty before the author took over, or still untracked, is no reason to leave it out of the commit. Before committing, check each file/case hunk item by item; after pushing,
-check that they really entered the commit and the same-name remote branch, and that `git status --porcelain --untracked-files=all -- <reviewer test paths>` prints nothing.
-`--no-commit-and-push` still forbids landing, and only reports the verification results and the tests awaiting commit.
+PR mode uses `commit-and-push` for adopted tests together with the repair, or alone when there is no APPLY. Check explicit hunks and new files,
+prove adopted tests entered the commit and same-name remote branch, and verify
+`git status --porcelain --untracked-files=all -- <reviewer test paths>` is empty after landing. `--no-commit-and-push` leaves adopted tests
+explicitly awaiting commit; temporary verification additions must still be removed. Keep required patch evidence outside future gate inputs.
 
 ## Landing and boundaries (principles)
 

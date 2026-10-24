@@ -289,7 +289,7 @@ A bug is "an unanticipated edge case causing failure", not a supposition. The me
 Reporting requirements (TDD principle):
 
 When a bug is found, the review agent must provide all three of the following:
-1. **Reproduction test** — actually write the test and run it narrowly to red (see "Verification boundary"), recording the test name + test file relative path + the observed failing assertion in the evidence. The test file stays in the working tree for the author. If you cannot get a red run, it is not a Bug finding
+1. **Reproduction test** — actually write the test and run it narrowly to red (see "Verification boundary"), recording the test name + test file relative path + the observed failing assertion in the evidence. Save a test-only patch with the result and remove your additions before handoff (see "Probe test lifecycle"). If you cannot get a red run, it is not a Bug finding
 2. **Fix suggestion** — a concrete fix (which file to change, how, and why this way)
 3. **Regression test** — how the test should turn green after the fix (the assertions expected to pass)
 
@@ -405,7 +405,7 @@ usual.
 ### Do not
 
 - **Change any non-test file**: production code, configuration, build scripts, docs, and plan files are never touched. Adjusting the implementation to make a test go red is manufacturing your own evidence; the hypothesis does not stand.
-- **Git write operations**: `add` / `commit` / `checkout` / `stash` / `rebase` are all forbidden. Probe tests stay in the working tree for the author to handle (see below).
+- **Git write operations**: `add` / `commit` / `checkout` / `stash` / `rebase` are all forbidden. Save a test-only probe patch and remove your additions before handoff (see below).
 - **Run quality gates**: `just lint`, `cargo fmt --check`, `cargo clippy`, `just build`, and `just ci` / `just check` are all forbidden, **including** filtered forms. These are **the responsibility of CI and `gate-and-fix`**; a reviewer rerunning them does not change the gate verdict.
 - **Run unfiltered full test suites**: `just test`, `cargo nextest run` without a filter, and `just maintenance-test`.
   Live end-to-end checks (`just e2e`) do not enter the review side; scratch TUI runs under review-pr's rules do.
@@ -426,11 +426,16 @@ usual.
 
 ### Probe test lifecycle
 
-Probe tests **stay in the working tree, uncommitted**, and the author decides whether to adopt, rewrite, or delete them. Accordingly:
+Probe tests are temporary additions in the feature author's worktree. Tell the author the exact test paths and intended cases before writing,
+then run focused tests using the owner's binary/target and build slot. Save a patch of only your additions (including untracked test files),
+commands and red/green output in ignored round artifacts. Remove only your additions before handoff, including on interruption, and prove the
+affected paths match their pre-probe state; never discard another writer's work. The author decides whether to adopt/rewrite the patch or leave it
+unadopted. Do not create a reviewer clone, worktree or target; see [Parallel writes](../../orchestration/parallel-writes.md#reviews-and-investigations).
+Accordingly:
 
 - **Do not overwrite another lane's probe.** Follow the explicit file write ownership from the previous section; when changing an existing test file, only add or remove your own cases, never others'.
-- **Changing existing test files has a cost**: existing tests are part of the author's verified baseline. Deleting or weakening an existing assertion is not a review action; it is changing the baseline — only adding cases is allowed, plus correcting an assertion that is genuinely wrong (in which case the correction itself must become a finding explaining what was wrong with the original assertion).
-- **A green probe is not a finding.** If it runs green after writing, the current behavior is correct for that input: withdraw that suspicion and open no finding in any dimension for it. The probe stays in the working tree, and one line is recorded in review.md "本轮探索区域 / 运行的测试" (this round's exploration areas / tests run), for the author to decide whether to adopt or delete it.
+- **Changing existing test files has a cost**: existing tests are part of the author's verified baseline. Deleting or weakening an existing assertion is not a review action; it is changing the baseline — only adding cases is allowed. If an existing assertion is wrong, report it with first-party evidence for the author to adjudicate and correct.
+- **A green probe is not a finding.** If it runs green after writing, the current behavior is correct for that input: withdraw that suspicion and open no finding in any dimension for it. Record its saved patch and result in review.md "本轮探索区域 / 运行的测试" (this round's exploration areas / tests run), then remove your additions; the author decides whether to adopt it.
 - **Never leave a red test without a finding.** A red run must become a finding in the corresponding dimension, explaining which line holds the root cause.
 
 ### Suspicions that cannot be proven may still be reported, but must be marked "unproven"
