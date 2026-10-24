@@ -313,3 +313,21 @@ mod fingerprint_tests;
 
 #[path = "auto_ui_test.rs"]
 mod automatic_ui;
+
+impl App {
+    pub(crate) fn test_prompt_clock(
+        &self,
+        method: &crate::protocol::api::schema::Method,
+    ) -> Option<crate::terminal::runtime::SubmissionClock> {
+        use crate::protocol::api::schema::Method;
+        let target = match method {
+            Method::AgentPrompt(params) => &params.target,
+            Method::AgentPromptIfIdle(params) => &params.target,
+            Method::AgentPromptIfUnbound(params) => &params.target,
+            _ => return None,
+        };
+        let resolved = self.resolve_agent_target(target).ok()?;
+        self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)?
+            .test_submission_clock()
+    }
+}

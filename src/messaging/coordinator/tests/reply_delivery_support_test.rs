@@ -33,11 +33,14 @@ struct Terminal {
     draft: String,
     submitted: Vec<String>,
     captured_screen: Option<&'static str>,
+    clock: crate::terminal::runtime::SubmissionClock,
 }
 
 struct NativeServer {
     app: App,
     terminals: BTreeMap<AgentId, Terminal>,
+    next_pump_pause: Duration,
+    last_submission_response: Option<Value>,
 }
 
 impl NativeServer {
@@ -52,6 +55,8 @@ impl NativeServer {
                 crate::server::api::EventHub::default(),
             ),
             terminals: BTreeMap::new(),
+            next_pump_pause: Duration::ZERO,
+            last_submission_response: None,
         }
     }
 
@@ -87,6 +92,8 @@ impl NativeServer {
             &[],
         );
         let (runtime, input) = TerminalRuntime::test_with_channel_capacity(240, 32, 32);
+        let clock = runtime.test_submission_clock().unwrap();
+        clock.pause();
         runtime.test_process_pty_bytes(screen(provider, "").as_bytes());
         self.app.state.insert_test_runtime(pane, runtime);
         let ResponseResult::AgentList { agents } =
@@ -107,6 +114,7 @@ impl NativeServer {
                 draft: String::new(),
                 submitted: Vec::new(),
                 captured_screen: None,
+                clock,
             },
         );
         AgentRuntimeIdentity {
@@ -167,11 +175,17 @@ impl NativeServer {
             method,
         };
         let (tx, rx) = mpsc::channel();
+        let submission = crate::protocol::api::submission::method_budget(&request.method).is_some();
         let encoded = if self
             .app
             .handle_deferred_agent_api_request(request.clone(), tx)
         {
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let pause = std::mem::take(&mut self.next_pump_pause);
+            if !pause.is_zero() {
+                // Fault injection: model the fake provider losing CPU time.
+                std::thread::sleep(pause);
+            }
+            let deadline = Instant::now() + crate::terminal::runtime::NATIVE_TEST_TIMEOUT;
             loop {
                 self.pump();
                 if let Ok(response) = rx.try_recv() {
@@ -186,7 +200,10 @@ impl NativeServer {
         } else {
             self.app.handle_api_request(request)
         };
-        let response = serde_json::from_str(&encoded).unwrap();
+        let response: Value = serde_json::from_str(&encoded).unwrap();
+        if submission {
+            self.last_submission_response = Some(response.clone());
+        }
         crate::protocol::api::client::parse_response_value(response)
             .map(|r| r.result)
             .map_err(|error| TransportError {
@@ -206,6 +223,27 @@ struct Native(Arc<Mutex<NativeServer>>);
 impl Transport for Native {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         self.0.lock().unwrap().request(method)
+    }
+}
+
+// The provider and its submission clock are scripted. Leave time for the
+// fixture to be scheduled; production/native budget regressions use the real
+// transport separately. Non-submission RPCs retain their real socket deadlines.
+#[cfg(unix)]
+struct FixtureSocketTransport(BusTransport);
+
+#[cfg(unix)]
+impl Transport for FixtureSocketTransport {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        self.0.request_using(method, |client, request, timeout| {
+            let timeout =
+                if crate::protocol::api::submission::method_budget(&request.method).is_some() {
+                    crate::terminal::runtime::NATIVE_TEST_TIMEOUT
+                } else {
+                    timeout
+                };
+            client.request_value_with_timeout(request, timeout)
+        })
     }
 }
 
@@ -280,6 +318,18 @@ pub(crate) struct Delivery {
 }
 
 impl Delivery {
+    pub(crate) fn real_submission_time(&self, agent: AgentId) {
+        self.native.lock().unwrap().terminals[&agent].clock.resume();
+    }
+
+    pub(crate) fn pause_next_provider_pump(&self, pause: Duration) {
+        self.native.lock().unwrap().next_pump_pause = pause;
+    }
+
+    pub(crate) fn last_submission_response(&self) -> Option<Value> {
+        self.native.lock().unwrap().last_submission_response.clone()
+    }
+
     pub(crate) fn new(providers: &[Provider], in_master: bool) -> Self {
         let dir = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "brd-{}-{}",
@@ -749,9 +799,9 @@ impl Delivery {
         #[cfg(not(target_os = "macos"))]
         let path = self.dir.join("api.sock");
         self.socket = Some(SocketServer::new(path.clone(), self.native.clone()));
-        self.worker_mut().transport = Box::new(BusTransport::new(
+        self.worker_mut().transport = Box::new(FixtureSocketTransport(BusTransport::new(
             crate::protocol::api::client::ConnectionTarget::SocketPath(path),
-        ));
+        )));
     }
     #[cfg(unix)]
     pub(crate) fn pause_server(&self, paused: bool) {
@@ -767,9 +817,9 @@ impl Delivery {
             Worker::open(self.dir.clone(), Box::new(Native(self.native.clone()))).unwrap();
         #[cfg(unix)]
         if let Some(socket) = &self.socket {
-            worker.transport = Box::new(BusTransport::new(
+            worker.transport = Box::new(FixtureSocketTransport(BusTransport::new(
                 crate::protocol::api::client::ConnectionTarget::SocketPath(socket.path.clone()),
-            ));
+            )));
         }
         worker.dev_enabled = true;
         self.worker = Some(worker);

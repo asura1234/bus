@@ -152,6 +152,7 @@ async fn focus_events_are_forwarded_when_enabled() {
         io: PaneRuntimeIo::TestChannel {
             sender: tx,
             resize_tx,
+            clock: crate::terminal::runtime::SubmissionClock::default(),
         },
         current_size: Cell::new((80, 24, 0, 0)),
         child_pid: Arc::new(AtomicU32::new(0)),
@@ -188,6 +189,7 @@ async fn focus_events_are_suppressed_when_disabled() {
         io: PaneRuntimeIo::TestChannel {
             sender: tx,
             resize_tx,
+            clock: crate::terminal::runtime::SubmissionClock::default(),
         },
         current_size: Cell::new((80, 24, 0, 0)),
         child_pid: Arc::new(AtomicU32::new(0)),

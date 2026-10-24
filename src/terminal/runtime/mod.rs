@@ -7,7 +7,10 @@ mod io;
 mod read;
 mod shutdown;
 mod submission;
+mod submission_clock;
 pub(crate) use submission::{InputObservation, PromptNotShown};
+#[cfg(test)]
+pub(crate) use submission_clock::{SubmissionClock, NATIVE_TEST_TIMEOUT};
 pub(crate) mod spawn;
 
 #[cfg(all(test, unix))]

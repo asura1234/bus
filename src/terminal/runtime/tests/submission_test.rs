@@ -16,7 +16,7 @@ async fn a_delayed_start_reserves_withdrawal_time_before_typing() {
         )
         .unwrap();
     let error = completion
-        .recv_timeout(Duration::from_millis(100))
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
         .expect("no confirmation time remains for a new paste")
         .unwrap_err();
     assert!(
@@ -42,6 +42,7 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
         clear: vec![Bytes::from_static(b"\x01")],
         deadline: std::cell::Cell::new(expired),
         hard_deadline: expired,
+        clock: SubmissionClock::default(),
     };
     let result = submission.withdraw_unshown(io::Error::new(io::ErrorKind::TimedOut, "expired"));
     assert!(result.is_err_and(|error| error.kind() == io::ErrorKind::TimedOut));
@@ -55,6 +56,8 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
 async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     runtime.test_process_pty_bytes("›\r\n\r\nGPT-6".as_bytes());
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
     let submission = ObservedSubmission {
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
@@ -68,8 +71,9 @@ async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
         }),
         enter: Bytes::from_static(b"\r"),
         clear: vec![Bytes::from_static(b"\x01")],
-        deadline: std::cell::Cell::new(Instant::now() + Duration::from_secs(2)),
-        hard_deadline: Instant::now() + Duration::from_secs(3),
+        deadline: std::cell::Cell::new(clock.now() + Duration::from_secs(2)),
+        hard_deadline: clock.now() + Duration::from_secs(3),
+        clock,
     };
     submission.clear_draft().unwrap();
     runtime.test_process_pty_bytes(
@@ -89,7 +93,9 @@ async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
 #[tokio::test]
 async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
-    let deadline = Instant::now() + Duration::from_millis(500);
+    let clock = runtime.test_submission_clock().unwrap();
+    let deadline = clock.now() + crate::terminal::runtime::NATIVE_TEST_TIMEOUT;
+    let observed_clock = clock.clone();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = calls.clone();
     let submission = ObservedSubmission {
@@ -104,9 +110,10 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
                 0..=2 => InputObservation::Empty,
                 3 | 4 => InputObservation::Pending,
                 _ => {
-                    std::thread::sleep(
+                    observed_clock.pause();
+                    observed_clock.advance(
                         (deadline + Duration::from_millis(50))
-                            .saturating_duration_since(Instant::now()),
+                            .saturating_duration_since(observed_clock.now()),
                     );
                     InputObservation::Accepted
                 }
@@ -116,6 +123,7 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         clear: vec![Bytes::from_static(b"\x01")],
         deadline: std::cell::Cell::new(deadline),
         hard_deadline: deadline + Duration::from_secs(1),
+        clock,
     };
     let result = submission.run(Bytes::from_static(b"hello"), Duration::ZERO);
     assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"hello"));

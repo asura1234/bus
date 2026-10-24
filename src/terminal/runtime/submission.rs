@@ -1,4 +1,5 @@
 //! Observe the composer between writes; retry only Enter for the owned draft.
+use super::submission_clock::SubmissionClock;
 use super::{io::PaneRuntimeIo, TerminalRuntime};
 use crate::protocol::api::submission::{confirmation_budget, maximum_budget, WITHDRAW_GRACE};
 use crate::terminal::emulator::PaneTerminal;
@@ -53,6 +54,7 @@ struct ObservedSubmission {
     clear: Vec<Bytes>,
     deadline: std::cell::Cell<Instant>,
     hard_deadline: Instant,
+    clock: SubmissionClock,
 }
 
 impl TerminalRuntime {
@@ -67,7 +69,8 @@ impl TerminalRuntime {
         deadline: Option<Instant>,
         inspect: impl Fn(&str) -> InputObservation + Send + 'static,
     ) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
-        let now = Instant::now();
+        let clock = self.io.submission_clock();
+        let now = clock.now();
         let hard_deadline = deadline
             .unwrap_or(now + maximum_budget(delay))
             .min(now + maximum_budget(delay));
@@ -83,6 +86,7 @@ impl TerminalRuntime {
                 (now + confirmation_budget(delay)).min(hard_deadline - WITHDRAW_GRACE),
             ),
             hard_deadline,
+            clock,
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -98,7 +102,7 @@ impl ObservedSubmission {
     }
 
     fn check_deadline(&self) -> io::Result<()> {
-        if Instant::now() >= self.deadline.get() {
+        if self.clock.now() >= self.deadline.get() {
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "Provider did not accept prompt before submission deadline",
@@ -128,11 +132,7 @@ impl ObservedSubmission {
         )?;
         drop(guard);
         completion
-            .recv_timeout(
-                self.deadline
-                    .get()
-                    .saturating_duration_since(Instant::now()),
-            )
+            .recv_timeout(self.clock.remaining(self.deadline.get()))
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
     }
 
@@ -147,6 +147,7 @@ impl ObservedSubmission {
     }
 
     fn clear_step(&self, key: Bytes) -> io::Result<bool> {
+        let generation = self.clock.generation();
         self.check_deadline()?;
         let guard = self
             .content_lock
@@ -170,15 +171,11 @@ impl ObservedSubmission {
         )?;
         drop(guard);
         completion
-            .recv_timeout(
-                self.deadline
-                    .get()
-                    .saturating_duration_since(Instant::now()),
-            )
+            .recv_timeout(self.clock.remaining(self.deadline.get()))
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
         // Keep editing keys in separate input events for Ink providers. Check
         // for emptiness again before sending the next key or another line kill.
-        std::thread::sleep(Duration::from_millis(25));
+        self.clock.sleep(Duration::from_millis(25), generation);
         Ok(false)
     }
 
@@ -191,7 +188,7 @@ impl ObservedSubmission {
             return Err(timeout);
         }
         self.deadline
-            .set((Instant::now() + WITHDRAW_GRACE).min(self.hard_deadline));
+            .set((self.clock.now() + WITHDRAW_GRACE).min(self.hard_deadline));
         self.clear_draft()?;
         Err(io::Error::other(PromptNotShown))
     }
@@ -210,14 +207,19 @@ impl ObservedSubmission {
         self.write(text, delay)?;
         // Paste may be buffered by the provider after the PTY flush. Wait for
         // the owned draft to render before attempting the first Enter.
-        while self.observe() != InputObservation::Pending {
+        loop {
+            let generation = self.clock.generation();
+            if self.observe() == InputObservation::Pending {
+                break;
+            }
             if let Err(error) = self.check_deadline() {
                 return self.withdraw_unshown(error);
             }
-            std::thread::sleep(Duration::from_millis(20));
+            self.clock.sleep(Duration::from_millis(20), generation);
         }
         let mut last_enter = None;
         loop {
+            let generation = self.clock.generation();
             let guard = self
                 .content_lock
                 .lock()
@@ -235,7 +237,9 @@ impl ObservedSubmission {
             // content lock. Confirm acceptance first; only further input expires.
             self.check_deadline()?;
             let retry = observation == InputObservation::Pending
-                && last_enter.is_none_or(|at: Instant| at.elapsed() >= Duration::from_millis(250));
+                && last_enter.is_none_or(|at: Instant| {
+                    self.clock.now().saturating_duration_since(at) >= Duration::from_millis(250)
+                });
             let completion = if retry {
                 // Inspect and enqueue under the same lock as PTY rendering.
                 // No paste retry: a lost response must never duplicate text.
@@ -251,15 +255,11 @@ impl ObservedSubmission {
             drop(guard);
             if let Some(completion) = completion {
                 completion
-                    .recv_timeout(
-                        self.deadline
-                            .get()
-                            .saturating_duration_since(Instant::now()),
-                    )
+                    .recv_timeout(self.clock.remaining(self.deadline.get()))
                     .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
-                last_enter = Some(Instant::now());
+                last_enter = Some(self.clock.now());
             }
-            std::thread::sleep(Duration::from_millis(20));
+            self.clock.sleep(Duration::from_millis(20), generation);
         }
     }
 }

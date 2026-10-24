@@ -143,6 +143,16 @@ impl TerminalRuntime {
             .process_pty_bytes(self.pane_id, 0, bytes, &tx, |_| None);
         self.content_seq.fetch_add(1, Ordering::Release);
         self.compression.wake();
+        if let Some(clock) = self.test_submission_clock() {
+            clock.rendered();
+        }
+    }
+
+    pub(crate) fn test_submission_clock(&self) -> Option<super::SubmissionClock> {
+        match &self.io {
+            PaneRuntimeIo::TestChannel { clock, .. } => Some(clock.clone()),
+            PaneRuntimeIo::Actor(_) => None,
+        }
     }
 
     /// A detached PTY chunk writer for tests that finish a frame while the
@@ -151,6 +161,7 @@ impl TerminalRuntime {
         let terminal = self.terminal.clone();
         let lock = self.content_write_lock.clone();
         let seq = self.content_seq.clone();
+        let clock = self.test_submission_clock();
         let pane = self.pane_id;
         move |bytes| {
             let _guard = lock.lock().unwrap_or_else(|error| error.into_inner());
@@ -158,6 +169,9 @@ impl TerminalRuntime {
             let (tx, _rx) = mpsc::channel(1);
             let _ = terminal.process_pty_bytes(pane, 0, bytes, &tx, |_| None);
             seq.fetch_add(1, Ordering::Release);
+            if let Some(clock) = &clock {
+                clock.rendered();
+            }
         }
     }
 
@@ -195,6 +209,7 @@ impl TerminalRuntime {
                 io: PaneRuntimeIo::TestChannel {
                     sender: tx,
                     resize_tx,
+                    clock: super::SubmissionClock::default(),
                 },
                 current_size: Cell::new((rows, cols, 0, 0)),
                 child_pid: Arc::new(AtomicU32::new(0)),
