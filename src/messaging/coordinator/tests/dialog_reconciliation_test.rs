@@ -308,3 +308,71 @@ fn losing_the_orchestrator_binding_does_not_cancel_an_open_episode_fallback() {
         1
     );
 }
+
+#[test]
+fn resuming_a_legacy_native_confirmation_preserves_its_receipt() {
+    let (mut f, worker, _, notice) = queued_worker_notice();
+    f.deliver();
+    assert_eq!(f.request(notice).phase, RequestPhase::Active);
+    assert!(!f.request(notice).uncertain_outcome);
+    assert!(!f.request(notice).trusted_start_bound);
+    let mut legacy = serde_json::to_value(&f.worker.state).unwrap();
+    legacy["requests"][notice.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("dialog_delivery");
+    let legacy: crate::messaging::model::BusState = serde_json::from_value(legacy).unwrap();
+    let resume = f.dir.join("legacy-resume");
+    JsonStore::new(resume.join("state.json"))
+        .save(&legacy)
+        .unwrap();
+    let mut resumed = Worker::open(resume, Box::new(Native(f.native.clone()))).unwrap();
+    resumed
+        .expire_unconfirmed_submissions(
+            f.request(notice).prompt.submitted_at_ms + crate::messaging::model::QUEUED_STALL_MS,
+        )
+        .unwrap();
+    assert_eq!(
+        resumed.state.agent(worker).unwrap().dialog_notice_to,
+        Some(DialogNoticeTo::Orchestrator(notice))
+    );
+    assert_eq!(
+        resumed.state.request(notice).unwrap().dialog_delivery,
+        Some(crate::messaging::model::DialogNoticeDelivery::Confirmed)
+    );
+}
+
+#[test]
+fn resuming_a_legacy_unknown_write_does_not_invent_a_confirmation() {
+    for uncertain in [false, true] {
+        let (f, worker, lead, notice) = queued_worker_notice();
+        let mut state = f.worker.state.clone();
+        state.begin_steering(notice, lead).unwrap();
+        if uncertain {
+            state
+                .record_steering(
+                    notice,
+                    SubmissionOutcome::Uncertain {
+                        message: "lost native outcome".into(),
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(state.request(notice).unwrap().dialog_delivery, None);
+        let resume = f.dir.join("legacy-unknown-resume");
+        JsonStore::new(resume.join("state.json"))
+            .save(&state)
+            .unwrap();
+        let mut resumed = Worker::open(resume, Box::new(Native(f.native.clone()))).unwrap();
+        assert_eq!(resumed.state.request(notice).unwrap().dialog_delivery, None);
+        resumed
+            .expire_unconfirmed_submissions(
+                f.request(notice).prompt.submitted_at_ms + crate::messaging::model::QUEUED_STALL_MS,
+            )
+            .unwrap();
+        assert_eq!(
+            resumed.state.agent(worker).unwrap().dialog_notice_to,
+            Some(DialogNoticeTo::Developer)
+        );
+    }
+}

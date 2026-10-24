@@ -111,6 +111,28 @@ impl BusState {
         })
     }
 
+    /// Before receipt storage existed, Active without uncertainty already
+    /// proved a native confirmation (or a trusted hook). Import that proof
+    /// before settlement can replace Active with the group's terminal phase.
+    pub(crate) fn upgrade_dialog_notice_delivery(&mut self) {
+        let confirmed: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.dialog_delivery.is_none()
+                    && request.phase == RequestPhase::Active
+                    && !request.uncertain_outcome
+                    && self.dialog_notice_worker(request.id).is_some()
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in confirmed {
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.dialog_delivery = Some(DialogNoticeDelivery::Confirmed);
+            }
+        }
+    }
+
     /// Persist alongside begin_submission/begin_steering, before native I/O.
     pub(crate) fn begin_dialog_notice_write(&mut self, id: RequestId, now_ms: u64) {
         if self.dialog_notice_worker(id).is_some() {
