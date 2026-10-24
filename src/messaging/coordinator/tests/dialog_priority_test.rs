@@ -48,13 +48,24 @@ fn blocked_behind_other_room(
 
 #[test]
 fn blocked_dialog_reaches_an_idle_background_orchestrator_in_a_new_turn() {
-    let (mut f, _, lead, head, notice) = blocked_behind_other_room(true, false);
+    let (mut f, codex, lead, head, notice) = blocked_behind_other_room(true, false);
     f.status(RuntimeStatus::Idle);
     f.deliver();
     assert_eq!(f.reply(lead).as_deref(), Some("pending"));
     assert_eq!(f.request(notice).phase, RequestPhase::Active);
     assert_eq!(f.request(notice).group, None);
     assert_eq!(f.worker.state.queued_requests(f.agent), &[head]);
+    assert_eq!(
+        f.request(notice).dialog_delivery,
+        Some(crate::messaging::model::DialogNoticeDelivery::Confirmed)
+    );
+    f.expire_after_reconciliation(
+        f.request(notice).prompt.submitted_at_ms + crate::messaging::model::QUEUED_STALL_MS,
+    );
+    assert_eq!(
+        f.worker.state.agent(codex).unwrap().dialog_notice_to,
+        Some(DialogNoticeTo::Orchestrator(notice))
+    );
 }
 
 #[test]
@@ -103,14 +114,12 @@ fn blocked_dialog_falls_back_on_its_own_deadline_when_orchestrator_is_blocked() 
     let (mut f, codex, lead, head, notice) = blocked_behind_other_room(true, false);
     let at = f.request(notice).prompt.submitted_at_ms;
     f.status(RuntimeStatus::Blocked);
-    f.worker
-        .expire_queued_requests(at + crate::messaging::model::QUEUED_STALL_MS - 1)
-        .unwrap();
+    f.expire_after_reconciliation(at + crate::messaging::model::QUEUED_STALL_MS - 1);
     assert_eq!(f.request(notice).phase, RequestPhase::Queued);
     // Ongoing owner activity must not reset this notice's delivery deadline.
     f.now = at + crate::messaging::model::QUEUED_STALL_MS - 1;
     f.status(RuntimeStatus::Blocked);
-    f.worker.expire_queued_requests(f.now).unwrap();
+    f.expire_after_reconciliation(f.now);
     assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
     assert_eq!(
         f.worker.state.agent(codex).unwrap().dialog_notice_to,
@@ -128,7 +137,7 @@ fn blocked_dialog_falls_back_on_its_own_deadline_when_orchestrator_is_blocked() 
     assert!(notices[0]
         .text
         .contains("The orchestrator did not receive this"));
-    f.worker.expire_queued_requests(f.now + 60_000).unwrap();
+    f.expire_after_reconciliation(f.now + 60_000);
     assert_eq!(
         f.worker
             .state
@@ -160,6 +169,7 @@ fn dialog_priority_survives_reload_and_definite_rejection_without_reordering_ord
     let mut state = f.worker.store.load().unwrap().unwrap();
     assert_eq!(state.next_steering(f.agent), Some((notice, lead)));
     state.begin_steering(notice, lead).unwrap();
+    state.begin_dialog_notice_write(notice, f.request(notice).prompt.submitted_at_ms);
     state
         .record_steering(
             notice,
@@ -168,6 +178,7 @@ fn dialog_priority_survives_reload_and_definite_rejection_without_reordering_ord
             },
         )
         .unwrap();
+    assert_eq!(state.request(notice).unwrap().dialog_delivery, None);
     f.worker.save(state).unwrap();
     f.deliver();
     assert_eq!(f.request(notice).group, Some(lead));
@@ -189,9 +200,7 @@ fn an_uncertain_dialog_write_escalates_without_replaying_or_closing_its_active_g
         .unwrap();
     f.worker.save(state).unwrap();
     let at = f.request(notice).prompt.submitted_at_ms;
-    f.worker
-        .expire_queued_requests(at + crate::messaging::model::QUEUED_STALL_MS)
-        .unwrap();
+    f.expire_after_reconciliation(at + crate::messaging::model::QUEUED_STALL_MS);
     assert_eq!(
         f.worker.state.agent(codex).unwrap().dialog_notice_to,
         Some(DialogNoticeTo::Developer)
@@ -213,4 +222,25 @@ fn an_uncertain_dialog_write_escalates_without_replaying_or_closing_its_active_g
     assert_eq!(f.worker.state.queued_requests(f.agent), &[head]);
     f.deliver();
     assert_eq!(f.typed().len(), 1, "unknown writes must never be replayed");
+}
+
+#[test]
+fn a_steered_dialog_notice_left_submitting_by_a_restart_escalates_after_its_deadline() {
+    let (mut f, codex, lead, head, notice) = blocked_behind_other_room(false, true);
+    // `steer` saves the begun steering before the native write; a coordinator
+    // restart then loses the write's outcome entirely.
+    let mut state = f.worker.store.load().unwrap().unwrap();
+    state.begin_steering(notice, lead).unwrap();
+    f.worker.save(state).unwrap();
+    let reloaded = f.worker.store.load().unwrap().unwrap();
+    f.worker.save(reloaded).unwrap();
+    assert_eq!(f.request(notice).phase, RequestPhase::Submitting);
+    let at = f.request(notice).prompt.submitted_at_ms;
+    f.expire_after_reconciliation(at + crate::messaging::model::QUEUED_STALL_MS);
+    assert_eq!(
+        f.worker.state.agent(codex).unwrap().dialog_notice_to,
+        Some(DialogNoticeTo::Developer),
+        "an unrecorded native write is unconfirmed and must reach the developer"
+    );
+    assert_eq!(f.worker.state.queued_requests(f.agent), &[head]);
 }

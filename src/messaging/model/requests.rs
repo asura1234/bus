@@ -91,11 +91,18 @@ impl BusState {
         if request_state.phase != RequestPhase::Submitting {
             return Err(ModelError::InvalidTransition);
         }
+        if matches!(&outcome, SubmissionOutcome::DefinitelyRejected { .. })
+            && request_state.trusted_start_bound
+        {
+            return Err(ModelError::InvalidTransition);
+        }
+        self.record_dialog_notice_write(request, &outcome);
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
         match outcome {
             SubmissionOutcome::DefinitelyRejected { message } => {
-                if request_state.trusted_start_bound {
-                    return Err(ModelError::InvalidTransition);
-                }
                 request_state.phase = RequestPhase::Queued;
                 request_state.expected_launch_id = None;
                 request_state.submission_boundary = None;
@@ -493,6 +500,11 @@ impl BusState {
         if request_state.phase != RequestPhase::Submitting || !request_state.steered {
             return Err(ModelError::InvalidTransition);
         }
+        self.record_dialog_notice_write(request, &outcome);
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
         match outcome {
             SubmissionOutcome::Confirmed { .. } => request_state.phase = RequestPhase::Active,
             SubmissionOutcome::Uncertain { .. } => {

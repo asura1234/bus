@@ -29,6 +29,9 @@ impl Worker {
         state
             .fail_unconfirmed_submissions(now_ms)
             .map_err(|e| e.to_string())?;
+        state
+            .escalate_unconfirmed_dialog_notices(now_ms)
+            .map_err(|e| e.to_string())?;
         state.retain_worker_outcomes(now_ms);
         if state != self.state {
             self.save(state)?;

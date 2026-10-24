@@ -1,7 +1,7 @@
 //! Explicit recovery and terminal failure of unsubmitted queued requests.
 use super::{
-    Author, BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus,
-    QUEUED_STALL_MS,
+    Author, BusState, DialogNoticeDelivery, DialogNoticeTo, ModelError, RequestId, RequestPhase,
+    RuntimeStatus, SubmissionOutcome, QUEUED_STALL_MS,
 };
 
 impl BusState {
@@ -91,15 +91,52 @@ impl BusState {
     pub(crate) fn is_dialog_notice(&self, id: RequestId) -> bool {
         self.request(id).is_some_and(|request| {
             !request.settled()
-                && request.prompt.author == Author::Bus
-                && self.agents.values().any(|worker| {
-                    worker.dialog_notice.is_some()
-                        && worker.dialog_notice_to == Some(DialogNoticeTo::Orchestrator(id))
-                        && worker.room_id == request.room_id
-                        && self.notice_orchestrator(worker.room_id, Some(worker.id))
-                            == Some(request.agent_id)
+                && self.dialog_notice_worker(id).is_some_and(|worker| {
+                    self.notice_orchestrator(worker.room_id, Some(worker.id))
+                        == Some(request.agent_id)
                 })
         })
+    }
+
+    /// The persisted episode is independent of its notice request's lifetime.
+    fn dialog_notice_worker(&self, id: RequestId) -> Option<&super::RoomAgent> {
+        let request = self.request(id)?;
+        if request.prompt.author != Author::Bus {
+            return None;
+        }
+        self.agents.values().find(|worker| {
+            worker.dialog_notice.is_some()
+                && worker.dialog_notice_to == Some(DialogNoticeTo::Orchestrator(id))
+                && worker.room_id == request.room_id
+        })
+    }
+
+    /// Persist alongside begin_submission/begin_steering, before native I/O.
+    pub(crate) fn begin_dialog_notice_write(&mut self, id: RequestId, now_ms: u64) {
+        if self.dialog_notice_worker(id).is_some() {
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.dialog_delivery =
+                    Some(DialogNoticeDelivery::Unconfirmed { since_ms: now_ms });
+            }
+        }
+    }
+
+    pub(super) fn record_dialog_notice_write(
+        &mut self,
+        id: RequestId,
+        outcome: &SubmissionOutcome,
+    ) {
+        if self.dialog_notice_worker(id).is_some() {
+            if let Some(request) = self.requests.get_mut(&id) {
+                match outcome {
+                    SubmissionOutcome::Confirmed { .. } => {
+                        request.dialog_delivery = Some(DialogNoticeDelivery::Confirmed);
+                    }
+                    SubmissionOutcome::DefinitelyRejected { .. } => request.dialog_delivery = None,
+                    SubmissionOutcome::Uncertain { .. } => {}
+                }
+            }
+        }
     }
 
     /// Capture all reasons before recovery clears the agent's last refusal.
@@ -142,26 +179,43 @@ impl BusState {
                     "Queued request {} was not submitted ({reason}); it was closed and will not run later. Resend the message when ready.", id.0
                 ));
             }
-            self.redirect_dialog_notice(id, &reason, now_ms)?;
             expired.push(id);
         }
-        // An unknown native write must never be replayed or recovered out of
-        // its active group. Escalate the still-unconfirmed dialog separately.
-        let uncertain: Vec<_> = self
-            .requests
+        Ok(expired)
+    }
+
+    /// Run only after fresh dialog observations and durable callbacks. Request
+    /// closure, including group settlement and interrupt, is not a receipt.
+    pub(crate) fn escalate_unconfirmed_dialog_notices(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let undelivered: Vec<_> = self
+            .agents
             .values()
-            .filter(|request| {
-                request.uncertain_outcome
-                    && !request.trusted_start_bound
-                    && self.is_dialog_notice(request.id)
-                    && now_ms.saturating_sub(request.prompt.submitted_at_ms) >= QUEUED_STALL_MS
+            .filter_map(|worker| {
+                let Some(DialogNoticeTo::Orchestrator(id)) = worker.dialog_notice_to else {
+                    return None;
+                };
+                // A settled request may already live in permanent history.
+                let request = self.request(id)?;
+                let since_ms = match request.dialog_delivery {
+                    Some(DialogNoticeDelivery::Confirmed) => return None,
+                    Some(DialogNoticeDelivery::Unconfirmed { since_ms }) => since_ms,
+                    // Older saved requests have no explicit receipt/clock.
+                    None => request.prompt.submitted_at_ms,
+                };
+                (!request.trusted_start_bound
+                    && self.dialog_notice_worker(request.id).is_some()
+                    && now_ms.saturating_sub(since_ms) >= QUEUED_STALL_MS)
+                    .then_some(id)
             })
-            .map(|request| request.id)
             .collect();
-        for id in uncertain {
+        // Escalation does not replay an unknown write or change its group.
+        for id in undelivered {
             self.redirect_dialog_notice(id, "dialog_notice_submission_unconfirmed", now_ms)?;
         }
-        Ok(expired)
+        Ok(())
     }
 
     /// An undelivered or unconfirmed blocked notice must reach the developer;
@@ -186,17 +240,21 @@ impl BusState {
             agent_id = agent.0,
             room_id = room.0,
             reason,
-            "Blocked-dialog notice was not delivered; inspect request and dialog state"
+            "Blocked-dialog notice lacks confirmed delivery; inspect request and dialog state"
         );
         let notice = self
-            .requests
-            .get(&request)
+            .request(request)
             .ok_or(ModelError::UnknownRequest(request))?;
-        let delivery = if notice.uncertain_outcome {
+        let delivery = if notice.dialog_delivery.is_some()
+            || notice.uncertain_outcome
+            || notice.steered
+            || notice.submission_boundary.is_some()
+        {
             "Delivery to the orchestrator is unconfirmed; it may already have received this"
         } else {
             "The orchestrator did not receive this"
         };
+        let reason = notice.failure_reason.as_deref().unwrap_or(reason);
         let text = format!("{}\n{delivery} ({reason}).", notice.prompt.text);
         self.post_bus_notice(room, None, text, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))

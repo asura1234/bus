@@ -395,6 +395,9 @@ fn an_undelivered_blocked_notice_keeps_its_failure_and_reaches_the_developer_onc
     worker
         .expire_queued_requests(now + crate::messaging::model::QUEUED_STALL_MS + 1)
         .unwrap();
+    worker
+        .expire_unconfirmed_submissions(now + crate::messaging::model::QUEUED_STALL_MS + 1)
+        .unwrap();
     let notice = worker
         .state
         .requests()
