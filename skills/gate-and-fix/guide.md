@@ -63,13 +63,19 @@ replace `rebase-origin-main` or PR creation.
   uses nextest when available and `cargo llvm-cov test` otherwise. `just ci` runs the same four
   recipes; it accepts no filter that could shrink the mandatory set. The artifact records the exact
   wrapper argv and its logs record every underlying command.
-- Coverage reports live in ignored `temp/gate-and-fix/coverage/`; instrumented Cargo output stays
-  in `target/llvm-cov-target/`. Tests run only once per round; coverage consumes their profiles.
+- Coverage reports live in ignored `temp/gate-and-fix/coverage/`. Instrumented output and its
+  bounded raw-profile pools live in one marked `.gate-profile-runs/run-<id>` directory beneath
+  the configured coverage target (by default `target/llvm-cov-target/`). The runner removes
+  this owned directory, including merged profiles and instrumented build products, after export
+  or failure. SIGINT/SIGTERM stop the run's child groups before removing its files; repeated
+  interrupts are deferred through teardown. Normal build output and unrelated files are retained.
+  Subsequent runs rebuild the disposable instrumented output. Tests run only once per round;
+  coverage consumes their profiles before cleanup.
   The gate drops every inherited `BUS_*`/`HERDR_*` variable (see **Environment** above); tests
   that model isolated config roots set and restore those variables within their fixture boundaries.
 - Coverage builds use `--no-rustc-wrapper`, so Cargo includes instrumentation flags in its artifact
   cache key even when `CARGO_LLVM_COV_TARGET_DIR` equals `CARGO_TARGET_DIR`. Keep instrumented output
-  separate in `<target>/llvm-cov-target`; regressions cover both separate and shared target settings.
+  separate from normal output; regressions cover both separate and shared target settings.
   The unit lane records
   its nonempty `*-unit-*.profraw` files before CLI or integration runs; coverage refuses to export
   if that evidence is missing, deleted, or belongs to another target. It also diagnoses drops over
@@ -123,8 +129,12 @@ On Windows, use `python` in place of `python3` and invoke the runner with the ve
 `Scripts/python.exe` (or pass that interpreter with `just --set python <path> ci`).
 The runner and just use the local venv if present; otherwise they use the current/default Python,
 which must have the requirements installed. Missing mandatory tools fail with setup guidance.
-`just coverage` consumes the immediately preceding `just unit-test` and `just integration-test`;
-use `just ci` for the full sequence. Do not run two rounds in the same checkout concurrently.
+`just unit-test` starts and records a private run, `just integration-test` continues it, and
+`just coverage` consumes its profiles and removes it. A failed lane or interrupted command
+removes that run as well; restart from unit after such a failure. Starting unit again discards
+its previous owned run. Ownership markers are checked before recursive cleanup; malformed or
+foreign metadata is rejected without deleting the referenced files. `just ci` owns the full
+sequence in one invocation. Do not run two rounds in the same checkout concurrently.
 
 ## Coverage-failure remediation
 

@@ -169,7 +169,7 @@ class GateAndFixTest(unittest.TestCase):
                 submitted: dict[Future, Gate] = {}
                 batches: list[set[str]] = []
 
-                def submit(_run, gate, *, cwd):
+                def submit(_run, gate, *, cwd, children):
                     future = Future()
                     submitted[future] = gate
                     return future

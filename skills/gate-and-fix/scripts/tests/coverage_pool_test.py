@@ -1,4 +1,5 @@
 """Real gate pipeline regression for bounded, lossless concurrent profiles."""
+import contextlib
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import bus_quality as quality  # noqa: E402
+from coverage_run import Run  # noqa: E402
 
 
 @unittest.skipUnless(
@@ -25,7 +27,6 @@ class CoveragePoolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="bus-cov-pool-") as folder:
             root = Path(folder)
             target = root / "target"
-            coverage_target = target / "llvm-cov-target"
             (root / "src").mkdir()
             (root / "Cargo.toml").write_text(
                 '[package]\nname = "bus"\nversion = "0.0.0"\n'
@@ -64,7 +65,7 @@ class CoveragePoolTest(unittest.TestCase):
                                 "LLVM_PROFILE_FILE", "LLVM_PROFILE_FILE_NAME"}
             }
             env.update(CARGO_TARGET_DIR=str(target), CARGO_INCREMENTAL="0",
-                       CARGO_ENCODED_RUSTFLAGS="", CARGO_BUILD_JOBS="4",
+                       CARGO_ENCODED_RUSTFLAGS="", CARGO_BUILD_JOBS="2",
                        RUST_TEST_THREADS="4", NEXTEST_TEST_THREADS="4")
             subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root,
                            env=env, check=True, capture_output=True, timeout=30)
@@ -80,7 +81,7 @@ class CoveragePoolTest(unittest.TestCase):
                         value[key] = re.sub(r"%[1-9]?m", "%p-%m", value[key])
                 return value
 
-            for baseline in (True, False):
+            for baseline, lifecycle in ((True, False), (False, False), (False, True)):
                 with (
                     patch.object(quality, "ROOT", root),
                     patch.object(quality, "OUTPUT", root / "reports"),
@@ -89,22 +90,24 @@ class CoveragePoolTest(unittest.TestCase):
                     patch.dict(os.environ, env, clear=True),
                     patch.object(quality, "child_env", side_effect=(
                         process_keyed_env if baseline else real_child_env)),
+                    (Run(root, root / "reports", "ci") if lifecycle else contextlib.nullcontext()),
                 ):
+                    active_target = quality.llvm_cov_target(os.environ)
                     self.assertEqual(quality.unit(), 0)
                     value = json.loads((quality.OUTPUT / "state.json").read_text())
                     quality.require_unit_profraw(value)
                     unit_before = {path.name: path.read_bytes()
-                                   for path in quality.unit_profraw_files(coverage_target)}
+                                   for path in quality.unit_profraw_files(active_target)}
                     self.assertEqual(quality.rust_test("--bin", "bus"), 0)
                     self.assertEqual(unit_before, {path.name: path.read_bytes()
-                                                 for path in quality.unit_profraw_files(coverage_target)})
+                                                 for path in quality.unit_profraw_files(active_target)})
                     quality.require_unit_profraw(value)
-                    profiles = list(coverage_target.glob("*.profraw"))
+                    profiles = list(active_target.glob("*.profraw"))
                     counts.append(len(profiles))
                     report = root / "coverage.json"
                     subprocess.run(
                         ["cargo", "llvm-cov", "report", "--json", "--output-path", str(report)],
-                        cwd=root, env=env, check=True, capture_output=True, timeout=30,
+                        cwd=root, env=quality.child_env(), check=True, capture_output=True, timeout=30,
                     )
                     data = json.loads(report.read_text())["data"][0]
                     files = [entry for entry in data["files"] if Path(entry["filename"]).resolve() == source.resolve()]
@@ -118,7 +121,15 @@ class CoveragePoolTest(unittest.TestCase):
                                             key=lambda entry: entry["name"]),
                     })
                     if not baseline:
-                        self.assertLessEqual(len(quality.unit_profraw_files(coverage_target)), 4)
+                        self.assertLessEqual(len(quality.unit_profraw_files(active_target)), 4)
                         self.assertLessEqual(len(profiles), 12)  # separate unit/integration/CLI pools
+                    if not lifecycle:
+                        for profile in profiles + list(active_target.glob("*.profdata")):
+                            profile.unlink()
+                if lifecycle:
+                    self.assertFalse(active_target.exists(), "the exported run must be removed")
+                    self.assertFalse(list(target.rglob("*.profraw")))
+                    self.assertFalse(list(target.rglob("*.profdata")))
             self.assertGreater(counts[0], 40, "the baseline must exercise separate writers")
             self.assertEqual(snapshots[0], snapshots[1], "pooling must preserve every counter")
+            self.assertEqual(snapshots[0], snapshots[2], "run isolation must preserve every counter")

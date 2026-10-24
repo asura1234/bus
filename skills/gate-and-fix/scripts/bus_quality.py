@@ -14,6 +14,9 @@ import sys
 import tomllib
 from pathlib import Path
 
+from coverage_run import EXTERNAL_RUN, Run
+from gate_process import Children, Interrupted, interrupt_signals
+
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "temp/gate-and-fix/coverage"
 POLICY = ROOT / "skills/gate-and-fix/references/coverage-policy.json"
@@ -73,7 +76,16 @@ def child_env(**overrides: str) -> dict:
 
 def run(*argv: str, env: dict | None = None) -> int:
     print("+ " + subprocess.list2cmdline(argv), flush=True)
-    return subprocess.run(argv, cwd=ROOT, env=child_env() if env is None else env).returncode
+    children = Children(private_groups=not bool(os.environ.get(EXTERNAL_RUN)))
+    process = children.start(argv, cwd=ROOT, env=child_env() if env is None else env)
+    try:
+        process.wait()
+        return process.returncode
+    except BaseException:
+        children.stop()
+        raise
+    finally:
+        children.finished(process)
 
 
 def python_files() -> list[Path]:
@@ -523,32 +535,34 @@ def coverage() -> int:
     return int(not summary["rust"]["pass"])
 
 
+def run_lane(lane: str) -> int:
+    required = ("ruff", "pytest") if lane == "lint" else ("pytest",)
+    if any(importlib.util.find_spec(name) is None for name in required):
+        raise ValueError("missing Python gate tools; install scripts/requirements.txt from this skill")
+    if lane in ("unit", "integration", "coverage", "ci") and not shutil.which("cargo-llvm-cov"):
+        raise ValueError("install cargo-llvm-cov and rustup component add llvm-tools-preview")
+    checks = {
+        "lint": lint, "unit": unit, "integration": integration,
+        "coverage": coverage, "windows-lint": windows_lint,
+    }
+    return int(any([checks[name]() for name in LANES])) if lane == "ci" else checks[lane]()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lane", choices=(*LANES, "ci", "windows-lint"))
     args = parser.parse_args(argv)
     try:
-        required = ("ruff", "pytest") if args.lane == "lint" else ("pytest",)
-        if any(importlib.util.find_spec(name) is None for name in required):
-            raise ValueError(
-                "missing Python gate tools; install scripts/requirements.txt from this skill"
-            )
-        if args.lane in ("unit", "integration", "coverage", "ci") and not shutil.which("cargo-llvm-cov"):
-            raise ValueError(
-                "install cargo-llvm-cov and rustup component add llvm-tools-preview"
-            )
-        checks = {
-            "lint": lint,
-            "unit": unit,
-            "integration": integration,
-            "coverage": coverage,
-            "windows-lint": windows_lint,
-        }
-        return (
-            int(any([checks[name]() for name in LANES]))
-            if args.lane == "ci"
-            else checks[args.lane]()
-        )
+        with interrupt_signals():
+            if args.lane not in ("unit", "integration", "coverage", "ci"):
+                return run_lane(args.lane)
+            with Run(ROOT, OUTPUT, args.lane) as profiles:
+                result = run_lane(args.lane)
+                profiles.finish(result)
+                return result
+    except Interrupted as error:
+        print("Bus quality gate interrupted; run profiles removed", file=sys.stderr)
+        return 128 + error.signum
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Bus quality gate failed: {error}", file=sys.stderr)
         return 1
