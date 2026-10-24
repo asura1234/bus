@@ -5,7 +5,7 @@ use bytes::Bytes;
 use crate::protocol::api::schema::AgentStartParams;
 use crate::server::{app::App, workspaces::ids::TerminalTargetError};
 
-const DEFAULT_AGENT_START_TIMEOUT: Duration = crate::protocol::api::AGENT_START_TIMEOUT;
+pub(super) const DEFAULT_AGENT_START_TIMEOUT: Duration = crate::protocol::api::AGENT_START_TIMEOUT;
 pub(crate) const MAX_AGENT_START_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const AGENT_START_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
@@ -437,7 +437,7 @@ impl App {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_state = ws.pane_state(pane_id)?;
         let terminal = self.state.terminals.get(&pane_state.attached_terminal_id)?;
-        if !terminal.is_agent_terminal() {
+        if !terminal.is_agent_terminal() && terminal.native_resume.is_none() {
             return None;
         }
         let pane = self.pane_info(ws_idx, pane_id)?;
@@ -459,6 +459,18 @@ impl App {
                     })
             });
         Some(crate::protocol::api::schema::AgentInfo {
+            native_resume: terminal.native_resume.as_ref().map(|resume| {
+                crate::protocol::api::schema::NativeResumeInfo {
+                    name: resume.name.clone(),
+                    agent: crate::agents::agent_label(resume.kind).into(),
+                    session_id: resume
+                        .session
+                        .as_ref()
+                        .map(|session| session.session_ref.value.clone()),
+                    command: resume.command.clone(),
+                    error: resume.error.clone(),
+                }
+            }),
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
             agent: pane.agent,
@@ -477,8 +489,10 @@ impl App {
             tab_id: pane.tab_id,
             pane_id: pane.pane_id,
             focused: pane.focused,
-            launch_pending: terminal.managed_agent_launch_pending(),
-            interactive_ready: terminal.managed_agent_interactive_ready(),
+            launch_pending: terminal.pending_agent_resume_plan.is_some()
+                || terminal.managed_agent_launch_pending(),
+            interactive_ready: terminal.pending_agent_resume_plan.is_none()
+                && terminal.managed_agent_interactive_ready(),
             native_ready: terminal.pending_agent_resume_plan.is_none()
                 && !terminal.managed_agent_launch_pending()
                 && terminal.effective_known_agent().is_some_and(|expected| {

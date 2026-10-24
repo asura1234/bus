@@ -9,6 +9,52 @@ pub(super) const STARTUP_TIMEOUT_MS: u64 =
     crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
 const SCREEN_LINES: u32 = 6;
 
+/// Only native restore evidence establishes a new attempt; opening a client does not.
+pub(super) fn watch_native_resume(
+    state: &mut super::BusState,
+    agent: &super::RoomAgent,
+    info: &schema::AgentInfo,
+) -> Result<(), String> {
+    let Some(attempt) = super::resume::native_attempt(agent, info) else {
+        return Ok(());
+    };
+    if agent.deletion_pending
+        || agent.session_binding_invalidated
+        || agent.runtime_identity.launch_id.is_none()
+        || agent.startup.as_ref().is_some_and(|startup| {
+            startup.native_terminal_id.as_deref() == Some(info.terminal_id.as_str())
+        })
+    {
+        return Ok(());
+    }
+    // Runtime identity may already point at a deferred restore's terminal before
+    // native launch evidence arrives. Deduplicate by the startup's own terminal.
+    // A different native terminal starts a new attempt. Retire the previous
+    // reported startup episode, as explicit recovery does, so confirmation of
+    // this attempt cannot leave its predecessor's error blocking a healthy agent.
+    if agent
+        .startup
+        .as_ref()
+        .is_some_and(|startup| startup.reported)
+    {
+        state
+            .set_agent_error(agent.id, None)
+            .map_err(|e| e.to_string())?;
+    }
+    state
+        .set_agent_startup(
+            agent.id,
+            Some(AgentStartup {
+                command: attempt.command.clone(),
+                started_at_ms: io::now_ms(),
+                reported: false,
+                native_terminal_id: Some(info.terminal_id.clone()),
+                recovery: None,
+            }),
+        )
+        .map_err(|e| e.to_string())
+}
+
 impl Worker {
     pub(super) fn watch_agent_startup(
         &mut self,
@@ -28,6 +74,7 @@ impl Worker {
                         .ok_or("Cannot describe the provider launch command")?,
                     started_at_ms,
                     reported: false,
+                    native_terminal_id: None,
                     recovery: None,
                 }),
             )
@@ -92,18 +139,24 @@ impl Worker {
             let info = infos.iter().find(|info| {
                 Some(info.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
                     && Some(info.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
-                    && info.name.as_deref() == Some(&name)
+                    && (info.name.as_deref() == Some(&name)
+                        || super::resume::native_attempt(&agent, info).is_some())
             });
+            let native_error = info
+                .and_then(|info| super::resume::native_attempt(&agent, info))
+                .and_then(|attempt| attempt.error.as_deref());
             // Codex defers SessionStart until its first prompt. Native
             // interactive confirmation, or a provider already waiting at its
             // own startup dialog, proves it started. Preserve that help wait.
-            if info.is_some_and(|info| {
-                info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
-                    && (info.interactive_ready
-                        || info.launch_pending
-                            && (info.agent_status == schema::AgentStatus::Blocked
-                                || info.dialog_id.is_some()))
-            }) {
+            if native_error.is_none()
+                && info.is_some_and(|info| {
+                    info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                        && (info.interactive_ready
+                            || info.launch_pending
+                                && (info.agent_status == schema::AgentStatus::Blocked
+                                    || info.dialog_id.is_some()))
+                })
+            {
                 let mut state = self.state.clone();
                 state
                     .set_agent_startup(agent.id, None)
@@ -119,18 +172,20 @@ impl Worker {
             let expired = now_ms.saturating_sub(startup.started_at_ms) >= STARTUP_TIMEOUT_MS;
             // The native server releases a launch on timeout or process exit.
             // A failed list request never reaches here, so silence is not failure.
-            if !startup.reported && !expired && info.is_some() {
+            if !startup.reported && !expired && info.is_some() && native_error.is_none() {
                 continue;
             }
             if !startup.reported {
                 let evidence = self.startup_screen(agent.id);
-                let reason = if expired {
+                let reason = if let Some(reason) = native_error {
+                    reason
+                } else if expired {
                     "no provider session or interactive confirmation within 30 seconds"
                 } else {
                     "the native provider launch ended before startup was confirmed"
                 };
                 let text = format!(
-                    "Startup failed: {reason}. Agent identity and queued work retained. Inspect readiness or resume this agent.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
+                    "Startup failed: {reason}. Agent identity and queued work retained. Repair shell/provider setup before resuming. A missing or unknown conversation requires delete-and-recreate: delete this agent, recreate it with its launch settings and system prompt, and rebrief the retained work. Resume reuses the saved conversation; it cannot recreate missing history.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
                     launch::provider_kind(agent.provider), startup.command
                 );
                 let mut state = self.state.clone();

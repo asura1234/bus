@@ -68,6 +68,74 @@ fn test_app() -> App {
 }
 
 #[cfg(unix)]
+#[tokio::test]
+async fn restored_provider_is_launching_until_the_resumed_process_is_confirmed() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("failed-resume");
+    let pane = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(app.state.view.terminal_area);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    app.state.default_shell = "/bin/sh".into();
+    let dir = crate::utils::test_temp::unique_temp_path("bus-failed-resume-cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    let provider = dir.join("fake-claude.sh");
+    std::fs::write(
+        &provider,
+        "printf 'No conversation found with session ID: missing\\n'\nexit 1\n",
+    )
+    .unwrap();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("saved-worker".into(), crate::agents::AgentKind::Claude);
+    terminal.set_detected_state(
+        Some(crate::agents::AgentKind::Claude),
+        crate::agents::AgentState::Idle,
+    );
+    terminal.pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
+        agent: "claude".into(),
+        argv: vec!["/bin/sh".into(), provider.to_string_lossy().into_owned()],
+        dedupe_key: "rejected-resume".into(),
+    });
+    let info = app.collect_agent_infos().pop().unwrap();
+    assert!(
+        info.launch_pending,
+        "a saved identity is not proof of a live process"
+    );
+    assert!(!info.interactive_ready);
+    assert!(app.start_pending_agent_resumes(true));
+    let info = app.collect_agent_infos().pop().unwrap();
+    assert!(
+        info.launch_pending,
+        "typing --resume must use the normal launch guard"
+    );
+    assert!(!info.interactive_ready);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        app.drain_all_internal_events();
+        let runtime = app.terminal_runtimes.get(&terminal_id).unwrap();
+        if runtime
+            .snapshot_history()
+            .is_some_and(|text| text.contains("No conversation found with session ID: missing"))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fake resume did not run"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    for (_, runtime) in app.terminal_runtimes.drain() {
+        runtime.shutdown();
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
 fn long_running_test_argv() -> Vec<String> {
     vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()]
 }
@@ -763,6 +831,255 @@ fn native_resume_runtime_defaults_preserve_literal_tails_and_owned_capture_extra
             assert_eq!(&argv[argv.len() - 2..], ["--", "literal --no-daemon"]);
         } else {
             assert_eq!(&argv[..3], plan.argv);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn suspended_restored_resume_is_not_reported_interactive() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("suspended-resume");
+    let pane = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(app.state.view.terminal_area);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("saved-worker".into(), crate::agents::AgentKind::Claude);
+    terminal.pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
+        agent: "claude".into(),
+        argv: vec!["claude".into(), "--resume".into(), "missing".into()],
+        dedupe_key: "suspended-resume".into(),
+    });
+    // The shell for the deferred resume failed to start (or resume extras
+    // could not be built): no provider process exists for this conversation.
+    assert!(app.suspend_pending_agent_resume(pane, &terminal_id, "shell failed to start"));
+    let info = app.collect_agent_infos().pop().unwrap();
+    assert!(
+        !info.interactive_ready,
+        "a suspended resume has no live provider and must not be reported interactive"
+    );
+}
+
+#[cfg(unix)]
+fn native_attempt_app(
+    kind: crate::agents::AgentKind,
+    label: &str,
+) -> (App, crate::utils::ids::TerminalId) {
+    let mut app = test_app();
+    let ws = crate::server::workspaces::Workspace::test_new("native-attempt");
+    let id = ws.terminal_id(ws.tabs[0].root_pane).unwrap().clone();
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.view.pane_infos = ws.tabs[0].layout.panes(app.state.view.terminal_area);
+    app.state.workspaces = vec![ws];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    app.state.default_shell = "/bin/sh".into();
+    let t = app.state.terminals.get_mut(&id).unwrap();
+    t.restore_managed_agent("bus-r1-a2".into(), kind);
+    t.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
+        source: format!("herdr:{label}"),
+        agent: label.into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("session").unwrap(),
+    });
+    t.pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
+        agent: label.into(),
+        argv: vec!["/bin/sh".into(), "-c".into(), "read line".into()],
+        dedupe_key: "native-attempt".into(),
+    });
+    (app, id)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_resume_failures_keep_owner_and_reason_without_interactive_readiness() {
+    for (kind, label) in [
+        (crate::agents::AgentKind::Claude, "claude"),
+        (crate::agents::AgentKind::Codex, "codex"),
+        (crate::agents::AgentKind::Cursor, "cursor"),
+    ] {
+        for context_failure in [false, true] {
+            let root = crate::utils::test_temp::unique_temp_path("native-resume-failure");
+            let _env = test_support::ProcessEnvironment::enter(
+                context_failure.then_some(root.as_path()),
+                context_failure.then_some("bus"),
+            );
+            let (mut app, id) = native_attempt_app(kind, label);
+            app.state.default_shell = root.join("missing-shell").to_string_lossy().into_owned();
+            app.start_pending_agent_resumes(true);
+            let info = app.collect_agent_infos().pop().unwrap();
+            assert!(
+                !info.interactive_ready && !info.launch_pending,
+                "{label}, context={context_failure}"
+            );
+            assert_eq!(info.name.as_deref(), Some("bus-r1-a2"));
+            assert_eq!(info.agent_session.as_ref().unwrap().value, "session");
+            let json = serde_json::to_value(info).unwrap();
+            assert_eq!(json["native_resume"]["name"], "bus-r1-a2");
+            assert!(json["native_resume"]["error"]
+                .as_str()
+                .is_some_and(|e| !e.is_empty()));
+            assert!(app.terminal_runtimes.get(&id).is_none());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_resume_evidence_survives_fast_exit_but_retires_on_confirmation() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    for confirmed in [false, true] {
+        let (mut app, id) = native_attempt_app(crate::agents::AgentKind::Claude, "claude");
+        assert!(app.start_pending_agent_resumes(true));
+        let before = serde_json::to_value(app.collect_agent_infos().pop().unwrap()).unwrap();
+        assert_eq!(before["native_resume"]["session_id"], "session");
+        let now = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        let t = app.state.terminals.get_mut(&id).unwrap();
+        if confirmed {
+            t.set_detected_state(
+                Some(crate::agents::AgentKind::Claude),
+                crate::agents::AgentState::Idle,
+            );
+            t.reconcile_managed_agent_at(now, false);
+        }
+        t.set_detected_state_with_screen_signals_at(
+            Some(crate::agents::AgentKind::Claude),
+            crate::agents::AgentState::Unknown,
+            false,
+            true,
+            None,
+            now,
+        );
+        let infos = app.collect_agent_infos();
+        if confirmed {
+            assert!(
+                infos.is_empty(),
+                "a later ordinary exit must not reappear as resume startup"
+            );
+        } else {
+            let after = serde_json::to_value(&infos[0]).unwrap();
+            assert_eq!(after["native_resume"]["name"], "bus-r1-a2");
+            assert_eq!(after["native_resume"]["session_id"], "session");
+            assert!(after["native_resume"]["error"].is_string());
+        }
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_native_resume_keeps_owned_metadata_for_the_next_restart() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let (mut app, id) = native_attempt_app(crate::agents::AgentKind::Claude, "claude");
+    assert!(app.start_pending_agent_resumes(true));
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state_with_screen_signals_at(
+            Some(crate::agents::AgentKind::Claude),
+            crate::agents::AgentState::Unknown,
+            false,
+            true,
+            None,
+            std::time::Instant::now(),
+        );
+    let saved = crate::server::persistence::capture(
+        &app.state.workspaces,
+        &app.state.terminals,
+        &app.terminal_runtimes,
+        Some(0),
+        0,
+    );
+    let pane = saved.workspaces[0].tabs[0].panes.values().next().unwrap();
+    assert_eq!(pane.agent_name.as_deref(), Some("bus-r1-a2"));
+    assert_eq!(pane.managed_agent_kind.as_deref(), Some("claude"));
+    assert_eq!(pane.agent_session.as_ref().unwrap().value, "session");
+    for (_, runtime) in app.terminal_runtimes.drain() {
+        runtime.shutdown();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_native_resume_never_labels_foreign_work_in_a_snapshot() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    for (kind, label) in [
+        (crate::agents::AgentKind::Cursor, "cursor"),
+        (crate::agents::AgentKind::Claude, "claude"),
+    ] {
+        let (mut app, id) = native_attempt_app(crate::agents::AgentKind::Claude, "claude");
+        assert!(app.start_pending_agent_resumes(true));
+        let t = app.state.terminals.get_mut(&id).unwrap();
+        t.set_detected_state_with_screen_signals_at(
+            Some(crate::agents::AgentKind::Claude),
+            crate::agents::AgentState::Unknown,
+            false,
+            true,
+            None,
+            std::time::Instant::now(),
+        );
+        t.set_detected_state(Some(kind), crate::agents::AgentState::Idle);
+        t.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
+            source: format!("herdr:{label}"),
+            agent: label.into(),
+            session_ref: crate::agents::resume::catalog::AgentSessionRef::id("foreign-session")
+                .unwrap(),
+        });
+        let saved = crate::server::persistence::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            Some(0),
+            0,
+        );
+        let pane = saved.workspaces[0].tabs[0].panes.values().next().unwrap();
+        assert!(pane.agent_name.is_none());
+        assert!(pane.managed_agent_kind.is_none());
+        assert_eq!(
+            pane.agent_session.as_ref().unwrap().value,
+            "foreign-session"
+        );
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_resume_evidence_is_retired_when_ownership_changes() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    for foreign_process in [false, true] {
+        let (mut app, id) = native_attempt_app(crate::agents::AgentKind::Claude, "claude");
+        assert!(app.start_pending_agent_resumes(true));
+        let t = app.state.terminals.get_mut(&id).unwrap();
+        if foreign_process {
+            t.set_detected_state(
+                Some(crate::agents::AgentKind::Cursor),
+                crate::agents::AgentState::Idle,
+            );
+        } else {
+            t.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
+                source: "herdr:claude".into(),
+                agent: "claude".into(),
+                session_ref: crate::agents::resume::catalog::AgentSessionRef::id("foreign-session")
+                    .unwrap(),
+            });
+        }
+        let info = serde_json::to_value(app.collect_agent_infos().pop().unwrap()).unwrap();
+        assert!(
+            info.get("native_resume").is_none(),
+            "old ownership must not reappear after foreign work exits: {info}"
+        );
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
         }
     }
 }

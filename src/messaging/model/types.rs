@@ -301,6 +301,9 @@ pub(crate) struct AgentStartup {
     pub(crate) started_at_ms: u64,
     /// A reported startup failure holds its queue until readiness confirms recovery.
     pub(crate) reported: bool,
+    /// The native attempt's terminal, independent of a later runtime rebind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) native_terminal_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) recovery: Option<StartupRecovery>,
 }

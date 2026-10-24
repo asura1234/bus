@@ -15,6 +15,16 @@ impl TerminalState {
     }
 
     fn update_managed_agent(&mut self, managed: Option<ManagedAgent>) {
+        if self.pending_agent_resume_plan.is_none()
+            && managed.is_some_and(|managed| {
+                matches!(
+                    managed.phase,
+                    ManagedAgentPhase::Active | ManagedAgentPhase::Blocked
+                )
+            })
+        {
+            self.native_resume = None;
+        }
         self.managed_agent = managed;
         self.sync_managed_launch_pending();
     }
@@ -111,6 +121,30 @@ impl TerminalState {
         self.managed_agent.map(|managed| managed.kind)
     }
 
+    pub(crate) fn begin_native_resume(&mut self, command: String) {
+        if let (Some(name), Some(kind)) = (self.agent_name.clone(), self.managed_agent_kind()) {
+            self.native_resume = Some(super::NativeAgentResume {
+                name,
+                kind,
+                session: self.persisted_agent_session.clone(),
+                command,
+                error: None,
+            });
+        }
+    }
+
+    pub(crate) fn suspend_native_resume(&mut self, reason: &str) {
+        if let Some(resume) = self.native_resume.as_mut() {
+            resume.error = Some(reason.into());
+        }
+        if let Some(managed) = self.managed_agent {
+            self.update_managed_agent(Some(ManagedAgent {
+                kind: managed.kind,
+                phase: ManagedAgentPhase::Suspended,
+            }));
+        }
+    }
+
     pub fn next_managed_agent_deadline(&self) -> Option<Instant> {
         let ManagedAgentPhase::Pending {
             ready_after,
@@ -132,7 +166,9 @@ impl TerminalState {
             ManagedAgentPhase::Pending {
                 observed_expected, ..
             } => observed_expected || known_agent == Some(managed.kind),
-            ManagedAgentPhase::Blocked | ManagedAgentPhase::Active => false,
+            ManagedAgentPhase::Blocked
+            | ManagedAgentPhase::Active
+            | ManagedAgentPhase::Suspended => false,
         };
         let clear = process_exited
             || known_agent.is_some_and(|agent| agent != managed.kind)
@@ -220,6 +256,11 @@ impl TerminalState {
     }
 
     pub fn clear_agent_name(&mut self) {
+        if let Some(resume) = self.native_resume.as_mut() {
+            resume
+                .error
+                .get_or_insert_with(|| "provider launch ended before startup was confirmed".into());
+        }
         if self
             .managed_agent_launch_session
             .take()

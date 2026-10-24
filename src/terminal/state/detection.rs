@@ -91,6 +91,13 @@ impl TerminalState {
         exited_process: Option<crate::platform::ProcessInstance>,
         now: Instant,
     ) -> TerminalStateMutation {
+        if self
+            .native_resume
+            .as_ref()
+            .is_some_and(|resume| agent.is_some_and(|kind| kind != resume.kind))
+        {
+            self.native_resume = None;
+        }
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
@@ -165,6 +172,7 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        self.native_resume = None;
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.persisted_agent_session = None;

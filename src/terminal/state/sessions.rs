@@ -7,8 +7,23 @@ impl TerminalState {
         &mut self,
         session: crate::agents::resume::catalog::PersistedAgentSession,
     ) {
+        self.retire_conflicting_native_resume(&session);
         self.persisted_agent_session = Some(session);
         self.session_reporter.clear();
+    }
+
+    fn retire_conflicting_native_resume(
+        &mut self,
+        session: &crate::agents::resume::catalog::PersistedAgentSession,
+    ) {
+        if self.native_resume.as_ref().is_some_and(|resume| {
+            resume
+                .session
+                .as_ref()
+                .is_some_and(|expected| expected != session)
+        }) {
+            self.native_resume = None;
+        }
     }
 
     pub fn set_agent_session_ref_for_session_start(
@@ -109,6 +124,7 @@ impl TerminalState {
         if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
             self.managed_agent_launch_session = None;
         }
+        self.retire_conflicting_native_resume(&persisted_session);
         self.persisted_agent_session = Some(persisted_session);
         self.session_reporter = reporter.to_vec();
         let current_session = self.current_session_identity_for_persistence();

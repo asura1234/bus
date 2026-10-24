@@ -1,6 +1,97 @@
 use super::*;
 
 #[test]
+fn expanded_worker_details_show_the_complete_startup_failure_and_recovery() {
+    let (mut ui, _, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.confirm_hook_setup(agent).unwrap();
+    snapshot
+        .state
+        .observe_status(agent, RuntimeStatus::Unavailable, 1)
+        .unwrap();
+    let error = "Startup failed: provider exited before confirmation.\nNo conversation found with session ID: missing.\nRecovery: delete-and-recreate with launch settings and system prompt; rebrief retained work.";
+    snapshot
+        .state
+        .set_agent_error(agent, Some(error.into()))
+        .unwrap();
+    snapshot
+        .state
+        .set_agent_startup(
+            agent,
+            Some(crate::messaging::model::AgentStartup {
+                command: "claude --resume missing".into(),
+                started_at_ms: 1,
+                reported: true,
+                native_terminal_id: Some("failed-terminal".into()),
+                recovery: None,
+            }),
+        )
+        .unwrap();
+    snapshot
+        .state
+        .set_agent_details_disclosed(agent, true)
+        .unwrap();
+    let second = snapshot
+        .state
+        .create_agent(
+            ui.room.unwrap(),
+            "second",
+            Provider::Cursor,
+            "/other".into(),
+            None,
+        )
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    for cols in [80, 160] {
+        ui.sidebar_scroll = 0;
+        ui.compute_view(cols, 24);
+        let maximum = ui.view.sidebar_max_scroll;
+        let mut seen = String::new();
+        for scroll in 0..=maximum {
+            ui.sidebar_scroll = scroll;
+            ui.compute_view(cols, 24);
+            let mut buffer =
+                ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, 24));
+            ui.render(&mut buffer);
+            for y in ui.view.sidebar_body.y..ui.view.sidebar_body.bottom() {
+                let line = (1..ui.view.sidebar.right() - 1)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>();
+                seen.push_str(line.trim());
+            }
+        }
+        for text in [
+            "Startup failed:",
+            "No conversation found",
+            "delete-and-recreate",
+            "system prompt",
+            "rebrief retained work.",
+        ] {
+            // Word wrapping removes only the row boundary, never the content.
+            assert!(
+                seen.replace(' ', "").contains(&text.replace(' ', "")),
+                "{cols}: missing {text}: {seen}"
+            );
+        }
+        assert!(
+            ui.view
+                .hits
+                .iter()
+                .any(|hit| hit.action == render::Action::Agent(second)),
+            "following agent remains reachable after scrolling"
+        );
+    }
+    snapshot.state.set_agent_error(agent, None).unwrap();
+    snapshot.state.set_agent_startup(agent, None).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.sidebar_scroll = 0;
+    assert!(
+        !room_screen(&mut ui, 160, 24).contains("Startup failed"),
+        "confirmed recovery removes the diagnosis rows"
+    );
+}
+
+#[test]
 fn selected_agent_names_keep_minimum_text_contrast_on_the_selection_tint() {
     use ratatui::{buffer::Buffer, layout::Rect, style::Color};
     // WCAG 2.2 contrast ratio. 3:1 is the lowest bar WCAG sets for any text

@@ -255,9 +255,10 @@ impl App {
             return false;
         }
 
-        let Some(terminal) = self.state.terminals.get(&terminal_id) else {
+        let Some(terminal) = self.state.terminals.get_mut(&terminal_id) else {
             return false;
         };
+        terminal.begin_native_resume(shell_command_from_argv(&plan.argv));
         let extras = match for_native_resume(terminal, &plan, &cwd) {
             Ok(extras) => extras,
             Err(reason) => {
@@ -285,6 +286,9 @@ impl App {
         };
         let (argv, env) = resume_launch_inputs(&plan, extras);
         let resume_command = shell_command_from_argv(&argv);
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            terminal.begin_native_resume(resume_command.clone());
+        }
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
@@ -320,11 +324,18 @@ impl App {
                 );
                 // No process ran, so nothing replaced the saved conversation:
                 // keep it for a later restart once the shell is fixed.
-                self.suspend_pending_agent_resume(pane_id, &terminal_id, "shell failed to start");
+                self.suspend_pending_agent_resume(
+                    pane_id,
+                    &terminal_id,
+                    &format!("shell failed to start: {err}"),
+                );
                 return false;
             }
         };
 
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            guard_resumed_agent_launch(terminal, &runtime);
+        }
         let mut input = resume_command;
         input.push('\r');
         if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {
@@ -359,6 +370,7 @@ impl App {
             // Keep durable name/session metadata for recovery on a later
             // restart, but do not retry disk reads on every layout tick.
             terminal.pending_agent_resume_plan = None;
+            terminal.suspend_native_resume(reason);
             let kind = terminal.managed_agent_kind();
             terminal.set_detected_state_with_screen_signals_at(
                 kind,
@@ -371,6 +383,35 @@ impl App {
         }
         true
     }
+}
+
+fn guard_resumed_agent_launch(
+    terminal: &mut crate::terminal::TerminalState,
+    runtime: &crate::terminal::TerminalRuntime,
+) {
+    let (Some(name), Some(kind)) = (terminal.agent_name.clone(), terminal.managed_agent_kind())
+    else {
+        return;
+    };
+    // The restored Idle label describes the old process. Require fresh
+    // detection and the same readiness guard as AgentStart.
+    let now = Instant::now();
+    terminal.set_detected_state_with_screen_signals_at(
+        None,
+        crate::agents::AgentState::Unknown,
+        false,
+        false,
+        None,
+        now,
+    );
+    terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
+    terminal.begin_managed_agent(
+        name,
+        kind,
+        now,
+        super::agents::AGENT_START_SETTLE_DELAY,
+        super::agents::DEFAULT_AGENT_START_TIMEOUT,
+    );
 }
 
 fn resume_launch_inputs(

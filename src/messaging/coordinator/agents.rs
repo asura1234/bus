@@ -111,7 +111,11 @@ impl Worker {
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let identity = &agent.runtime_identity;
         let (Some(pane), Some(terminal)) = (&identity.pane_id, &identity.terminal_id) else {
-            if identity == &AgentRuntimeIdentity::default() {
+            if identity == &AgentRuntimeIdentity::default()
+                || identity.pane_id.is_none() && identity.terminal_id.is_some()
+            {
+                // A known terminal's pane is detached only after authoritative
+                // absence/replacement evidence or a successful guarded close.
                 return Ok(None);
             }
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
