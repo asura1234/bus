@@ -2,6 +2,8 @@
 
 #[path = "callbacks_test.rs"]
 mod callbacks;
+#[path = "help_test.rs"]
+mod help;
 #[path = "../../src/utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;
 #[path = "paths_test.rs"]

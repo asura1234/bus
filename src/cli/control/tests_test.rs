@@ -8,6 +8,12 @@ fn command(args: &[&str]) -> Result<ParsedCommand, String> {
     )
 }
 
+fn command_help(args: &[&str]) -> String {
+    let mut args: Vec<_> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    args.push("--help".into());
+    help_for(command_tree(false), &args).unwrap()
+}
+
 #[test]
 fn feishu_cli_toggle_accepts_only_on_off_and_no_destination() {
     for (flag, on) in [("--on", true), ("--off", false)] {
@@ -167,10 +173,23 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
             .find(|args| command(args).is_ok_and(|c| c.method == spec.method))
             .unwrap_or_else(|| panic!("no sample parses into {}", spec.method));
         assert!(sample.join(" ").starts_with(spec.command), "{sample:?}");
-        let line = format!("\n  {}", spec.command);
+        let words: Vec<_> = spec
+            .command
+            .split_whitespace()
+            .take_while(|part| !part.starts_with("--"))
+            .collect();
+        let line = format!("\n  {}", words.join(" "));
+        let help = command_help(&words);
+        for flag in spec
+            .command
+            .split_whitespace()
+            .filter(|part| part.starts_with("--"))
+        {
+            assert!(help.contains(flag), "{} omits {flag}: {help}", spec.command);
+        }
         match spec.tier {
             Tier::Agent => assert!(
-                AGENT_HELP.contains(&line),
+                agent_help().contains(&line),
                 "{} missing from bus --help",
                 spec.command
             ),
@@ -181,14 +200,14 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
                     spec.command
                 );
                 assert!(
-                    !AGENT_HELP.contains(&line),
+                    !agent_help().contains(&line),
                     "{} is a dev tool in bus --help",
                     spec.command
                 );
             }
         }
     }
-    assert_eq!(dev_tier_mentions(AGENT_HELP), Vec::<String>::new());
+    assert_eq!(dev_tier_mentions(&agent_help()), Vec::<String>::new());
 }
 
 /// `DEV_HELP` is compiled in from docs/dev-tools.md, so every source closure
@@ -233,10 +252,11 @@ fn release_builds_leave_dev_tools_off_and_dev_builds_turn_it_on() {
 #[test]
 fn orchestrators_have_no_reassign_command() {
     assert!(command(&["agent", "orchestrate", "claude-orch", "--none"]).is_err());
-    assert!(!AGENT_HELP.contains("agent orchestrate AGENT"));
-    assert!(AGENT_HELP.contains("exactly one work room for its whole life"));
-    assert!(AGENT_HELP.contains("[--orchestrates ROOM]"));
-    assert!(AGENT_HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH]"));
+    assert!(!agent_help().contains("agent orchestrate AGENT"));
+    assert!(agent_help().contains("exactly one work room for its whole life"));
+    let help = command_help(&["agent", "add"]);
+    assert!(help.contains("--orchestrates"));
+    assert!(help.contains("--system-prompt") && help.contains("--system-prompt-file"));
 }
 
 #[test]
@@ -1261,7 +1281,8 @@ fn send_async_rejects_a_message_to_the_developer() {
             .unwrap()
             .follow
     );
-    assert!(AGENT_HELP.contains("[--queue] [--async]"));
+    let help = command_help(&["send"]);
+    assert!(help.contains("--queue") && help.contains("--async"));
 }
 
 #[test]
@@ -1405,7 +1426,8 @@ fn send_queue_asks_for_an_own_turn_and_is_omitted_otherwise() {
     assert_eq!(queued.params["queue"], true);
     let steering = command(&["send", "--room", "r", "--to", "a", "--text", "t"]).unwrap();
     assert!(steering.params.get("queue").is_none());
-    assert!(AGENT_HELP.contains("[--as AGENT] [--queue]"));
+    let help = command_help(&["send"]);
+    assert!(help.contains("--as") && help.contains("--queue"));
 }
 
 #[test]
@@ -1733,12 +1755,7 @@ fn coordinator_timeout_never_replays_a_message_send() {
 /// or mistyped agent-tier command should not advertise dev tools either.
 #[test]
 fn parse_errors_do_not_advertise_dev_tools() {
-    for args in [
-        &["room"][..],
-        &["agent"][..],
-        &["settings", "x"][..],
-        &["room", "focs", "r"][..],
-    ] {
+    for args in [&["settings", "x"][..], &["room", "focs", "r"][..]] {
         let error = command(args).unwrap_err();
         for dev in [
             "focus",

@@ -12,40 +12,8 @@ pub(crate) fn write_stdout_line(arguments: std::fmt::Arguments<'_>) {
     }
 }
 
-/// Agent-tier commands, which every session answers. `bus --help` prints only
-/// these; the tier of each command is `coordinator::control::METHODS`.
-pub const AGENT_HELP: &str =
-    "Commands (connect to the running Bus in BUS_DATA_DIR; they never start one):
-  state
-  room create NAME
-  room rename ROOM NAME
-  room notes ROOM --text TEXT
-  room delete ROOM --confirm
-  agent list [--room ROOM]
-  agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
-            [--args STRING] [--consent-hooks] [--orchestrates ROOM]
-            [--system-prompt TEXT | --system-prompt-file PATH]
-  agent read AGENT --source visible
-  agent read AGENT [--source recent] --lines N
-  agent dialog AGENT
-  agent choose AGENT --option N --fingerprint FINGERPRINT
-  agent answer AGENT (--text TEXT | --skip) --fingerprint FINGERPRINT
-  agent clear AGENT
-  agent resume --room ROOM
-  agent interrupt [AGENT] [--room ROOM] [--text TEXT] [--as AGENT]
-  agent rename AGENT NAME
-  agent setup-confirm AGENT --confirm
-  agent delete AGENT --confirm
-  send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]
-  message status MESSAGE_ID
-  message seen REQUEST_ID --as AGENT
-  request recover REQUEST_ID --confirm
-  wait --message MESSAGE_ID [--timeout SECONDS | --async] [--as AGENT]
-  history --room ROOM
-  settings
-  settings feishu-notifications --on  (always on; --off is rejected)
-
-Every command accepts --request-id STRING and emits one JSON response.
+/// General command behavior; command and flag inventories come from the grammar.
+pub const AGENT_NOTES: &str = "Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the
 MASTER room. Every MASTER agent orchestrates exactly one work room for its whole life:
 agent add --room master --orchestrates ROOM is required, a work room has at most one
@@ -134,8 +102,38 @@ Every session answers these commands.";
 /// cannot drift; it is never written to the agents' docs folder.
 pub const DEV_HELP: &str = include_str!("../../docs/dev-tools.md");
 
+pub(crate) fn agent_help() -> String {
+    format!("{}\n{AGENT_NOTES}", super::control::overview(false))
+}
+
+pub(super) fn subcommand_help(args: &[String]) -> Option<String> {
+    if args
+        .iter()
+        .all(|arg| matches!(arg.as_str(), "--help" | "-h" | "--dev" | "--yolo"))
+    {
+        return None;
+    }
+    let dev = args
+        .iter()
+        .take_while(|arg| arg.starts_with('-'))
+        .any(|arg| arg == "--dev");
+    super::control::help_for(super::control::command_tree(dev), args)
+}
+
 pub(super) fn print_help(dev: bool) {
-    write_stdout_line(format_args!("{}\n", AGENT_HELP));
+    write_stdout_line(format_args!(
+        "{}",
+        super::control::command_tree(dev).render_long_help()
+    ));
+    let overview = if dev {
+        super::control::overview(true)
+    } else {
+        agent_help()
+    };
+    write_stdout_line(format_args!("{overview}\n"));
+    if dev {
+        write_stdout_line(format_args!("{AGENT_NOTES}\n"));
+    }
     write_stdout_line(format_args!("--yolo bypasses provider permission prompts for all workers and MASTER orchestrators\n(new and resumed) in this run only. It is off by default and is never saved.\n"));
     if dev {
         write_stdout_line(format_args!("{}", DEV_HELP));

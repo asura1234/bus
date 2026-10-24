@@ -27,15 +27,15 @@ fn flag(name: &'static str) -> Arg {
 }
 
 fn subcommand(name: &'static str) -> Command {
-    Command::new(name)
-        .disable_help_flag(true)
-        .disable_help_subcommand(true)
+    Command::new(name).disable_help_subcommand(true)
 }
 
-fn cli() -> Command {
+pub(super) fn cli() -> Command {
     let command = subcommand("bus")
+        .bin_name("bus")
         .no_binary_name(true)
         .subcommand_required(true)
+        .arg_required_else_help(true)
         .arg(value_arg("request-id").long("request-id").global(true))
         .subcommand(subcommand("state"))
         .subcommand(subcommand("quit"))
@@ -49,8 +49,13 @@ fn cli() -> Command {
         .subcommand(subcommand("sounds"));
     // `ui hits` exists only in the dev variant, with the TUI driver it serves.
     #[cfg(feature = "dev-tools")]
-    let command = command.subcommand(subcommand("ui").subcommand(subcommand("hits")));
-    command
+    let command = command.subcommand(
+        subcommand("ui")
+            .subcommand_required(true)
+            .arg_required_else_help(true)
+            .subcommand(subcommand("hits")),
+    );
+    let command = command
         .subcommand(room_cli())
         .subcommand(agent_cli())
         .subcommand(
@@ -66,6 +71,7 @@ fn cli() -> Command {
         .subcommand(
             subcommand("message")
                 .subcommand_required(true)
+                .arg_required_else_help(true)
                 .subcommand(subcommand("status").arg(value_arg("message").required(true)))
                 .subcommand(
                     subcommand("seen")
@@ -74,11 +80,14 @@ fn cli() -> Command {
                 ),
         )
         .subcommand(
-            subcommand("request").subcommand_required(true).subcommand(
-                subcommand("recover")
-                    .arg(value_arg("request").required(true))
-                    .arg(flag("confirm")),
-            ),
+            subcommand("request")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    subcommand("recover")
+                        .arg(value_arg("request").required(true))
+                        .arg(flag("confirm")),
+                ),
         )
         .subcommand(
             subcommand("wait")
@@ -92,7 +101,8 @@ fn cli() -> Command {
                         .allow_hyphen_values(true),
                 ),
         )
-        .subcommand(subcommand("history").arg(option("room")))
+        .subcommand(subcommand("history").arg(option("room")));
+    super::help::decorate(command, "", false)
 }
 
 fn required<'a>(matches: &'a ArgMatches, name: &str) -> Result<&'a str, String> {
@@ -239,6 +249,7 @@ fn parse_message(args: &ArgMatches) -> Result<(&'static str, Value), String> {
 fn room_cli() -> Command {
     subcommand("room")
         .subcommand_required(true)
+        .arg_required_else_help(true)
         .subcommand(subcommand("create").arg(value_arg("name").required(true)))
         .subcommand(subcommand("focus").arg(value_arg("room").required(true)))
         .subcommand(subcommand("seen").arg(value_arg("room").required(true)))
@@ -272,6 +283,7 @@ fn room_cli() -> Command {
 fn agent_cli() -> Command {
     let command = subcommand("agent")
         .subcommand_required(true)
+        .arg_required_else_help(true)
         .subcommand(
             subcommand("add")
                 .arg(option("room"))
