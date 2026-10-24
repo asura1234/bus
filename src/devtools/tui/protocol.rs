@@ -49,6 +49,7 @@ pub(super) struct Style {
 #[serde(tag = "verb", rename_all = "snake_case")]
 pub(super) enum Command {
     Status,
+    Restart,
     Snapshot {
         rows: Option<(u16, u16)>,
     },

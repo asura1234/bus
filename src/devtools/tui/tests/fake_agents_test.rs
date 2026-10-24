@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn resumed_fakes_keep_the_session_and_start_a_fresh_turn_sequence() {
+    for (provider, flag) in [
+        ("claude", "--resume"),
+        ("codex", "resume"),
+        ("cursor-agent", "--resume"),
+    ] {
+        let mut agent = FakeAgent::new(provider, Value::Null);
+        agent.resume(&[flag.into(), "saved-session".into()]);
+        assert_eq!(agent.session, "saved-session");
+        assert!(agent.turns > 1);
+    }
+    for args in [
+        vec![],
+        vec!["--resume".into()],
+        vec!["--resume".into(), "--help".into()],
+    ] {
+        let mut agent = FakeAgent::new("claude", Value::Null);
+        let fresh = agent.session.clone();
+        agent.resume(&args);
+        assert_eq!(agent.session, fresh);
+        assert_eq!(agent.turns, 0);
+    }
+}
+
+#[test]
 fn input_splits_text_keys_and_pastes() {
     let mut pending = b"ab\x1b[200~line\nmore\x1b[201~\x7f\r\x1b[13u\x1b[A\x03".to_vec();
     assert_eq!(

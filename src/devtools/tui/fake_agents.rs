@@ -15,6 +15,7 @@ mod dialogs;
 mod directives;
 mod input;
 mod question;
+mod resume;
 mod rollout;
 
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
@@ -89,6 +90,7 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
         .map(|settings| settings["hooks"].clone())
         .unwrap_or(Value::Null);
     let mut agent = FakeAgent::new(provider, hooks);
+    agent.resume(args);
     // Codex defers SessionStart to its first prompt; Bus delivers to it unbound.
     // Claude and Cursor start theirs at launch: Bus delivers only to a bound session.
     if !agent.codex() {

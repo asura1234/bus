@@ -136,7 +136,8 @@ Exit codes:
 
 After Bus exits (Ctrl+Q, a crash), `status`, `snapshot`, `find`, `cells`,
 `screenshot`, `effects` and `clipboard` still read the last screen and the
-records, and `stop` still cleans up; every other verb exits 3.
+records, `restart` relaunches the scratch Bus, and `stop` still cleans up;
+every other verb exits 3.
 
 Sessions: every verb takes `--name NAME` (default `s1`, or `$BUS_TUI_SESSION`).
 At most 4 sessions run at once.
@@ -151,7 +152,7 @@ them), `shots/` (screenshots) and, after `stop`, the Bus logs and
 `effects.ndjson` (every recorded effect). Inside a Bus checkout it lives under
 `temp/tui-driver/runs/`, otherwise under `~/.local/state/bus/tui-runs/`.
 
-Verbs: start, stop, status, list, bus, snapshot, find, cells, screenshot,
+Verbs: start, stop, restart, status, list, bus, snapshot, find, cells, screenshot,
 hits, type, paste, press, click, hover, drag, scroll, resize, focus, wait,
 expect, effects, clipboard, fixture, journey, gc.
 
@@ -197,6 +198,16 @@ be copied, `stop` fails with `effects_not_kept` and leaves the session directory
 
 Session, process ids, whether Bus is alive, size, frame count, data and run
 folders.
+
+### restart
+`restart [--name NAME]`
+
+Quits the driver-owned scratch Bus, stops its server and relaunches both with
+the same scratch data, size and graphics settings. It preserves the run's trace,
+recordings and screenshots, and returns the old/new Bus process IDs. It also
+works after Ctrl+Q. It never attaches to or restarts another Bus.
+Fake providers honor their resume arguments, retaining session IDs with fresh
+turn IDs so a post-restart request can settle normally.
 
 ### list
 `list`

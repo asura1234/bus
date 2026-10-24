@@ -22,6 +22,8 @@ mod orchestrator_recipient_tests;
 mod rooms_tests;
 #[path = "selector_label_roundtrip_test.rs"]
 mod selector_label_roundtrip_tests;
+#[path = "unread_dot_test.rs"]
+mod unread_dot_tests;
 
 struct NoTransport;
 

@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn unread_dot_covers_bus_notices_and_clears_when_deletion_opens_master() {
+    let mut state = BusState::new();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    state
+        .create_agent(work, "worker", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    state.select_room(work).unwrap();
+    state
+        .post_bus_notice(master, None, "notice".into(), 1)
+        .unwrap();
+    assert!(state.room(master).unwrap().unseen_to_developer);
+    state.delete_room(work, 2).unwrap();
+    assert_eq!(state.visible_room(), Some(master));
+    assert!(!state.room(master).unwrap().unseen_to_developer);
+    state
+        .post_bus_notice(master, None, "visible notice".into(), 2)
+        .unwrap();
+    assert!(!state.room(master).unwrap().unseen_to_developer);
+    // A mechanical developer-attention notice uses a separate producer.
+    let work = state.create_room("attention").unwrap();
+    let agent = state
+        .create_agent(
+            work,
+            "attention-worker",
+            Provider::Codex,
+            "/repo".into(),
+            None,
+        )
+        .unwrap();
+    state.select_room(work).unwrap();
+    state
+        .post_developer_attention(agent, "needs a decision", 3)
+        .unwrap();
+    assert!(state.room(master).unwrap().unseen_to_developer);
+    state.mark_room_seen(master).unwrap();
+    assert!(!state.room(master).unwrap().unseen_to_developer);
+}
+
+#[test]
 fn master_room_is_added_once_without_consuming_ids() {
     let mut state = BusState::new();
     let master = state.ensure_master_room();

@@ -27,6 +27,7 @@ impl BusState {
                 missing_provider_binaries: BTreeSet::new(),
                 draft: Draft::default(),
                 unread_count: 0,
+                unseen_to_developer: false,
                 latest_prompt: None,
                 latest_replies: BTreeMap::new(),
                 deletion_pending: false,
@@ -78,6 +79,7 @@ impl BusState {
                         missing_provider_binaries: BTreeSet::new(),
                         draft: Draft::default(),
                         unread_count: 0,
+                        unseen_to_developer: false,
                         latest_prompt: None,
                         latest_replies: BTreeMap::new(),
                         deletion_pending: false,
@@ -271,6 +273,9 @@ impl BusState {
         // so `state` never shows a gap between the delete and the next view.
         if self.visible_room == Some(id) {
             self.visible_room = self.rooms.keys().next().copied();
+            if let Some(fallback) = self.visible_room {
+                self.mark_room_seen(fallback)?;
+            }
         }
         Ok(())
     }
@@ -443,6 +448,7 @@ impl BusState {
         room.notices.push(prompt);
         if !visible {
             room.unread_count = room.unread_count.saturating_add(1);
+            room.unseen_to_developer = true;
         }
         Ok(id)
     }
@@ -502,10 +508,12 @@ impl BusState {
     }
 
     pub(crate) fn mark_room_seen(&mut self, room: RoomId) -> Result<(), ModelError> {
-        self.rooms
+        let room = self
+            .rooms
             .get_mut(&room)
-            .ok_or(ModelError::UnknownRoom(room))?
-            .unread_count = 0;
+            .ok_or(ModelError::UnknownRoom(room))?;
+        room.unread_count = 0;
+        room.unseen_to_developer = false;
         Ok(())
     }
 }

@@ -26,6 +26,89 @@ fn master_fixture() -> (BusUi, RoomId, RoomId, RoomId, AgentId) {
 }
 
 #[test]
+fn unread_dot_is_green_clickable_and_survives_narrow_room_labels() {
+    let (ui, master, room, other, author) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .rename_room(room, "非常长的房间名称-with-a-long-suffix")
+        .unwrap();
+    for target in [master, room] {
+        snapshot
+            .state
+            .post_to_developer(target, author, "decision".into(), vec![], 1)
+            .unwrap();
+    }
+    let worker = snapshot
+        .state
+        .create_agent(room, "working", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    snapshot.state.confirm_hook_setup(worker).unwrap();
+    snapshot
+        .state
+        .observe_status(worker, RuntimeStatus::Working, 1)
+        .unwrap();
+    let mut ui = BusUi::new(Arc::new(snapshot));
+    ui.open_room(other);
+    for (cols, width) in [(40, 20), (60, 20), (100, 28), (180, 60)] {
+        ui.settings.sidebar_width = width;
+        ui.compute_view(cols, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, 30));
+        ui.render(&mut buffer);
+        for target in [master, room] {
+            let row = render::sidebar_room_row(&ui.snapshot.state, target, ui.room).unwrap() as u16;
+            let dots: Vec<_> = (0..ui.view.sidebar.width)
+                .filter(|&x| buffer[(x, row)].symbol() == "●")
+                .collect();
+            assert_eq!(dots.len(), 1, "room {target:?}, width {width}");
+            let x = dots[0];
+            assert_eq!(buffer[(x, row)].fg, render::ACCENT);
+            assert_eq!(ui.view.hit_at(x, row), Some(&render::Action::Room(target)));
+        }
+    }
+}
+
+#[test]
+fn unread_dot_stays_visible_beside_long_room_statuses_in_narrow_sidebars() {
+    for (status, cols) in [
+        (RuntimeStatus::Working, 36),
+        (RuntimeStatus::Unavailable, 40),
+    ] {
+        let (ui, _master, room, other, author) = master_fixture();
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .post_to_developer(room, author, "decision".into(), vec![], 1)
+            .unwrap();
+        let worker = snapshot
+            .state
+            .create_agent(room, "status", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        snapshot.state.confirm_hook_setup(worker).unwrap();
+        snapshot.state.observe_status(worker, status, 1).unwrap();
+        let mut ui = BusUi::new(Arc::new(snapshot));
+        ui.open_room(other);
+        ui.settings.sidebar_width = 20;
+        ui.compute_view(cols, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, 30));
+        ui.render(&mut buffer);
+        let row = render::sidebar_room_row(&ui.snapshot.state, room, ui.room).unwrap() as u16;
+        let line: String = (0..ui.view.sidebar.width)
+            .map(|x| buffer[(x, row)].symbol().to_string())
+            .collect();
+        assert!(
+            line.contains('●'),
+            "{status:?} at {cols} columns hid the dot: {line:?}"
+        );
+        let dot = (0..ui.view.sidebar.width)
+            .find(|&x| buffer[(x, row)].symbol() == "●")
+            .unwrap();
+        assert_eq!(buffer[(dot, row)].fg, render::ACCENT);
+        assert_eq!(ui.view.hit_at(dot, row), Some(&render::Action::Room(room)));
+    }
+}
+
+#[test]
 fn worker_to_orchestrator_picker_lists_and_selects_only_the_bound_orchestrator() {
     let (mut ui, master, room, other, orchestrator) = master_fixture();
     let mut snapshot = (*ui.snapshot).clone();

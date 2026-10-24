@@ -113,7 +113,7 @@ fn verbs_build_host_commands() {
             rows: 30
         }
     ));
-    for verb in ["status", "clipboard", "snapshot"] {
+    for verb in ["status", "clipboard", "snapshot", "restart"] {
         assert!(command(verb, &mut parsed(&[])).is_ok());
     }
     assert!(matches!(
