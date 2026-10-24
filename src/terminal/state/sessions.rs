@@ -104,6 +104,18 @@ impl TerminalState {
             agent: agent_label,
             session_ref,
         };
+        // A fresh accepted provider callback proves startup independently of
+        // screen fallback. Merely restoring a cached session must not do so.
+        if Self::session_start_source_is_recognized(session_start_source.as_deref())
+            && crate::agents::resume::catalog::is_official_agent_source(
+                &persisted_session.source,
+                &persisted_session.agent,
+            )
+        {
+            if let Some(kind) = known_agent {
+                self.confirm_managed_agent_session_start(kind);
+            }
+        }
         if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
             self.managed_agent_launch_session = None;
         }

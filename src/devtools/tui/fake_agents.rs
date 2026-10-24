@@ -630,7 +630,7 @@ const CURSOR_FOLLOW_UP: &str = "Add a follow-up";
 /// draft, continuation lines indented under its marker. Claude Code: `❯` over
 /// a rule and its hint, image lines already lifted into leading `[Image #N]`
 /// chips. Codex: a `›` composer with a dim placeholder when empty, then a
-/// blank row and its model line, which is where Bus stops reading the draft.
+/// model line and shortcut hint, which also prove startup readiness to Bus.
 /// Cursor: a `→` composer with a dim placeholder when empty, then its
 /// half-block bottom border, where Bus stops reading, and its model line.
 /// It starts and ends with the cursor on the box's first row: moving relative
@@ -646,7 +646,10 @@ fn prompt_box_with(shown: &str, provider: &str, cursor_placeholder: &str, cols: 
     let (marker, footer, empty) = match provider {
         "codex" => (
             '›',
-            [String::new(), format!("  gpt-fake · fake {provider}")],
+            [
+                format!("  GPT-fake · fake {provider}"),
+                "  ? for shortcuts".into(),
+            ],
             Some(CODEX_PLACEHOLDER),
         ),
         "cursor-agent" => (

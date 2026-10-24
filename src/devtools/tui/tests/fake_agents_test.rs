@@ -383,6 +383,23 @@ fn screen_rows_of(screen: &crate::devtools::tui::screen::Screen) -> Vec<String> 
 }
 
 #[test]
+fn fake_codex_prompt_proves_managed_startup_readiness() {
+    use crate::agents::{detect_agent_with_launch_context, AgentKind, AgentState};
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 12).unwrap();
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("", "codex", 80).as_bytes());
+    let text = screen_rows_of(&screen).join("\n");
+    let detection = detect_agent_with_launch_context(Some(AgentKind::Codex), &text, "", "", true);
+    assert_eq!(detection.state, AgentState::Idle, "{text}");
+    assert!(
+        detection.visible_idle,
+        "the fake prompt needs a positive ready rule: {text}"
+    );
+}
+
+#[test]
 fn the_fake_codex_draws_a_codex_composer_that_bus_can_read() {
     use crate::devtools::tui::screen::Screen;
 
@@ -406,8 +423,8 @@ fn the_fake_codex_draws_a_codex_composer_that_bus_can_read() {
         "{rows:#?}"
     );
     let composer = rows.iter().position(|row| row.starts_with('›')).unwrap();
-    assert_eq!(rows[composer + 1], "");
-    assert_eq!(rows[composer + 2], "  gpt-fake · fake codex");
+    assert_eq!(rows[composer + 1], "  GPT-fake · fake codex");
+    assert_eq!(rows[composer + 2], "  ? for shortcuts");
     assert!(!rows.iter().any(|row| row.starts_with('❯')), "{rows:#?}");
 
     for draft in ["h", "he", "hey"] {

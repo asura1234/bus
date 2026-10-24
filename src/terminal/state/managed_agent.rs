@@ -97,6 +97,16 @@ impl TerminalState {
             .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
     }
 
+    pub(super) fn confirm_managed_agent_session_start(&mut self, kind: AgentKind) {
+        if self.managed_agent_launch_pending() && self.managed_agent_kind() == Some(kind) {
+            self.update_managed_agent(Some(ManagedAgent {
+                kind,
+                phase: ManagedAgentPhase::Active,
+            }));
+            self.managed_agent_launch_session = None;
+        }
+    }
+
     pub fn managed_agent_kind(&self) -> Option<AgentKind> {
         self.managed_agent.map(|managed| managed.kind)
     }
