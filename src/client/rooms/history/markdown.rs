@@ -30,6 +30,7 @@ impl History {
 
 impl MarkdownBlock {
     fn new(key: MarkdownSource, source: &str) -> Self {
+        let _timer = super::phases::PARSE.start();
         let raw: Arc<str> = Arc::from(source);
         // People type prompts like chat messages, so every newline they enter
         // is a line break. Agent replies keep standard Markdown paragraphs.
@@ -80,6 +81,7 @@ impl MarkdownBlock {
         if self.width == Some(width) {
             return &self.lines;
         }
+        let _timer = super::phases::LAYOUT.start();
         let content_width = width.saturating_sub(indent.len() as u16).max(1);
         self.lines = self
             .view
@@ -152,6 +154,7 @@ fn prepared_markdown_lines(
     indent: &str,
     anchor: RowAnchor,
 ) -> Option<Vec<Line>> {
+    let prepare_timer = super::phases::PREPARE.start();
     let layout = match view.prepare(width) {
         Ok(layout) => layout,
         Err(error) => {
@@ -159,6 +162,7 @@ fn prepared_markdown_lines(
             return None;
         }
     };
+    drop(prepare_timer);
     let line_count = layout.line_count();
     let mut lines = Vec::with_capacity(line_count);
     let mut first = 0;
@@ -172,10 +176,13 @@ fn prepared_markdown_lines(
             .min(rows_per_chunk)
             .min(usize::from(u16::MAX)) as u16;
         let area = Rect::new(0, 0, width, height);
+        let paint_timer = super::phases::PAINT.start();
         let mut buffer = Buffer::empty(area);
         let mut state = ViewState::default();
         state.scroll_to(DocumentRow::new(first));
         layout.widget().render(area, &mut buffer, &mut state);
+        drop(paint_timer);
+        let rows_timer = super::phases::ROWS.start();
         for offset in 0..height {
             let position = first + usize::from(offset);
             lines.push(line_from_buffer(
@@ -188,6 +195,7 @@ fn prepared_markdown_lines(
                 RowAnchor { position, ..anchor },
             ));
         }
+        drop(rows_timer);
         first += usize::from(height);
     }
     mark_soft_wraps(&mut lines, width, indent.len());
