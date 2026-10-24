@@ -12,6 +12,7 @@ mod help;
 mod history;
 mod input;
 mod links;
+mod quit;
 #[path = "widgets/recipients.rs"]
 mod recipients;
 mod render;
