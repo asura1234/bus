@@ -40,6 +40,127 @@ fn staffing_codex_captured_startup_screen_confirms_native_readiness_without_a_se
 }
 
 #[test]
+fn promptless_codex_keeps_its_startup_watch_until_the_deadline() {
+    let mut terminal = test_terminal();
+    let now = Instant::now();
+    terminal.begin_managed_agent(
+        "promptless".into(),
+        AgentKind::Codex,
+        now,
+        Duration::from_secs(3),
+        Duration::from_secs(30),
+    );
+    let detection = crate::agents::detect_agent_with_launch_context(
+        Some(AgentKind::Codex),
+        "BUS_QA% codex --no-daemon\n",
+        "",
+        "",
+        terminal.managed_agent_launch_pending(),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), detection.state);
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(4), false);
+    assert!(
+        terminal.managed_agent_launch_pending(),
+        "a promptless process must not lose its startup watchdog"
+    );
+    assert!(!terminal.managed_agent_interactive_ready());
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+    assert!(!terminal.managed_agent_interactive_ready());
+    assert!(!terminal.managed_agent_launch_pending());
+}
+
+#[test]
+fn accepted_session_start_confirms_startup_without_a_ready_screen_rule() {
+    use crate::agents::resume::catalog::AgentSessionRef;
+
+    for (kind, label, source) in [
+        (AgentKind::Codex, "codex", "startup"),
+        (AgentKind::Claude, "claude", "startup"),
+        (AgentKind::Cursor, "cursor", "new"),
+    ] {
+        for state in [
+            AgentState::Unknown,
+            AgentState::Working,
+            AgentState::Blocked,
+        ] {
+            let mut terminal = test_terminal();
+            let now = Instant::now();
+            terminal.begin_managed_agent(
+                "fresh".into(),
+                kind,
+                now,
+                Duration::from_secs(3),
+                Duration::from_secs(30),
+            );
+            terminal.set_detected_state(Some(kind), state);
+            terminal
+                .set_agent_session_ref_for_session_start(
+                    format!("herdr:{label}"),
+                    label.into(),
+                    AgentSessionRef::id("fresh-session"),
+                    Some(1),
+                    Some(source.into()),
+                    &[],
+                )
+                .unwrap();
+            terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+            assert!(
+                terminal.managed_agent_interactive_ready(),
+                "{label}: {state:?}"
+            );
+            assert!(!terminal.managed_agent_launch_pending());
+            assert_eq!(terminal.state, state, "readiness must preserve activity");
+        }
+    }
+}
+
+#[test]
+fn cached_or_identity_only_session_does_not_confirm_managed_startup() {
+    use crate::agents::resume::catalog::{AgentSessionRef, PersistedAgentSession};
+
+    for (cached, source, start_source) in [
+        (true, "herdr:codex", Some("startup")),
+        (false, "herdr:codex", None),
+        (false, "custom", Some("startup")),
+    ] {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.begin_managed_agent(
+            "unconfirmed".into(),
+            AgentKind::Codex,
+            now,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Unknown);
+        if cached {
+            terminal.set_persisted_agent_session(PersistedAgentSession {
+                source: source.into(),
+                agent: "codex".into(),
+                session_ref: AgentSessionRef::id("cached-session").unwrap(),
+            });
+        } else {
+            terminal
+                .set_agent_session_ref_for_session_start(
+                    source.into(),
+                    "codex".into(),
+                    AgentSessionRef::id("identity-only"),
+                    Some(1),
+                    start_source.map(str::to_string),
+                    &[],
+                )
+                .unwrap();
+        }
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(4), false);
+        assert!(
+            terminal.managed_agent_launch_pending(),
+            "{cached}, {source}"
+        );
+        assert!(!terminal.managed_agent_interactive_ready());
+    }
+}
+
+#[test]
 fn managed_launch_signal_tracks_blocked_active_timeout_and_exit() {
     use std::sync::{
         atomic::{AtomicBool, Ordering},

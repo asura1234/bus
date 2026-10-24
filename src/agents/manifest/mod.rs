@@ -36,7 +36,7 @@ pub(crate) fn detect_with_launch_context(
     managed_launch_pending: bool,
 ) -> AgentDetection {
     let Some(loaded) = load_manifest(agent) else {
-        return idle_fallback();
+        return fallback_detection(managed_launch_pending);
     };
     evaluate_loaded_manifest(input, &loaded, managed_launch_pending)
 }
@@ -47,7 +47,7 @@ fn evaluate_loaded_manifest(
     managed_launch_pending: bool,
 ) -> AgentDetection {
     let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending) else {
-        return idle_fallback();
+        return fallback_detection(managed_launch_pending);
     };
     let state = rule
         .state
@@ -91,9 +91,15 @@ fn matched_manifest_rule<'a>(
     matched
 }
 
-fn idle_fallback() -> AgentDetection {
+fn fallback_detection(managed_launch_pending: bool) -> AgentDetection {
     AgentDetection {
-        state: AgentState::Idle,
+        // Absence of evidence can describe an idle provider after startup,
+        // but cannot confirm that a managed provider has started.
+        state: if managed_launch_pending {
+            AgentState::Unknown
+        } else {
+            AgentState::Idle
+        },
         skip_state_update: false,
         visible_idle: false,
         visible_blocker: false,

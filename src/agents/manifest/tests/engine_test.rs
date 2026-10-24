@@ -141,6 +141,55 @@ fn known_agent_no_match_defaults_to_idle_fallback() {
 }
 
 #[test]
+fn no_matching_rule_does_not_prove_managed_startup_readiness() {
+    let loaded =
+        loaded_manifest(parse_manifest(&local_manifest("idle", "READY")).unwrap()).unwrap();
+    let input = DetectionInput {
+        screen: "process started, but no provider prompt",
+        osc_title: "",
+        osc_progress: "",
+    };
+    assert!(matched_manifest_rule(input, &loaded, true).is_none());
+    let result = evaluate_loaded_manifest(input, &loaded, true);
+    assert_eq!(result.state, AgentState::Unknown);
+    assert!(!result.visible_idle);
+}
+
+#[test]
+fn a_missing_manifest_does_not_prove_managed_startup_readiness() {
+    assert!(load_manifest(AgentKind::Omp).is_none());
+    let input = DetectionInput {
+        screen: "process started, but no provider prompt",
+        osc_title: "",
+        osc_progress: "",
+    };
+    assert_eq!(
+        detect_with_launch_context(AgentKind::Omp, input, true).state,
+        AgentState::Unknown
+    );
+    assert_eq!(
+        detect_with_launch_context(AgentKind::Omp, input, false).state,
+        AgentState::Idle
+    );
+}
+
+#[test]
+fn a_provider_ready_rule_still_confirms_a_managed_launch() {
+    let loaded =
+        loaded_manifest(parse_manifest(&local_manifest("idle", "READY")).unwrap()).unwrap();
+    let input = DetectionInput {
+        screen: "READY",
+        osc_title: "",
+        osc_progress: "",
+    };
+    assert!(matched_manifest_rule(input, &loaded, true).is_some());
+    assert_eq!(
+        evaluate_loaded_manifest(input, &loaded, true).state,
+        AgentState::Idle
+    );
+}
+
+#[test]
 fn rule_semantics_apply_gates_priority_and_line_regex() {
     with_manifest_dirs("rule-semantics", || {
         write_local_codex(&rules_manifest(
