@@ -154,6 +154,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
         .subcommand(
             Command::new("sessions")
                 .about("List saved sessions")
+                .args(run_flags())
                 .after_help("Example: bus sessions"),
         )
         .subcommand(
@@ -177,6 +178,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
         .subcommand(
             Command::new("stop")
                 .about("Stop the session server and close its panes")
+                .args(run_flags())
                 .after_help("Example: bus stop"),
         )
         .subcommand(
