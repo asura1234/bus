@@ -1328,16 +1328,8 @@ fn run_soak() {
         .requests()
         .all(|r| r.phase == RequestPhase::Completed));
     let notices: Vec<_> = f.state().notices(f.work).collect();
-    assert_eq!(
-        notices.len(),
-        round,
-        "one idle-worker notice per aged stall cycle: {notices:?}"
-    );
     assert!(
-        notices.iter().all(
-            |notice| notice.author == crate::messaging::model::Author::Bus
-                && notice.text.starts_with("You have 11 idle agents (")
-        ),
+        notices.is_empty(),
         "unexpected work-room notices: {notices:?}"
     );
     assert_eq!(

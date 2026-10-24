@@ -26,7 +26,7 @@ mod worker_notifications;
 use requests::rejection_reason;
 
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
-pub(crate) use developer_notifications::new_developer_notifications;
+pub(crate) use developer_notifications::{developer_alerts, new_developer_notifications};
 pub(crate) use error::ModelError;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS};
 #[cfg(test)]

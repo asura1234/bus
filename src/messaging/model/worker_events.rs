@@ -10,6 +10,7 @@ use super::{
 pub(super) enum WorkerEventKind {
     Final,
     Outcome,
+    /// Retired "Idle with open request" notice; kept so saved state still loads.
     Idle,
     Exited,
 }
@@ -216,8 +217,8 @@ impl BusState {
             .collect();
         let before = self.worker_events.len();
         for request in requests {
-            // An interrupt is the sender's own action, and a deleted agent's requests end
-            // by design; neither needs a notice per queued request.
+            // Whoever interrupted or deleted the agent ended these requests on purpose;
+            // a notice per queued request repeats that decision back to the sender.
             let expected_end = request.failure_reason.as_deref() == Some(super::INTERRUPTED)
                 || self
                     .agent(request.agent_id)

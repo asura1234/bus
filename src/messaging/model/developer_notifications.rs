@@ -1,5 +1,5 @@
 //! Shared developer alert sources: explicit notices and tagged agent messages in every room.
-use super::{Author, BusState, Prompt, PromptId, RequestId, RequestPhase};
+use super::{AgentId, Author, BusState, Prompt, PromptId, RequestId, RequestPhase};
 use crate::messaging::attention::{
     has_you_mention, plain_line, waiting_action, waiting_tag_action,
 };
@@ -13,6 +13,7 @@ enum Key {
 
 struct Message<'a> {
     sender: &'a str,
+    sender_id: Option<AgentId>,
     text: &'a str,
     directed: bool,
     developer_context: bool,
@@ -28,6 +29,24 @@ pub(crate) fn new_developer_notifications(
     next: &BusState,
     waiting_only: bool,
 ) -> Vec<String> {
+    developer_alerts(previous, next, waiting_only)
+        .into_iter()
+        .map(|alert| alert.line)
+        .collect()
+}
+
+/// One developer alert. `sender` and `body` identify a repeated ask across renames.
+pub(crate) struct DeveloperAlert {
+    pub(crate) sender: Option<AgentId>,
+    pub(crate) body: String,
+    pub(crate) line: String,
+}
+
+pub(crate) fn developer_alerts(
+    previous: &BusState,
+    next: &BusState,
+    waiting_only: bool,
+) -> Vec<DeveloperAlert> {
     let known = messages(previous);
     let mut added: Vec<_> = messages(next)
         .into_iter()
@@ -45,22 +64,27 @@ pub(crate) fn new_developer_notifications(
             } else {
                 waiting_tag_action(message.text)
             };
-            if let Some(action) = action {
-                Some(format!(
-                    "{sender} is waiting on you: {}",
-                    plain_line(action)
-                ))
+            let (body, line) = if let Some(action) = action {
+                let body = plain_line(action);
+                let line = format!("{sender} is waiting on you: {body}");
+                (body, line)
             } else if !waiting_only && (message.directed || has_you_mention(message.text)) {
-                let line = plain_line(message.text.trim_start());
-                let line = if line.is_empty() {
-                    "Attached files"
+                let body = plain_line(message.text.trim_start());
+                let body = if body.is_empty() {
+                    "Attached files".to_string()
                 } else {
-                    &line
+                    body
                 };
-                Some(format!("{sender} to you: {line}"))
+                let line = format!("{sender} to you: {body}");
+                (body, line)
             } else {
-                None
-            }
+                return None;
+            };
+            Some(DeveloperAlert {
+                sender: message.sender_id,
+                body,
+                line,
+            })
         })
         .collect()
 }
@@ -105,6 +129,7 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
                         sender: state
                             .agent(request.agent_id)
                             .map_or("Bus", |a| a.name.as_str()),
+                        sender_id: Some(request.agent_id),
                         text: crate::messaging::attention::text(&reply.text).unwrap_or(&reply.text),
                         directed: false,
                         developer_context,
@@ -122,13 +147,14 @@ fn insert_prompt<'a>(
     prompt: &'a Prompt,
     messages: &mut BTreeMap<Key, Message<'a>>,
 ) {
-    let (sender, directed) = match prompt.author {
+    let (sender, sender_id, directed) = match prompt.author {
         Author::Agent(id) => (
             state.agent(id).map_or("Bus", |a| a.name.as_str()),
+            Some(id),
             prompt.recipient_ids.is_empty(),
         ),
         Author::Bus => match &prompt.attention_origin {
-            Some(origin) => (origin.agent_name.as_str(), false),
+            Some(origin) => (origin.agent_name.as_str(), Some(origin.agent_id), false),
             None => return,
         },
         Author::Developer => return,
@@ -137,6 +163,7 @@ fn insert_prompt<'a>(
         Key::Prompt(prompt.id),
         Message {
             sender,
+            sender_id,
             text: crate::messaging::attention::text(&prompt.text).unwrap_or(&prompt.text),
             directed,
             developer_context: prompt.recipient_ids.is_empty(),

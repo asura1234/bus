@@ -1386,3 +1386,6 @@ fn replayed_autonomous_final_after_later_abandonment_claude() {
 fn replayed_autonomous_final_after_later_abandonment_codex() {
     replayed_autonomous_final_after_later_abandonment(Provider::Codex);
 }
+
+#[path = "worker_event_waiter_overlap_test.rs"]
+mod waiter_overlap;

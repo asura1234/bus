@@ -140,11 +140,12 @@ the wrapper remains held.
   Pending events survive waiter and Bus restarts, and each event routes once.
   You can rely on these notifications without room polling or self-timers.
   Normal idle waits for callback settlement, so a late Stop produces one reply
-  wake; persistent idle open work and confirmed exit remain visible. Blocked,
-  Resolved notices are unchanged; startup failures remain in lifecycle state and logs.
+  wake; idle open work surfaces as a stall, and confirmed exit stays visible.
+  Blocked notices are unchanged; a closed dialog posts nothing. Startup failures
+  remain in lifecycle state and logs.
   A live author waiter defers its own reply/outcome components and marks only
   flushed replies and exact printed event keys seen; use `wait --message ID
-  --as YOUR_NAME` to resume that behavior. Idle (including background shells), other-message, exit and autonomous
+  --as YOUR_NAME` to resume that behavior. Stall, other-message, exit and autonomous
   events remain independent. New work followed by idle/stall is a new event;
   unchanged polls and restarts never replay it. Seeing one part of a queued batch preserves its
   other events. Shared-turn replies route once per group. A late stdout/native

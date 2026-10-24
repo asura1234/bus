@@ -394,3 +394,68 @@ fn notify_you_legacy_off_cannot_disable_worker_notifications() {
     );
     assert!(f.worker.set_feishu_notifications(false, &f.events).is_err());
 }
+
+#[test]
+fn repeated_tagged_blocker_after_failed_delivery_can_be_sent_after_recovery() {
+    let mut f = Fixture::new();
+    std::fs::write(f.root.join("mode"), "fail").unwrap();
+    f.post("[waiting-on-you] Unlock the device");
+    f.flush();
+    assert!(f.worker.attention.status.error.is_some());
+    assert_eq!(f.calls().len(), 1);
+    std::fs::remove_file(f.root.join("mode")).unwrap();
+    f.now += 5_000;
+    f.post("[waiting-on-you] Unlock the device");
+    f.flush();
+    assert_eq!(
+        f.calls().len(),
+        2,
+        "a failed attempt must not suppress a fresh explicit blocker after delivery recovers"
+    );
+    assert_eq!(f.worker.attention.status.error, None);
+}
+
+#[test]
+fn repeated_tagged_ask_stays_deduplicated_after_sender_rename() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Unlock the device");
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+    let mut state = f.worker.state.clone();
+    state.rename_agent(f.agent, "renamed-orch").unwrap();
+    f.worker.save(state).unwrap();
+    f.pump();
+    f.now += 5_000;
+    f.post("[waiting-on-you] Unlock the device");
+    f.flush();
+    assert_eq!(
+        f.calls().len(),
+        1,
+        "renaming does not change the sender ID of an already paged ask"
+    );
+}
+
+#[test]
+fn distinct_sender_reusing_a_name_can_page_its_own_tagged_ask() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Unlock the device");
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+    let mut state = f.worker.state.clone();
+    state.rename_agent(f.agent, "renamed-orch").unwrap();
+    let master = state.master_room().unwrap().id;
+    let replacement = state
+        .create_agent(master, "orch", Provider::Codex, f.root.clone(), None)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.agent = replacement;
+    f.pump();
+    f.now += 5_000;
+    f.post("[waiting-on-you] Unlock the device");
+    f.flush();
+    assert_eq!(
+        f.calls().len(),
+        2,
+        "a different sender ID must not inherit another sender's dedupe entry"
+    );
+}

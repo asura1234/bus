@@ -504,8 +504,8 @@ collects same-worker events for two seconds and combines them in one short
 message; new events can join a still-queued batch during its collection window.
 Long text uses a preview and `bus message status MESSAGE_ID` or
 `bus history --room ROOM` pointer. Different workers keep their own identity.
-No room monitoring, self-timer or surviving waiter is required. Blocked,
-Resolved notices keep their existing behavior. Startup failures are retained in agent state and diagnostic logs.
+No room monitoring, self-timer or surviving waiter is required. Blocked
+notices keep their existing behavior; a closed dialog posts nothing. Startup failures are retained in agent state and diagnostic logs.
 
 An author's `send --async --as ORCH` renews a three-second waiter lease, so its
 reply and no-reply outcome components wait for the combined output.
@@ -516,7 +516,7 @@ waiter marks only printed completed replies and the exact printed outcome
 including finals, exits and already-seen events; only unseen own outcomes are
 acknowledgeable through `event_acks`.
 It cannot hide an event that appeared after its output, an autonomous result,
-idle, an exit, or another message's events. Seeing a shared reply covers its group.
+an exit, or another message's events. Seeing a shared reply covers its group.
 A killed waiter stops renewing its lease, so unseen components are routed.
 
 Event decisions and queued batches are saved together before native submission.

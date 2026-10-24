@@ -174,7 +174,8 @@ do not add a new per-PR merge OK.
   flags and exhausted-budget blockers to the orchestrator in finals.
 - Report a missing or replaced peer to the orchestrator, which owns room notes,
   the roster and verifier allocation. Workers do not edit the notes or roster.
-  Finals still go to the orchestrator. Send only the message body; Bus adds
+  The PR owner's milestone finals still go to the orchestrator; reviewer and
+  verifier verdicts go to the owner only. Send only the message body; Bus adds
   the header, so do not sign messages.
 
 ## Clean up after integration

@@ -49,7 +49,9 @@ untagged posts, `@you` mentions and the legacy phrase stay in the TUI. A fixed t
 window combines tagged messages in a burst into one DM. Each contributes
 `sender is waiting on you: action`, taking the first line or bullet after the marker (same or
 following nonempty line), with Markdown closing markers skipped and the full action line
-preserved. The same line from the same sender is not resent within 30 minutes.
+preserved. The same action from the same agent (by ID, so a rename does not matter) is
+not resent within 30 minutes of a delivered DM; a failed send releases it, and a Bus restart
+starts a fresh window.
 Additional body lines and attachment paths are never added.
 Routing markers and terminal controls are filtered. Each source contributes its own line.
 
