@@ -13,7 +13,7 @@ state = "idle"
 priority = 80
 region = "bottom_non_empty_lines(4)"
 visible_idle = true
-regex = ['(?m)^[ \t]*[>→][ \t]*(?:Plan, search, build anything|Ask anything|Add a follow-up(?: — /plan to review and build)?)?[ \t]*\r?\n(?:[ \t]*▀+[ \t]*\r?\n)?[ \t\r\n]*[^\r\n]*\S[^\r\n]*\r?\n[ \t]*(?:/|~/)[^\r\n]+\s*\z']
+regex = ['(?m)^[ \t]*[>→][ \t]*(?:Plan, search, build anything|Ask anything|Add a follow-up(?: — /plan to review and build)?)?[ \t]*\r?\n(?:[ \t]*▀+[ \t]*\r?\n)?[ \t\r\n]*[^\r\n]*\S[^\r\n]*\r?\n[ \t]*(?:~(?:[\\/][^\r\n]*)?|(?:[A-Za-z]:)?[\\/][^\r\n]*)\s*\z']
 
 # Cursor Agent 2026.09.10: the native question chooser has boxed checkbox
 # options and a navigation footer. Both must be live at the screen bottom;

@@ -182,13 +182,26 @@ fn cursor_managed_startup_requires_a_complete_empty_composer_footer() {
     let current =
         " → Plan, search, build anything\n\n  Grok 4.7 256K High  Run Everything\n  /workspace\n";
     let legacy = include_str!("../../../server/api/agents/tests/fixtures/cursor_empty.txt");
-    for screen in [
-        current,
-        legacy,
-        &current.replace("Plan, search, build anything", "Add a follow-up"),
-    ] {
+    let mut screens = vec![
+        current.to_owned(),
+        legacy.to_owned(),
+        current.replace("Plan, search, build anything", "Add a follow-up"),
+    ];
+    screens.extend(
+        [
+            r"C:\Users\qa\work",
+            "C:/workspace",
+            r"~\work",
+            r"\\server\share",
+            r"C:\",
+            "/",
+            "~",
+        ]
+        .map(|path| current.replace("/workspace", path)),
+    );
+    for screen in screens {
         let input = DetectionInput {
-            screen,
+            screen: &screen,
             osc_title: "",
             osc_progress: "",
         };
@@ -202,6 +215,8 @@ fn cursor_managed_startup_requires_a_complete_empty_composer_footer() {
         current.replace("Plan, search, build anything", "my unsubmitted draft"),
         current.replace("  /workspace\n", ""),
         current.replace("  Grok 4.7 256K High  Run Everything\n", ""),
+        current.replace("/workspace", "C:workspace"),
+        current.replace("/workspace", "workspace"),
         format!("{current}Loading conversation...\n"),
     ] {
         let detection = evaluate_loaded_manifest(
