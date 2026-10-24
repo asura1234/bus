@@ -43,9 +43,9 @@ impl Worker {
         }));
         let evidence = match evidence {
             Ok(ResponseResult::PaneInfo { pane }) => pane,
-            Err(error)
-                if error.definitely_rejected && error.code.as_deref() == Some("pane_not_found") =>
-            {
+            // This is a read response. The transport's rejection bit concerns
+            // PTY submission and is intentionally false for pane_not_found.
+            Err(error) if error.code.as_deref() == Some("pane_not_found") => {
                 // A close may have succeeded just before its state save
                 // failed. Keep its address through the idempotent close pass
                 // so that pass can durably record success and detach it.
