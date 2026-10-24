@@ -380,7 +380,7 @@ fn the_same_blocked_screen_is_not_reported_again_after_a_flicker() {
 }
 
 #[test]
-fn an_undelivered_blocked_notice_keeps_its_failure_without_delivery_error_chat() {
+fn an_undelivered_blocked_notice_keeps_its_failure_and_reaches_the_developer_once() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
     screen.lock().unwrap().dialog = true;
@@ -394,6 +394,9 @@ fn an_undelivered_blocked_notice_keeps_its_failure_without_delivery_error_chat()
     let now = crate::messaging::storage::io::now_ms();
     worker
         .expire_queued_requests(now + crate::messaging::model::QUEUED_STALL_MS + 1)
+        .unwrap();
+    worker
+        .expire_unconfirmed_submissions(now + crate::messaging::model::QUEUED_STALL_MS + 1)
         .unwrap();
     let notice = worker
         .state
@@ -409,21 +412,26 @@ fn an_undelivered_blocked_notice_keeps_its_failure_without_delivery_error_chat()
         Some("hook_setup_unconfirmed")
     );
     assert!(notice.completed_at_ms.is_some());
+    let fallback =
+        format!("{blocked}\nThe orchestrator did not receive this (hook_setup_unconfirmed).");
     assert_eq!(
         sent_by(&worker, room, agent),
-        [(vec![orchestrator], blocked.clone())]
+        [
+            (vec![orchestrator], blocked.clone()),
+            (Vec::new(), fallback.clone())
+        ]
     );
-    // The actual dialog remains visible; its normal resolution is retained.
-    // Neither another help message nor a delivery-error message is injected.
+    // Escalation does not close the dialog or post duplicate help on later polls.
     polls(&mut worker, 3);
     assert!(worker.state.agent(agent).unwrap().dialog);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    assert_eq!(sent_by(&worker, room, agent).len(), 2);
     screen.lock().unwrap().dialog = false;
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
         [
             (vec![orchestrator], blocked),
+            (Vec::new(), fallback),
             (Vec::new(), expected_resolved(&worker, agent))
         ]
     );
@@ -1195,6 +1203,35 @@ fn manual_dialog_close_marks_the_previous_notice_resolved_once() {
 }
 
 #[test]
+fn a_fresh_native_dialog_close_suppresses_fallback_before_episode_debounce_finishes() {
+    let (mut worker, agent, _room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let Some(crate::messaging::model::DialogNoticeTo::Orchestrator(notice)) =
+        worker.state.agent(agent).unwrap().dialog_notice_to
+    else {
+        panic!("the open dialog must have an orchestrator notice");
+    };
+    let deadline = worker.state.request(notice).unwrap().prompt.submitted_at_ms
+        + crate::messaging::model::QUEUED_STALL_MS;
+    // Tick closes queued stalls first. Its fresh native poll then sees that
+    // the question has gone, before post-reconciliation episode escalation.
+    worker.expire_queued_requests(deadline).unwrap();
+    screen.lock().unwrap().dialog = false;
+    worker.poll().unwrap();
+    assert!(!worker.state.agent(agent).unwrap().dialog);
+    worker.expire_unconfirmed_submissions(deadline).unwrap();
+    let route = worker.state.agent(agent).unwrap().dialog_notice_to;
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_ne!(
+        route,
+        Some(crate::messaging::model::DialogNoticeTo::Developer),
+        "a fresh closed-dialog observation must win over fallback at the bound"
+    );
+}
+
+#[test]
 fn closed_dialog_resolves_help_even_while_blocked_metadata_stays_cached() {
     let (mut worker, agent, room, _, screen, dir) = worker(true);
     screen.lock().unwrap().dialog = true;
@@ -1264,4 +1301,183 @@ fn absent_metadata_keeps_help_while_a_native_dialog_or_question_remains() {
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn a_due_fallback_checks_the_native_screen_even_when_list_metadata_still_says_open() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let Some(crate::messaging::model::DialogNoticeTo::Orchestrator(notice)) =
+        worker.state.agent(agent).unwrap().dialog_notice_to
+    else {
+        panic!("missing notice")
+    };
+    let deadline = worker.state.request(notice).unwrap().prompt.submitted_at_ms
+        + crate::messaging::model::QUEUED_STALL_MS;
+    worker.expire_queued_requests(deadline).unwrap();
+    screen.lock().unwrap().dialog = false;
+    // No new AgentList poll: its open flag and the episode are both stale.
+    assert!(worker.state.agent(agent).unwrap().dialog);
+    for at in [
+        deadline,
+        deadline + crate::messaging::coordinator::expiry::DIALOG_OBSERVATION_GRACE_MS + 86_400_000,
+    ] {
+        worker.expire_unconfirmed_submissions(at).unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().dialog_notice_to,
+            Some(crate::messaging::model::DialogNoticeTo::Orchestrator(
+                notice
+            ))
+        );
+        assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_due_fallback_reaches_the_developer_for_an_open_native_dialog_or_pending_question() {
+    for pending in [false, true] {
+        let (mut worker, agent, room, _, screen, dir) = worker(true);
+        screen.lock().unwrap().dialog = true;
+        polls(&mut worker, 3);
+        let Some(crate::messaging::model::DialogNoticeTo::Orchestrator(notice)) =
+            worker.state.agent(agent).unwrap().dialog_notice_to
+        else {
+            panic!("missing notice")
+        };
+        let deadline = worker.state.request(notice).unwrap().prompt.submitted_at_ms
+            + crate::messaging::model::QUEUED_STALL_MS;
+        if pending {
+            let mut current = screen.lock().unwrap();
+            current.dialog = false;
+            current.pending_question = true;
+        }
+        notify_steady(&mut worker, agent, None);
+        let mut state = worker.state.clone();
+        state.observe_dialog(agent, false, deadline).unwrap();
+        worker.save(state).unwrap();
+        worker.expire_queued_requests(deadline).unwrap();
+        worker.expire_unconfirmed_submissions(deadline).unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().dialog_notice_to,
+            Some(crate::messaging::model::DialogNoticeTo::Developer)
+        );
+        let messages = sent_by(&worker, room, agent);
+        assert_eq!(messages.len(), 2);
+        assert!(messages[1].0.is_empty());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn an_unreadable_deadline_observation_retains_help_until_an_open_snapshot() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let Some(crate::messaging::model::DialogNoticeTo::Orchestrator(notice)) =
+        worker.state.agent(agent).unwrap().dialog_notice_to
+    else {
+        panic!("missing notice")
+    };
+    let deadline = worker.state.request(notice).unwrap().prompt.submitted_at_ms
+        + crate::messaging::model::QUEUED_STALL_MS;
+    worker.expire_queued_requests(deadline).unwrap();
+    {
+        let mut current = screen.lock().unwrap();
+        current.answer_sent = true;
+        current.settle_errors = 1;
+    }
+    worker.expire_unconfirmed_submissions(deadline).unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().dialog_notice_to,
+        Some(crate::messaging::model::DialogNoticeTo::Orchestrator(
+            notice
+        ))
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_some());
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    // The next ordinary tick can escalate once a coherent open snapshot returns.
+    worker.expire_unconfirmed_submissions(deadline + 1).unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().dialog_notice_to,
+        Some(crate::messaging::model::DialogNoticeTo::Developer)
+    );
+    worker
+        .expire_unconfirmed_submissions(deadline + 60_000)
+        .unwrap();
+    let messages = sent_by(&worker, room, agent);
+    assert_eq!(messages.len(), 2);
+    assert!(!messages[1].1.contains("The dialog state could not be read"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_persistently_unreadable_open_dialog_still_gets_a_bounded_developer_fallback() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let Some(crate::messaging::model::DialogNoticeTo::Orchestrator(notice)) =
+        worker.state.agent(agent).unwrap().dialog_notice_to
+    else {
+        panic!("the open dialog must have an orchestrator notice");
+    };
+    let deadline = worker.state.request(notice).unwrap().prompt.submitted_at_ms
+        + crate::messaging::model::QUEUED_STALL_MS;
+    {
+        let mut current = screen.lock().unwrap();
+        // AgentList continues to report this same open dialog. Detailed
+        // observation remains unreadable, as during a sustained redraw.
+        current.answer_sent = true;
+        current.settle_errors = u32::MAX;
+    }
+    let grace = crate::messaging::coordinator::expiry::DIALOG_OBSERVATION_GRACE_MS;
+    for elapsed in [
+        0,
+        crate::messaging::model::QUEUED_STALL_MS,
+        grace - 1,
+        grace,
+        3_600_000,
+        86_400_000,
+    ] {
+        let reloaded = worker.store.load().unwrap().unwrap();
+        worker.save(reloaded).unwrap();
+        worker.expire_queued_requests(deadline + elapsed).unwrap();
+        worker.poll().unwrap();
+        worker
+            .expire_unconfirmed_submissions(deadline + elapsed)
+            .unwrap();
+        if elapsed < grace {
+            assert_eq!(
+                worker.state.agent(agent).unwrap().dialog_notice_to,
+                Some(crate::messaging::model::DialogNoticeTo::Orchestrator(
+                    notice
+                ))
+            );
+            assert_eq!(sent_by(&worker, room, agent).len(), 1);
+        } else {
+            assert_eq!(
+                worker.state.agent(agent).unwrap().dialog_notice_to,
+                Some(crate::messaging::model::DialogNoticeTo::Developer)
+            );
+            assert_eq!(sent_by(&worker, room, agent).len(), 2);
+        }
+    }
+    assert!(screen.lock().unwrap().current_dialog().is_some());
+    assert!(worker.state.agent(agent).unwrap().dialog);
+    let route = worker.state.agent(agent).unwrap().dialog_notice_to;
+    let messages = sent_by(&worker, room, agent);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        route,
+        Some(crate::messaging::model::DialogNoticeTo::Developer),
+        "repeated unreadable observations must not suppress fallback forever, even a day past its bound"
+    );
+    assert_eq!(messages.len(), 2, "fallback must be posted exactly once");
+    assert!(messages[1].1.contains("The dialog state could not be read"));
+    assert!(messages[1].1.contains("may still be blocked"));
 }

@@ -44,11 +44,11 @@ pub(crate) use {
     types::{
         is_developer_recipient, AgentId, AgentRecipients, AgentRuntimeIdentity, AgentStartup,
         Author, CallbackDisposition, CallbackEventKind, CallbackRejection, Compactions,
-        DialogNoticeTo, Draft, ExitSnapshot, PendingFinal, Prompt, PromptId, Provider,
-        ProviderCallback, Reply, Request, RequestId, RequestPhase, Room, RoomId, RoomKind,
-        RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER, DELIVERED_STALL_MS,
-        HELD_REPLY_SETTLE_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS, STEERING_SETTLE_MS,
-        TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
+        DialogNoticeDelivery, DialogNoticeTo, Draft, ExitSnapshot, PendingFinal, Prompt, PromptId,
+        Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, Room, RoomId,
+        RoomKind, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER,
+        DELIVERED_STALL_MS, HELD_REPLY_SETTLE_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS,
+        STEERING_SETTLE_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },
 };
 

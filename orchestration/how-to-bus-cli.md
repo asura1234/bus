@@ -420,6 +420,13 @@ keep their saved instructions; upgrades do not insert new task turns.
 A message from another conversation room waits for the recipient's running
 turn to finish, then gets its own turn and reply. Same-room steering,
 `--queue`, `wait` and settlement keep their normal behavior.
+Bus's blocked-dialog notices take priority and may steer into an orchestrator's
+active turn across rooms. If a notice remains unsubmitted or its native write
+unconfirmed for two minutes, Bus reports it to the developer even while the
+orchestrator is working or blocked. A readable closed dialog suppresses fallback.
+If its dialog state cannot be read, Bus allows at most three extra minutes,
+then tells the developer the state is unreadable and the agent may still be
+blocked. Uncertain writes are never replayed.
 `--to all` targets conversation-room members only (excluding `--as`). The
 work-room composer's picker lists the bound orchestrator separately; its All
 row selects and clears room members only.

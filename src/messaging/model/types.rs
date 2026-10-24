@@ -486,6 +486,15 @@ pub(crate) struct PendingFinal {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) enum DialogNoticeDelivery {
+    /// Saved before native I/O; a restart may lose its outcome entirely.
+    Unconfirmed {
+        since_ms: u64,
+    },
+    Confirmed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
     pub(crate) room_id: RoomId,
@@ -507,6 +516,10 @@ pub(crate) struct Request {
     #[serde(default)]
     pub(crate) trusted_start_bound: bool,
     pub(crate) uncertain_outcome: bool,
+    /// A blocked-dialog episode outlives request/group settlement. Keep its
+    /// native receipt and write clock independently of those transitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_delivery: Option<DialogNoticeDelivery>,
     pub(crate) pending_final: Option<PendingFinal>,
     pub(crate) completed_at_ms: Option<u64>,
     /// Sent with `--queue`: waits for an idle agent and gets its own turn.

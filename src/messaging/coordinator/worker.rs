@@ -92,6 +92,7 @@ impl Worker {
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
         // Sessions saved before MASTER existed gain it here, once, before any client sees them.
         state.ensure_master_room();
+        state.upgrade_dialog_notice_delivery();
         state
             .upgrade_agent_names(io::now_ms())
             .map_err(|e| e.to_string())?;

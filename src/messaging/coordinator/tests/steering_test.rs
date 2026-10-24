@@ -9,6 +9,12 @@ use std::sync::{
     Arc, Mutex,
 };
 
+#[path = "dialog_priority_test.rs"]
+mod dialog_priority_tests;
+
+#[path = "dialog_reconciliation_test.rs"]
+mod dialog_reconciliation_tests;
+
 #[path = "turn_settlement_test.rs"]
 mod turn_settlement_tests;
 
@@ -51,10 +57,25 @@ impl Transport for Native {
                 }))
                 .unwrap(),
             },
+            Method::AgentDialogObserve(params) => open_native_question(&params.target),
             _ => ResponseResult::Ok {},
         };
         self.0.lock().unwrap().push(method);
         Ok(result)
+    }
+}
+
+/// A coherent collapsed question in the blocked worker's owned pane.
+fn open_native_question(pane: &str) -> ResponseResult {
+    ResponseResult::AgentDialog {
+        observation: schema::AgentDialogObservation {
+            terminal_id: "terminal".into(),
+            pane_id: pane.into(),
+            session_id: None,
+            content_revision: 1,
+            pending_question: true,
+            dialog: None,
+        },
     }
 }
 
@@ -69,6 +90,29 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn bind_dialog_pane(&mut self, worker: AgentId) {
+        let mut state = self.worker.state.clone();
+        state
+            .set_agent_runtime_identity(
+                worker,
+                AgentRuntimeIdentity {
+                    launch_id: Some("worker-launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("worker-pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        self.worker.save(state).unwrap();
+    }
+
+    /// Mirror tick's boundary: queued cleanup, durable callbacks, then expiry.
+    fn expire_after_reconciliation(&mut self, now_ms: u64) {
+        self.worker.expire_queued_requests(now_ms).unwrap();
+        self.consume();
+        self.worker.expire_unconfirmed_submissions(now_ms).unwrap();
+    }
+
     fn new(provider: Provider) -> Self {
         Self::in_room(provider, false)
     }
@@ -1051,4 +1095,109 @@ fn a_deleted_recipients_closed_request_survives_archive_reload_and_history() {
         None,
     );
     assert!(history.ok, "{history:?}");
+}
+
+/// A MASTER orchestrator running `lead`, bound to a work room whose Codex
+/// worker has just posted a real blocked-dialog notice to it.
+fn orchestrator_with_blocked_worker_notice() -> (Fixture, AgentId, RequestId, RequestId) {
+    use crate::messaging::model::DialogNoticeTo;
+    let mut f = Fixture::in_room(Provider::ClaudeCode, true);
+    let mut state = f.worker.state.clone();
+    let work = state.create_room("work").unwrap();
+    state.bind_orchestrator(f.agent, work).unwrap();
+    let codex = state
+        .create_agent(work, "feishu-pull", Provider::Codex, f.dir.clone(), None)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.bind_dialog_pane(codex);
+    f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
+    f.consume();
+    let lead = running(&mut f, "keep working", "turn-1");
+    for _ in 0..2 {
+        f.worker
+            .notify_dialogs(vec![(codex, Some("codex:pending_question".into()))])
+            .unwrap();
+    }
+    let Some(DialogNoticeTo::Orchestrator(notice)) =
+        f.worker.state.agent(codex).unwrap().dialog_notice_to
+    else {
+        panic!("blocked question must queue a notice");
+    };
+    (f, codex, lead, notice)
+}
+
+#[test]
+fn an_uncertain_steered_dialog_notice_reaches_the_developer_even_if_its_turn_settles_first() {
+    use crate::messaging::model::{DialogNoticeTo, QUEUED_STALL_MS};
+    struct UncertainNative;
+    impl Transport for UncertainNative {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            Ok(match method {
+                Method::AgentDialogObserve(params) => open_native_question(&params.target),
+                _ => ResponseResult::Ok {},
+            })
+        }
+    }
+    let (mut f, codex, lead, notice) = orchestrator_with_blocked_worker_notice();
+    f.worker.transport = Box::new(UncertainNative);
+    f.deliver();
+    assert!(f.request(notice).uncertain_outcome);
+    assert!(!f.request(notice).trusted_start_bound);
+    assert_eq!(f.request(notice).group, Some(lead));
+    // The lead's turn ends without any hook showing the notice was seen.
+    f.stopped("turn-1", "MASTER status done");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.now = crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    let Some(crate::messaging::model::DialogNoticeDelivery::Unconfirmed { since_ms: at }) =
+        f.request(notice).dialog_delivery
+    else {
+        panic!("the real native write must persist its start before I/O");
+    };
+    f.expire_after_reconciliation(at + QUEUED_STALL_MS);
+    assert_eq!(
+        f.worker.state.agent(codex).unwrap().dialog_notice_to,
+        Some(DialogNoticeTo::Developer),
+        "an unconfirmed blocked notice must reach the developer: notice={:?}",
+        f.request(notice)
+    );
+}
+
+#[test]
+fn an_interrupt_that_closes_a_queued_dialog_notice_reaches_the_developer() {
+    use crate::messaging::model::{DialogNoticeTo, QUEUED_STALL_MS};
+    let (mut f, codex, _lead, notice) = orchestrator_with_blocked_worker_notice();
+    // The developer pressed stop before Bus could type the notice.
+    let mut state = f.worker.state.clone();
+    state.begin_interrupt(f.agent).unwrap();
+    f.worker.save(state).unwrap();
+    f.deliver();
+    assert_eq!(f.request(notice).phase, RequestPhase::Queued);
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
+    let at = f.request(notice).prompt.submitted_at_ms;
+    f.expire_after_reconciliation(at + QUEUED_STALL_MS);
+    f.deliver();
+    let room = f.request(notice).room_id;
+    let reached_developer =
+        f.worker.state.agent(codex).unwrap().dialog_notice_to == Some(DialogNoticeTo::Developer);
+    let retried = f
+        .worker
+        .state
+        .queued_requests(f.agent)
+        .iter()
+        .any(|id| f.request(*id).prompt.text.contains("Blocked, needs help"));
+    assert!(
+        reached_developer || retried,
+        "an interrupted blocked notice is lost: dialog_notice_to={:?}, notices={:?}",
+        f.worker.state.agent(codex).unwrap().dialog_notice_to,
+        f.worker.state.room(room).unwrap().notices
+    );
+    assert!(reached_developer);
+    assert!(!retried, "interrupted notices must not be replayed");
+    f.expire_after_reconciliation(at + QUEUED_STALL_MS + 60_000);
+    assert_eq!(f.worker.state.room(room).unwrap().notices.len(), 1);
 }

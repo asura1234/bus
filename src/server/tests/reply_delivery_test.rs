@@ -1383,7 +1383,7 @@ async fn orchestrator_inbox_admits_master_peers_before_background_shells_finish(
 }
 
 #[tokio::test]
-async fn orchestrator_inbox_prioritizes_real_blocked_notices_at_held_boundary() {
+async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_answer() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
     let held = f.send(orch, f.master, "status", false, None);
@@ -1394,9 +1394,10 @@ async fn orchestrator_inbox_prioritizes_real_blocked_notices_at_held_boundary() 
     let notice = f.blocked_worker_notice(orch);
     assert_eq!(
         f.typed(orch).len(),
-        1,
-        "a live turn must not be interrupted"
+        2,
+        "the real blocked notice must reach the live turn"
     );
+    assert_eq!(f.state().request(notice).unwrap().group, Some(held));
     f.stop(
         orch,
         "status-turn",
@@ -1413,8 +1414,12 @@ async fn orchestrator_inbox_prioritizes_real_blocked_notices_at_held_boundary() 
         f.state().request(ordinary).unwrap().phase,
         RequestPhase::Queued
     );
-    f.assert_reply(held, "captured status");
+    assert_eq!(f.state().request(held).unwrap().phase, RequestPhase::Active);
     f.start(orch, "notice-turn", &payload);
+    // The provider ran the steered input as a separate turn. Its submit hook
+    // detaches the notice while preserving the captured earlier answer.
+    assert_eq!(f.state().request(notice).unwrap().group, None);
+    f.assert_reply(held, "captured status");
     f.stop(orch, "notice-turn", "help given", json!([]), json!([]));
     f.elapse(31_000);
     f.assert_reply(notice, "help given");
@@ -1496,8 +1501,11 @@ fn orchestrator_inbox_burst(round: usize) {
         payload.contains("Blocked, needs help"),
         "28 queued messages hid a dialog: {payload}"
     );
-    f.assert_reply(held, "held reply");
+    assert_eq!(f.state().request(blocker).unwrap().group, Some(held));
+    assert_eq!(f.state().request(held).unwrap().phase, RequestPhase::Active);
     f.start(orch, "blocker", &payload);
+    assert_eq!(f.state().request(blocker).unwrap().group, None);
+    f.assert_reply(held, "held reply");
     f.stop(orch, "blocker", "blocker reply", json!([]), json!([]));
     f.elapse(31_000);
     f.assert_reply(blocker, "blocker reply");

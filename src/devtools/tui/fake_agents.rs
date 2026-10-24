@@ -341,7 +341,7 @@ impl FakeAgent {
             show_dialog(seconds);
         }
         if question::requested(&self.provider, prompt) {
-            if let Err(code) = self.queued_question() {
+            if let Err(code) = self.queued_question(prompt.trim() == "fake:question-text") {
                 return Some(code);
             }
         }

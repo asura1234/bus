@@ -1,5 +1,8 @@
 //! Explicit recovery and terminal failure of unsubmitted queued requests.
-use super::{BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus};
+use super::{
+    Author, BusState, DialogNoticeDelivery, DialogNoticeTo, ModelError, RequestId, RequestPhase,
+    RuntimeStatus, SubmissionOutcome, QUEUED_STALL_MS,
+};
 
 impl BusState {
     /// Close only never-submitted notices emitted by the retired GitHub watch.
@@ -83,6 +86,81 @@ impl BusState {
         Ok(())
     }
 
+    /// Only a live dialog episode's Bus-authored notice to its bound
+    /// orchestrator can bypass ordinary delivery. Text never grants priority.
+    pub(crate) fn is_dialog_notice(&self, id: RequestId) -> bool {
+        self.request(id).is_some_and(|request| {
+            !request.settled()
+                && self.dialog_notice_worker(id).is_some_and(|worker| {
+                    self.notice_orchestrator(worker.room_id, Some(worker.id))
+                        == Some(request.agent_id)
+                })
+        })
+    }
+
+    /// The persisted episode is independent of its notice request's lifetime.
+    fn dialog_notice_worker(&self, id: RequestId) -> Option<&super::RoomAgent> {
+        let request = self.request(id)?;
+        if request.prompt.author != Author::Bus {
+            return None;
+        }
+        self.agents.values().find(|worker| {
+            worker.dialog_notice.is_some()
+                && worker.dialog_notice_to == Some(DialogNoticeTo::Orchestrator(id))
+                && worker.room_id == request.room_id
+        })
+    }
+
+    /// Before receipt storage existed, Active without uncertainty already
+    /// proved a native confirmation (or a trusted hook). Import that proof
+    /// before settlement can replace Active with the group's terminal phase.
+    pub(crate) fn upgrade_dialog_notice_delivery(&mut self) {
+        let confirmed: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.dialog_delivery.is_none()
+                    && request.phase == RequestPhase::Active
+                    && !request.uncertain_outcome
+                    && self.dialog_notice_worker(request.id).is_some()
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in confirmed {
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.dialog_delivery = Some(DialogNoticeDelivery::Confirmed);
+            }
+        }
+    }
+
+    /// Persist alongside begin_submission/begin_steering, before native I/O.
+    pub(crate) fn begin_dialog_notice_write(&mut self, id: RequestId, now_ms: u64) {
+        if self.dialog_notice_worker(id).is_some() {
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.dialog_delivery =
+                    Some(DialogNoticeDelivery::Unconfirmed { since_ms: now_ms });
+            }
+        }
+    }
+
+    pub(super) fn record_dialog_notice_write(
+        &mut self,
+        id: RequestId,
+        outcome: &SubmissionOutcome,
+    ) {
+        if self.dialog_notice_worker(id).is_some() {
+            if let Some(request) = self.requests.get_mut(&id) {
+                match outcome {
+                    SubmissionOutcome::Confirmed { .. } => {
+                        request.dialog_delivery = Some(DialogNoticeDelivery::Confirmed);
+                    }
+                    SubmissionOutcome::DefinitelyRejected { .. } => request.dialog_delivery = None,
+                    SubmissionOutcome::Uncertain { .. } => {}
+                }
+            }
+        }
+    }
+
     /// Capture all reasons before recovery clears the agent's last refusal.
     pub(crate) fn expire_stalled_queued_requests(
         &mut self,
@@ -96,6 +174,12 @@ impl BusState {
             .filter(|request| !self.is_reply_notification(request.id))
             .filter_map(|request| {
                 self.stall_reason(request, now_ms)
+                    .or_else(|| {
+                        (self.is_dialog_notice(request.id)
+                            && now_ms.saturating_sub(request.prompt.submitted_at_ms)
+                                >= QUEUED_STALL_MS)
+                            .then(|| "dialog_notice_undelivered".into())
+                    })
                     .map(|reason| (request.id, reason))
             })
             .collect();
@@ -117,19 +201,47 @@ impl BusState {
                     "Queued request {} was not submitted ({reason}); it was closed and will not run later. Resend the message when ready.", id.0
                 ));
             }
-            self.redirect_dialog_notice(id, &reason, now_ms)?;
             expired.push(id);
         }
         Ok(expired)
     }
 
-    /// A blocked notice the orchestrator never took would leave the dialog
-    /// unreported for as long as it stays open, so the developer gets it.
-    fn redirect_dialog_notice(
+    /// Due episodes need a current native liveness check before escalation.
+    /// Request closure, including group settlement, is not a delivery receipt.
+    /// Each candidate includes its persisted-clock delivery deadline.
+    pub(crate) fn dialog_notice_fallback_candidates(
+        &self,
+        now_ms: u64,
+    ) -> Vec<(super::AgentId, RequestId, u64)> {
+        self.agents
+            .values()
+            .filter_map(|worker| {
+                let Some(DialogNoticeTo::Orchestrator(id)) = worker.dialog_notice_to else {
+                    return None;
+                };
+                // A settled request may already live in permanent history.
+                let request = self.request(id)?;
+                let since_ms = match request.dialog_delivery {
+                    Some(DialogNoticeDelivery::Confirmed) => return None,
+                    Some(DialogNoticeDelivery::Unconfirmed { since_ms }) => since_ms,
+                    // Older saved requests have no explicit receipt/clock.
+                    None => request.prompt.submitted_at_ms,
+                };
+                (!request.trusted_start_bound
+                    && self.dialog_notice_worker(request.id).is_some()
+                    && now_ms.saturating_sub(since_ms) >= QUEUED_STALL_MS)
+                    .then_some((worker.id, id, since_ms.saturating_add(QUEUED_STALL_MS)))
+            })
+            .collect()
+    }
+
+    /// An undelivered or unconfirmed blocked notice must reach the developer;
+    /// an unknown native write may already have reached the orchestrator.
+    pub(crate) fn redirect_dialog_notice(
         &mut self,
         request: RequestId,
         reason: &str,
-        _now_ms: u64,
+        now_ms: u64,
     ) -> Result<(), ModelError> {
         let Some((agent, room)) = self
             .agents
@@ -145,8 +257,31 @@ impl BusState {
             agent_id = agent.0,
             room_id = room.0,
             reason,
-            "Blocked-dialog notice was not delivered; inspect request and dialog state"
+            "Blocked-dialog notice lacks confirmed delivery; inspect request and dialog state"
         );
+        let notice = self
+            .request(request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        let delivery = if notice.dialog_delivery.is_some()
+            || notice.uncertain_outcome
+            || notice.steered
+            || notice.submission_boundary.is_some()
+        {
+            "Delivery to the orchestrator is unconfirmed; it may already have received this"
+        } else {
+            "The orchestrator did not receive this"
+        };
+        let observation = if reason == "dialog_notice_observation_unavailable" {
+            "\nThe dialog state could not be read; the agent may still be blocked."
+        } else {
+            ""
+        };
+        let reason = notice.failure_reason.as_deref().unwrap_or(reason);
+        let text = format!(
+            "{}\n{delivery} ({reason}).{observation}",
+            notice.prompt.text
+        );
+        self.post_bus_notice(room, None, text, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 

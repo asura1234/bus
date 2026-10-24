@@ -1,4 +1,5 @@
 //! Coordinator delivery ownership.
+use super::io;
 use super::{
     callbacks, diagnostics, launch, schema, Method, Provider, RequestId, ResponseResult, RoomAgent,
     RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
@@ -210,6 +211,7 @@ impl Worker {
         state
             .begin_submission(request, launch, boundary)
             .map_err(|e| e.to_string())?;
+        state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
         let started = std::time::Instant::now();
@@ -315,6 +317,7 @@ impl Worker {
         state
             .begin_steering(request, lead)
             .map_err(|e| e.to_string())?;
+        state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
         let started = std::time::Instant::now();
