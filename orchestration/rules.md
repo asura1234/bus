@@ -342,8 +342,7 @@ the wrapper remains held.
   after proving its operation is no longer active.
 - **Reuse one Cargo target per worktree.** Export
   `CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run;
-  leave `CARGO_LLVM_COV_TARGET_DIR` unset for separate instrumented output in
-  `<worktree>/target/llvm-cov-target`. Never create per-run target dirs.
+  point LLVM coverage at that same target. Never create per-run target dirs.
   Delete your inactive per-run targets after runs and close merged worktrees.
   Build outside the live Bus checkout so its running binary is not replaced.
 - **Limit the room to two full builds.** Before a gate, coverage or E2E binary

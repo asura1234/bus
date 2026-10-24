@@ -80,9 +80,8 @@ specified below; they do not get another checkout.
 
 Reuse exactly one Cargo target per worktree: export
 `CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run,
-and leave `CARGO_LLVM_COV_TARGET_DIR` unset so instrumented output stays in
-`<worktree>/target/llvm-cov-target`. Never make per-run targets or share a
-writable target between worktrees. Serialize builds in the author worktree,
+and set `CARGO_LLVM_COV_TARGET_DIR` to that same path for coverage. Never make
+per-run targets or share a writable target between worktrees. Serialize builds in the author worktree,
 including reviewer/investigator probe builds. Each room has two full-build slots:
 `/tmp/bus-<room id>-build-slot-1` and `/tmp/bus-<room id>-build-slot-2`.
 The orchestrator takes its room id from its prompt, resolves both literal

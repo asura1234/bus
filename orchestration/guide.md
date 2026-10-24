@@ -290,12 +290,11 @@ lease only after proving its operation has ended. If ownership is unclear,
 coordinate with the other orchestrator while unrelated work continues.
 
 Keep **one Cargo target per worktree**. For every Cargo, gate, coverage and E2E
-run, export the absolute worktree target. Keep instrumented output separate
-inside that root at `target/llvm-cov-target` by leaving the coverage override unset:
+run, export the absolute worktree target; configure coverage to reuse it too:
 
 ```sh
 export CARGO_TARGET_DIR="$worktree_path/target"
-unset CARGO_LLVM_COV_TARGET_DIR
+export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR"
 ```
 
 Do not create per-run targets such as `target/scratch`, `target/e2e`,
