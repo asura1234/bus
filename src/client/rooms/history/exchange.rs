@@ -20,6 +20,10 @@ struct Exchange<'a> {
 #[path = "../tests/history_group_test.rs"]
 mod group_tests;
 
+#[cfg(test)]
+#[path = "../tests/history_perf_test.rs"]
+mod perf_tests;
+
 impl History {
     pub fn lines(
         &mut self,
@@ -35,7 +39,17 @@ impl History {
         static REBUILD: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.rebuild");
         let _lines_timer = LINES.start();
+        self.rebuilt = 0;
+        self.rendered = 0;
+        self.projected = 0;
         if self.source != Some((revision, room.id)) {
+            let _timer = super::phases::SIGNATURE.start();
+            let visited = self.room_markdown.len();
+            self.room_markdown.retain(|id, _| state.room(*id).is_some());
+            if self.room_markdown.len() != visited {
+                let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
+                self.markdown.retain(|source, _| shown.contains(source));
+            }
             self.signature = signature(state, room);
             self.source = Some((revision, room.id));
         }
@@ -46,18 +60,56 @@ impl History {
             now / 60_000,
             thumbnails.layout_key(),
         );
-        if self.key == Some(key) {
+        if self.key.is_some_and(|previous| {
+            previous.0 == key.0
+                && previous.1 == key.1
+                && previous.2 == key.2
+                && previous.4 == key.4
+                && (previous.3 == key.3 || self.age_valid.contains(&now))
+        }) {
+            self.key = Some(key);
             return &self.lines;
         }
         let started = std::time::Instant::now();
         let reason = rebuild_reason(self.key, key);
         self.rendered = 0;
-        let groups = state.groups();
-        let exchanges = exchanges(state, room);
+        let (groups, exchanges) = {
+            let _timer = super::phases::GROUPING.start();
+            (state.groups(), exchanges(state, room))
+        };
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
+        let mut age_valid = 0..u64::MAX;
         for exchange in exchanges.into_values() {
+            if self
+                .cancellation
+                .as_ref()
+                .is_some_and(|cancel| cancel.cancelled())
+            {
+                REBUILD.record_op(
+                    started.elapsed(),
+                    &format!(
+                        "room={} reason={reason} cancelled=1 rows={} rendered={} exchanges={} projected={}",
+                        room.id.0,
+                        lines.len(),
+                        self.rendered,
+                        self.rebuilt,
+                        self.projected
+                    ),
+                );
+                return &self.lines;
+            }
+            self.rebuilt += 1;
             let prompt = exchange.prompt;
+            // HH:MM is constant until this prompt becomes older than one day.
+            // Keep both bounds so moving the wall clock backwards is safe too.
+            if let Some(expires) = prompt.submitted_at_ms.checked_add(86_400_001) {
+                if now >= expires {
+                    age_valid.start = age_valid.start.max(expires);
+                } else {
+                    age_valid.end = age_valid.end.min(expires);
+                }
+            }
             self.push_prompt_lines(
                 &mut lines,
                 &mut active_markdown,
@@ -85,14 +137,17 @@ impl History {
         let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
         self.markdown.retain(|source, _| shown.contains(source));
         self.key = Some(key);
-        self.lines = lines;
+        self.lines = lines.into();
+        self.age_valid = age_valid;
         REBUILD.record_op(
             started.elapsed(),
             &format!(
-                "room={} reason={reason} rows={} rendered={}",
+                "room={} reason={reason} rows={} rendered={} exchanges={} projected={}",
                 room.id.0,
                 self.lines.len(),
-                self.rendered
+                self.rendered,
+                self.rebuilt,
+                self.projected
             ),
         );
         &self.lines
@@ -107,6 +162,7 @@ impl History {
         width: u16,
         now: u64,
     ) {
+        let header_timer = super::phases::HEADER.start();
         let mut header = vec![
             (
                 participant_label(state, &prompt.author),
@@ -140,21 +196,27 @@ impl History {
             "",
             RowAnchor::new(prompt.id, None, RowKind::PromptHeader),
         ));
+        drop(header_timer);
         let prompt_source = MarkdownSource::Prompt(prompt.id);
         active_markdown.insert(prompt_source);
         let scope = link_scope(state, &prompt.author);
         let block = self.markdown_block(prompt_source, attention.unwrap_or(&prompt.text));
         let cold = !block.is_laid_out(width);
-        lines.extend(super::wrapped_links::scoped_lines(
-            block.lines(
-                width,
-                prompt_source,
-                "",
-                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
-            ),
-            scope,
-        ));
+        let projected = !block.is_scoped(width, &scope);
+        lines.extend(
+            block
+                .lines(
+                    width,
+                    prompt_source,
+                    "",
+                    RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+                    scope,
+                )
+                .iter()
+                .cloned(),
+        );
         self.rendered += usize::from(cold);
+        self.projected += usize::from(projected);
     }
 
     fn push_reply_lines(
@@ -214,6 +276,7 @@ impl History {
                 )));
             }
             replied = true;
+            let header_timer = super::phases::HEADER.start();
             let attention = state
                 .is_developer_attention_author(room.id, &Author::Agent(*agent_id))
                 .then(|| crate::messaging::attention::text(text))
@@ -232,6 +295,7 @@ impl History {
                 "    ",
                 RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyHeader),
             ));
+            drop(header_timer);
             let reply_anchor = RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyBody);
             if let Some(request) = quote {
                 let source = MarkdownSource::Reply(request);
@@ -239,11 +303,15 @@ impl History {
                 let scope = link_scope(state, &Author::Agent(*agent_id));
                 let block = self.markdown_block(source, text);
                 let cold = !block.is_laid_out(width);
-                lines.extend(super::wrapped_links::scoped_lines(
-                    block.lines(width, source, "    ", reply_anchor),
-                    scope,
-                ));
+                let projected = !block.is_scoped(width, &scope);
+                lines.extend(
+                    block
+                        .lines(width, source, "    ", reply_anchor, scope)
+                        .iter()
+                        .cloned(),
+                );
                 self.rendered += usize::from(cold);
+                self.projected += usize::from(projected);
                 lines.push(Line {
                     text: "    Quote".into(),
                     action: Some(Action::Quote(request)),
@@ -292,6 +360,7 @@ fn wrap_header(
     indent: &str,
     anchor: RowAnchor,
 ) -> Vec<Line> {
+    let _timer = super::phases::WRAP.start();
     let mut source = String::new();
     let mut ranges = Vec::new();
     for (text, tone) in spans {
@@ -547,6 +616,7 @@ fn push_prompt_files(
     width: u16,
     thumbnails: &mut Thumbnails,
 ) {
+    let _timer = super::phases::THUMBNAILS.start();
     if prompt.files.is_empty() {
         return;
     }

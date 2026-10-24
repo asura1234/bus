@@ -72,11 +72,10 @@ impl BusUi {
         let visible_anchor = (!self.history_follow_tail)
             .then(|| self.history.anchor_at(self.main_scroll))
             .flatten();
-        self.history.lines(
-            &self.snapshot.state,
-            room,
+        self.history.request_lines(
+            Arc::clone(&self.snapshot),
+            room.id,
             width,
-            self.snapshot.revision,
             now,
             &mut self.thumbnails,
         );
@@ -371,6 +370,7 @@ impl BusUi {
             if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
                 // Partly scrolled thumbnails keep their blank rows and name.
                 thumbnail.row == 0
+                    && thumbnail.cols <= width
                     && index + usize::from(thumbnail.rows) <= usize::from(view.history.height)
             }) {
                 view.thumbnails.push(Placement {

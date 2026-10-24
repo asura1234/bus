@@ -91,6 +91,7 @@ impl crate::client::compositor::ClientShellState {
         )?;
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
+        bus.history.enable_background()?;
         bus.handle = Some(handle);
         bus.yolo = server_yolo();
         bus.dev_settings = crate::client::perf::overlay_available();
@@ -136,7 +137,8 @@ impl crate::client::compositor::ClientShellState {
         let focus = self.outer_focused;
         let changed = self.bus.as_mut().is_some_and(|bus| {
             bus.outer_focused = focus;
-            bus.tick()
+            let changed = bus.tick();
+            bus.history.poll() || changed
         });
         self.dispatch_bus_terminal_focus(outcome);
         changed
