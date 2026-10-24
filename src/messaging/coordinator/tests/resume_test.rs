@@ -323,7 +323,13 @@ fn missing_pane_after_restart_is_cleared_but_transport_failure_is_not_evidence()
             }
         }
     }
-    for (code, rejected, cleared) in [("pane_not_found", true, true), ("timeout", false, false)] {
+    // The transport's submission rejection bit is false for PaneGet's
+    // pane_not_found response; it describes PTY input, not read evidence.
+    for (code, rejected, cleared) in [
+        ("pane_not_found", false, true),
+        ("pane_not_found", true, true),
+        ("timeout", false, false),
+    ] {
         let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
         worker.transport = Box::new(MissingPane { code, rejected });
         worker.poll().unwrap();
