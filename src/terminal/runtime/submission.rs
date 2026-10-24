@@ -215,6 +215,8 @@ impl ObservedSubmission {
             if let Err(error) = self.check_deadline() {
                 return self.withdraw_unshown(error);
             }
+            #[cfg(test)]
+            self.clock.waiting_for_draft();
             self.clock.sleep(Duration::from_millis(20), generation);
         }
         let mut last_enter = None;
@@ -258,7 +260,11 @@ impl ObservedSubmission {
                     .recv_timeout(self.clock.remaining(self.deadline.get()))
                     .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
                 last_enter = Some(self.clock.now());
+                #[cfg(test)]
+                self.clock.entered();
             }
+            #[cfg(test)]
+            self.clock.submission_checked(generation);
             self.clock.sleep(Duration::from_millis(20), generation);
         }
     }

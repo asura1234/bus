@@ -28,11 +28,15 @@ fn start_deferred_agent_prompt(
     id: &str,
     params: AgentPromptParams,
 ) -> std::sync::mpsc::Receiver<String> {
+    let method = crate::protocol::api::schema::Method::AgentPrompt(params);
+    if let Some(clock) = app.test_prompt_clock(&method) {
+        clock.pause();
+    }
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(app.handle_deferred_agent_api_request(
         crate::protocol::api::schema::Request {
             id: id.into(),
-            method: crate::protocol::api::schema::Method::AgentPrompt(params),
+            method,
         },
         respond_to,
     ));
@@ -41,7 +45,7 @@ fn start_deferred_agent_prompt(
 
 fn run_deferred_agent_prompt(app: &mut App, id: &str, params: AgentPromptParams) -> String {
     start_deferred_agent_prompt(app, id, params)
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
         .expect("agent prompt responds after submission")
 }
 

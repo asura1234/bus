@@ -1,3 +1,52 @@
+const NATIVE_FIXTURE_WAIT: Duration = Duration::from_secs(60);
+
+fn wait_for_fake_provider_ready(socket: &PathBuf, pane: &str, marker: &str) {
+    let request = serde_json::json!({
+        "id": "fake-ready",
+        "method": "pane.read",
+        "params": {"pane_id": pane, "source": "recent", "lines": 200}
+    })
+    .to_string();
+    assert!(
+        wait_until(NATIVE_FIXTURE_WAIT, Duration::from_millis(50), || {
+            send_json_request(socket, &request)["result"]["read"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains(marker))
+        }),
+        "fake provider did not reach readiness barrier {marker}"
+    );
+}
+
+fn wait_for_semantic_notification(stream: &mut UnixStream, pane: &str, event: &str) -> bool {
+    let deadline = Instant::now() + NATIVE_FIXTURE_WAIT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        stream.set_read_timeout(Some(remaining)).unwrap();
+        // A timeout can consume part of a frame. Do not discard that error
+        // and treat the remaining payload as a new length prefix.
+        let (variant, payload) = match read_server_message(stream) {
+            Ok(message) => message,
+            Err(error) => {
+                eprintln!("read error while awaiting {event} for {pane}: {error}");
+                return false;
+            }
+        };
+        if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION
+            && payload
+                .windows(event.len())
+                .any(|window| window == event.as_bytes())
+            && payload
+                .windows(pane.len())
+                .any(|window| window == pane.as_bytes())
+        {
+            return true;
+        }
+    }
+}
+
 #[test]
 fn client_receives_pane_surface_after_pane_output() {
     let _lock = test_lock();
@@ -81,23 +130,18 @@ fn client_receives_notify_on_agent_state_change() {
     let bin_dir = base.join("bin");
     let go_file = base.join("pi-go");
     let stop_file = base.join("pi-stop");
+    let exit_file = base.join("pi-exit");
     fs::create_dir_all(&bin_dir).unwrap();
-    let fake_pi = bin_dir.join("pi");
-    fs::write(
-        &fake_pi,
-        format!(
-            "#!/bin/sh\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'Working...\\n'\nwhile [ ! -f '{stop}' ]; do sleep 0.05; done\nprintf '\\033[2J\\033[Hdone\\n'\nsleep 30\n",
+    support::write_fake_agent(
+        &bin_dir,
+        "pi",
+        &format!(
+            "printf 'fake-pi-ready\\n'\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'Working...\\n'\nwhile [ ! -f '{stop}' ]; do sleep 0.05; done\nprintf '\\033[2J\\033[Hdone\\n'\nwhile [ ! -f '{exit}' ]; do sleep 0.05; done\n",
             go = go_file.display(),
-            stop = stop_file.display()
+            stop = stop_file.display(),
+            exit = exit_file.display()
         ),
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_pi, perms).unwrap();
-    }
+    );
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
 
@@ -196,10 +240,11 @@ fn client_receives_notify_on_agent_state_change() {
         .to_string(),
     );
     assert_eq!(started["result"]["type"], "ok", "{started}");
+    wait_for_fake_provider_ready(&api_socket, &pane_id, "fake-pi-ready");
     let pane_get =
         format!(r#"{{"id":"pane","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#);
     assert!(
-        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+        wait_until(NATIVE_FIXTURE_WAIT, Duration::from_millis(50), || {
             let pane = send_json_request(&api_socket, &pane_get);
             pane["result"]["pane"]["agent"] == "pi"
                 && pane["result"]["pane"]["agent_status"] == "idle"
@@ -239,40 +284,19 @@ fn client_receives_notify_on_agent_state_change() {
     // Working→Idle in a background workspace is a Done toast.
     fs::write(&go_file, "go").unwrap();
     assert!(
-        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+        wait_until(NATIVE_FIXTURE_WAIT, Duration::from_millis(50), || {
             send_json_request(&api_socket, &pane_get)["result"]["pane"]["agent_status"] == "working"
         }),
         "fake pi should be detected as working"
     );
     fs::write(&stop_file, "stop").unwrap();
 
-    // Read messages and look for the done semantic notification.
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut found_done_notify = false;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        match read_server_message(&mut stream) {
-            Ok((variant, _payload)) => {
-                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION {
-                    found_done_notify = true;
-                    break;
-                }
-                // Snapshot and pane-surface messages may arrive first.
-            }
-            Err(e) => {
-                eprintln!("read error while looking for done notification: {e}");
-                break;
-            }
-        }
-    }
-
     assert!(
-        found_done_notify,
+        wait_for_semantic_notification(&mut stream, &pane_id, "finished"),
         "client should receive a semantic notification when a background pane transitions Working→Idle"
     );
 
+    fs::write(&exit_file, "exit").unwrap();
     cleanup_spawned_bus(spawned, base);
 }
 
@@ -290,22 +314,17 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
 
     let bin_dir = base.join("bin");
     let go_file = base.join("amp-go");
+    let stop_file = base.join("amp-stop");
     fs::create_dir_all(&bin_dir).unwrap();
-    let fake_amp = bin_dir.join("amp");
-    fs::write(
-        &fake_amp,
-        format!(
-            "#!/bin/sh\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'waiting for approval\\n'\nsleep 30\n",
-            go = go_file.display()
+    support::write_fake_agent(
+        &bin_dir,
+        "amp",
+        &format!(
+            "printf 'fake-amp-ready\\n'\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'waiting for approval\\n'\nwhile [ ! -f '{stop}' ]; do sleep 0.05; done\n",
+            go = go_file.display(),
+            stop = stop_file.display()
         ),
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fake_amp).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_amp, perms).unwrap();
-    }
+    );
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
 
@@ -379,10 +398,11 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
         .to_string(),
     );
     assert_eq!(started["result"]["type"], "ok", "{started}");
+    wait_for_fake_provider_ready(&api_socket, &pane_id, "fake-amp-ready");
     let pane_get =
         format!(r#"{{"id":"pane","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#);
     assert!(
-        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+        wait_until(NATIVE_FIXTURE_WAIT, Duration::from_millis(50), || {
             let pane = send_json_request(&api_socket, &pane_get);
             pane["result"]["pane"]["agent"] == "amp"
                 && pane["result"]["pane"]["agent_status"] == "idle"
@@ -390,46 +410,18 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
         "fake amp should be detected as idle before the blocker appears"
     );
 
-    support::drain_messages(&mut stream);
     fs::write(&go_file, "go").unwrap();
-
-    stream
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .unwrap();
-    let mut found_blocked_notify = false;
-    let mut saw_blocked = false;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline && !(found_blocked_notify && saw_blocked) {
-        match read_server_message(&mut stream) {
-            Ok((variant, payload)) => {
-                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION
-                    && payload
-                        .windows(b"needs attention".len())
-                        .any(|window| window == b"needs attention")
-                {
-                    found_blocked_notify = true;
-                }
-            }
-            Err(error)
-                if error.contains("timed out")
-                    || error.contains("Resource temporarily unavailable") => {}
-            Err(error) => {
-                eprintln!("read error while looking for blocked notification: {error}");
-                break;
-            }
-        }
-        if !saw_blocked {
-            saw_blocked = send_json_request(&api_socket, &pane_get)["result"]["pane"]
-                ["agent_status"]
-                == "blocked";
-        }
-    }
-
-    assert!(saw_blocked, "fake amp should be detected as blocked");
     assert!(
-        found_blocked_notify,
+        wait_until(NATIVE_FIXTURE_WAIT, Duration::from_millis(50), || {
+            send_json_request(&api_socket, &pane_get)["result"]["pane"]["agent_status"] == "blocked"
+        }),
+        "fake amp should be detected as blocked"
+    );
+    assert!(
+        wait_for_semantic_notification(&mut stream, &pane_id, "needs attention"),
         "client should receive a needs-attention notification when a detected agent becomes blocked"
     );
 
+    fs::write(&stop_file, "stop").unwrap();
     cleanup_spawned_bus(spawned, base);
 }

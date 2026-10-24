@@ -3,6 +3,23 @@ use crate::protocol::api::schema::{
     AgentPromptIfIdleParams, AgentPromptIfUnboundParams, Method, Request,
 };
 
+pub(super) const WAIT: Duration = crate::terminal::runtime::NATIVE_TEST_TIMEOUT;
+
+fn clock(app: &App) -> crate::terminal::runtime::SubmissionClock {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_submission_clock()
+        .unwrap()
+}
+
+fn confirmation_expiry(method: &Method) -> Duration {
+    use crate::protocol::api::submission::{method_budget, WITHDRAW_GRACE};
+    // Provider paste delay varies on ConPTY. Keep the withdrawal reserve
+    // while advancing beyond the declared confirmation window.
+    method_budget(method).unwrap() - WITHDRAW_GRACE + Duration::from_millis(100)
+}
+
 fn provider_fixture(
     kind: AgentKind,
     bound: bool,
@@ -152,7 +169,7 @@ async fn an_expired_native_budget_answers_without_typing_or_waiting_for_a_new_de
         started,
     ));
     let response: serde_json::Value = serde_json::from_str(
-        &rx.recv_timeout(Duration::from_secs(5))
+        &rx.recv_timeout(WAIT)
             .expect("native response must be bounded"),
     )
     .unwrap();
@@ -189,6 +206,7 @@ async fn guarded_submission_rejects_unavailable_composer_before_any_write() {
     let (app, _, mut writes) = provider_fixture(AgentKind::Codex, false, "");
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.test_submission_clock().unwrap().pause();
     let completion = runtime
         .queue_observed_input_submission(
             Bytes::from_static(b"from bus"),
@@ -199,10 +217,7 @@ async fn guarded_submission_rejects_unavailable_composer_before_any_write() {
             |_| crate::terminal::runtime::InputObservation::Unavailable,
         )
         .unwrap();
-    let error = completion
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_err();
+    let error = completion.recv_timeout(WAIT).unwrap().unwrap_err();
     assert!(
         crate::terminal::runtime::PromptNotShown::is(&error),
         "{error}"
@@ -224,6 +239,7 @@ pub(super) fn redraw(app: &App, kind: AgentKind, draft: &str) {
 async fn startup_controls_appearing_before_clear_are_definite_non_delivery() {
     let (runtime, mut writes) =
         crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_submission_clock().unwrap().pause();
     runtime.test_process_pty_bytes(screen(AgentKind::Codex, "").as_bytes());
     let runtime = std::sync::Arc::new(std::sync::Mutex::new(runtime));
     let runtime_for_redraw = runtime.clone();
@@ -251,10 +267,7 @@ async fn startup_controls_appearing_before_clear_are_definite_non_delivery() {
             },
         )
         .unwrap();
-    let error = completion
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_err();
+    let error = completion.recv_timeout(WAIT).unwrap().unwrap_err();
     assert!(writes.try_recv().is_err(), "startup control received input");
     assert!(
         crate::terminal::runtime::PromptNotShown::is(&error),
@@ -263,6 +276,9 @@ async fn startup_controls_appearing_before_clear_are_definite_non_delivery() {
 }
 
 pub(super) fn start(app: &mut App, method: Method) -> std::sync::mpsc::Receiver<String> {
+    if let Some(clock) = app.test_prompt_clock(&method) {
+        clock.pause();
+    }
     let (tx, rx) = std::sync::mpsc::channel();
     assert!(app.handle_deferred_agent_api_request(
         Request {
@@ -274,18 +290,27 @@ pub(super) fn start(app: &mut App, method: Method) -> std::sync::mpsc::Receiver<
     rx
 }
 
-pub(super) fn next_write(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        if let Ok(bytes) = writes.try_recv() {
-            return bytes;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "expected native input write"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+pub(super) async fn next_write(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
+    tokio::time::timeout(WAIT, writes.recv())
+        .await
+        .expect("expected native input write")
+        .expect("native input channel closed")
+}
+
+#[tokio::test]
+async fn fake_provider_scheduling_pause_does_not_expire_a_submission() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let response = start(&mut app, method);
+    // Model the fixture being descheduled during another build's test burst.
+    // This is an injected scheduling stall, not a provider readiness wait.
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        response.try_recv().is_err(),
+        "fixture scheduling must not consume the native submission clock"
+    );
+    accept_paste(&app, AgentKind::Codex, "from bus", &mut writes).await;
+    let response = response.recv_timeout(WAIT).unwrap();
+    assert!(response.contains("agent_prompted"), "{response}");
 }
 
 #[tokio::test]
@@ -299,19 +324,20 @@ async fn ignored_first_enter_is_verified_and_retried_without_repasting() {
         let (mut app, method, mut writes) = provider_fixture(kind, bound, "");
         let response = start(&mut app, method);
         assert_eq!(
-            next_write(&mut writes),
+            next_write(&mut writes).await,
             Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
         );
         redraw(&app, kind, "from bus");
-        assert_eq!(next_write(&mut writes), Bytes::from_static(b"\r"));
-        std::thread::sleep(Duration::from_millis(40));
+        assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+        clock(&app).wait_for_enters(1);
+        clock(&app).advance(Duration::from_millis(250));
+        assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
         assert!(
             response.try_recv().is_err(),
             "{kind:?}: PTY write is not provider acceptance"
         );
-        assert_eq!(next_write(&mut writes), Bytes::from_static(b"\r"));
         redraw(&app, kind, "");
-        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        let response = response.recv_timeout(WAIT).unwrap();
         assert!(response.contains("agent_prompted"), "{kind:?}: {response}");
         assert!(writes.try_recv().is_err(), "must not type the prompt twice");
     }
@@ -325,35 +351,36 @@ async fn stranded_draft_is_cleared_before_guarded_delivery_for_every_provider() 
         (AgentKind::Claude, true),
         (AgentKind::Cursor, true),
     ] {
-        stranded_draft(kind, bound);
+        stranded_draft(kind, bound).await;
     }
 }
 
-pub(super) fn accept_paste(
+pub(super) async fn accept_paste(
     app: &App,
     kind: AgentKind,
     text: &str,
     writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
 ) {
     assert_eq!(
-        next_write(writes),
+        next_write(writes).await,
         Bytes::from(format!("\x1b[200~{text}\x1b[201~"))
     );
     redraw(app, kind, text);
-    assert_eq!(next_write(writes), Bytes::from_static(b"\r"));
+    assert_eq!(next_write(writes).await, Bytes::from_static(b"\r"));
     redraw(app, kind, "");
 }
 
-pub(super) fn stranded_draft(kind: AgentKind, bound: bool) {
+pub(super) async fn stranded_draft(kind: AgentKind, bound: bool) {
     let (mut app, method, mut writes) = provider_fixture(kind, bound, "stranded draft");
     let response = start(&mut app, method);
     // Ink-based providers can decode a burst of control characters as one
     // event. Send each editing key separately and allow a redraw between them.
-    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x01"));
-    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x0b"));
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
+    redraw(&app, kind, "stranded draft");
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x0b"));
     redraw(&app, kind, "");
-    accept_paste(&app, kind, "from bus", &mut writes);
-    let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+    accept_paste(&app, kind, "from bus", &mut writes).await;
+    let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("agent_prompted"), "{kind:?}: {response}");
 }
 
@@ -362,19 +389,20 @@ async fn delayed_paste_render_waits_before_the_first_enter() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, false, "");
     let response = start(&mut app, method);
     assert_eq!(
-        next_write(&mut writes),
+        next_write(&mut writes).await,
         Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
     );
-    std::thread::sleep(Duration::from_millis(450));
+    clock(&app).advance(Duration::from_millis(450));
+    clock(&app).wait_for_draft_wait();
     assert!(
         writes.try_recv().is_err(),
         "Enter must wait until provider consumed paste"
     );
     redraw(&app, AgentKind::Codex, "from bus");
-    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\r"));
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
     redraw(&app, AgentKind::Codex, "");
     assert!(response
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(WAIT)
         .unwrap()
         .contains("agent_prompted"));
 }
@@ -382,15 +410,24 @@ async fn delayed_paste_render_waits_before_the_first_enter() {
 #[tokio::test]
 async fn changed_draft_after_enter_is_never_submitted_by_retry() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let expiry = confirmation_expiry(&method);
     let response = start(&mut app, method);
     assert_eq!(
-        next_write(&mut writes),
+        next_write(&mut writes).await,
         Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
     );
     redraw(&app, AgentKind::Codex, "from bus");
-    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\r"));
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    clock(&app).wait_for_enters(1);
     redraw(&app, AgentKind::Codex, "frombus");
-    let response = response.recv_timeout(Duration::from_secs(3)).unwrap();
+    let generation = clock(&app).advance(Duration::from_millis(250));
+    clock(&app).wait_for_submission_check(generation);
+    assert!(
+        writes.try_recv().is_err(),
+        "do not retry Enter on someone else's draft when the retry is due"
+    );
+    clock(&app).advance(expiry);
+    let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("timeout"), "{response}");
     assert!(!response.contains("agent_prompted"));
     assert!(
@@ -402,47 +439,43 @@ async fn changed_draft_after_enter_is_never_submitted_by_retry() {
 #[tokio::test]
 async fn enter_never_accepted_times_out_without_repasting_or_reporting_success() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Cursor, true, "");
+    let expiry = confirmation_expiry(&method);
     let response = start(&mut app, method);
     assert_eq!(
-        next_write(&mut writes),
+        next_write(&mut writes).await,
         Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
     );
     redraw(&app, AgentKind::Cursor, "from bus");
-    let response = response.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    clock(&app).wait_for_enters(1);
+    clock(&app).advance(Duration::from_millis(250));
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    clock(&app).advance(expiry);
+    let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("timeout"), "{response}");
     assert!(!response.contains("agent_prompted"));
-    let mut enters = 0;
     while let Ok(bytes) = writes.try_recv() {
         assert_eq!(bytes, Bytes::from_static(b"\r"));
-        enters += 1;
     }
-    assert!(enters > 1, "must retry ignored Enter");
 }
 
 #[tokio::test]
 async fn an_unrecognised_paste_is_cleared_and_reported_as_not_submitted() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let expiry = confirmation_expiry(&method);
     let response = start(&mut app, method);
     assert_eq!(
-        next_write(&mut writes),
+        next_write(&mut writes).await,
         Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
     );
     // A rendering the observer cannot attribute to Bus: never press Enter on it.
     redraw(&app, AgentKind::Claude, "[Pasted text #3] from bus?");
-    // Consume the cleanup as soon as it starts. A fixed sleep can overshoot
-    // under load and fill the mock channel with repeated editing keys.
-    let deadline = std::time::Instant::now() + Duration::from_secs(4);
-    while writes.is_empty() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "cleanup did not start"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x01"));
-    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x0b"));
+    clock(&app).advance(expiry);
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
+    redraw(&app, AgentKind::Claude, "[Pasted text #3] from bus?");
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x0b"));
     redraw(&app, AgentKind::Claude, "");
-    let response = response.recv_timeout(Duration::from_secs(3)).unwrap();
+    let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("agent_prompt_not_shown"), "{response}");
     assert!(!response.contains("agent_prompted"));
     while let Ok(bytes) = writes.try_recv() {

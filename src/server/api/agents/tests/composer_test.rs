@@ -24,6 +24,7 @@ fn codex_trust_controls_are_never_owned_composer_input() {
 async fn startup_controls_visible_after_validation_receive_no_input() {
     let (runtime, mut writes) =
         crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    runtime.test_submission_clock().unwrap().pause();
     runtime.test_process_pty_bytes(
         concat!(
             "Hooks need review\r\n3 hooks are new or changed.\r\n",
@@ -46,7 +47,7 @@ async fn startup_controls_visible_after_validation_receive_no_input() {
         )
         .unwrap();
     let error = completion
-        .recv_timeout(std::time::Duration::from_secs(3))
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
         .unwrap()
         .unwrap_err();
     assert!(
@@ -480,6 +481,7 @@ async fn codex_numbered_list_message_is_submitted_after_its_draft_renders() {
         crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 32);
     runtime.test_process_pty_bytes("history\r\n›\r\n\r\n  gpt-5.6-sol · /repo".as_bytes());
     let text = "1. run the tests\n2. open the PR";
+    runtime.test_submission_clock().unwrap().pause();
     let completion = runtime
         .queue_observed_input_submission(
             bytes::Bytes::from_static(b"1. run the tests\n2. open the PR"),
@@ -490,7 +492,7 @@ async fn codex_numbered_list_message_is_submitted_after_its_draft_renders() {
             observer(AgentKind::Codex, text.into()),
         )
         .unwrap();
-    let paste = tokio::time::timeout(std::time::Duration::from_secs(2), writes.recv())
+    let paste = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
         .await
         .unwrap()
         .unwrap();
@@ -499,17 +501,18 @@ async fn codex_numbered_list_message_is_submitted_after_its_draft_renders() {
         "\x1b[2J\x1b[Hhistory\r\n› 1. run the tests\r\n  2. open the PR\r\n\r\n  gpt-5.6-sol · /repo"
             .as_bytes(),
     );
-    let enter = tokio::time::timeout(std::time::Duration::from_secs(3), writes.recv()).await;
+    let enter =
+        tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv()).await;
     assert!(
         matches!(&enter, Ok(Some(bytes)) if bytes.as_ref() == b"\r"),
         "the rendered numbered-list draft must receive Enter: {enter:?}; result {:?}",
-        completion.recv_timeout(std::time::Duration::from_secs(1))
+        completion.recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
     );
     runtime.test_process_pty_bytes(
         "\x1b[2J\x1b[Hhistory\r\n›\r\n\r\n  gpt-5.6-sol · /repo".as_bytes(),
     );
     assert!(completion
-        .recv_timeout(std::time::Duration::from_secs(2))
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
         .unwrap()
         .is_ok());
 }
@@ -617,6 +620,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
     };
     show(include_str!("fixtures/cursor_20261014_empty.ansi"));
     let text = "first line\n\nGPT-6 and Claude\nlast line";
+    runtime.test_submission_clock().unwrap().pause();
     let completion = super::super::queue_prompt_input(
         &runtime,
         AgentKind::Cursor,
@@ -626,7 +630,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
     )
     .unwrap();
-    let paste = tokio::time::timeout(std::time::Duration::from_secs(1), writes.recv())
+    let paste = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
         .await
         .unwrap()
         .unwrap();
@@ -636,7 +640,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         "an empty composer must receive the prompt before editing keys"
     );
     show(include_str!("fixtures/cursor_20261014_draft.ansi"));
-    let enter = tokio::time::timeout(std::time::Duration::from_secs(1), writes.recv())
+    let enter = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
         .await
         .unwrap()
         .unwrap();
@@ -647,7 +651,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
     );
     show(include_str!("fixtures/cursor_20261014_empty.ansi"));
     assert!(completion
-        .recv_timeout(std::time::Duration::from_secs(2))
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
         .unwrap()
         .is_ok());
 }
