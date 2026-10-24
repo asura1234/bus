@@ -206,6 +206,8 @@ Quits the driver-owned scratch Bus, stops its server and relaunches both with
 the same scratch data, size and graphics settings. It preserves the run's trace,
 recordings and screenshots, and returns the old/new Bus process IDs. It also
 works after Ctrl+Q. It never attaches to or restarts another Bus.
+Fake providers honor their resume arguments, retaining session IDs with fresh
+turn IDs so a post-restart request can settle normally.
 
 ### list
 `list`

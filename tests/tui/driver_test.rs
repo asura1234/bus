@@ -185,9 +185,26 @@ fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() 
         "--timeout",
         "20s",
     ]);
+    let (code, bootstrap) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "dot-worker",
+            "--text",
+            "bootstrap restart fixture",
+        ],
+    ));
+    assert_eq!(code, 0, "{bootstrap}");
+    let bootstrap_message = bootstrap["result"]["message_id"].to_string();
+    session.ok(&["wait", "--message", &bootstrap_message, "--timeout", "30s"]);
     let (code, _) = parse(scratch_bus(&session, &["room", "create", "unseen"]));
     assert_eq!(code, 0);
     session.ok(&["wait", "--text", "# unseen", "--timeout", "10s"]);
+    let original_session =
+        bus_state(&session)["agents"][0]["runtime_identity"]["session_id"].clone();
     for room in ["unseen", "master"] {
         let (code, sent) = parse(scratch_bus(
             &session,
@@ -212,6 +229,36 @@ fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() 
     assert_ne!(restarted["bus_pid"], original["bus_pid"]);
     assert_eq!(restarted["data_dir"], original["data_dir"]);
     assert!(std::fs::metadata(&trace).unwrap().len() > before);
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.0.status == idle",
+        "--timeout",
+        "10s",
+    ]);
+    assert_eq!(
+        bus_state(&session)["agents"][0]["runtime_identity"]["session_id"],
+        original_session
+    );
+    let (code, sent) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "dot-worker",
+            "--text",
+            "after restart",
+        ],
+    ));
+    assert_eq!(code, 0, "{sent}");
+    let message = sent["result"]["message_id"].to_string();
+    let replied = session.ok(&["wait", "--message", &message, "--timeout", "30s"]);
+    assert_eq!(
+        replied["message"]["result"]["requests"][0]["reply"]["text"],
+        "fake reply: after restart"
+    );
     for room in bus_state(&session)["rooms"].as_array().unwrap() {
         if matches!(room["name"].as_str(), Some("unseen" | "MASTER")) {
             assert_eq!(room["unseen_to_developer"], true);

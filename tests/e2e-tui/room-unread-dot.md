@@ -5,7 +5,8 @@
 Fresh scratch Bus through the own-worktree dev-tools TUI driver, 120x40,
 graphics none. Use only fake providers and recorded effects; never restart or
 connect to the live Bus. CLI fixtures may create rooms/agents and post incoming
-agent-authored messages. Room opening, terminal opening, F6 and resizing use
+agent-authored messages, plus the provider bootstrap prompts in setup and the
+post-restart developer fixture in step 5. Room opening, terminal opening, F6 and resizing use
 real driver input. Read-only state/history corroborate the screen. Capture and
 open cell screenshots for layout, and inspect cells for the green dot's color.
 No skips or failed-step retries. `restart` quits and relaunches only this
@@ -14,11 +15,13 @@ driver-owned scratch Bus, retaining its data and trace.
 ### DOT-01 — Developer unread dots persist, clear on opening, and fit narrow names
 
 Preconditions: create work rooms `dot-very-long-room-name` and `dot-other` with
-the scratch CLI. Add fake Claude worker `dot-worker` to the long-named room,
-using the session's scratch work directory and consenting to its hooks. Wait
-for it to be idle. Record IDs and select `dot-other` through the sidebar.
+the scratch CLI. Add fake Claude workers `dot-worker` and `dot-peer` to the long-named room,
+using the session's scratch work directory and consenting to their hooks. Wait
+for both to be idle. Send each one a developer `DOT bootstrap` prompt with the
+scratch CLI and wait for both fake replies, so both provider conversations have
+completed a turn before restart. Record IDs and select `dot-other` through the sidebar.
 
-1. Fixture: send `DOT peer` as dot-worker to dot-worker in the long-named
+1. Fixture: send `DOT peer` as dot-worker to dot-peer in the long-named
    room and wait for its fake reply to settle. Assert its `unread_count` is
    positive but `unseen_to_developer` is false and no sidebar dot appears.
 2. Fixture: send `DOT decision` as dot-worker to `you` in the long-named room
@@ -40,7 +43,10 @@ for it to be idle. Record IDs and select `dot-other` through the sidebar.
    room. Record state and process ID, then use the scratch driver's `restart`.
    Assert a new Bus process with the same scratch data directory, both work-room
    and MASTER markers/dots retained, and the default first work room (`bus`)
-   visible after startup. Capture/open
+   visible after startup. Wait for both fake agents to be idle, then send a
+   developer fixture `DOT after restart` to dot-peer in the long-named room
+   and wait for its fake reply. Assert no session invalidation and both unseen
+   markers retained. Capture/open
    a screenshot of the persisted dots.
 6. Click MASTER and assert its decision displays with a You recipient and its
    marker/dot clear. Click the long-named room and assert its marker/dot clear.
