@@ -10,6 +10,7 @@ use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
 
+mod callback_spool;
 mod control_reads;
 
 /// How often a tick moves settled history out of `state.json`.
@@ -291,20 +292,6 @@ impl Worker {
             return Ok(());
         }
         remove_spooled(dir, &paths)
-    }
-
-    /// Invalid envelopes leave the active scan only once the agent error is saved.
-    pub(super) fn retain_rejected_spool(
-        &mut self,
-        id: AgentId,
-        dir: &Path,
-        path: PathBuf,
-    ) -> Result<(), String> {
-        if let Some(batch) = self.batch.as_mut() {
-            batch.rejections.push((id, dir.to_path_buf(), path));
-            return Ok(());
-        }
-        spool::retain_rejected(dir, &path, spool::RoutingKey(id.0)).map_err(|e| e.to_string())
     }
 
     /// Writes the batch's changes once, then deletes the spool files they
