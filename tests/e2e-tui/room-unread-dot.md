@@ -6,7 +6,8 @@ Fresh scratch Bus through the own-worktree dev-tools TUI driver, 120x40,
 graphics none. Use only fake providers and recorded effects; never restart or
 connect to the live Bus. CLI fixtures may create rooms/agents and post incoming
 agent-authored messages, plus the provider bootstrap prompts in setup and the
-developer fixtures in steps 2 and 5. Room opening, terminal opening, F6 and resizing use
+developer fixtures in steps 2 and 5. Step 2 may create and delete its disposable
+fake worker as fixture setup/cleanup. Room opening, terminal opening, F6 and resizing use
 real driver input. Read-only state/history corroborate the screen. Capture and
 open cell screenshots for layout, and inspect cells for the green dot's color.
 No skips or failed-step retries. `restart` quits and relaunches only this
@@ -31,10 +32,15 @@ completed a turn before restart. Record IDs and select `dot-other` through the s
    foreground (`#66ff66`), and capture/open a screenshot. The other room stays
    visible. Resize to 60x40: the long name truncates and its green dot remains
    visible before the status; MASTER also keeps its dot. Capture/open a screenshot.
-   Fixture: send `fake:work 10 DOT narrow working` as the developer to dot-peer,
+   Fixture: add a disposable fake Claude worker `dot-working` to the long-named
+   room using the scratch workspace and hook consent. Wait until it is idle,
+   send `fake:work 30 DOT narrow working` as the developer to dot-working,
    wait until Working, then resize to 40x40. Assert the work-room dot is still
    visible and green beside Working and MASTER also retains its dot. Capture/open
-   a screenshot, wait for the fake request to settle, and return to 60x40.
+   a screenshot. Delete only the disposable dot-working fixture with the scratch
+   CLI and `--confirm`, assert it is absent from state and the unseen marker stays
+   true, then return to 60x40. Its request may close abandoned during cleanup;
+   no provider continuation in the narrow pane is under test.
 3. Click the long-named room's sidebar entry. Assert the decision and its You
    recipient display, the room's dot and marker clear, and MASTER's remain.
    Fixture: send `DOT visible` to you in the visible room; assert it displays
