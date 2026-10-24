@@ -265,15 +265,19 @@ as for any send. `human` is a compatibility alias for `you`; both work from ever
 
 ### Reach the developer from any room
 
-Any worker or orchestrator can address the developer when something needs their attention:
+Workers can address the developer when something only the developer can do or decide
+is blocking them. Include `[waiting-on-you]` or `[waiting_on_you]` and say what
+the developer must do:
 
 ```sh
-bus send --room ROOM --as AGENT --to you --text "Please decide the release date."
 bus send --room ROOM --as AGENT --to you --text "[waiting-on-you] Approve access."
 ```
 
-`@you` means the developer; use `--to you` in the CLI. Use it or `[waiting-on-you]`
-for things only the developer can do or decide. The message stays in the selected
+`@you` means the developer; use `--to you` in the CLI. Worker sends to `you` or
+`human`, and worker messages containing `@you`, are rejected without an explicit
+waiting marker. Send progress, acknowledgements and hand-offs to `--to orchestrator`.
+Orchestrators (agents with `orchestrates` set) may post without a marker;
+developer-authored sends are unaffected. The message stays in the selected
 conversation room, with the usual agent attribution and a **You** recipient.
 No copy is moved to MASTER. Agent names or IDs work for `--as`, including senders
 from another room. `you` and `human` are case-insensitive reserved names.
