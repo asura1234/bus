@@ -276,7 +276,7 @@ fn run(shared: Arc<Shared>) {
             if mailbox.stopped {
                 return;
             }
-            mailbox.next.take().unwrap()
+            mailbox.next.take().expect("pending history job after wait")
         };
         rooms.retain(|id, _| job.snapshot.state.room(*id).is_some());
         let Some(room) = job.snapshot.state.room(job.key.room) else {

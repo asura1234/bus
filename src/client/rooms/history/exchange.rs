@@ -39,20 +39,7 @@ impl History {
         static REBUILD: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.rebuild");
         let _lines_timer = LINES.start();
-        self.rebuilt = 0;
-        self.rendered = 0;
-        self.projected = 0;
-        if self.source != Some((revision, room.id)) {
-            let _timer = super::phases::SIGNATURE.start();
-            let visited = self.room_markdown.len();
-            self.room_markdown.retain(|id, _| state.room(*id).is_some());
-            if self.room_markdown.len() != visited {
-                let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
-                self.markdown.retain(|source, _| shown.contains(source));
-            }
-            self.signature = signature(state, room);
-            self.source = Some((revision, room.id));
-        }
+        self.prepare_source(state, room, revision);
         let key = (
             self.signature,
             room.id,
@@ -72,7 +59,6 @@ impl History {
         }
         let started = std::time::Instant::now();
         let reason = rebuild_reason(self.key, key);
-        self.rendered = 0;
         let (groups, exchanges) = {
             let _timer = super::phases::GROUPING.start();
             (state.groups(), exchanges(state, room))
@@ -152,6 +138,24 @@ impl History {
         );
         &self.lines
     }
+
+    fn prepare_source(&mut self, state: &BusState, room: &Room, revision: u64) {
+        self.rebuilt = 0;
+        self.rendered = 0;
+        self.projected = 0;
+        if self.source != Some((revision, room.id)) {
+            let _timer = super::phases::SIGNATURE.start();
+            let visited = self.room_markdown.len();
+            self.room_markdown.retain(|id, _| state.room(*id).is_some());
+            if self.room_markdown.len() != visited {
+                let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
+                self.markdown.retain(|source, _| shown.contains(source));
+            }
+            self.signature = signature(state, room);
+            self.source = Some((revision, room.id));
+        }
+    }
+
     fn push_prompt_lines(
         &mut self,
         lines: &mut Vec<Line>,
