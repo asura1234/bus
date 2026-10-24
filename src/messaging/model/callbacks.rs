@@ -608,6 +608,10 @@ impl BusState {
         members: &[RequestId],
         pending: &PendingFinal,
     ) -> Result<(), ModelError> {
+        // A silent completed turn has a durable result but no room message or ding.
+        if pending.text.trim().is_empty() {
+            return Ok(());
+        }
         let mut replies = std::collections::BTreeMap::new();
         for id in std::iter::once(&lead).chain(members) {
             let request = self

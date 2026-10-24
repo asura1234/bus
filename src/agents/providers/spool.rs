@@ -19,7 +19,7 @@ pub(crate) use files::try_append_lock;
 
 #[path = "spool/parsed_event.rs"]
 mod parsed_event;
-pub(crate) use parsed_event::{field, Parsed};
+pub(crate) use parsed_event::{field, optional_text, Parsed};
 
 /// Maximum raw hook input; retain the existing two-MiB capture limit.
 pub(crate) const MAX_CALLBACK_BYTES: u64 = 2 * 1024 * 1024;
