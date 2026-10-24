@@ -324,7 +324,7 @@ impl BusUi {
             + master_header_rows
             + rooms.len()
             + agents.iter().map(|entry| entry.height).sum::<usize>();
-        let notices = if self.force_exit_available {
+        let notices = if self.force_exit_until.is_some() {
             2
         } else {
             u16::from(self.quitting.is_some())
@@ -635,8 +635,8 @@ impl BusUi {
         let build_row = u16::from(cfg!(feature = "dev-tools"));
         view.row(
             Rect::new(1, rows.saturating_sub(4 + build_row), sw, 1),
-            if self.force_exit_available {
-                "Unsaved: Ctrl+Shift+Q exits"
+            if self.force_exit_until.is_some() {
+                "Ctrl+Q again within 5s"
             } else {
                 ""
             },
@@ -648,8 +648,8 @@ impl BusUi {
             Rect::new(1, rows.saturating_sub(3 + build_row), sw, 1),
             if self.quitting.is_some() {
                 "Saving before exit…"
-            } else if self.force_exit_available {
-                "Ctrl+Q retries saving"
+            } else if self.force_exit_until.is_some() {
+                "May lose unsaved edits"
             } else {
                 ""
             },

@@ -788,7 +788,7 @@ fn room_renders_without_native_snapshot_and_only_approved_chrome_and_collapsed_m
 #[test]
 fn sidebar_build_hash_keeps_save_failure_notices_visible() {
     let (mut ui, _, _) = fixture();
-    ui.force_exit_available = true;
+    ui.force_exit_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
     let (buffer, y, right) = settings_row(&mut ui, 100, 30);
     let extra = u16::from(cfg!(feature = "dev-tools"));
     let text = |row| {
@@ -796,7 +796,7 @@ fn sidebar_build_hash_keeps_save_failure_notices_visible() {
             .map(|x| buffer[(x, row)].symbol())
             .collect::<String>()
     };
-    assert!(text(y - 3 - extra).starts_with("Unsaved:"));
-    assert!(text(y - 2 - extra).starts_with("Ctrl+Q retries saving"));
+    assert!(text(y - 3 - extra).starts_with("Ctrl+Q again within 5s"));
+    assert!(text(y - 2 - extra).starts_with("May lose unsaved edits"));
     assert_eq!(ui.view.sidebar_body.bottom(), y - 3 - extra);
 }

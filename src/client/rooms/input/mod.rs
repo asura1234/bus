@@ -87,14 +87,26 @@ impl BusUi {
             }
             return true;
         }
-        let quit = matches!(key.code, KeyCode::Char('q' | 'Q'))
-            && key.modifiers.contains(KeyModifiers::CONTROL);
-        if quit && key.kind != KeyEventKind::Release {
-            if key.modifiers.contains(KeyModifiers::SHIFT) && self.force_exit_available {
-                outcome.detach = true;
-            } else {
-                self.request_quit();
-                outcome.repaint = true;
+        let quit =
+            matches!(key.code, KeyCode::Char('q' | 'Q')) && key.modifiers == KeyModifiers::CONTROL;
+        if quit {
+            if key.kind == KeyEventKind::Press {
+                if self
+                    .force_exit_until
+                    .is_some_and(|until| std::time::Instant::now() < until)
+                {
+                    tracing::warn!(
+                        event = "bus.quit.forced",
+                        pending_count = self.pending.len(),
+                        failed_count = self.failed.len(),
+                        last_command_id = self.snapshot.last_command_id,
+                        "Force quit confirmed; unsaved edits may be lost"
+                    );
+                    outcome.detach = true;
+                } else {
+                    self.request_quit();
+                    outcome.repaint = true;
+                }
             }
             return true;
         }
