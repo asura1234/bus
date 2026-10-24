@@ -27,6 +27,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::AgentRename(_)
             | Method::AgentFocus(_)
             | Method::AgentStart(_)
+            | Method::AgentStartIfIdentity(_)
             | Method::AgentPrompt(_)
             | Method::AgentPromptIfIdle(_)
             | Method::AgentPromptIfUnbound(_)
@@ -162,6 +163,7 @@ impl App {
             Method::AgentFocus(target) => self.handle_agent_focus(id, target),
             Method::AgentRename(params) => self.handle_agent_rename(id, params),
             Method::AgentStart(params) => self.handle_agent_start(id, params),
+            Method::AgentStartIfIdentity(params) => self.handle_agent_start_if_identity(id, params),
             Method::AgentPrompt(_)
             | Method::AgentPromptIfIdle(_)
             | Method::AgentPromptIfUnbound(_) => errors::encode_error(

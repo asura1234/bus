@@ -590,7 +590,10 @@ impl TerminalRuntime {
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
-        Self::spawn_command_builder(
+        let mut integration = super::shell_integration::ShellIntegration::install_for_agent_launch(
+            &mut cmd, launch_env,
+        )?;
+        let mut runtime = Self::spawn_command_builder(
             pane_id,
             rows,
             cols,
@@ -608,7 +611,12 @@ impl TerminalRuntime {
                 windows_powershell_prompt_cwd_reporting,
             },
             AgentDetection::Enabled,
-        )
+        )?;
+        if let Some(integration) = integration.as_mut() {
+            integration.start_wait(runtime.child_pid());
+        }
+        runtime.shell_integration = integration;
+        Ok(runtime)
     }
 
     /// Test helper: runs `command` through `/bin/sh -c` in a real PTY.
@@ -731,7 +739,6 @@ impl TerminalRuntime {
             &response_tx,
         )?;
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
-        let kitty_keyboard_flags = Arc::new(AtomicU16::new(0));
         let content_write_lock = Arc::new(Mutex::new(()));
 
         let spawned = spawn_with_portable_pty(rows, cols, cmd)
@@ -752,32 +759,20 @@ impl TerminalRuntime {
         );
 
         let io = {
-            let terminal = terminal.clone();
-            let response_writer = response_tx.clone();
-            let render_notify = render_notify.clone();
-            let render_dirty = render_dirty.clone();
-            let content_seq = content_seq.clone();
-            let content_write_lock = content_write_lock.clone();
-            let detection_content_seq = detection_content_seq.clone();
-            let child_pid = child_pid.clone();
-            let events = events.clone();
-            let reported_cwd = reported_cwd.clone();
-            let compression_wake = compression.notifier();
-            let rt = tokio::runtime::Handle::current();
             let on_read = pty_read_callback(PtyReadContext {
                 pane_id,
-                terminal,
-                response_writer,
-                render_notify,
-                render_dirty,
-                content_seq,
-                content_write_lock,
-                detection_content_seq,
-                child_pid,
-                events,
-                reported_cwd,
-                compression_wake,
-                rt,
+                terminal: terminal.clone(),
+                response_writer: response_tx.clone(),
+                render_notify: render_notify.clone(),
+                render_dirty: render_dirty.clone(),
+                content_seq: content_seq.clone(),
+                content_write_lock: content_write_lock.clone(),
+                detection_content_seq: detection_content_seq.clone(),
+                child_pid: child_pid.clone(),
+                events: events.clone(),
+                reported_cwd: reported_cwd.clone(),
+                compression_wake: compression.notifier(),
+                rt: tokio::runtime::Handle::current(),
                 agent_detection,
             });
 
@@ -812,7 +807,7 @@ impl TerminalRuntime {
             child_pid,
             reported_cwd,
             child_wait_completed: Some(child_wait_completed),
-            kitty_keyboard_flags,
+            kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq,
             content_write_lock,
             #[cfg(test)]
@@ -820,6 +815,8 @@ impl TerminalRuntime {
             detection_content_seq,
             managed_launch_pending,
             preserve_processes_on_drop: false,
+            shell_integration: None,
+            launch_prompt_generation: Cell::new(0),
             compression,
             detect_handle,
         })

@@ -222,6 +222,8 @@ impl TerminalRuntime {
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),
                 preserve_processes_on_drop: true,
+                shell_integration: None,
+                launch_prompt_generation: std::cell::Cell::new(0),
                 compression,
                 detect_handle: Some(tokio::spawn(async {}).abort_handle()),
             },

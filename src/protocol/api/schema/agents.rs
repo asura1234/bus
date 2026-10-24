@@ -225,6 +225,15 @@ pub struct AgentStartParams {
     pub timeout_ms: Option<u64>,
 }
 
+/// Retry an unsubmitted launch only in its retained, prompt-integrated terminal.
+/// A separate method makes older servers reject the terminal ownership guard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentStartIfIdentityParams {
+    pub expected_terminal_id: String,
+    #[serde(flatten)]
+    pub start: AgentStartParams,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentPromptParams {
     pub target: String,

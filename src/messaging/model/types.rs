@@ -301,6 +301,19 @@ pub(crate) struct AgentStartup {
     pub(crate) started_at_ms: u64,
     /// A reported startup failure holds its queue until readiness confirms recovery.
     pub(crate) reported: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) recovery: Option<StartupRecovery>,
+}
+
+/// Authority to retry only a provider command proven never to have reached input.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum StartupRecovery {
+    Unsubmitted {
+        args: Vec<String>,
+    },
+    /// Persisted before requesting input; uncertain outcomes cannot replay it.
+    Requested,
 }
 
 /// Where an agent's blocked notice went.

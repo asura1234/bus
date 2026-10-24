@@ -1,12 +1,22 @@
 //! Agent basic API operations.
 use crate::protocol::api::schema::{
-    AgentRenameParams, AgentStartParams, AgentTarget, ResponseResult,
+    AgentRenameParams, AgentStartIfIdentityParams, AgentStartParams, AgentTarget, ResponseResult,
 };
 use crate::server::api::errors::{encode_error_body, encode_success};
 use crate::server::app::App;
 
 impl App {
     pub(in crate::server::api) fn handle_agent_list(&mut self, id: String) -> String {
+        let pending: Vec<_> = self
+            .state
+            .terminals
+            .values()
+            .filter(|terminal| terminal.managed_agent_launch_pending())
+            .filter_map(|terminal| terminal.agent_name.clone())
+            .collect();
+        for name in pending {
+            self.reconcile_managed_agent_target(&name);
+        }
         encode_success(
             id,
             ResponseResult::AgentList {
@@ -53,6 +63,37 @@ impl App {
         };
 
         encode_success(id, ResponseResult::AgentInfo { agent })
+    }
+
+    pub(in crate::server::api) fn handle_agent_start_if_identity(
+        &mut self,
+        id: String,
+        params: AgentStartIfIdentityParams,
+    ) -> String {
+        // Check and start under the same App borrow; no separate read/write race.
+        let terminal = self
+            .parse_current_public_pane_id(&params.start.pane_id)
+            .and_then(|(ws, pane)| self.state.workspaces.get(ws)?.terminal_id(pane))
+            .and_then(|id| self.state.terminals.get(id));
+        let matches = terminal.is_some_and(|terminal| {
+            terminal.id.as_str() == params.expected_terminal_id
+                && self
+                    .terminal_runtimes
+                    .get(&terminal.id)
+                    .is_some_and(|runtime| runtime.has_launch_shell_integration())
+                && terminal
+                    .agent_name
+                    .as_deref()
+                    .is_none_or(|name| name == params.start.name)
+        });
+        if !matches {
+            return crate::server::api::errors::encode_error(
+                id,
+                "agent_identity_changed",
+                "Launch terminal ownership or prompt integration changed; no input was sent",
+            );
+        }
+        self.handle_agent_start(id, params.start)
     }
 
     pub(in crate::server::api) fn handle_agent_start(

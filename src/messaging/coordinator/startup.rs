@@ -1,8 +1,12 @@
 //! A new provider must confirm startup, or retain its identity and report a blocker.
 use super::{io, launch, mpsc, schema, AgentId, BusEvent, Method, ResponseResult, Worker};
-use crate::messaging::{identity, model::AgentStartup};
+use crate::messaging::{
+    identity,
+    model::{AgentStartup, StartupRecovery},
+};
 
-pub(super) const STARTUP_TIMEOUT_MS: u64 = 30_000;
+pub(super) const STARTUP_TIMEOUT_MS: u64 =
+    crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
 const SCREEN_LINES: u32 = 6;
 
 impl Worker {
@@ -24,10 +28,43 @@ impl Worker {
                         .ok_or("Cannot describe the provider launch command")?,
                     started_at_ms,
                     reported: false,
+                    recovery: None,
                 }),
             )
             .map_err(|e| e.to_string())?;
         self.save(state)
+    }
+
+    pub(super) fn record_failed_agent_start(
+        &mut self,
+        id: AgentId,
+        args: Vec<String>,
+        outcome: Result<ResponseResult, crate::messaging::native::TransportError>,
+    ) -> Result<(), String> {
+        let error = match outcome {
+            Err(error) if matches!(error.code.as_deref(), Some("agent_shell_starting" | "agent_shell_waiting")) => error,
+            other => return self.agent_error(id, format!("Agent start outcome requires inspection of its owned terminal; startup is watched and will not be retried. {other:?}")),
+        };
+        let mut state = self.state.clone();
+        let mut startup = state
+            .agent(id)
+            .and_then(|agent| agent.startup.clone())
+            .ok_or("Agent startup watch is missing")?;
+        // These native errors precede input. Keep their specific shell evidence
+        // and the reported marker together, so the watchdog cannot replace it
+        // and queued work remains held until actual startup confirmation.
+        startup.reported = true;
+        if error.definitely_rejected {
+            startup.recovery = Some(StartupRecovery::Unsubmitted { args });
+        }
+        state
+            .set_agent_startup(id, Some(startup))
+            .map_err(|e| e.to_string())?;
+        state
+            .set_agent_error(id, Some(error.message.clone()))
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        Err(error.message)
     }
 
     pub(super) fn cleanup_failed_startups(

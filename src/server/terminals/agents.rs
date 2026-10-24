@@ -5,7 +5,7 @@ use bytes::Bytes;
 use crate::protocol::api::schema::AgentStartParams;
 use crate::server::{app::App, workspaces::ids::TerminalTargetError};
 
-const DEFAULT_AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_AGENT_START_TIMEOUT: Duration = crate::protocol::api::AGENT_START_TIMEOUT;
 pub(crate) const MAX_AGENT_START_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const AGENT_START_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
@@ -51,11 +51,26 @@ impl App {
         else {
             return;
         };
+        let returned_to_prompt = self
+            .terminal_runtimes
+            .get(&terminal_id)
+            .is_some_and(|runtime| {
+                runtime.launch_returned_to_prompt()
+                    && available_shell_name(runtime).is_some()
+                    && live_runtime_agent(runtime).is_none()
+            });
         let changed = self
             .state
             .terminals
             .get_mut(&terminal_id)
-            .is_some_and(|terminal| terminal.reconcile_managed_agent_at(Instant::now(), false));
+            .is_some_and(|terminal| {
+                if terminal.managed_agent_launch_pending() && returned_to_prompt {
+                    terminal.clear_agent_name();
+                    true
+                } else {
+                    terminal.reconcile_managed_agent_at(Instant::now(), false)
+                }
+            });
         if changed {
             self.state.mark_session_dirty();
             self.schedule_session_save();
@@ -193,8 +208,13 @@ impl App {
             .terminal_runtimes
             .get(&terminal_id)
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
-        let shell_name = available_shell_name(runtime)
-            .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+        let shell_name = available_shell_name(runtime).ok_or_else(|| {
+            if runtime.waiting_for_shell_prompt() {
+                AgentStartError::ShellStarting(params.pane_id.clone())
+            } else {
+                AgentStartError::TargetBusy(params.pane_id.clone())
+            }
+        })?;
 
         let mut args = params.args;
         let launch =
@@ -228,6 +248,7 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
+        runtime.mark_agent_launch();
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
@@ -271,8 +292,9 @@ impl App {
             },
             AgentStartError::TargetBusy(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_busy".into(),
-                message: format!("agent target pane {target} is not an available shell"),
+                message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then retry the launch."),
             },
+            AgentStartError::ShellStarting(target) => self.shell_wait_error_body(&target),
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
                 message: format!("agent target pane {target} has no live terminal"),
@@ -300,6 +322,37 @@ impl App {
                         .join("; ")
                 ),
             },
+        }
+    }
+
+    fn shell_wait_error_body(&self, target: &str) -> crate::protocol::api::schema::ErrorBody {
+        let runtime = self
+            .parse_current_public_pane_id(target)
+            .and_then(|(workspace, pane)| self.state.workspaces.get(workspace)?.terminal_id(pane))
+            .and_then(|id| self.terminal_runtimes.get(id));
+        let expired = runtime.is_some_and(|runtime| runtime.shell_prompt_wait_expired());
+        let last_line = runtime
+            .map(|runtime| {
+                runtime
+                    .visible_text()
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .map(|line| {
+                        line.chars()
+                            .filter(|c| !c.is_control() || *c == '\t')
+                            .take(300)
+                            .collect::<String>()
+                    })
+                    .unwrap_or_else(|| "(no visible output)".into())
+            })
+            .unwrap_or_else(|| "(pane unavailable)".into());
+        crate::protocol::api::schema::ErrorBody {
+            code: if expired { "agent_shell_waiting" } else { "agent_shell_starting" }.into(),
+            message: format!(
+                "Shell waiting for input or prompt confirmation{}. Last visible line: {last_line}. Answer any shell startup question, then resume this agent.",
+                if expired { " after 30 seconds" } else { "" },
+            ),
         }
     }
 
@@ -456,6 +509,9 @@ impl App {
 pub(in crate::server) fn available_shell_name(
     runtime: &crate::terminal::TerminalRuntime,
 ) -> Option<String> {
+    if runtime.waiting_for_shell_prompt() {
+        return None;
+    }
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());
@@ -502,6 +558,7 @@ fn live_runtime_agent(
 }
 
 pub(in crate::server) enum AgentStartError {
+    ShellStarting(String),
     InvalidName,
     UnsupportedKind(String),
     InvalidArgument,

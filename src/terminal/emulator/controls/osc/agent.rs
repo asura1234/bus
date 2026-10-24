@@ -18,6 +18,8 @@ pub(in crate::terminal::emulator) struct AgentOscStateTracker {
     latest_title: Option<String>,
     terminal_title: Option<String>,
     latest_progress: Option<String>,
+    pub(in crate::terminal::emulator) shell_prompt_generation: u64,
+    pub(in crate::terminal::emulator) launch_prompt_generation: Option<(String, u64)>,
 }
 
 impl AgentOscStateTracker {
@@ -29,6 +31,8 @@ impl AgentOscStateTracker {
             &mut self.latest_progress,
         );
         let mut terminal_title_changed = false;
+        let shell_prompt_generation = &mut self.shell_prompt_generation;
+        let launch_prompt_generation = &mut self.launch_prompt_generation;
         collector.observe(bytes, |body| {
             let Some((command, payload)) = parse_agent_osc_body(body) else {
                 return;
@@ -44,6 +48,23 @@ impl AgentOscStateTracker {
                 b"9" => {
                     *latest_progress =
                         Some(sanitize_agent_osc_string(payload, AGENT_OSC_MAX_CHARS));
+                }
+                b"133" => {
+                    let token = payload.strip_prefix(b"A;bus=").filter(|token| {
+                        !token.is_empty()
+                            && token.len() <= 64
+                            && token.iter().all(u8::is_ascii_hexdigit)
+                    });
+                    if payload != b"A" && token.is_none() {
+                        return;
+                    }
+                    *shell_prompt_generation = shell_prompt_generation.saturating_add(1);
+                    if let Some(token) = token {
+                        *launch_prompt_generation = Some((
+                            String::from_utf8_lossy(token).into_owned(),
+                            *shell_prompt_generation,
+                        ));
+                    }
                 }
                 _ => {}
             }

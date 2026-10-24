@@ -1,8 +1,8 @@
 //! Read/write one request against an existing private control endpoint.
 use super::protocol::{
-    encode, poll_write, ControlledStream, Frame, FrameError, Request, Response, IO_TIMEOUT,
-    LEGACY_SOCKET_NAME, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME,
-    WAIT_SOCKET_NAME, WORKER_TIMEOUT,
+    encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, Request, Response,
+    IO_TIMEOUT, LEGACY_SOCKET_NAME, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL,
+    SOCKET_NAME, WAIT_SOCKET_NAME,
 };
 use crate::platform::ipc;
 use std::{
@@ -27,7 +27,11 @@ pub(crate) fn undelivered(error: &str) -> bool {
 
 /// One JSON line in each direction, with no endpoint creation or stale-file removal.
 pub(crate) fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
-    request_with_timeout(data_dir, request, WORKER_TIMEOUT + IO_TIMEOUT * 3)
+    request_with_timeout(
+        data_dir,
+        request,
+        worker_timeout(&request.method) + IO_TIMEOUT * 3,
+    )
 }
 
 pub(crate) fn request_with_timeout(

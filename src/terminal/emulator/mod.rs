@@ -316,6 +316,14 @@ impl PaneTerminal {
         self.ghostty.agent_osc_title()
     }
 
+    pub(crate) fn shell_prompt_generation(&self) -> u64 {
+        self.ghostty.shell_prompt_generation()
+    }
+
+    pub(crate) fn launch_shell_prompt_generation(&self, token: &str) -> u64 {
+        self.ghostty.launch_shell_prompt_generation(token)
+    }
+
     pub fn agent_osc_progress(&self) -> String {
         self.ghostty.agent_osc_progress()
     }
@@ -397,6 +405,27 @@ impl GhosttyPaneTerminal {
             .lock()
             .ok()
             .and_then(|core| core.agent_osc_state.terminal_title().map(str::to_string))
+    }
+
+    fn shell_prompt_generation(&self) -> u64 {
+        self.core
+            .lock()
+            .map(|core| core.agent_osc_state.shell_prompt_generation)
+            .unwrap_or_default()
+    }
+
+    fn launch_shell_prompt_generation(&self, token: &str) -> u64 {
+        self.core
+            .lock()
+            .ok()
+            .and_then(|core| {
+                core.agent_osc_state
+                    .launch_prompt_generation
+                    .as_ref()
+                    .filter(|(seen, _)| seen == token)
+                    .map(|(_, generation)| *generation)
+            })
+            .unwrap_or_default()
     }
 
     /// Returns the latest OSC 0/2 title retained for agent detection, or `""`

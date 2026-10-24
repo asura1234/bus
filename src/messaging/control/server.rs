@@ -2,9 +2,8 @@
 #[cfg(test)]
 use super::client::{request, request_with_timeout};
 use super::protocol::{
-    encode, poll_write, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
+    encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
     MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME, WAIT_SOCKET_NAME,
-    WORKER_TIMEOUT,
 };
 pub(crate) use super::protocol::{ControlCall, Request, Response};
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
@@ -428,7 +427,7 @@ impl Client {
         let command_id = *next_id;
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;
         let started = Instant::now();
-        let deadline = started + WORKER_TIMEOUT;
+        let deadline = started + worker_timeout(&request.method);
         match commands.try_send((
             command_id,
             BusCommand::Control(ControlCall {
