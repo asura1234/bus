@@ -1,4 +1,6 @@
 //! Observe the composer between writes; retry only Enter for the owned draft.
+mod diagnostics;
+
 use super::submission_clock::SubmissionClock;
 use super::{io::PaneRuntimeIo, TerminalRuntime};
 use crate::protocol::api::submission::{confirmation_budget, maximum_budget, WITHDRAW_GRACE};
@@ -54,6 +56,7 @@ struct ObservedSubmission {
     deadline: std::cell::Cell<Instant>,
     hard_deadline: Instant,
     clock: SubmissionClock,
+    diagnostics: diagnostics::Diagnostics,
 }
 
 impl TerminalRuntime {
@@ -86,18 +89,37 @@ impl TerminalRuntime {
             ),
             hard_deadline,
             clock,
+            diagnostics: diagnostics::Diagnostics::default(),
         };
         let (tx, rx) = std::sync::mpsc::channel();
+        let span = tracing::Span::current();
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
         std::thread::spawn(move || {
-            let _ = tx.send(submission.run(text, delay));
+            tracing::dispatcher::with_default(&dispatch, || {
+                let _entered = span.enter();
+                submission.diagnostics.begin(
+                    submission.clock.now(),
+                    submission.deadline.get(),
+                    submission.hard_deadline,
+                );
+                let result = submission.run(text, delay);
+                submission
+                    .diagnostics
+                    .finish(&result, submission.clock.now());
+                let _ = tx.send(result);
+            })
         });
         Ok(rx)
     }
 }
 
 impl ObservedSubmission {
-    fn observe(&self) -> InputObservation {
-        (self.inspect)(&self.terminal.visible_ansi())
+    fn observe(&self, phase: &'static str) -> InputObservation {
+        let screen = self.terminal.visible_ansi();
+        let observation = (self.inspect)(&screen);
+        self.diagnostics
+            .observe(phase, observation, screen.len(), self.clock.now());
+        observation
     }
 
     fn check_deadline(&self) -> io::Result<()> {
@@ -119,10 +141,12 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other(PromptNotShown))?;
         // Rendering and paste enqueue share this lock, just like clear keys
         // and Enter. A chooser can have replaced the empty composer since clear.
-        if self.observe() != InputObservation::Empty {
+        if self.observe("paste_preflight") != InputObservation::Empty {
             return Err(io::Error::other(PromptNotShown));
         }
         self.check_deadline()?;
+        self.diagnostics
+            .paste(bytes.len(), delay.as_millis() as u64, self.clock.now());
         let completion = self.io.queue_user_input_submission(
             bytes,
             Bytes::new(),
@@ -130,9 +154,12 @@ impl ObservedSubmission {
             Some(self.deadline.get()),
         )?;
         drop(guard);
-        completion
+        let result = completion
             .recv_timeout(self.clock.remaining(self.deadline.get()))
-            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
+            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
+            .and_then(|result| result);
+        self.diagnostics.pasted(&result, self.clock.now());
+        result
     }
 
     fn clear_draft(&self, owned_only: bool) -> io::Result<()> {
@@ -152,7 +179,7 @@ impl ObservedSubmission {
             .content_lock
             .lock()
             .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        match self.observe() {
+        match self.observe("clear_preflight") {
             InputObservation::Empty => return Ok(true),
             InputObservation::Pending => {}
             InputObservation::Other if !owned_only => {}
@@ -163,6 +190,7 @@ impl ObservedSubmission {
             }
         }
         self.check_deadline()?;
+        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only);
         let completion = self.io.queue_user_input_submission(
             key,
             Bytes::new(),
@@ -182,15 +210,20 @@ impl ObservedSubmission {
     /// No Enter was sent. Withdraw the paste, including a draft first seen
     /// across the confirmation deadline. Preserve ownership checks for a
     /// recognized draft; report definite non-delivery only once it is empty.
-    fn withdraw_before_enter(&self, timeout: io::Error) -> io::Result<()> {
-        let owned_only = match self.observe() {
+    fn withdraw_before_enter(&self, timeout: io::Error, owned_seen: bool) -> io::Result<()> {
+        let owned_only = match self.observe("withdraw_before_enter") {
             InputObservation::Pending => true,
-            InputObservation::Other => false,
-            _ => return Err(timeout),
+            InputObservation::Other if !owned_seen => false,
+            _ => {
+                self.diagnostics.cleanup_refused(self.clock.now());
+                return Err(timeout);
+            }
         };
         self.deadline
             .set((self.clock.now() + WITHDRAW_GRACE).min(self.hard_deadline));
-        self.clear_draft(owned_only)?;
+        let cleared = self.clear_draft(owned_only);
+        self.diagnostics.cleared(&cleared, self.clock.now());
+        cleared?;
         Err(io::Error::other(PromptNotShown))
     }
 
@@ -201,6 +234,7 @@ impl ObservedSubmission {
         self.deadline
             .set((self.clock.now() + WITHDRAW_GRACE).min(self.hard_deadline));
         let cleared = self.clear_draft(true);
+        self.diagnostics.cleared(&cleared, self.clock.now());
         let detail = match cleared {
             Ok(()) => "The remaining draft was cleared".to_owned(),
             Err(error) => format!("The draft could not be safely cleared: {error}"),
@@ -215,7 +249,7 @@ impl ObservedSubmission {
         // No paste or Enter has been queued yet. A dialog that appeared after
         // API validation is a definite non-delivery, safe to retain in FIFO.
         if matches!(
-            self.observe(),
+            self.observe("initial"),
             InputObservation::Unavailable | InputObservation::Accepted
         ) {
             return Err(io::Error::other(PromptNotShown));
@@ -227,11 +261,11 @@ impl ObservedSubmission {
         // the owned draft to render before attempting the first Enter.
         loop {
             let generation = self.clock.generation();
-            if self.observe() == InputObservation::Pending {
+            if self.observe("await_paste") == InputObservation::Pending {
                 break;
             }
             if let Err(error) = self.check_deadline() {
-                return self.withdraw_before_enter(error);
+                return self.withdraw_before_enter(error, false);
             }
             #[cfg(test)]
             self.clock.waiting_for_draft();
@@ -244,7 +278,7 @@ impl ObservedSubmission {
                 .content_lock
                 .lock()
                 .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-            let observation = self.observe();
+            let observation = self.observe("confirm");
             if last_enter.is_some()
                 && matches!(
                     observation,
@@ -260,7 +294,7 @@ impl ObservedSubmission {
                 return if last_enter.is_some() {
                     self.withdraw_pending(error)
                 } else {
-                    self.withdraw_before_enter(error)
+                    self.withdraw_before_enter(error, true)
                 };
             }
             let retry = observation == InputObservation::Pending
@@ -270,6 +304,7 @@ impl ObservedSubmission {
             let completion = if retry {
                 // Inspect and enqueue under the same lock as PTY rendering.
                 // No paste retry: a lost response must never duplicate text.
+                self.diagnostics.enter(&self.enter, self.clock.now());
                 Some(self.io.queue_user_input_submission(
                     Bytes::new(),
                     self.enter.clone(),
@@ -281,9 +316,12 @@ impl ObservedSubmission {
             };
             drop(guard);
             if let Some(completion) = completion {
-                completion
+                let result = completion
                     .recv_timeout(self.clock.remaining(self.deadline.get()))
-                    .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
+                    .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
+                    .and_then(|result| result);
+                self.diagnostics.entered(&result, self.clock.now());
+                result?;
                 last_enter = Some(self.clock.now());
                 #[cfg(test)]
                 self.clock.entered();

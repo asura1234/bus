@@ -43,9 +43,10 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
         deadline: std::cell::Cell::new(expired),
         hard_deadline: expired,
         clock: SubmissionClock::default(),
+        diagnostics: Default::default(),
     };
     let result =
-        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"), false);
     assert!(result.is_err_and(|error| error.kind() == io::ErrorKind::TimedOut));
     assert!(
         writes.try_recv().is_err(),
@@ -75,6 +76,7 @@ async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
         deadline: std::cell::Cell::new(clock.now() + Duration::from_secs(2)),
         hard_deadline: clock.now() + Duration::from_secs(3),
         clock,
+        diagnostics: Default::default(),
     };
     submission.clear_draft(false).unwrap();
     runtime.test_process_pty_bytes(
@@ -125,6 +127,7 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         deadline: std::cell::Cell::new(deadline),
         hard_deadline: deadline + Duration::from_secs(1),
         clock,
+        diagnostics: Default::default(),
     };
     let result = submission.run(Bytes::from_static(b"hello"), Duration::ZERO);
     assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"hello"));
@@ -135,3 +138,82 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         "Enter was sent and the provider accepted the prompt: {result:?}"
     );
 }
+
+#[tokio::test]
+async fn an_owned_draft_edited_before_first_enter_is_preserved() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let first_owned = AtomicBool::new(true);
+    let completion = runtime
+        .queue_observed_input_submission(
+            Bytes::from_static(b"owned draft"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+            Duration::ZERO,
+            None,
+            move |screen| {
+                if screen.contains("owned draft + developer edit") {
+                    InputObservation::Other
+                } else if screen.contains("owned draft") {
+                    if first_owned.swap(false, Ordering::SeqCst) {
+                        seen_tx.send(()).unwrap();
+                        resume_rx
+                            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+                            .unwrap();
+                    }
+                    InputObservation::Pending
+                } else {
+                    InputObservation::Empty
+                }
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"owned draft")
+    );
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned draft");
+    seen_rx
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+        .unwrap();
+    // Ownership was established; a developer edits before the first Enter.
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned draft + developer edit");
+    clock.advance(Duration::from_millis(2100));
+    resume_tx.send(()).unwrap();
+    let mut result = tokio::task::spawn_blocking(move || {
+        completion
+            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+            .unwrap()
+    });
+    let (error, destructive) = tokio::select! {
+        result = &mut result => (result.unwrap().unwrap_err(), None),
+        key = writes.recv() => {
+            // Let the bad implementation terminate before asserting its write.
+            clock.advance(Duration::from_secs(2));
+            (result.await.unwrap().unwrap_err(), key)
+        }
+    };
+    assert_eq!(
+        destructive, None,
+        "cleanup must not edit input after ownership is lost"
+    );
+    assert!(
+        !PromptNotShown::is(&error),
+        "changed input is unsafe to replay: {error}"
+    );
+    assert!(runtime
+        .terminal
+        .visible_ansi()
+        .contains("owned draft + developer edit"));
+    assert!(
+        writes.try_recv().is_err(),
+        "no Enter or destructive clear keys"
+    );
+}
+
+#[path = "submission_diagnostics_test.rs"]
+mod diagnostics_tests;
