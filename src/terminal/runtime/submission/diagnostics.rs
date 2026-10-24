@@ -1,5 +1,5 @@
 //! Content-free native submission evidence, owned by the writer thread.
-use super::{InputObservation, PromptNotShown};
+use super::{ClearOutcome, InputObservation, PromptNotShown};
 use std::{cell::Cell, io, time::Instant};
 
 #[derive(Default)]
@@ -70,11 +70,12 @@ impl Diagnostics {
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter_flushed", attempt = self.enter_attempts.get(), flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
     }
 
-    pub(super) fn cleared(&self, result: &io::Result<()>, now: Instant) {
-        let outcome = if result.is_ok() {
-            "cleared"
-        } else {
-            "unsafe_or_failed"
+    pub(super) fn cleared(&self, result: &io::Result<ClearOutcome>, now: Instant) {
+        let outcome = match result {
+            Ok(ClearOutcome::AlreadyEmpty) => "already_empty",
+            Ok(ClearOutcome::Accepted) => "accepted",
+            Ok(ClearOutcome::Cleared) => "cleared",
+            Err(_) => "unsafe_or_failed",
         };
         self.cleanup.set(outcome);
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.cleanup", outcome, final_observation = ?self.last.get(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));

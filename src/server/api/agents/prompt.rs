@@ -471,13 +471,13 @@ fn queue_prompt_input(
         &["ctrl+a".into(), "ctrl+k".into(), "ctrl+u".into()],
     )
     .map_err(|key| std::io::Error::other(format!("Invalid clear key: {key}")))?;
-    runtime.queue_observed_input_submission(
+    runtime.queue_observed_input_with_inspector(
         Bytes::from(encoded),
         Bytes::from(enter),
         clear.into_iter().map(Bytes::from).collect(),
         delay,
         deadline,
-        composer::observer(kind, text),
+        Box::new(composer::observer(kind, text)),
     )
 }
 

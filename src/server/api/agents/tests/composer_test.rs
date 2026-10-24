@@ -37,13 +37,13 @@ async fn startup_controls_visible_after_validation_receive_no_input() {
     // The dialog appeared after native identity/readiness validation but
     // before the asynchronous writer looked at the current screen.
     let completion = runtime
-        .queue_observed_input_submission(
+        .queue_observed_input_with_inspector(
             bytes::Bytes::from_static(b"first room message"),
             bytes::Bytes::from_static(b"\r"),
             vec![bytes::Bytes::from_static(b"\x01")],
             std::time::Duration::ZERO,
             None,
-            observer(AgentKind::Codex, "first room message".into()),
+            Box::new(observer(AgentKind::Codex, "first room message".into())),
         )
         .unwrap();
     let error = completion
@@ -483,13 +483,13 @@ async fn codex_numbered_list_message_is_submitted_after_its_draft_renders() {
     let text = "1. run the tests\n2. open the PR";
     runtime.test_submission_clock().unwrap().pause();
     let completion = runtime
-        .queue_observed_input_submission(
+        .queue_observed_input_with_inspector(
             bytes::Bytes::from_static(b"1. run the tests\n2. open the PR"),
             bytes::Bytes::from_static(b"\r"),
             vec![bytes::Bytes::from_static(b"\x01")],
             std::time::Duration::ZERO,
             Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
-            observer(AgentKind::Codex, text.into()),
+            Box::new(observer(AgentKind::Codex, text.into())),
         )
         .unwrap();
     let paste = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
@@ -910,4 +910,27 @@ fn cursor_composer_format_order_preserves_the_newest_draft() {
             "an older composer cannot own the current draft"
         );
     }
+}
+
+#[test]
+fn queued_cleanup_keys_allow_their_intermediate_rendered_remainders() {
+    use crate::terminal::runtime::SubmissionInspector;
+    let inspector = observer(AgentKind::Codex, "header\nmiddle\nlast".into());
+    let render = |body: &str| format!("› {body}\n\n GPT-6 · /repo");
+    assert_eq!(
+        inspector.observe(&render("header\nmiddle\nlast")),
+        InputObservation::Pending
+    );
+    // A delayed renderer can show an earlier queued edit before the latest one.
+    for index in [0, 1, 2, 0, 1] {
+        inspector.clearing(index);
+    }
+    assert_eq!(
+        inspector.observe(&render("header\nmiddle")),
+        InputObservation::Pending
+    );
+    assert_eq!(
+        inspector.observe(&render("header")),
+        InputObservation::Pending
+    );
 }

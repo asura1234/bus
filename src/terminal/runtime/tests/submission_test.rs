@@ -37,7 +37,7 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
-        inspect: Box::new(|_| InputObservation::Other),
+        inspect: Box::new(|_: &str| InputObservation::Other),
         enter: Bytes::from_static(b"\r"),
         clear: vec![Bytes::from_static(b"\x01")],
         deadline: std::cell::Cell::new(expired),
@@ -64,7 +64,7 @@ async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
-        inspect: Box::new(|screen| {
+        inspect: Box::new(|screen: &str| {
             if crate::agents::dialog::parse(screen).is_some() {
                 InputObservation::Unavailable
             } else {
@@ -108,8 +108,8 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         // Empty composer, our paste renders, Enter goes out, and the
         // provider accepts it; that last observation (render plus content
         // lock wait) finishes just after the confirmation deadline.
-        inspect: Box::new(
-            move |_| match seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+        inspect: Box::new(move |_: &str| {
+            match seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
                 0..=2 => InputObservation::Empty,
                 3 | 4 => InputObservation::Pending,
                 _ => {
@@ -120,8 +120,8 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
                     );
                     InputObservation::Accepted
                 }
-            },
-        ),
+            }
+        }),
         enter: Bytes::from_static(b"\r"),
         clear: vec![Bytes::from_static(b"\x01")],
         deadline: std::cell::Cell::new(deadline),
@@ -205,6 +205,12 @@ async fn an_owned_draft_edited_before_first_enter_is_preserved() {
         !PromptNotShown::is(&error),
         "changed input is unsafe to replay: {error}"
     );
+    for detail in ["draft was left", "edited", "transcript", "before resending"] {
+        assert!(
+            error.to_string().contains(detail),
+            "missing {detail}: {error}"
+        );
+    }
     assert!(runtime
         .terminal
         .visible_ansi()
@@ -217,3 +223,6 @@ async fn an_owned_draft_edited_before_first_enter_is_preserved() {
 
 #[path = "submission_diagnostics_test.rs"]
 mod diagnostics_tests;
+
+#[path = "submission_write_failure_test.rs"]
+mod write_failure_tests;

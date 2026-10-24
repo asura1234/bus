@@ -18,6 +18,7 @@ struct TestTime {
     enters: usize,
     draft_waits: usize,
     checked_generation: Option<u64>,
+    write_failure: Option<WriteCompletionFault>,
 }
 
 impl SubmissionClock {
@@ -162,5 +163,44 @@ impl SubmissionClock {
             },
             "writer did not inspect the advanced clock",
         );
+    }
+}
+
+#[cfg(test)]
+pub(super) struct WriteCompletionFault {
+    kind: std::io::ErrorKind,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+impl WriteCompletionFault {
+    pub(super) fn complete(self, result: std::io::Result<()>) -> std::io::Result<()> {
+        result?;
+        self.release.recv_timeout(NATIVE_TEST_TIMEOUT).unwrap();
+        Err(std::io::Error::new(
+            self.kind,
+            "injected write acknowledgement failure",
+        ))
+    }
+}
+
+#[cfg(test)]
+impl SubmissionClock {
+    pub(crate) fn fail_next_write_completion(
+        &self,
+        kind: std::io::ErrorKind,
+    ) -> std::sync::mpsc::Sender<()> {
+        let (release, receiver) = std::sync::mpsc::channel();
+        let mut state = self.state.0.lock().unwrap();
+        assert!(state.write_failure.is_none());
+        state.write_failure = Some(WriteCompletionFault {
+            kind,
+            release: receiver,
+        });
+        release
+    }
+
+    pub(super) fn take_write_failure(&self) -> Option<WriteCompletionFault> {
+        self.state.0.lock().unwrap().write_failure.take()
     }
 }

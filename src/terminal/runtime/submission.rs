@@ -46,11 +46,32 @@ impl PromptNotShown {
     }
 }
 
+/// Provider-specific ownership transitions after Bus's own editing keys.
+pub(crate) trait SubmissionInspector: Send {
+    fn observe(&self, screen: &str) -> InputObservation;
+    /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
+    /// Called only after its key was queued under the content/render lock.
+    fn clearing(&self, _key_index: usize) {}
+}
+
+impl<F: Fn(&str) -> InputObservation + Send> SubmissionInspector for F {
+    fn observe(&self, screen: &str) -> InputObservation {
+        self(screen)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClearOutcome {
+    AlreadyEmpty,
+    Cleared,
+    Accepted,
+}
+
 struct ObservedSubmission {
     terminal: Arc<PaneTerminal>,
     io: PaneRuntimeIo,
     content_lock: Arc<Mutex<()>>,
-    inspect: Box<dyn Fn(&str) -> InputObservation + Send>,
+    inspect: Box<dyn SubmissionInspector>,
     enter: Bytes,
     clear: Vec<Bytes>,
     deadline: std::cell::Cell<Instant>,
@@ -62,6 +83,7 @@ struct ObservedSubmission {
 impl TerminalRuntime {
     /// Completion means the owned composer cleared after Enter, or a turn
     /// visibly began. A PTY write alone cannot confirm provider acceptance.
+    #[cfg(test)]
     pub(crate) fn queue_observed_input_submission(
         &self,
         text: Bytes,
@@ -70,6 +92,25 @@ impl TerminalRuntime {
         delay: Duration,
         deadline: Option<Instant>,
         inspect: impl Fn(&str) -> InputObservation + Send + 'static,
+    ) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
+        self.queue_observed_input_with_inspector(
+            text,
+            enter,
+            clear,
+            delay,
+            deadline,
+            Box::new(inspect),
+        )
+    }
+
+    pub(crate) fn queue_observed_input_with_inspector(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        clear: Vec<Bytes>,
+        delay: Duration,
+        deadline: Option<Instant>,
+        inspect: Box<dyn SubmissionInspector>,
     ) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
         let clock = self.io.submission_clock();
         let now = clock.now();
@@ -80,7 +121,7 @@ impl TerminalRuntime {
             terminal: self.terminal.clone(),
             io: self.io.clone(),
             content_lock: self.content_write_lock.clone(),
-            inspect: Box::new(inspect),
+            inspect,
             enter,
             clear,
             // Queue/dispatch time must not consume the withdrawal reserve.
@@ -116,7 +157,7 @@ impl TerminalRuntime {
 impl ObservedSubmission {
     fn observe(&self, phase: &'static str) -> InputObservation {
         let screen = self.terminal.visible_ansi();
-        let observation = (self.inspect)(&screen);
+        let observation = self.inspect.observe(&screen);
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
         observation
@@ -134,7 +175,8 @@ impl ObservedSubmission {
     }
 
     fn write(&self, bytes: Bytes, delay: Duration) -> io::Result<()> {
-        self.check_deadline()?;
+        self.check_deadline()
+            .map_err(|_| io::Error::other(PromptNotShown))?;
         let guard = self
             .content_lock
             .lock()
@@ -144,7 +186,8 @@ impl ObservedSubmission {
         if self.observe("paste_preflight") != InputObservation::Empty {
             return Err(io::Error::other(PromptNotShown));
         }
-        self.check_deadline()?;
+        self.check_deadline()
+            .map_err(|_| io::Error::other(PromptNotShown))?;
         self.diagnostics
             .paste(bytes.len(), delay.as_millis() as u64, self.clock.now());
         let completion = self.io.queue_user_input_submission(
@@ -162,25 +205,38 @@ impl ObservedSubmission {
         result
     }
 
-    fn clear_draft(&self, owned_only: bool) -> io::Result<()> {
+    fn clear_draft(&self, owned_only: bool) -> io::Result<ClearOutcome> {
+        let mut sent = false;
         loop {
-            for key in &self.clear {
-                if self.clear_step(key.clone(), owned_only)? {
-                    return Ok(());
+            for (index, key) in self.clear.iter().enumerate() {
+                if let Some(outcome) = self.clear_step(key.clone(), index, owned_only, &mut sent)? {
+                    return Ok(outcome);
                 }
             }
         }
     }
 
-    fn clear_step(&self, key: Bytes, owned_only: bool) -> io::Result<bool> {
+    fn clear_step(
+        &self,
+        key: Bytes,
+        index: usize,
+        owned_only: bool,
+        sent: &mut bool,
+    ) -> io::Result<Option<ClearOutcome>> {
         let generation = self.clock.generation();
-        self.check_deadline()?;
         let guard = self
             .content_lock
             .lock()
             .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
         match self.observe("clear_preflight") {
-            InputObservation::Empty => return Ok(true),
+            InputObservation::Empty => {
+                return Ok(Some(if *sent {
+                    ClearOutcome::Cleared
+                } else {
+                    ClearOutcome::AlreadyEmpty
+                }))
+            }
+            InputObservation::Accepted => return Ok(Some(ClearOutcome::Accepted)),
             InputObservation::Pending => {}
             InputObservation::Other if !owned_only => {}
             _ => {
@@ -197,6 +253,7 @@ impl ObservedSubmission {
             Duration::ZERO,
             Some(self.deadline.get()),
         )?;
+        self.inspect.clearing(index);
         drop(guard);
         completion
             .recv_timeout(self.clock.remaining(self.deadline.get()))
@@ -204,30 +261,54 @@ impl ObservedSubmission {
         // Keep editing keys in separate input events for Ink providers. Check
         // for emptiness again before sending the next key or another line kill.
         self.clock.sleep(Duration::from_millis(25), generation);
-        Ok(false)
+        *sent = true;
+        Ok(None)
     }
 
     /// No Enter was sent. Withdraw the paste, including a draft first seen
     /// across the confirmation deadline. Preserve ownership checks for a
     /// recognized draft; report definite non-delivery only once it is empty.
     fn withdraw_before_enter(&self, timeout: io::Error, owned_seen: bool) -> io::Result<()> {
-        let owned_only = match self.observe("withdraw_before_enter") {
+        let observation = self.observe("withdraw_before_enter");
+        let owned_only = match observation {
             InputObservation::Pending => true,
             InputObservation::Other if !owned_seen => false,
             _ => {
                 self.diagnostics.cleanup_refused(self.clock.now());
-                return Err(timeout);
+                let detail = match observation {
+                    InputObservation::Other => "The draft was left because it was edited",
+                    InputObservation::Empty => {
+                        "No remaining draft was visible; the paste write may still be pending"
+                    }
+                    _ => "The draft was left because the composer could not be safely edited",
+                };
+                return Err(Self::before_enter_failure(timeout, detail));
             }
         };
         self.deadline
             .set((self.clock.now() + WITHDRAW_GRACE).min(self.hard_deadline));
         let cleared = self.clear_draft(owned_only);
         self.diagnostics.cleared(&cleared, self.clock.now());
-        cleared?;
-        Err(io::Error::other(PromptNotShown))
+        match cleared {
+            Ok(ClearOutcome::AlreadyEmpty | ClearOutcome::Cleared) => {
+                Err(io::Error::other(PromptNotShown))
+            }
+            Ok(ClearOutcome::Accepted) => Err(Self::before_enter_failure(
+                timeout,
+                "Provider work appeared before the draft could be withdrawn",
+            )),
+            Err(error) => Err(Self::before_enter_failure(
+                timeout,
+                &format!("The draft was left because cleanup could not finish safely: {error}"),
+            )),
+        }
     }
 
-    /// Enter was flushed but acceptance is still unknown. Withdraw only the
+    fn before_enter_failure(error: io::Error, detail: &str) -> io::Error {
+        io::Error::new(error.kind(), format!("{error}. {detail}. No Enter was sent by Bus. Inspect the agent's transcript and composer before resending; preserve your edits while removing any remaining Bus draft"))
+    }
+
+    /// Enter was attempted but acceptance is still unknown. Withdraw only the
     /// unchanged owned draft, rechecking ownership under the render lock before
     /// every editing key. Clearing cannot prove the provider never ran it.
     fn withdraw_pending(&self, timeout: io::Error) -> io::Result<()> {
@@ -236,13 +317,39 @@ impl ObservedSubmission {
         let cleared = self.clear_draft(true);
         self.diagnostics.cleared(&cleared, self.clock.now());
         let detail = match cleared {
-            Ok(()) => "The remaining draft was cleared".to_owned(),
+            Ok(ClearOutcome::AlreadyEmpty | ClearOutcome::Accepted) => return Ok(()),
+            Ok(ClearOutcome::Cleared) => "The remaining draft was cleared".to_owned(),
             Err(error) => format!("The draft could not be safely cleared: {error}"),
         };
         Err(io::Error::new(
             io::ErrorKind::TimedOut,
             format!("{timeout}. {detail}. The message may have run; inspect the agent's transcript and composer before resending"),
         ))
+    }
+
+    // The caller holds content_lock while queueing, and releases it before waiting.
+    fn enqueue_enter(&self) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
+        self.diagnostics.enter(&self.enter, self.clock.now());
+        self.io.queue_user_input_submission(
+            Bytes::new(),
+            self.enter.clone(),
+            Duration::ZERO,
+            Some(self.deadline.get()),
+        )
+    }
+
+    fn finish_enter(
+        &self,
+        completion: io::Result<std::sync::mpsc::Receiver<io::Result<()>>>,
+    ) -> io::Result<()> {
+        let result = completion.and_then(|completion| {
+            completion
+                .recv_timeout(self.clock.remaining(self.deadline.get()))
+                .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
+                .and_then(|result| result)
+        });
+        self.diagnostics.entered(&result, self.clock.now());
+        result
     }
 
     fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
@@ -256,7 +363,13 @@ impl ObservedSubmission {
         }
         self.clear_draft(false)
             .map_err(|_| io::Error::other(PromptNotShown))?;
-        self.write(text, delay)?;
+        if let Err(error) = self.write(text, delay) {
+            return if PromptNotShown::is(&error) {
+                Err(error)
+            } else {
+                self.withdraw_before_enter(error, false)
+            };
+        }
         // Paste may be buffered by the provider after the PTY flush. Wait for
         // the owned draft to render before attempting the first Enter.
         loop {
@@ -304,24 +417,15 @@ impl ObservedSubmission {
             let completion = if retry {
                 // Inspect and enqueue under the same lock as PTY rendering.
                 // No paste retry: a lost response must never duplicate text.
-                self.diagnostics.enter(&self.enter, self.clock.now());
-                Some(self.io.queue_user_input_submission(
-                    Bytes::new(),
-                    self.enter.clone(),
-                    Duration::ZERO,
-                    Some(self.deadline.get()),
-                )?)
+                Some(self.enqueue_enter())
             } else {
                 None
             };
             drop(guard);
             if let Some(completion) = completion {
-                let result = completion
-                    .recv_timeout(self.clock.remaining(self.deadline.get()))
-                    .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
-                    .and_then(|result| result);
-                self.diagnostics.entered(&result, self.clock.now());
-                result?;
+                if let Err(error) = self.finish_enter(completion) {
+                    return self.withdraw_pending(error);
+                }
                 last_enter = Some(self.clock.now());
                 #[cfg(test)]
                 self.clock.entered();

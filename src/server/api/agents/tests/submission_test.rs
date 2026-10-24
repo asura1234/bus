@@ -493,3 +493,6 @@ async fn an_unrecognised_paste_is_cleared_and_reported_as_not_submitted() {
 
 #[path = "paste_recovery_test.rs"]
 mod paste_recovery_tests;
+
+#[path = "owned_draft_cleanup_test.rs"]
+mod owned_draft_cleanup_tests;
