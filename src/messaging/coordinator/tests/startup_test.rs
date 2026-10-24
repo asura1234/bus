@@ -1004,3 +1004,6 @@ fn shell_recovery_does_not_invent_retry_authority_from_legacy_command_text() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[path = "review_round1_test.rs"]
+mod review_round1;

@@ -27,6 +27,7 @@ enum ManagedAgentPhase {
     },
     Blocked,
     Active,
+    Suspended,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,16 @@ struct RecentAgentProcessExit {
     observed_at: Instant,
 }
 
+/// Native restore evidence outlives an unconfirmed provider process. It is
+/// retired when that process becomes interactive, rather than on client attach.
+pub(crate) struct NativeAgentResume {
+    pub(crate) name: String,
+    pub(crate) kind: AgentKind,
+    pub(crate) session: Option<crate::agents::resume::catalog::PersistedAgentSession>,
+    pub(crate) command: String,
+    pub(crate) error: Option<String>,
+}
+
 /// Pure state for a server-owned terminal.
 ///
 /// Agent identity comes from process and screen detection. Provider session
@@ -106,6 +117,7 @@ pub struct TerminalState {
     session_reporter: Vec<crate::platform::ProcessInstance>,
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agents::resume::catalog::AgentResumePlan>,
+    pub(crate) native_resume: Option<NativeAgentResume>,
 }
 
 impl TerminalState {
@@ -134,6 +146,7 @@ impl TerminalState {
             session_reporter: Vec::new(),
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
+            native_resume: None,
         }
     }
 

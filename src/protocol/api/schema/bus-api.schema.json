@@ -4586,6 +4586,17 @@
               "description": "A current PTY hosts the expected provider process, with no deferred\nresume or pending launch. Saved identity and idle state alone do not\nmake this true. Check agent_status separately before submitting input.",
               "type": "boolean"
             },
+            "native_resume": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/NativeResumeInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Native restore attempt, including a failure before process detection.\nAbsent after interactive confirmation and on ordinary client reattach."
+            },
             "pane_id": {
               "type": "string"
             },
@@ -5292,6 +5303,37 @@
               "type": "object"
             }
           ]
+        },
+        "NativeResumeInfo": {
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "agent",
+            "command"
+          ],
+          "type": "object"
         },
         "NotificationShowReason": {
           "enum": [

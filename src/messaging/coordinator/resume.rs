@@ -59,6 +59,26 @@ fn is_unstarted_codex(state: &BusState, agent: &RoomAgent) -> bool {
         })
 }
 
+/// Correlate native-owned restore evidence, never screen text or a reused pane.
+pub(super) fn native_attempt<'a>(
+    agent: &RoomAgent,
+    info: &'a schema::AgentInfo,
+) -> Option<&'a schema::NativeResumeInfo> {
+    let attempt = info.native_resume.as_ref()?;
+    let kind = identity::provider_kind(agent.provider).label();
+    (attempt.name == identity::managed_name(agent.room_id, agent.id)
+        && attempt.agent == kind
+        && attempt.session_id == agent.runtime_identity.session_id
+        && info.agent_session.as_ref().is_none_or(|session| {
+            session.agent == kind
+                && session.source == identity::managed_source(agent.provider)
+                && session.kind == schema::AgentSessionRefKind::Id
+                && Some(&session.value) == attempt.session_id.as_ref()
+        })
+        && info.agent.as_deref().is_none_or(|actual| actual == kind))
+    .then_some(attempt)
+}
+
 pub(super) fn restored_agent<'a>(
     state: &BusState,
     agent: &RoomAgent,
@@ -84,18 +104,20 @@ pub(super) fn restored_agent<'a>(
     let name = identity::managed_name(agent.room_id, agent.id);
     let source = identity::managed_source(agent.provider);
     let mut matches = infos.iter().filter(|info| {
-        info.name.as_deref() == Some(name.as_str())
-            && (info.agent.as_deref() == Some(kind) || info.agent.is_none() && info.launch_pending)
-            && match (session, info.agent_session.as_ref()) {
-                (None, None) => true,
-                (Some(session), Some(native)) => {
-                    native.source == source
-                        && native.agent == kind
-                        && native.kind == schema::AgentSessionRefKind::Id
-                        && native.value == session
-                }
-                _ => false,
-            }
+        native_attempt(agent, info).is_some()
+            || (info.name.as_deref() == Some(name.as_str())
+                && (info.agent.as_deref() == Some(kind)
+                    || info.agent.is_none() && info.launch_pending)
+                && match (session, info.agent_session.as_ref()) {
+                    (None, None) => true,
+                    (Some(session), Some(native)) => {
+                        native.source == source
+                            && native.agent == kind
+                            && native.kind == schema::AgentSessionRefKind::Id
+                            && native.value == session
+                    }
+                    _ => false,
+                })
     });
     let candidate = matches.next()?;
     if matches.next().is_some() || candidate.terminal_id.is_empty() || candidate.pane_id.is_empty()

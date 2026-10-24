@@ -115,7 +115,6 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
-        super::startup::watch_restored_startups(&mut state)?;
         state
             .expire_stalled_queued_requests(io::now_ms())
             .map_err(|e| e.to_string())?;

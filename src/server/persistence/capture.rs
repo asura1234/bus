@@ -75,14 +75,31 @@ fn capture_tab(
             .cwd_for_pane(*id, terminals, terminal_runtimes)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
         let terminal = terminals.get(&pane.attached_terminal_id);
+        // A failed native attempt retains its proven owner even after process
+        // exit cleared detection/name/session. Never carry it into foreign work.
+        let resume = terminal.and_then(|terminal| {
+            terminal.native_resume.as_ref().filter(|resume| {
+                terminal
+                    .effective_known_agent()
+                    .is_none_or(|kind| kind == resume.kind)
+                    && terminal
+                        .persisted_agent_session
+                        .as_ref()
+                        .is_none_or(|session| resume.session.as_ref() == Some(session))
+            })
+        });
         let label = terminal.and_then(|terminal| terminal.manual_label.clone());
         let (agent_name, managed_agent_kind) = terminal
-            .filter(|terminal| !terminal.managed_agent_launch_pending())
+            .filter(|terminal| !terminal.managed_agent_launch_pending() || resume.is_some())
             .map(|terminal| {
                 (
-                    terminal.agent_name.clone(),
+                    terminal
+                        .agent_name
+                        .clone()
+                        .or_else(|| resume.map(|resume| resume.name.clone())),
                     terminal
                         .managed_agent_kind()
+                        .or_else(|| resume.map(|resume| resume.kind))
                         .map(|agent| crate::agents::agent_label(agent).to_string()),
                 )
             })
@@ -92,6 +109,7 @@ fn capture_tab(
             terminal
                 .persisted_agent_session
                 .as_ref()
+                .or_else(|| resume.and_then(|resume| resume.session.as_ref()))
                 .map(|session| PaneAgentSessionSnapshot {
                     source: session.source.clone(),
                     agent: session.agent.clone(),

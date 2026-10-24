@@ -437,7 +437,7 @@ impl App {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_state = ws.pane_state(pane_id)?;
         let terminal = self.state.terminals.get(&pane_state.attached_terminal_id)?;
-        if !terminal.is_agent_terminal() {
+        if !terminal.is_agent_terminal() && terminal.native_resume.is_none() {
             return None;
         }
         let pane = self.pane_info(ws_idx, pane_id)?;
@@ -459,6 +459,18 @@ impl App {
                     })
             });
         Some(crate::protocol::api::schema::AgentInfo {
+            native_resume: terminal.native_resume.as_ref().map(|resume| {
+                crate::protocol::api::schema::NativeResumeInfo {
+                    name: resume.name.clone(),
+                    agent: crate::agents::agent_label(resume.kind).into(),
+                    session_id: resume
+                        .session
+                        .as_ref()
+                        .map(|session| session.session_ref.value.clone()),
+                    command: resume.command.clone(),
+                    error: resume.error.clone(),
+                }
+            }),
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
             agent: pane.agent,

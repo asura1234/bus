@@ -255,9 +255,10 @@ impl App {
             return false;
         }
 
-        let Some(terminal) = self.state.terminals.get(&terminal_id) else {
+        let Some(terminal) = self.state.terminals.get_mut(&terminal_id) else {
             return false;
         };
+        terminal.begin_native_resume(shell_command_from_argv(&plan.argv));
         let extras = match for_native_resume(terminal, &plan, &cwd) {
             Ok(extras) => extras,
             Err(reason) => {
@@ -285,6 +286,9 @@ impl App {
         };
         let (argv, env) = resume_launch_inputs(&plan, extras);
         let resume_command = shell_command_from_argv(&argv);
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            terminal.begin_native_resume(resume_command.clone());
+        }
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
@@ -320,7 +324,11 @@ impl App {
                 );
                 // No process ran, so nothing replaced the saved conversation:
                 // keep it for a later restart once the shell is fixed.
-                self.suspend_pending_agent_resume(pane_id, &terminal_id, "shell failed to start");
+                self.suspend_pending_agent_resume(
+                    pane_id,
+                    &terminal_id,
+                    &format!("shell failed to start: {err}"),
+                );
                 return false;
             }
         };
@@ -362,6 +370,7 @@ impl App {
             // Keep durable name/session metadata for recovery on a later
             // restart, but do not retry disk reads on every layout tick.
             terminal.pending_agent_resume_plan = None;
+            terminal.suspend_native_resume(reason);
             let kind = terminal.managed_agent_kind();
             terminal.set_detected_state_with_screen_signals_at(
                 kind,

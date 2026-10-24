@@ -232,7 +232,10 @@ struct RejectedResume;
 impl Transport for RejectedResume {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![serde_json::from_value(json!({
+                "terminal_id":"terminal", "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1", "focused":false, "revision":1, "agent_status":"unknown",
+                "native_resume":{"name":"bus-r1-a2","agent":"claude","session_id":"session","command":"claude --resume session","error":"provider exited before startup confirmation"}
+            })).unwrap()] }),
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
                     "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1",

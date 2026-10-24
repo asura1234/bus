@@ -58,6 +58,11 @@ impl Worker {
                     ));
                 }
             }
+            if let Some(info) = info {
+                super::startup::watch_native_resume(&mut state, agent, info)?;
+            }
+            let current_agent = state.agent(agent.id).ok_or("Unknown polled agent")?.clone();
+            let agent = &current_agent;
             let status = polled_status(agent, info);
             let (missing, exit_evidence) =
                 self.observe_missing_binary(&mut state, agent, status, info)?;
