@@ -14,8 +14,9 @@ import sys
 import tomllib
 from pathlib import Path
 
-from coverage_run import EXTERNAL_RUN, Run
+from coverage_run import EXTERNAL_RUN, PROFILE_DIR, Run
 from gate_process import Children, Interrupted, interrupt_signals
+from profile_report import merged_profile
 
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "temp/gate-and-fix/coverage"
@@ -168,7 +169,8 @@ def profile_file_name(stage: str) -> str:
     # LLVM locks and online-merges four slots per binary instead of retaining
     # one multi-megabyte profile for every nextest/CLI process. Keep lanes
     # separate so CLI or integration cannot substitute for unit evidence.
-    return f"{ROOT.name}-{stage}-%4m.profraw"
+    name = f"{ROOT.name}-{stage}-%4m.profraw"
+    return str(Path(os.environ[PROFILE_DIR]) / name) if os.environ.get(PROFILE_DIR) else name
 
 
 def rust_test(
@@ -178,7 +180,7 @@ def rust_test(
     env = child_env(LLVM_PROFILE_FILE_NAME=profile_file_name(stage))
     # --no-report already preserves profiles and rejects --no-clean. Reset just the raw
     # profiles once per round, keeping the instrumented build cache warm.
-    if fresh and run("cargo", "llvm-cov", "clean", "--profraw-only", env=env):
+    if fresh and not os.environ.get(PROFILE_DIR) and run("cargo", "llvm-cov", "clean", "--profraw-only", env=env):
         return 1
     argv = [
         "cargo",
@@ -286,9 +288,13 @@ def llvm_cov_target(env) -> Path:
     return ROOT / env.get("CARGO_TARGET_DIR", "target") / "llvm-cov-target"
 
 
+def profile_directory(target: Path) -> Path:
+    return Path(os.environ[PROFILE_DIR]) if os.environ.get(PROFILE_DIR) else target
+
+
 def unit_profraw_files(target: Path) -> list[Path]:
     return sorted(
-        path for path in target.glob("*.profraw")
+        path for path in profile_directory(target).glob("*.profraw")
         if path.name.startswith(f"{ROOT.name}-unit-")
         and path.is_file() and path.stat().st_size > 0
     )
@@ -304,13 +310,16 @@ def require_unit_profraw(value: dict) -> None:
         )
     if value.get("profile_target") != str(target):
         raise ValueError("unit profraw target changed; rerun unit and integration")
+    directory = profile_directory(target)
+    if value.get("profile_dir", str(target)) != str(directory):
+        raise ValueError("unit profraw run changed; rerun unit and integration")
     for name in names:
         if (
             not isinstance(name, str) or Path(name).name != name
             or not name.startswith(f"{ROOT.name}-unit-") or not name.endswith(".profraw")
         ):
             raise ValueError("invalid unit profraw evidence; rerun the complete gate")
-        path = target / name
+        path = directory / name
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"unit profraw is missing or empty: {path}; rerun the complete gate")
 
@@ -323,7 +332,8 @@ def unit() -> int:
     target = llvm_cov_target(os.environ)
     value = {
         "head": head(), "unit": False, "integration": False,
-        "profile_target": str(target.resolve()), "unit_profraw": [],
+        "profile_target": str(target.resolve()), "profile_dir": str(profile_directory(target)),
+        "unit_profraw": [],
     }
     save_state(value)
     rust = rust_test("--bin", "bus", fresh=True, in_process_server=False)
@@ -481,17 +491,18 @@ def coverage() -> int:
         raise ValueError(
             "coverage requires successful unit and integration checks from this round"
         )
-    if run(
-        "cargo",
-        "llvm-cov",
-        "report",
-        "--lcov",
-        "--output-path",
-        str(OUTPUT / "rust.lcov"),
-        "--ignore-filename-regex",
-        RUST_EXCLUDE,
-    ):
-        return 1
+    with merged_profile(ROOT, llvm_cov_target(os.environ), dict(os.environ), run):
+        if run(
+            "cargo",
+            "llvm-cov",
+            "report",
+            "--lcov",
+            "--output-path",
+            str(OUTPUT / "rust.lcov"),
+            "--ignore-filename-regex",
+            RUST_EXCLUDE,
+        ):
+            return 1
     policy = json.loads(POLICY.read_text(encoding="utf-8"))
     # Only Rust, the product, has a floor; Python tests run in the unit lane
     # without one (see unit()).

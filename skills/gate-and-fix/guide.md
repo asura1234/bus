@@ -63,14 +63,15 @@ replace `rebase-origin-main` or PR creation.
   uses nextest when available and `cargo llvm-cov test` otherwise. `just ci` runs the same four
   recipes; it accepts no filter that could shrink the mandatory set. The artifact records the exact
   wrapper argv and its logs record every underlying command.
-- Coverage reports live in ignored `temp/gate-and-fix/coverage/`. Instrumented output and its
-  bounded raw-profile pools live in one marked `.gate-profile-runs/run-<id>` directory beneath
-  the configured coverage target (by default `target/llvm-cov-target/`). The runner removes
-  this owned directory, including merged profiles and instrumented build products, after export
-  or failure. SIGINT/SIGTERM stop the run's child groups before removing its files; repeated
-  interrupts are deferred through teardown. Normal build output and unrelated files are retained.
-  Subsequent runs rebuild the disposable instrumented output. Tests run only once per round;
-  coverage consumes their profiles before cleanup.
+- Coverage reports live in ignored `temp/gate-and-fix/coverage/`. Only the bounded raw-profile
+  pools and merged index live in one marked `.gate-profile-runs/run-<id>` directory beneath
+  the configured coverage target (by default `target/llvm-cov-target/`). Instrumented build
+  products remain in that persistent target for incremental reuse. After export or failure,
+  the runner removes its profile directory and report lookup link. SIGINT/SIGTERM stop the
+  run's child groups before cleanup; repeated interrupts are deferred through teardown.
+  Fresh gates also reclaim valid checkout-owned runs whose PID/start-time owner has died.
+  Live and unverifiable owners are preserved. Tests run only once per round; coverage consumes
+  their profiles before cleanup.
   The gate drops every inherited `BUS_*`/`HERDR_*` variable (see **Environment** above); tests
   that model isolated config roots set and restore those variables within their fixture boundaries.
 - Coverage builds use `--no-rustc-wrapper`, so Cargo includes instrumentation flags in its artifact
@@ -132,7 +133,11 @@ which must have the requirements installed. Missing mandatory tools fail with se
 `just unit-test` starts and records a private run, `just integration-test` continues it, and
 `just coverage` consumes its profiles and removes it. A failed lane or interrupted command
 removes that run as well; restart from unit after such a failure. Starting unit again discards
-its previous owned run. Ownership markers are checked before recursive cleanup; malformed or
+its previous inactive owned run. Each run marker records the checkout, owner PID and process start
+time. Fresh gates reclaim validated run directories left by dead owners, including PID reuse; live,
+foreign or malformed owners are preserved. The instrumented Cargo build cache is persistent. Only
+raw profiles and the merged index are run-owned; report lookup links are removed after export and
+reclaimed with a dead run. Ownership markers are checked before recursive cleanup; malformed or
 foreign metadata is rejected without deleting the referenced files. `just ci` owns the full
 sequence in one invocation. Do not run two rounds in the same checkout concurrently.
 

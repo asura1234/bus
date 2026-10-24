@@ -52,7 +52,7 @@ class ProfileLifecycleTest(unittest.TestCase):
                 yield root, target, output
 
     def emit(self, stage):
-        target = quality.llvm_cov_target(os.environ)
+        target = quality.profile_directory(quality.llvm_cov_target(os.environ))
         target.mkdir(parents=True, exist_ok=True)
         (target / f"fixture-{stage}.profraw").write_bytes(b"counters")
         return target
@@ -70,7 +70,7 @@ class ProfileLifecycleTest(unittest.TestCase):
                 return 0
 
             def coverage():
-                location = quality.llvm_cov_target(os.environ)
+                location = quality.profile_directory(quality.llvm_cov_target(os.environ))
                 self.assertTrue((location / "fixture-unit.profraw").is_file())
                 self.assertTrue((location / "fixture-integration.profraw").is_file())
                 (location / "fixture.profdata").write_bytes(b"merged")
@@ -197,7 +197,7 @@ class ProfileLifecycleTest(unittest.TestCase):
             base = repository(root)
             script = (
                 "import os;from pathlib import Path;"
-                "p=Path(os.environ['CARGO_LLVM_COV_TARGET_DIR']);p.mkdir(parents=True,exist_ok=True);"
+                "p=Path(os.environ.get('BUS_GATE_PROFILE_DIR',os.environ.get('LLVM_PROFILE_FILE')));p.mkdir(parents=True,exist_ok=True);"
                 "(p/'fixture.profraw').write_bytes(b'counters');"
                 "(p/'fixture.profdata').write_bytes(b'merged')"
             )
@@ -243,7 +243,7 @@ class ProfileLifecycleTest(unittest.TestCase):
             ready = root / "ready.json"
             child = (
                 "import json,os,signal,time;from pathlib import Path;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-                "p=Path(os.environ['CARGO_LLVM_COV_TARGET_DIR']);p.mkdir(parents=True,exist_ok=True);"
+                "p=Path(os.environ.get('BUS_GATE_PROFILE_DIR',os.environ.get('LLVM_PROFILE_FILE')));p.mkdir(parents=True,exist_ok=True);"
                 "(p/'unit.profraw').write_bytes(b'counters');"
                 f"Path({str(ready)!r}).write_text(json.dumps({{'pid':os.getpid(),'pgid':os.getpgrp()}}));"
                 "time.sleep(60)"
@@ -252,7 +252,7 @@ class ProfileLifecycleTest(unittest.TestCase):
                 f"import sys;sys.path.insert(0,{str(Path(quality.__file__).parent)!r});"
                 "import bus_quality as q;from pathlib import Path;"
                 f"q.ROOT=Path({str(root)!r});q.OUTPUT=q.ROOT/'reports';"
-                f"q.unit=lambda:q.run(sys.executable,'-c',{child!r});"
+                f"q.unit=lambda:q.run(sys.executable,'-c',{child!r},env=q.child_env(LLVM_PROFILE_FILE=str(q.profile_directory(q.llvm_cov_target(q.os.environ)))));"
                 "sys.exit(q.main(['unit']))"
             )
             if mode != "quality":

@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import bus_quality as quality  # noqa: E402
-from coverage_run import Run  # noqa: E402
+from coverage_run import PROFILE_DIR, Run
+from profile_report import merged_profile  # noqa: E402
 
 
 @unittest.skipUnless(
@@ -81,7 +82,7 @@ class CoveragePoolTest(unittest.TestCase):
                         value[key] = re.sub(r"%[1-9]?m", "%p-%m", value[key])
                 return value
 
-            for baseline, lifecycle in ((True, False), (False, False), (False, True)):
+            for baseline, lifecycle in ((True, False), (False, False), (False, True), (False, True)):
                 with (
                     patch.object(quality, "ROOT", root),
                     patch.object(quality, "OUTPUT", root / "reports"),
@@ -93,22 +94,32 @@ class CoveragePoolTest(unittest.TestCase):
                     (Run(root, root / "reports", "ci") if lifecycle else contextlib.nullcontext()),
                 ):
                     active_target = quality.llvm_cov_target(os.environ)
+                    binary = active_target / "debug" / ("bus.exe" if os.name == "nt" else "bus")
+                    before = binary.stat().st_mtime_ns if lifecycle and binary.exists() else None
                     self.assertEqual(quality.unit(), 0)
+                    if before is not None:
+                        self.assertEqual(binary.stat().st_mtime_ns, before, "incremental cache was rebuilt")
                     value = json.loads((quality.OUTPUT / "state.json").read_text())
                     quality.require_unit_profraw(value)
+                    if lifecycle:
+                        with patch.dict(os.environ, {PROFILE_DIR: str(root / "another-run")}):
+                            with self.assertRaisesRegex(ValueError, "run changed"):
+                                quality.require_unit_profraw(value)
                     unit_before = {path.name: path.read_bytes()
                                    for path in quality.unit_profraw_files(active_target)}
                     self.assertEqual(quality.rust_test("--bin", "bus"), 0)
                     self.assertEqual(unit_before, {path.name: path.read_bytes()
                                                  for path in quality.unit_profraw_files(active_target)})
                     quality.require_unit_profraw(value)
-                    profiles = list(active_target.glob("*.profraw"))
+                    profile_dir = quality.profile_directory(active_target)
+                    profiles = list(profile_dir.glob("*.profraw"))
                     counts.append(len(profiles))
                     report = root / "coverage.json"
-                    subprocess.run(
-                        ["cargo", "llvm-cov", "report", "--json", "--output-path", str(report)],
-                        cwd=root, env=quality.child_env(), check=True, capture_output=True, timeout=30,
-                    )
+                    with merged_profile(root, active_target, dict(os.environ), quality.run):
+                        subprocess.run(
+                            ["cargo", "llvm-cov", "report", "--json", "--output-path", str(report)],
+                            cwd=root, env=quality.child_env(), check=True, capture_output=True, timeout=30,
+                        )
                     data = json.loads(report.read_text())["data"][0]
                     files = [entry for entry in data["files"] if Path(entry["filename"]).resolve() == source.resolve()]
                     self.assertEqual(len(files), 1)
@@ -127,9 +138,11 @@ class CoveragePoolTest(unittest.TestCase):
                         for profile in profiles + list(active_target.glob("*.profdata")):
                             profile.unlink()
                 if lifecycle:
-                    self.assertFalse(active_target.exists(), "the exported run must be removed")
+                    self.assertFalse(profile_dir.exists(), "the exported profiles must be removed")
+                    self.assertTrue(binary.is_file(), "the build cache must remain")
                     self.assertFalse(list(target.rglob("*.profraw")))
                     self.assertFalse(list(target.rglob("*.profdata")))
             self.assertGreater(counts[0], 40, "the baseline must exercise separate writers")
             self.assertEqual(snapshots[0], snapshots[1], "pooling must preserve every counter")
-            self.assertEqual(snapshots[0], snapshots[2], "run isolation must preserve every counter")
+            for snapshot in snapshots[2:]:
+                self.assertEqual(snapshots[0], snapshot, "successive run isolation must preserve every counter")
