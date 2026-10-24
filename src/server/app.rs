@@ -72,6 +72,8 @@ pub struct App {
     pub(crate) last_api_notification_at: Option<Instant>,
     pub(crate) loaded_host_cursor: crate::utils::config::HostCursorModeConfig,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
+    #[cfg(test)]
+    pub(crate) resume_geometry_derivations: std::sync::atomic::AtomicUsize,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     pub(super) pane_exit_checkpoint_pending: bool,
@@ -186,6 +188,8 @@ impl App {
             event_rx,
             loaded_host_cursor: config.ui.host_cursor,
             pending_agent_resume_deadline: None,
+            #[cfg(test)]
+            resume_geometry_derivations: std::sync::atomic::AtomicUsize::new(0),
             session_save_deadline: None,
             session_save_thread: None,
             pane_exit_checkpoint_pending: false,

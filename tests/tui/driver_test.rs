@@ -11,6 +11,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "native_restart_test.rs"]
+mod native_restart;
+
 #[test]
 fn reply_delivery_survives_actual_server_restart_mid_request() {
     let output = Command::new("python3")

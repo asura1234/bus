@@ -426,7 +426,7 @@ impl HeadlessServer {
         self.stream_direct_terminal_keyboard_mode();
     }
 
-    fn render_pending_loop_work(
+    pub(super) fn render_pending_loop_work(
         &mut self,
         now: Instant,
         needs_render: &mut bool,
@@ -469,7 +469,7 @@ impl HeadlessServer {
                 // A synchronized-output OSC title can be the only pending work.
                 // Its deferred PTY repaint has its own signal; do not manufacture
                 // a full UI render for this client-local side effect.
-                *needs_render = false;
+                self.finish_loop_render(now, needs_render, needs_full_render);
                 return true;
             }
             let hidden_only = pty_dirty
@@ -486,12 +486,24 @@ impl HeadlessServer {
                 self.render_and_stream();
             }
             self.app.record_render_attempt(now, !hidden_only);
-            *needs_render = false;
-            *needs_full_render = false;
+            self.finish_loop_render(now, needs_render, needs_full_render);
             return true;
         }
 
         false
+    }
+
+    fn finish_loop_render(
+        &mut self,
+        now: Instant,
+        needs_render: &mut bool,
+        needs_full_render: &mut bool,
+    ) {
+        // Geometry is current now. Resume work must progress even when
+        // rejected prompts or PTY output keep requesting another repaint.
+        let resumed = self.resume_pending_agents_at(now);
+        *needs_render = resumed;
+        *needs_full_render = resumed;
     }
 
     async fn wait_for_loop_event(&mut self, now: Instant, needs_render: bool) -> LoopEvent {
@@ -668,15 +680,18 @@ impl HeadlessServer {
             self.app.start_background_session_save();
         }
 
-        if geometry_dirty {
-            self.app.pending_agent_resume_deadline = None;
-        } else {
-            self.app.sync_pending_agent_resume_deadline(now);
-            changed |= self
-                .app
-                .start_pending_agent_resumes(self.app.pending_agent_resume_due(now));
+        if !geometry_dirty {
+            changed |= self.resume_pending_agents_at(now);
         }
         changed
+    }
+
+    fn resume_pending_agents_at(&mut self, now: Instant) -> bool {
+        self.app.sync_pending_agent_resume_deadline(now);
+        self.app.has_pending_agent_resumes()
+            && self
+                .app
+                .start_pending_agent_resumes(self.app.pending_agent_resume_due(now))
     }
 }
 
