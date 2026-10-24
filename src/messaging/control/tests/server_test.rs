@@ -1101,3 +1101,63 @@ fn excess_caller_that_timed_out_waiting_never_runs_later() {
     );
     drop(busy_holder);
 }
+
+#[test]
+fn shell_launch_control_deadline_encloses_startup_and_preserves_queue_age() {
+    for (method, budget) in [
+        (
+            "agent.add",
+            crate::protocol::api::AGENT_START_TIMEOUT + Duration::from_secs(15),
+        ),
+        (
+            "agent.resume",
+            crate::protocol::api::AGENT_START_TIMEOUT + Duration::from_secs(15),
+        ),
+        ("state.get", Duration::from_secs(15)),
+    ] {
+        let dir = TestDir::new();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let _server = start(&dir.0, tx).unwrap();
+        let path = dir.0.clone();
+        let before = Instant::now();
+        let client = thread::spawn(move || {
+            request(
+                &path,
+                &Request {
+                    id: "launch-budget".into(),
+                    method: method.into(),
+                    params: json!({}),
+                },
+            )
+        });
+        let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(60)).unwrap()
+        else {
+            panic!("expected control dispatch");
+        };
+        let after = Instant::now();
+        let deadline = call.deadline.unwrap();
+        assert!(
+            deadline >= before + budget && deadline <= after + budget,
+            "{method} dispatch deadline must enclose its operation budget"
+        );
+        let minimum_age = after.elapsed();
+        let age = call.queued_for().unwrap();
+        let maximum_age = before.elapsed();
+        assert!(
+            age >= minimum_age && age <= maximum_age,
+            "{method} queue age {age:?} must be anchored between request and dispatch observations"
+        );
+        call.reply
+            .send(Response::failure(
+                "launch-budget",
+                "agent_shell_waiting",
+                "Shell waiting. Last visible line: STARTUP QUESTION",
+            ))
+            .unwrap();
+        let response = client.join().unwrap().unwrap();
+        assert_eq!(
+            response.error.unwrap().message,
+            "Shell waiting. Last visible line: STARTUP QUESTION"
+        );
+    }
+}

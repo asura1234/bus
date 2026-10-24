@@ -12,6 +12,15 @@ pub(super) const MAX_REQUEST_BYTES: usize = 256 * 1024;
 pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(3);
 pub(super) const WORKER_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A launch can spend the native startup budget waiting for a real shell prompt.
+/// Leave the existing worker allowance for setup, scheduling and the error reply.
+pub(super) fn worker_timeout(method: &str) -> Duration {
+    match method {
+        "agent.add" | "agent.resume" => crate::protocol::api::AGENT_START_TIMEOUT + WORKER_TIMEOUT,
+        _ => WORKER_TIMEOUT,
+    }
+}
 pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// The control socket in a session's data directory. Every session runs it;
 /// the `--dev` flag only decides which methods answer.
@@ -84,7 +93,7 @@ impl ControlCall {
     /// Direct in-process callers without a deadline have no queue measurement.
     pub(crate) fn queued_for(&self) -> Option<Duration> {
         self.deadline
-            .and_then(|deadline| deadline.checked_sub(WORKER_TIMEOUT))
+            .and_then(|deadline| deadline.checked_sub(worker_timeout(&self.request.method)))
             .map(|started| started.elapsed())
     }
 }
