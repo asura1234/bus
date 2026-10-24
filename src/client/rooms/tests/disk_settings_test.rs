@@ -8,7 +8,7 @@ fn disk_settings_arrow_steppers_show_defaults_and_queue_changes() {
     assert!(screen.contains("‹ 20 ›"), "{screen}");
     assert!(screen.contains("‹ 5 ›"), "{screen}");
     let before = ui.pending.len();
-    for _ in 0..ui.idle_agents_field() + 1 {
+    for _ in 0..ui.disk_warning_field() {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);

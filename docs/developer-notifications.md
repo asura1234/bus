@@ -3,18 +3,22 @@
 Any worker or orchestrator may address the developer in any room with
 `bus send --room ROOM --as AGENT --to you --text TEXT`. `human` remains an alias.
 The agent-authored message stays in that conversation room, displays **You** as
-recipient, and creates no agent request. Use @you or [waiting-on-you] for things only
-the developer can do or decide.
+recipient, and creates no agent request. When and how to write to the developer is in the
+[Bus communication guide](../orchestration/bus-communication-guide.md).
 
-Every direct agent message to you notifies, including untagged messages. Agent-authored
+There are two routes. The **TUI alert** (unread dot and developer-alert sound) is for the
+developer at the computer. The **Feishu DM** pages the developer anywhere, so it carries only
+`[waiting-on-you]`/`[waiting_on_you]`-tagged hard blockers.
+
+Every direct agent message to you raises the TUI alert, including untagged messages. Agent-authored
 peer messages and completed agent replies also notify when they contain an explicit `@you`,
 `[waiting-on-you]` or `[waiting_on_you]` marker (case-insensitive). The legacy whole phrase
-`waiting on you`, including `still waiting on you`, qualifies only in direct developer notices
+`waiting on you`, including `still waiting on you`, raises the TUI alert only in direct developer notices
 and replies to developer-authored requests. Bare phrases between agents do not trigger developer alerts;
 there, "you" names the receiving agent. Developer-authored sends never trigger alerts.
 
 When the You sound checkbox is enabled, the selected system sound rings once for each
-qualifying source, regardless of visible room, focus, room sound switches, startup grace
+snapshot that brings one or more qualifying sources, regardless of visible room, focus, room sound switches, startup grace
 or ordinary notification cooldown.
 Only the coordinator-owning client plays it. Initial history is a baseline on start/resume;
 repeated snapshots and archive moves do not replay alerts. Ordinary room sounds keep their
@@ -40,11 +44,13 @@ Click **Recipient open_id** to edit it; **lark-cli path** overrides the executab
 with an empty field using `lark-cli` from PATH. Bus stores no credentials.
 Configure bot authentication in lark-cli; sends explicitly use `--as bot`.
 
-A fixed two-second window combines every qualifying message in a burst into one DM.
-Tagged messages contribute `sender is waiting on you: action`, taking the first line
-or bullet after the marker (same or following nonempty line), with Markdown closing
-markers skipped and the full action line preserved. Untagged direct posts contribute
-`sender to you: first line`. Additional body lines and attachment paths are never added.
+Only messages with the literal `[waiting-on-you]` or `[waiting_on_you]` tag reach Feishu;
+untagged posts, `@you` mentions and the legacy phrase stay in the TUI. A fixed two-second
+window combines tagged messages in a burst into one DM. Each contributes
+`sender is waiting on you: action`, taking the first line or bullet after the marker (same or
+following nonempty line), with Markdown closing markers skipped and the full action line
+preserved. The same line from the same sender is not resent within 30 minutes.
+Additional body lines and attachment paths are never added.
 Routing markers and terminal controls are filtered. Each source contributes its own line.
 
 The coordinator runs `lark-cli im +messages-send --as bot --user-id OPEN_ID --text TEXT

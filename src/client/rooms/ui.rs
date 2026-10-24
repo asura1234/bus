@@ -287,13 +287,8 @@ impl BusUi {
         self.room_sound_field(self.sound_settings_targets().len())
     }
 
-    /// The idle agents alert's Settings focus index, after the compaction limit.
-    pub(super) fn idle_agents_field(&self) -> usize {
-        self.compaction_field() + 1
-    }
-
     pub(super) fn disk_warning_field(&self) -> usize {
-        self.idle_agents_field() + 1
+        self.compaction_field() + 1
     }
 
     pub(super) fn disk_critical_field(&self) -> usize {
@@ -541,13 +536,11 @@ impl BusUi {
             let alerts = crate::messaging::model::new_developer_notifications(
                 &previous.state,
                 &self.snapshot.state,
+                false,
             );
-            if self.settings.developer_sound_enabled {
-                for _ in &alerts {
-                    crate::platform::sound::play_developer(
-                        self.settings.developer_sound.as_deref(),
-                    );
-                }
+            // One sound per snapshot: a burst of posts is one interruption, not several.
+            if self.settings.developer_sound_enabled && !alerts.is_empty() {
+                crate::platform::sound::play_developer(self.settings.developer_sound.as_deref());
             }
             if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
                 .filter(|_| alerts.is_empty() && self.ringer.allow(std::time::Instant::now()))

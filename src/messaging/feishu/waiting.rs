@@ -4,11 +4,14 @@ use crate::messaging::attention::{plain_line, waiting_action};
 use crate::messaging::model::{new_developer_notifications, BusState};
 
 const BURST_WINDOW: u64 = 2_000;
+/// A repeated ask (same sender and action line) is already on the developer's phone.
+const REPEAT_WINDOW: u64 = 30 * 60_000;
 
 #[derive(Debug, Default)]
 pub(crate) struct WaitingNotifications {
     allowed: bool,
     pending: Option<Burst>,
+    sent: std::collections::BTreeMap<String, u64>,
 }
 
 #[derive(Debug)]
@@ -30,7 +33,13 @@ impl WaitingNotifications {
         if !self.allowed {
             return;
         }
-        for line in new_developer_notifications(previous, next) {
+        self.sent
+            .retain(|_, at| now.saturating_sub(*at) < REPEAT_WINDOW);
+        for line in new_developer_notifications(previous, next, true) {
+            if self.sent.contains_key(&line) {
+                continue;
+            }
+            self.sent.insert(line.clone(), now);
             if let Some(burst) = self.pending.as_mut() {
                 burst.lines.push(line);
             } else {

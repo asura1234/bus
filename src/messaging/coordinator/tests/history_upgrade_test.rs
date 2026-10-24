@@ -38,8 +38,9 @@ fn routing_floor_blocks_inline_event_backfill_but_keeps_recent_and_open_work() {
     let mut state: BusState = serde_json::from_value(saved).unwrap();
     state.retain_worker_outcomes(now);
     let events = serde_json::to_value(&state).unwrap()["worker_events"].clone();
+    // Peer finals belong to the peer: none are copied to the orchestrator.
     assert!(events.get(format!("turn-final:{}", ids[0].0)).is_none());
-    assert!(events.get(format!("turn-final:{}", ids[1].0)).is_some());
+    assert!(events.get(format!("turn-final:{}", ids[1].0)).is_none());
     assert!(events
         .as_object()
         .unwrap()

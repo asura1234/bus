@@ -31,7 +31,7 @@ pub(crate) enum Author {
     Developer,
     Agent(AgentId),
     /// Bus itself, shown as the grey sender "bus": every notice Bus generates
-    /// (a blocked dialog, a compaction or idle-agents limit, a deleted agent's
+    /// (a blocked dialog, a compaction limit, a deleted agent's
     /// open terminal) is signed this way, never with an agent's name.
     Bus,
 }
@@ -250,10 +250,6 @@ pub(crate) struct Room {
     /// is compared only with the messages its own turn sent.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) report_turns: BTreeMap<AgentId, ReportTurn>,
-    /// Bus told this room it has too many idle workers; cleared once the
-    /// count falls back to the limit, so the next episode notifies again.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) idle_alert_sent: bool,
     #[serde(
         default,
         skip_serializing_if = "super::disk_space::DiskAlerts::is_empty"

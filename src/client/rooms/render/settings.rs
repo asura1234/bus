@@ -1,5 +1,5 @@
 //! The Settings screen: color blind mode, the sound rows, the compaction
-//! limit, idle agents alert, disk thresholds, sidebar width and dev performance
+//! limit, disk thresholds, sidebar width and dev performance
 //! overlay.
 use super::super::BusUi;
 use super::text::display;
@@ -67,12 +67,6 @@ impl BusUi {
             label: "Max compactions per agent (1–100)",
             value: self.settings.max_compactions_per_agent.to_string(),
             adjust: Action::AdjustCompactionLimit,
-        });
-        lines.push(SoundSettingsLine::Stepper {
-            field: self.idle_agents_field(),
-            label: "Idle agents alert (1–10)",
-            value: self.settings.idle_agents_alert.to_string(),
-            adjust: Action::AdjustIdleAgentsAlert,
         });
         lines.push(SoundSettingsLine::Empty(""));
         lines.push(SoundSettingsLine::Heading("DISK"));

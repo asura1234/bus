@@ -288,7 +288,6 @@ fn dev_settings_show_and_set_the_global_sounds() {
             "feishu_cli_path": null,
             "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
-            "idle_agents_alert": 7,
             "disk_warning_gb": 20,
             "disk_critical_gb": 5,
             "background_shell_hold_minutes": 15,

@@ -2,8 +2,7 @@
 use super::{
     reply_routing::{reply_key, ReplyRoute},
     AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, PromptId,
-    ProviderCallback, Request, RequestId, RequestPhase, RoomId, RoomKind, RuntimeStatus,
-    TURN_SETTLE_MS,
+    ProviderCallback, Request, RequestId, RequestPhase, RoomId, RoomKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -194,11 +193,6 @@ impl BusState {
     /// Reconcile retained outcomes before archive or delivery. First upgrade
     /// deliberately backfills retained outcomes rather than guessing them seen.
     pub(crate) fn retain_worker_outcomes(&mut self, now_ms: u64) -> bool {
-        let orchestrator_groups: std::collections::BTreeSet<_> = self
-            .requests()
-            .filter(|r| self.reply_orchestrator(r).is_some())
-            .map(reply_key)
-            .collect();
         let requests: Vec<_> = self
             .requests()
             .filter(|r| !retired_automation(r))
@@ -209,39 +203,35 @@ impl BusState {
                         .agent(r.agent_id)
                         .is_some_and(|a| a.room_id == r.room_id)
             })
+            // A reply to a peer-started request belongs to that peer; copying it to the
+            // orchestrator duplicated what the worker reports itself (bus-communication-guide.md).
+            .filter(|r| r.pending_final.is_none())
             .filter(|r| {
-                if r.pending_final.is_some() {
-                    let group = reply_key(r);
-                    r.phase == RequestPhase::Completed
-                        && matches!(r.prompt.author, Author::Agent(_))
-                        && !orchestrator_groups.contains(&group)
-                        && !self.reply_routes.contains_key(&group)
-                        && !self
-                            .worker_events
-                            .contains_key(&format!("turn-final:{}", group.0))
-                } else {
-                    !r.settled()
-                        || !self
-                            .worker_events
-                            .contains_key(&format!("ended:{}", reply_key(r).0))
-                }
+                !r.settled()
+                    || !self
+                        .worker_events
+                        .contains_key(&format!("ended:{}", reply_key(r).0))
             })
             .cloned()
             .collect();
         let before = self.worker_events.len();
         for request in requests {
-            if request.pending_final.is_some() {
-                self.retain_peer_final(&request);
-                continue;
-            }
+            // An interrupt is the sender's own action, and a deleted agent's requests end
+            // by design; neither needs a notice per queued request.
+            let expected_end = request.failure_reason.as_deref() == Some(super::INTERRUPTED)
+                || self
+                    .agent(request.agent_id)
+                    .is_none_or(|a| a.deletion_pending);
             let outcome = if request.phase == RequestPhase::Abandoned {
-                Some((
-                    "ended",
-                    format!(
-                        "abandoned: {}",
-                        request.failure_reason.as_deref().unwrap_or("abandoned")
-                    ),
-                ))
+                (!expected_end).then(|| {
+                    (
+                        "ended",
+                        format!(
+                            "abandoned: {}",
+                            request.failure_reason.as_deref().unwrap_or("abandoned")
+                        ),
+                    )
+                })
             } else {
                 self.stall_reason(&request, now_ms)
                     .map(|reason| ("stalled", format!("stalled: {reason}")))
@@ -256,65 +246,8 @@ impl BusState {
                     request.completed_at_ms.unwrap_or(now_ms),
                 );
             }
-            let Some(agent) = self.agent(request.agent_id) else {
-                continue;
-            };
-            let idle_since = request.turn_ended_at_ms.unwrap_or(agent.status_since_ms);
-            let idle = self.reply_orchestrator(&request).is_some()
-                && !request.settled()
-                && !self.settling(&request)
-                && agent.shown_status() == RuntimeStatus::Idle
-                && !agent.dialog
-                && agent.status_revision > agent.busy_revision
-                && (request.awaiting_background
-                    || self.turn_ended(&request)
-                    || (agent.status_since_ms >= request.prompt.submitted_at_ms
-                        && agent.busy_revision > request.submission_status_revision))
-                && now_ms >= idle_since.saturating_add(TURN_SETTLE_MS);
-            if idle {
-                self.record_request_event(
-                    &request,
-                    WorkerEventKind::Idle,
-                    "idle",
-                    if request.has_held_background_reply() {
-                        "Idle with open request (captured reply held for background work)"
-                    } else if request.awaiting_background {
-                        "Idle with open request (background work pending)"
-                    } else {
-                        "Idle with open request (reply pending)"
-                    },
-                    idle_since,
-                );
-            }
         }
         before != self.worker_events.len()
-    }
-
-    fn retain_peer_final(&mut self, request: &Request) {
-        let Some(reply) = request.pending_final.as_ref() else {
-            return;
-        };
-        let group = reply_key(request);
-        if request.phase != RequestPhase::Completed
-            || !matches!(request.prompt.author, Author::Agent(_))
-            || self.reply_routes.contains_key(&group)
-        {
-            return;
-        }
-        let text = format!(
-            "Turn final.\n{}",
-            preview(
-                &reply.text,
-                &format!("bus message status {}", request.prompt.id.0)
-            )
-        );
-        self.record_request_event(
-            request,
-            WorkerEventKind::Final,
-            "turn-final",
-            &text,
-            request.completed_at_ms.unwrap_or(reply.received_at_ms),
-        );
     }
 
     /// Native positive evidence only; an unavailable list/socket is not exit.

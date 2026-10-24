@@ -109,14 +109,7 @@ impl Drop for Fixture {
 
 #[test]
 fn feishu_waiting_variants_invoke_bot_dm_once_with_exact_action_and_argv() {
-    for marker in [
-        "[waiting-on-you]",
-        "[waiting_on_you]",
-        "[WAITING_ON_YOU]",
-        "waiting on you",
-        "still waiting on you",
-        "WAITING ON YOU",
-    ] {
+    for marker in ["[waiting-on-you]", "[waiting_on_you]", "[WAITING_ON_YOU]"] {
         let mut f = Fixture::new();
         f.post(&format!(
             "Summary\n{marker}\nApprove access\nPRIVATE attachment /tmp/secret"
@@ -157,6 +150,24 @@ fn feishu_waiting_variants_invoke_bot_dm_once_with_exact_action_and_argv() {
 }
 
 #[test]
+fn feishu_ignores_untagged_posts_and_the_legacy_phrase() {
+    // Status replies such as "nothing is waiting on you" must never page the developer.
+    for text in [
+        "Merged #179; nothing is waiting on you.",
+        "still waiting on you: Approve access",
+        "[needs_developer_attention] Approve access",
+        "Decide release timing",
+    ] {
+        let mut f = Fixture::new();
+        f.post(text);
+        f.flush();
+        f.now += 5000;
+        f.pump();
+        assert!(f.calls().is_empty(), "{text}");
+    }
+}
+
+#[test]
 fn feishu_full_unicode_action_reaches_cli_without_truncation() {
     let mut f = Fixture::new();
     let action = "界 full action ".repeat(100);
@@ -172,10 +183,10 @@ fn feishu_full_unicode_action_reaches_cli_without_truncation() {
 #[test]
 fn feishu_direct_messages_notify_and_legacy_off_cannot_silence_or_replay() {
     let mut f = Fixture::new();
-    f.post("[needs_developer_attention] Approve access");
+    f.post("[waiting-on-you] Approve access");
     f.flush();
     assert_eq!(f.calls().len(), 1);
-    assert_eq!(f.calls()[0][7], "orch to you: Approve access");
+    assert_eq!(f.calls()[0][7], "orch is waiting on you: Approve access");
     f.settings(|s| s.feishu_notifications = false);
     f.post("[waiting_on_you] mandatory");
     f.flush();
@@ -190,7 +201,7 @@ fn feishu_bursts_coalesce_and_disable_is_rejected_without_losing_pending() {
     let mut f = Fixture::new();
     f.post("[waiting_on_you] first");
     f.now += 1900;
-    f.post("waiting on you: second");
+    f.post("[waiting-on-you] second");
     assert!(f.calls().is_empty());
     f.now += 100;
     f.pump();
@@ -365,12 +376,21 @@ fn notify_you_legacy_off_cannot_disable_worker_notifications() {
         .create_agent(room, "worker", Provider::Codex, f.root.clone(), None)
         .unwrap();
     state
-        .post_to_developer(room, sender, "Decide release timing".into(), vec![], f.now)
+        .post_to_developer(
+            room,
+            sender,
+            "[waiting-on-you] Decide release timing".into(),
+            vec![],
+            f.now,
+        )
         .unwrap();
     f.worker.save(state).unwrap();
     f.pump();
     f.flush();
     assert_eq!(f.calls().len(), 1);
-    assert_eq!(f.calls()[0][7], "worker to you: Decide release timing");
+    assert_eq!(
+        f.calls()[0][7],
+        "worker is waiting on you: Decide release timing"
+    );
     assert!(f.worker.set_feishu_notifications(false, &f.events).is_err());
 }

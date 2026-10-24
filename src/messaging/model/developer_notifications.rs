@@ -21,7 +21,13 @@ struct Message<'a> {
 
 /// Retained and archived sources share stable IDs. Snapshot repeats, archive moves and
 /// coalesced finals cannot replay an alert; the caller's initial snapshot is its baseline.
-pub(crate) fn new_developer_notifications(previous: &BusState, next: &BusState) -> Vec<String> {
+/// `waiting_only` keeps just `[waiting-on-you]`-tagged hard blockers: Feishu reaches the
+/// developer away from the desk, so untagged posts and replies stay in the TUI (sound + dot).
+pub(crate) fn new_developer_notifications(
+    previous: &BusState,
+    next: &BusState,
+    waiting_only: bool,
+) -> Vec<String> {
     let known = messages(previous);
     let mut added: Vec<_> = messages(next)
         .into_iter()
@@ -32,7 +38,9 @@ pub(crate) fn new_developer_notifications(previous: &BusState, next: &BusState) 
         .into_iter()
         .filter_map(|(_, message)| {
             let sender = plain_line(message.sender);
-            let action = if message.developer_context {
+            // Feishu needs the literal tag: the legacy phrase also matches "nothing is
+            // waiting on you", which turned plain status replies into DMs.
+            let action = if message.developer_context && !waiting_only {
                 waiting_action(message.text)
             } else {
                 waiting_tag_action(message.text)
@@ -42,7 +50,7 @@ pub(crate) fn new_developer_notifications(previous: &BusState, next: &BusState) 
                     "{sender} is waiting on you: {}",
                     plain_line(action)
                 ))
-            } else if message.directed || has_you_mention(message.text) {
+            } else if !waiting_only && (message.directed || has_you_mention(message.text)) {
                 let line = plain_line(message.text.trim_start());
                 let line = if line.is_empty() {
                     "Attached files"
