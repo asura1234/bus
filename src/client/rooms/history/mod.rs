@@ -97,7 +97,7 @@ pub(super) enum MarkdownSource {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct RowAnchor {
     prompt: PromptId,
     agent: Option<AgentId>,
@@ -106,7 +106,7 @@ pub(super) struct RowAnchor {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+#[cfg_attr(test, derive(Debug))]
 enum RowKind {
     PromptHeader,
     PromptBody,
