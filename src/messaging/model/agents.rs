@@ -150,7 +150,7 @@ impl BusState {
         self.retired_agents.insert(
             id,
             super::staffing::RetiredAgent {
-                room: Some(removed.room_id),
+                room: removed.room_id,
                 orchestrates: removed.orchestrates,
                 name: removed.name,
                 provider: Some(removed.provider),
