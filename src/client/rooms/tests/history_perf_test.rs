@@ -505,7 +505,7 @@ fn background_thumbnails_match_and_do_not_overflow_during_resize() {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("attachment.png");
-    image::RgbaImage::new(200, 80).save(&file).unwrap();
+    image::RgbaImage::new(480, 80).save(&file).unwrap();
     let mut state = BusState::default();
     let room = state.create_room("images").unwrap();
     let agent = state
@@ -543,6 +543,7 @@ fn background_thumbnails_match_and_do_not_overflow_during_resize() {
     );
     ui.compute_view(124, 40);
     assert_eq!(ui.view.thumbnails.len(), 1);
+    let cached_cols = ui.view.thumbnails[0].cols;
     let mut reference = History::default();
     let mut thumbnails = Thumbnails::default();
     thumbnails.set_cell(Some(cell));
@@ -559,7 +560,7 @@ fn background_thumbnails_match_and_do_not_overflow_during_resize() {
     );
     ui.compute_view(40, 40);
     assert!(
-        ui.view.history_text.width < 20,
+        ui.view.history_text.width < cached_cols,
         "exercise a narrower viewport than the cached image"
     );
     assert!(ui.view.thumbnails.is_empty());
