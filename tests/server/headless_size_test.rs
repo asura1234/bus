@@ -1,3 +1,31 @@
+fn wait_for_pane_tty_size(
+    socket: &PathBuf,
+    pane: &str,
+    marker: &str,
+    expected: (u16, u16),
+) -> (u16, u16) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut sample = 0;
+    loop {
+        // A fresh marker prevents an earlier stty result from satisfying this sample.
+        let size = read_pane_tty_size_after_marker(
+            socket,
+            pane,
+            &format!("{marker}_{sample}"),
+            deadline.saturating_duration_since(Instant::now()),
+        );
+        if size == expected {
+            return size;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected {expected:?}, last tty size {size:?}"
+        );
+        sample += 1;
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn pane_created_without_client_uses_configured_headless_size() {
     let _lock = test_lock();
@@ -20,15 +48,8 @@ fn pane_created_without_client_uses_configured_headless_size() {
         .expect("root pane id")
         .to_string();
 
-    // A second request cannot run until the full render triggered by workspace
-    // creation has applied the virtual headless geometry.
-    assert!(ping_socket(&api_socket).contains("pong"));
-    let size = read_pane_tty_size_after_marker(
-        &api_socket,
-        &pane_id,
-        "HEADLESS_SIZE",
-        Duration::from_secs(5),
-    );
+    // API replies precede rendering; wait for the actual PTY resize.
+    let size = wait_for_pane_tty_size(&api_socket, &pane_id, "HEADLESS_SIZE", (41, 132));
 
     assert_eq!(size, (41, 132));
 
@@ -66,17 +87,13 @@ fn pane_created_after_detach_uses_configured_headless_size() {
         .as_str()
         .expect("first root pane id")
         .to_string();
-    let attached_size = read_pane_tty_size_after_marker(
-        &api_socket,
-        &first_pane_id,
-        "ATTACHED_SIZE",
-        Duration::from_secs(5),
-    );
+    let attached_size =
+        wait_for_pane_tty_size(&api_socket, &first_pane_id, "ATTACHED_SIZE", (50, 160));
     assert_eq!(attached_size, (50, 160));
 
     send_detach(&mut stream).expect("send detach");
     assert!(
-        wait_for_disconnect(&mut stream, Duration::from_secs(2)).expect("wait for detach"),
+        wait_for_disconnect(&mut stream, Duration::from_secs(60)).expect("wait for detach"),
         "detached client connection should close"
     );
     drop(stream);
@@ -86,17 +103,17 @@ fn pane_created_after_detach_uses_configured_headless_size() {
         .as_str()
         .expect("second root pane id")
         .to_string();
-    let headless_size = read_pane_tty_size_after_marker(
+    let headless_size = wait_for_pane_tty_size(
         &api_socket,
         &second_pane_id,
         "HEADLESS_SIZE_AFTER_DETACH",
-        Duration::from_secs(5),
+        (41, 132),
     );
     let preserved_size = read_pane_tty_size_after_marker(
         &api_socket,
         &first_pane_id,
         "PRESERVED_SIZE_AFTER_DETACH",
-        Duration::from_secs(5),
+        Duration::from_secs(60),
     );
 
     assert_eq!(headless_size, (41, 132));

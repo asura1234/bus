@@ -72,6 +72,8 @@ pub(super) struct Worker {
     batch: Option<SaveBatch>,
     /// When the last archive pass ran; it runs at most once per [`ARCHIVE_EVERY`].
     archived_at: Option<std::time::Instant>,
+    #[cfg(test)]
+    pub(super) test_save_observations: Option<mpsc::Sender<super::TestSaveObservation>>,
 }
 
 /// State changes waiting for one `state.json` write, and the spool files
@@ -164,6 +166,8 @@ impl Worker {
             sound_dirs: None,
             batch: None,
             archived_at: None,
+            #[cfg(test)]
+            test_save_observations: None,
         })
     }
 
@@ -428,12 +432,16 @@ impl Worker {
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let name = perf::command_name(&command);
                     let started = std::time::Instant::now();
+                    #[cfg(test)]
+                    let saves_before = self.store.writes();
                     let result = if self.storage_pause.is_some() {
                         Err(self.storage_notice().into())
                     } else {
                         self.command(command, &events)
                     };
                     perf::COMMAND.record_op(started.elapsed(), name);
+                    #[cfg(test)]
+                    self.observe_test_saves(Some(id), name, saves_before);
                     self.last_command_id = id;
                     if submitting {
                         tracing::info!(
@@ -453,10 +461,7 @@ impl Worker {
                     // The client settles a command only once a snapshot shows
                     // it; do not make that wait for this loop's poll tick.
                     busy.stage("snapshot");
-                    let snapshot = self.timed_snapshot();
-                    if let Ok(mut shared) = snapshots.lock() {
-                        *shared = snapshot;
-                    }
+                    self.publish_snapshot(&snapshots);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -472,6 +477,8 @@ impl Worker {
                 if self.storage_pause.is_none() {
                     busy.stage("tick");
                     let _tick = perf::TICK.start();
+                    #[cfg(test)]
+                    let saves_before = self.store.writes();
                     if let Err(error) = self.tick_with_delivery_check(
                         || collect_delivery_commands(&commands, &mut pending_commands),
                         &events,
@@ -480,14 +487,31 @@ impl Worker {
                             self.error = Some(error);
                         }
                     }
+                    #[cfg(test)]
+                    self.observe_test_saves(None, "tick", saves_before);
                 }
                 next_poll = std::time::Instant::now() + self.poll_interval();
             }
             busy.stage("snapshot");
-            let snapshot = self.timed_snapshot();
-            if let Ok(mut shared) = snapshots.lock() {
-                *shared = snapshot;
-            }
+            self.publish_snapshot(&snapshots);
+        }
+    }
+
+    #[cfg(test)]
+    fn observe_test_saves(&self, command_id: Option<u64>, operation: &'static str, before: u64) {
+        if let Some(observations) = &self.test_save_observations {
+            let _ = observations.send(super::TestSaveObservation {
+                command_id,
+                operation,
+                full_saves: self.store.writes() - before,
+            });
+        }
+    }
+
+    fn publish_snapshot(&self, snapshots: &Mutex<Arc<BusSnapshot>>) {
+        let snapshot = self.timed_snapshot();
+        if let Ok(mut shared) = snapshots.lock() {
+            *shared = snapshot;
         }
     }
 

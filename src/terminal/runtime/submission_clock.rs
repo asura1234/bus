@@ -15,6 +15,9 @@ pub(crate) struct SubmissionClock {
 struct TestTime {
     now: Option<Instant>,
     generation: u64,
+    enters: usize,
+    draft_waits: usize,
+    checked_generation: Option<u64>,
 }
 
 impl SubmissionClock {
@@ -87,11 +90,12 @@ impl SubmissionClock {
         self.state.1.notify_all();
     }
 
-    pub(crate) fn advance(&self, by: Duration) {
+    pub(crate) fn advance(&self, by: Duration) -> u64 {
         let mut state = self.state.0.lock().unwrap();
         state.now = Some(state.now.expect("pause the fake clock first") + by);
         state.generation += 1;
         self.state.1.notify_all();
+        state.generation
     }
 
     pub(crate) fn rendered(&self) {
@@ -100,5 +104,63 @@ impl SubmissionClock {
             state.generation += 1;
             self.state.1.notify_all();
         }
+    }
+
+    pub(super) fn entered(&self) {
+        let mut state = self.state.0.lock().unwrap();
+        state.enters += 1;
+        self.state.1.notify_all();
+    }
+
+    pub(super) fn waiting_for_draft(&self) {
+        let mut state = self.state.0.lock().unwrap();
+        state.draft_waits += 1;
+        self.state.1.notify_all();
+    }
+
+    pub(super) fn submission_checked(&self, generation: u64) {
+        let mut state = self.state.0.lock().unwrap();
+        state.checked_generation = Some(
+            state
+                .checked_generation
+                .map_or(generation, |seen| seen.max(generation)),
+        );
+        self.state.1.notify_all();
+    }
+
+    fn wait_for(&self, ready: impl Fn(&TestTime) -> bool, message: &str) {
+        let state = self.state.0.lock().unwrap();
+        assert!(state.now.is_some(), "pause the fake clock first");
+        let (state, _) = self
+            .state
+            .1
+            .wait_timeout_while(state, NATIVE_TEST_TIMEOUT, |state| !ready(state))
+            .unwrap();
+        assert!(ready(&state), "{message}");
+    }
+
+    pub(crate) fn wait_for_enters(&self, count: usize) {
+        self.wait_for(
+            |state| state.enters >= count,
+            "native Enter was not acknowledged",
+        );
+    }
+
+    pub(crate) fn wait_for_draft_wait(&self) {
+        self.wait_for(
+            |state| state.draft_waits > 0,
+            "writer did not wait for a rendered draft",
+        );
+    }
+
+    pub(crate) fn wait_for_submission_check(&self, generation: u64) {
+        self.wait_for(
+            |state| {
+                state
+                    .checked_generation
+                    .is_some_and(|checked| checked >= generation)
+            },
+            "writer did not inspect the advanced clock",
+        );
     }
 }
