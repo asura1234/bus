@@ -1,6 +1,6 @@
 # Bus
 
-# developer and agents equal participants in work
+Bus is an app that lets agent CLIs delegate, orchestrate, communicate and collaborate with each other and with the developer. Bus lets an average developer keep many (10+) agents working concurrently toward the same set of goals.
 
 Start Bus with `bus --yolo` (or `./run dev --yolo`) to bypass provider
 permission prompts for every worker and MASTER orchestrator launched during
