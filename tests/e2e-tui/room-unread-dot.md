@@ -6,7 +6,7 @@ Fresh scratch Bus through the own-worktree dev-tools TUI driver, 120x40,
 graphics none. Use only fake providers and recorded effects; never restart or
 connect to the live Bus. CLI fixtures may create rooms/agents and post incoming
 agent-authored messages, plus the provider bootstrap prompts in setup and the
-post-restart developer fixture in step 5. Room opening, terminal opening, F6 and resizing use
+developer fixtures in steps 2 and 5. Room opening, terminal opening, F6 and resizing use
 real driver input. Read-only state/history corroborate the screen. Capture and
 open cell screenshots for layout, and inspect cells for the green dot's color.
 No skips or failed-step retries. `restart` quits and relaunches only this
@@ -31,6 +31,10 @@ completed a turn before restart. Record IDs and select `dot-other` through the s
    foreground (`#66ff66`), and capture/open a screenshot. The other room stays
    visible. Resize to 60x40: the long name truncates and its green dot remains
    visible before the status; MASTER also keeps its dot. Capture/open a screenshot.
+   Fixture: send `fake:work 10 DOT narrow working` as the developer to dot-peer,
+   wait until Working, then resize to 40x40. Assert the work-room dot is still
+   visible and green beside Working and MASTER also retains its dot. Capture/open
+   a screenshot, wait for the fake request to settle, and return to 60x40.
 3. Click the long-named room's sidebar entry. Assert the decision and its You
    recipient display, the room's dot and marker clear, and MASTER's remain.
    Fixture: send `DOT visible` to you in the visible room; assert it displays

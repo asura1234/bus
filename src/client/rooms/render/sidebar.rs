@@ -432,6 +432,7 @@ impl BusUi {
             } else {
                 sw.saturating_sub(right.len() as u16 + 3)
             };
+            let name_width = name_width.max(u16::from(room.unseen_to_developer)).min(sw);
             let rect = viewport.at(1, row, name_width);
             if rect.height == 0 {
                 continue;
