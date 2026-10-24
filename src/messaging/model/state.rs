@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use {
-    super::{history::History, AgentId, ModelError, Prompt, Request, RequestId, Room, RoomId},
+    super::{
+        history::History, AgentId, ModelError, Prompt, PromptId, Request, RequestId, Room, RoomId,
+    },
     crate::messaging::model::RoomAgent,
 };
 
@@ -237,6 +239,18 @@ impl BusState {
         MergeById {
             live: self.requests.values().peekable(),
             archived: self.history.requests.values().map(Arc::as_ref).peekable(),
+        }
+    }
+
+    /// A message's recipients in request order, without rescanning permanent history.
+    pub(crate) fn requests_for_message(&self, message: PromptId) -> impl Iterator<Item = &Request> {
+        MergeById {
+            live: self
+                .requests
+                .values()
+                .filter(move |r| r.prompt.id == message)
+                .peekable(),
+            archived: self.history.requests_for_message(message).peekable(),
         }
     }
 

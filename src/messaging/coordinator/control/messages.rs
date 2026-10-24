@@ -21,7 +21,7 @@ impl Worker {
                 let message = PromptId(id);
                 let result = self.control_message(message)?;
                 if let Some(selector) = optional_text(p, "as")? {
-                    if let Some(source) = self.state.requests().find(|r| r.prompt.id == message) {
+                    if let Some(source) = self.state.requests_for_message(message).next() {
                         let author = self.control_author(source.room_id, selector)?;
                         if self.state.reply_orchestrator(source) == Some(author) {
                             self.reply_waiters
@@ -255,13 +255,12 @@ impl Worker {
         // from their current screen without opening or answering any question.
         let agents: std::collections::BTreeSet<_> = self
             .state
-            .requests()
+            .requests_for_message(message)
             .filter(|request| {
-                request.prompt.id == message
-                    && !matches!(
-                        request.phase,
-                        RequestPhase::Completed | RequestPhase::Abandoned
-                    )
+                !matches!(
+                    request.phase,
+                    RequestPhase::Completed | RequestPhase::Abandoned
+                )
             })
             .filter_map(|request| self.state.agent(request.agent_id))
             .filter(|agent| agent.dialog)
@@ -308,11 +307,19 @@ impl Worker {
         message: PromptId,
         now_ms: u64,
     ) -> Result<Value, String> {
-        let mut requests = self
-            .state
-            .requests()
-            .filter(|r| r.prompt.id == message)
-            .collect::<Vec<_>>();
+        self.control_message_from(
+            message,
+            now_ms,
+            self.state.requests_for_message(message).collect(),
+        )
+    }
+
+    pub(in crate::messaging::coordinator) fn control_message_from(
+        &self,
+        message: PromptId,
+        now_ms: u64,
+        mut requests: Vec<&Request>,
+    ) -> Result<Value, String> {
         if requests.is_empty() {
             if let Some(prompt) = self.state.notice(message) {
                 return Ok(

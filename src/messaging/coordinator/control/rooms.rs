@@ -75,6 +75,14 @@ impl Worker {
         let room = self.control_history_room(selector)?;
         let now = super::super::io::now_ms();
         self.expire_queued_requests(now)?;
+        // Group once: constructing each delivery must not rescan all history.
+        let mut deliveries = BTreeMap::<_, Vec<_>>::new();
+        for request in self.state.requests() {
+            deliveries
+                .entry(request.prompt.id)
+                .or_default()
+                .push(request);
+        }
         // Messages carry their delivery; notices (reports to the
         // developer, interrupts) were delivered to nobody.
         let mut messages = self
@@ -85,7 +93,7 @@ impl Worker {
             .collect::<BTreeMap<_, _>>();
         messages.extend(self.state.notices(room).map(|n| (n.id, (n, false))));
         Ok(
-            json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.control_message_at(*id, now).ok()).flatten()})).collect::<Vec<_>>()}),
+            json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.control_message_from(*id, now, deliveries.get(id).cloned().unwrap_or_default()).ok()).flatten()})).collect::<Vec<_>>()}),
         )
     }
 
