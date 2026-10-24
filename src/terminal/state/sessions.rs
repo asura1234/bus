@@ -104,19 +104,8 @@ impl TerminalState {
             agent: agent_label,
             session_ref,
         };
-        // Provider callbacks carry a sequence; Bus's adopted-session report
-        // does not. Restoring saved identity must not prove fresh readiness.
-        if seq.is_some()
-            && Self::session_start_source_is_recognized(session_start_source.as_deref())
-            && crate::agents::resume::catalog::is_official_agent_source(
-                &persisted_session.source,
-                &persisted_session.agent,
-            )
-        {
-            if let Some(kind) = known_agent {
-                self.confirm_managed_agent_session_start(kind);
-            }
-        }
+        let start_source = session_start_source.as_deref();
+        self.confirm_startup_from_report(known_agent, seq, start_source, &persisted_session);
         if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
             self.managed_agent_launch_session = None;
         }
@@ -134,6 +123,28 @@ impl TerminalState {
             session_ref_changed: previous_session != current_session,
             agent_released: false,
         })
+    }
+
+    fn confirm_startup_from_report(
+        &mut self,
+        known_agent: Option<crate::agents::AgentKind>,
+        seq: Option<u64>,
+        session_start_source: Option<&str>,
+        persisted_session: &crate::agents::resume::catalog::PersistedAgentSession,
+    ) {
+        // Provider callbacks carry a sequence; Bus's adopted-session report
+        // does not. Restoring saved identity must not prove fresh readiness.
+        if seq.is_some()
+            && Self::session_start_source_is_recognized(session_start_source)
+            && crate::agents::resume::catalog::is_official_agent_source(
+                &persisted_session.source,
+                &persisted_session.agent,
+            )
+        {
+            if let Some(kind) = known_agent {
+                self.confirm_managed_agent_session_start(kind);
+            }
+        }
     }
 
     fn known_agent_label_conflicts_with_detected_agent(&self, agent_label: &str) -> bool {
