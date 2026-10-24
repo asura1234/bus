@@ -79,7 +79,7 @@ Use the isolated worktree's one target directory; none of these commands touches
 ```sh
 cd /Users/dylanliu/work/bus-test-reply-delivery
 export CARGO_TARGET_DIR="$PWD/target"
-export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR"
+unset CARGO_LLVM_COV_TARGET_DIR  # instrumented cache: target/llvm-cov-target
 with_build_slot() (
   slot=
   until [ -n "$slot" ]; do
