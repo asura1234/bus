@@ -231,7 +231,7 @@ impl JsonStore {
     /// Reads every committed archive record, regardless of age or live owners.
     /// A duplicate in state.json wins after a crash between append and save.
     /// A torn last line is skipped; any other unreadable line is corruption.
-    fn load_history(&self, state: &mut BusState) -> Result<Arc<History>, StoreError> {
+    fn load_history(&self, state: &BusState) -> Result<Arc<History>, StoreError> {
         let path = self.history_path();
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
@@ -398,7 +398,7 @@ impl JsonStore {
         let entries = self.load_journal()?;
         replay(&mut state, &entries, base_seq);
         state.adopt_version_one_guards(super::io::now_ms());
-        let history = self.load_history(&mut state)?;
+        let history = self.load_history(&state)?;
         let state = state.with_history(history);
         let mut journal = self.journal_state();
         journal.seq = entries
