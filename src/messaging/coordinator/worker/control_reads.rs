@@ -19,3 +19,7 @@ impl Worker {
         read && self.revision == revision && self.error == error && Instant::now() < next_poll
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/control_read_error_test.rs"]
+mod tests;

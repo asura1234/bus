@@ -60,6 +60,88 @@ fn archived_request_ids(dir: &Path) -> Vec<u64> {
 }
 
 #[test]
+fn history_status_keeps_mixed_live_and_archived_recipients_after_reopen() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let mut state = worker.state.clone();
+    let peer = state
+        .create_agent(room, "other-recipient", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let at = io::now_ms() + 2 * ARCHIVE_AFTER_MS;
+    let requests = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "two recipients, one settled".into(),
+                files: vec![],
+                recipient_ids: [peer, agent].into(),
+            },
+            Author::Developer,
+            at,
+        )
+        .unwrap();
+    state.finish_for_test(requests[0], "archived answer", at);
+    let message = state.request(requests[0]).unwrap().prompt.id;
+    worker.save(state).unwrap();
+    worker.archive_history(at + ARCHIVE_AFTER_MS + 1).unwrap();
+    assert!(!state_json_requests(&dir).contains(&requests[0].0));
+    assert!(state_json_requests(&dir).contains(&requests[1].0));
+    drop(worker);
+
+    let mut reopened = reopen_saved(&dir);
+    let status = reopened.control_message_at(message, at).unwrap();
+    assert_eq!(status["complete"], false);
+    assert_eq!(status["requests"].as_array().unwrap().len(), 2);
+    assert_eq!(status["requests"][0]["agent_id"], peer.0);
+    assert_eq!(status["requests"][0]["reply"]["text"], "archived answer");
+    assert_eq!(status["requests"][1]["agent_id"], agent.0);
+    assert_eq!(status["requests"][1]["stage"], "queued");
+    let history = reopened.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "mixed-history".into(),
+            method: "room.history".into(),
+            params: json!({"room":room.0.to_string()}),
+        },
+        None,
+    );
+    assert!(history.ok, "{history:?}");
+    assert_eq!(history.result["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        history.result["messages"][0]["delivery"]["requests"],
+        status["requests"]
+    );
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn replacing_an_archived_request_moves_its_message_lookup() {
+    use crate::messaging::model::{Archived, History};
+
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let requests = settled(&mut worker, room, agent, 1);
+    worker.archive_history(later()).unwrap();
+    let mut request = worker.state.request(requests[0]).unwrap().clone();
+    let original = request.prompt.id;
+    let mut history = History::default();
+    history.insert(Archived::Request(Box::new(request.clone())));
+    request.prompt.id = PromptId(original.0 + 1_000_000);
+    request.pending_final.as_mut().unwrap().text = "replacement".into();
+    let replacement = request.prompt.id;
+    history.insert(Archived::Request(Box::new(request)));
+    worker.state = worker.state.clone().with_history(Arc::new(history));
+
+    assert!(worker.control_message_at(original, io::now_ms()).is_err());
+    let status = worker
+        .control_message_at(replacement, io::now_ms())
+        .unwrap();
+    assert_eq!(status["requests"].as_array().unwrap().len(), 1);
+    assert_eq!(status["requests"][0]["request_id"], requests[0].0);
+    assert_eq!(status["requests"][0]["reply"]["text"], "replacement");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn state_json_stays_bounded_however_many_requests_finish() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let first = settled(&mut worker, room, agent, 20);

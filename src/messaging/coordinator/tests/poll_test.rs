@@ -145,6 +145,9 @@ mod scheduling_tests;
 #[path = "save_traffic_test.rs"]
 mod save_traffic_tests;
 
+#[path = "control_fast_path_test.rs"]
+mod control_fast_path_tests;
+
 #[path = "callback_batch_test.rs"]
 mod callback_batch_tests;
 
