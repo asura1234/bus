@@ -300,6 +300,11 @@ pub struct AgentInfo {
     pub launch_pending: bool,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub interactive_ready: bool,
+    /// A current PTY hosts the expected provider process, with no deferred
+    /// resume or pending launch. Saved identity and idle state alone do not
+    /// make this true. Check agent_status separately before submitting input.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub native_ready: bool,
     #[serde(default)]
     pub state_change_seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

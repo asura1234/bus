@@ -4527,6 +4527,10 @@
                 "null"
               ]
             },
+            "native_ready": {
+              "description": "A current PTY hosts the expected provider process, with no deferred\nresume or pending launch. Saved identity and idle state alone do not\nmake this true. Check agent_status separately before submitting input.",
+              "type": "boolean"
+            },
             "pane_id": {
               "type": "string"
             },

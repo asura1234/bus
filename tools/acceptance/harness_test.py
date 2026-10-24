@@ -6,6 +6,7 @@ from pathlib import Path
 import pty
 import select
 import signal
+import socket
 import struct
 import subprocess
 import termios
@@ -111,6 +112,39 @@ class Bus:
         if result.returncode or not response.get("ok"):
             raise CliError(response.get("error"))
         return response["result"]
+
+    def native_agent(self, target):
+        """Current native observation, never the coordinator's persisted idle state.
+
+        Native metadata can also be restored before a PTY exists; only
+        native_ready attests to the current runtime/provider process. The socket
+        is strictly inside this fixture's data root.
+        """
+        path = self.data / "herdr-config/sessions/bus/herdr.sock"
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+                stream.settimeout(3)
+                stream.connect(str(path))
+                request = {"id": "acceptance:native-ready", "method": "agent.list", "params": {}}
+                stream.sendall(json.dumps(request).encode() + b"\n")
+                response = json.loads(stream.makefile().readline())
+        except (OSError, ValueError):
+            return None
+        return next((agent for agent in response.get("result", {}).get("agents", [])
+                     if target in (agent.get("name"), agent.get("pane_id"), agent.get("terminal_id"))), None)
+
+    def wait_native_ready(self, name, timeout=30):
+        """Wait for a recreated, interactive native provider, not just control/UI readiness."""
+        deadline = time.monotonic() + timeout
+        while True:
+            agent = self.native_agent(name)
+            if (agent and agent.get("native_ready") and agent.get("interactive_ready")
+                    and not agent.get("launch_pending")
+                    and agent.get("agent_status") in ("idle", "done")):
+                return agent
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"native provider {name!r} did not become ready: {agent}")
+            time.sleep(0.05)
 
     def stop(self):
         """Quit the TUI, stop the server, and kill anything still holding our directories."""

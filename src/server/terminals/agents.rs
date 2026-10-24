@@ -426,6 +426,12 @@ impl App {
             focused: pane.focused,
             launch_pending: terminal.managed_agent_launch_pending(),
             interactive_ready: terminal.managed_agent_interactive_ready(),
+            native_ready: terminal.pending_agent_resume_plan.is_none()
+                && !terminal.managed_agent_launch_pending()
+                && terminal.effective_known_agent().is_some_and(|expected| {
+                    self.lookup_runtime_sender(ws_idx, pane_id)
+                        .is_some_and(|runtime| runtime_hosts_agent(runtime, expected))
+                }),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,

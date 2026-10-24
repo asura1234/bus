@@ -188,6 +188,98 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
     shutdown_test_runtimes(&mut server);
 }
 
+#[cfg(unix)]
+fn restored_native_server_for_restart() -> (HeadlessServer, crate::utils::ids::TerminalId) {
+    let mut server = test_headless_server();
+    let cwd = std::env::current_dir().unwrap();
+    let snapshot = serde_json::from_value(serde_json::json!({
+        "version": 3, "active": 0, "selected": 0,
+        "workspaces": [{ "id": "restored", "identity_cwd": cwd,
+            "active_tab": 0, "tabs": [{ "layout": { "Pane": 10 },
+                "panes": { "10": { "cwd": cwd, "label": null,
+                    "agent_name": "worker", "managed_agent_kind": "codex",
+                    "agent_session": { "source": "herdr:codex", "agent": "codex",
+                        "kind": "id", "value": "saved-session" } } },
+                "zoomed": false, "focused": 10, "root_pane": 10 }] }]
+    }))
+    .unwrap();
+    let restored = crate::server::persistence::restore(
+        &snapshot,
+        None,
+        true,
+        server.app.event_tx.clone(),
+        server.app.render_notify.clone(),
+        server.app.render_dirty.clone(),
+    );
+    server.app.state.workspaces = restored.workspaces;
+    server.app.state.terminals = restored.terminals;
+    server.app.state.active = Some(0);
+    let terminal_id = server.app.state.terminals.keys().next().unwrap().clone();
+    // A benign native process: never launch an installed provider from a test.
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .pending_agent_resume_plan
+        .as_mut()
+        .unwrap()
+        .argv = vec!["/bin/sh".into(), "-c".into(), "read line".into()];
+    server.app.state.default_shell = "/bin/sh".into();
+    server.render_and_stream();
+    (server, terminal_id)
+}
+
+/// A real restore plan, then the same rejected API input that arrives from the
+/// coordinator immediately after restart. Virtual time isolates the deadline
+/// reset from provider startup speed and the coordinator's retry interval.
+#[cfg(unix)]
+#[tokio::test]
+async fn rejected_post_restart_prompt_does_not_reset_native_resume_deadline() {
+    let (mut server, terminal_id) = restored_native_server_for_restart();
+    let pane_id = server.app.agent_info_for_target("worker").unwrap().pane_id;
+    let now = Instant::now();
+    assert!(!server.handle_scheduled_tasks_headless(now, false));
+    let deadline = server.app.pending_agent_resume_deadline.unwrap();
+
+    for offset in [Duration::from_millis(500), Duration::from_millis(1000)] {
+        let (respond_to, response) = std::sync::mpsc::channel();
+        let changed =
+            server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+                received_at: Instant::now(),
+                request: api::schema::Request {
+                    id: "early-send".into(),
+                    method: api::schema::Method::AgentPromptIfIdle(
+                        api::schema::AgentPromptIfIdleParams {
+                            target: "worker".into(),
+                            text: "immediate".into(),
+                            expected_terminal_id: terminal_id.to_string(),
+                            expected_pane_id: pane_id.clone(),
+                            expected_agent: "codex".into(),
+                            expected_session_id: "saved-session".into(),
+                            steer: false,
+                        },
+                    ),
+                },
+                respond_to,
+            });
+        let reply: serde_json::Value = serde_json::from_str(&response.recv().unwrap()).unwrap();
+        assert_eq!(reply["error"]["code"], "agent_not_found");
+        assert!(changed, "the rejected prompt still requests a repaint");
+        server.handle_scheduled_tasks_headless(now + offset, changed);
+        assert_eq!(
+            server.app.pending_agent_resume_deadline,
+            Some(deadline),
+            "a repaint must not restart the native resume theme wait"
+        );
+        server.render_and_stream();
+    }
+    assert!(server.handle_scheduled_tasks_headless(deadline, false));
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+    shutdown_test_runtimes(&mut server);
+}
+
 #[test]
 fn drained_api_requests_are_timed_like_waited_ones() {
     let mut server = test_headless_server();
@@ -220,4 +312,64 @@ fn drained_api_requests_are_timed_like_waited_ones() {
         .expect("drained requests are recorded in server.api");
     assert_eq!(window.count, 2, "{window:?}");
     shutdown_test_runtimes(&mut server);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn post_render_native_resume_progresses_during_repaints_with_or_without_theme() {
+    for (theme_ready, full_render) in [(false, true), (true, true), (false, false)] {
+        let (mut server, terminal_id) = restored_native_server_for_restart();
+        let saved = server.app.agent_info_for_target("worker").unwrap();
+        assert!(
+            saved.interactive_ready,
+            "managed active metadata was restored"
+        );
+        assert!(
+            !saved.native_ready,
+            "there is no recreated PTY/provider yet"
+        );
+        if theme_ready {
+            server.app.state.host_terminal_theme.foreground =
+                Some(crate::utils::theme::color::RgbColor {
+                    r: 220,
+                    g: 220,
+                    b: 220,
+                });
+        }
+        let now = Instant::now();
+        let (mut needs_render, mut needs_full_render) = (true, full_render);
+        assert!(server.render_pending_loop_work(now, &mut needs_render, &mut needs_full_render));
+        if !theme_ready {
+            assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
+            let deadline = server.app.pending_agent_resume_deadline.unwrap();
+            for offset in [Duration::from_millis(400), Duration::from_millis(800)] {
+                // Every iteration has repaint work, including when the theme
+                // wait expires; a clean/idle scheduler pass is never supplied.
+                needs_render = true;
+                needs_full_render = full_render;
+                server.handle_scheduled_tasks_headless(now + offset, true);
+                assert_eq!(server.app.pending_agent_resume_deadline, Some(deadline));
+                assert!(server.render_pending_loop_work(
+                    now + offset,
+                    &mut needs_render,
+                    &mut needs_full_render,
+                ));
+            }
+        }
+        assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+        assert!(
+            needs_render && needs_full_render,
+            "publish the newly started runtime"
+        );
+        assert!(server.app.pending_agent_resume_deadline.is_none());
+        // A shell runtime alone is not a provider-readiness signal either.
+        assert!(
+            !server
+                .app
+                .agent_info_for_target("worker")
+                .unwrap()
+                .native_ready
+        );
+        shutdown_test_runtimes(&mut server);
+    }
 }
