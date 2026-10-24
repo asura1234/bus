@@ -451,6 +451,10 @@ async fn enter_never_accepted_times_out_without_repasting_or_reporting_success()
     clock(&app).advance(Duration::from_millis(250));
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
     clock(&app).advance(expiry);
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
+    redraw(&app, AgentKind::Cursor, "from bus");
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x0b"));
+    redraw(&app, AgentKind::Cursor, "");
     let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("timeout"), "{response}");
     assert!(!response.contains("agent_prompted"));
@@ -486,3 +490,6 @@ async fn an_unrecognised_paste_is_cleared_and_reported_as_not_submitted() {
         );
     }
 }
+
+#[path = "paste_recovery_test.rs"]
+mod paste_recovery_tests;

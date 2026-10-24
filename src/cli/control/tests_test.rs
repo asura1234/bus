@@ -1264,6 +1264,38 @@ fn send_async_exits_early_with_the_stalled_code_and_reason() {
     assert_eq!(lines[0]["error"]["code"], "message_stalled");
 }
 
+#[test]
+fn send_async_unconfirmed_submission_explains_safe_recovery() {
+    for stage in ["stalled", "abandoned"] {
+        let mut request = stalled_recipient(1, "submitting", "submission_unconfirmed", false);
+        request["stage"] = json!(stage);
+        request["uncertain_outcome"] = json!(true);
+        let (outcome, lines, _, _) = run_async(&[], [status(vec![request])]);
+        assert_eq!(
+            exit_code(&outcome),
+            Some(if stage == "stalled" {
+                STALLED_EXIT_CODE
+            } else {
+                1
+            })
+        );
+        let message = lines[0]["error"]["message"].as_str().unwrap();
+        for guidance in [
+            "submission_unconfirmed",
+            "may have run",
+            "transcript",
+            "composer",
+            "before resending",
+        ] {
+            assert!(
+                message.contains(guidance),
+                "{stage}: missing {guidance}: {message}"
+            );
+        }
+        assert_eq!(lines[0]["result"]["requests"][0]["uncertain_outcome"], true);
+    }
+}
+
 /// Settlement closes an ended turn without a captured reply as
 /// `reply_not_captured`, which is done; one still open when it stalls is not.
 #[test]

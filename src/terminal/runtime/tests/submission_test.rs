@@ -44,7 +44,8 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
         hard_deadline: expired,
         clock: SubmissionClock::default(),
     };
-    let result = submission.withdraw_unshown(io::Error::new(io::ErrorKind::TimedOut, "expired"));
+    let result =
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
     assert!(result.is_err_and(|error| error.kind() == io::ErrorKind::TimedOut));
     assert!(
         writes.try_recv().is_err(),
@@ -75,7 +76,7 @@ async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
         hard_deadline: clock.now() + Duration::from_secs(3),
         clock,
     };
-    submission.clear_draft().unwrap();
+    submission.clear_draft(false).unwrap();
     runtime.test_process_pty_bytes(
         concat!(
             "\x1b[2J\x1b[HHooks need review\r\n",

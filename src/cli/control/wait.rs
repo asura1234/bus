@@ -191,6 +191,9 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
             ),
         ));
     }
+    if abandoned["reason"] == "submission_unconfirmed" {
+        return Some(("message_abandoned", unconfirmed_guidance(status, agent)));
+    }
     Some((
         "message_abandoned",
         format!(
@@ -207,6 +210,12 @@ fn stalled(status: &Value, relevant: impl Fn(&Value) -> bool) -> Option<(&'stati
         .as_array()?
         .iter()
         .find(|r| r["stage"] == "stalled" && relevant(r))?;
+    if request["reason"] == "submission_unconfirmed" {
+        return Some((
+            "message_stalled",
+            unconfirmed_guidance(status, request["agent_name"].as_str().unwrap_or("unknown")),
+        ));
+    }
     Some((
         "message_stalled",
         format!(
@@ -217,6 +226,16 @@ fn stalled(status: &Value, relevant: impl Fn(&Value) -> bool) -> Option<(&'stati
             request["reason"].as_str().unwrap_or("unknown"),
         ),
     ))
+}
+
+fn unconfirmed_guidance(status: &Value, agent: &str) -> String {
+    format!(
+        "Message {} for agent {agent} has an unknown outcome (submission_unconfirmed). \
+         The agent may have run it; Bus will not replay it. Inspect the agent's transcript \
+         and composer before resending, and clear any remaining draft. \
+         Inspect: bus message status {}",
+        status["message_id"], status["message_id"],
+    )
 }
 
 fn timeout_response(id: &str, last_status: Value) -> Response {
