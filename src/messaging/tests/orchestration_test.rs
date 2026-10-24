@@ -690,6 +690,9 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("Bus messaging: you are codex1"));
     assert!(text.contains("Read /bus-docs/how-to-bus-cli.md"));
     assert!(text.contains("Send only the body"));
-    assert!(text.contains("For things only the developer can do or decide, use @you or [waiting-on-you] (CLI: bus send --to you --as AGENT)."));
+    assert!(text
+        .contains("For who to message, follow the Who to message section in how-to-bus-cli.md."));
+    assert!(text
+        .contains("bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\""));
     assert_eq!(state.requests().count(), 0);
 }

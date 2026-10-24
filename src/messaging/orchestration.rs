@@ -149,7 +149,7 @@ pub(crate) fn agent_onboarding(
          Use --as {} when sending messages. Every CLI agent selector accepts a name or ID; bus agent list maps names to IDs. Any agent can message any agent by name or ID; \
          current names are unique across all rooms and resolve globally, like IDs. \
          --to orchestrator names your home room's bound orchestrator. \
-         For things only the developer can do or decide, use @you or [waiting-on-you] (CLI: bus send --to you --as AGENT). \
+         For things only the developer can do or decide, use [waiting-on-you] and state the action or decision needed (CLI: bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\"). \
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
          For verification, send VERIFIED with the PR/task and exact head or defects with file:line straight to the owner. \
          If you own a PR, re-send the head to verifier and reviewers on every push and use auto-merge-pr's owner-run path: \
@@ -162,7 +162,7 @@ pub(crate) fn agent_onboarding(
          comments adjudicated, recorded authority and no explicit hold. Enforce these checks during merge-pr too. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
          For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \
-         Finals still go to the orchestrator, including after peer-started work. \
+         For who to message, follow the Who to message section in how-to-bus-cli.md. \
          The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit room notes or the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
