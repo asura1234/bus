@@ -162,8 +162,13 @@ fn failed_provider_turn_closes_its_group_and_releases_the_queue() {
 }
 
 #[test]
-fn transcript_unmatched_turn_closes_without_a_reply_and_unblocks_next_request() {
+fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
     for provider in [Provider::Cursor, Provider::ClaudeCode] {
+        let expected = if provider == Provider::ClaudeCode {
+            RequestPhase::Completed
+        } else {
+            RequestPhase::Abandoned
+        };
         let mut fixture = Fixture::new(provider);
         let lead = running(&mut fixture, "review this change", "turn-1");
         let next = fixture.send("review the next change", true);
@@ -176,22 +181,32 @@ fn transcript_unmatched_turn_closes_without_a_reply_and_unblocks_next_request() 
             fixture.record(json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn-1","text":"Checking.Ready","transcript_path":transcript}));
             fixture.record(json!({"hook_event_name":"stop","conversation_id":"session","generation_id":"turn-1","status":"completed"}));
         } else {
-            // A completed Claude hook with no captured assistant message.
+            // A completed Claude hook with no assistant text is an empty final.
             fixture.record(
                 json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1"}),
             );
         }
         fixture.consume();
         fixture.status(RuntimeStatus::Idle);
-        assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+        assert_eq!(
+            fixture.request(lead).phase,
+            if provider == Provider::ClaudeCode {
+                expected
+            } else {
+                RequestPhase::Active
+            }
+        );
         fixture.now += CALLBACK_GRACE_MS;
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
-        assert_eq!(
-            fixture.request(lead).phase,
-            RequestPhase::Abandoned,
-            "{provider:?}"
-        );
+        assert_eq!(fixture.request(lead).phase, expected, "{provider:?}");
+        if provider == Provider::ClaudeCode {
+            assert_eq!(
+                fixture.request(lead).pending_final.as_ref().unwrap().text,
+                ""
+            );
+            assert!(fixture.request(lead).failure_reason.is_none());
+        }
         assert!(fixture
             .worker
             .state
@@ -206,10 +221,7 @@ fn transcript_unmatched_turn_closes_without_a_reply_and_unblocks_next_request() 
             &("review the next change".into(), false)
         );
         let persisted = fixture.worker.store.load().unwrap().unwrap();
-        assert_eq!(
-            persisted.request(lead).unwrap().phase,
-            RequestPhase::Abandoned
-        );
+        assert_eq!(persisted.request(lead).unwrap().phase, expected);
     }
 }
 

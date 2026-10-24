@@ -125,7 +125,8 @@ impl Worker {
                 shells = ?started,
                 "Reply waits for shells this request started"
             );
-            return (Parsed::BackgroundPending { session, turn }, Some(text));
+            let interim = (!text.trim().is_empty()).then_some(text);
+            return (Parsed::BackgroundPending { session, turn }, interim);
         }
         self.claude_settled_shells.insert(id, running);
         (

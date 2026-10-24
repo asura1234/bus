@@ -347,6 +347,12 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
                 }
+                // A textless wake ends the hold without erasing its captured answer.
+                let text = if text.trim().is_empty() {
+                    Self::held_interim(request).map_or(text, |interim| interim.text)
+                } else {
+                    text
+                };
                 let Some(request) = self.requests.get_mut(&request_id) else {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
