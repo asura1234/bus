@@ -289,7 +289,7 @@ A bug is "an unanticipated edge case causing failure", not a supposition. The me
 Reporting requirements (TDD principle):
 
 When a bug is found, the review agent must provide all three of the following:
-1. **Reproduction test** — actually write the test and run it narrowly to red (see "Verification boundary"), recording the test name + test file relative path + the observed failing assertion in the evidence. The test file stays in the working tree for the author. If you cannot get a red run, it is not a Bug finding
+1. **Reproduction test** — actually write the test and run it narrowly to red (see "Verification boundary"), recording the test name + test file relative path + the observed failing assertion in the evidence. Save a test-only patch with the result and remove your additions before handoff (see "Probe test lifecycle"). If you cannot get a red run, it is not a Bug finding
 2. **Fix suggestion** — a concrete fix (which file to change, how, and why this way)
 3. **Regression test** — how the test should turn green after the fix (the assertions expected to pass)
 
