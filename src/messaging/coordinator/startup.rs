@@ -26,6 +26,18 @@ pub(super) fn watch_native_resume(
     {
         return Ok(());
     }
+    // A different native terminal starts a new attempt. Retire the previous
+    // reported startup episode, as explicit recovery does, so confirmation of
+    // this attempt cannot leave its predecessor's error blocking a healthy agent.
+    if agent
+        .startup
+        .as_ref()
+        .is_some_and(|startup| startup.reported)
+    {
+        state
+            .set_agent_error(agent.id, None)
+            .map_err(|e| e.to_string())?;
+    }
     state
         .set_agent_startup(
             agent.id,

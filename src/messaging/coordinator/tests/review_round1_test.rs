@@ -130,6 +130,56 @@ fn rejected_conversation_error_requires_delete_and_recreate() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn confirmed_new_native_attempt_clears_the_previous_startup_error() {
+    struct Frames(VecDeque<schema::AgentInfo>);
+    impl Transport for Frames {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentList(_) => Ok(ResponseResult::AgentList {
+                    agents: vec![self.0.pop_front().unwrap()],
+                }),
+                other => panic!("unexpected native recovery operation: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, agent, dir) = failed_native(Provider::ClaudeCode, false, false);
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_some());
+    let mut launching = json!({"terminal_id":"recovered-terminal","pane_id":"pane","name":"bus-r1-a2",
+        "workspace_id":"w1","tab_id":"t1","focused":false,"revision":1,"agent_status":"unknown","launch_pending":true,
+        "agent_session":{"source":"herdr:claude","agent":"claude","kind":"id","value":"session"},
+        "native_resume":{"name":"bus-r1-a2","agent":"claude","session_id":"session","command":"claude --resume session"}});
+    let first = serde_json::from_value(launching.clone()).unwrap();
+    launching.as_object_mut().unwrap().remove("native_resume");
+    launching["agent"] = json!("claude");
+    launching["agent_status"] = json!("idle");
+    launching["launch_pending"] = json!(false);
+    launching["interactive_ready"] = json!(true);
+    worker.transport = Box::new(Frames(
+        vec![first, serde_json::from_value(launching).unwrap()].into(),
+    ));
+    for _ in 0..2 {
+        let infos = worker.poll().unwrap().unwrap();
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+            .unwrap();
+    }
+    let recovered = worker.state.agent(agent).unwrap();
+    assert_eq!(recovered.status, RuntimeStatus::Idle);
+    assert!(recovered.startup.is_none());
+    assert!(
+        recovered.actionable_error.is_none(),
+        "a real confirmed recovery must clear its prior startup failure"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The client owns the coordinator; the native server and its provider PTYs
 /// outlive a client detach. The worker's provider exited normally while no
 /// client was attached; nothing was relaunched on reattach.
