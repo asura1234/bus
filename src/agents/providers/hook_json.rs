@@ -190,6 +190,17 @@ pub(crate) fn merge_hooks(
     Ok(document)
 }
 
+/// Consent is unnecessary only when installation would leave this JSON unchanged.
+pub(crate) fn hooks_are_current(path: &Path, contract: HookContract, binary: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    merge_hooks(document.clone(), contract, binary).is_ok_and(|merged| merged == document)
+}
+
 pub(crate) fn rebind_owned_hooks(
     path: &Path,
     contract: HookContract,

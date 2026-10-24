@@ -337,13 +337,19 @@ pub(crate) fn project_root(cwd: &Path) -> PathBuf {
 
 const ADOPTED_SESSION_FILE: &str = "adopted-session";
 
-pub(crate) fn setup_notice(provider: ProviderKind, cwd: &Path) -> Option<SetupNotice> {
+pub(crate) fn setup_notice(
+    provider: ProviderKind,
+    cwd: &Path,
+    binary: &Path,
+) -> Option<SetupNotice> {
     let root = project_root(cwd);
-    match provider {
+    let notice = match provider {
         ProviderKind::Codex => Some(codex::launch::setup_notice(&root)),
         ProviderKind::ClaudeCode => None,
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
-    }
+    }?;
+    (!hook_json::hooks_are_current(&notice.path, HookContract::for_provider(provider), binary))
+        .then_some(notice)
 }
 
 /// The caller initializes its routing manifest after project hook setup and
@@ -360,7 +366,7 @@ pub(crate) fn prepare(
             executable(spec.provider)
         ));
     }
-    if let Some(notice) = setup_notice(spec.provider, &cwd) {
+    if let Some(notice) = setup_notice(spec.provider, &cwd, &spec.hooks.binary) {
         if !spec.consent_project_hooks {
             return Err(format!(
                 "Setup confirmation required for {}. {}",
