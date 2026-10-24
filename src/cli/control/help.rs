@@ -112,6 +112,19 @@ fn description(path: &str) -> (&'static str, &'static str) {
     }
 }
 
+fn run_flags() -> [Arg; 2] {
+    [
+        Arg::new("dev")
+            .long("dev")
+            .action(clap::ArgAction::SetTrue)
+            .help("Enable developer tools and developer logs"),
+        Arg::new("yolo")
+            .long("yolo")
+            .action(clap::ArgAction::SetTrue)
+            .help("Bypass provider permission prompts for this run"),
+    ]
+}
+
 pub(crate) fn command_tree(dev: bool) -> Command {
     let control = super::parse::cli();
     let request_id = control
@@ -131,20 +144,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
         );
     decorate(command, "", dev)
         .subcommand_required(false)
-        .arg(
-            Arg::new("dev")
-                .long("dev")
-                .action(clap::ArgAction::SetTrue)
-                .global(true)
-                .help("Enable developer tools and developer logs"),
-        )
-        .arg(
-            Arg::new("yolo")
-                .long("yolo")
-                .action(clap::ArgAction::SetTrue)
-                .global(true)
-                .help("Bypass provider permission prompts for this run"),
-        )
+        .args(run_flags())
         .arg(
             Arg::new("paths")
                 .long("paths")
@@ -159,6 +159,12 @@ pub(crate) fn command_tree(dev: bool) -> Command {
         .subcommand(
             Command::new("resume")
                 .about("Resume a saved session")
+                .args(run_flags())
+                .group(
+                    clap::ArgGroup::new("target")
+                        .args(["session-id", "last"])
+                        .required(true),
+                )
                 .arg(Arg::new("session-id").help("Saved session ID"))
                 .arg(
                     Arg::new("last")
@@ -184,6 +190,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                 .arg(
                     Arg::new("all")
                         .long("all")
+                        .conflicts_with("since")
                         .action(clap::ArgAction::SetTrue)
                         .help("Read all recorded performance history"),
                 )

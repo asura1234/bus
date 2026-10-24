@@ -31,3 +31,29 @@ fn unexpected_argument_names_the_argument_and_help() {
     assert!(error.contains("--bogus"), "{error}");
     assert!(error.contains("--help"), "{error}");
 }
+
+#[test]
+fn command_help_matches_process_flag_positions() {
+    let args = ["agent", "add", "--help"].map(String::from);
+    let text = super::help_for(super::command_tree(false), &args).unwrap();
+    assert!(
+        !text.contains("--dev") && !text.contains("--yolo"),
+        "{text}"
+    );
+    let misplaced = ["agent", "add", "--dev", "--help"].map(String::from);
+    assert!(super::help_for(super::command_tree(false), &misplaced).is_none());
+    assert!(parse::parse(&misplaced, "id")
+        .unwrap_err()
+        .contains("--dev"));
+    for args in [
+        vec!["--dev", "agent", "--help"],
+        vec!["--yolo", "--dev", "agent", "--help"],
+        vec!["resume", "--dev", "--help"],
+    ] {
+        let args: Vec<_> = args.into_iter().map(String::from).collect();
+        assert!(
+            crate::cli::help::subcommand_help(&args).is_some(),
+            "{args:?}"
+        );
+    }
+}

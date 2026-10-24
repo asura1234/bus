@@ -113,7 +113,10 @@ pub(super) fn subcommand_help(args: &[String]) -> Option<String> {
     {
         return None;
     }
-    let dev = args.first().is_some_and(|arg| arg == "--dev");
+    let dev = args
+        .iter()
+        .take_while(|arg| arg.starts_with('-'))
+        .any(|arg| arg == "--dev");
     super::control::help_for(super::control::command_tree(dev), args)
 }
 
