@@ -198,36 +198,16 @@ fn client_receives_notify_on_agent_state_change() {
     wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(5))
         .expect("client shell bootstrap");
 
-    // Create a workspace via the API.
-    let mut ws_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let request = r#"{"id":"1","method":"workspace.create","params":{}}"#;
-    writeln!(ws_stream, "{}", request).unwrap();
-    let mut reader = BufReader::new(ws_stream);
-    let mut ws_response = String::new();
-    reader.read_line(&mut ws_response).unwrap();
-
-    // Extract the workspace ID and pane ID from the response.
-    let ws_id = ws_response
-        .split('"')
-        .find(|s| s.starts_with("w_"))
-        .unwrap_or("w_1")
-        .to_string();
-
-    // Get pane list to find a pane ID.
-    let mut pane_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let pane_request =
-        format!(r#"{{"id":"2","method":"pane.list","params":{{"workspace_id":"{ws_id}"}}}}"#);
-    writeln!(pane_stream, "{}", pane_request).unwrap();
-    let mut pane_reader = BufReader::new(pane_stream);
-    let mut pane_response = String::new();
-    pane_reader.read_line(&mut pane_response).unwrap();
-
-    // Extract first pane ID (format: p_<ws>_<pane>).
-    let pane_id = pane_response
-        .split('"')
-        .find(|s| s.starts_with("p_"))
-        .unwrap_or("p_1_1")
-        .to_string();
+    // Use the canonical public pane ID: accepted legacy aliases are not
+    // the identity carried in semantic notifications.
+    let created = send_json_request(
+        &api_socket,
+        r#"{"id":"1","method":"workspace.create","params":{"focus":true}}"#,
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("created workspace root pane ID")
+        .to_owned();
 
     // Start the fake agent. The first idle after detection never notifies.
     let started = send_json_request(
@@ -253,26 +233,23 @@ fn client_receives_notify_on_agent_state_change() {
     );
 
     // Create and focus a second workspace so the agent's pane is in the background.
-    let mut ws2_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let ws2_request = r#"{"id":"4","method":"workspace.create","params":{}}"#;
-    writeln!(ws2_stream, "{}", ws2_request).unwrap();
-    let mut ws2_reader = BufReader::new(ws2_stream);
-    let mut ws2_response = String::new();
-    ws2_reader.read_line(&mut ws2_response).unwrap();
-
-    let ws2_id = ws2_response
-        .split('"')
-        .find(|s| s.starts_with("w_"))
-        .unwrap_or("w_2")
-        .to_string();
-    let mut focus_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let focus_request = format!(
-        r#"{{"id":"5","method":"workspace.focus","params":{{"workspace_id":"{ws2_id}"}}}}"#
+    let background = send_json_request(
+        &api_socket,
+        r#"{"id":"4","method":"workspace.create","params":{}}"#,
     );
-    writeln!(focus_stream, "{}", focus_request).unwrap();
-    let mut focus_reader = BufReader::new(focus_stream);
-    let mut focus_response = String::new();
-    focus_reader.read_line(&mut focus_response).unwrap();
+    let background_id = background["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .expect("background workspace ID");
+    let focused = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "5",
+            "method": "workspace.focus",
+            "params": {"workspace_id": background_id},
+        })
+        .to_string(),
+    );
+    assert!(focused.get("error").is_none(), "{focused}");
 
     assert!(
         wait_until(Duration::from_secs(2), Duration::from_millis(25), || {

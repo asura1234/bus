@@ -66,7 +66,9 @@ go/stop phases; they already had phase barriers, rather than a transient idle
 window. Fake terminal states persist until explicit stop/exit files. Positive
 fixture waits have a sixty-second failure ceiling. Notification reads use the
 remaining deadline and stop on a framing error; they do not resume a partially
-consumed frame after a short timeout.
+consumed frame after a short timeout. The fixture takes canonical workspace and
+pane IDs from structured API results; compatibility aliases accepted in requests
+are not the IDs carried in notifications.
 
 Repeated acceptance uses the entire default Rust test suite at default Nextest
 parallelism, with no retries, under normal concurrent build-slot load. Existing
