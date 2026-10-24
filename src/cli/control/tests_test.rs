@@ -173,7 +173,20 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
             .find(|args| command(args).is_ok_and(|c| c.method == spec.method))
             .unwrap_or_else(|| panic!("no sample parses into {}", spec.method));
         assert!(sample.join(" ").starts_with(spec.command), "{sample:?}");
-        let line = format!("\n  {}", spec.command);
+        let words: Vec<_> = spec
+            .command
+            .split_whitespace()
+            .take_while(|part| !part.starts_with("--"))
+            .collect();
+        let line = format!("\n  {}", words.join(" "));
+        let help = command_help(&words);
+        for flag in spec
+            .command
+            .split_whitespace()
+            .filter(|part| part.starts_with("--"))
+        {
+            assert!(help.contains(flag), "{} omits {flag}: {help}", spec.command);
+        }
         match spec.tier {
             Tier::Agent => assert!(
                 agent_help().contains(&line),
