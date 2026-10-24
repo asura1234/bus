@@ -380,7 +380,7 @@ fn the_same_blocked_screen_is_not_reported_again_after_a_flicker() {
 }
 
 #[test]
-fn an_undelivered_blocked_notice_keeps_its_failure_without_delivery_error_chat() {
+fn an_undelivered_blocked_notice_keeps_its_failure_and_reaches_the_developer_once() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
     screen.lock().unwrap().dialog = true;
@@ -409,21 +409,26 @@ fn an_undelivered_blocked_notice_keeps_its_failure_without_delivery_error_chat()
         Some("hook_setup_unconfirmed")
     );
     assert!(notice.completed_at_ms.is_some());
+    let fallback =
+        format!("{blocked}\nThe orchestrator did not receive this (hook_setup_unconfirmed).");
     assert_eq!(
         sent_by(&worker, room, agent),
-        [(vec![orchestrator], blocked.clone())]
+        [
+            (vec![orchestrator], blocked.clone()),
+            (Vec::new(), fallback.clone())
+        ]
     );
-    // The actual dialog remains visible; its normal resolution is retained.
-    // Neither another help message nor a delivery-error message is injected.
+    // Escalation does not close the dialog or post duplicate help on later polls.
     polls(&mut worker, 3);
     assert!(worker.state.agent(agent).unwrap().dialog);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    assert_eq!(sent_by(&worker, room, agent).len(), 2);
     screen.lock().unwrap().dialog = false;
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
         [
             (vec![orchestrator], blocked),
+            (Vec::new(), fallback),
             (Vec::new(), expected_resolved(&worker, agent))
         ]
     );
