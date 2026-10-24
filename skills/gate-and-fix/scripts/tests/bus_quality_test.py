@@ -140,7 +140,7 @@ class BusQualityTest(unittest.TestCase):
                         "/debug/bus.exe" if os.name == "nt" else "/debug/bus"
                     )
                 )
-                self.assertIn("%p", env["LLVM_PROFILE_FILE"])
+                self.assertNotIn("%p", env["LLVM_PROFILE_FILE"])
                 # Python tests run plainly: no coverage.py, no Python floor.
                 self.assertEqual(
                     run.call_args.args[:4], (sys.executable, "-m", "pytest", "-q")
