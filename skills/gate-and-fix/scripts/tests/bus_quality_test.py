@@ -486,7 +486,7 @@ class BusQualityTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as folder,
             patch.dict(os.environ, {**live, "KEEP_ME": "1"}),
-            patch.object(quality.subprocess, "run") as spawn,
+            patch.object(quality.subprocess, "Popen") as spawn,
         ):
             spawn.return_value.returncode = 0
             quality.run("cargo", "nextest", "run")

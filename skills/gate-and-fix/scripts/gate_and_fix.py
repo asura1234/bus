@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Sequence
 
 from gate_artifact import GateResult, _parse_round, render_round, validate_round
+from coverage_run import Run
+from gate_process import Children, Interrupted, interrupt_signals
 
 
 CI_TOOLS = frozenset({"just", "cargo-nextest"})
@@ -75,10 +77,10 @@ def select_gates(
     return gates
 
 
-def _run_gate(gate: Gate, *, cwd: Path) -> GateResult:
+def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
     started = time.monotonic()
     try:
-        process = subprocess.Popen(
+        process = children.start(
             gate.argv,
             cwd=cwd,
             stdout=subprocess.PIPE,
@@ -97,7 +99,10 @@ def _run_gate(gate: Gate, *, cwd: Path) -> GateResult:
             stderr=f"launch error: {error}",
         )
 
-    stdout, stderr = process.communicate()
+    try:
+        stdout, stderr = process.communicate()
+    finally:
+        children.finished(process)
     return GateResult(
         name=gate.name,
         argv=gate.argv,
@@ -115,38 +120,49 @@ def run_gates(gates: Sequence[Gate], *, cwd: Path) -> list[GateResult]:
     if len({gate.name for gate in gates}) != len(gates):
         raise ValueError("duplicate gate name")
 
-    pending = list(gates)
-    active_resources: set[str] = set()
-    results: dict[str, GateResult] = {}
+    children = Children()
     with ThreadPoolExecutor(
         max_workers=min(MAX_PARALLEL_GATES, len(gates)), thread_name_prefix="gate-and-fix"
     ) as executor:
-        active = {}
-        while pending or active:
-            while len(active) < MAX_PARALLEL_GATES:
-                if any(gate.requires_exclusive_execution for gate in active.values()):
-                    break
-                index = next(
-                    (
-                        candidate_index
-                        for candidate_index, candidate in enumerate(pending)
-                        if not active_resources.intersection(candidate.resources)
-                        and not (candidate.requires_exclusive_execution and active)
-                    ),
-                    None,
-                )
-                if index is None:
-                    break
-                gate = pending.pop(index)
-                active_resources.update(gate.resources)
-                active[executor.submit(_run_gate, gate, cwd=cwd)] = gate
-            if not active:
-                raise ValueError("gate resource scheduling cannot make progress")
-            completed, _ = wait(active, return_when=FIRST_COMPLETED)
-            for future in completed:
-                gate = active.pop(future)
-                active_resources.difference_update(gate.resources)
-                results[gate.name] = future.result()
+        try:
+            return _schedule_gates(gates, executor=executor, children=children, cwd=cwd)
+        except BaseException:
+            children.stop()
+            raise
+
+
+def _schedule_gates(
+    gates: Sequence[Gate], *, executor: ThreadPoolExecutor, children: Children, cwd: Path
+) -> list[GateResult]:
+    pending = list(gates)
+    active_resources: set[str] = set()
+    results: dict[str, GateResult] = {}
+    active = {}
+    while pending or active:
+        while len(active) < MAX_PARALLEL_GATES:
+            if any(gate.requires_exclusive_execution for gate in active.values()):
+                break
+            index = next(
+                (
+                    candidate_index
+                    for candidate_index, candidate in enumerate(pending)
+                    if not active_resources.intersection(candidate.resources)
+                    and not (candidate.requires_exclusive_execution and active)
+                ),
+                None,
+            )
+            if index is None:
+                break
+            gate = pending.pop(index)
+            active_resources.update(gate.resources)
+            active[executor.submit(_run_gate, gate, cwd=cwd, children=children)] = gate
+        if not active:
+            raise ValueError("gate resource scheduling cannot make progress")
+        completed, _ = wait(active, return_when=FIRST_COMPLETED)
+        for future in completed:
+            gate = active.pop(future)
+            active_resources.difference_update(gate.resources)
+            results[gate.name] = future.result()
     return [results[gate.name] for gate in gates]
 
 
@@ -265,7 +281,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             python=str(repo / "temp/gate-tools/python/bin/python")
             if (repo / "temp/gate-tools/python/bin/python").is_file() else sys.executable,
         )
-        results = run_gates(gates, cwd=repo)
+        with interrupt_signals(), Run(repo, repo / "temp/gate-and-fix/coverage", "gate"):
+            results = run_gates(gates, cwd=repo)
         if (
             _git_output(repo, "rev-parse", "HEAD") != head
             or _git_output(repo, "status", "--porcelain", "--untracked-files=all")
@@ -285,6 +302,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
         outcome = validate_round(artifact_path.read_text(encoding="utf-8"), expected_base=base)
+    except Interrupted as error:
+        print("gate-and-fix interrupted; run profiles removed", file=sys.stderr)
+        return 128 + error.signum
     except (OSError, ValueError) as error:
         print(f"gate-and-fix runner failed: {error}", file=sys.stderr)
         return 2
