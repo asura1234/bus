@@ -76,9 +76,10 @@ fn tick_until(
 
 #[test]
 fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
+    const WAIT: Duration = Duration::from_secs(60);
     let dir = crate::utils::test_temp::unique_temp_path("bus-send-latency");
     let (seed, master, _) = busy_session();
-    let (handle, commands) = BusHandle::start_for_test(dir.clone(), &seed);
+    let (handle, commands, saves) = BusHandle::start_for_test_observing_saves(dir.clone(), &seed);
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let poller = {
         let stop = Arc::clone(&stop);
@@ -87,8 +88,7 @@ fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
     let mut ui = BusUi::new(handle.snapshot().unwrap());
     ui.handle = Some(handle);
     ui.open_room(master);
-    // Settle the navigation commands before typing, like a human reading first.
-    tick_until(&mut ui, Duration::from_secs(10), |ui| ui.pending.is_empty());
+    let navigation = tick_until(&mut ui, WAIT, |ui| ui.pending.is_empty());
 
     // Type at a brisk human pace with the 100 ms client tick interleaved.
     let started = Instant::now();
@@ -103,36 +103,114 @@ fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
         }
         std::thread::sleep(Duration::from_millis(60));
     }
-    // The bug this guards: Enter waited behind full `state.json` saves (170-270 ms
-    // each for this session in a debug build). Assert that no full save sits
-    // between Enter and the send rather than timing it, since wall time here also
-    // counts the journal fsync and scheduling, which a busy machine stretches.
-    let state_file = dir.join("state.json");
-    let saved_before = state_file_version(&state_file);
+    // A changed state.json timestamp cannot identify a blocking composer save:
+    // the first archive tick can replace it after navigation was acknowledged.
+    // Measure saves inside each serialized handler, separately from ticks.
+    let enter = Instant::now();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(ui.send_intent.is_some() || !ui.pending.is_empty());
+    let had_intent = ui.send_intent.is_some() || !ui.pending.is_empty();
     let prompts_before = seed.requests().count();
 
-    // No further input: the one Enter must deliver the message on its own.
-    let sent = tick_until(&mut ui, Duration::from_secs(5), |ui| {
+    // No further input: the one Enter must deliver the complete text on its own.
+    let sent = tick_until(&mut ui, WAIT, |ui| {
         ui.send_intent.is_none()
+            && ui.pending.is_empty()
             && ui.locals[&master].text.text.is_empty()
             && ui.snapshot.state.requests().count() > prompts_before
     });
-    let saved_after = state_file_version(&state_file);
+    let elapsed = enter.elapsed();
+    let sent_texts = ui
+        .snapshot
+        .state
+        .requests()
+        .filter(|request| request.prompt.text == "please review the draft")
+        .count();
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     poller.join().unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
-    let sent = sent.expect("Enter with no further input never sent the message");
-    eprintln!("enter -> sent: {sent:?}");
-    assert_eq!(
-        saved_after, saved_before,
-        "Enter waited on a full state.json save before the send landed ({sent:?})"
-    );
-}
 
-/// When and how large `state.json` was last written; a full save replaces it.
-fn state_file_version(path: &std::path::Path) -> (std::time::SystemTime, u64) {
-    let metadata = std::fs::metadata(path).unwrap();
-    (metadata.modified().unwrap(), metadata.len())
+    // Positive control: the real startup archive must register a full save.
+    // Its receipt may follow the command snapshot the UI already consumed.
+    let mut observed = saves.try_iter().collect::<Vec<_>>();
+    let deadline = Instant::now() + WAIT;
+    while sent.is_some()
+        && !observed
+            .iter()
+            .any(|save| save.operation == "tick" && save.full_saves > 0)
+    {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match saves.recv_timeout(remaining) {
+            Ok(save) => observed.push(save),
+            Err(_) => break,
+        }
+    }
+    observed.extend(saves.try_iter());
+
+    // Fold the journal and stop the owned coordinator before removing its files.
+    let handle = ui.handle.as_ref().unwrap();
+    let shutdown_id = u64::MAX;
+    let shutdown = handle.try_send(shutdown_id, BusCommand::Shutdown).is_ok();
+    let deadline = Instant::now() + WAIT;
+    let mut stopped = false;
+    while shutdown && Instant::now() < deadline {
+        if handle
+            .snapshot()
+            .is_some_and(|snapshot| snapshot.last_command_id == shutdown_id)
+        {
+            stopped = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    drop(ui);
+    if stopped {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    assert!(navigation.is_some(), "navigation never settled");
+    assert!(had_intent, "Enter did not queue its send intent");
+    sent.expect("Enter with no further input never sent the message");
+    assert!(
+        stopped,
+        "owned coordinator did not stop; evidence at {dir:?}"
+    );
+    assert_eq!(sent_texts, 1, "one Enter must send the exact draft once");
+    eprintln!("enter -> sent: {elapsed:?}; save receipts: {observed:?}");
+    assert!(
+        observed
+            .iter()
+            .any(|save| save.operation == "tick" && save.full_saves > 0),
+        "the startup archive did not exercise the save observer: {observed:?}"
+    );
+    let composer = observed
+        .iter()
+        .filter(|save| {
+            matches!(
+                save.operation,
+                "set_draft_text" | "submit" | "submit_queued"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(composer
+        .iter()
+        .any(|save| save.operation == "set_draft_text"));
+    assert_eq!(
+        composer
+            .iter()
+            .filter(|save| save.operation.starts_with("submit"))
+            .count(),
+        1
+    );
+    for save in composer {
+        assert!(
+            save.command_id.is_some(),
+            "composer receipt needs its command ID"
+        );
+        assert_eq!(
+            save.full_saves, 0,
+            "composer handler performed a full save: {save:?}"
+        );
+    }
 }

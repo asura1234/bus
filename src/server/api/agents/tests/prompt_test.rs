@@ -18,7 +18,7 @@ fn prompt_delay_only_scales_for_windows_codex() {
 
 #[tokio::test]
 async fn guarded_claude_prompt_clears_stranded_text_before_delivery() {
-    submission_tests::stranded_draft(AgentKind::Claude, true);
+    submission_tests::stranded_draft(AgentKind::Claude, true).await;
 }
 
 #[tokio::test]
@@ -32,8 +32,8 @@ async fn guarded_claude_prompt_types_into_an_empty_input_box() {
             &mut app,
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params),
         );
-        submission_tests::accept_paste(&app, AgentKind::Claude, "from bus", &mut writes);
-        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        submission_tests::accept_paste(&app, AgentKind::Claude, "from bus", &mut writes).await;
+        let response = response.recv_timeout(submission_tests::WAIT).unwrap();
         assert!(response.contains("agent_prompted"), "{input:?}: {response}");
     }
 }
@@ -70,11 +70,15 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
         expected_managed_name: "bus-r1-a2".into(),
     };
     let run = |app: &mut App, params: AgentPromptIfUnboundParams| {
+        let method = Method::AgentPromptIfUnbound(params);
+        if let Some(clock) = app.test_prompt_clock(&method) {
+            clock.pause();
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         assert!(app.handle_deferred_agent_api_request(
             Request {
                 id: "bootstrap".into(),
-                method: Method::AgentPromptIfUnbound(params)
+                method
             },
             tx
         ));
@@ -84,7 +88,7 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
         let mut wrong = params.clone();
         wrong.expected_managed_name = name.into();
         assert!(run(&mut app, wrong)
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(submission_tests::WAIT)
             .unwrap()
             .contains("agent_identity_changed"));
         assert!(rx.try_recv().is_err());
@@ -96,7 +100,7 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
             .unwrap()
             .set_detected_state(Some(AgentKind::Codex), state);
         assert!(run(&mut app, params.clone())
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(submission_tests::WAIT)
             .unwrap()
             .contains("agent_not_idle"));
         assert!(rx.try_recv().is_err());
@@ -128,20 +132,20 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
     let mut wrong = params.clone();
     wrong.expected_terminal_id = "different".into();
     assert!(run(&mut app, wrong)
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(submission_tests::WAIT)
         .unwrap()
         .contains("agent_identity_changed"));
     let mut wrong = params.clone();
     wrong.expected_pane_id = "different".into();
     assert!(run(&mut app, wrong)
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(submission_tests::WAIT)
         .unwrap()
         .contains("agent_identity_changed"));
     assert!(rx.try_recv().is_err());
     let response = run(&mut app, params.clone());
-    submission_tests::accept_paste(&app, AgentKind::Codex, "first room prompt", &mut rx);
+    submission_tests::accept_paste(&app, AgentKind::Codex, "first room prompt", &mut rx).await;
     assert!(response
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(submission_tests::WAIT)
         .unwrap()
         .contains("agent_prompted"));
     app.state
@@ -157,7 +161,7 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
             &[],
         );
     assert!(run(&mut app, params)
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(submission_tests::WAIT)
         .unwrap()
         .contains("agent_identity_changed"));
     assert!(rx.try_recv().is_err());
@@ -205,11 +209,15 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
         steer: false,
     };
     let run = |app: &mut App, params: AgentPromptIfIdleParams| {
+        let method = Method::AgentPromptIfIdle(params);
+        if let Some(clock) = app.test_prompt_clock(&method) {
+            clock.pause();
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         assert!(app.handle_deferred_agent_api_request(
             Request {
                 id: "guard".into(),
-                method: Method::AgentPromptIfIdle(params)
+                method
             },
             tx
         ));
@@ -218,7 +226,7 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
     let mut wrong = params.clone();
     wrong.expected_session_id = "other".into();
     let rejected = run(&mut app, wrong)
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(submission_tests::WAIT)
         .unwrap();
     assert!(rejected.contains("agent_identity_changed"), "{rejected}");
     assert!(rx.try_recv().is_err());
@@ -229,7 +237,7 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
             .unwrap()
             .set_detected_state(Some(AgentKind::Codex), state);
         let rejected = run(&mut app, params.clone())
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(submission_tests::WAIT)
             .unwrap();
         assert!(rejected.contains("agent_not_idle"), "{rejected}");
         assert!(rx.try_recv().is_err());
@@ -241,14 +249,14 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
         .set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     let response = run(&mut app, params);
     assert!(response.try_recv().is_err());
-    submission_tests::accept_paste(&app, AgentKind::Codex, "literal @x $HOME", &mut rx);
-    let result = response.recv_timeout(Duration::from_secs(2)).unwrap();
+    submission_tests::accept_paste(&app, AgentKind::Codex, "literal @x $HOME", &mut rx).await;
+    let result = response.recv_timeout(submission_tests::WAIT).unwrap();
     assert!(result.contains("agent_prompted"), "{result}");
 }
 
 #[tokio::test]
 async fn guarded_codex_prompt_clears_stranded_text_before_delivery() {
-    submission_tests::stranded_draft(AgentKind::Codex, true);
+    submission_tests::stranded_draft(AgentKind::Codex, true).await;
 }
 
 #[tokio::test]
@@ -279,7 +287,7 @@ async fn agent_prompt_sends_text_then_delays_enter() {
     );
     assert!(response_rx.try_recv().is_err());
     let response = response_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(submission_tests::WAIT)
         .expect("agent prompt responds after submission");
     let success: SuccessResponse = serde_json::from_str(&response).unwrap();
     let ResponseResult::AgentPrompted { agent, .. } = success.result else {
@@ -485,7 +493,7 @@ async fn guarded_cursor_background_multiline_quote_is_submitted_as_the_complete_
             steer: false,
         }),
     );
-    let paste = tokio::time::timeout(Duration::from_secs(2), writes.recv())
+    let paste = tokio::time::timeout(submission_tests::WAIT, writes.recv())
         .await
         .unwrap()
         .unwrap();
@@ -503,7 +511,7 @@ async fn guarded_cursor_background_multiline_quote_is_submitted_as_the_complete_
     let runtime = app.lookup_runtime_sender(0, pane_id).unwrap();
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
     runtime.test_process_pty_bytes(draft.as_bytes());
-    let enter = tokio::time::timeout(Duration::from_secs(3), writes.recv())
+    let enter = tokio::time::timeout(submission_tests::WAIT, writes.recv())
         .await
         .expect("matching rendered multiline draft must receive Enter")
         .expect("native writer must remain available");
@@ -515,7 +523,7 @@ async fn guarded_cursor_background_multiline_quote_is_submitted_as_the_complete_
 
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
     runtime.test_process_pty_bytes(empty.as_bytes());
-    let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+    let response = response.recv_timeout(submission_tests::WAIT).unwrap();
     assert!(response.contains("agent_prompted"), "{response}");
     assert!(
         writes.try_recv().is_err(),
