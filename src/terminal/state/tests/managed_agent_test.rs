@@ -161,6 +161,40 @@ fn cached_or_identity_only_session_does_not_confirm_managed_startup() {
 }
 
 #[test]
+fn codex_current_hook_review_keeps_managed_identity_while_waiting() {
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let screen = "Hooks need review\n3 hooks are new or changed.\n\
+        Hooks can run outside the sandbox after you trust them.\n\n\
+        › 1. Review hooks\n  2. Trust all and continue\n\
+          3. Continue without trusting (hooks won't run)\n\n\
+          enter confirm · esc skip\n";
+    let detection = crate::agents::detect_agent_with_launch_context(
+        Some(AgentKind::Codex),
+        screen,
+        "",
+        "",
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Blocked);
+    assert!(detection.visible_blocker);
+    let mut terminal = test_terminal();
+    let now = Instant::now();
+    terminal.begin_managed_agent(
+        "reviewing-hooks".into(),
+        AgentKind::Codex,
+        now,
+        Duration::from_secs(3),
+        Duration::from_secs(30),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), detection.state);
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(4), false);
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+    assert_eq!(terminal.agent_name.as_deref(), Some("reviewing-hooks"));
+    assert!(terminal.managed_agent_launch_pending());
+    assert!(!terminal.managed_agent_interactive_ready());
+}
+
+#[test]
 fn managed_launch_signal_tracks_blocked_active_timeout_and_exit() {
     use std::sync::{
         atomic::{AtomicBool, Ordering},
