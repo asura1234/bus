@@ -1,6 +1,293 @@
 //! Callback-binding regressions from the unbound-callback investigation; no live provider.
 use super::*;
 
+#[test]
+fn empty_stop_settles_without_sender_errors_or_orchestrator_notices() {
+    for provider in [Provider::Codex, Provider::ClaudeCode] {
+        for text in [None, Some(json!(null)), Some(json!(""))] {
+            let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+            let mut state = worker.state.clone();
+            let orch = state
+                .create_agent(
+                    state.master_room().unwrap().id,
+                    "orch",
+                    Provider::ClaudeCode,
+                    dir.clone(),
+                    None,
+                )
+                .unwrap();
+            state.bind_orchestrator(orch, room).unwrap();
+            let request = state
+                .submit_message_from(
+                    room,
+                    Draft {
+                        text: "Do not reply".into(),
+                        files: vec![],
+                        recipient_ids: [agent].into(),
+                    },
+                    Author::Agent(orch),
+                    io::now_ms(),
+                )
+                .unwrap()[0];
+            state.begin_submission(request, "launch", 0).unwrap();
+            let prompt = state.render_request_payload(request).unwrap();
+            worker.save(state).unwrap();
+            record(
+                &dir,
+                provider,
+                json!({"hook_event_name":"UserPromptSubmit",
+                "session_id":"session","turn_id":"turn","prompt_id":"turn","prompt":prompt}),
+            );
+            consume(&mut worker, agent, &dir);
+            let unread = worker.state.room(room).unwrap().unread_count;
+            let mut stop = json!({"hook_event_name":"Stop","session_id":"session",
+                "turn_id":"turn","prompt_id":"turn"});
+            if let Some(text) = text {
+                stop["last_assistant_message"] = text;
+            }
+            record(&dir, provider, stop);
+            consume(&mut worker, agent, &dir);
+            worker
+                .state
+                .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+                .unwrap();
+            let result = worker.state.request(request).unwrap();
+            assert_eq!(result.phase, RequestPhase::Completed);
+            assert_eq!(result.pending_final.as_ref().unwrap().text, "");
+            assert!(result.failure_reason.is_none());
+            assert!(worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .is_none());
+            assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+            assert_eq!(worker.state.room(room).unwrap().unread_count, unread);
+            worker
+                .state
+                .route_worker_replies(io::now_ms() + 10_000, &BTreeSet::new())
+                .unwrap();
+            assert!(
+                !worker.state.requests().any(|r| r.agent_id == orch),
+                "an intentional empty reply must not wake the orchestrator"
+            );
+            assert!(callbacks::records(&dir.join("callbacks/launch"))
+                .unwrap()
+                .is_empty());
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn empty_stop_preexisting_retained_record_recovers_after_restart_by_turn_id() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "Do not reply");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"UserPromptSubmit",
+        "session_id":"session","turn_id":"owned","prompt":"Do not reply"}),
+    );
+    consume(&mut worker, agent, &dir);
+    let spool = dir.join("callbacks/launch");
+    // Old Bus retained these bytes as event-*.json after rejecting a null Stop.
+    // Write the old envelope directly, without the current hook publisher.
+    let mut old = json!({"id":"abcd","sequence":2,"at_ms":io::now_ms(),
+        "manifest":{"agent_id":agent.0,"provider":"codex","launch_id":"launch"},
+        "value":{"hook_event_name":"Stop","session_id":"session","turn_id":"owned",
+            "transcript_path":"/tmp/retained.jsonl","last_assistant_message":null}});
+    std::fs::write(
+        spool.join("event-abcd.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    worker
+        .state
+        .set_agent_error(agent, Some("Hook missing last_assistant_message".into()))
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    consume(&mut worker, agent, &dir);
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .pending_final
+            .as_ref()
+            .unwrap()
+            .provider_turn_id
+            .as_deref(),
+        Some("owned")
+    );
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+    assert!(callbacks::records(&spool).unwrap().is_empty());
+    let next = queue(&mut worker, room, agent, "next task");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"UserPromptSubmit",
+        "session_id":"session","turn_id":"next","prompt":"next task"}),
+    );
+    consume(&mut worker, agent, &dir);
+    // Even a different callback ID for the old turn cannot complete newer work.
+    old["id"] = json!("dcba");
+    old["sequence"] = json!(3);
+    std::fs::write(
+        spool.join("event-dcba.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    consume(&mut worker, agent, &dir);
+    assert!(worker.state.request(next).unwrap().pending_final.is_none());
+    assert_eq!(
+        worker
+            .state
+            .request(next)
+            .unwrap()
+            .provider_turn_id
+            .as_deref(),
+        Some("next")
+    );
+    assert!(callbacks::records(&spool).unwrap().is_empty());
+    assert!(!matches!(
+        worker.state.request(next).unwrap().phase,
+        RequestPhase::Completed | RequestPhase::Abandoned
+    ));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn empty_stop_retained_abandoned_turn_is_consumed_after_restart_without_rebinding() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let old = queue(&mut worker, room, agent, "old task");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"UserPromptSubmit",
+        "session_id":"session","turn_id":"old","prompt":"old task"}),
+    );
+    consume(&mut worker, agent, &dir);
+    let at = io::now_ms();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, at)
+        .unwrap();
+    assert_eq!(
+        worker.state.settle_ended_request(
+            agent,
+            at + crate::messaging::model::TURN_SETTLE_MS,
+            |_| None
+        ),
+        Some(old)
+    );
+    assert_eq!(
+        worker.state.request(old).unwrap().failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+    let next = queue(&mut worker, room, agent, "new task");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"UserPromptSubmit",
+        "session_id":"session","turn_id":"new","prompt":"new task"}),
+    );
+    consume(&mut worker, agent, &dir);
+    let spool = dir.join("callbacks/launch");
+    let retained = json!({"id":"beef","sequence":3,"at_ms":at,
+        "manifest":{"agent_id":agent.0,"provider":"codex","launch_id":"launch"},
+        "value":{"hook_event_name":"Stop","session_id":"session","turn_id":"old",
+            "transcript_path":"/tmp/retained.jsonl","last_assistant_message":null}});
+    std::fs::write(
+        spool.join("event-beef.json"),
+        serde_json::to_vec(&retained).unwrap(),
+    )
+    .unwrap();
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    consume(&mut worker, agent, &dir);
+    let current = worker.state.request(next).unwrap();
+    assert_eq!(current.phase, RequestPhase::Active);
+    assert_eq!(current.provider_turn_id.as_deref(), Some("new"));
+    assert!(current.pending_final.is_none());
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+    assert!(callbacks::records(&spool).unwrap().is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn empty_stop_invalid_payload_is_logged_and_retained_once_across_polls_and_restart() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+        let invalid = json!({"hook_event_name":"Stop","session_id":"session","turn_id":"bad",
+            "last_assistant_message":42});
+        record(&dir, Provider::Codex, invalid.clone());
+        let spool = dir.join("callbacks/launch");
+        let (original, envelope) = callbacks::records(&spool).unwrap().pop().unwrap();
+        let bytes = std::fs::read(&original).unwrap();
+        for _ in 0..3 {
+            consume(&mut worker, agent, &dir);
+        }
+        drop(worker);
+        let mut worker = reopen_saved(&dir);
+        // A retry of exactly the same hook must not republish a rejected record.
+        record(&dir, Provider::Codex, invalid);
+        consume(&mut worker, agent, &dir);
+        let logs = capture.text();
+        assert_eq!(
+            logs.matches("reason=\"invalid_payload\"").count(),
+            1,
+            "{logs}"
+        );
+        assert_eq!(
+            logs.matches("event=\"bus.callback.observed\"").count(),
+            1,
+            "{logs}"
+        );
+        assert!(callbacks::records(&spool).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(spool.join(format!("rejected-{}.json", envelope.id))).unwrap(),
+            bytes
+        );
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_some());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
 fn master_fixture() -> (Worker, AgentId, RoomId, PathBuf) {
     let (mut worker, previous, work, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let mut state = worker.state.clone();

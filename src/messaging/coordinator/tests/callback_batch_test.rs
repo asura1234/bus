@@ -46,6 +46,42 @@ fn saved(dir: &Path) -> BusState {
 }
 
 #[test]
+fn empty_stop_invalid_payload_retention_waits_for_a_durable_agent_error() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut worker, agent, _, dir) = settled_worker();
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            json!({"hook_event_name":"Stop",
+            "session_id":"session","prompt_id":"bad","last_assistant_message":false}),
+        );
+        worker
+            .store
+            .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+        assert!(worker.tick().is_err());
+        assert_eq!(
+            spool_len(&dir),
+            1,
+            "a failed save must leave the event retryable"
+        );
+        assert!(!capture.text().contains("reason=\"invalid_payload\""));
+        let (events, _events) = mpsc::channel();
+        worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+        worker.tick().unwrap();
+        assert_eq!(spool_len(&dir), 0);
+        assert!(saved(&dir).agent(agent).unwrap().actionable_error.is_some());
+        worker.tick().unwrap();
+        assert_eq!(
+            capture.text().matches("reason=\"invalid_payload\"").count(),
+            1
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
+#[test]
 fn a_failed_callback_write_moves_the_revision_forward_and_applies_on_recovery() {
     let (mut worker, _, _, dir) = settled_worker();
     for turn in 0..3 {

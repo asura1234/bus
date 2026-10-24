@@ -3,7 +3,7 @@
 use super::statusline;
 use crate::agents::providers::{
     hook_json::{self, HookContext, HookContract},
-    spool::{field, Parsed},
+    spool::{field, optional_text, Parsed},
     ProviderKind,
 };
 use serde_json::Value;
@@ -73,7 +73,7 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
         "Stop" => Ok(Parsed::Final {
             session,
             turn,
-            text: field(value, "last_assistant_message")?,
+            text: optional_text(value, "last_assistant_message")?,
         }),
         "StopFailure" => Ok(Parsed::Failure {
             session,

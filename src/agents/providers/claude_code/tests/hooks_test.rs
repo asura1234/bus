@@ -28,6 +28,31 @@ fn missing_field(key: &str) -> String {
 }
 
 #[test]
+fn claude_empty_stop_keeps_the_turn_with_null_missing_or_empty_text() {
+    for text in [None, Some(Value::Null), Some(json!(""))] {
+        let mut value = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p"});
+        if let Some(text) = text {
+            value["last_assistant_message"] = text;
+        }
+        assert_eq!(
+            parse(&value).unwrap(),
+            Parsed::Final {
+                session: "s".into(),
+                turn: "p".into(),
+                text: String::new(),
+            }
+        );
+    }
+    for text in [json!(false), json!(7), json!([]), json!({})] {
+        assert!(parse(
+            &json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p",
+            "last_assistant_message":text})
+        )
+        .is_err());
+    }
+}
+
+#[test]
 fn claude_adapter_preserves_field_error_order_and_subagent_exclusion() {
     assert_eq!(
         parse(&json!({"agent_id":"child"})).unwrap_err(),

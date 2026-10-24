@@ -5,10 +5,12 @@ use super::{
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
     RequestId, RequestPhase, RuntimeStatus, StoragePause, Transport,
 };
+use crate::agents::providers::spool;
 use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
 
+mod callback_spool;
 mod control_reads;
 
 /// How often a tick moves settled history out of `state.json`.
@@ -84,6 +86,7 @@ struct SaveBatch {
     /// the write fails, as a failed immediate save leaves the state unchanged.
     before: Option<(BusState, u64)>,
     acknowledgements: Vec<(PathBuf, Vec<PathBuf>)>,
+    rejections: Vec<(AgentId, PathBuf, PathBuf)>,
 }
 
 impl Worker {
@@ -312,6 +315,10 @@ impl Worker {
         }
         for (dir, paths) in batch.acknowledgements {
             remove_spooled(&dir, &paths)?;
+        }
+        for (id, dir, path) in batch.rejections {
+            spool::retain_rejected(&dir, &path, spool::RoutingKey(id.0))
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }

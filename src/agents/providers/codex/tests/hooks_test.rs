@@ -12,6 +12,33 @@ fn hook(event: &str) -> Value {
 }
 
 #[test]
+fn codex_empty_stop_keeps_the_turn_with_null_missing_or_empty_text() {
+    for text in [None, Some(Value::Null), Some(json!(""))] {
+        let mut value = hook("Stop");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("last_assistant_message");
+        if let Some(text) = text {
+            value["last_assistant_message"] = text;
+        }
+        assert_eq!(
+            parse(&value).unwrap(),
+            Parsed::Final {
+                session: "s".into(),
+                turn: "t".into(),
+                text: String::new(),
+            }
+        );
+    }
+    for text in [json!(false), json!(7), json!([]), json!({})] {
+        let mut value = hook("Stop");
+        value["last_assistant_message"] = text;
+        assert!(parse(&value).is_err());
+    }
+}
+
+#[test]
 fn codex_hook_filter_runs_before_background_session_and_turn_decoding() {
     for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
         for transcript in [Value::Null, json!(""), json!(false), json!(7)] {

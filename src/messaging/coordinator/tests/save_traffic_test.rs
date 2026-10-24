@@ -49,6 +49,15 @@ fn spooled(dir: &Path) -> usize {
         .len()
 }
 
+fn rejected_record(dir: &Path) -> (PathBuf, Vec<u8>) {
+    let spool = dir.join("callbacks/launch");
+    let (path, record) = callbacks::records(&spool).unwrap().pop().unwrap();
+    (
+        spool.join(format!("rejected-{}.json", record.id)),
+        std::fs::read(path).unwrap(),
+    )
+}
+
 #[test]
 fn a_retained_invalid_callback_is_not_rewritten_every_tick() {
     let (mut worker, agent, _, dir, _) = idle_worker();
@@ -57,6 +66,7 @@ fn a_retained_invalid_callback_is_not_rewritten_every_tick() {
         Provider::ClaudeCode,
         json!({"hook_event_name":"NotARealHook","session_id":"session"}),
     );
+    let (retained, original) = rejected_record(&dir);
     worker.tick().unwrap();
     assert!(
         worker
@@ -67,7 +77,8 @@ fn a_retained_invalid_callback_is_not_rewritten_every_tick() {
             .is_some(),
         "an invalid callback is reported on its agent"
     );
-    assert_eq!(spooled(&dir), 1, "an invalid callback stays for inspection");
+    assert_eq!(spooled(&dir), 0, "invalid input leaves the active scan");
+    assert_eq!(std::fs::read(&retained).unwrap(), original);
     let writes = worker.store.writes();
     for _ in 0..5 {
         worker.tick().unwrap();
@@ -75,8 +86,9 @@ fn a_retained_invalid_callback_is_not_rewritten_every_tick() {
     assert_eq!(
         worker.store.writes(),
         writes,
-        "re-reading the same retained callback changes nothing and must not save"
+        "a retained callback must not be reprocessed or save the state again"
     );
+    assert_eq!(std::fs::read(retained).unwrap(), original);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -89,6 +101,7 @@ fn unchanged_retained_callbacks_do_not_fold_draft_journals_on_every_tick() {
         Provider::ClaudeCode,
         json!({"hook_event_name":"NotARealHook","session_id":"session"}),
     );
+    let (retained, original) = rejected_record(&dir);
     worker.tick().unwrap();
     let writes = worker.store.writes();
     let events = mpsc::channel().0;
@@ -113,9 +126,10 @@ fn unchanged_retained_callbacks_do_not_fold_draft_journals_on_every_tick() {
     assert_eq!(saved.room(room).unwrap().draft.text, "draft 4");
     assert_eq!(
         spooled(&dir),
-        1,
-        "invalid input remains available for inspection"
+        0,
+        "invalid input stays outside the active scan"
     );
+    assert_eq!(std::fs::read(retained).unwrap(), original);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

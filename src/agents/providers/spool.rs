@@ -19,7 +19,7 @@ pub(crate) use files::try_append_lock;
 
 #[path = "spool/parsed_event.rs"]
 mod parsed_event;
-pub(crate) use parsed_event::{field, Parsed};
+pub(crate) use parsed_event::{field, optional_text, Parsed};
 
 /// Maximum raw hook input; retain the existing two-MiB capture limit.
 pub(crate) const MAX_CALLBACK_BYTES: u64 = 2 * 1024 * 1024;
@@ -137,6 +137,26 @@ pub(crate) fn records(dir: &Path) -> io::Result<Vec<(PathBuf, Record)>> {
     read_records(dir, "event-")
 }
 
+/// Keep the original envelope for inspection outside the active event scan.
+/// The coordinator calls this only after its rejection state is durable.
+pub(crate) fn retain_rejected(dir: &Path, path: &Path, routing_key: RoutingKey) -> io::Result<()> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("event-"))
+        .ok_or_else(|| io::Error::other("Invalid Bus callback filename"))?;
+    std::fs::rename(path, dir.join(format!("rejected-{name}")))?;
+    crate::platform::sync_parent_directory(dir)?;
+    tracing::warn!(
+        event = "bus.callback.rejected",
+        reason = "invalid_payload",
+        agent_id = routing_key.0,
+        callback_id = name.trim_end_matches(".json"),
+        "Callback retained outside the active spool for inspection"
+    );
+    Ok(())
+}
+
 fn try_publish_pending(dir: &Path, own: Option<&Path>) -> io::Result<()> {
     let _lease = match try_append_lock(&dir.join("append.lock")) {
         Ok(lease) => lease,
@@ -190,7 +210,7 @@ fn publish_record(dir: &Path, staged: &Path, mut record: Record) -> io::Result<(
         return Err(io::Error::other("Invalid Bus callback id"));
     }
     let path = dir.join(format!("event-{}.json", record.id));
-    if path.exists() {
+    if path.exists() || dir.join(format!("rejected-{}.json", record.id)).exists() {
         tracing::debug!(event = "bus.callback.duplicate", callback_id = %record.id, "Callback already spooled");
     } else {
         record.sequence = read_counter(dir)?

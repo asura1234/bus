@@ -15,10 +15,27 @@ fn reply_capture_diagnostics_distinguish_empty_missing_and_ignored_callbacks() {
             .as_nanos()
     ));
     for (index, (text, transcript, expected, parsed)) in [
-        (serde_json::Value::Null, true, "null", "invalid"),
-        (serde_json::json!(""), true, "empty", "invalid"),
-        (serde_json::json!("PRIVATE_REPLY"), true, "text", "parsed"),
-        (serde_json::json!("PRIVATE_REPLY"), false, "text", "ignored"),
+        (None, true, "missing", "parsed"),
+        (Some(serde_json::Value::Null), true, "null", "parsed"),
+        (Some(serde_json::json!("")), true, "empty", "parsed"),
+        (
+            Some(serde_json::json!(true)),
+            true,
+            "invalid_type",
+            "invalid",
+        ),
+        (
+            Some(serde_json::json!("PRIVATE_REPLY")),
+            true,
+            "text",
+            "parsed",
+        ),
+        (
+            Some(serde_json::json!("PRIVATE_REPLY")),
+            false,
+            "text",
+            "ignored",
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -32,8 +49,11 @@ fn reply_capture_diagnostics_distinguish_empty_missing_and_ignored_callbacks() {
         .unwrap();
         let mut payload = serde_json::json!({
             "hook_event_name":"Stop", "session_id":"shape-session", "turn_id":"shape-turn",
-            "last_assistant_message":text, "prompt":"PRIVATE_PROMPT"
+            "prompt":"PRIVATE_PROMPT"
         });
+        if let Some(text) = text {
+            payload["last_assistant_message"] = text;
+        }
         if transcript {
             payload["transcript_path"] = serde_json::json!("/PRIVATE_PATH/transcript.jsonl");
         }

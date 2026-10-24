@@ -584,6 +584,8 @@ impl Worker {
     fn parse_observed_callback(
         &mut self,
         id: AgentId,
+        dir: &Path,
+        path: &Path,
         record: &callbacks::Record,
     ) -> Result<ControlFlow<CallbackFlow, Parsed>, String> {
         let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
@@ -616,16 +618,12 @@ impl Worker {
         let parsed = match callbacks::parse(agent.provider, &record.value) {
             Ok(parsed) => parsed,
             Err(message) => {
-                tracing::warn!(
-                    event = "bus.callback.rejected",
-                    reason = "invalid_payload",
-                    "Callback retained for inspection"
-                );
                 let mut state = self.state.clone();
                 state
                     .set_agent_error(id, Some(message))
                     .map_err(|e| e.to_string())?;
                 self.save_callback_state(state)?;
+                self.retain_rejected_spool(id, dir, path.to_path_buf())?;
                 return Ok(ControlFlow::Break(CallbackFlow::Next));
             }
         };
@@ -665,7 +663,7 @@ impl Worker {
             crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
             return Ok(CallbackFlow::Next);
         }
-        let parsed = match self.parse_observed_callback(id, record)? {
+        let parsed = match self.parse_observed_callback(id, dir, path, record)? {
             ControlFlow::Continue(parsed) => parsed,
             ControlFlow::Break(flow) => return Ok(flow),
         };
