@@ -5,7 +5,7 @@ use bytes::Bytes;
 use crate::protocol::api::schema::AgentStartParams;
 use crate::server::{app::App, workspaces::ids::TerminalTargetError};
 
-const DEFAULT_AGENT_START_TIMEOUT: Duration = crate::protocol::api::AGENT_START_TIMEOUT;
+pub(super) const DEFAULT_AGENT_START_TIMEOUT: Duration = crate::protocol::api::AGENT_START_TIMEOUT;
 pub(crate) const MAX_AGENT_START_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const AGENT_START_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
@@ -477,8 +477,10 @@ impl App {
             tab_id: pane.tab_id,
             pane_id: pane.pane_id,
             focused: pane.focused,
-            launch_pending: terminal.managed_agent_launch_pending(),
-            interactive_ready: terminal.managed_agent_interactive_ready(),
+            launch_pending: terminal.pending_agent_resume_plan.is_some()
+                || terminal.managed_agent_launch_pending(),
+            interactive_ready: terminal.pending_agent_resume_plan.is_none()
+                && terminal.managed_agent_interactive_ready(),
             native_ready: terminal.pending_agent_resume_plan.is_none()
                 && !terminal.managed_agent_launch_pending()
                 && terminal.effective_known_agent().is_some_and(|expected| {
