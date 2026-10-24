@@ -124,7 +124,7 @@ fn run_with_pause(
             if follow || command.wait_for_message {
                 reply_author = command.params["as"].as_str().map(str::to_owned);
             }
-            let sent = execute(command, &mut *send);
+            let sent = execute(command, &mut *send, &mut pause);
             if follow && sent.ok {
                 let selector = match &reply_author {
                     Some(author) => {

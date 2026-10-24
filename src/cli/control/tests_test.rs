@@ -903,6 +903,80 @@ fn send_async_emits_one_json_document() {
 }
 
 #[test]
+fn async_waiters_back_off_between_successful_pending_status_polls() {
+    for args in [
+        vec![
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ],
+        vec!["wait", "--message", "19", "--async"],
+    ] {
+        let mut polls = 0;
+        let mut pauses = Vec::new();
+        let mut request_ids = std::collections::BTreeSet::new();
+        let mut output = Vec::new();
+        let outcome = run_with_pause(
+            &args.into_iter().map(String::from).collect::<Vec<_>>(),
+            &mut output,
+            &mut |request: &Request, timeout| {
+                assert!(timeout.is_none(), "async waits have no deadline");
+                if request.method == "message.send" {
+                    return Ok(Response::success(&request.id, json!({"message_id":19})));
+                }
+                assert_eq!(request.method, "message.status");
+                assert!(
+                    request_ids.insert(request.id.clone()),
+                    "every poll is fresh"
+                );
+                polls += 1;
+                assert!(polls <= 9, "completion must stop polling immediately");
+                Ok(Response::success(
+                    &request.id,
+                    status(vec![recipient(
+                        1,
+                        if polls == 9 { "replied" } else { "delivered" },
+                        polls == 9,
+                    )]),
+                ))
+            },
+            |pause| pauses.push(pause),
+        );
+        assert!(outcome.is_ok());
+        assert_eq!(polls, 9);
+        assert_eq!(
+            pauses,
+            [200, 400, 800, 1600, 2000, 2000, 2000, 2000].map(Duration::from_millis),
+        );
+    }
+}
+
+#[test]
+fn bounded_wait_keeps_its_short_poll_interval() {
+    let mut polls = 0;
+    let mut pauses = Vec::new();
+    let outcome = run_with_pause(
+        &["wait", "--message", "19", "--timeout", "60"].map(String::from),
+        &mut Vec::new(),
+        &mut |request: &Request, timeout| {
+            assert!(timeout.is_some());
+            polls += 1;
+            assert!(polls <= 7, "completion must stop polling immediately");
+            Ok(Response::success(
+                &request.id,
+                status(vec![recipient(
+                    1,
+                    if polls == 7 { "replied" } else { "delivered" },
+                    polls == 7,
+                )]),
+            ))
+        },
+        |pause| pauses.push(pause),
+    );
+    assert!(outcome.is_ok());
+    assert_eq!(polls, 7);
+    assert_eq!(pauses, [Duration::from_millis(200); 6]);
+}
+
+#[test]
 fn send_async_returns_the_message_id_and_receipt_once_the_message_completed() {
     let (outcome, lines, timeouts, pauses) = run_async(
         &[],
@@ -923,12 +997,15 @@ fn send_async_returns_the_message_id_and_receipt_once_the_message_completed() {
     assert_eq!(lines[0]["result"]["requests"][0]["turn_ended"], true);
     assert!(lines[0]["id"].is_string());
     assert!(timeouts.iter().all(Option::is_none), "no per-read deadline");
-    assert_eq!(pauses, [Duration::from_millis(200); 2]);
+    assert_eq!(
+        pauses,
+        [Duration::from_millis(200), Duration::from_millis(400)]
+    );
 }
 
 #[test]
 fn send_async_has_no_time_limit_and_keeps_waiting_while_blocked() {
-    // About 33 minutes of polling, far past wait's 600-second cap.
+    // Hours of polling, far past wait's 600-second cap.
     let polls = 10_000;
     let statuses = (0..polls)
         .map(|_| status(vec![recipient(1, "delivered", false)]))
