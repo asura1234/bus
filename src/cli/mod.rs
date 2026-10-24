@@ -91,6 +91,10 @@ fn apply_run_environment(dev: bool, yolo: bool) {
 }
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
+    if let Some(text) = help::subcommand_help(args) {
+        help::write_stdout_line(format_args!("{text}"));
+        return Ok(());
+    }
     let invocation = parse_invocation(args).map_err(io::Error::other)?;
     let control_args = match &invocation.action {
         Action::Control(args) => Some(args.clone()),

@@ -1,10 +1,15 @@
 //! Client commands for an already running Bus instance.
 mod feishu;
+mod help;
+pub(crate) use help::{command_tree, help_for, overview};
+#[cfg(test)]
+#[path = "control/tests/help_test.rs"]
+mod help_tests;
 mod interrupt;
 mod parse;
 mod wait;
 #[cfg(test)]
-use super::help::{AGENT_HELP, DEV_HELP};
+use super::help::{agent_help, DEV_HELP};
 use parse::{parse, ParsedCommand};
 use wait::{execute, follow_message};
 
@@ -110,6 +115,11 @@ fn run_with_pause(
     send: &mut impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
     mut pause: impl FnMut(Duration),
 ) -> io::Result<()> {
+    if let Some(text) = help_for(parse::cli(), args) {
+        output.write_all(text.as_bytes())?;
+        output.flush()?;
+        return Ok(());
+    }
     let request_id = next_request_id();
     let mut reply_author = None;
     let response = match parse(args, &request_id) {
