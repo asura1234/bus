@@ -5,6 +5,7 @@ struct FailedLaunchNative {
     state_path: PathBuf,
     close_failures: usize,
     screen_terminal: Option<String>,
+    shell_wait_code: Option<&'static str>,
 }
 
 impl Transport for FailedLaunchNative {
@@ -22,6 +23,9 @@ impl Transport for FailedLaunchNative {
                 })).unwrap(),
             }),
             Method::AgentStart(params) => {
+                if let Some(code) = self.shell_wait_code {
+                    return Err(TransportError { code: Some(code.into()), message: SHELL_PROMPT_WAIT_ERROR.into(), definitely_rejected: true });
+                }
                 let mut info = native_info("pane", "codex", "unused");
                 info.name = Some(params.name);
                 info.agent_session = None;
@@ -44,7 +48,7 @@ impl Transport for FailedLaunchNative {
                 read: serde_json::from_value(json!({
                     "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1",
                     "source":"recent", "format":"text", "revision":1,
-                    "text":"zsh: command not found: bus-provider-does-not-exist\nscratch% ",
+                    "text":if self.shell_wait_code.is_some() { "STARTUP QUESTION [Y/n] " } else { "zsh: command not found: bus-provider-does-not-exist\nscratch% " },
                     "truncated":false, "returned_lines":2
                 })).unwrap(),
             }),
@@ -569,4 +573,121 @@ fn startup_failure_keeps_queued_work_past_the_queued_stall_window() {
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+const SHELL_PROMPT_WAIT_ERROR: &str = "Shell waiting for input or prompt confirmation after 30 seconds. Last visible line: STARTUP QUESTION [Y/n]. Answer any shell startup question, then resume this agent.";
+
+#[test]
+fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
+    for code in ["agent_shell_waiting", "agent_shell_starting"] {
+        let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let mut state = worker.state.clone();
+        state.delete_agent(previous, 0).unwrap();
+        worker.save(state).unwrap();
+        worker.transport = Box::new(FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            shell_wait_code: Some(code),
+            ..Default::default()
+        });
+        let error = worker
+            .add_agent(
+                AddAgent {
+                    room,
+                    name: "shell-blocked".into(),
+                    provider: Provider::Codex,
+                    cwd: dir.to_string_lossy().into_owned(),
+                    extra_args: String::new(),
+                    consent_project_hooks: true,
+                },
+                None,
+                &mpsc::channel().0,
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("STARTUP QUESTION"),
+            "native evidence reached the worker: {error}"
+        );
+        let agent = worker
+            .state
+            .agents()
+            .find(|a| a.name == "shell-blocked")
+            .unwrap()
+            .id;
+        let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        let submitted = io::now_ms();
+        let mut state = worker.state.clone();
+        let request = state
+            .submit_message_with(
+                room,
+                Draft {
+                    text: "retained pending work".into(),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                submitted,
+                true,
+            )
+            .unwrap()[0];
+        worker.save(state).unwrap();
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+            .unwrap();
+        assert_eq!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .as_deref(),
+            Some(SHELL_PROMPT_WAIT_ERROR),
+            "watchdog must preserve the actionable shell-wait error"
+        );
+        worker
+            .expire_queued_requests(submitted + 10 * 60_000)
+            .unwrap();
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert_eq!(
+            worker.state.agent(agent).unwrap().runtime_identity,
+            identity
+        );
+        assert!(!worker.state.agent(agent).unwrap().deletion_pending);
+        assert_eq!(worker.state.notices(room).count(), 0);
+        drop(worker);
+        let mut worker = Worker::open(
+            dir.clone(),
+            Box::new(FailedLaunchNative {
+                state_path: dir.join("state.json"),
+                shell_wait_code: Some(code),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+            .unwrap();
+        assert_eq!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .as_deref(),
+            Some(SHELL_PROMPT_WAIT_ERROR)
+        );
+        assert_eq!(
+            worker.state.agent(agent).unwrap().runtime_identity,
+            identity
+        );
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert_eq!(worker.state.notices(room).count(), 0);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

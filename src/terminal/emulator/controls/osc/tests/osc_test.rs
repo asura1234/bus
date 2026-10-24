@@ -773,3 +773,17 @@ fn shell_prompt_mark_ignores_text_other_marks_and_control_string_payloads() {
     tracker.observe(b"\x1b]133;A\x07");
     assert_eq!(tracker.shell_prompt_generation, 1);
 }
+
+#[test]
+fn shell_prompt_launch_token_survives_chunks_and_ignores_unrelated_marks() {
+    let mark = b"\x1b]133;A;bus=abc123\x07";
+    for split in 0..mark.len() {
+        let mut tracker = AgentOscStateTracker::default();
+        tracker.observe(&mark[..split]);
+        assert_eq!(tracker.launch_prompt_generation, None);
+        tracker.observe(&mark[split..]);
+        assert_eq!(tracker.launch_prompt_generation, Some(("abc123".into(), 1)));
+        tracker.observe(b"\x1b]133;A\x07\x1b]133;A;bus=not-a-token\x07");
+        assert_eq!(tracker.launch_prompt_generation, Some(("abc123".into(), 1)));
+    }
+}

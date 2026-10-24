@@ -467,7 +467,7 @@ impl Worker {
                 };
                 self.report_adopted_session(id, input.provider, pane, session)
             }
-            other => self.agent_error(id,format!("Agent start outcome requires inspection of its owned terminal; startup is watched and will not be retried. {other:?}")),
+            other => self.record_failed_agent_start(id, other),
         }
     }
 

@@ -186,6 +186,9 @@ impl TerminalRuntime {
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        if !bytes.is_empty() {
+            self.invalidate_shell_prompt();
+        }
         self.io.try_send_bytes(bytes)
     }
 
@@ -196,6 +199,7 @@ impl TerminalRuntime {
         delay: std::time::Duration,
         deadline: Option<std::time::Instant>,
     ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        self.invalidate_shell_prompt();
         self.io
             .queue_user_input_submission(text, enter, delay, deadline)
     }
@@ -212,7 +216,7 @@ impl TerminalRuntime {
         let Ok(bytes) = crate::terminal::vt::encode_focus(event) else {
             return false;
         };
-        if let Err(err) = self.try_send_bytes(Bytes::from(bytes)) {
+        if let Err(err) = self.io.try_send_bytes(Bytes::from(bytes)) {
             warn!(err = %err, ?event, "failed to forward pane focus event");
         }
         true

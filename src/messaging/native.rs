@@ -67,7 +67,7 @@ impl BusTransport {
             let response = send(&self.client, &request, timeout)
                 .and_then(crate::protocol::api::client::parse_response_value);
             // Both shell-start rejections precede PTY input. Integrated shells
-            // get the startup watchdog budget to settle their output; ordinary
+            // get the startup watchdog budget to confirm their prompt; ordinary
             // busy shells keep their five-second window. These occur before
             // managed launch mutation. Never retry a timeout, input failure,
             // readiness failure after launch, or any prompt submission.
@@ -115,7 +115,7 @@ fn classify_error(error: ApiClientError) -> TransportError {
     // withdrew a paste it never submitted. Every other failure, including an IO
     // error after partial send, leaves submission ownership intact.
     let definitely_rejected = matches!(&error, ApiClientError::ErrorResponse(response) if matches!(response.error.code.as_str(),
-        "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request")
+        "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request" | "agent_shell_starting" | "agent_shell_waiting")
         || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN);
     TransportError {
         code: match &error {
@@ -167,6 +167,7 @@ mod tests {
         for code in [
             "agent_pane_busy",
             "agent_shell_starting",
+            "agent_shell_waiting",
             "timeout",
             "agent_start_input_failed",
             "agent_not_ready",

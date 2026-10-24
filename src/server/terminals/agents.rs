@@ -294,10 +294,7 @@ impl App {
                 code: "agent_pane_busy".into(),
                 message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then retry the launch."),
             },
-            AgentStartError::ShellStarting(target) => crate::protocol::api::schema::ErrorBody {
-                code: "agent_shell_starting".into(),
-                message: format!("agent target pane {target} is still settling its shell startup output. Wait briefly or answer any shell startup question in the terminal, then retry the launch."),
-            },
+            AgentStartError::ShellStarting(target) => self.shell_wait_error_body(&target),
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
                 message: format!("agent target pane {target} has no live terminal"),
@@ -325,6 +322,37 @@ impl App {
                         .join("; ")
                 ),
             },
+        }
+    }
+
+    fn shell_wait_error_body(&self, target: &str) -> crate::protocol::api::schema::ErrorBody {
+        let runtime = self
+            .parse_current_public_pane_id(target)
+            .and_then(|(workspace, pane)| self.state.workspaces.get(workspace)?.terminal_id(pane))
+            .and_then(|id| self.terminal_runtimes.get(id));
+        let expired = runtime.is_some_and(|runtime| runtime.shell_prompt_wait_expired());
+        let last_line = runtime
+            .map(|runtime| {
+                runtime
+                    .visible_text()
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .map(|line| {
+                        line.chars()
+                            .filter(|c| !c.is_control() || *c == '\t')
+                            .take(300)
+                            .collect::<String>()
+                    })
+                    .unwrap_or_else(|| "(no visible output)".into())
+            })
+            .unwrap_or_else(|| "(pane unavailable)".into());
+        crate::protocol::api::schema::ErrorBody {
+            code: if expired { "agent_shell_waiting" } else { "agent_shell_starting" }.into(),
+            message: format!(
+                "Shell waiting for input or prompt confirmation{}. Last visible line: {last_line}. Answer any shell startup question, then resume this agent.",
+                if expired { " after 30 seconds" } else { "" },
+            ),
         }
     }
 

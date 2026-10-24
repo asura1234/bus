@@ -591,9 +591,7 @@ impl TerminalRuntime {
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
         let mut integration = super::shell_integration::ShellIntegration::install_for_agent_launch(
-            &mut cmd,
-            &pane_shell(shell_config.default_shell),
-            launch_env,
+            &mut cmd, launch_env,
         )?;
         let mut runtime = Self::spawn_command_builder(
             pane_id,
@@ -615,7 +613,7 @@ impl TerminalRuntime {
             AgentDetection::Enabled,
         )?;
         if let Some(integration) = integration.as_mut() {
-            integration.start_wait();
+            integration.start_wait(runtime.child_pid());
         }
         runtime.shell_integration = integration;
         Ok(runtime)

@@ -351,8 +351,13 @@ fn process_argv(pid: u32) -> Option<Vec<String>> {
     (!parts.is_empty()).then_some(parts)
 }
 
-/// Get the current working directory of a process.
-/// Uses /proc/<pid>/cwd symlink.
+/// The executable backing the running process, not its mutable argv/name.
+pub(crate) fn process_image(pid: u32) -> Option<PathBuf> {
+    let image = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    image.is_absolute().then_some(image)
+}
+
+/// Get the current working directory of a process through /proc/<pid>/cwd.
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     if pid == 0 {
         return None;

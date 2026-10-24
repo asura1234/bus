@@ -49,6 +49,19 @@ async fn wait_for_text(runtime: &TerminalRuntime, text: &str) {
     }
 }
 
+async fn wait_for_prompt(runtime: &TerminalRuntime) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while runtime.waiting_for_shell_prompt() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no prompt evidence: {}; {}",
+            runtime.visible_text(),
+            runtime.shell_prompt_diagnostics()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn fixture_shell(
     shell: &str,
     mode: crate::utils::config::ShellModeConfig,
@@ -115,6 +128,7 @@ async fn launch_prompt_bash_waits_through_builtin_read_and_preserves_user_prompt
             assert!(available_shell_name(&runtime).is_none());
             runtime.try_send_bytes(Bytes::from_static(b"n")).unwrap();
             wait_for_text(&runtime, "READY>").await;
+            wait_for_prompt(&runtime).await;
             assert!(
                 !runtime.waiting_for_shell_prompt(),
                 "{mode:?}, {prompt}: {}",
@@ -161,6 +175,7 @@ async fn launch_prompt_zsh_login_honors_zdotdir_and_waits_for_zlogin() {
     assert!(available_shell_name(&runtime).is_none());
     runtime.try_send_bytes(Bytes::from_static(b"n")).unwrap();
     wait_for_text(&runtime, "READY>").await;
+    wait_for_prompt(&runtime).await;
     assert!(!runtime.waiting_for_shell_prompt());
     let text = runtime.visible_text();
     for expected in ["USER_ENV", "USER_PROFILE", "USER_RC", "USER_HOOK"] {
@@ -252,6 +267,7 @@ async fn launch_prompt_builtin_read_cannot_swallow_provider_command() {
     assert!(!runtime.visible_text().contains("odex"));
     runtime.try_send_bytes(Bytes::from_static(b"n")).unwrap();
     wait_for_text(runtime, "READY>").await;
+    wait_for_prompt(runtime).await;
     assert!(available_shell_name(runtime).is_some());
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
@@ -287,7 +303,7 @@ async fn launch_prompt_zsh_integration_keeps_the_users_history_file() {
 }
 
 #[tokio::test]
-async fn launch_prompt_rc_that_execs_another_shell_still_becomes_available() {
+async fn launch_prompt_rc_exec_without_integration_fails_closed() {
     for command in ["exec /bin/sh\n", "exec -a sh /bin/bash --norc -i\n"] {
         let dir = crate::utils::test_temp::unique_temp_path("bus-bash-exec-sh");
         std::fs::create_dir_all(&dir).unwrap();
@@ -297,19 +313,11 @@ async fn launch_prompt_rc_that_execs_another_shell_still_becomes_available() {
             crate::utils::config::ShellModeConfig::NonLogin,
             &dir,
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(12);
-        while available_shell_name(&runtime).is_none() {
-            assert!(
-            std::time::Instant::now() < deadline,
-            "a bashrc that execs /bin/sh never reaches an available shell: waiting_for_shell_prompt={}, job={:?}",
-            runtime.waiting_for_shell_prompt(), crate::agents::foreground_job(runtime.child_pid().unwrap())
-        );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        drop(runtime);
+        assert_unmarked_launch_is_rejected(runtime).await;
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
 #[tokio::test]
 async fn launch_prompt_ordinary_user_pane_has_no_injected_hook() {
     if !std::path::Path::new("/bin/zsh").exists() {
@@ -327,7 +335,7 @@ async fn launch_prompt_ordinary_user_pane_has_no_injected_hook() {
     wait_for_text(&runtime, "READY>").await;
     runtime
         .try_send_bytes(Bytes::from_static(
-            b"print -r -- HAS_BUS_HOOK=$+functions[__bus_prompt_ready]\r",
+            b"print -r -- HAS_BUS_HOOK=$+functions[__bus_install_line_init]\r",
         ))
         .unwrap();
     wait_for_text(&runtime, "HAS_BUS_HOOK=0").await;
@@ -399,6 +407,7 @@ async fn launch_prompt_seven_second_builtin_rc_waits_without_typing() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(started.elapsed() >= Duration::from_secs(7));
+    wait_for_prompt(&runtime).await;
     assert!(available_shell_name(&runtime).is_some());
     drop(runtime);
     std::fs::remove_dir_all(dir).unwrap();
@@ -454,19 +463,19 @@ async fn launch_prompt_bash_login_limitation_is_confined_to_agent_panes() {
     }
 }
 
-fn install_fallback_provider(dir: &std::path::Path) {
+fn install_fake_provider(dir: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir.join("bin")).unwrap();
     let file = dir.join("bin/codex");
     std::fs::write(
         &file,
-        "#!/bin/sh\nprintf 'FALLBACK_PROVIDER_RUNNING\\n'\nread -r unused\n",
+        "#!/bin/sh\nprintf 'FIXTURE_PROVIDER_RUNNING\\n'\nread -r unused\n",
     )
     .unwrap();
     std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-fn app_with_fallback_runtime(runtime: TerminalRuntime) -> (App, String) {
+fn app_with_prompt_runtime(runtime: TerminalRuntime) -> (App, String) {
     let mut app = app_with_agent();
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let terminal_id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
@@ -475,13 +484,13 @@ fn app_with_fallback_runtime(runtime: TerminalRuntime) -> (App, String) {
     (app, target)
 }
 
-fn fallback_runtime(app: &App) -> &TerminalRuntime {
+fn prompt_runtime(app: &App) -> &TerminalRuntime {
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let terminal_id = app.state.workspaces[0].terminal_id(pane).unwrap();
     app.terminal_runtimes.get(terminal_id).unwrap()
 }
 
-fn try_fallback_launch(
+fn try_prompt_launch(
     app: &mut App,
     target: &str,
 ) -> Result<(), crate::protocol::api::schema::ErrorBody> {
@@ -500,39 +509,23 @@ fn try_fallback_launch(
     .map_err(|error| app.agent_start_error_body(error))
 }
 
-async fn assert_fallback_launch(runtime: TerminalRuntime, started: std::time::Instant) {
-    let (mut app, target) = app_with_fallback_runtime(runtime);
-    loop {
-        // Check before AgentStart records its prompt-generation baseline.
-        assert!(
-            !fallback_runtime(&app).launch_returned_to_prompt(),
-            "this case must launch without a prompt mark"
-        );
-        match try_fallback_launch(&mut app, &target) {
-            Ok(()) => break,
-            Err(error) => {
-                assert!(
-                    matches!(
-                        error.code.as_str(),
-                        "agent_shell_starting" | "agent_pane_busy"
-                    ),
-                    "{error:?}"
-                );
-                assert!(
-                    started.elapsed() < Duration::from_secs(12),
-                    "fallback never launched: {error:?}"
-                );
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        }
+async fn assert_unmarked_launch_is_rejected(runtime: TerminalRuntime) {
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_secs(9) {
+        let error = try_prompt_launch(&mut app, &target)
+            .expect_err("an exec handoff without fresh prompt evidence must not launch");
+        assert_eq!(error.code, "agent_shell_starting", "{error:?}");
+        assert!(!prompt_runtime(&app)
+            .visible_text()
+            .contains("FIXTURE_PROVIDER_RUNNING"));
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(started.elapsed() >= Duration::from_secs(8));
-    eprintln!("fallback accepted input after {:?}", started.elapsed());
-    wait_for_text(fallback_runtime(&app), "FALLBACK_PROVIDER_RUNNING").await;
+    assert!(available_shell_name(prompt_runtime(&app)).is_none());
 }
 
 #[tokio::test]
-async fn launch_prompt_fallback_after_same_name_shell_handoff() {
+async fn launch_prompt_same_name_handoff_requires_fresh_replacement_evidence() {
     // Adopted reviewer probe, plus the same handoff from a login profile.
     for mode in [
         crate::utils::config::ShellModeConfig::NonLogin,
@@ -540,28 +533,27 @@ async fn launch_prompt_fallback_after_same_name_shell_handoff() {
     ] {
         let dir = crate::utils::test_temp::unique_temp_path("bus-bash-exec-bash");
         std::fs::create_dir_all(&dir).unwrap();
-        install_fallback_provider(&dir);
+        install_fake_provider(&dir);
         let (file, command) = if mode == crate::utils::config::ShellModeConfig::Login {
             (".bash_profile", "/bin/bash -l -i")
         } else {
             (".bashrc", "/bin/bash --norc -i")
         };
         std::fs::write(dir.join(file), format!("PATH=\"$HOME/bin:/usr/bin:/bin\"\nif [ -z \"$BUS_TEST_HANDOFF\" ]; then export BUS_TEST_HANDOFF=1; exec {command}; fi\nPS1='READY> '\n")).unwrap();
-        let started = std::time::Instant::now();
         let runtime = fixture_shell("/bin/bash", mode, &dir);
-        assert_fallback_launch(runtime, started).await;
+        assert_unmarked_launch_is_rejected(runtime).await;
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
 #[tokio::test]
-async fn launch_prompt_fallback_after_zsh_precmd_assignment() {
+async fn launch_prompt_precmd_assignment_launches_on_the_zle_mark() {
     if !std::path::Path::new("/bin/zsh").exists() {
         return;
     }
     let dir = crate::utils::test_temp::unique_temp_path("bus-zsh-precmd-assign");
     std::fs::create_dir_all(&dir).unwrap();
-    install_fallback_provider(&dir);
+    install_fake_provider(&dir);
     std::fs::write(
         dir.join(".zshrc"),
         "function my_title() { :; }\nprecmd_functions=(my_title)\nPS1='READY> '\n",
@@ -574,20 +566,29 @@ async fn launch_prompt_fallback_after_zsh_precmd_assignment() {
         &dir,
     );
     wait_for_text(&runtime, "READY>").await;
-    assert_fallback_launch(runtime, started).await;
+    wait_for_prompt(&runtime).await;
+    assert!(
+        runtime.launch_returned_to_prompt(),
+        "precmd reset must still emit a real mark"
+    );
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    try_prompt_launch(&mut app, &target).expect("ZLE readiness permits launch");
+    wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
+    assert!(started.elapsed() < Duration::from_secs(4));
+    drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
-async fn launch_prompt_fallback_waits_for_output_to_settle() {
+async fn launch_prompt_noisy_rc_waits_for_the_actual_prompt() {
     if !std::path::Path::new("/bin/zsh").exists() {
         return;
     }
     let dir = crate::utils::test_temp::unique_temp_path("bus-zsh-noisy-startup");
     std::fs::create_dir_all(&dir).unwrap();
-    install_fallback_provider(&dir);
+    install_fake_provider(&dir);
     // Builtins only: the legacy foreground-process gate already says available.
-    // Resetting precmd_functions removes the mark, and output remains active past 8 s.
+    // No prompt mark or quiet period exists during the builtin-only rc.
     std::fs::write(dir.join(".zshrc"), "precmd_functions=()\nfor i in {1..200}; do printf 'RC_PROGRESS %s\\n' $i; read -r -k 1 -t 0.05 unused; done\nPS1='READY> '\n").unwrap();
     let started = std::time::Instant::now();
     let runtime = fixture_shell(
@@ -596,53 +597,41 @@ async fn launch_prompt_fallback_waits_for_output_to_settle() {
         &dir,
     );
     wait_for_text(&runtime, "RC_PROGRESS").await;
-    let (mut app, target) = app_with_fallback_runtime(runtime);
-    while !fallback_runtime(&app)
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    while !prompt_runtime(&app)
         .recent_unwrapped_text(100)
         .contains("READY>")
     {
         assert!(started.elapsed() < Duration::from_secs(15));
-        let error = try_fallback_launch(&mut app, &target)
+        let error = try_prompt_launch(&mut app, &target)
             .expect_err("Bus typed while startup output was still active");
         assert_eq!(error.code, "agent_shell_starting");
-        assert!(!fallback_runtime(&app)
+        assert!(!prompt_runtime(&app)
             .recent_unwrapped_text(100)
             .contains("codex"));
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(started.elapsed() >= Duration::from_secs(10));
-    let quiet_started = std::time::Instant::now();
-    loop {
-        assert!(
-            !fallback_runtime(&app).launch_returned_to_prompt(),
-            "the rc must not emit a prompt mark"
-        );
-        match try_fallback_launch(&mut app, &target) {
-            Ok(()) => break,
-            Err(error) => {
-                assert!(
-                    quiet_started.elapsed() < Duration::from_secs(3),
-                    "{error:?}"
-                );
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        }
-    }
-    assert!(quiet_started.elapsed() >= Duration::from_millis(400));
-    wait_for_text(fallback_runtime(&app), "FALLBACK_PROVIDER_RUNNING").await;
+    wait_for_prompt(prompt_runtime(&app)).await;
+    assert!(
+        prompt_runtime(&app).launch_returned_to_prompt(),
+        "only real prompt evidence permits launch"
+    );
+    try_prompt_launch(&mut app, &target).expect("the completed noisy rc reaches its real prompt");
+    wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
-async fn launch_prompt_mark_is_a_fast_path_without_waiting_for_the_fallback() {
+async fn launch_prompt_real_mark_launches_without_an_elapsed_gate() {
     for shell in ["/bin/bash", "/bin/zsh"] {
         if !std::path::Path::new(shell).exists() {
             continue;
         }
         let dir = crate::utils::test_temp::unique_temp_path("bus-mark-fast-path");
         std::fs::create_dir_all(&dir).unwrap();
-        install_fallback_provider(&dir);
+        install_fake_provider(&dir);
         let rc = if shell.ends_with("bash") {
             ".bashrc"
         } else {
@@ -652,20 +641,305 @@ async fn launch_prompt_mark_is_a_fast_path_without_waiting_for_the_fallback() {
         let started = std::time::Instant::now();
         let runtime = fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
         wait_for_text(&runtime, "READY>").await;
+        wait_for_prompt(&runtime).await;
         assert!(
             runtime.launch_returned_to_prompt(),
             "fixture must emit the mark"
         );
-        let (mut app, target) = app_with_fallback_runtime(runtime);
-        try_fallback_launch(&mut app, &target)
-            .expect("the prompt mark must bypass fallback and quiet waits");
-        wait_for_text(fallback_runtime(&app), "FALLBACK_PROVIDER_RUNNING").await;
+        let (mut app, target) = app_with_prompt_runtime(runtime);
+        try_prompt_launch(&mut app, &target)
+            .expect("real prompt evidence permits immediate launch");
+        wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
         assert!(started.elapsed() < Duration::from_secs(4));
         eprintln!(
             "marked {shell} accepted input and ran the provider after {:?}",
             started.elapsed()
         );
         drop(app);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn launch_prompt_unanswered_startup_question_is_not_typed_into_after_the_fallback_window() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-unanswered-startup-question");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fake_provider(&dir);
+    std::fs::write(
+        dir.join(".zshrc"),
+        "print -n 'STARTUP QUESTION [Y/n] '; read -r -k 1 answer; print; PS1='READY> '\n",
+    )
+    .unwrap();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_text(&runtime, "STARTUP QUESTION").await;
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    // Adopt the R3 probe's delayed repeated calls: one call alone starts the old
+    // quiet clock and misses the swallowed-keystroke bug.
+    tokio::time::sleep(Duration::from_secs(9)).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        let error = try_prompt_launch(&mut app, &target)
+            .expect_err("Bus typed the provider command into the unanswered startup question");
+        assert!(
+            !prompt_runtime(&app).visible_text().contains("codex"),
+            "launch bytes reached the question: {}",
+            prompt_runtime(&app).visible_text()
+        );
+        if error.code == "agent_shell_waiting" {
+            assert!(
+                error.message.contains("STARTUP QUESTION [Y/n]"),
+                "{error:?}"
+            );
+            assert!(error.message.contains("30 seconds"), "{error:?}");
+            assert!(error.message.contains("resume"), "{error:?}");
+            break;
+        }
+        assert_eq!(error.code, "agent_shell_starting", "{error:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no actionable deadline error: {error:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    prompt_runtime(&app)
+        .try_send_bytes(Bytes::from_static(b"n"))
+        .unwrap();
+    wait_for_text(prompt_runtime(&app), "READY>").await;
+    wait_for_prompt(prompt_runtime(&app)).await;
+    try_prompt_launch(&mut app, &target).expect("answering the question must allow one launch");
+    wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
+    assert!(!prompt_runtime(&app).visible_text().contains("odex:"));
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_zle_survives_precmd_reset_without_an_elapsed_fallback() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-zle-precmd-reset");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".zshrc"), "precmd_functions=()\nPS1='READY> '\n").unwrap();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_text(&runtime, "READY>").await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while runtime.waiting_for_shell_prompt() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !runtime.waiting_for_shell_prompt(),
+        "the primary ZLE prompt must emit real readiness"
+    );
+    assert!(
+        runtime.launch_returned_to_prompt(),
+        "this must be actual prompt evidence"
+    );
+    drop(runtime);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_unrelated_osc_does_not_authorize_a_startup_question() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-unrelated-prompt-mark");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".zshrc"), "printf '\\033]133;A\\007\\033]133;A;bus=deadbeef\\007'; print -n 'UNRELATED QUESTION '; read -r -k 1 answer; print; PS1='READY> '\n").unwrap();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_text(&runtime, "UNRELATED QUESTION").await;
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    let error = try_prompt_launch(&mut app, &target)
+        .expect_err("unrelated OSC is not our shell's readiness");
+    assert_eq!(error.code, "agent_shell_starting");
+    assert!(!prompt_runtime(&app).visible_text().contains("codex"));
+    prompt_runtime(&app)
+        .try_send_bytes(Bytes::from_static(b"n"))
+        .unwrap();
+    wait_for_prompt(prompt_runtime(&app)).await;
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_input_invalidates_evidence_before_same_or_changed_image_exec() {
+    for shell in ["/bin/bash", "/bin/zsh"] {
+        if !std::path::Path::new(shell).exists() {
+            continue;
+        }
+        let dir = crate::utils::test_temp::unique_temp_path("bus-prompt-then-exec");
+        std::fs::create_dir_all(&dir).unwrap();
+        let rc = if shell.ends_with("zsh") {
+            ".zshrc"
+        } else {
+            ".bashrc"
+        };
+        std::fs::write(dir.join(rc), "export PS1='READY> '\n").unwrap();
+        let runtime = fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
+        wait_for_prompt(&runtime).await;
+        let pid = runtime.child_pid().unwrap();
+        runtime
+            .try_send_bytes(Bytes::from_static(
+                b"PS1='REPLACEMENT_\\s> ' exec /bin/bash --noprofile --norc -i\r",
+            ))
+            .unwrap();
+        wait_for_text(&runtime, "REPLACEMENT_bash>").await;
+        assert_eq!(runtime.child_pid(), Some(pid), "exec keeps the shell PID");
+        let (mut app, target) = app_with_prompt_runtime(runtime);
+        let error = try_prompt_launch(&mut app, &target)
+            .expect_err("pre-exec prompt evidence must not be reused");
+        assert_eq!(error.code, "agent_shell_starting");
+        assert!(!prompt_runtime(&app).visible_text().contains("codex"));
+        drop(app);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn launch_prompt_startup_vared_and_late_user_widget_keep_real_readiness() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-zle-vared-widget");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".zshrc"), "precmd_functions=()\nanswer=''; vared -p 'VARED QUESTION> ' answer\nmy_init() { print -r -- USER_WIDGET:$WIDGET:$KEYMAP; return 7; }\nzle -N zle-line-init my_init\nPS1='READY> '\n").unwrap();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_text(&runtime, "VARED QUESTION>").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        runtime.waiting_for_shell_prompt(),
+        "vared is not the primary prompt"
+    );
+    assert!(!runtime.launch_returned_to_prompt());
+    runtime.try_send_bytes(Bytes::from_static(b"n\r")).unwrap();
+    wait_for_prompt(&runtime).await;
+    let text = runtime.visible_text();
+    assert!(text.contains("USER_WIDGET:zle-line-init:"), "{text}");
+    assert_eq!(
+        text.matches("USER_WIDGET:").count(),
+        1,
+        "user init must run exactly once: {text}"
+    );
+    drop(runtime);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_zle_preserves_user_status_and_widget_context() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-zle-user-status");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".zshrc"), "my_init() { local rc=$?; print -r -- USER_WIDGET_STATUS:$rc:$WIDGET; return 7; }\nzle -N zle-line-init my_init\nPS1='READY_STATUS=%?> '\nfalse\n").unwrap();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    let text = runtime.visible_text();
+    assert!(text.contains("READY_STATUS=1>"), "{text}");
+    assert!(
+        text.contains("USER_WIDGET_STATUS:1:zle-line-init"),
+        "{text}"
+    );
+    runtime
+        .try_send_bytes(Bytes::from_static(b"false\r"))
+        .unwrap();
+    wait_for_prompt(&runtime).await;
+    let text = runtime.visible_text();
+    assert_eq!(
+        text.matches("USER_WIDGET_STATUS:1:zle-line-init").count(),
+        2,
+        "{text}"
+    );
+    drop(runtime);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_automatic_image_handoff_rejects_the_old_prompt_without_input() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let dir = crate::utils::test_temp::unique_temp_path("bus-automatic-shell-exec");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fake_provider(&dir);
+    std::fs::write(
+        dir.join(".zshrc"),
+        "TRAPUSR1() { export PS1='SIGNAL_REPLACEMENT_\\s> '; exec /bin/bash --noprofile --norc -i; }\nPS1='READY> '\n",
+    )
+    .unwrap();
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    let pid = runtime.child_pid().unwrap();
+    let old_image = crate::platform::process_image(pid).expect("known initial image");
+    // An external signal changes the image without any pane input invalidation.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1) }, 0);
+    wait_for_text(&runtime, "SIGNAL_REPLACEMENT_bash>").await;
+    assert_eq!(runtime.child_pid(), Some(pid));
+    assert_ne!(crate::platform::process_image(pid), Some(old_image));
+    assert!(
+        runtime.launch_returned_to_prompt(),
+        "old mark is retained until the identity check"
+    );
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    let error = try_prompt_launch(&mut app, &target)
+        .expect_err("replacement cannot reuse the old image's mark");
+    assert_eq!(error.code, "agent_shell_starting");
+    assert!(!prompt_runtime(&app).visible_text().contains("codex"));
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn launch_prompt_relative_shell_uses_the_panes_cwd_for_image_proof() {
+    for shell in ["bash", "zsh"] {
+        let program = std::path::Path::new("/bin").join(shell);
+        if !program.exists() {
+            continue;
+        }
+        let dir = crate::utils::test_temp::unique_temp_path("bus-relative-shell-image");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        // Use the real shell through a symlink: a copied system binary can be
+        // killed by macOS before this pane-cwd resolution assertion runs.
+        std::os::unix::fs::symlink(program, dir.join("bin").join(shell)).unwrap();
+        let rc = if shell == "zsh" { ".zshrc" } else { ".bashrc" };
+        std::fs::write(dir.join(rc), "PS1='PATH_READY> '\n").unwrap();
+        let runtime = fixture_shell(
+            &format!("./bin/{shell}"),
+            crate::utils::config::ShellModeConfig::NonLogin,
+            &dir,
+        );
+        wait_for_prompt(&runtime).await;
+        assert!(runtime.launch_returned_to_prompt());
+        assert!(available_shell_name(&runtime).is_some());
+        drop(runtime);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

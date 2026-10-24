@@ -30,6 +30,19 @@ pub(crate) use crate::platform::unix::{
 
 const PROC_PGRP_ONLY: u32 = 2;
 
+/// The executable backing the running process, not its mutable argv/name.
+pub(crate) fn process_image(pid: u32) -> Option<PathBuf> {
+    let pid = i32::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    let mut buffer = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let length =
+        unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    if length <= 0 {
+        return None;
+    }
+    let end = buffer.iter().position(|byte| *byte == 0)?;
+    (end > 0).then(|| PathBuf::from(OsStr::from_bytes(&buffer[..end])))
+}
+
 const SERVER_NOFILE_LIMIT_TARGET: libc::rlim_t = 8192;
 
 pub fn raise_server_nofile_limit() {

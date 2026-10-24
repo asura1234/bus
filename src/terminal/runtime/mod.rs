@@ -179,20 +179,54 @@ pub enum WheelRouting {
 mod tests;
 
 impl TerminalRuntime {
+    #[cfg(test)]
+    pub(crate) fn shell_prompt_diagnostics(&self) -> String {
+        format!(
+            "integration={:?} current_image={:?} exited={:?} generation={}",
+            self.shell_integration,
+            self.child_pid().and_then(crate::platform::process_image),
+            self.child_wait_completed
+                .as_ref()
+                .map(|done| done.load(std::sync::atomic::Ordering::Acquire)),
+            self.shell_prompt_generation()
+        )
+    }
+
     pub(crate) fn waiting_for_shell_prompt(&self) -> bool {
-        self.terminal.shell_prompt_generation() == 0
-            && self.shell_integration.as_ref().is_some_and(|integration| {
-                integration.waiting_for_quiet_fallback(self.content_seq())
-            })
+        self.shell_integration.as_ref().is_some_and(|integration| {
+            integration.waiting_for_prompt(self.child_pid(), self.shell_prompt_generation())
+        })
+    }
+
+    pub(crate) fn shell_prompt_wait_expired(&self) -> bool {
+        self.shell_integration
+            .as_ref()
+            .is_some_and(|integration| integration.wait_expired())
+    }
+
+    fn shell_prompt_generation(&self) -> u64 {
+        self.shell_integration.as_ref().map_or_else(
+            || self.terminal.shell_prompt_generation(),
+            |integration| {
+                self.terminal
+                    .launch_shell_prompt_generation(integration.token())
+            },
+        )
+    }
+
+    fn invalidate_shell_prompt(&self) {
+        if let Some(integration) = &self.shell_integration {
+            integration.invalidate_prompt(self.shell_prompt_generation());
+        }
     }
 
     pub(crate) fn mark_agent_launch(&self) {
         self.launch_prompt_generation
-            .set(self.terminal.shell_prompt_generation());
+            .set(self.shell_prompt_generation());
     }
 
     pub(crate) fn launch_returned_to_prompt(&self) -> bool {
-        self.terminal.shell_prompt_generation() > self.launch_prompt_generation.get()
+        self.shell_prompt_generation() > self.launch_prompt_generation.get()
     }
 
     pub fn apply_host_terminal_theme(&self, theme: crate::utils::theme::color::TerminalTheme) {

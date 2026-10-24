@@ -34,6 +34,45 @@ pub fn process_instance(pid: u32) -> Option<ProcessInstance> {
         .map(|birth| ProcessInstance { pid, birth })
 }
 
+/// Resolve the executable image using a pane's own PATH and working directory.
+#[cfg(unix)]
+pub(crate) fn resolve_executable_image(
+    program: &std::path::Path,
+    search_path: Option<&std::ffi::OsStr>,
+    cwd: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let candidates = if program.is_absolute() || program.components().count() > 1 {
+        vec![cwd.join(program)]
+    } else {
+        std::env::split_paths(search_path?)
+            .map(|directory| cwd.join(directory).join(program))
+            .collect()
+    };
+    candidates.into_iter().find_map(|candidate| {
+        let path = std::ffi::CString::new(candidate.as_os_str().as_bytes()).ok()?;
+        if candidate.is_file() && unsafe { libc::access(path.as_ptr(), libc::X_OK) } == 0 {
+            candidate.canonicalize().ok()
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(not(unix))]
+pub(crate) fn resolve_executable_image(
+    _program: &std::path::Path,
+    _search_path: Option<&std::ffi::OsStr>,
+    _cwd: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn process_image(_pid: u32) -> Option<std::path::PathBuf> {
+    None
+}
+
 /// `pid` and its ancestors, nearest first. The walk stops at an unreadable process,
 /// and at a parent born after its child (the parent pid was reused).
 pub fn process_ancestry(pid: u32) -> Vec<ProcessInstance> {
@@ -422,6 +461,7 @@ mod tests {
     use super::*;
 
     include!("tests/signals_test.rs");
+    include!("tests/executable_image_test.rs");
 
     #[test]
     fn pane_shell_process_names_reject_exec_replacement_programs() {
