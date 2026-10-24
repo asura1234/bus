@@ -172,3 +172,67 @@ fn cursor_previous_question_does_not_block_current_prompt_or_working_turn() {
         assert!(!result.visible_blocker, "{screen}");
     }
 }
+
+#[test]
+fn cursor_managed_startup_requires_a_complete_empty_composer_footer() {
+    let loaded = bundled_loaded_manifest(
+        AgentKind::Cursor,
+        bundled_manifest(AgentKind::Cursor).unwrap(),
+    );
+    let current =
+        " → Plan, search, build anything\n\n  Grok 4.7 256K High  Run Everything\n  /workspace\n";
+    let legacy = include_str!("../../../server/api/agents/tests/fixtures/cursor_empty.txt");
+    for screen in [
+        current,
+        legacy,
+        &current.replace("Plan, search, build anything", "Add a follow-up"),
+    ] {
+        let input = DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        };
+        let detection = evaluate_loaded_manifest(input, &loaded, true);
+        assert_eq!(detection.state, AgentState::Idle, "{screen}");
+        assert!(detection.visible_idle, "{screen}");
+        assert!(!evaluate_loaded_manifest(input, &loaded, false).visible_idle);
+    }
+    for screen in [
+        " → Plan, search, build anything\n".to_owned(),
+        current.replace("Plan, search, build anything", "my unsubmitted draft"),
+        current.replace("  /workspace\n", ""),
+        current.replace("  Grok 4.7 256K High  Run Everything\n", ""),
+        format!("{current}Loading conversation...\n"),
+    ] {
+        let detection = evaluate_loaded_manifest(
+            DetectionInput {
+                screen: &screen,
+                osc_title: "",
+                osc_progress: "",
+            },
+            &loaded,
+            true,
+        );
+        assert_eq!(detection.state, AgentState::Unknown, "{screen}");
+        assert!(!detection.visible_idle, "{screen}");
+    }
+    for (screen, expected) in [
+        (format!("{current} ctrl+c to stop\n"), AgentState::Working),
+        (
+            format!("{current}{CURSOR_QUESTION_CONTROLS}"),
+            AgentState::Blocked,
+        ),
+    ] {
+        let detection = evaluate_loaded_manifest(
+            DetectionInput {
+                screen: &screen,
+                osc_title: "",
+                osc_progress: "",
+            },
+            &loaded,
+            true,
+        );
+        assert_eq!(detection.state, expected, "{screen}");
+        assert!(!detection.visible_idle, "{screen}");
+    }
+}

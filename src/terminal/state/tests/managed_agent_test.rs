@@ -266,3 +266,88 @@ fn managed_launch_signal_tracks_blocked_active_timeout_and_exit() {
         "an already-active restore is not a pending launch"
     );
 }
+
+#[test]
+fn bus_adopted_session_report_does_not_confirm_managed_startup() {
+    use crate::agents::resume::catalog::AgentSessionRef;
+
+    for (kind, label) in [
+        (AgentKind::Codex, "codex"),
+        (AgentKind::Claude, "claude"),
+        (AgentKind::Cursor, "cursor"),
+    ] {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.begin_managed_agent(
+            "adopted".into(),
+            kind,
+            now,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+        // What the coordinator's report_adopted_session sends right after
+        // AgentStarted on recovery or resume: no seq, no reporter process.
+        terminal
+            .set_agent_session_ref_for_session_start(
+                format!("herdr:{label}"),
+                label.into(),
+                AgentSessionRef::id("saved-session"),
+                None,
+                Some("resume".into()),
+                &[],
+            )
+            .unwrap();
+        assert!(
+            terminal.managed_agent_launch_pending(),
+            "{label}: a Bus-synthesized cached-session report is not provider readiness"
+        );
+        assert!(!terminal.managed_agent_interactive_ready(), "{label}");
+    }
+}
+
+#[test]
+fn resumed_cursor_confirms_readiness_only_after_its_composer_appears() {
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let mut terminal = test_terminal();
+    let now = Instant::now();
+    terminal.begin_managed_agent(
+        "resumed-cursor".into(),
+        AgentKind::Cursor,
+        now,
+        Duration::from_secs(3),
+        Duration::from_secs(30),
+    );
+    terminal
+        .set_agent_session_ref_for_session_start(
+            "herdr:cursor".into(),
+            "cursor".into(),
+            crate::agents::resume::catalog::AgentSessionRef::id("saved-session"),
+            None,
+            Some("resume".into()),
+            &[],
+        )
+        .unwrap();
+    assert!(terminal.managed_agent_launch_pending());
+    let screen = " → Add a follow-up\n\n  Grok 4.7 256K High  Run Everything\n  /workspace\n";
+    let detection = crate::agents::detect_agent_with_launch_context(
+        Some(AgentKind::Cursor),
+        screen,
+        "",
+        "",
+        terminal.managed_agent_launch_pending(),
+    );
+    assert!(detection.visible_idle);
+    terminal.set_detected_state(Some(AgentKind::Cursor), detection.state);
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(4), false);
+    assert!(terminal.managed_agent_interactive_ready());
+    assert!(!terminal.managed_agent_launch_pending());
+    assert_eq!(
+        terminal
+            .persisted_agent_session
+            .as_ref()
+            .unwrap()
+            .session_ref
+            .value,
+        "saved-session"
+    );
+}

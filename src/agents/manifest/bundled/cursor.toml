@@ -1,8 +1,19 @@
 id = "cursor"
-version = "2026.09.13.1"
-min_engine_version = 1
-updated_at = "2026-09-13T06:42:45Z"
+version = "2026.10.25.1"
+min_engine_version = 3
+updated_at = "2026-10-24T17:05:51Z"
 aliases = ["cursor-agent"]
+
+# Cursor --resume emits no SessionStart. Require its empty composer and
+# complete model/workspace footer; working and blocker rules still win.
+[[rules]]
+id = "startup_prompt_idle"
+managed_launch_only = true
+state = "idle"
+priority = 80
+region = "bottom_non_empty_lines(4)"
+visible_idle = true
+regex = ['(?m)^[ \t]*[>→][ \t]*(?:Plan, search, build anything|Ask anything|Add a follow-up(?: — /plan to review and build)?)?[ \t]*\r?\n(?:[ \t]*▀+[ \t]*\r?\n)?[ \t\r\n]*[^\r\n]*\S[^\r\n]*\r?\n[ \t]*(?:/|~/)[^\r\n]+\s*\z']
 
 # Cursor Agent 2026.09.10: the native question chooser has boxed checkbox
 # options and a navigation footer. Both must be live at the screen bottom;

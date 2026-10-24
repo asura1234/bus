@@ -104,9 +104,10 @@ impl TerminalState {
             agent: agent_label,
             session_ref,
         };
-        // A fresh accepted provider callback proves startup independently of
-        // screen fallback. Merely restoring a cached session must not do so.
-        if Self::session_start_source_is_recognized(session_start_source.as_deref())
+        // Provider callbacks carry a sequence; Bus's adopted-session report
+        // does not. Restoring saved identity must not prove fresh readiness.
+        if seq.is_some()
+            && Self::session_start_source_is_recognized(session_start_source.as_deref())
             && crate::agents::resume::catalog::is_official_agent_source(
                 &persisted_session.source,
                 &persisted_session.agent,
