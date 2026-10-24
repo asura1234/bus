@@ -16,6 +16,7 @@ fn blocked_behind_other_room(
         .create_agent(work, "feishu-pull", Provider::Codex, f.dir.clone(), None)
         .unwrap();
     f.worker.save(state).unwrap();
+    f.bind_dialog_pane(codex);
     if !master_turn {
         f.room = work;
     }

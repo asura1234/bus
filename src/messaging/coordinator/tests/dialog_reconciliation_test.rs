@@ -27,6 +27,7 @@ fn queued_worker_notice() -> (Fixture, AgentId, RequestId, RequestId) {
         .create_agent(work, "blocked-worker", Provider::Codex, f.dir.clone(), None)
         .unwrap();
     f.worker.save(state).unwrap();
+    f.bind_dialog_pane(worker);
     f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
     f.consume();
     let lead = running(&mut f, "original task", "original-turn");
@@ -122,9 +123,9 @@ fn an_escalated_uncertain_notice_is_not_reposted_after_state_reload() {
     reloaded
         .expire_stalled_queued_requests(deadline + 60_000)
         .unwrap();
-    reloaded
-        .escalate_unconfirmed_dialog_notices(deadline + 60_000)
-        .unwrap();
+    f.worker.save(reloaded).unwrap();
+    f.expire_after_reconciliation(deadline + 60_000);
+    let reloaded = f.worker.store.load().unwrap().unwrap();
     assert_eq!(
         reloaded.agent(worker).unwrap().dialog_notice_to,
         Some(DialogNoticeTo::Developer)

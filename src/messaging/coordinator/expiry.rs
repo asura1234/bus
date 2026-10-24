@@ -29,9 +29,23 @@ impl Worker {
         state
             .fail_unconfirmed_submissions(now_ms)
             .map_err(|e| e.to_string())?;
-        state
-            .escalate_unconfirmed_dialog_notices(now_ms)
-            .map_err(|e| e.to_string())?;
+        for (worker, notice) in state.dialog_notice_fallback_candidates(now_ms) {
+            let Ok((_, _, terminal, pane, session)) = self.dialog_identity(worker) else {
+                continue;
+            };
+            let Ok(current) = self.native_dialog(&pane, &terminal, session.as_deref(), false)
+            else {
+                continue;
+            };
+            // The notification marker is debounced history, not proof of a
+            // still-open screen. Preserve that history on close or redraw;
+            // ordinary polling owns resolution and its original recipient.
+            if current.dialog.is_some() || current.pending_question {
+                state
+                    .redirect_dialog_notice(notice, "dialog_notice_submission_unconfirmed", now_ms)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         state.retain_worker_outcomes(now_ms);
         if state != self.state {
             self.save(state)?;

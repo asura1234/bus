@@ -206,14 +206,13 @@ impl BusState {
         Ok(expired)
     }
 
-    /// Run only after fresh dialog observations and durable callbacks. Request
-    /// closure, including group settlement and interrupt, is not a receipt.
-    pub(crate) fn escalate_unconfirmed_dialog_notices(
-        &mut self,
+    /// Due episodes need a current native liveness check before escalation.
+    /// Request closure, including group settlement, is not a delivery receipt.
+    pub(crate) fn dialog_notice_fallback_candidates(
+        &self,
         now_ms: u64,
-    ) -> Result<(), ModelError> {
-        let undelivered: Vec<_> = self
-            .agents
+    ) -> Vec<(super::AgentId, RequestId)> {
+        self.agents
             .values()
             .filter_map(|worker| {
                 let Some(DialogNoticeTo::Orchestrator(id)) = worker.dialog_notice_to else {
@@ -230,19 +229,14 @@ impl BusState {
                 (!request.trusted_start_bound
                     && self.dialog_notice_worker(request.id).is_some()
                     && now_ms.saturating_sub(since_ms) >= QUEUED_STALL_MS)
-                    .then_some(id)
+                    .then_some((worker.id, id))
             })
-            .collect();
-        // Escalation does not replay an unknown write or change its group.
-        for id in undelivered {
-            self.redirect_dialog_notice(id, "dialog_notice_submission_unconfirmed", now_ms)?;
-        }
-        Ok(())
+            .collect()
     }
 
     /// An undelivered or unconfirmed blocked notice must reach the developer;
     /// an unknown native write may already have reached the orchestrator.
-    fn redirect_dialog_notice(
+    pub(crate) fn redirect_dialog_notice(
         &mut self,
         request: RequestId,
         reason: &str,

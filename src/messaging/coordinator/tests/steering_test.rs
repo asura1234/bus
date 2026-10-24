@@ -57,10 +57,25 @@ impl Transport for Native {
                 }))
                 .unwrap(),
             },
+            Method::AgentDialogObserve(params) => open_native_question(&params.target),
             _ => ResponseResult::Ok {},
         };
         self.0.lock().unwrap().push(method);
         Ok(result)
+    }
+}
+
+/// A coherent collapsed question in the blocked worker's owned pane.
+fn open_native_question(pane: &str) -> ResponseResult {
+    ResponseResult::AgentDialog {
+        observation: schema::AgentDialogObservation {
+            terminal_id: "terminal".into(),
+            pane_id: pane.into(),
+            session_id: None,
+            content_revision: 1,
+            pending_question: true,
+            dialog: None,
+        },
     }
 }
 
@@ -75,6 +90,22 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn bind_dialog_pane(&mut self, worker: AgentId) {
+        let mut state = self.worker.state.clone();
+        state
+            .set_agent_runtime_identity(
+                worker,
+                AgentRuntimeIdentity {
+                    launch_id: Some("worker-launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("worker-pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        self.worker.save(state).unwrap();
+    }
+
     /// Mirror tick's boundary: queued cleanup, durable callbacks, then expiry.
     fn expire_after_reconciliation(&mut self, now_ms: u64) {
         self.worker.expire_queued_requests(now_ms).unwrap();
@@ -1078,6 +1109,7 @@ fn orchestrator_with_blocked_worker_notice() -> (Fixture, AgentId, RequestId, Re
         .create_agent(work, "feishu-pull", Provider::Codex, f.dir.clone(), None)
         .unwrap();
     f.worker.save(state).unwrap();
+    f.bind_dialog_pane(codex);
     f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
     f.consume();
     let lead = running(&mut f, "keep working", "turn-1");
@@ -1099,8 +1131,11 @@ fn an_uncertain_steered_dialog_notice_reaches_the_developer_even_if_its_turn_set
     use crate::messaging::model::{DialogNoticeTo, QUEUED_STALL_MS};
     struct UncertainNative;
     impl Transport for UncertainNative {
-        fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
-            Ok(ResponseResult::Ok {})
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            Ok(match method {
+                Method::AgentDialogObserve(params) => open_native_question(&params.target),
+                _ => ResponseResult::Ok {},
+            })
         }
     }
     let (mut f, codex, lead, notice) = orchestrator_with_blocked_worker_notice();
