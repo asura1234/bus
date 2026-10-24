@@ -242,6 +242,52 @@ fn empty_stop_retained_abandoned_turn_is_consumed_after_restart_without_rebindin
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn empty_stop_invalid_payload_is_logged_and_retained_once_across_polls_and_restart() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+        let invalid = json!({"hook_event_name":"Stop","session_id":"session","turn_id":"bad",
+            "last_assistant_message":42});
+        record(&dir, Provider::Codex, invalid.clone());
+        let spool = dir.join("callbacks/launch");
+        let (original, envelope) = callbacks::records(&spool).unwrap().pop().unwrap();
+        let bytes = std::fs::read(&original).unwrap();
+        for _ in 0..3 {
+            consume(&mut worker, agent, &dir);
+        }
+        drop(worker);
+        let mut worker = reopen_saved(&dir);
+        // A retry of exactly the same hook must not republish a rejected record.
+        record(&dir, Provider::Codex, invalid);
+        consume(&mut worker, agent, &dir);
+        let logs = capture.text();
+        assert_eq!(
+            logs.matches("reason=\"invalid_payload\"").count(),
+            1,
+            "{logs}"
+        );
+        assert_eq!(
+            logs.matches("event=\"bus.callback.observed\"").count(),
+            1,
+            "{logs}"
+        );
+        assert!(callbacks::records(&spool).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(spool.join(format!("rejected-{}.json", envelope.id))).unwrap(),
+            bytes
+        );
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_some());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
 fn master_fixture() -> (Worker, AgentId, RoomId, PathBuf) {
     let (mut worker, previous, work, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let mut state = worker.state.clone();

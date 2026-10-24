@@ -5,6 +5,7 @@ use super::{
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
     RequestId, RequestPhase, RuntimeStatus, StoragePause, Transport,
 };
+use crate::agents::providers::spool;
 use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
@@ -82,6 +83,7 @@ struct SaveBatch {
     /// the write fails, as a failed immediate save leaves the state unchanged.
     before: Option<(BusState, u64)>,
     acknowledgements: Vec<(PathBuf, Vec<PathBuf>)>,
+    rejections: Vec<(AgentId, PathBuf, PathBuf)>,
 }
 
 impl Worker {
@@ -291,6 +293,20 @@ impl Worker {
         remove_spooled(dir, &paths)
     }
 
+    /// Invalid envelopes leave the active scan only once the agent error is saved.
+    pub(super) fn retain_rejected_spool(
+        &mut self,
+        id: AgentId,
+        dir: &Path,
+        path: PathBuf,
+    ) -> Result<(), String> {
+        if let Some(batch) = self.batch.as_mut() {
+            batch.rejections.push((id, dir.to_path_buf(), path));
+            return Ok(());
+        }
+        spool::retain_rejected(dir, &path, spool::RoutingKey(id.0)).map_err(|e| e.to_string())
+    }
+
     /// Writes the batch's changes once, then deletes the spool files they
     /// consumed. When the write fails, the state returns to where the batch
     /// began and every spool file stays, so nothing is acknowledged unsaved.
@@ -308,6 +324,10 @@ impl Worker {
         }
         for (dir, paths) in batch.acknowledgements {
             remove_spooled(&dir, &paths)?;
+        }
+        for (id, dir, path) in batch.rejections {
+            spool::retain_rejected(&dir, &path, spool::RoutingKey(id.0))
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
