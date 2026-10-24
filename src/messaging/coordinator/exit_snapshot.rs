@@ -134,6 +134,13 @@ impl Worker {
                     "Exited provider's terminal was not closed");
             }
             snapshot.terminal_closed = Some(matches!(closed, Some(Ok(()))));
+            if snapshot.terminal_closed == Some(true) {
+                let mut identity = agent.runtime_identity.clone();
+                identity.pane_id = None;
+                state
+                    .set_agent_runtime_identity(agent.id, identity)
+                    .map_err(|e| e.to_string())?;
+            }
             tracing::info!(event = "bus.agent.exit_terminal", agent_id = agent.id.0,
                 terminal_id = %snapshot.terminal_id, closed = snapshot.terminal_closed,
                 "Handled the exited provider's terminal");

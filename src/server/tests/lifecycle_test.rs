@@ -265,7 +265,7 @@ async fn rejected_post_restart_prompt_does_not_reset_native_resume_deadline() {
                 respond_to,
             });
         let reply: serde_json::Value = serde_json::from_str(&response.recv().unwrap()).unwrap();
-        assert_eq!(reply["error"]["code"], "agent_not_found");
+        assert_eq!(reply["error"]["code"], "agent_not_ready");
         assert!(changed, "the rejected prompt still requests a repaint");
         server.handle_scheduled_tasks_headless(now + offset, changed);
         assert_eq!(
@@ -321,8 +321,12 @@ async fn post_render_native_resume_progresses_during_repaints_with_or_without_th
         let (mut server, terminal_id) = restored_native_server_for_restart();
         let saved = server.app.agent_info_for_target("worker").unwrap();
         assert!(
-            saved.interactive_ready,
-            "managed active metadata was restored"
+            saved.launch_pending,
+            "the saved provider still needs to resume"
+        );
+        assert!(
+            !saved.interactive_ready,
+            "saved metadata is not readiness evidence"
         );
         assert!(
             !saved.native_ready,

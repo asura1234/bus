@@ -9,6 +9,44 @@ pub(super) const STARTUP_TIMEOUT_MS: u64 =
     crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
 const SCREEN_LINES: u32 = 6;
 
+/// Native PTY restore relaunches providers without going through AgentStart.
+/// Watch those launches too, including a CLI that exits before detection.
+pub(super) fn watch_restored_startups(state: &mut super::BusState) -> Result<(), String> {
+    use crate::agents::resume::catalog::{self, AgentSessionRef};
+    let pending: Vec<_> = state
+        .agents()
+        .filter_map(|agent| {
+            if agent.startup.is_some()
+                || agent.deletion_pending
+                || agent.session_binding_invalidated
+                || agent.exit_snapshot.is_some()
+                || agent.runtime_identity.launch_id.is_none()
+            {
+                return None;
+            }
+            let kind = launch::provider_kind(agent.provider);
+            let session = AgentSessionRef::id(agent.runtime_identity.session_id.as_ref()?)?;
+            let plan = catalog::plan(&format!("herdr:{kind}"), kind, &session)?;
+            Some((agent.id, plan.argv))
+        })
+        .collect();
+    for (id, argv) in pending {
+        state
+            .set_agent_startup(
+                id,
+                Some(AgentStartup {
+                    command: crate::platform::interactive_shell_command(&argv, "sh")
+                        .ok_or("Cannot describe provider resume command")?,
+                    started_at_ms: io::now_ms(),
+                    reported: false,
+                    recovery: None,
+                }),
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 impl Worker {
     pub(super) fn watch_agent_startup(
         &mut self,

@@ -217,6 +217,10 @@ impl Worker {
     }
 
     fn close_resume_terminal(&mut self, agent: &RoomAgent) -> Result<(), String> {
+        if agent.runtime_identity.pane_id.is_none() && agent.runtime_identity.terminal_id.is_some()
+        {
+            return Ok(());
+        }
         let (Some(pane), Some(terminal)) = (
             &agent.runtime_identity.pane_id,
             &agent.runtime_identity.terminal_id,

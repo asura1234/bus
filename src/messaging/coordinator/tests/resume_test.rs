@@ -225,6 +225,130 @@ fn resumed_info(provider: Provider) -> schema::AgentInfo {
     })).unwrap()
 }
 
+/// Native fault injection: the resumed CLI prints its rejection and exits,
+/// leaving the pane's shell alive. No real provider or live Bus is contacted.
+struct RejectedResume;
+
+impl Transport for RejectedResume {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
+                pane: serde_json::from_value(json!({
+                    "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1",
+                    "tab_id":"t1", "focused":false, "agent_status":"unknown", "revision":1,
+                    "agent_process_exited":true
+                }))
+                .unwrap(),
+            }),
+            Method::PaneRead(_) => Ok(ResponseResult::PaneRead {
+                read: serde_json::from_value(json!({
+                    "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1", "revision":1,
+                    "source":"recent", "format":"text", "truncated":false,
+                    "text":"No conversation found with session ID: session\nscratch% "
+                }))
+                .unwrap(),
+            }),
+            other => panic!("failed resume must preserve the shell and queued work: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn restart_resume_rejection_surfaces_actionable_error_and_preserves_work() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = queue(&mut worker, room, agent, "retained task");
+    let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+    drop(worker);
+    let mut worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
+    let infos = worker.poll().unwrap().unwrap();
+    worker
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    let failed = worker.state.agent(agent).unwrap();
+    let error = failed
+        .actionable_error
+        .as_deref()
+        .expect("restart must monitor resume startup");
+    assert!(
+        error.contains("No conversation found with session ID: session"),
+        "{error}"
+    );
+    assert!(error.contains("resume"), "{error}");
+    assert_eq!(failed.status, RuntimeStatus::Unavailable);
+    assert_eq!(failed.runtime_identity, identity);
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert!(failed.startup.as_ref().unwrap().reported);
+    drop(worker);
+    let worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
+    assert!(
+        worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .startup
+            .as_ref()
+            .unwrap()
+            .reported
+    );
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_some());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn missing_pane_after_restart_is_cleared_but_transport_failure_is_not_evidence() {
+    struct MissingPane {
+        code: &'static str,
+        rejected: bool,
+    }
+    impl Transport for MissingPane {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+                Method::PaneGet(_) => Err(TransportError {
+                    code: Some(self.code.into()),
+                    message: self.code.into(),
+                    definitely_rejected: self.rejected,
+                }),
+                other => panic!("unexpected operation: {other:?}"),
+            }
+        }
+    }
+    for (code, rejected, cleared) in [("pane_not_found", true, true), ("timeout", false, false)] {
+        let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        worker.transport = Box::new(MissingPane { code, rejected });
+        worker.poll().unwrap();
+        let observed = worker.state.agent(agent).unwrap();
+        assert_eq!(
+            observed.runtime_identity.pane_id.is_none(),
+            cleared,
+            "{code}"
+        );
+        assert_eq!(
+            observed.runtime_identity.terminal_id.as_deref(),
+            Some("terminal")
+        );
+        assert_eq!(
+            observed.runtime_identity.session_id.as_deref(),
+            Some("session")
+        );
+        if cleared {
+            assert!(observed.actionable_error.is_some());
+        }
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn cold_resume_rebinds_same_conversation_and_persists_new_terminal_for_each_provider() {
     // Bus restores the same provider conversation in a newly allocated PTY.
