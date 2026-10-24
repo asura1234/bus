@@ -45,7 +45,20 @@ fn developer_sound_setting_cycles_with_mouse_and_keyboard_without_an_off_choice(
     let (mut ui, _, _) = sound_fixture(0);
     ui.action(render::Action::Settings);
     ui.system_sounds = Some(vec!["Glass".into(), "Ping".into()]);
-    ui.action(render::Action::CycleDeveloperSound(true));
+    ui.compute_view(100, 55);
+    let next = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::CycleDeveloperSound(true))
+        .unwrap()
+        .rect;
+    pointer(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        next.x,
+        next.y,
+    );
     assert_eq!(ui.settings_field, ui.developer_sound_field());
     assert_eq!(ui.settings.developer_sound.as_deref(), Some("Glass"));
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
@@ -145,15 +158,28 @@ fn settings_lists_master_sound_above_every_work_room() {
                 .unwrap_or_else(|| panic!("missing {suffix}: {rows:#?}"))
     };
     let master_group = below("MASTER");
+    let you_group = below("YOU");
+    let developer_sound = position("Notify you sound (always on)");
     let master = position("[x] # MASTER");
     let rooms_group = below("ROOMS");
     let all_rooms = position("[ ] All rooms");
     let first = position("[ ] # room-0");
     let second = position("[ ] # room-1");
     assert!(position("Color blind mode") < heading);
-    assert!(heading < master_group && master_group < master, "{rows:#?}");
+    assert!(
+        heading < you_group && you_group + 1 == developer_sound,
+        "{rows:#?}"
+    );
+    assert!(
+        developer_sound < master_group && master_group < master,
+        "{rows:#?}"
+    );
     assert!(master < rooms_group && rooms_group < all_rooms && all_rooms < first);
     assert!(first < second);
+    let notifications = below("NOTIFICATIONS");
+    assert!(second < notifications && notifications < position("Feishu notifications"));
+    assert!(notifications < position("Recipient open_id"));
+    assert!(notifications < position("lark-cli path"));
 }
 
 #[test]
@@ -161,15 +187,20 @@ fn release_settings_keyboard_reaches_the_developer_sound_picker() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.system_sounds = Some(vec!["Ping".into()]);
     ui.action(render::Action::Settings);
-    for _ in 0..30 {
-        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    }
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, 1);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(ui.settings.developer_sound.as_deref(), Some("Ping"));
     assert!(ui.pending.iter().any(|pending| matches!(
         &pending.command,
         BusCommand::SetDeveloperSoundName(Some(name)) if name == "Ping"
     )));
+    for _ in 0..30 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    assert_eq!(ui.settings_field, ui.feishu_field() + 2);
+    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, ui.feishu_field() + 1);
 }
 
 #[test]
@@ -204,6 +235,8 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     ui.action(render::Action::Settings);
     room_screen(&mut ui, 100, 40);
     // Field 0 is still color blind mode.
+    // Field 1 is the developer sound; MASTER follows it.
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     // The All rooms row sits between MASTER and the rooms.
@@ -216,15 +249,15 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     ui.action(render::Action::ToggleSound(render::SoundTarget::Room(
         rooms[1],
     )));
-    assert_eq!(ui.settings_field, 4);
+    assert_eq!(ui.settings_field, 5);
     assert_eq!(queued_sound(&ui).last(), Some(&(rooms[1], true)));
     // The compaction limit follows the last room, then the sidebar width.
-    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 5);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     assert_eq!(ui.settings_field, 6);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     assert_eq!(ui.settings_field, 7);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, 8);
     assert!(!ui.settings.color_blind_mode);
 }
 
@@ -241,6 +274,7 @@ fn settings_all_rooms_row_sets_the_default_while_there_are_no_rooms() {
     assert!(rows[all_rooms + 1].contains("No rooms yet"), "{rows:#?}");
     assert!(!rows.iter().any(|row| row.contains("New rooms")));
 
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
@@ -366,6 +400,7 @@ fn settings_rows_cycle_through_default_and_the_system_sounds() {
         "{rows:#?}"
     );
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
     assert_eq!(
@@ -387,7 +422,7 @@ fn settings_rows_cycle_through_default_and_the_system_sounds() {
         render::SoundTarget::Room(rooms[0]),
         true,
     ));
-    assert_eq!(ui.settings_field, 3);
+    assert_eq!(ui.settings_field, 4);
     assert_eq!(queued_sound_names(&ui).last(), Some(&(rooms[0], None)));
 
     // A sound no longer installed is labelled, and plays the default ding.
@@ -429,7 +464,7 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
     ui.action(render::Action::Settings);
     let rows = settings_rows(&mut ui, 24);
     assert!(!rows.iter().any(|row| row.contains("# room-29")));
-    for _ in 0..rooms.len() + 2 {
+    for _ in 0..rooms.len() + 3 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
     let rows = settings_rows(&mut ui, 24);
@@ -444,6 +479,13 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
     let rows = settings_rows(&mut ui, 24);
     assert!(
         rows.iter().any(|row| row.contains("[x] # MASTER")),
+        "{rows:#?}"
+    );
+    assert_eq!(ui.settings_field, ui.developer_sound_field());
+    assert!(rows.iter().any(|row| row.ends_with("YOU")), "{rows:#?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Notify you sound (always on)")),
         "{rows:#?}"
     );
 }
@@ -898,7 +940,7 @@ fn live_sound_reload_updates_bus_room_playback() {
 fn settings_hides_the_performance_overlay_outside_dev_builds() {
     let (mut ui, _, _) = sound_fixture(1);
     ui.action(render::Action::Settings);
-    let rows = settings_rows(&mut ui, 40);
+    let rows = settings_rows(&mut ui, 55);
     assert!(
         !rows.iter().any(|row| row.contains("Performance overlay")),
         "{rows:#?}"
@@ -910,7 +952,7 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
     let (mut ui, _, _) = sound_fixture(1);
     ui.dev_settings = true;
     ui.action(render::Action::Settings);
-    let rows = settings_rows(&mut ui, 40);
+    let rows = settings_rows(&mut ui, 55);
     let row = rows
         .iter()
         .position(|row| row.contains("[ ] Performance overlay"))
@@ -932,7 +974,7 @@ fn dev_settings_toggle_the_performance_overlay_with_enter() {
     );
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(crate::client::perf::OVERLAY.is_on());
-    let rows = settings_rows(&mut ui, 40);
+    let rows = settings_rows(&mut ui, 55);
     assert!(
         rows.iter()
             .any(|row| row.contains("[x] Performance overlay")),

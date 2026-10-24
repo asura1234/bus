@@ -284,7 +284,7 @@ impl BusUi {
 
     /// The compaction limit's Settings focus index, after the sound rows.
     pub(super) fn compaction_field(&self) -> usize {
-        self.sound_settings_targets().len() + 1
+        self.room_sound_field(self.sound_settings_targets().len())
     }
 
     /// The idle agents alert's Settings focus index, after the compaction limit.
@@ -307,11 +307,16 @@ impl BusUi {
 
     /// The overlay row's Settings focus index, after notification settings.
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
-        self.dev_settings.then(|| self.developer_sound_field() + 1)
+        self.dev_settings.then(|| self.feishu_field() + 3)
     }
 
     pub(super) fn developer_sound_field(&self) -> usize {
-        self.feishu_field() + 3
+        1
+    }
+
+    /// Room sound fields follow the always-on developer sound selector.
+    pub(super) fn room_sound_field(&self, index: usize) -> usize {
+        self.developer_sound_field() + 1 + index
     }
 
     pub(super) fn feishu_field(&self) -> usize {

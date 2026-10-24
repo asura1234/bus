@@ -490,7 +490,7 @@ impl BusUi {
             .iter()
             .position(|t| *t == target)
         {
-            self.settings_field = index + 1;
+            self.settings_field = self.room_sound_field(index);
         }
     }
 
