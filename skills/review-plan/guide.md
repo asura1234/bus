@@ -14,6 +14,18 @@ discuss it directly, without creating round artifacts.
 The reviewer is read-only over the plan. Even when a repair only changes one sentence, it may only be given as exact
 replacement text in the finding's "possible remediation", for the plan author to verify and write. This keeps multiple reviewers from racing to write the same plan.
 
+## Use the feature author's worktree
+
+Use the author's feature development worktree and already-built binary; never
+create a review/investigation worktree, clone or target, or build main. If a fix
+has no worktree yet, its author first creates the feature worktree with
+`worktree-new`. Compilation uses that worktree's target through the room build
+slot, coordinated with the owner. This skill remains read-only over plans and
+repository content; reports stay under ignored `temp/review-plan/`. If a separate
+investigation needs test probes, follow the test-only write and saved-patch/restore
+lifecycle in [Parallel writes](../../orchestration/parallel-writes.md#reviews-and-investigations),
+without changing production files or the plan.
+
 ## A lane is one independent viewpoint
 
 The same reviewer uses a stable `--reviewer <name>` across rounds so it can reconcile its own history. When multiple models review in parallel,

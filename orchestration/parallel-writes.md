@@ -70,17 +70,20 @@ into a commit, stash, reset or cleanup.
 
 ## When worktrees are needed
 
-Switch to separate worktrees and branches when ownership overlaps so heavily
-that one branch would need constant hand-offs, or when gates/builds conflict
-through shared outputs, profiles or a required clean tree. Have an agent use
-`worktree-new`; record each checkout, branch, immutable base and owner in the
-map. Workers still obey their ownership maps inside their own worktrees.
+Separate worktrees and branches are for parallel authors whose ownership
+overlaps so heavily that one branch would need constant hand-offs, or whose
+gates/builds conflict through shared outputs, profiles or a required clean tree.
+Have the author use `worktree-new`; record each checkout, branch, immutable base
+and owner in the map. Authors still obey their ownership maps inside their own
+worktrees. Reviews and investigations use the feature author's worktree as
+specified below; they do not get another checkout.
 
 Reuse exactly one Cargo target per worktree: export
 `CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run,
-and set `CARGO_LLVM_COV_TARGET_DIR` to that same path for coverage. Never make
-per-run targets or share another worktree's writable target. Serialize conflicting
-builds within a worktree. Each room has two full-build slots:
+and leave `CARGO_LLVM_COV_TARGET_DIR` unset so instrumented output stays in
+`<worktree>/target/llvm-cov-target`. Never make per-run targets or share a
+writable target between worktrees. Serialize builds in the author worktree,
+including reviewer/investigator probe builds. Each room has two full-build slots:
 `/tmp/bus-<room id>-build-slot-1` and `/tmp/bus-<room id>-build-slot-2`.
 The orchestrator takes its room id from its prompt, resolves both literal
 absolute paths and includes them in each build worker's brief and ownership map.
@@ -90,8 +93,39 @@ slots with `mkdir`; if both are busy, wait 60 seconds and retry. Record the
 owner, expiry and liveness check, and release only your slot with a trap on
 success or failure. Follow the
 [resource protocol](orchestrator-guide.md#resource-leases-and-build-slots).
-Final review, verification and bot review all use the same integrated head;
-separate worktrees are available for conflicting gates or builds.
+Final review, verification and bot review all use the same integrated head
+in the feature author's worktree; coordinate access rather than creating another
+target or checkout.
+
+## Reviews and investigations
+
+Reviews and investigations are mostly read-only. Their only repository-content
+writes are new test files or added cases in existing test files; never edit
+production code, configuration, build scripts, docs or plans in that role.
+Reports, logs and saved probe patches belong in ignored workflow artifact paths.
+An author who needs to investigate before a fix exists first uses `worktree-new`
+to create the feature worktree where the fix will be made, then investigates
+there. Never build in the main checkout or touch the live Bus or its target.
+
+The orchestrator must not create reviewer/investigator worktrees, diagnostic
+clones or scratch repository copies (including `bus-review-*` and `bus-diag-*`).
+Reviewers and investigators use the feature author's development worktree and
+its single target. Prefer the author's already-built binary for the exact head.
+If a probe needs compilation, coordinate with the author and use that target
+through the room's build slot; never create a second target. Serialize probe
+writes/builds with the owner's gates so a gate sees only its committed head.
+
+Before adding a probe, tell the author its exact test paths and intended cases,
+and agree exclusive access to any shared test file. Run the focused probe,
+then save a patch containing only your additions, including new untracked test
+files, plus the command and red/green output in ignored review artifacts.
+Remove only your additions before handing back the worktree, even for green
+probes or interrupted reviews; preserve the author's and other reviewers'
+changes. Do not stage, commit, stash or reset the shared tree to do this.
+Report patch paths and prove the affected test paths have returned to their
+pre-probe state. The author independently verifies the evidence and chooses
+whether to adopt/rewrite the probe or leave the saved patch unadopted. A red
+probe must neither dirty the owner's gate nor enter its commit accidentally.
 
 ## Integrate deliberately
 

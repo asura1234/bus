@@ -46,7 +46,7 @@ MAY:
   - run read-only queries: git, grep, reading files
   - run tests narrowly: Rust with `just test-one <filter>`, a skill's Python tests with
     `python3 -m pytest <test file>::<test name>`
-  - drive the PR's HEAD on a scratch Bus (`./run tui`, or /e2e-test on an ad-hoc QA doc under <round dir>/tui/)
+  - drive the PR's HEAD on a scratch Bus (owner's dev binary, or /e2e-test on an ad-hoc QA doc under <round dir>/tui/)
     per guide.md "Prove user-visible behavior by driving the real TUI", whose env, cleanup, and no-touch rules are mandatory
 
 MUST NOT:
@@ -57,9 +57,9 @@ MUST NOT:
   - run formatters, lint fixers, or other write commands
   - run quality gates: `just lint`, `cargo fmt --check`, `just check`, `just ci`, `just build`,
     **including** filtered forms. Those belong to CI and gate-and-fix
-  - run the unfiltered full test suite: `just test`, or `cargo nextest run` without a filter;
-    `just e2e` does not enter the review side; `./run tui`'s own dev build is not a gate
-
+  - run unfiltered full suites (`just test`, unfiltered `cargo nextest run`) or `just e2e`
+  - create a review worktree/clone/target or build main; use the owner's tree/target and room slot;
+    coordinate probe access, save test patches and remove your additions per guide.md
 ========== 2. DETERMINISTIC PROLOGUE ==========
 
 Run:

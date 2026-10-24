@@ -145,39 +145,37 @@ Verifying a single comment is only the foundation. With multiple lanes in parall
 
 ## Taking ownership of PR reviewer tests
 
-Tests left by the reviewer are regression evidence pending adjudication, including new files that still run red and new cases in existing test files. They are identified
-from the working tree as well as from the test paths cited in findings: every uncommitted new test file or new case the review rounds left counts, including a
-green probe that opened no finding (review-pr records it only under "本轮探索区域 / 运行的测试"). The author first reconciles each
-test with its claim, its actual assertion, and its worktree hunk; red by itself is not worktree pollution, and does not automatically prove the reviewer's
-expectation correct. Whether to adopt is still decided by the same verification and adjudication rules, and tests are not modified before every claim is adjudicated.
+Reviewer probes arrive as saved test-only patches in ignored round artifacts, including green probes with no finding. Reviewers use the feature
+author's worktree, tell the owner the exact test paths before writing, and remove only their additions before handoff; they never create a separate
+review clone, worktree or target. See [Parallel writes](../../orchestration/parallel-writes.md#reviews-and-investigations).
 
-Before adopting or rewriting a probe, apply [code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates). The "adds coverage" decisions below use that behavioral criterion.
+Inventory each patch, its test paths/cases, claim or "no finding", command and red/green result. Also identify any legacy reviewer additions still
+in the working tree; distinguish them from owner changes before touching them. Red output alone neither proves the expectation correct nor
+requires adopting the test. Independently reconcile the assertion with first-party behavior and the goal. To verify a claim, main may temporarily
+apply only the test additions, run them narrowly with the owner's target and room build slot, then remove only those additions and restore the
+pre-probe state. This evidence step permits no production edits, assertion weakening or repair before unified adjudication.
 
-For an APPLY repair, the author takes over the corresponding test and adds it to the repair allowlist, and after fixing the root cause runs it narrowly to prove red turns green; adopted
-green coverage cases are kept as well. Tests should follow code-review-guide "Probe test naming and ownership", renaming them by actual
-behavior or merging them into existing test files when needed; never manufacture green by deleting the test, changing it to skip/todo, weakening a valid assertion, or mocking out the behavior under test.
-When the original assertion really is wrong, the rewrite must have independent first-party evidence and be explained in triage.
+The author chooses whether to adopt/rewrite each probe or leave its patch unadopted, recording the choice and reason in triage.md. Apply
+[code-review-guide "Never pad coverage with a tautology"](code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates)
+and "Probe test naming and ownership" to adopted tests. For APPLY, prove the root cause fixed using the original probe or an independently
+justified replacement regression, narrowly confirming red turns green. Never manufacture green by deleting valid assertions, skipping tests or
+mocking out the behavior; a wrong assertion needs first-party evidence and a triage explanation. Leaving the original patch unadopted does not
+remove this repair-evidence obligation.
 
-**No reviewer-added test stays uncommitted.** The worktree is shared: a leftover probe makes it dirty, so split-pr PREFLIGHT fails and
-worktree-close stops to ask before discarding. Every reviewer-added test file or case ends the run in exactly one of these states, and the outcome is recorded per test in triage.md:
+Every probe ends in one of these recorded states:
 
-- **committed**, as its own test or integrated into an existing test (renamed / merged per "Probe test naming and ownership"), green;
-- **removed**, with the reason recorded in triage.md.
+- **adopted**, committed green as a normal test or integrated into an existing test;
+- **unadopted**, saved with its assertion, output and reason in ignored evidence, with no reviewer additions left in repository content.
 
-Which one follows from the claim's disposition; the disposition itself is unchanged by this rule, and landing a test is not a repair:
+This applies to green probes, non-APPLY claims and probes with no finding as well. A red FLAG probe stays unadopted evidence for the developer;
+committing it red or rewriting it to choose behavior would decide for them. Clean up legacy leftover probes by removing only the reviewer's
+unadopted additions, never the author's or another reviewer's work. Removal cannot manufacture green for an admitted APPLY problem, and scoped
+runs never adopt a patch outside the chunk's test allowlist.
 
-- APPLY: committed with the repair, red turned green as above.
-- REJECT or HOUSEKEEPING: a green test is committed when it adds coverage. A red test for a claim that does not hold is rewritten to assert the
-  correct (current, verified) behavior and committed when it still adds coverage; otherwise it is folded into an existing test or removed.
-- No finding (a green probe the reviewer kept without a finding): committed when it adds coverage, otherwise folded into an existing test or removed.
-- FLAG: a green test that pins current behavior is committed when it adds coverage; a red test is removed and its path, assertion, and red output go
-  into the FLAG item's evidence, so the developer can restore it if they rule for the change. Committing it red or rewritten would decide for the developer.
-- Removal is never a way to manufacture green for an APPLY claim, and a scoped run removes a probe outside the chunk's test allowlist rather than expanding it.
-
-PR mode by default has `commit-and-push` commit and push these tests together with the repair, or on their own when there is no APPLY; a test coming from the reviewer,
-already dirty before the author took over, or still untracked, is no reason to leave it out of the commit. Before committing, check each file/case hunk item by item; after pushing,
-check that they really entered the commit and the same-name remote branch, and that `git status --porcelain --untracked-files=all -- <reviewer test paths>` prints nothing.
-`--no-commit-and-push` still forbids landing, and only reports the verification results and the tests awaiting commit.
+PR mode uses `commit-and-push` for adopted tests together with the repair, or alone when there is no APPLY. Check explicit hunks and new files,
+prove adopted tests entered the commit and same-name remote branch, and verify
+`git status --porcelain --untracked-files=all -- <reviewer test paths>` is empty after landing. `--no-commit-and-push` leaves adopted tests
+explicitly awaiting commit; temporary verification additions must still be removed. Keep required patch evidence outside future gate inputs.
 
 ## Landing and boundaries (principles)
 

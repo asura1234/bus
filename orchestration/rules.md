@@ -186,8 +186,14 @@ the wrapper remains held.
 - **Assign write ownership before parallel work.** Give each agent a directory
   or file area in its brief; agents write only there. Lock shared files to one
   writer at a time, or give them one owner. Use separate worktrees and branches
-  for heavy overlap or conflicting gates/builds; control their integration.
-  Follow [Parallel writes](parallel-writes.md).
+  for parallel authors with heavy overlap or conflicting gates/builds; control
+  their integration. Follow [Parallel writes](parallel-writes.md).
+- **Keep reviews and investigations in the author's feature worktree.** Only
+  test additions may change repository content in these roles; reuse the owner's
+  binary/target and build slot, save probe patches and remove your additions
+  before handoff. Never create review/diagnostic clones or build main; before a
+  fix exists, create its feature worktree with `worktree-new`. Follow the full
+  [review and investigation rules](parallel-writes.md#reviews-and-investigations).
 - **Give every parallel worker the installed write guide.** Each brief tells
   the worker to read the absolute session `docs/parallel-writes.md` path and
   includes its ownership map; resolve the path before sending the brief.
@@ -336,7 +342,8 @@ the wrapper remains held.
   after proving its operation is no longer active.
 - **Reuse one Cargo target per worktree.** Export
   `CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run;
-  point LLVM coverage at that same target. Never create per-run target dirs.
+  leave `CARGO_LLVM_COV_TARGET_DIR` unset for separate instrumented output in
+  `<worktree>/target/llvm-cov-target`. Never create per-run target dirs.
   Delete your inactive per-run targets after runs and close merged worktrees.
   Build outside the live Bus checkout so its running binary is not replaced.
 - **Limit the room to two full builds.** Before a gate, coverage or E2E binary

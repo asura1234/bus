@@ -4,6 +4,16 @@ This guide holds only the workflow principles of `/review-pr`. Code-review dimen
 boundaries are defined in one place by the [Code Review Guide](../../docs/guides/code-review-guide.md); report fields and order are defined in one place by
 the [Review Format](../../docs/guides/review-format.md).
 
+## Use the feature author's worktree
+
+Review in the feature author's development worktree at the exact committed head,
+using its already-built binary when available. Do not create a reviewer clone,
+worktree or target, and never build in the main checkout. Coordinate test writes
+and builds with the author; compilation uses the owner's single target and the
+room build slot, never concurrently with its gate. The full
+[review/investigation rules](../../orchestration/parallel-writes.md#reviews-and-investigations)
+also apply to subagents. Reports, logs and patches go in ignored round artifacts.
+
 ## A lane is one independent viewpoint
 
 Only when the same reviewer uses a stable lane across rounds can it reconcile its own history. When multiple models review in parallel, each reviewer
@@ -84,15 +94,19 @@ Review added tests under [code-review-guide "Never pad coverage with a tautology
 
 **Probe lifecycle**:
 
-- probes stay in the working tree, uncommitted, and the author decides to adopt, rewrite, or delete them; tests should be keepable
-  long-term as normal regression tests;
+- before writing, tell the author the exact test paths and intended cases; agree exclusive access to shared files;
+- run each probe, save only your test additions as a patch under this round's ignored artifacts (including new untracked files),
+  and record the command, output and patch path; tests should be keepable as normal regression tests;
+- remove only your additions before handoff, including green probes and after interruptions; prove affected paths match their
+  pre-probe state without staging, stashing, resetting or discarding anyone else's work. The author chooses to adopt/rewrite
+  the saved patch or leave it unadopted; it must not dirty the owner's gate or enter a commit accidentally;
 - file and case names follow code-review-guide "probe test naming and ownership"; first make clear which
   files you may write, never overwrite or delete someone else's probe, never delete or weaken existing assertions; lane / round are recorded only in the review
   artifact, not in test names;
 - red → write a finding in the corresponding dimension, with the first evidence item
   `已证明：<test name @ relative test file path> — <failed assertion>`;
-- green → withdraw the suspicion and open no finding; the probe stays in the working tree, with one line recorded in review.md
-  "本轮探索区域 / 运行的测试";
+- green → withdraw the suspicion and open no finding; record the saved patch and result in review.md
+  "本轮探索区域 / 运行的测试", then remove your additions as above;
 - never leave only a red test without writing a finding.
 
 ### Prove user-visible behavior by driving the real TUI
@@ -101,22 +115,25 @@ When the claim is about what a user sees or does in the TUI (layout, keys, click
 prefer proving it by driving the PR's HEAD through the real terminal over reasoning about it, or writing a unit test that mirrors the code.
 It complements probes, never replaces one where a probe can show the failure. Two ways, both on a scratch Bus the driver starts:
 
-- drive it directly with `./run tui <verb> --name <session> …` per `docs/tui-driver.md`, saving the session's run folder
+- drive it directly with the author's already-built dev binary (`bus --dev tui <verb> --name <session> …`) per `docs/tui-driver.md`, saving the session's run folder
   (`start --run-dir <round dir>/tui/sessions`); the report is that folder's `trace.ndjson`, `shots/` and `effects.ndjson`,
   plus a `<round dir>/tui/<session>.md` you write listing the steps, expected vs seen, and the screenshot you opened;
 - or write a small ad-hoc QA doc in the format of `tests/e2e-tui/app.md` at `<round dir>/tui/qa.md` and run
   `/e2e-test <round dir>/tui/qa.md`. That skill takes only the doc and `--cases`, so add `--runs-root <round dir>/tui` yourself
   to its `e2e_report.py init` call; the report then lands at `<round dir>/tui/<run>/report.md`, its sessions under `<run>/sessions/`.
+  If that skill would create its own build target instead of reusing the owner's binary, use the direct driver route above.
 
 `<round dir>` is this round's `STATE_DIR/round-NN/`. Whether to run the TUI is your judgment; these rules are mandatory for every run:
 
-- export your own `CARGO_TARGET_DIR` (an absolute path no other worker uses, e.g. `<repo>/target/review-pr-<lane>`)
-  and an absolute `BUS_TUI_ROOT` of your own (e.g. `/tmp/bus-tui-<lane>`); `./run tui` builds into `$CARGO_TARGET_DIR/tui-driver`;
+- use the author's exact-head dev binary from a private copy outside `target/debug`, and an absolute scratch
+  `BUS_TUI_ROOT` of your own (e.g. `/tmp/bus-tui-<lane>`). If a dev build is needed, coordinate with the author
+  to build in its existing target through the room slot; do not use `./run tui` to create a second target;
 - unset `BUS_DATA_DIR` as /e2e-test does, or point it at a scratch dir outside your `BUS_TUI_ROOT` (the driver refuses one
   inside its target); it never names the live data dir. Unset every other inherited `BUS_*` and `HERDR_*` variable before any command;
 - never point anything at the running Bus, its data dir, or `target/debug`; a driver refusal is final, never worked around;
 - ad-hoc QA docs live only under `<round dir>/tui/`; never edit `tests/e2e-tui/app.md` or any other committed doc;
-- when done, `stop` every session you started (also after failures) and delete your `CARGO_TARGET_DIR`.
+- when done, `stop` every session you started (also after failures); preserve required evidence and remove only your
+  disposable runtime files/private binary. Never delete the author's shared target.
 
 A failing step proves the finding; its first evidence item is
 `已证明：<case/step or session step @ relative run report path> — <expected vs seen>`, and the screenshot, trace,

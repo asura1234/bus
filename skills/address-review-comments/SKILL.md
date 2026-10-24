@@ -22,12 +22,12 @@ INPUT = [plan | pr] [--round latest|N] [--github] [--pr <n>] [--review-file <pat
 
 HARD RULES
 - Automatically modify only claims finally adjudicated APPLY; REJECT / FLAG / HOUSEKEEPING do not change the repository,
-  except that PR mode lands or removes every reviewer-added test (PASS 4); that is landing, not a repair.
+  except that PR mode adjudicates saved reviewer test patches and cleans up any legacy leftover probes (PASS 4).
 - The main agent exclusively owns deduplication, cross-claim comparison, disposition, triage, remediation grouping, and landing.
-- Evidence gathering answers only local facts: no adjudication, no repair suggestions, no patches, no repository changes; disposition, conflict resolution, and repair direction belong to main alone.
+- Evidence gathering answers only local facts: no adjudication, repair suggestions or production changes; temporary test-only probe application/removal is allowed as below. Disposition, conflict resolution, and repair direction belong to main alone.
 - Claim truth, goal scope, and repair design are judged separately: `SUPPORTED` does not approve the scope or the repair; main first rules on scope, then independently derives the repair for admitted claims.
 - **Orchestration is main's own decision**: verify each claim itself, hand some to read-only subagents, or mix, depending on claim count, whether claims share files, and remaining context. This skill prescribes no shape and does not assume parallel is faster (reasoning in the guide's "Verification and adjudication authority").
-- Unified adjudication barrier: no write operation of any kind until every claim has a first-party truth assessment and main has completed unified adjudication.
+- Unified adjudication barrier: no repair writes until every claim has a first-party truth assessment and main has completed unified adjudication. Before that barrier, main may temporarily apply a saved test-only probe patch to verify evidence, then remove only those additions and restore the pre-probe state; never edit production or weaken assertions during verification.
 - **Never run repository-wide gates; run only validation within the diff.** Forbidden: `just ci`, `just check`, `just test`,
   `just lint`, an unfiltered `cargo test` / `cargo nextest run`, and any other full-tier run;
   only diff-only / scoped forms are allowed:
@@ -91,10 +91,10 @@ run root: plan/pr is `temp/address-review-comments/<slug>/<YYYYMMDD-HHmmss>/`.
 With --scope it is `temp/address-review-comments/<slug>/scopes/<SCOPE_HASH>/<YYYYMMDD-HHmmss>/`;
 put **范围哈希**：<SCOPE_HASH> in triage.md so author decisions stay tied to the chunk.
 
-IF mode == pr: reviewer-added tests are the test paths in sanitized findings plus every uncommitted new test file and new case in an existing
-test file the review rounds left in the working tree (`git status --porcelain --untracked-files=all`), including green probes that opened no finding;
-record each one's source claim (or "no finding") and original red/green state; stay read-only at this point and do not treat them as unrelated dirty files
-merely because they are uncommitted or currently red. Adoption, validation, and landing follow review-response-guide "Taking ownership of PR reviewer tests".
+IF mode == pr: inventory saved test-only probe patches cited by the review, including green probes with no finding, and any legacy
+uncommitted reviewer test additions (`git status --porcelain --untracked-files=all`). Record each patch/test path, source claim or "no finding",
+and original red/green result; do not apply patches yet. Reviewers should have removed their additions before handoff. Distinguish any legacy
+probe hunks from the author's work; never discard the latter. Verification and adoption follow review-response-guide "Taking ownership of PR reviewer tests".
 
 ========== PASS 1: ATOMIZE & DEDUPE (main only) ==========
 
@@ -158,14 +158,15 @@ With --scope each remediation allowlist stays within the chunk's files / test_fi
 repair needs another production or test file, STOP that repair and obtain an explicit new assignment;
 do not expand the manifest or the locked Goal yourself. Adopt only probes from the chunk's test allowlist.
 
-IF mode == pr: include the reviewer test files/case hunks for APPLY claims in the allowlist; after the repair, narrowly run those tests and
-directly related regressions, confirming red turns green without weakening effective assertions. When landing, commit and push the repair together with the
-adopted new tests through commit-and-push, explicitly checking that new untracked files are also in the commit; never commit only the author's own production code.
-IF mode == pr: no reviewer-added test stays uncommitted. Each test for a non-APPLY claim or with no finding is committed green (a red REJECT probe rewritten
-to assert the correct behavior when it still adds coverage), folded into an existing test, or removed with the reason in triage.md;
-a red FLAG probe is removed with its path, assertion, and red output in the FLAG evidence. Rules: review-response-guide
-"Taking ownership of PR reviewer tests". commit-and-push lands them even with no APPLY; after the push,
-`git status --porcelain --untracked-files=all -- <reviewer test paths>` must print nothing, else STOP.
+IF mode == pr: main chooses which saved reviewer probes to adopt/rewrite and which patches to leave unadopted, recording reasons per test
+in triage.md. Include adopted test paths/hunks in the repair allowlist. For APPLY, prove the admitted issue fixed with the original probe or an
+independently justified replacement regression; narrowly confirm red turns green without weakening valid assertions. Commit and push adopted
+tests with the repair through commit-and-push, including new untracked test files. Leaving a patch unadopted never substitutes for repair evidence.
+IF mode == pr: no temporary or legacy reviewer addition stays dirty. An adopted probe is committed green (or reported awaiting commit with
+--no-commit-and-push); an unadopted patch stays in ignored evidence with its result and reason. Remove only legacy reviewer additions that were
+not adopted, preserving owner changes. Red FLAG probes remain saved evidence, never committed or rewritten to decide for the developer.
+After landing, `git status --porcelain --untracked-files=all -- <reviewer test paths>` must print nothing, else STOP.
+Rules: review-response-guide "Taking ownership of PR reviewer tests".
 
 When adding, rewriting, or adopting tests, read and apply code-review-guide
 "Never pad coverage with a tautology". Remediation stays within the existing allowlist and STOP rules.

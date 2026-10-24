@@ -112,7 +112,10 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   with a final result.
 - Before parallel work, give each worker its ownership map and tell it to read
   {{DOCS}}/parallel-writes.md. Default to one shared branch with exclusive file
-  ownership; use separate worktrees for heavy overlap or conflicting gates/builds.
+  ownership; separate worktrees are for parallel authors with heavy overlap or
+  conflicting gates/builds. Reviewers/investigators use the author's worktree,
+  binary and target; repository writes are test additions only, saved as a patch
+  and removed before handoff (see parallel-writes.md).
 - Use different models for review. Keep a provider for review only once its
   weekly allowance is below about 25% (`bus state` shows usage).
 - On a worker's `reached N compactions` notice at **Settings → Max compactions
