@@ -254,6 +254,69 @@ fn a_textless_shell_wake_stop_does_not_blank_the_captured_reply() {
     assert_eq!(f.reply(lead).as_deref(), Some("Captured answer"));
 }
 
+fn empty_wake_keeps_captured_answer(text: Option<Value>, running_shells: &[&str]) {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(claude_startup());
+    f.consume();
+    let lead = running(&mut f, "run the build", "turn-1");
+    f.record(claude_stop("turn-1", "Captured answer", &["long-shell"]));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    let since = f.request(lead).shell_hold.as_ref().unwrap().since_ms;
+    f.started(
+        "turn-2",
+        "<task-notification><task-id>other-shell</task-id></task-notification>",
+    );
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    let mut stop = claude_stop("turn-2", "", running_shells);
+    match text {
+        Some(text) => stop["last_assistant_message"] = text,
+        None => {
+            stop.as_object_mut()
+                .unwrap()
+                .remove("last_assistant_message");
+        }
+    }
+    f.record(stop);
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    if !running_shells.is_empty() {
+        let hold = f.request(lead).shell_hold.as_ref().unwrap();
+        assert_eq!(hold.interim.text, "Captured answer");
+        assert_eq!(hold.since_ms, since);
+        f.now = since + 60 * 60_000;
+        f.status(RuntimeStatus::Idle);
+    }
+    f.consume();
+    assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(f.reply(lead).as_deref(), Some("Captured answer"));
+}
+
+#[test]
+fn empty_stop_background_wake_preserves_held_reply_for_null_missing_or_blank_text() {
+    for text in [
+        Some(Value::Null),
+        None,
+        Some(json!("")),
+        Some(json!(" \n\t")),
+    ] {
+        empty_wake_keeps_captured_answer(text, &["long-shell"]);
+    }
+}
+
+#[test]
+fn empty_stop_final_wake_delivers_held_reply_after_shell_exit() {
+    for text in [
+        Some(Value::Null),
+        None,
+        Some(json!("")),
+        Some(json!(" \n\t")),
+    ] {
+        empty_wake_keeps_captured_answer(text, &[]);
+    }
+}
+
 #[test]
 fn a_scheduled_turn_that_finishes_without_background_work_does_not_answer_the_held_request() {
     let mut f = Fixture::new(Provider::ClaudeCode);

@@ -1,5 +1,5 @@
 //! Codex hook decoding; only persisted interactive sessions emit observations.
-use super::super::spool::{field, Parsed};
+use super::super::spool::{field, optional_text, Parsed};
 use serde_json::Value;
 
 pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
@@ -36,7 +36,7 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
         "Stop" => Ok(Parsed::Final {
             session,
             turn,
-            text: field(value, "last_assistant_message")?,
+            text: optional_text(value, "last_assistant_message")?,
         }),
         "StopFailure" => Ok(Parsed::Failure {
             session,

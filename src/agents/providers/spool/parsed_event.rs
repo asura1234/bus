@@ -68,3 +68,13 @@ pub(crate) fn field(value: &Value, key: &str) -> Result<String, String> {
     value.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned)
         .ok_or_else(|| format!("Hook missing {key}; update the CLI and verify Bus hooks. No prompt will be retried."))
 }
+
+/// Hook text may be absent or null when a turn ends silently. Other JSON
+/// types remain invalid, and strings (including empty ones) stay verbatim.
+pub(crate) fn optional_text(value: &Value, key: &str) -> Result<String, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(text)) => Ok(text.clone()),
+        Some(_) => field(value, key),
+    }
+}

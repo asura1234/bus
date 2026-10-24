@@ -50,7 +50,10 @@ impl BusState {
 
     pub(crate) fn reply_needs_ack(&self, request: &Request) -> bool {
         request.phase == RequestPhase::Completed
-            && request.pending_final.is_some()
+            && request
+                .pending_final
+                .as_ref()
+                .is_some_and(|reply| !reply.text.trim().is_empty())
             && self.reply_orchestrator(request).is_some()
             && self.reply_routes.get(&reply_key(request)) != Some(&ReplyRoute::Seen)
             && (self.routing_source(request) || self.reply_routes.contains_key(&reply_key(request)))
