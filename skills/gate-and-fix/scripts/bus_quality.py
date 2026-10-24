@@ -289,7 +289,7 @@ def llvm_cov_target(env) -> Path:
 
 
 def profile_directory(target: Path) -> Path:
-    return Path(os.environ[PROFILE_DIR]) if os.environ.get(PROFILE_DIR) else target
+    return (Path(os.environ[PROFILE_DIR]) if os.environ.get(PROFILE_DIR) else target).resolve()
 
 
 def unit_profraw_files(target: Path) -> list[Path]:

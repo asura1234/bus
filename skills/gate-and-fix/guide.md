@@ -70,7 +70,9 @@ replace `rebase-origin-main` or PR creation.
   the runner removes its profile directory and report lookup link. SIGINT/SIGTERM stop the
   run's child groups before cleanup; repeated interrupts are deferred through teardown.
   Fresh gates also reclaim valid checkout-owned runs whose PID/start-time owner has died.
-  Live and unverifiable owners are preserved. Tests run only once per round; coverage consumes
+  Live and unverifiable owners are preserved. With no live or unverifiable owner, fresh runs
+  also clear legacy flat raw profiles and the workspace index before collecting counters.
+  Tests run only once per round; coverage consumes
   their profiles before cleanup.
   The gate drops every inherited `BUS_*`/`HERDR_*` variable (see **Environment** above); tests
   that model isolated config roots set and restore those variables within their fixture boundaries.

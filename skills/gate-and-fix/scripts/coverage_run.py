@@ -131,16 +131,19 @@ class Run:
             pending.write_text(json.dumps(data), encoding="utf-8")
             pending.replace(self.manifest)
 
-    def _reap(self):
+    def _reap(self) -> bool:
+        clear_flat = True
         # The manifest is intentionally not the source of crash recovery: gates
         # have their own markers, and multiple abandoned runs can coexist.
         for path in (self.base / ".gate-profile-runs").glob("run-*"):
             try:
                 data = json.loads((path / MARKER).read_text(encoding="utf-8"))
                 if self._validate(data) != path:
+                    clear_flat = False
                     continue
                 dead = not owner_alive(data)
             except (OSError, ValueError, KeyError, TypeError):
+                clear_flat = False
                 continue  # Unverifiable or foreign directories are never deleted.
             if dead:
                 self._remove(path)
@@ -148,6 +151,16 @@ class Run:
                     current = json.loads(self.manifest.read_text(encoding="utf-8"))
                     if current.get("path") == str(path):
                         self.manifest.unlink()
+            elif data["active"]:
+                clear_flat = False
+        return clear_flat
+
+    def _clear_flat(self):
+        # Pre-lifecycle gates wrote here. Clean only flat data, once, before
+        # collection; never recursively clean the persistent cache/live runs.
+        for path in (*self.base.glob("*.profraw"), self.base / (self.root.name + ".profdata")):
+            if path.is_file() or path.is_symlink():
+                path.unlink()
 
     def __enter__(self):
         if self.external:
@@ -156,13 +169,15 @@ class Run:
             if self._validate(data) != self.path or not owner_alive(data):
                 raise ValueError("coverage run environment does not match its owner")
         elif self.lane in ("gate", "ci", "unit"):
-            self._reap()
+            clear_flat = self._reap()
             if self.manifest.exists():
                 old = self._load()
                 if old["active"] and owner_alive(old):
                     raise ValueError("coverage run is still held by a live owner")
                 self._remove(Path(old["path"]))
                 self.manifest.unlink()
+            if clear_flat:
+                self._clear_flat()
             parent = self.base / ".gate-profile-runs"
             parent.mkdir(parents=True, exist_ok=True)
             if parent.is_symlink() or parent.resolve() != parent:
