@@ -285,6 +285,9 @@ mod tests {
     #[path = "toasts_test.rs"]
     mod toasts_tests;
 
+    #[path = "submission_notice_test.rs"]
+    mod submission_notice_tests;
+
     #[path = "native_shell_test.rs"]
     mod native_shell_tests;
 

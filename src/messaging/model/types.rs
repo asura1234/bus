@@ -528,6 +528,9 @@ pub(crate) struct Request {
     #[serde(default)]
     pub(crate) trusted_start_bound: bool,
     pub(crate) uncertain_outcome: bool,
+    /// Native draft/recovery detail belongs to this send, beyond agent changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) submission_error: Option<String>,
     /// A blocked-dialog episode outlives request/group settlement. Keep its
     /// native receipt and write clock independently of those transitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]

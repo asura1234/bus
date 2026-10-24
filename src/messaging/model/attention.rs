@@ -190,7 +190,7 @@ impl BusState {
         format!(
             "The outcome of message {} is unknown (submission_unconfirmed). \
              The agent may have run it. Bus will not retry automatically. \
-             Check the agent's transcript before resending. Inspect: bus message status {}",
+             Check the agent's transcript and composer before resending. Inspect: bus message status {}",
             prompt.0, prompt.0
         )
     }

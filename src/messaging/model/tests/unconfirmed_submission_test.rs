@@ -321,3 +321,34 @@ fn restored_unconfirmed_write_waits_for_fresh_idle_observation_and_bound() {
     assert_eq!(tagged_master_notices(&mut restored_again), 0);
     assert_unknown_outcome_failure(&restored_again, typed);
 }
+
+#[test]
+fn unconfirmed_settlement_preserves_each_native_cleanup_outcome() {
+    for detail in [
+        "The remaining draft was cleared",
+        "The draft was left because it was edited",
+    ] {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let (typed, _, bound) = uncertain_write(&mut state, room, agent);
+        state
+            .record_submission(
+                typed,
+                SubmissionOutcome::Uncertain {
+                    message: detail.into(),
+                },
+            )
+            .unwrap();
+        state.fail_unconfirmed_submissions(bound).unwrap();
+        let restored: BusState =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        let error = restored
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .as_deref()
+            .unwrap();
+        for expected in [detail, "submission_unconfirmed", "before resending"] {
+            assert!(error.contains(expected), "missing {expected}: {error}");
+        }
+    }
+}

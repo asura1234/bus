@@ -1270,6 +1270,7 @@ fn send_async_unconfirmed_submission_explains_safe_recovery() {
         let mut request = stalled_recipient(1, "submitting", "submission_unconfirmed", false);
         request["stage"] = json!(stage);
         request["uncertain_outcome"] = json!(true);
+        request["detail"] = json!("The draft was left because it was edited");
         let (outcome, lines, _, _) = run_async(&[], [status(vec![request])]);
         assert_eq!(
             exit_code(&outcome),
@@ -1282,6 +1283,7 @@ fn send_async_unconfirmed_submission_explains_safe_recovery() {
         let message = lines[0]["error"]["message"].as_str().unwrap();
         for guidance in [
             "submission_unconfirmed",
+            "draft was left because it was edited",
             "may have run",
             "transcript",
             "composer",

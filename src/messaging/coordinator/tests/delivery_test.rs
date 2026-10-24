@@ -1415,3 +1415,37 @@ fn unconfirmed_submission_survives_failed_callback_reconciliation() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn message_status_retains_native_withdrawal_detail_after_uncertain_settlement() {
+    let detail = "The draft was left because it was edited. Inspect the composer before resending.";
+    let (mut worker, agent, room, dir, _) = fixture(
+        Provider::ClaudeCode,
+        vec![Err(TransportError {
+            message: detail.into(),
+            code: Some("timeout".into()),
+            definitely_rejected: false,
+        })],
+    );
+    fresh_idle_poll(&mut worker, agent);
+    let request = queue(&mut worker, room, agent, "brief");
+    worker.submit_ready().unwrap();
+    let message = worker.state.request(request).unwrap().prompt.id;
+    let bound = worker
+        .state
+        .request(request)
+        .unwrap()
+        .progress_at_ms
+        .unwrap()
+        + crate::messaging::model::DELIVERED_STALL_MS;
+    worker.expire_unconfirmed_submissions(bound).unwrap();
+    let status = worker.control_message_at(message, bound).unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        status["requests"][0]["detail"]
+            .as_str()
+            .is_some_and(|value| value.contains(detail)),
+        "{status}"
+    );
+}

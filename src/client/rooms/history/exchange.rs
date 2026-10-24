@@ -256,20 +256,8 @@ impl History {
                     continue;
                 }
             }
-            let final_reply = request
-                .filter(|request| request.phase == RequestPhase::Completed)
-                .and_then(|request| request.pending_final.as_ref());
-            let legacy_reply = request
-                .is_none()
-                .then(|| room.latest_replies.get(agent_id))
-                .flatten();
-            let (text, quote) = if let Some(reply) = final_reply {
-                (reply.text.as_str(), request.map(|request| request.id))
-            } else if let Some(reply) = legacy_reply {
-                (reply.text.as_str(), Some(reply.request_id))
-            } else {
-                ("…", None)
-            };
+            let (reply, quote) = exchange_reply(state, room, request, *agent_id);
+            let text = reply.as_ref();
             // One blank row between replies, as at every other block
             // boundary; the exchange's own Gap row follows the last one.
             if replied {
@@ -525,6 +513,36 @@ fn participant_tone(participant: &Author) -> Tone {
     }
 }
 
+fn exchange_reply<'a>(
+    state: &'a BusState,
+    room: &'a Room,
+    request: Option<&'a Request>,
+    agent: AgentId,
+) -> (std::borrow::Cow<'a, str>, Option<RequestId>) {
+    if let Some(request) = request {
+        if let Some(reply) = request
+            .pending_final
+            .as_ref()
+            .filter(|_| request.phase == RequestPhase::Completed)
+        {
+            return (std::borrow::Cow::Borrowed(&reply.text), Some(request.id));
+        }
+        let submission = request
+            .group
+            .and_then(|lead| state.request(lead))
+            .unwrap_or(request);
+        if let Some(notice) = submission.submission_notice() {
+            return (std::borrow::Cow::Owned(notice), None);
+        }
+    } else if let Some(reply) = room.latest_replies.get(&agent) {
+        return (
+            std::borrow::Cow::Borrowed(&reply.text),
+            Some(reply.request_id),
+        );
+    }
+    (std::borrow::Cow::Borrowed("…"), None)
+}
+
 // Prompts and completed finals are immutable after creation. Check their
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
@@ -536,6 +554,13 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
         request.group.map(|lead| lead.0).hash(&mut hash);
+        let outcome = request
+            .group
+            .and_then(|lead| state.request(lead))
+            .unwrap_or(request);
+        outcome.uncertain_outcome.hash(&mut hash);
+        outcome.failure_reason.hash(&mut hash);
+        outcome.submission_error.hash(&mut hash);
         if request.phase == RequestPhase::Completed {
             request
                 .pending_final

@@ -460,12 +460,22 @@ impl BusState {
         now_ms: u64,
         reason: String,
     ) -> Result<(), ModelError> {
+        let detail = (reason == "submission_unconfirmed")
+            .then(|| {
+                self.requests
+                    .get(&id)
+                    .and_then(|request| request.submission_error.clone())
+            })
+            .flatten();
         let mut closed = self.group_members(id);
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
         closed.push(id);
         for request in closed {
             if let Some(request) = self.requests.get_mut(&request) {
                 request.failure_reason = Some(reason.clone());
+                if detail.is_some() {
+                    request.submission_error = detail.clone();
+                }
             }
         }
         // Retain the provider outcome before abandoning the group.
