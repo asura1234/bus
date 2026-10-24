@@ -347,9 +347,10 @@ mod tests;
 use crate::agents::providers::launch;
 use crate::agents::providers::spool as callbacks;
 pub(crate) use agents::AddAgent;
+#[cfg(test)]
+pub(crate) use control_dispatch::dev_tier_mentions;
 pub(crate) use control_dispatch::method_spec;
 #[cfg(feature = "dev-tools")]
 pub(crate) use control_dispatch::ui_hits;
-#[cfg(test)]
-pub(crate) use control_dispatch::{dev_tier_mentions, Tier, METHODS};
+pub(crate) use control_dispatch::{Tier, METHODS};
 pub(crate) mod usage;
