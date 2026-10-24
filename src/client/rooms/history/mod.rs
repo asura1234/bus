@@ -150,6 +150,7 @@ pub(super) struct History {
     /// Markdown blocks laid out afresh during the current rebuild.
     rendered: usize,
     rebuilt: usize,
+    projected: usize,
 }
 
 impl History {

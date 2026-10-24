@@ -566,3 +566,63 @@ fn background_thumbnails_match_and_do_not_overflow_during_resize() {
     assert_eq!(ui.history.rebuilt, 0);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn append_only_projects_links_for_the_new_message() {
+    let mut state = BusState::default();
+    let room = state.create_room("links").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    let draft = || Draft {
+        text: "https://example.com/a/b/c/d/e/f/g/h/i/j/k/l/m".into(),
+        files: vec![],
+        recipient_ids: [agent].into(),
+    };
+    let request = state
+        .submit_message_from(room, draft(), Author::Developer, 1_800_000_000_000)
+        .unwrap()[0];
+    state.finish_for_test(
+        request,
+        "Read src/client/rooms/history/exchange.rs",
+        1_800_000_001_000,
+    );
+    let mut history = History::default();
+    let mut thumbnails = Thumbnails::default();
+    history.lines(
+        &state,
+        state.room(room).unwrap(),
+        30,
+        1,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    assert_eq!(history.projected, 2);
+    state
+        .submit_message_from(room, draft(), Author::Developer, 1_800_000_002_000)
+        .unwrap();
+    history.lines(
+        &state,
+        state.room(room).unwrap(),
+        30,
+        2,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    assert_eq!(
+        history.projected, 1,
+        "unchanged Markdown keeps its source-to-row link projection"
+    );
+    let mut reference = History::default();
+    assert_eq!(
+        history.cached(),
+        reference.lines(
+            &state,
+            state.room(room).unwrap(),
+            30,
+            2,
+            1_800_000_010_000,
+            &mut Thumbnails::default()
+        )
+    );
+}

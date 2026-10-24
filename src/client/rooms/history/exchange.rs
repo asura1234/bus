@@ -41,6 +41,7 @@ impl History {
         let _lines_timer = LINES.start();
         self.rebuilt = 0;
         self.rendered = 0;
+        self.projected = 0;
         if self.source != Some((revision, room.id)) {
             let _timer = super::phases::SIGNATURE.start();
             let visited = self.room_markdown.len();
@@ -88,11 +89,12 @@ impl History {
                 REBUILD.record_op(
                     started.elapsed(),
                     &format!(
-                        "room={} reason={reason} cancelled=1 rows={} rendered={} exchanges={}",
+                        "room={} reason={reason} cancelled=1 rows={} rendered={} exchanges={} projected={}",
                         room.id.0,
                         lines.len(),
                         self.rendered,
-                        self.rebuilt
+                        self.rebuilt,
+                        self.projected
                     ),
                 );
                 return &self.lines;
@@ -140,11 +142,12 @@ impl History {
         REBUILD.record_op(
             started.elapsed(),
             &format!(
-                "room={} reason={reason} rows={} rendered={} exchanges={}",
+                "room={} reason={reason} rows={} rendered={} exchanges={} projected={}",
                 room.id.0,
                 self.lines.len(),
                 self.rendered,
-                self.rebuilt
+                self.rebuilt,
+                self.projected
             ),
         );
         &self.lines
@@ -199,16 +202,21 @@ impl History {
         let scope = link_scope(state, &prompt.author);
         let block = self.markdown_block(prompt_source, attention.unwrap_or(&prompt.text));
         let cold = !block.is_laid_out(width);
-        lines.extend(super::wrapped_links::scoped_lines(
-            block.lines(
-                width,
-                prompt_source,
-                "",
-                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
-            ),
-            scope,
-        ));
+        let projected = !block.is_scoped(width, &scope);
+        lines.extend(
+            block
+                .lines(
+                    width,
+                    prompt_source,
+                    "",
+                    RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+                    scope,
+                )
+                .iter()
+                .cloned(),
+        );
         self.rendered += usize::from(cold);
+        self.projected += usize::from(projected);
     }
 
     fn push_reply_lines(
@@ -295,11 +303,15 @@ impl History {
                 let scope = link_scope(state, &Author::Agent(*agent_id));
                 let block = self.markdown_block(source, text);
                 let cold = !block.is_laid_out(width);
-                lines.extend(super::wrapped_links::scoped_lines(
-                    block.lines(width, source, "    ", reply_anchor),
-                    scope,
-                ));
+                let projected = !block.is_scoped(width, &scope);
+                lines.extend(
+                    block
+                        .lines(width, source, "    ", reply_anchor, scope)
+                        .iter()
+                        .cloned(),
+                );
                 self.rendered += usize::from(cold);
+                self.projected += usize::from(projected);
                 lines.push(Line {
                     text: "    Quote".into(),
                     action: Some(Action::Quote(request)),

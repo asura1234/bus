@@ -178,6 +178,7 @@ impl History {
         };
         self.rebuilt = 0;
         self.rendered = 0;
+        self.projected = 0;
         let key = Key {
             revision: snapshot.revision,
             room,

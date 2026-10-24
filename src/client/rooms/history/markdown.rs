@@ -1,6 +1,6 @@
 //! Markdown message preparation, style preservation and copyable row layout.
 use super::super::render::{display, wrap_ranges, ACCENT};
-use super::{History, Line, MarkdownSource, RowAnchor, Tone};
+use super::{History, Line, LinkScope, MarkdownSource, RowAnchor, Tone};
 use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
@@ -13,6 +13,9 @@ pub(super) struct MarkdownBlock {
     view: Option<MarkdownView>,
     width: Option<u16>,
     lines: Vec<Line>,
+    /// None means links have not been projected; Some(None) is a developer
+    /// message, whose paths have no author working directory.
+    scope: Option<Option<Arc<std::path::Path>>>,
 }
 
 impl History {
@@ -63,6 +66,7 @@ impl MarkdownBlock {
             view,
             width: None,
             lines: Vec::new(),
+            scope: None,
         }
     }
 
@@ -71,29 +75,45 @@ impl MarkdownBlock {
         self.width == Some(width)
     }
 
+    pub(super) fn is_scoped(&self, width: u16, scope: &LinkScope) -> bool {
+        self.width == Some(width) && self.scope.as_ref() == Some(&scope.cwd)
+    }
+
     pub(super) fn lines(
         &mut self,
         width: u16,
         request: MarkdownSource,
         indent: &str,
         anchor: RowAnchor,
+        scope: LinkScope,
     ) -> &[Line] {
-        if self.width == Some(width) {
+        if self.is_scoped(width, &scope) {
             return &self.lines;
         }
-        let _timer = super::phases::LAYOUT.start();
-        let content_width = width.saturating_sub(indent.len() as u16).max(1);
-        self.lines = self
-            .view
-            .as_mut()
-            .and_then(|view| {
-                prepared_markdown_lines(view, content_width, request, &self.source, indent, anchor)
-            })
-            .unwrap_or_else(|| {
-                literal_reply_lines(&self.source, content_width, request, indent, anchor)
-            });
-        highlight_waiting_tags(&mut self.lines, &self.source);
-        self.width = Some(width);
+        if self.width != Some(width) {
+            let _timer = super::phases::LAYOUT.start();
+            let content_width = width.saturating_sub(indent.len() as u16).max(1);
+            self.lines = self
+                .view
+                .as_mut()
+                .and_then(|view| {
+                    prepared_markdown_lines(
+                        view,
+                        content_width,
+                        request,
+                        &self.source,
+                        indent,
+                        anchor,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    literal_reply_lines(&self.source, content_width, request, indent, anchor)
+                });
+            highlight_waiting_tags(&mut self.lines, &self.source);
+            self.width = Some(width);
+        }
+        self.scope = Some(scope.cwd.clone());
+        self.lines = super::wrapped_links::scoped_lines(&self.lines, scope);
         &self.lines
     }
 }
