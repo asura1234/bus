@@ -266,6 +266,13 @@ fn remaining_time(deadline: Option<Instant>) -> Option<Duration> {
 
 pub(super) fn execute(
     command: ParsedCommand,
+    send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+) -> Response {
+    execute_with_pause(command, send, &mut std::thread::sleep)
+}
+
+pub(super) fn execute_with_pause(
+    command: ParsedCommand,
     mut send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
     pause: &mut impl FnMut(Duration),
 ) -> Response {
