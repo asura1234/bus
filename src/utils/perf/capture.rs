@@ -51,7 +51,7 @@ impl Recorder {
         // Only the same captured stall can escalate during its cooldown.
         let reason = if !self.pending_captures.is_empty() {
             Some("capture_in_flight")
-        } else if !cooled && !previous.is_some_and(|(stall, _)| stall == id) {
+        } else if !cooled && previous.is_none_or(|(stall, _)| stall != id) {
             Some("cooldown")
         } else {
             None
