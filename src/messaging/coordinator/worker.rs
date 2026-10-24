@@ -1,4 +1,5 @@
 //! Coordinator worker ownership.
+use super::storage::remove_spooled;
 use super::{
     control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
@@ -7,6 +8,8 @@ use super::{
 use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
+
+mod control_reads;
 
 /// How often a tick moves settled history out of `state.json`.
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
@@ -415,7 +418,9 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
-                    self.serve_control(call, &events, &snapshots);
+                    if self.serve_control_without_refresh(call, &events, &snapshots, next_poll) {
+                        continue;
+                    }
                 }
                 Ok((id, command)) => {
                     let submitting =
@@ -749,17 +754,6 @@ fn next_command(
             }
         }
     }
-}
-
-fn remove_spooled(dir: &Path, paths: &[PathBuf]) -> Result<(), String> {
-    for path in paths {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())
 }
 
 /// Reads are answered after this tick, without suppressing its delivery. A

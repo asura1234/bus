@@ -82,6 +82,45 @@ fn a_retained_invalid_callback_is_not_rewritten_every_tick() {
 }
 
 #[test]
+fn unchanged_retained_callbacks_do_not_fold_draft_journals_on_every_tick() {
+    let (mut worker, _, room, dir, _) = idle_worker();
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"NotARealHook","session_id":"session"}),
+    );
+    worker.tick().unwrap();
+    let writes = worker.store.writes();
+    let events = mpsc::channel().0;
+    for index in 0..5 {
+        worker
+            .command(
+                BusCommand::SetDraftText(room, format!("draft {index}")),
+                &events,
+            )
+            .unwrap();
+        worker.tick().unwrap();
+    }
+    assert_eq!(
+        worker.store.writes(),
+        writes,
+        "unchanged retained callbacks must not turn each journalled draft into a full state save"
+    );
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.room(room).unwrap().draft.text, "draft 4");
+    assert_eq!(
+        spooled(&dir),
+        1,
+        "invalid input remains available for inspection"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn callbacks_applied_in_one_tick_are_saved_once_before_the_spool_is_cleared() {
     let (mut worker, _, _, dir, _) = idle_worker();
     for turn in 0..5 {

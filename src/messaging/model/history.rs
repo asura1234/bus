@@ -310,7 +310,7 @@ impl super::BusState {
             .filter_map(|agent| agent.runtime_identity.launch_id.clone())
             .collect();
         let callbacks = self.consumed_callbacks.len();
-        self.consumed_callbacks.retain(|_, launch| {
+        Arc::make_mut(&mut self.consumed_callbacks).retain(|_, launch| {
             launch
                 .as_ref()
                 .is_none_or(|launch| launches.contains(launch))

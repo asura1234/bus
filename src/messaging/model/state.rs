@@ -32,8 +32,9 @@ pub(crate) struct BusState {
     /// Applied provider callbacks by id, with the launch whose spool they
     /// came from; a re-spooled duplicate is refused while its id is kept.
     /// `None` marks ids carried over from a version 1 file, launch unknown.
-    #[serde(default)]
-    pub(super) consumed_callbacks: BTreeMap<String, Option<String>>,
+    /// Snapshots share retained keys; consuming or pruning a key copies them.
+    #[serde(default, with = "callback_keys")]
+    pub(super) consumed_callbacks: Arc<BTreeMap<String, Option<String>>>,
     /// Version 1 shapes of the spent-id guards, read once on load and moved
     /// into `consumed_callbacks` and `spent_dialog_answers`; never written.
     #[serde(default, skip_serializing)]
@@ -164,7 +165,7 @@ impl BusState {
             queues: BTreeMap::new(),
             reply_routes: BTreeMap::new(),
             worker_events: BTreeMap::new(),
-            consumed_callbacks: BTreeMap::new(),
+            consumed_callbacks: Arc::default(),
             consumed_callback_ids: BTreeSet::new(),
             consumed_dialog_fingerprints: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
@@ -184,7 +185,9 @@ impl BusState {
     /// lifetime.
     pub(crate) fn adopt_version_one_guards(&mut self, now_ms: u64) {
         for id in std::mem::take(&mut self.consumed_callback_ids) {
-            self.consumed_callbacks.entry(id).or_insert(None);
+            Arc::make_mut(&mut self.consumed_callbacks)
+                .entry(id)
+                .or_insert(None);
         }
         for token in std::mem::take(&mut self.consumed_dialog_fingerprints) {
             self.spent_dialog_answers
@@ -319,5 +322,26 @@ pub(super) fn normalized_name(name: &str) -> Result<String, ModelError> {
 impl Default for BusState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Keep the existing JSON map while sharing its in-memory keys across snapshots.
+mod callback_keys {
+    use super::{Arc, BTreeMap};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    type Keys = BTreeMap<String, Option<String>>;
+
+    pub(super) fn serialize<S: Serializer>(
+        keys: &Arc<Keys>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        keys.as_ref().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Arc<Keys>, D::Error> {
+        Keys::deserialize(deserializer).map(Arc::new)
     }
 }

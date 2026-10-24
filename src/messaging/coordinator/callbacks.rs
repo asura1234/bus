@@ -83,7 +83,7 @@ impl Worker {
         state
             .set_agent_runtime_identity(id, identity)
             .map_err(|e| e.to_string())?;
-        self.save(state)?;
+        self.save_callback_state(state)?;
         Ok(true)
     }
 
@@ -257,7 +257,7 @@ impl Worker {
                         state
                             .set_agent_error(id, Some(message))
                             .map_err(|e| e.to_string())?;
-                        self.save(state)?;
+                        self.save_callback_state(state)?;
                     }
                     return Ok(ControlFlow::Break(()));
                 }
@@ -478,7 +478,7 @@ impl Worker {
                 )
                 .map_err(|e| e.to_string())?;
             state.set_agent_error(id, Some("The Bus server kept the previous provider session after agent clear, so Bus can no longer follow this agent. Delete it and add a new one; restart Bus first if its server predates this build.".into())).map_err(|e| e.to_string())?;
-            self.save(state)?;
+            self.save_callback_state(state)?;
             self.acknowledge_spool(dir, vec![path.to_path_buf()])?;
             return Ok(CallbackFlow::Next);
         }
@@ -490,7 +490,7 @@ impl Worker {
         state
             .rebind_reset_session(id, session.to_owned())
             .map_err(|e| e.to_string())?;
-        self.save(state)?;
+        self.save_callback_state(state)?;
         // The callback stays spooled and is consumed on the next pass,
         // now under the rebound session.
         Ok(CallbackFlow::Stop)
@@ -561,7 +561,7 @@ impl Worker {
                     )
                     .map_err(|e| e.to_string())?;
                 state.set_agent_error(id, Some("Provider callback session differs from this Bus launch; request ownership is preserved. Inspect the terminal and create a new Bus agent for a new session.".into())).map_err(|e| e.to_string())?;
-                self.save(state)?;
+                self.save_callback_state(state)?;
                 self.acknowledge_spool(dir, vec![path.to_path_buf()])?;
                 return Ok(ControlFlow::Break(CallbackFlow::Next));
             }
@@ -625,7 +625,7 @@ impl Worker {
                 state
                     .set_agent_error(id, Some(message))
                     .map_err(|e| e.to_string())?;
-                self.save(state)?;
+                self.save_callback_state(state)?;
                 return Ok(ControlFlow::Break(CallbackFlow::Next));
             }
         };
@@ -708,7 +708,7 @@ impl Worker {
                 state.hold_background_reply(id, interim);
             }
         }
-        self.save(state)?;
+        self.save_callback_state(state)?;
         tracing::debug!(
             event = "bus.callback.applied",
             "Callback state committed; its spool files go once it is durable"

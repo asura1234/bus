@@ -73,8 +73,8 @@ state includes each agent's compactions, its wait_reason (why a queued message w
 it, or null) and per-provider usage (5-hour and weekly used %).
 Claude usage comes from its status line; Codex usage is read after each turn.
 Usage status \"unknown\" means data is missing or stale, never that the allowance is unused.
-wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
-wait --async has no deadline and stops when the message settles or a recipient needs a dialog.
+Bounded wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
+Async waits have no deadline and back off from 200 ms to 2 s; wait --async stops on settlement or a dialog.
 Both async waits exit 1 with bus_down after four consecutive transport failures.
 Live-server overload replies and accepted-connection disconnects back off and retry.
 send --async blocks with no time limit until the message is complete: every recipient

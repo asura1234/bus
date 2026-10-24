@@ -46,6 +46,15 @@ impl Worker {
         }
     }
 
+    /// A callback that changes nothing must not fold an already durable draft
+    /// journal into state.json. Pending batch changes still commit before ack.
+    pub(super) fn save_callback_state(&mut self, state: BusState) -> Result<(), String> {
+        if state != self.state {
+            self.save(state)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn storage_notice(&self) -> &'static str {
         match self.storage_pause.as_ref() {
             Some(StoragePause::NeedsRepair) => STORAGE_NEEDS_REPAIR,
@@ -140,4 +149,18 @@ impl Worker {
         );
         let _ = events.send(BusEvent::StorageRecovered);
     }
+}
+
+pub(super) fn remove_spooled(
+    dir: &std::path::Path,
+    paths: &[std::path::PathBuf],
+) -> Result<(), String> {
+    for path in paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())
 }

@@ -1,10 +1,7 @@
 //! Async following and bounded or unbounded message waits.
 use super::{next_request_id, ParsedCommand, Request, Response};
 use serde_json::{json, Value};
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 /// The control server rejects a connection over its shared client limit with
 /// `server_busy` before reading the request, so the same request can be sent
@@ -16,6 +13,8 @@ const BUSY_RETRIES: u32 = 5;
 /// Four consecutive failed reads allow three seconds of reconnect grace.
 /// Successful reads reset the budget; a healthy long turn has no deadline.
 const TRANSPORT_FAILURE_LIMIT: u32 = 4;
+// Long-lived followers should not keep the short-poll rate for a whole turn.
+const ASYNC_POLL_MAX_DELAY: Duration = Duration::from_secs(2);
 
 fn bus_down_response(id: &str, message: String) -> Response {
     Response::failure(
@@ -76,6 +75,7 @@ pub(super) fn follow_message(
     };
     let mut busy_delay = BUSY_FIRST_DELAY;
     let mut transport_failures = 0;
+    let mut poll_delay = Duration::from_millis(200);
     loop {
         let mut params = json!({ "message": message });
         if let Some(author) = &author {
@@ -122,7 +122,10 @@ pub(super) fn follow_message(
                     failure.result = response.result;
                     return failure;
                 }
-                None => pause(Duration::from_millis(200)),
+                None => {
+                    pause(poll_delay);
+                    poll_delay = (poll_delay * 2).min(ASYNC_POLL_MAX_DELAY);
+                }
             },
         }
     }
@@ -261,9 +264,29 @@ fn remaining_time(deadline: Option<Instant>) -> Option<Duration> {
     deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
 }
 
+fn pause_pending_poll(
+    deadline: Option<Instant>,
+    poll_delay: &mut Duration,
+    pause: &mut impl FnMut(Duration),
+) {
+    let remaining = remaining_time(deadline);
+    pause(remaining.map_or(*poll_delay, |remaining| (*poll_delay).min(remaining)));
+    if deadline.is_none() {
+        *poll_delay = (*poll_delay * 2).min(ASYNC_POLL_MAX_DELAY);
+    }
+}
+
 pub(super) fn execute(
     command: ParsedCommand,
+    send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+) -> Response {
+    execute_with_pause(command, send, &mut std::thread::sleep)
+}
+
+pub(super) fn execute_with_pause(
+    command: ParsedCommand,
     mut send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+    pause: &mut impl FnMut(Duration),
 ) -> Response {
     let waiting = command.wait_for_message;
     let id = command.request_id;
@@ -277,6 +300,7 @@ pub(super) fn execute(
     let mut busy_delay = BUSY_FIRST_DELAY;
     let mut busy_retries = 0;
     let mut transport_failures = 0;
+    let mut poll_delay = Duration::from_millis(200);
     loop {
         let remaining = remaining_time(deadline);
         if remaining == Some(Duration::ZERO) {
@@ -289,7 +313,7 @@ pub(super) fn execute(
             }
             Err(message) if waiting && connected_failure(&message) => {
                 transport_failures = 0;
-                thread::sleep(remaining.map_or(busy_delay, |d| d.min(busy_delay)));
+                pause(remaining.map_or(busy_delay, |d| d.min(busy_delay)));
                 busy_delay = next_busy_delay(busy_delay);
                 request.id = next_request_id();
                 continue;
@@ -302,7 +326,7 @@ pub(super) fn execute(
                         response.result = last_status;
                         return response;
                     }
-                    thread::sleep(Duration::from_secs(1));
+                    pause(Duration::from_secs(1));
                     request.id = next_request_id();
                     continue;
                 }
@@ -323,7 +347,7 @@ pub(super) fn execute(
                 }
                 busy_retries += 1;
             }
-            thread::sleep(remaining.map_or(busy_delay, |remaining| busy_delay.min(remaining)));
+            pause(remaining.map_or(busy_delay, |remaining| busy_delay.min(remaining)));
             busy_delay = next_busy_delay(busy_delay);
             continue;
         }
@@ -360,10 +384,7 @@ pub(super) fn execute(
             return failure;
         }
         last_status = response.result;
-        let remaining = remaining_time(deadline);
-        thread::sleep(remaining.map_or(Duration::from_millis(200), |remaining| {
-            Duration::from_millis(200).min(remaining)
-        }));
+        pause_pending_poll(deadline, &mut poll_delay, pause);
         // Every status read is fresh even if the server caches request outcomes.
         request.id = next_request_id();
     }

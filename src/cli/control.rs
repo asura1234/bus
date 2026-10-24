@@ -11,7 +11,7 @@ mod wait;
 #[cfg(test)]
 use super::help::{agent_help, DEV_HELP};
 use parse::{parse, ParsedCommand};
-use wait::{execute, follow_message};
+use wait::{execute, execute_with_pause, follow_message};
 
 use crate::messaging::control::{self, Request, Response};
 #[cfg(test)]
@@ -134,7 +134,7 @@ fn run_with_pause(
             if follow || command.wait_for_message {
                 reply_author = command.params["as"].as_str().map(str::to_owned);
             }
-            let sent = execute(command, &mut *send);
+            let sent = execute_with_pause(command, &mut *send, &mut pause);
             if follow && sent.ok {
                 let selector = match &reply_author {
                     Some(author) => {
