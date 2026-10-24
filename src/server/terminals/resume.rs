@@ -325,6 +325,31 @@ impl App {
             }
         };
 
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            if let (Some(name), Some(kind)) =
+                (terminal.agent_name.clone(), terminal.managed_agent_kind())
+            {
+                // The restored Idle label describes the old process. Require
+                // fresh detection and the same readiness guard as AgentStart.
+                let now = Instant::now();
+                terminal.set_detected_state_with_screen_signals_at(
+                    None,
+                    crate::agents::AgentState::Unknown,
+                    false,
+                    false,
+                    None,
+                    now,
+                );
+                terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
+                terminal.begin_managed_agent(
+                    name,
+                    kind,
+                    now,
+                    super::agents::AGENT_START_SETTLE_DELAY,
+                    super::agents::DEFAULT_AGENT_START_TIMEOUT,
+                );
+            }
+        }
         let mut input = resume_command;
         input.push('\r');
         if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {

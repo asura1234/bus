@@ -184,6 +184,16 @@ fn provider_exit_while_idle_saves_screen_in_state_without_chat() {
     exited_worker(&mut f);
     let pane = ExitedPane::install(&mut f, 0);
     f.worker.poll().unwrap();
+    assert!(
+        f.worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .runtime_identity
+            .pane_id
+            .is_none(),
+        "a successfully closed exit pane must no longer be focusable"
+    );
     let master = f.worker.state.master_room().unwrap().id;
     assert_eq!(f.worker.state.notices(master).count(), 0);
     let snapshot = f

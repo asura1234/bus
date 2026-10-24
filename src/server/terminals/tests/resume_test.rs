@@ -68,6 +68,74 @@ fn test_app() -> App {
 }
 
 #[cfg(unix)]
+#[tokio::test]
+async fn restored_provider_is_launching_until_the_resumed_process_is_confirmed() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("failed-resume");
+    let pane = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(app.state.view.terminal_area);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    app.state.default_shell = "/bin/sh".into();
+    let dir = crate::utils::test_temp::unique_temp_path("bus-failed-resume-cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    let provider = dir.join("fake-claude.sh");
+    std::fs::write(
+        &provider,
+        "printf 'No conversation found with session ID: missing\\n'\nexit 1\n",
+    )
+    .unwrap();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("saved-worker".into(), crate::agents::AgentKind::Claude);
+    terminal.set_detected_state(
+        Some(crate::agents::AgentKind::Claude),
+        crate::agents::AgentState::Idle,
+    );
+    terminal.pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
+        agent: "claude".into(),
+        argv: vec!["/bin/sh".into(), provider.to_string_lossy().into_owned()],
+        dedupe_key: "rejected-resume".into(),
+    });
+    let info = app.collect_agent_infos().pop().unwrap();
+    assert!(
+        info.launch_pending,
+        "a saved identity is not proof of a live process"
+    );
+    assert!(!info.interactive_ready);
+    assert!(app.start_pending_agent_resumes(true));
+    let info = app.collect_agent_infos().pop().unwrap();
+    assert!(
+        info.launch_pending,
+        "typing --resume must use the normal launch guard"
+    );
+    assert!(!info.interactive_ready);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        app.drain_all_internal_events();
+        let runtime = app.terminal_runtimes.get(&terminal_id).unwrap();
+        if runtime
+            .snapshot_history()
+            .is_some_and(|text| text.contains("No conversation found with session ID: missing"))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fake resume did not run"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    for (_, runtime) in app.terminal_runtimes.drain() {
+        runtime.shutdown();
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
 fn long_running_test_argv() -> Vec<String> {
     vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()]
 }
