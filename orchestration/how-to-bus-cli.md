@@ -12,6 +12,20 @@ If you are an agent orchestrating a room, also read the
 
 This guide covers both surfaces. It uses an installed `bus` command in examples.
 
+## Getting help
+
+Use `bus <cmd> [<sub>] --help` (or `-h`) as the source of truth for a
+command's flags, usage, and examples. For example:
+
+```sh
+bus agent --help
+bus agent add --help
+```
+
+`bus --help` lists commands. A bare command group such as `bus agent` also
+lists its subcommands. Help prints text, exits successfully, and does not need
+a running session.
+
 ## Start or resume Bus
 
 Start a new interactive session:
