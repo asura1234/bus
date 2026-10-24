@@ -560,3 +560,28 @@ fn startup_readiness_accepts_a_bare_composer_but_preserves_a_typed_draft() {
         );
     }
 }
+
+#[test]
+fn codex_captured_0_164_footer_confirms_startup_and_preserves_negative_controls() {
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    // Captured from the real v0.164.0 launch that failed STAFF-01. The blank
+    // composer/model row is provider chrome, not an incomplete footer.
+    let captured = include_str!("../../../../tests/fixtures/codex-startup/empty-footer-0.164.txt");
+    for screen in [captured.to_owned(), captured.replacen("\n\n", "\n", 1)] {
+        let result = detect_startup_screen_with_osc(AgentKind::Codex, &screen, "⠋ Codex", "");
+        assert_eq!(result.state, AgentState::Idle, "{screen}");
+        assert!(result.visible_idle, "{screen}");
+    }
+    for screen in [
+        captured.replace("Ask Codex to do anything", "inspect my changes"),
+        format!("• Working (1s · esc to interrupt)\n{captured}"),
+        format!("{captured}• Working (1s · esc to interrupt)\n"),
+    ] {
+        let result = detect_startup_screen_with_osc(AgentKind::Codex, &screen, "⠋ Codex", "");
+        assert_eq!(result.state, AgentState::Working, "{screen}");
+        assert!(!result.visible_idle, "{screen}");
+    }
+    let blocked = detect_startup_screen_with_osc(AgentKind::Codex, captured, "Action Required", "");
+    assert_eq!(blocked.state, AgentState::Blocked);
+    assert!(blocked.visible_blocker);
+}

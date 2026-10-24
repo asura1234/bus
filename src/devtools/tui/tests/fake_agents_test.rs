@@ -392,6 +392,10 @@ fn fake_codex_prompt_proves_managed_startup_readiness() {
     screen.feed(prompt_top("codex").as_bytes());
     screen.feed(prompt_box("", "codex", 80).as_bytes());
     let text = screen_rows_of(&screen).join("\n");
+    assert!(
+        text.contains("› Ask Codex to do anything\n\n  GPT-fake"),
+        "the fake must retain the real v0.164 composer/model spacing: {text}"
+    );
     let detection = detect_agent_with_launch_context(Some(AgentKind::Codex), &text, "", "", true);
     assert_eq!(detection.state, AgentState::Idle, "{text}");
     assert!(
@@ -424,8 +428,9 @@ fn the_fake_codex_draws_a_codex_composer_that_bus_can_read() {
         "{rows:#?}"
     );
     let composer = rows.iter().position(|row| row.starts_with('›')).unwrap();
-    assert_eq!(rows[composer + 1], "  GPT-fake · fake codex");
-    assert_eq!(rows[composer + 2], "  ? for shortcuts");
+    assert_eq!(rows[composer + 1], "");
+    assert_eq!(rows[composer + 2], "  GPT-fake · fake codex");
+    assert_eq!(rows[composer + 3], "  ? for shortcuts");
     assert!(!rows.iter().any(|row| row.starts_with('❯')), "{rows:#?}");
 
     for draft in ["h", "he", "hey"] {

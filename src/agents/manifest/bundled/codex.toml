@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.10.24.1"
+version = "2026.10.25.1"
 min_engine_version = 3
-updated_at = "2026-10-24T16:20:53Z"
+updated_at = "2026-10-24T17:30:00Z"
 
 # "Update now" replaces the Codex UI with the package manager it runs, while the
 # node launcher keeps the pane's process looking like Codex. Without this rule
@@ -68,6 +68,7 @@ regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
 # Codex has no SessionStart or rollout before its first prompt. Its startup
 # prompt can already be ready while OSC still carries a bootstrap spinner.
 # Require all three live footer lines, and never override visible working text.
+# Codex 0.164 may leave one blank row between the composer and model.
 [[rules]]
 id = "startup_prompt_idle"
 managed_launch_only = true
@@ -75,7 +76,7 @@ state = "idle"
 priority = 1080
 region = "whole_recent"
 visible_idle = true
-regex = ['(?m)^[ \t]*›[ \t]*{{codex_empty_composer}}[ \t]*\r?\n[ \t]*GPT-[^\r\n]+·[^\r\n]+\r?\n[ \t]*\? for shortcuts[^\r\n]*\s*\z']
+regex = ['(?m)^[ \t]*›[ \t]*{{codex_empty_composer}}[ \t]*\r?\n(?:[ \t]*\r?\n)?[ \t]*GPT-[^\r\n]+·[^\r\n]+\r?\n[ \t]*\? for shortcuts[^\r\n]*\s*\z']
 not = [{ line_regex = ['(?i)^\s*[•◦]\s+\S.*esc to interrupt'] }]
 
 [[rules]]
