@@ -264,6 +264,18 @@ fn remaining_time(deadline: Option<Instant>) -> Option<Duration> {
     deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
 }
 
+fn pause_pending_poll(
+    deadline: Option<Instant>,
+    poll_delay: &mut Duration,
+    pause: &mut impl FnMut(Duration),
+) {
+    let remaining = remaining_time(deadline);
+    pause(remaining.map_or(*poll_delay, |remaining| (*poll_delay).min(remaining)));
+    if deadline.is_none() {
+        *poll_delay = (*poll_delay * 2).min(ASYNC_POLL_MAX_DELAY);
+    }
+}
+
 pub(super) fn execute(
     command: ParsedCommand,
     send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
@@ -372,11 +384,7 @@ pub(super) fn execute_with_pause(
             return failure;
         }
         last_status = response.result;
-        let remaining = remaining_time(deadline);
-        pause(remaining.map_or(poll_delay, |remaining| poll_delay.min(remaining)));
-        if deadline.is_none() {
-            poll_delay = (poll_delay * 2).min(ASYNC_POLL_MAX_DELAY);
-        }
+        pause_pending_poll(deadline, &mut poll_delay, pause);
         // Every status read is fresh even if the server caches request outcomes.
         request.id = next_request_id();
     }

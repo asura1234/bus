@@ -9,6 +9,8 @@ use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
 
+mod control_reads;
+
 /// How often a tick moves settled history out of `state.json`.
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 
@@ -415,17 +417,7 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
-                    let read = !control_dispatch::is_mutation(&call.request.method);
-                    let revision = self.revision;
-                    let error = self.error.clone();
-                    self.serve_control(call, &events, &snapshots);
-                    // Unchanged reads need no notification scan or copied UI state.
-                    // Due polls still run, so a follower flood cannot stop delivery.
-                    if read
-                        && self.revision == revision
-                        && self.error == error
-                        && std::time::Instant::now() < next_poll
-                    {
+                    if self.serve_control_without_refresh(call, &events, &snapshots, next_poll) {
                         continue;
                     }
                 }
