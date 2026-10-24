@@ -385,8 +385,9 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         if !input.consent_project_hooks {
+            let binary = std::env::current_exe().map_err(|e| e.to_string())?;
             if let Some(notice) =
-                launch::setup_notice(identity::provider_kind(input.provider), &cwd)
+                launch::setup_notice(identity::provider_kind(input.provider), &cwd, &binary)
             {
                 let _ = events.send(BusEvent::SetupRequired {
                     input,

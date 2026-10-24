@@ -1,6 +1,102 @@
 use super::*;
 
 #[test]
+fn agent_add_requires_consent_only_when_project_hooks_would_change() {
+    use crate::agents::providers::{hook_json, ProviderKind};
+
+    struct RestorePath(Option<std::ffi::OsString>);
+    impl Drop for RestorePath {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _restore = RestorePath(std::env::var_os("PATH"));
+    let binary = std::env::current_exe().unwrap();
+    for (provider, folder) in [
+        (ProviderKind::Codex, ".codex"),
+        (ProviderKind::Cursor, ".cursor"),
+    ] {
+        for case in [
+            "missing",
+            "present",
+            "outdated",
+            "incomplete",
+            "conflicting",
+            "invalid",
+        ] {
+            let (mut worker, _room, _agent, dir) = fixture();
+            worker.transport = Box::new(NoTabs);
+            let bin = dir.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join(provider.executable()), "fixture binary").unwrap();
+            std::env::set_var("PATH", &bin);
+            let path = dir.join(folder).join("hooks.json");
+            let contract = hook_json::HookContract::for_provider(provider);
+            let previous = if case == "missing" {
+                None
+            } else if case == "invalid" {
+                Some(b"invalid JSON".to_vec())
+            } else {
+                let other_binary = dir.join("another Bus executable");
+                let expected_binary = if case == "outdated" {
+                    &other_binary
+                } else {
+                    &binary
+                };
+                let mut document = hook_json::merge_hooks(
+                    json!({"user_setting":"keep"}),
+                    contract,
+                    expected_binary,
+                )
+                .unwrap();
+                let event = contract.events[0];
+                if case == "incomplete" {
+                    document["hooks"].as_object_mut().unwrap().remove(event);
+                } else if case == "conflicting" {
+                    document["hooks"][event][0]["unexpected"] = json!(true);
+                }
+                // Compact JSON with trailing whitespace differs from the installer's
+                // pretty output, so a rewrite cannot hide behind equal JSON values.
+                let mut bytes = serde_json::to_vec(&document).unwrap();
+                bytes.extend_from_slice(b"\n\n");
+                Some(bytes)
+            };
+            if let Some(bytes) = &previous {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, bytes).unwrap();
+            }
+            let response = call(
+                &mut worker,
+                "without-consent",
+                "agent.add",
+                json!({"room":"test","name":"candidate","provider":provider.label(),
+                    "cwd":dir.to_string_lossy()}),
+            );
+            let error = error_message(&response);
+            if case == "present" {
+                assert!(
+                    error.contains("no tabs in tests"),
+                    "{provider:?}/{case}: {response:?}"
+                );
+            } else {
+                assert!(
+                    error.contains("--consent-hooks"),
+                    "{provider:?}/{case}: {response:?}"
+                );
+            }
+            assert_eq!(std::fs::read(&path).ok(), previous, "{provider:?}/{case}");
+            assert!(!path.parent().unwrap().join(".bus-hooks.lock").exists());
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
 fn codex_is_refused_as_an_orchestrator_but_not_as_a_worker() {
     let (mut worker, _room, _agent, dir) = fixture();
     worker.state.create_room("second").unwrap();
