@@ -487,7 +487,10 @@ fn large_room_ui_profile() {
                     assert!(Instant::now() < deadline);
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
-                eprintln!("UI background={background} {label}: max_pending_or_apply_frame_us={max_frame_us} rows={}", ui.history.cached().len());
+                eprintln!(
+                    "UI background={background} {label}: max_pending_or_apply_frame_us={max_frame_us} rows={}",
+                    ui.history.cached().len()
+                );
             }
         }
     }
@@ -626,4 +629,169 @@ fn append_only_projects_links_for_the_new_message() {
             &mut Thumbnails::default()
         )
     );
+}
+
+fn rooms_with_history(count: usize) -> (BusState, Vec<RoomId>) {
+    let mut state = BusState::default();
+    let mut rooms = Vec::new();
+    for index in 0..count {
+        let room = state.create_room(&format!("room-{index}")).unwrap();
+        let agent = state
+            .create_agent(
+                room,
+                &format!("worker-{index}"),
+                Provider::Codex,
+                "/project".into(),
+                None,
+            )
+            .unwrap();
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("visited room {index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1_800_000_000_000,
+            )
+            .unwrap();
+        rooms.push(room);
+    }
+    (state, rooms)
+}
+
+#[test]
+fn returning_to_a_fifth_visited_room_keeps_its_history_visible() {
+    let (state, rooms) = rooms_with_history(5);
+    let snapshot = snapshot(state, 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    for room in &rooms {
+        await_layout(
+            &mut history,
+            Arc::clone(&snapshot),
+            *room,
+            80,
+            1_800_000_010_000,
+            &mut thumbnails,
+        );
+    }
+    history.request_lines(
+        Arc::clone(&snapshot),
+        rooms[0],
+        80,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    assert!(
+        history
+            .cached()
+            .iter()
+            .any(|line| line.text.contains("visited room 0")),
+        "a previously visited room came back with {} rows",
+        history.cached().len()
+    );
+}
+
+#[test]
+fn visited_room_markdown_stays_warm_after_five_rooms_and_a_revision() {
+    let (mut state, rooms) = rooms_with_history(5);
+    let initial = snapshot(state.clone(), 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    await_layout(
+        &mut history,
+        Arc::clone(&initial),
+        rooms[0],
+        80,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    let original = history
+        .cached()
+        .iter()
+        .find_map(|line| {
+            line.raw_markdown
+                .as_ref()
+                .map(|(_, source)| Arc::clone(source))
+        })
+        .unwrap();
+    for room in &rooms[1..] {
+        await_layout(
+            &mut history,
+            Arc::clone(&initial),
+            *room,
+            80,
+            1_800_000_010_000,
+            &mut thumbnails,
+        );
+    }
+    state
+        .set_room_notes(rooms[0], "new global revision without a history change")
+        .unwrap();
+    let updated = snapshot(state, 2);
+    await_layout(
+        &mut history,
+        updated,
+        rooms[0],
+        80,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    let reused = history
+        .cached()
+        .iter()
+        .find_map(|line| line.raw_markdown.as_ref().map(|(_, source)| source))
+        .unwrap();
+    assert!(
+        Arc::ptr_eq(&original, reused),
+        "returning after a revision must not parse the first room's Markdown again"
+    );
+}
+
+#[test]
+fn deleting_a_visited_room_releases_its_cached_layout() {
+    let (mut state, rooms) = rooms_with_history(2);
+    let initial = snapshot(state.clone(), 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    await_layout(
+        &mut history,
+        Arc::clone(&initial),
+        rooms[0],
+        80,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    let deleted_rows = Arc::downgrade(&history.lines);
+    await_layout(
+        &mut history,
+        initial,
+        rooms[1],
+        80,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    state.delete_room(rooms[0], 1_800_000_010_000).unwrap();
+    await_layout(
+        &mut history,
+        snapshot(state, 2),
+        rooms[1],
+        80,
+        1_800_000_010_000,
+        &mut thumbnails,
+    );
+    assert!(
+        deleted_rows.upgrade().is_none(),
+        "deleted room rows must be released by both UI and worker caches"
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text.contains("visited room 1")));
 }

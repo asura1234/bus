@@ -3,14 +3,12 @@ use super::super::thumbnails::Thumbnails;
 use super::{History, Line};
 use crate::messaging::{coordinator::BusSnapshot, model::RoomId};
 use crate::protocol::kitty::HostCellSize;
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Condvar, Mutex,
 };
-
-const CACHED_ROOMS: usize = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Key {
@@ -80,7 +78,7 @@ pub(super) struct Background {
     shared: Arc<Shared>,
     requested: Option<Key>,
     displayed_room: Option<RoomId>,
-    layouts: VecDeque<Layout>,
+    layouts: BTreeMap<RoomId, Layout>,
     _thread: std::thread::JoinHandle<()>,
 }
 
@@ -101,7 +99,9 @@ impl Background {
             minute: now / 60_000,
             cell,
         };
-        self.layouts.iter().any(|layout| layout.reusable(key, now))
+        self.layouts
+            .get(&room)
+            .is_some_and(|layout| layout.reusable(key, now))
     }
 
     fn start() -> Result<Self, String> {
@@ -115,7 +115,7 @@ impl Background {
             shared,
             requested: None,
             displayed_room: None,
-            layouts: VecDeque::new(),
+            layouts: BTreeMap::new(),
             _thread: thread,
         })
     }
@@ -186,12 +186,16 @@ impl History {
             minute: now / 60_000,
             cell: thumbnails.layout_key(),
         };
+        // A live visited room keeps its completed rows, even while its inputs
+        // change. Deletion releases both these rows and the worker's cache.
+        background
+            .layouts
+            .retain(|id, _| snapshot.state.room(*id).is_some());
         // Never show another room's rows while this room's first layout loads.
         if background.displayed_room != Some(room) {
             self.lines = background
                 .layouts
-                .iter()
-                .find(|layout| layout.key.room == room)
+                .get(&room)
                 .map_or_else(Arc::default, |layout| Arc::clone(&layout.lines));
             background.displayed_room = Some(room);
         }
@@ -205,22 +209,14 @@ impl History {
             mailbox.result.take()
         };
         if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
-            background
-                .layouts
-                .retain(|old| old.key.room != layout.key.room);
-            background.layouts.push_back(layout);
-            if background.layouts.len() > CACHED_ROOMS {
-                background.layouts.pop_front();
-            }
+            background.layouts.insert(layout.key.room, layout);
         }
-        if let Some(index) = background
+        if let Some(layout) = background
             .layouts
-            .iter()
-            .position(|layout| layout.reusable(key, now))
+            .get(&room)
+            .filter(|layout| layout.reusable(key, now))
         {
-            let layout = background.layouts.remove(index).unwrap();
             self.lines = Arc::clone(&layout.lines);
-            background.layouts.push_back(layout);
             if background.requested != Some(key) {
                 background.shared.generation.fetch_add(1, Ordering::Relaxed);
                 let mut mailbox = background
@@ -234,11 +230,7 @@ impl History {
             return;
         }
         // Keep the same room's last complete layout during a resize or update.
-        if let Some(layout) = background
-            .layouts
-            .iter()
-            .find(|layout| layout.key.room == room)
-        {
+        if let Some(layout) = background.layouts.get(&room) {
             self.lines = Arc::clone(&layout.lines);
         }
         if background.requested == Some(key) {
@@ -273,7 +265,7 @@ impl History {
 }
 
 fn run(shared: Arc<Shared>) {
-    let mut rooms: VecDeque<(RoomId, History)> = VecDeque::new();
+    let mut rooms: BTreeMap<RoomId, History> = BTreeMap::new();
     let mut thumbnails = Thumbnails::default();
     loop {
         let job = {
@@ -286,14 +278,11 @@ fn run(shared: Arc<Shared>) {
             }
             mailbox.next.take().unwrap()
         };
-        rooms.retain(|(id, _)| job.snapshot.state.room(*id).is_some());
+        rooms.retain(|id, _| job.snapshot.state.room(*id).is_some());
         let Some(room) = job.snapshot.state.room(job.key.room) else {
             continue;
         };
-        let index = rooms.iter().position(|(id, _)| *id == room.id);
-        let (_, mut history) = index
-            .and_then(|index| rooms.remove(index))
-            .unwrap_or_else(|| (room.id, History::default()));
+        let history = rooms.entry(room.id).or_default();
         history.cancellation = Some(Cancellation {
             shared: Arc::clone(&shared),
             generation: job.generation,
@@ -315,10 +304,6 @@ fn run(shared: Arc<Shared>) {
             lines: Arc::clone(&history.lines),
             age_valid: history.age_valid.clone(),
         };
-        rooms.push_back((room.id, history));
-        if rooms.len() > CACHED_ROOMS {
-            rooms.pop_front();
-        }
         let mut mailbox = shared.mailbox.lock().unwrap_or_else(|e| e.into_inner());
         if !mailbox.stopped && shared.generation.load(Ordering::Relaxed) == job.generation {
             mailbox.result = Some(layout);
