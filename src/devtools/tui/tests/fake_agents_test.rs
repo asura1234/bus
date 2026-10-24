@@ -387,6 +387,7 @@ fn fake_codex_prompt_proves_managed_startup_readiness() {
     use crate::agents::{detect_agent_with_launch_context, AgentKind, AgentState};
     use crate::devtools::tui::screen::Screen;
 
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let mut screen = Screen::new(80, 12).unwrap();
     screen.feed(prompt_top("codex").as_bytes());
     screen.feed(prompt_box("", "codex", 80).as_bytes());
