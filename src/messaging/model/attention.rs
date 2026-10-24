@@ -126,6 +126,7 @@ impl BusState {
         room.notices.push(prompt);
         if !visible {
             room.unread_count = room.unread_count.saturating_add(1);
+            room.unseen_to_developer = true;
         }
         Ok(())
     }

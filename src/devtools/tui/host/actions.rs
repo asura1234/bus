@@ -121,6 +121,7 @@ impl Host {
             if !matches!(
                 command,
                 Command::Stop
+                    | Command::Restart
                     | Command::Status
                     | Command::Snapshot { .. }
                     | Command::Find { .. }
@@ -134,6 +135,7 @@ impl Host {
         }
         match command {
             Command::Status => self.status(),
+            Command::Restart => self.restart(),
             Command::Snapshot { rows } => self.snapshot(rows),
             Command::Find { text, regex, rows } => match needle(&text, regex) {
                 Ok(needle) => {

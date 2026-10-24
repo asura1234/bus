@@ -16,6 +16,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 mod actions;
+mod restart;
 mod visual;
 mod waits;
 
@@ -85,7 +86,7 @@ pub(super) fn run(root: &Path, options: HostOptions) -> i32 {
         eprintln!("bus tui host: {error}");
         1
     };
-    let mut host = match start(&paths, &options, owner) {
+    let mut host = match start(&paths, &options, owner, None) {
         Ok(host) => host,
         Err(error) => return failed(error),
     };
@@ -103,13 +104,19 @@ fn start(
     paths: &SessionPaths,
     options: &HostOptions,
     owner: std::fs::File,
+    trace: Option<Arc<Mutex<Trace>>>,
 ) -> Result<Host, String> {
     let binary = std::env::current_exe().map_err(|e| e.to_string())?;
     let env = scratch_env(paths, &options.token, &super::session::inherited_env());
     super::fake_agents::install(&paths.bin_dir(), &binary).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&options.run_dir).map_err(|e| e.to_string())?;
-    let trace = Trace::open(&options.run_dir, options.cols, options.rows)
-        .map_err(|e| format!("cannot open run dir {}: {e}", options.run_dir.display()))?;
+    let trace = match trace {
+        Some(trace) => trace,
+        None => Arc::new(Mutex::new(
+            Trace::open(&options.run_dir, options.cols, options.rows)
+                .map_err(|e| format!("cannot open run dir {}: {e}", options.run_dir.display()))?,
+        )),
+    };
     let screen = Screen::new(options.cols, options.rows).map_err(|e| e.to_string())?;
 
     let pair = native_pty_system()
@@ -156,7 +163,6 @@ fn start(
         }),
         Condvar::new(),
     ));
-    let trace = Arc::new(Mutex::new(trace));
     let child = Arc::new(Mutex::new(child));
     spawn_pump(
         reader,

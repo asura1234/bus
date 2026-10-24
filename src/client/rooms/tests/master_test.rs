@@ -26,6 +26,40 @@ fn master_fixture() -> (BusUi, RoomId, RoomId, RoomId, AgentId) {
 }
 
 #[test]
+fn unread_dot_is_green_clickable_and_survives_narrow_room_labels() {
+    let (ui, master, room, other, author) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .rename_room(room, "非常长的房间名称-with-a-long-suffix")
+        .unwrap();
+    for target in [master, room] {
+        snapshot
+            .state
+            .post_to_developer(target, author, "decision".into(), vec![], 1)
+            .unwrap();
+    }
+    let mut ui = BusUi::new(Arc::new(snapshot));
+    ui.open_room(other);
+    for width in [20, 28, 60] {
+        ui.settings.sidebar_width = width;
+        ui.compute_view(100, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        for target in [master, room] {
+            let row = render::sidebar_room_row(&ui.snapshot.state, target, ui.room).unwrap() as u16;
+            let dots: Vec<_> = (0..width)
+                .filter(|&x| buffer[(x, row)].symbol() == "●")
+                .collect();
+            assert_eq!(dots.len(), 1, "room {target:?}, width {width}");
+            let x = dots[0];
+            assert_eq!(buffer[(x, row)].fg, render::ACCENT);
+            assert_eq!(ui.view.hit_at(x, row), Some(&render::Action::Room(target)));
+        }
+    }
+}
+
+#[test]
 fn worker_to_orchestrator_picker_lists_and_selects_only_the_bound_orchestrator() {
     let (mut ui, master, room, other, orchestrator) = master_fixture();
     let mut snapshot = (*ui.snapshot).clone();

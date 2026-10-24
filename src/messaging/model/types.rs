@@ -225,6 +225,10 @@ pub(crate) struct Room {
     pub(crate) missing_provider_binaries: BTreeSet<String>,
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
+    /// A message addressed to You arrived while this room was not visible.
+    /// Separate from unread_count, which also includes peer traffic and replies.
+    #[serde(default)]
+    pub(crate) unseen_to_developer: bool,
     pub(crate) latest_prompt: Option<Prompt>,
     /// Messages to the developer with no agent recipients, including Bus's
     /// own notices.

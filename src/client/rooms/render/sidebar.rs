@@ -158,6 +158,9 @@ pub(in crate::client::rooms) fn sidebar_room_row(
 
 /// A room's sidebar label, its name truncated to fit in `width` cells.
 pub(in crate::client::rooms) fn room_label(room: &Room, width: usize) -> String {
+    if width <= 2 {
+        return "# ".chars().take(width).collect();
+    }
     let room_width = width.saturating_sub(2);
     let name = if cells(&room.name) <= room_width {
         room.name.clone()
@@ -175,6 +178,19 @@ pub(in crate::client::rooms) fn room_label(room: &Room, width: usize) -> String 
         name
     };
     format!("# {name}")
+}
+
+/// Reserve the suffix before truncating, so the unseen marker always fits.
+fn sidebar_room_label(room: &Room, width: u16) -> String {
+    if room.unseen_to_developer {
+        match width {
+            0 => String::new(),
+            1 | 2 => "●".into(),
+            _ => format!("{} ●", room_label(room, usize::from(width - 2))),
+        }
+    } else {
+        room_label(room, usize::from(width))
+    }
 }
 
 /// The MASTER line under an agent's provider: the room it orchestrates, or
@@ -420,7 +436,7 @@ impl BusUi {
             if rect.height == 0 {
                 continue;
             }
-            let label = room_label(room, usize::from(name_width));
+            let label = sidebar_room_label(room, name_width);
             if let Some(rename) = self
                 .rename
                 .as_ref()
@@ -430,11 +446,16 @@ impl BusUi {
             } else {
                 view.row(
                     rect,
-                    label,
+                    &label,
                     Some(Action::Room(room.id)),
                     Some(room.id) == self.room && self.terminal.is_none(),
                     false,
                 );
+                if room.unseen_to_developer && !label.is_empty() {
+                    let dot = Rect::new(rect.x + cells(&label) as u16 - 1, rect.y, 1, 1);
+                    view.row(dot, "●", Some(Action::Room(room.id)), false, false);
+                    view.color_last_row(dot, ACCENT);
+                }
             }
             if !right.is_empty() {
                 let status_rect = viewport.at(

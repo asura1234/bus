@@ -25,7 +25,8 @@ Separately, test tooling (the TUI driver, `bus --dev tui`) is compiled only into
 variant: cargo feature `dev-tools`, built by `./run dev`. The release variant (`./run prod`,
 `just build`, Nix, npm) leaves it out entirely, and its `tui` command only says so.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
-room seen clears a room's unread count without changing the visible Bus view.
+room seen clears a room's unread count and unseen-to-You dot without changing
+the visible Bus view.
 room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.
 room sound --sound picks a system sound by name (Default is Bus's own ding); sounds lists them.
 room sound master changes MASTER's sound. settings room-sound sets the All rooms sound on

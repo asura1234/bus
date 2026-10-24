@@ -824,7 +824,7 @@ bus state | jq '.result.build'
   UI, or `null` while a terminal or form is open instead. Deleting the visible
   room moves it to the room the UI falls back to, MASTER.
 - Each room has `id`, `name`, `kind` (`master` or `work`), `notes`,
-  `unread_count`, `sound`, `sound_name`, `deletion_pending`, and
+  `unread_count`, `unseen_to_developer`, `sound`, `sound_name`, `deletion_pending`, and
   `orchestrator`: the ID of
   the MASTER agent orchestrating it, or `null`, and `status`, the sidebar's
   status: `blocked` if any agent is blocked, on a dialog, or `unavailable`,
@@ -832,6 +832,10 @@ bus state | jq '.result.build'
   while its provider is not running in its pane (it exited or crashed, or an
   updater or another program replaced it); deliveries to it stay queued with
   wait reason `agent_unavailable` until the provider is relaunched or resumed.
+- `unread_count` counts incoming peer messages, replies and notices while a room is
+  hidden. `unseen_to_developer` is the persisted sidebar green dot: it tracks
+  messages addressed to You, including Bus notices, and clears when the room opens.
+  Messages arriving in the visible room do not set either marker.
 - Each agent includes `room_id`, `status`, `wait_reason`, `dialog`, `details_disclosed`,
   `orchestrates` (a MASTER agent's work room, `null` for work-room agents), and `compactions`:
   `count` and `last_at_ms` of the provider context compactions Bus observed for

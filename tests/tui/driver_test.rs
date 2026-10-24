@@ -143,6 +143,101 @@ fn bus_state(session: &Session) -> Value {
     serde_json::from_str::<Value>(stdout.trim()).unwrap()["result"].clone()
 }
 
+#[test]
+fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() {
+    let name = session_name("dot");
+    let (code, started) = parse(tui_raw(
+        &name,
+        &[
+            "start",
+            "--size",
+            "140x40",
+            "--run-dir",
+            run_dir().to_str().unwrap(),
+        ],
+        &[("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")],
+    ));
+    assert_eq!(code, 0, "{started}");
+    let session = Session(name);
+    let original = session.ok(&["status"]);
+    let work = session_dir(&session.0).join("work");
+    let (code, _) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "dot-worker",
+            "--provider",
+            "claude",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--consent-hooks",
+        ],
+    ));
+    assert_eq!(code, 0);
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    let (code, _) = parse(scratch_bus(&session, &["room", "create", "unseen"]));
+    assert_eq!(code, 0);
+    session.ok(&["wait", "--text", "# unseen", "--timeout", "10s"]);
+    for room in ["unseen", "master"] {
+        let (code, sent) = parse(scratch_bus(
+            &session,
+            &[
+                "send",
+                "--room",
+                room,
+                "--as",
+                "dot-worker",
+                "--to",
+                "you",
+                "--text",
+                "DOT persisted",
+            ],
+        ));
+        assert_eq!(code, 0, "{sent}");
+    }
+    let trace = PathBuf::from(original["run_dir"].as_str().unwrap()).join("trace.ndjson");
+    let before = std::fs::metadata(&trace).unwrap().len();
+    let restarted = session.ok(&["restart"]);
+    assert_eq!(restarted["old_bus_pid"], original["bus_pid"]);
+    assert_ne!(restarted["bus_pid"], original["bus_pid"]);
+    assert_eq!(restarted["data_dir"], original["data_dir"]);
+    assert!(std::fs::metadata(&trace).unwrap().len() > before);
+    for room in bus_state(&session)["rooms"].as_array().unwrap() {
+        if matches!(room["name"].as_str(), Some("unseen" | "MASTER")) {
+            assert_eq!(room["unseen_to_developer"], true);
+        }
+    }
+    session.ok(&["wait", "--text", "●", "--rows", "1-7", "--timeout", "10s"]);
+    session.ok(&["click", "--hit", "room:unseen"]);
+    session.ok(&["click", "--hit", "room:MASTER"]);
+    session.ok(&["click", "--hit", "room:bus"]);
+    session.ok(&["press", "ctrl+q"]);
+    session.ok(&["restart"]);
+    for room in bus_state(&session)["rooms"].as_array().unwrap() {
+        assert_eq!(room["unseen_to_developer"], false);
+    }
+    session.ok(&[
+        "wait",
+        "--text",
+        "●",
+        "--gone",
+        "--rows",
+        "1-7",
+        "--timeout",
+        "10s",
+    ]);
+}
+
 fn assert_client_death_stops_scratch_tree(signal: i32, tag: &str) {
     use std::time::{Duration, Instant};
     let session = Session::start(tag);

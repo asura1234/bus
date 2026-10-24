@@ -189,6 +189,7 @@ fn cell_target(parsed: &mut Parsed) -> Result<Target, String> {
 pub(super) fn command(verb: &str, parsed: &mut Parsed) -> Result<Command, String> {
     let command = match verb {
         "status" => Command::Status,
+        "restart" => Command::Restart,
         "snapshot" => Command::Snapshot {
             rows: rows_flag(parsed)?,
         },
