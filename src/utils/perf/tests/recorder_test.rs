@@ -1351,6 +1351,50 @@ fn severe_stall_escalates_at_five_fifteen_thirty_seconds_with_one_identity() {
 }
 
 #[test]
+fn a_new_severe_stall_cannot_bypass_the_previous_stalls_capture_cooldown() {
+    static WATCH: LoopWatch = LoopWatch::new("test.freeze.new-episode-cooldown");
+    let registry = Registry::new();
+    registry.add_watch(&WATCH);
+    let (mut recorder, dir) = recorder(
+        "freeze-new-episode-cooldown",
+        PerfHooks {
+            sample: no_sample,
+            machine: || None,
+            capture_stacks: no_capture,
+        },
+    );
+    let now = Instant::now();
+    let first = WATCH.enter("dispatch");
+    recorder.watch(now, now_us() + 2_100_000, &registry);
+    recorder.wait_for_captures();
+    drop(first);
+    recorder.watch(now, now_us(), &registry);
+
+    // Under load the watchdog can first observe a new episode after five
+    // seconds. That is a new capture, not escalation of the previous episode.
+    let second = WATCH.enter("dispatch");
+    let started = WATCH.busy_since.load(Ordering::Acquire);
+    for seconds in [5, 15, 30] {
+        recorder.watch(
+            now + Duration::from_secs(60 + seconds),
+            started + seconds * 1_000_000,
+            &registry,
+        );
+        recorder.wait_for_captures();
+    }
+    drop(second);
+    recorder.watch(now + Duration::from_secs(91), now_us(), &registry);
+    recorder.flush();
+    let records = lines(&perf_dir(&dir).join("client.jsonl"));
+    assert_eq!(
+        records.iter().filter(|r| r["state"] == "capture").count(),
+        1,
+        "a new stall must respect the cooldown even at escalation thresholds: {records:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dump_evictions_have_a_byte_count_and_reason_record() {
     let (mut recorder, dir) = recorder(
         "freeze-eviction-record",

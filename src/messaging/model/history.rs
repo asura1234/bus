@@ -14,6 +14,8 @@ pub(crate) const HISTORY_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct History {
     pub(super) requests: BTreeMap<RequestId, Arc<Request>>,
+    /// Derived at insert/load; request bodies remain shared and history stays append-only.
+    messages: BTreeMap<(PromptId, RequestId), Arc<Request>>,
     pub(super) rooms: BTreeMap<RoomId, String>,
     /// Per room, in id order.
     pub(super) notices: BTreeMap<RoomId, BTreeMap<PromptId, Arc<Prompt>>>,
@@ -111,7 +113,12 @@ impl History {
                 self.rooms.insert(id, name);
             }
             Archived::Request(request) => {
-                self.requests.insert(request.id, Arc::new(*request));
+                let request = Arc::new(*request);
+                if let Some(previous) = self.requests.insert(request.id, Arc::clone(&request)) {
+                    self.messages.remove(&(previous.prompt.id, previous.id));
+                }
+                self.messages
+                    .insert((request.prompt.id, request.id), request);
             }
             Archived::Notice { room, prompt } => {
                 self.notices
@@ -124,6 +131,12 @@ impl History {
 
     pub(super) fn request(&self, id: RequestId) -> Option<&Request> {
         self.requests.get(&id).map(Arc::as_ref)
+    }
+
+    pub(super) fn requests_for_message(&self, message: PromptId) -> impl Iterator<Item = &Request> {
+        self.messages
+            .range((message, RequestId(0))..=(message, RequestId(u64::MAX)))
+            .map(|(_, request)| request.as_ref())
     }
 
     pub(super) fn room_notices(&self, room: RoomId) -> impl DoubleEndedIterator<Item = &Prompt> {
