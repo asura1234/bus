@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.10.25.1"
+version = "2026.10.25.2"
 min_engine_version = 3
-updated_at = "2026-10-24T17:30:00Z"
+updated_at = "2026-10-24T18:04:42Z"
 
 # "Update now" replaces the Codex UI with the package manager it runs, while the
 # node launcher keeps the pane's process looking like Codex. Without this rule
@@ -179,7 +179,8 @@ any = [
 id = "screen_working_fallback"
 state = "working"
 priority = 500
-region = "bottom_non_empty_lines(3)"
+# The complete composer, model and shortcuts footer occupies three nonempty rows.
+region = "bottom_non_empty_lines(4)"
 visible_working = true
 line_regex = ['^[•◦]\s+Working \([^)]*esc to interrupt\)(?: · .*)?$']
 not = [{ contains = ["■ Conversation interrupted"] }]

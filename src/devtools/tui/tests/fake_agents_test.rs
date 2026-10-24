@@ -607,6 +607,26 @@ fn the_fake_codex_fires_bus_hook_after_a_project_hook_for_the_same_event() {
 }
 
 #[test]
+fn codex_working_detection_keeps_the_complete_composer_footer() {
+    use crate::agents::{detect_agent_with_launch_context, AgentKind, AgentState};
+    use crate::devtools::tui::screen::Screen;
+
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let mut screen = Screen::new(132, 16).unwrap();
+    screen.feed(working_block(&working_line("codex", 0, 1), "", "codex", false, 132).as_bytes());
+    let complete = screen_rows_of(&screen).join("\n");
+    // The base fake lacked the shortcuts row. Removing only that row keeps
+    // the same working control inside the old three-nonempty-line window.
+    let previous = complete.replace("  ? for shortcuts", "");
+    for (name, text) in [("previous", previous), ("complete", complete)] {
+        let detection =
+            detect_agent_with_launch_context(Some(AgentKind::Codex), &text, "", "", false);
+        assert_eq!(detection.state, AgentState::Working, "{name}: {text}");
+        assert!(detection.visible_working, "{name}: {text}");
+    }
+}
+
+#[test]
 fn a_working_fake_codex_still_shows_a_composer_bus_can_type_into() {
     use crate::devtools::tui::screen::Screen;
 
