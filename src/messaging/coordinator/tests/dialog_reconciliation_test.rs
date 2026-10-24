@@ -377,3 +377,73 @@ fn resuming_a_legacy_unknown_write_does_not_invent_a_confirmation() {
         );
     }
 }
+
+#[test]
+fn an_unreadable_uncertain_notice_uses_its_write_clock_and_preserves_delivery_uncertainty() {
+    struct Unreadable;
+    impl Transport for Unreadable {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(
+                matches!(method, Method::AgentDialogObserve(_)),
+                "must not replay a native write"
+            );
+            Err(TransportError {
+                code: Some("dialog_observation_unavailable".into()),
+                message: "Agent screen remains unreadable".into(),
+                definitely_rejected: true,
+            })
+        }
+    }
+    let (mut f, worker, lead, notice) = queued_worker_notice();
+    let created = f.request(notice).prompt.submitted_at_ms;
+    let write_at = created + crate::messaging::model::QUEUED_STALL_MS - 1;
+    let mut state = f.worker.state.clone();
+    state.begin_steering(notice, lead).unwrap();
+    state.begin_dialog_notice_write(notice, write_at);
+    state
+        .record_steering(
+            notice,
+            SubmissionOutcome::Uncertain {
+                message: "native response timed out after the write".into(),
+            },
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.transport = Box::new(Unreadable);
+    let grace = crate::messaging::coordinator::expiry::DIALOG_OBSERVATION_GRACE_MS;
+    let bound = write_at + crate::messaging::model::QUEUED_STALL_MS + grace;
+    for at in [
+        created + crate::messaging::model::QUEUED_STALL_MS + grace,
+        bound - 1,
+    ] {
+        let reloaded = f.worker.store.load().unwrap().unwrap();
+        f.worker.save(reloaded).unwrap();
+        f.expire_after_reconciliation(at);
+        assert_eq!(
+            f.worker.state.agent(worker).unwrap().dialog_notice_to,
+            Some(DialogNoticeTo::Orchestrator(notice))
+        );
+        assert!(f
+            .worker
+            .state
+            .room(f.request(notice).room_id)
+            .unwrap()
+            .notices
+            .is_empty());
+    }
+    f.expire_after_reconciliation(bound);
+    f.expire_after_reconciliation(bound + 86_400_000);
+    assert_eq!(
+        f.worker.state.agent(worker).unwrap().dialog_notice_to,
+        Some(DialogNoticeTo::Developer)
+    );
+    assert_eq!(f.request(notice).phase, RequestPhase::Active);
+    assert_eq!(f.request(notice).group, Some(lead));
+    let room = f.worker.state.room(f.request(notice).room_id).unwrap();
+    assert_eq!(room.notices.len(), 1);
+    let text = &room.notices[0].text;
+    assert!(text.contains(
+        "Delivery to the orchestrator is unconfirmed; it may already have received this"
+    ));
+    assert!(text.contains("The dialog state could not be read; the agent may still be blocked."));
+}

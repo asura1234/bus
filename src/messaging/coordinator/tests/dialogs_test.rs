@@ -1319,14 +1319,19 @@ fn a_due_fallback_checks_the_native_screen_even_when_list_metadata_still_says_op
     screen.lock().unwrap().dialog = false;
     // No new AgentList poll: its open flag and the episode are both stale.
     assert!(worker.state.agent(agent).unwrap().dialog);
-    worker.expire_unconfirmed_submissions(deadline).unwrap();
-    assert_eq!(
-        worker.state.agent(agent).unwrap().dialog_notice_to,
-        Some(crate::messaging::model::DialogNoticeTo::Orchestrator(
-            notice
-        ))
-    );
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    for at in [
+        deadline,
+        deadline + crate::messaging::coordinator::expiry::DIALOG_OBSERVATION_GRACE_MS + 86_400_000,
+    ] {
+        worker.expire_unconfirmed_submissions(at).unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().dialog_notice_to,
+            Some(crate::messaging::model::DialogNoticeTo::Orchestrator(
+                notice
+            ))
+        );
+        assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    }
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1403,7 +1408,76 @@ fn an_unreadable_deadline_observation_retains_help_until_an_open_snapshot() {
     worker
         .expire_unconfirmed_submissions(deadline + 60_000)
         .unwrap();
-    assert_eq!(sent_by(&worker, room, agent).len(), 2);
+    let messages = sent_by(&worker, room, agent);
+    assert_eq!(messages.len(), 2);
+    assert!(!messages[1].1.contains("The dialog state could not be read"));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_persistently_unreadable_open_dialog_still_gets_a_bounded_developer_fallback() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let Some(crate::messaging::model::DialogNoticeTo::Orchestrator(notice)) =
+        worker.state.agent(agent).unwrap().dialog_notice_to
+    else {
+        panic!("the open dialog must have an orchestrator notice");
+    };
+    let deadline = worker.state.request(notice).unwrap().prompt.submitted_at_ms
+        + crate::messaging::model::QUEUED_STALL_MS;
+    {
+        let mut current = screen.lock().unwrap();
+        // AgentList continues to report this same open dialog. Detailed
+        // observation remains unreadable, as during a sustained redraw.
+        current.answer_sent = true;
+        current.settle_errors = u32::MAX;
+    }
+    let grace = crate::messaging::coordinator::expiry::DIALOG_OBSERVATION_GRACE_MS;
+    for elapsed in [
+        0,
+        crate::messaging::model::QUEUED_STALL_MS,
+        grace - 1,
+        grace,
+        3_600_000,
+        86_400_000,
+    ] {
+        let reloaded = worker.store.load().unwrap().unwrap();
+        worker.save(reloaded).unwrap();
+        worker.expire_queued_requests(deadline + elapsed).unwrap();
+        worker.poll().unwrap();
+        worker
+            .expire_unconfirmed_submissions(deadline + elapsed)
+            .unwrap();
+        if elapsed < grace {
+            assert_eq!(
+                worker.state.agent(agent).unwrap().dialog_notice_to,
+                Some(crate::messaging::model::DialogNoticeTo::Orchestrator(
+                    notice
+                ))
+            );
+            assert_eq!(sent_by(&worker, room, agent).len(), 1);
+        } else {
+            assert_eq!(
+                worker.state.agent(agent).unwrap().dialog_notice_to,
+                Some(crate::messaging::model::DialogNoticeTo::Developer)
+            );
+            assert_eq!(sent_by(&worker, room, agent).len(), 2);
+        }
+    }
+    assert!(screen.lock().unwrap().current_dialog().is_some());
+    assert!(worker.state.agent(agent).unwrap().dialog);
+    let route = worker.state.agent(agent).unwrap().dialog_notice_to;
+    let messages = sent_by(&worker, room, agent);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        route,
+        Some(crate::messaging::model::DialogNoticeTo::Developer),
+        "repeated unreadable observations must not suppress fallback forever, even a day past its bound"
+    );
+    assert_eq!(messages.len(), 2, "fallback must be posted exactly once");
+    assert!(messages[1].1.contains("The dialog state could not be read"));
+    assert!(messages[1].1.contains("may still be blocked"));
 }

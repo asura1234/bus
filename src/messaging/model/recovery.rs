@@ -208,10 +208,11 @@ impl BusState {
 
     /// Due episodes need a current native liveness check before escalation.
     /// Request closure, including group settlement, is not a delivery receipt.
+    /// Each candidate includes its persisted-clock delivery deadline.
     pub(crate) fn dialog_notice_fallback_candidates(
         &self,
         now_ms: u64,
-    ) -> Vec<(super::AgentId, RequestId)> {
+    ) -> Vec<(super::AgentId, RequestId, u64)> {
         self.agents
             .values()
             .filter_map(|worker| {
@@ -229,7 +230,7 @@ impl BusState {
                 (!request.trusted_start_bound
                     && self.dialog_notice_worker(request.id).is_some()
                     && now_ms.saturating_sub(since_ms) >= QUEUED_STALL_MS)
-                    .then_some((worker.id, id))
+                    .then_some((worker.id, id, since_ms.saturating_add(QUEUED_STALL_MS)))
             })
             .collect()
     }
@@ -270,8 +271,16 @@ impl BusState {
         } else {
             "The orchestrator did not receive this"
         };
+        let observation = if reason == "dialog_notice_observation_unavailable" {
+            "\nThe dialog state could not be read; the agent may still be blocked."
+        } else {
+            ""
+        };
         let reason = notice.failure_reason.as_deref().unwrap_or(reason);
-        let text = format!("{}\n{delivery} ({reason}).", notice.prompt.text);
+        let text = format!(
+            "{}\n{delivery} ({reason}).{observation}",
+            notice.prompt.text
+        );
         self.post_bus_notice(room, None, text, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
