@@ -81,7 +81,7 @@ class Run(helper.Run):
 
     def start_case(self, case, size="160x55"):
         self.case = case
-        self.name = f"{self.base_name}-{case[-2:]}"
+        self.name = f"you-{self.base_name[-8:]}-{case[-2:]}"
         self.session = self.command("start", "--size", size, "--graphics", "none", "--run-dir", self.root / "sessions")
         body, start, end = self.case_section()
         section = body[start:end].replace("- Session: `none`", f"- Session: `{self.session['run_dir']}`")
