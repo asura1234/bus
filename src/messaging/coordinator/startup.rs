@@ -21,11 +21,14 @@ pub(super) fn watch_native_resume(
     if agent.deletion_pending
         || agent.session_binding_invalidated
         || agent.runtime_identity.launch_id.is_none()
-        || agent.startup.is_some()
-            && agent.runtime_identity.terminal_id.as_deref() == Some(info.terminal_id.as_str())
+        || agent.startup.as_ref().is_some_and(|startup| {
+            startup.native_terminal_id.as_deref() == Some(info.terminal_id.as_str())
+        })
     {
         return Ok(());
     }
+    // Runtime identity may already point at a deferred restore's terminal before
+    // native launch evidence arrives. Deduplicate by the startup's own terminal.
     // A different native terminal starts a new attempt. Retire the previous
     // reported startup episode, as explicit recovery does, so confirmation of
     // this attempt cannot leave its predecessor's error blocking a healthy agent.
@@ -45,6 +48,7 @@ pub(super) fn watch_native_resume(
                 command: attempt.command.clone(),
                 started_at_ms: io::now_ms(),
                 reported: false,
+                native_terminal_id: Some(info.terminal_id.clone()),
                 recovery: None,
             }),
         )
@@ -70,6 +74,7 @@ impl Worker {
                         .ok_or("Cannot describe the provider launch command")?,
                     started_at_ms,
                     reported: false,
+                    native_terminal_id: None,
                     recovery: None,
                 }),
             )

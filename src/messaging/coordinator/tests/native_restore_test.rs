@@ -131,6 +131,116 @@ fn rejected_conversation_error_requires_delete_and_recreate() {
 }
 
 #[test]
+fn deferred_terminal_rebind_does_not_hide_the_next_native_failure() {
+    struct Frames {
+        pending: VecDeque<schema::AgentInfo>,
+        current: NativeFailure,
+    }
+    impl Transport for Frames {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if matches!(method, Method::AgentList(_)) {
+                self.current.info = self.pending.pop_front().unwrap();
+                return self.current.request(method);
+            }
+            self.current.request(method)
+        }
+    }
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        let (mut worker, agent, dir) = failed_native(provider, provider == Provider::Codex, false);
+        let prior = worker.state.agent(agent).unwrap().clone();
+        let kind = launch::provider_kind(provider);
+        let session = prior.runtime_identity.session_id.clone();
+        let mut row = json!({
+            "terminal_id":"next-terminal", "pane_id":"pane", "name":"bus-r1-a2",
+            "workspace_id":"w1", "tab_id":"t1", "focused":false, "revision":1,
+            "agent_status":"unknown", "launch_pending":true,
+            "agent_session":session.as_ref().map(|value| json!({
+                "source":format!("herdr:{kind}"), "agent":kind, "kind":"id", "value":value
+            }))
+        });
+        let deferred = serde_json::from_value(row.clone()).unwrap();
+        row["launch_pending"] = json!(false);
+        row["native_resume"] = json!({
+            "name":"bus-r1-a2", "agent":kind, "session_id":session,
+            "command":format!("{kind} restored"),
+            "error":"shell failed to start: missing-shell (ENOENT)"
+        });
+        let failed: schema::AgentInfo = serde_json::from_value(row.clone()).unwrap();
+        row.as_object_mut().unwrap().remove("native_resume");
+        row["agent"] = json!(kind);
+        row["agent_status"] = json!("idle");
+        row["interactive_ready"] = json!(true);
+        let healthy = serde_json::from_value(row).unwrap();
+        worker.transport = Box::new(Frames {
+            pending: vec![deferred, failed.clone()].into(),
+            current: NativeFailure {
+                info: failed.clone(),
+            },
+        });
+        let infos = worker.poll().unwrap().unwrap();
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        let rebound = worker.state.agent(agent).unwrap();
+        assert_eq!(
+            rebound.runtime_identity.terminal_id.as_deref(),
+            Some("next-terminal")
+        );
+        assert_eq!(
+            rebound.startup, prior.startup,
+            "deferred evidence must not rearm startup"
+        );
+        assert_eq!(rebound.actionable_error, prior.actionable_error);
+
+        let infos = worker.poll().unwrap().unwrap();
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        let current = worker.state.agent(agent).unwrap().clone();
+        let error = current.actionable_error.as_deref().unwrap();
+        assert!(
+            error.contains("shell failed to start") && error.contains("ENOENT"),
+            "{provider:?}: {error}"
+        );
+        assert_eq!(
+            current.startup.as_ref().unwrap().command,
+            format!("{kind} restored")
+        );
+        assert!(current.startup.as_ref().unwrap().reported);
+        assert_ne!(current.actionable_error, prior.actionable_error);
+
+        // Client reattach and repeated observations of this same native attempt
+        // preserve its episode; real confirmation then releases its error.
+        drop(worker);
+        let mut worker = Worker::open(
+            dir.clone(),
+            Box::new(Frames {
+                pending: vec![failed.clone(), healthy].into(),
+                current: NativeFailure { info: failed },
+            }),
+        )
+        .unwrap();
+        let infos = worker.poll().unwrap().unwrap();
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        let repeated = worker.state.agent(agent).unwrap();
+        assert_eq!(repeated.startup, current.startup);
+        assert_eq!(repeated.actionable_error, current.actionable_error);
+        let infos = worker.poll().unwrap().unwrap();
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        let confirmed = worker.state.agent(agent).unwrap();
+        assert_eq!(confirmed.status, RuntimeStatus::Idle);
+        assert!(confirmed.startup.is_none());
+        assert!(confirmed.actionable_error.is_none());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn confirmed_new_native_attempt_clears_the_previous_startup_error() {
     struct Frames(VecDeque<schema::AgentInfo>);
     impl Transport for Frames {
