@@ -10,7 +10,8 @@ Peer messages and their replies can increase `bus state`'s existing `unread_coun
 without setting the dot. The separate `unseen_to_developer` field is the dot's
 persisted state. Legacy saved rooms start with it clear.
 
-The room name truncates before the dot, leaving it visible next to the status.
+The room name truncates before the dot. In very narrow sidebars, the status
+truncates first so it cannot overwrite the dot.
 
 ![Unseen messages in MASTER and a work room](assets/room-unread-dot/normal.png)
 

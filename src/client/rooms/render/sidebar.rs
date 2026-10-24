@@ -409,6 +409,7 @@ impl BusUi {
         rooms_header: usize,
     ) {
         let sw = viewport.sidebar.width.saturating_sub(3);
+        let status_end = viewport.sidebar.width.saturating_sub(4);
         view.row(viewport.at(1, rooms_header, sw), "ROOMS", None, false, true);
         view.row(
             viewport.at(viewport.sidebar.width.saturating_sub(3), rooms_header, 1),
@@ -459,14 +460,15 @@ impl BusUi {
                 }
             }
             if !right.is_empty() {
-                let status_rect = viewport.at(
-                    viewport
-                        .sidebar
-                        .width
-                        .saturating_sub(right.len() as u16 + 4),
-                    row,
-                    right.len() as u16,
+                let status_start = status_end.saturating_sub(right.len() as u16).max(
+                    if room.unseen_to_developer {
+                        1 + name_width
+                    } else {
+                        0
+                    },
                 );
+                let status_rect =
+                    viewport.at(status_start, row, status_end.saturating_sub(status_start));
                 view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
                 if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
                     view.color_last_row_characters(status_rect, colors);

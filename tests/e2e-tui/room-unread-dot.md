@@ -37,7 +37,9 @@ completed a turn before restart. Record IDs and select `dot-other` through the s
    send `fake:work 30 DOT narrow working` as the developer to dot-working,
    wait until Working, then resize to 40x40. Assert the work-room dot is still
    visible and green beside Working and MASTER also retains its dot. Capture/open
-   a screenshot. Delete only the disposable dot-working fixture with the scratch
+   a screenshot. Resize again to 36x40: the room remains Working, its status may
+   truncate, and both unread dots must still be visible and green. Capture/open
+   another screenshot. Delete only the disposable dot-working fixture with the scratch
    CLI and `--confirm`, assert it is absent from state and the unseen marker stays
    true, then return to 60x40. Its request may close abandoned during cleanup;
    no provider continuation in the narrow pane is under test.
