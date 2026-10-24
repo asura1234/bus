@@ -89,7 +89,7 @@ class Run(helper.Run):
         self.command("focus", "out")
         self.quiet()
         count = len(self.sounds())
-        sent = self.post("Choose release timing")
+        sent = self.post("[waiting-on-you] Choose release timing")
         assert sent["result"]["request_ids"] == []
         self.until(lambda: len(self.sounds()) == count + 1, "one Glass developer alert")
         assert self.sounds()[-1]["target"] == self.sound_path("Glass")

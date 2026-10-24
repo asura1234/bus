@@ -62,32 +62,40 @@ class Run(helper.Run):
         sounds, calls = len(self.mandatory()), len(self.calls())
         self.step(1, "Always-on Feishu row stayed on after Enter; legacy false read as true; recipient and CLI path visible, room sounds disabled; KEEP DRAFT entered; settings-mandatory.png captured")
 
-        sent = self.post_room("notify-work", "notify-worker", "you", "Decide release timing")
+        before_history = self.bus("history", "--room", "notify-work")["result"]
+        rejected = self.post_room("notify-work", "notify-worker", "you", "Decide release timing", ok=False)
+        assert rejected["ok"] is False, rejected
+        error = rejected["error"]["message"]
+        assert all(part in error for part in ["--to orchestrator", "[waiting-on-you]", "developer must do"]), error
+        assert self.bus("history", "--room", "notify-work")["result"] == before_history
+        self.quiet()
+        assert len(self.mandatory()) == sounds and len(self.calls()) == calls
+        sent = self.post_room("notify-work", "notify-worker", "you", "[waiting-on-you] Decide release timing")
         assert sent["result"]["stage"] == "posted" and sent["result"]["request_ids"] == []
         history = self.bus("history", "--room", "notify-work")
         (self.root / "worker-history.json").write_text(json.dumps(history, indent=2))
         sender_id = next(agent["id"] for agent in self.state()["agents"] if agent["name"] == "notify-worker")
-        posted = next(message["prompt"] for message in history["result"]["messages"] if message["prompt"]["text"] == "Decide release timing")
+        posted = next(message["prompt"] for message in history["result"]["messages"] if message["prompt"]["text"] == "[waiting-on-you] Decide release timing")
         assert posted["author"] == {"agent": sender_id} and posted["recipient_ids"] == [], posted
         self.until(lambda: len(self.mandatory()) == sounds + 1, "worker mandatory sound")
-        self.delivered("notify-worker to you: Decide release timing")
+        self.delivered("notify-worker is waiting on you: Decide release timing")
         assert len(self.calls()) == calls + 1
         self.command("wait", "--text", "KEEP DRAFT")
         assert self.state()["visible_room"] == next(room["id"] for room in self.state()["rooms"] if room["name"] == "notify-other")
         self.quiet()
         assert len(self.mandatory()) == sounds + 1 and len(self.calls()) == calls + 1
         self.no_popup()
-        self.step(2, "Worker --to you posted without requests in notify-work history; one distinct recorded mandatory sound and exact bot DM; hidden-room draft/focus unchanged and no replay or popup")
+        self.step(2, "Untagged worker --to you rejected with actionable guidance and unchanged history/alerts; tagged send posted without requests in notify-work history; one distinct recorded mandatory sound and exact bot DM; hidden-room draft/focus unchanged and no replay or popup")
 
         self.command("click", "--hit", "room:notify-work")
         self.command("wait", "--text", "Decide release timing")
         assert "You" in str(self.command("snapshot"))
         sounds = len(self.mandatory())
         self.post_room("notify-work", "notify-orch", "you", "[waiting-on-you] Approve access")
-        self.post_room("master", "notify-worker", "you", "MASTER decision")
+        self.post_room("master", "notify-worker", "you", "[waiting_on_you] MASTER decision")
         self.until(lambda: len(self.mandatory()) == sounds + 2, "two mandatory burst sounds")
         self.delivered("notify-orch is waiting on you: Approve access")
-        self.delivered("notify-worker to you: MASTER decision")
+        self.delivered("notify-worker is waiting on you: MASTER decision")
         for room, text in [("notify-work", "Approve access"), ("master", "MASTER decision")]:
             assert text in str(self.bus("history", "--room", room))
         self.capture("worker-to-you")
@@ -100,9 +108,17 @@ class Run(helper.Run):
         self.command("wait", "--message", tagged["result"]["message_id"], "--timeout", "20s")
         self.until(lambda: len(self.mandatory()) > sounds, "tagged peer mandatory sound")
         self.delivered("notify-worker is waiting on you: Choose rollout")
-        mentioned = self.post_room("notify-work", "notify-worker", "notify-orch", "@you Please choose rollout")
+        before_history = self.bus("history", "--room", "notify-work")["result"]
+        self.quiet()
+        mention_sounds, mention_calls = len(self.mandatory()), len(self.calls())
+        rejected = self.post_room("notify-work", "notify-worker", "notify-orch", "@you Please choose rollout", ok=False)
+        assert rejected["ok"] is False and "--to orchestrator" in rejected["error"]["message"], rejected
+        assert self.bus("history", "--room", "notify-work")["result"] == before_history
+        self.quiet()
+        assert len(self.mandatory()) == mention_sounds and len(self.calls()) == mention_calls
+        mentioned = self.post_room("notify-work", "notify-worker", "notify-orch", "@you [waiting-on-you] Please choose rollout")
         self.command("wait", "--message", mentioned["result"]["message_id"], "--timeout", "20s")
-        self.delivered("notify-worker to you: @you Please choose rollout")
+        self.delivered("notify-worker is waiting on you: Please choose rollout")
         self.quiet()
         sounds, calls = len(self.mandatory()), len(self.calls())
         for sender, text in [("notify-worker", "PR is pushed; still waiting on you for the next task"), (None, "[waiting-on-you] Developer send fake:raw-reply done")]:
@@ -111,14 +127,14 @@ class Run(helper.Run):
         self.quiet()
         assert len(self.mandatory()) == sounds and len(self.calls()) == calls
         self.command("wait", "--text", "KEEP DRAFT")
-        self.step(4, "Tagged peer send and explicit @you notified with focus out and muted rooms; untagged peer waiting phrase and developer-authored tagged prompt produced no mandatory sound or bot call; KEEP DRAFT preserved")
+        self.step(4, "Untagged @you rejected without history/request/alert; tagged peer send and tagged @you notified with focus out and muted rooms; untagged peer waiting phrase and developer-authored tagged prompt produced no mandatory sound or bot call; KEEP DRAFT preserved")
 
-        self.post_room("notify-other", "notify-worker", "human", "Alias delivery")
-        self.delivered("notify-worker to you: Alias delivery")
+        self.post_room("notify-other", "notify-worker", "human", "[waiting_on_you] Alias delivery")
+        self.delivered("notify-worker is waiting on you: Alias delivery")
         self.quiet()
         sounds, calls = len(self.mandatory()), len(self.calls())
         for sender, recipient, extra in [("notify-worker", "you,notify-orch", ()), ("notify-worker", "you", ("--queue",)), ("notify-worker", "you", ("--async",)), (None, "you", ())]:
-            response = self.post_room("notify-other", sender, recipient, "Rejected message", *extra, ok=False)
+            response = self.post_room("notify-other", sender, recipient, "[waiting-on-you] Rejected message", *extra, ok=False)
             assert response.get("ok") is False, response
         assert self.bus("settings", "feishu-notifications", "--off", ok=False)["ok"] is False
         self.quiet()

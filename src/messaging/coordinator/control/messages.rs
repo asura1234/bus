@@ -137,6 +137,11 @@ impl Worker {
         let to_developer = selectors
             .iter()
             .any(|s| crate::messaging::model::is_developer_recipient(s));
+        self.validate_worker_developer_send(
+            author,
+            to_developer,
+            optional_text(p, "text")?.unwrap_or_default(),
+        )?;
         if to_developer {
             return self.control_send_to_developer(p, room, author, selectors.len(), files);
         }
@@ -198,6 +203,27 @@ impl Worker {
             );
         }
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
+    }
+
+    fn validate_worker_developer_send(
+        &self,
+        author: Option<AgentId>,
+        to_developer: bool,
+        text: &str,
+    ) -> Result<(), String> {
+        use crate::messaging::attention::{has_you_mention, waiting_tag_action};
+        let worker = author
+            .and_then(|id| self.state.agent(id))
+            .is_some_and(|agent| agent.orchestrates.is_none());
+        if worker && (to_developer || has_you_mention(text)) && waiting_tag_action(text).is_none() {
+            return Err(
+                "Worker messages to the developer require [waiting-on-you] or [waiting_on_you] \
+                 plus what the developer must do. Send progress to your orchestrator \
+                 with --to orchestrator."
+                    .into(),
+            );
+        }
+        Ok(())
     }
 
     pub(in crate::messaging::coordinator) fn control_author(

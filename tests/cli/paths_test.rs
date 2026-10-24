@@ -311,6 +311,9 @@ fn notify_you_help_explains_developer_recipient_and_mandatory_notifications() {
         "[waiting-on-you]",
         "every room",
         "always notify",
+        "--to orchestrator",
+        "what the developer must do",
+        "Orchestrators are exempt",
     ] {
         assert!(help.contains(phrase), "missing {phrase}: {help}");
     }

@@ -89,7 +89,8 @@ send --room ROOM --as AGENT --to you posts any agent's message to the developer 
 It stays in that room, addressed to You, with no agent request or wait. --to human is an alias.
 Messages to you and every [waiting-on-you] always notify with a distinct sound and Feishu bot DM;
 room sounds and legacy Feishu off settings cannot silence them. Developer sends never notify.
-Use @you or [waiting-on-you] for things only the developer can do or decide.
+Worker sends to you/human or containing @you require [waiting-on-you] or [waiting_on_you]
+and what the developer must do. Send progress to --to orchestrator. Orchestrators are exempt.
 agent interrupt stops an agent's running turn: Bus presses the provider's stop key once
 (Esc for claude and codex, Ctrl+C for cursor), waits up to 15 s until the agent is idle,
 and reports stopped, already_idle, or failed with a reason (exit 1). The turn, the messages

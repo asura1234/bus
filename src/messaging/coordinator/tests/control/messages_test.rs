@@ -644,7 +644,7 @@ fn notify_you_any_sender_can_post_in_any_conversation_room() {
                 &format!("notify-you-{}-{selector}", room.0),
                 "message.send",
                 json!({
-                    "room":room.0.to_string(), "to":[selector], "text":"Decide release timing", "as":sender.0.to_string()
+                    "room":room.0.to_string(), "to":[selector], "text":"[waiting-on-you] Decide release timing", "as":sender.0.to_string()
                 }),
             );
             assert!(sent.ok, "{room:?}/{selector}: {sent:?}");
@@ -655,6 +655,110 @@ fn notify_you_any_sender_can_post_in_any_conversation_room() {
         }
     }
     assert_eq!(worker.state.requests().count(), 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn worker_developer_sends_without_waiting_marker_are_rejected_atomically() {
+    let (mut worker, work, sender, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let peer = worker
+        .state
+        .create_agent(work, "peer", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    worker.state.set_draft_text(work, "KEEP DRAFT").unwrap();
+    for room in [work, master] {
+        for (to, text) in [
+            ("you", "PR pushed"),
+            ("HUMAN", "waiting on you: next task"),
+            ("YOU", "[needs_developer_attention] PR pushed"),
+            ("peer", "@you PR pushed"),
+            ("all", "Please @YOU decide"),
+        ] {
+            let before = worker.state.clone();
+            let result = call(
+                &mut worker,
+                &format!("guard-{}-{to}", room.0),
+                "message.send",
+                json!({"room":room.0.to_string(), "as":sender.0.to_string(), "to":[to], "text":text}),
+            );
+            assert!(!result.ok, "{to}: {result:?}");
+            let error = error_message(&result);
+            assert!(
+                error.contains("--to orchestrator")
+                    && error.contains("[waiting-on-you]")
+                    && error.contains("developer must do"),
+                "{error}"
+            );
+            assert_eq!(
+                worker.state, before,
+                "a rejected send must not mutate history, draft, IDs or requests"
+            );
+        }
+    }
+    assert!(worker.state.agent(peer).is_some());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn worker_developer_sends_accept_both_waiting_markers_and_mentions() {
+    let (mut worker, room, sender, dir) = fixture();
+    worker
+        .state
+        .create_agent(room, "peer", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    for (i, (to, text, stage)) in [
+        ("you", "[waiting-on-you] Approve access", "posted"),
+        (
+            "human",
+            "Please [WAITING_ON_YOU] unlock the device",
+            "posted",
+        ),
+        (
+            "peer",
+            "@you [waiting_on_you] Choose release date",
+            "queued",
+        ),
+        ("all", "[waiting-on-you] @YOU Approve access", "queued"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let result = call(
+            &mut worker,
+            &format!("guard-tag-{i}"),
+            "message.send",
+            json!({"room":room.0.to_string(), "as":sender.0.to_string(), "to":[to], "text":text}),
+        );
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.result["stage"], stage);
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn worker_developer_guard_preserves_orchestrator_developer_and_peer_sends() {
+    let (mut worker, room, sender, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let orch = worker
+        .state
+        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    worker.state.bind_orchestrator(orch, room).unwrap();
+    for (i, params) in [
+        json!({"room":"test", "as":"orch", "to":["you"], "text":"PR merged"}),
+        json!({"room":"test", "as":"orch", "to":["human"], "text":"PR merged"}),
+        json!({"room":"test", "as":"orch", "to":["codex1"], "text":"@you PR merged"}),
+        json!({"room":"test", "to":["codex1"], "text":"@you developer-authored prompt"}),
+        json!({"room":"test", "as":sender.0.to_string(), "to":["orch"], "text":"Routine progress"}),
+        json!({"room":"test", "as":sender.0.to_string(), "to":["orch"], "text":"@young and name@you.example are peer text"}),
+    ].into_iter().enumerate() {
+        let result = call(&mut worker, &format!("guard-unaffected-{i}"), "message.send", params);
+        assert!(result.ok, "{result:?}");
+    }
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
