@@ -67,7 +67,23 @@ impl Worker {
             self.save(state)?;
             return Err(error);
         }
-        if agent.session_binding_invalidated || !agent.hook_setup_confirmed {
+        if agent.session_binding_invalidated {
+            return Err("Session ownership or hook setup needs inspection before resume".into());
+        }
+        match agent
+            .startup
+            .as_ref()
+            .and_then(|startup| startup.recovery.as_ref())
+        {
+            Some(crate::messaging::model::StartupRecovery::Unsubmitted { args }) => {
+                return self.retry_unsubmitted_agent_start(agent, args.clone());
+            }
+            Some(crate::messaging::model::StartupRecovery::Requested) => {
+                return Err("Previous launch input is unconfirmed; inspect the owned terminal before recovery; no retry was sent".into());
+            }
+            None => {}
+        }
+        if !agent.hook_setup_confirmed {
             return Err("Session ownership or hook setup needs inspection before resume".into());
         }
         let kind = identity::provider_kind(agent.provider).label();

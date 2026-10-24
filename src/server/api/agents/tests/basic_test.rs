@@ -335,3 +335,50 @@ impl App {
             .test_submission_clock()
     }
 }
+
+#[tokio::test]
+async fn guarded_agent_start_rejects_stale_owner_or_lost_prompt_integration_without_input() {
+    for rejection in ["stale-terminal", "foreign-owner", "lost-integration"] {
+        let foreign_owner = rejection == "foreign-owner";
+        let mut app = app_with_agent();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        let target = app.public_pane_id(0, pane).unwrap();
+        let original_name = foreign_owner.then(|| "someone-else".to_owned());
+        app.state.terminals.get_mut(&terminal).unwrap().agent_name = original_name.clone();
+        let (runtime, mut input) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal.clone(), runtime);
+        let response = app.handle_api_request(crate::protocol::api::schema::Request {
+            id: "guarded-recovery".into(),
+            method: crate::protocol::api::schema::Method::AgentStartIfIdentity(
+                crate::protocol::api::schema::AgentStartIfIdentityParams {
+                    expected_terminal_id: if rejection == "stale-terminal" {
+                        "stale-terminal".into()
+                    } else {
+                        terminal.to_string()
+                    },
+                    start: crate::protocol::api::schema::AgentStartParams {
+                        name: "recovered".into(),
+                        kind: "codex".into(),
+                        pane_id: target,
+                        args: vec![],
+                        timeout_ms: None,
+                    },
+                },
+            ),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let input = input.try_recv();
+        assert_eq!(
+            response["error"]["code"], "agent_identity_changed",
+            "{rejection}: response={response}, input={input:?}"
+        );
+        assert!(matches!(
+            input,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        let saved = &app.state.terminals[&terminal];
+        assert_eq!(saved.agent_name, original_name);
+        assert!(saved.managed_agent_kind().is_none());
+    }
+}

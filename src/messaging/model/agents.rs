@@ -205,7 +205,12 @@ impl BusState {
             .agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
-        if startup.is_none() && agent.startup.as_ref().is_some_and(|s| s.reported) {
+        if startup.is_none()
+            && agent
+                .startup
+                .as_ref()
+                .is_some_and(|s| s.reported || s.recovery.is_some())
+        {
             // Like closing a dialog, readiness gives held work a fresh idle
             // interval even if the runtime remained Idle throughout the hold.
             agent.status_since_ms = agent.status_since_ms.max(agent.observed_at_ms);

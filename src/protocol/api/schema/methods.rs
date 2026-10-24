@@ -1,16 +1,17 @@
 use super::{
     AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogObserveParams,
     AgentPromptIfIdleParams, AgentPromptIfUnboundParams, AgentPromptParams, AgentReadParams,
-    AgentRenameParams, AgentSendKeysParams, AgentStartParams, AgentTarget, AgentWaitParams,
-    ClientShellSurfaceSetParams, ClientWindowTitleSetParams, EmptyParams, EventsSubscribeParams,
-    EventsWaitParams, LayoutSetSplitRatioParams, NotificationShowParams, PaneCloseIfIdentityParams,
-    PaneCopyMotionParams, PaneCopySearchParams, PaneCurrentParams, PaneFocusDirectionParams,
-    PaneInputSetParams, PaneLayoutParams, PaneLinkActivateParams, PaneListParams, PaneReadParams,
-    PaneRenameParams, PaneReportAgentSessionParams, PaneResizeParams, PaneScrollParams,
-    PaneSelectionReadParams, PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams,
-    PaneSplitParams, PaneSwapParams, PaneTarget, PaneWaitForOutputParams, PaneZoomParams,
-    PingParams, TabCreateParams, TabListParams, TabRenameParams, TabTarget, WorkspaceCloseParams,
-    WorkspaceCreateParams, WorkspaceMoveParams, WorkspaceRenameParams, WorkspaceTarget,
+    AgentRenameParams, AgentSendKeysParams, AgentStartIfIdentityParams, AgentStartParams,
+    AgentTarget, AgentWaitParams, ClientShellSurfaceSetParams, ClientWindowTitleSetParams,
+    EmptyParams, EventsSubscribeParams, EventsWaitParams, LayoutSetSplitRatioParams,
+    NotificationShowParams, PaneCloseIfIdentityParams, PaneCopyMotionParams, PaneCopySearchParams,
+    PaneCurrentParams, PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams,
+    PaneLinkActivateParams, PaneListParams, PaneReadParams, PaneRenameParams,
+    PaneReportAgentSessionParams, PaneResizeParams, PaneScrollParams, PaneSelectionReadParams,
+    PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams,
+    PaneTarget, PaneWaitForOutputParams, PaneZoomParams, PingParams, TabCreateParams,
+    TabListParams, TabRenameParams, TabTarget, WorkspaceCloseParams, WorkspaceCreateParams,
+    WorkspaceMoveParams, WorkspaceRenameParams, WorkspaceTarget,
 };
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +90,8 @@ pub enum Method {
     AgentFocus(AgentTarget),
     #[serde(rename = "agent.start")]
     AgentStart(AgentStartParams),
+    #[serde(rename = "agent.start_if_identity")]
+    AgentStartIfIdentity(AgentStartIfIdentityParams),
     #[serde(rename = "agent.prompt")]
     AgentPrompt(AgentPromptParams),
     #[serde(rename = "agent.prompt_if_idle")]
@@ -190,6 +193,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentRename(_) => "agent.rename",
         Method::AgentFocus(_) => "agent.focus",
         Method::AgentStart(_) => "agent.start",
+        Method::AgentStartIfIdentity(_) => "agent.start_if_identity",
         Method::AgentPrompt(_) => "agent.prompt",
         Method::AgentPromptIfIdle(_) => "agent.prompt_if_idle",
         Method::AgentPromptIfUnbound(_) => "agent.prompt_if_unbound",

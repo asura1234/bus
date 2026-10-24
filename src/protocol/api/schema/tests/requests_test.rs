@@ -593,3 +593,24 @@ fn auto_ui_choice_actions_are_closed_and_keep_the_default_wire_shape() {
     invalid["action"] = serde_json::json!("enter");
     assert!(serde_json::from_value::<AgentDialogChooseParams>(invalid).is_err());
 }
+
+#[test]
+fn guarded_agent_start_has_a_distinct_wire_method_and_requires_terminal_identity() {
+    let value = serde_json::json!({
+        "id":"recover", "method":"agent.start_if_identity",
+        "params":{"name":"worker","kind":"codex","pane_id":"w1:p2",
+        "expected_terminal_id":"owned-terminal","args":["--model","literal model"]}
+    });
+    let request: Request = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(
+        crate::protocol::api::api_method_name(&request.method),
+        "agent.start_if_identity"
+    );
+    assert_eq!(serde_json::to_value(request).unwrap(), value);
+    let mut missing = value;
+    missing["params"]
+        .as_object_mut()
+        .unwrap()
+        .remove("expected_terminal_id");
+    assert!(serde_json::from_value::<Request>(missing).is_err());
+}

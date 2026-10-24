@@ -197,7 +197,14 @@ impl BusState {
             RequestPhase::Completed | RequestPhase::Abandoned => None,
             // A reported startup failure retains its queue until recovery;
             // it has no submission opportunity and must not expire as a stall.
-            RequestPhase::Queued if agent.startup.as_ref().is_some_and(|s| s.reported) => None,
+            RequestPhase::Queued
+                if agent
+                    .startup
+                    .as_ref()
+                    .is_some_and(|s| s.reported || s.recovery.is_some()) =>
+            {
+                None
+            }
             // A reply held for background work is known work with a
             // cap of its own; the queue behind it waits, it has not stalled.
             // Background waits with no captured text still report stalls.

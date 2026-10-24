@@ -192,6 +192,10 @@ impl TerminalRuntime {
         )
     }
 
+    pub(crate) fn has_launch_shell_integration(&self) -> bool {
+        self.shell_integration.is_some()
+    }
+
     pub(crate) fn waiting_for_shell_prompt(&self) -> bool {
         self.shell_integration.as_ref().is_some_and(|integration| {
             integration.waiting_for_prompt(self.child_pid(), self.shell_prompt_generation())

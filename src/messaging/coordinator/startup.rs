@@ -1,6 +1,9 @@
 //! A new provider must confirm startup, or retain its identity and report a blocker.
 use super::{io, launch, mpsc, schema, AgentId, BusEvent, Method, ResponseResult, Worker};
-use crate::messaging::{identity, model::AgentStartup};
+use crate::messaging::{
+    identity,
+    model::{AgentStartup, StartupRecovery},
+};
 
 pub(super) const STARTUP_TIMEOUT_MS: u64 =
     crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
@@ -25,6 +28,7 @@ impl Worker {
                         .ok_or("Cannot describe the provider launch command")?,
                     started_at_ms,
                     reported: false,
+                    recovery: None,
                 }),
             )
             .map_err(|e| e.to_string())?;
@@ -34,6 +38,7 @@ impl Worker {
     pub(super) fn record_failed_agent_start(
         &mut self,
         id: AgentId,
+        args: Vec<String>,
         outcome: Result<ResponseResult, crate::messaging::native::TransportError>,
     ) -> Result<(), String> {
         let error = match outcome {
@@ -49,6 +54,9 @@ impl Worker {
         // and the reported marker together, so the watchdog cannot replace it
         // and queued work remains held until actual startup confirmation.
         startup.reported = true;
+        if error.definitely_rejected {
+            startup.recovery = Some(StartupRecovery::Unsubmitted { args });
+        }
         state
             .set_agent_startup(id, Some(startup))
             .map_err(|e| e.to_string())?;

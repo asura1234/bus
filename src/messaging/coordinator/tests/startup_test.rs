@@ -6,6 +6,7 @@ struct FailedLaunchNative {
     close_failures: usize,
     screen_terminal: Option<String>,
     shell_wait_code: Option<&'static str>,
+    launch_args: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl Transport for FailedLaunchNative {
@@ -23,6 +24,9 @@ impl Transport for FailedLaunchNative {
                 })).unwrap(),
             }),
             Method::AgentStart(params) => {
+                if let Some(args) = &self.launch_args {
+                    *args.lock().unwrap() = params.args.clone();
+                }
                 if let Some(code) = self.shell_wait_code {
                     return Err(TransportError { code: Some(code.into()), message: SHELL_PROMPT_WAIT_ERROR.into(), definitely_rejected: true });
                 }
@@ -690,4 +694,313 @@ fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+struct ShellRetryNative {
+    fallback: FailedLaunchNative,
+    starts: Arc<Mutex<Vec<schema::AgentStartParams>>>,
+    ready: Arc<Mutex<Option<schema::AgentInfo>>>,
+    uncertain: bool,
+}
+
+impl Transport for ShellRetryNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList {
+                agents: self.ready.lock().unwrap().iter().cloned().collect(),
+            }),
+            Method::AgentStartIfIdentity(params) => {
+                let state = JsonStore::new(self.fallback.state_path.clone())
+                    .load()
+                    .unwrap()
+                    .unwrap();
+                let saved = state
+                    .agents()
+                    .find(|a| a.runtime_identity.pane_id.as_deref() == Some(&params.start.pane_id))
+                    .unwrap();
+                assert!(
+                    matches!(
+                        saved.startup.as_ref().unwrap().recovery,
+                        Some(crate::messaging::model::StartupRecovery::Requested)
+                    ),
+                    "retry authority must be consumed durably before input"
+                );
+                assert!(
+                    !saved.startup.as_ref().unwrap().reported,
+                    "the retry gets a fresh startup watch"
+                );
+                assert_eq!(
+                    saved.runtime_identity.terminal_id.as_deref(),
+                    Some(params.expected_terminal_id.as_str())
+                );
+                self.starts.lock().unwrap().push(params.start.clone());
+                if self.uncertain {
+                    return Err(TransportError {
+                        code: None,
+                        message: "lost launch response".into(),
+                        definitely_rejected: false,
+                    });
+                }
+                let mut info = native_info(&params.start.pane_id, &params.start.kind, "unused");
+                info.terminal_id = params.expected_terminal_id;
+                info.name = Some(params.start.name);
+                info.agent_session = None;
+                info.interactive_ready = false;
+                info.launch_pending = true;
+                let mut argv = vec![saved.provider.executable().to_owned()];
+                argv.extend(params.start.args);
+                Ok(ResponseResult::AgentStarted { agent: info, argv })
+            }
+            other @ (Method::PaneGet(_) | Method::PaneRead(_)) => self.fallback.request(other),
+            other => panic!("recovery must retain the pane and use guarded start: {other:?}"),
+        }
+    }
+}
+
+fn shell_blocked_first_launch(
+    provider: Provider,
+) -> (Worker, AgentId, RoomId, PathBuf, Vec<String>) {
+    let (mut worker, previous, room, dir, _) = fixture(provider, vec![]);
+    let mut state = worker.state.clone();
+    state.delete_agent(previous, 0).unwrap();
+    worker.save(state).unwrap();
+    let args = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        shell_wait_code: Some("agent_shell_waiting"),
+        launch_args: Some(Arc::clone(&args)),
+        ..Default::default()
+    });
+    worker
+        .add_agent(
+            AddAgent {
+                room,
+                name: "shell-blocked".into(),
+                provider,
+                cwd: dir.to_string_lossy().into_owned(),
+                extra_args: "--model 'literal model with spaces'".into(),
+                consent_project_hooks: true,
+            },
+            None,
+            &mpsc::channel().0,
+        )
+        .unwrap_err();
+    let agent = worker
+        .state
+        .agents()
+        .find(|a| a.name == "shell-blocked")
+        .unwrap()
+        .id;
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+        .unwrap();
+    let args = args.lock().unwrap().clone();
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["--model", "literal model with spaces"]));
+    (worker, agent, room, dir, args)
+}
+
+#[test]
+fn shell_wait_failure_guidance_to_resume_this_agent_actually_resumes_it() {
+    for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
+        let (mut worker, agent, room, dir, original_args) = shell_blocked_first_launch(provider);
+        let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        let request = queue(
+            &mut worker,
+            room,
+            agent,
+            "retained before answering the shell",
+        );
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        let ready = Arc::new(Mutex::new(None));
+        // The developer answers; the native pane can now accept a guarded start.
+        // Codex/Cursor hook confirmation legitimately happens only AFTER startup.
+        assert_eq!(
+            worker.state.agent(agent).unwrap().hook_setup_confirmed,
+            provider == Provider::ClaudeCode
+        );
+        worker.transport = Box::new(ShellRetryNative {
+            fallback: FailedLaunchNative {
+                state_path: dir.join("state.json"),
+                ..Default::default()
+            },
+            starts: Arc::clone(&starts),
+            ready: Arc::clone(&ready),
+            uncertain: false,
+        });
+        let resumed = worker.resume_room(room).unwrap();
+        let row = resumed["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["agent_id"] == agent.0);
+        assert!(
+            row.is_some_and(|row| row["outcome"] == "resuming"),
+            "following the error's own guidance does not resume the agent: {resumed}"
+        );
+        assert_eq!(
+            worker.state.agent(agent).unwrap().runtime_identity,
+            identity
+        );
+        assert_eq!(starts.lock().unwrap().len(), 1);
+        assert_eq!(starts.lock().unwrap()[0].args, original_args);
+        assert!(
+            !worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .startup
+                .as_ref()
+                .unwrap()
+                .reported
+        );
+        worker.expire_queued_requests(u64::MAX).unwrap();
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        // Pending confirmation must not authorize a second provider command.
+        worker.resume_room(room).unwrap();
+        assert_eq!(starts.lock().unwrap().len(), 1);
+        let mut info = native_info(
+            "pane",
+            crate::messaging::identity::provider_kind(provider).label(),
+            "unused",
+        );
+        info.terminal_id = identity.terminal_id.clone().unwrap();
+        info.name = Some(crate::messaging::identity::managed_name(room, agent));
+        info.agent_session = None;
+        info.interactive_ready = true;
+        info.launch_pending = false;
+        *ready.lock().unwrap() = Some(info);
+        let infos = worker.poll().unwrap().unwrap();
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        assert!(worker.state.agent(agent).unwrap().startup.is_none());
+        assert!(worker.state.agent(agent).unwrap().hook_setup_confirmed);
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert_eq!(
+            worker.state.agent(agent).unwrap().runtime_identity,
+            identity
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn shell_recovery_never_replays_an_uncertain_start_after_reopen() {
+    let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::Codex);
+    let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+    let request = queue(&mut worker, room, agent, "retain uncertain launch work");
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let transport = || ShellRetryNative {
+        fallback: FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            ..Default::default()
+        },
+        starts: Arc::clone(&starts),
+        ready: Arc::new(Mutex::new(None)),
+        uncertain: true,
+    };
+    worker.transport = Box::new(transport());
+    assert_eq!(
+        worker.resume_room(room).unwrap()["agents"][0]["outcome"],
+        "blocked"
+    );
+    assert_eq!(starts.lock().unwrap().len(), 1);
+    drop(worker);
+    let mut worker = Worker::open(dir.clone(), Box::new(transport())).unwrap();
+    let resumed = worker.resume_room(room).unwrap();
+    assert_eq!(resumed["agents"][0]["outcome"], "blocked");
+    assert!(resumed["agents"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("unconfirmed"));
+    assert_eq!(
+        starts.lock().unwrap().len(),
+        1,
+        "a lost response cannot replay provider input"
+    );
+    worker.expire_queued_requests(u64::MAX).unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert_eq!(
+        worker.state.agent(agent).unwrap().runtime_identity,
+        identity
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn shell_recovery_keeps_the_session_invalidation_guard() {
+    let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::Codex);
+    let mut state = worker.state.clone();
+    state.invalidate_agent_session(agent).unwrap();
+    worker.save(state).unwrap();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(ShellRetryNative {
+        fallback: FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            ..Default::default()
+        },
+        starts: Arc::clone(&starts),
+        ready: Arc::new(Mutex::new(None)),
+        uncertain: false,
+    });
+    let resumed = worker.resume_room(room).unwrap();
+    assert_eq!(resumed["agents"][0]["outcome"], "blocked");
+    assert!(resumed["agents"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("ownership"));
+    assert!(starts.lock().unwrap().is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn shell_recovery_does_not_invent_retry_authority_from_legacy_command_text() {
+    let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::ClaudeCode);
+    let saved = worker.state.agent(agent).unwrap().startup.as_ref().unwrap();
+    let legacy: crate::messaging::model::AgentStartup = serde_json::from_value(json!({
+        "command":saved.command, "started_at_ms":saved.started_at_ms, "reported":true,
+    }))
+    .unwrap();
+    let mut state = worker.state.clone();
+    state.set_agent_startup(agent, Some(legacy)).unwrap();
+    worker.save(state).unwrap();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(ShellRetryNative {
+        fallback: FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            ..Default::default()
+        },
+        starts: Arc::clone(&starts),
+        ready: Arc::new(Mutex::new(None)),
+        uncertain: false,
+    });
+    let resumed = worker.resume_room(room).unwrap();
+    assert_eq!(resumed["agents"][0]["outcome"], "blocked");
+    assert_eq!(resumed["agents"][0]["reason"], "No saved provider session");
+    assert!(
+        starts.lock().unwrap().is_empty(),
+        "display command text does not prove unsubmitted input"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }

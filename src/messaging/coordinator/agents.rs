@@ -456,7 +456,7 @@ impl Worker {
                 name: identity::managed_name(input.room, id),
                 kind: identity::provider_kind(input.provider).label().into(),
                 pane_id: pane.clone(),
-                args: prepared.args,
+                args: prepared.args.clone(),
                 timeout_ms: None,
             }));
         match started {
@@ -467,7 +467,7 @@ impl Worker {
                 };
                 self.report_adopted_session(id, input.provider, pane, session)
             }
-            other => self.record_failed_agent_start(id, other),
+            other => self.record_failed_agent_start(id, prepared.args, other),
         }
     }
 

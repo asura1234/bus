@@ -25,6 +25,7 @@ mod retired_github_watch_tests;
 #[path = "tests/retired_room_digest_test.rs"]
 mod retired_room_digest_tests;
 mod startup;
+mod startup_recovery;
 mod storage;
 mod worker;
 use storage::{CoordinatorLease, StoragePause};

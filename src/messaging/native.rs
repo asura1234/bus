@@ -106,7 +106,10 @@ fn retry_shell_start(
     before_deadline: bool,
 ) -> bool {
     before_deadline
-        && matches!(method, Method::AgentStart(_))
+        && matches!(
+            method,
+            Method::AgentStart(_) | Method::AgentStartIfIdentity(_)
+        )
         && matches!(response, Err(ApiClientError::ErrorResponse(response)) if matches!(response.error.code.as_str(), "agent_pane_busy" | "agent_shell_starting"))
 }
 
@@ -157,46 +160,56 @@ mod tests {
 
     #[test]
     fn shell_retry_never_repeats_uncertain_start_or_prompt_or_exceeds_deadline() {
-        let start = Method::AgentStart(crate::protocol::api::schema::AgentStartParams {
+        let params = crate::protocol::api::schema::AgentStartParams {
             name: "live".into(),
             kind: "claude".into(),
             pane_id: "w1:p2".into(),
             args: vec![],
             timeout_ms: None,
-        });
-        for code in [
-            "agent_pane_busy",
-            "agent_shell_starting",
-            "agent_shell_waiting",
-            "timeout",
-            "agent_start_input_failed",
-            "agent_not_ready",
-        ] {
-            let error = Err(ApiClientError::ErrorResponse(
-                crate::protocol::api::schema::ErrorResponse {
-                    id: "r".into(),
-                    error: crate::protocol::api::schema::ErrorBody {
-                        code: code.into(),
-                        message: code.into(),
-                    },
+        };
+        for start in [
+            Method::AgentStart(params.clone()),
+            Method::AgentStartIfIdentity(
+                crate::protocol::api::schema::AgentStartIfIdentityParams {
+                    expected_terminal_id: "owned-terminal".into(),
+                    start: params,
                 },
-            ));
-            assert_eq!(
-                retry_shell_start(&start, &error, true),
-                matches!(code, "agent_pane_busy" | "agent_shell_starting")
-            );
-            assert!(!retry_shell_start(&start, &error, false));
+            ),
+        ] {
+            for code in [
+                "agent_pane_busy",
+                "agent_shell_starting",
+                "agent_shell_waiting",
+                "timeout",
+                "agent_start_input_failed",
+                "agent_not_ready",
+            ] {
+                let error = Err(ApiClientError::ErrorResponse(
+                    crate::protocol::api::schema::ErrorResponse {
+                        id: "r".into(),
+                        error: crate::protocol::api::schema::ErrorBody {
+                            code: code.into(),
+                            message: code.into(),
+                        },
+                    },
+                ));
+                assert_eq!(
+                    retry_shell_start(&start, &error, true),
+                    matches!(code, "agent_pane_busy" | "agent_shell_starting")
+                );
+                assert!(!retry_shell_start(&start, &error, false));
+                assert!(!retry_shell_start(
+                    &Method::AgentList(crate::protocol::api::schema::EmptyParams {}),
+                    &error,
+                    true
+                ));
+            }
             assert!(!retry_shell_start(
-                &Method::AgentList(crate::protocol::api::schema::EmptyParams {}),
-                &error,
+                &start,
+                &Err(ApiClientError::Io(std::io::Error::other("lost response"))),
                 true
             ));
         }
-        assert!(!retry_shell_start(
-            &start,
-            &Err(ApiClientError::Io(std::io::Error::other("lost response"))),
-            true
-        ));
     }
 
     #[test]
