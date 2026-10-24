@@ -1,7 +1,24 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
+mod background;
 mod exchange;
 mod markdown;
 mod wrapped_links;
+
+// Separate the costs of a rebuild so a slow operation identifies its phase.
+mod phases {
+    use crate::utils::perf::Timer;
+    pub(super) static SIGNATURE: Timer = Timer::new("client.history.signature");
+    pub(super) static GROUPING: Timer = Timer::new("client.history.grouping");
+    pub(super) static PARSE: Timer = Timer::new("client.history.markdown.parse");
+    pub(super) static LAYOUT: Timer = Timer::new("client.history.markdown.layout");
+    pub(super) static PREPARE: Timer = Timer::new("client.history.markdown.prepare");
+    pub(super) static PAINT: Timer = Timer::new("client.history.markdown.paint");
+    pub(super) static ROWS: Timer = Timer::new("client.history.markdown.rows");
+    pub(super) static LINKS: Timer = Timer::new("client.history.links");
+    pub(super) static HEADER: Timer = Timer::new("client.history.header");
+    pub(super) static WRAP: Timer = Timer::new("client.history.wrap");
+    pub(super) static THUMBNAILS: Timer = Timer::new("client.history.thumbnails");
+}
 
 use super::render::Action;
 use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
@@ -14,6 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub(super) enum Tone {
     Text,
     Muted,
@@ -24,6 +42,7 @@ pub(super) enum Tone {
 }
 
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub(super) struct Line {
     pub text: String,
     pub action: Option<Action>,
@@ -54,6 +73,7 @@ pub(super) struct Line {
 /// Relative paths in a message resolve against `cwd`, its authoring agent's
 /// working directory; the developer and Bus have none.
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub(super) struct LinkScope {
     pub cwd: Option<Arc<std::path::Path>>,
     /// Complete source tokens projected onto this row after wrapping.
@@ -61,6 +81,7 @@ pub(super) struct LinkScope {
 }
 
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub(super) struct ThumbnailRow {
     pub path: Arc<std::path::Path>,
     pub cols: u16,
@@ -76,6 +97,7 @@ pub(super) enum MarkdownSource {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct RowAnchor {
     prompt: PromptId,
     agent: Option<AgentId>,
@@ -84,6 +106,7 @@ pub(super) struct RowAnchor {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
 enum RowKind {
     PromptHeader,
     PromptBody,
@@ -115,7 +138,10 @@ pub(super) struct History {
     key: Option<LayoutKey>,
     source: Option<(u64, RoomId)>,
     signature: u64,
-    lines: Vec<Line>,
+    lines: Arc<[Line]>,
+    background: Option<background::Background>,
+    cancellation: Option<background::Cancellation>,
+    age_valid: std::ops::Range<u64>,
     markdown: BTreeMap<MarkdownSource, MarkdownBlock>,
     /// The Markdown each visited room showed at its last rebuild. Rendering
     /// a long room is the costly part, so a block stays cached while any
@@ -123,6 +149,8 @@ pub(super) struct History {
     room_markdown: BTreeMap<RoomId, BTreeSet<MarkdownSource>>,
     /// Markdown blocks laid out afresh during the current rebuild.
     rendered: usize,
+    rebuilt: usize,
+    projected: usize,
 }
 
 impl History {

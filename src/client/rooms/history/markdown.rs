@@ -1,6 +1,6 @@
 //! Markdown message preparation, style preservation and copyable row layout.
 use super::super::render::{display, wrap_ranges, ACCENT};
-use super::{History, Line, MarkdownSource, RowAnchor, Tone};
+use super::{History, Line, LinkScope, MarkdownSource, RowAnchor, Tone};
 use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
@@ -13,6 +13,9 @@ pub(super) struct MarkdownBlock {
     view: Option<MarkdownView>,
     width: Option<u16>,
     lines: Vec<Line>,
+    /// None means links have not been projected; Some(None) is a developer
+    /// message, whose paths have no author working directory.
+    scope: Option<Option<Arc<std::path::Path>>>,
 }
 
 impl History {
@@ -30,6 +33,7 @@ impl History {
 
 impl MarkdownBlock {
     fn new(key: MarkdownSource, source: &str) -> Self {
+        let _timer = super::phases::PARSE.start();
         let raw: Arc<str> = Arc::from(source);
         // People type prompts like chat messages, so every newline they enter
         // is a line break. Agent replies keep standard Markdown paragraphs.
@@ -62,6 +66,7 @@ impl MarkdownBlock {
             view,
             width: None,
             lines: Vec::new(),
+            scope: None,
         }
     }
 
@@ -70,28 +75,45 @@ impl MarkdownBlock {
         self.width == Some(width)
     }
 
+    pub(super) fn is_scoped(&self, width: u16, scope: &LinkScope) -> bool {
+        self.width == Some(width) && self.scope.as_ref() == Some(&scope.cwd)
+    }
+
     pub(super) fn lines(
         &mut self,
         width: u16,
         request: MarkdownSource,
         indent: &str,
         anchor: RowAnchor,
+        scope: LinkScope,
     ) -> &[Line] {
-        if self.width == Some(width) {
+        if self.is_scoped(width, &scope) {
             return &self.lines;
         }
-        let content_width = width.saturating_sub(indent.len() as u16).max(1);
-        self.lines = self
-            .view
-            .as_mut()
-            .and_then(|view| {
-                prepared_markdown_lines(view, content_width, request, &self.source, indent, anchor)
-            })
-            .unwrap_or_else(|| {
-                literal_reply_lines(&self.source, content_width, request, indent, anchor)
-            });
-        highlight_waiting_tags(&mut self.lines, &self.source);
-        self.width = Some(width);
+        if self.width != Some(width) {
+            let _timer = super::phases::LAYOUT.start();
+            let content_width = width.saturating_sub(indent.len() as u16).max(1);
+            self.lines = self
+                .view
+                .as_mut()
+                .and_then(|view| {
+                    prepared_markdown_lines(
+                        view,
+                        content_width,
+                        request,
+                        &self.source,
+                        indent,
+                        anchor,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    literal_reply_lines(&self.source, content_width, request, indent, anchor)
+                });
+            highlight_waiting_tags(&mut self.lines, &self.source);
+            self.width = Some(width);
+        }
+        self.scope = Some(scope.cwd.clone());
+        self.lines = super::wrapped_links::scoped_lines(&self.lines, scope);
         &self.lines
     }
 }
@@ -152,6 +174,7 @@ fn prepared_markdown_lines(
     indent: &str,
     anchor: RowAnchor,
 ) -> Option<Vec<Line>> {
+    let prepare_timer = super::phases::PREPARE.start();
     let layout = match view.prepare(width) {
         Ok(layout) => layout,
         Err(error) => {
@@ -159,6 +182,7 @@ fn prepared_markdown_lines(
             return None;
         }
     };
+    drop(prepare_timer);
     let line_count = layout.line_count();
     let mut lines = Vec::with_capacity(line_count);
     let mut first = 0;
@@ -172,10 +196,13 @@ fn prepared_markdown_lines(
             .min(rows_per_chunk)
             .min(usize::from(u16::MAX)) as u16;
         let area = Rect::new(0, 0, width, height);
+        let paint_timer = super::phases::PAINT.start();
         let mut buffer = Buffer::empty(area);
         let mut state = ViewState::default();
         state.scroll_to(DocumentRow::new(first));
         layout.widget().render(area, &mut buffer, &mut state);
+        drop(paint_timer);
+        let rows_timer = super::phases::ROWS.start();
         for offset in 0..height {
             let position = first + usize::from(offset);
             lines.push(line_from_buffer(
@@ -188,6 +215,7 @@ fn prepared_markdown_lines(
                 RowAnchor { position, ..anchor },
             ));
         }
+        drop(rows_timer);
         first += usize::from(height);
     }
     mark_soft_wraps(&mut lines, width, indent.len());

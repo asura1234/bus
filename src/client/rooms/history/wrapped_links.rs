@@ -10,6 +10,7 @@ type Fragments = Vec<(usize, Range<usize>)>;
 /// off-screen messages on every frame. The existing detector and path probe
 /// still decide which tokens can link and whether their targets exist.
 pub(super) fn scoped_lines(lines: &[Line], scope: LinkScope) -> Vec<Line> {
+    let _timer = super::phases::LINKS.start();
     let mut rows = lines.to_vec();
     let Some((_, source)) = lines.first().and_then(|line| line.raw_markdown.as_ref()) else {
         return rows;
