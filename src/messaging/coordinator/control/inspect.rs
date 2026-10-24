@@ -89,6 +89,13 @@ impl Worker {
         {
             Some(Ok(settings)) => {
                 let mut value = json!(settings);
+                value["developer_sound"] = json!({
+                    "enabled": settings.developer_sound_enabled,
+                    "name": settings.developer_sound,
+                });
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("developer_sound_enabled");
+                }
                 value["feishu"] = json!(self.attention.status);
                 value
             }

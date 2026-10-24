@@ -82,7 +82,10 @@ fn developer_sound_setting_is_saved_for_later_sessions_and_rejects_non_system_ch
         .unwrap();
     assert!(receiver.try_iter().any(|event| matches!(event, BusEvent::SettingsChanged(saved) if saved.developer_sound.as_deref() == Some("Glass"))));
     let later = session(&root, "later");
-    assert_eq!(later.settings_json()["developer_sound"], "Glass");
+    assert_eq!(
+        later.settings_json()["developer_sound"],
+        json!({"enabled":true,"name":"Glass"})
+    );
     assert_eq!(later.settings_json()["feishu_waiting_notifications"], true);
     let path = root.join("settings.json");
     let before = std::fs::read(&path).unwrap();
@@ -98,6 +101,27 @@ fn developer_sound_setting_is_saved_for_later_sessions_and_rejects_non_system_ch
     first
         .command(BusCommand::SetDeveloperSoundName(None), &events)
         .unwrap();
+    first
+        .command(BusCommand::SetDeveloperSoundEnabled(false), &events)
+        .unwrap();
+    assert!(receiver.try_iter().any(
+        |event| matches!(event, BusEvent::SettingsChanged(saved) if !saved.developer_sound_enabled)
+    ));
+    let muted = session(&root, "muted");
+    assert_eq!(
+        muted.settings_json()["developer_sound"],
+        json!({"enabled":false,"name":null})
+    );
+    assert_eq!(muted.settings_json()["feishu_waiting_notifications"], true);
+    assert!(muted
+        .settings_json()
+        .get("developer_sound_enabled")
+        .is_none());
+    first
+        .command(BusCommand::SetDeveloperSoundEnabled(true), &events)
+        .unwrap();
+    assert!(settings::load(&path).unwrap().developer_sound_enabled);
+    drop(muted);
     assert_eq!(settings::load(&path).unwrap().developer_sound, None);
     assert!(settings::load(&path).unwrap().feishu_notifications);
     drop(later);
@@ -258,7 +282,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
         shown.result["settings"],
         json!({
             "color_blind_mode": false,
-            "developer_sound": null,
+            "developer_sound": {"enabled": true, "name": null},
             "feishu_waiting_notifications": true,
             "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",
             "feishu_cli_path": null,

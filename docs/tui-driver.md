@@ -110,11 +110,17 @@ Use a closed PATH recording shim to assert argv. Developer sends emit no alerts,
 and these alerts emit no terminal OSC. See [developer notifications](developer-notifications.md).
 Freezes are recorded only in diagnostics and emit no terminal notification.
 
-The **Notify you sound (always on)** selector has `developer-sound:previous` and
-`developer-sound:next` hits; Left/Right and Enter also cycle its choices. Previews and mandatory
-developer sounds record the selected installed system file as the `afplay` target,
-independent of room sound switches, focus and normal cooldown. Ordinary room sounds
-record `bus-sound-*.mp3` or a selected system sound. Nothing is played by the recorder.
+The **You** row under **Sound notifications → YOU** has the same checkbox and
+sound controls as room rows. `sound:you` toggles it; Enter toggles the focused row,
+while Left/Right and `developer-sound:previous` / `developer-sound:next` cycle and
+preview sounds. The checkbox defaults on and persists independently of the selected
+name; `bus state` settings expose `developer_sound: {enabled, name}`.
+Unchecking suppresses developer-alert audio only; Feishu and other alerts continue.
+Previews still record the selected installed system file as the `afplay` target,
+including when the checkbox is off. Enabled developer alerts ignore room switches,
+focus and ordinary cooldown. Ordinary room sounds record `bus-sound-*.mp3` or a
+selected system sound. Nothing is played by the recorder.
+
 Initial history and repeated snapshots do not replay alerts.
 
 Output: every verb prints one JSON line on stdout, except `journey` (one

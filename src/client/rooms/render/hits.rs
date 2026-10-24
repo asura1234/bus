@@ -40,6 +40,7 @@ impl BusUi {
 
     fn sound_target(&self, target: &SoundTarget) -> String {
         match target {
+            SoundTarget::Developer => "you".into(),
             SoundTarget::Room(id) => self.room_name(*id),
             SoundTarget::AllRooms => "all-rooms".into(),
         }
@@ -91,7 +92,7 @@ impl BusUi {
             Action::EditFeishuRecipient => "feishu-recipient".into(),
             Action::EditFeishuCli => "feishu-cli-path".into(),
             Action::ToggleFeishuNotifications => "feishu-notifications".into(),
-            Action::CycleDeveloperSound(next) => format!(
+            Action::CycleSound(SoundTarget::Developer, next) => format!(
                 "developer-sound:{}",
                 if *next { "next" } else { "previous" }
             ),

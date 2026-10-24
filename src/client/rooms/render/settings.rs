@@ -30,14 +30,21 @@ impl BusUi {
             .state
             .master_room()
             .map(|room| SoundTarget::Room(room.id));
-        let mut lines = Vec::new();
+        let mut lines = vec![
+            SoundSettingsLine::Heading("YOU"),
+            SoundSettingsLine::Sound {
+                field: self.developer_sound_field(),
+                target: SoundTarget::Developer,
+            },
+            SoundSettingsLine::Empty(""),
+        ];
         let mut targets = self
             .sound_settings_targets()
             .into_iter()
             .enumerate()
             .map(|(index, target)| SoundSettingsLine::Sound {
                 target,
-                field: index + 1,
+                field: self.room_sound_field(index),
             })
             .peekable();
         if let Some(line) =
@@ -100,15 +107,6 @@ impl BusUi {
         lines.push(SoundSettingsLine::FeishuCli {
             field: self.feishu_field() + 2,
         });
-        lines.push(SoundSettingsLine::Stepper {
-            field: self.developer_sound_field(),
-            label: "Notify you sound (always on)",
-            value: self.settings.developer_sound.as_deref().map_or_else(
-                || "System default".into(),
-                |name| self.sound_label(Some(name)),
-            ),
-            adjust: Action::CycleDeveloperSound,
-        });
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
@@ -124,6 +122,14 @@ impl BusUi {
         target: SoundTarget,
     ) -> Option<(String, Option<bool>, String)> {
         match target {
+            SoundTarget::Developer => Some((
+                "You".into(),
+                Some(self.settings.developer_sound_enabled),
+                self.settings.developer_sound.as_deref().map_or_else(
+                    || "System default".into(),
+                    |name| self.sound_label(Some(name)),
+                ),
+            )),
             SoundTarget::Room(room) => {
                 let room = self.snapshot.state.room(room)?;
                 Some((

@@ -67,7 +67,6 @@ pub(super) enum Action {
     ToggleSound(SoundTarget),
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
-    CycleDeveloperSound(bool),
     AdjustCompactionLimit(bool),
     /// Raises (true) or lowers the idle agents alert by one.
     AdjustIdleAgentsAlert(bool),
@@ -148,10 +147,11 @@ pub(super) struct View {
     pub thumbnails: Vec<super::thumbnails::Placement>,
 }
 
-/// What a Settings sound row sets: a room's sound (MASTER's is global), or
+/// What a Settings sound row sets: developer-alert audio, a room's sound, or
 /// every work room at once, which is also what new work rooms start with.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SoundTarget {
+    Developer,
     Room(RoomId),
     AllRooms,
 }

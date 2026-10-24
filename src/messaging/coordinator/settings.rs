@@ -7,6 +7,20 @@ use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
 use crate::messaging::prefs::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
+    pub(super) fn set_developer_sound_enabled(
+        &mut self,
+        enabled: bool,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.developer_sound_enabled = enabled)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        Ok(())
+    }
+
     pub(super) fn set_developer_sound(
         &mut self,
         name: Option<String>,
