@@ -383,6 +383,28 @@ fn screen_rows_of(screen: &crate::devtools::tui::screen::Screen) -> Vec<String> 
 }
 
 #[test]
+fn fake_codex_prompt_proves_managed_startup_readiness() {
+    use crate::agents::{detect_agent_with_launch_context, AgentKind, AgentState};
+    use crate::devtools::tui::screen::Screen;
+
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let mut screen = Screen::new(80, 12).unwrap();
+    screen.feed(prompt_top("codex").as_bytes());
+    screen.feed(prompt_box("", "codex", 80).as_bytes());
+    let text = screen_rows_of(&screen).join("\n");
+    assert!(
+        text.contains("› Ask Codex to do anything\n\n  GPT-fake"),
+        "the fake must retain the real v0.164 composer/model spacing: {text}"
+    );
+    let detection = detect_agent_with_launch_context(Some(AgentKind::Codex), &text, "", "", true);
+    assert_eq!(detection.state, AgentState::Idle, "{text}");
+    assert!(
+        detection.visible_idle,
+        "the fake prompt needs a positive ready rule: {text}"
+    );
+}
+
+#[test]
 fn the_fake_codex_draws_a_codex_composer_that_bus_can_read() {
     use crate::devtools::tui::screen::Screen;
 
@@ -407,7 +429,8 @@ fn the_fake_codex_draws_a_codex_composer_that_bus_can_read() {
     );
     let composer = rows.iter().position(|row| row.starts_with('›')).unwrap();
     assert_eq!(rows[composer + 1], "");
-    assert_eq!(rows[composer + 2], "  gpt-fake · fake codex");
+    assert_eq!(rows[composer + 2], "  GPT-fake · fake codex");
+    assert_eq!(rows[composer + 3], "  ? for shortcuts");
     assert!(!rows.iter().any(|row| row.starts_with('❯')), "{rows:#?}");
 
     for draft in ["h", "he", "hey"] {
@@ -581,6 +604,26 @@ fn the_fake_codex_fires_bus_hook_after_a_project_hook_for_the_same_event() {
     let fired = delivered.is_file();
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(fired, "Bus's Stop hook never ran: {merged:#}");
+}
+
+#[test]
+fn codex_working_detection_keeps_the_complete_composer_footer() {
+    use crate::agents::{detect_agent_with_launch_context, AgentKind, AgentState};
+    use crate::devtools::tui::screen::Screen;
+
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let mut screen = Screen::new(132, 16).unwrap();
+    screen.feed(working_block(&working_line("codex", 0, 1), "", "codex", false, 132).as_bytes());
+    let complete = screen_rows_of(&screen).join("\n");
+    // The base fake lacked the shortcuts row. Removing only that row keeps
+    // the same working control inside the old three-nonempty-line window.
+    let previous = complete.replace("  ? for shortcuts", "");
+    for (name, text) in [("previous", previous), ("complete", complete)] {
+        let detection =
+            detect_agent_with_launch_context(Some(AgentKind::Codex), &text, "", "", false);
+        assert_eq!(detection.state, AgentState::Working, "{name}: {text}");
+        assert!(detection.visible_working, "{name}: {text}");
+    }
 }
 
 #[test]
