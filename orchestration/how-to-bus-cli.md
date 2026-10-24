@@ -251,8 +251,7 @@ these events never log commands or message text.
   in MASTER only milestones (merged or failed), blockers or decisions with
   `[waiting-on-you]`, and plan changes. Never relay routine worker acknowledgements.
 
-[Reach the developer from any room](#reach-the-developer-from-any-room) explains
-CLI addressing and developer alerts. To post in MASTER as an orchestrator:
+To post a milestone in MASTER as an orchestrator:
 
 ```sh
 bus send --room master --as claude-orch --to human \
@@ -265,17 +264,15 @@ has no requests and nothing to `wait` on: `send` returns its `message_id`
 with `"request_ids": []` and `"stage": "posted"`. `--file PATH` attaches files
 as for any send. `human` is a compatibility alias for `you`; both work from every room.
 
-### Reach the developer from any room
+#### Reach the developer from any room
 
-Any worker or orchestrator can address the developer when something needs their attention:
+For a developer-only request from any room:
 
 ```sh
-bus send --room ROOM --as AGENT --to you --text "Please decide the release date."
 bus send --room ROOM --as AGENT --to you --text "[waiting-on-you] Approve access."
 ```
 
-`@you` means the developer; use `--to you` in the CLI. Use it or `[waiting-on-you]`
-for things only the developer can do or decide. The message stays in the selected
+`@you` means the developer; use `--to you` in the CLI. The message stays in the selected
 conversation room, with the usual agent attribution and a **You** recipient.
 No copy is moved to MASTER. Agent names or IDs work for `--as`, including senders
 from another room. `you` and `human` are case-insensitive reserved names.

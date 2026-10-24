@@ -444,12 +444,16 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     for phrase in [
         "A reply lands in the message's room, equally for developer and agent senders.",
         "A turn no message started posts in the orchestrator's work room.",
-        "MASTER carries progress, questions and blockers; work details stay in the work room.",
-        "a progress report when a step or milestone finishes or fails (a PR merged, a task done, a gate failed);",
-        "every question or decision for you;",
-        "every blocker that waits on you (a dialog you must approve, a destructive action);",
-        "anything that changes the plan.",
-        "Routine dialog approvals, worker hand-offs, step-by-step details and \"nothing is waiting on you\" notes stay in the work room.",
+        "### Who to message",
+        "**Worker:** Send progress, acknowledgements, hand-offs and finals to your orchestrator (`--to orchestrator`).",
+        "Send review and verification results directly to the PR owner.",
+        "Contact the developer only for something only they can do:",
+        "Never send status or",
+        "**Orchestrator:** Absorb worker progress into room notes.",
+        "Send the developer in MASTER only milestones (merged or failed), blockers or decisions with `[waiting-on-you]`, and plan changes.",
+        "Never relay routine worker acknowledgements.",
+        "#### Reach the developer from any room",
+        "For a developer-only request from any room:",
         "bus send --room master --as claude-orch --to human",
     ] {
         assert!(cli.contains(phrase), "missing {phrase}: {cli}");
