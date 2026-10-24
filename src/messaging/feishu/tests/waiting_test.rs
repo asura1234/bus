@@ -18,6 +18,11 @@ fn fixture() -> (BusState, RoomId, RoomId, AgentId) {
     (state, master, work, agent)
 }
 
+/// The TUI alert route: every developer-addressed message, tagged or not.
+fn tui(before: &BusState, next: &BusState) -> Vec<String> {
+    new_developer_notifications(before, next, false)
+}
+
 fn enabled() -> WaitingNotifications {
     let mut policy = WaitingNotifications::default();
     policy.configure(true);
@@ -61,15 +66,15 @@ fn developer_notification_final_reply_to_developer_triggers_once() {
     item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"Still waiting on you: Approve export", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
     item["completed_at_ms"] = serde_json::json!(2);
     let next: BusState = serde_json::from_value(value).unwrap();
-    let mut policy = enabled();
-    let now = 1000_u64;
-    policy.observe(&before, &next, now);
     assert_eq!(
-        policy.take(now + 2000).as_deref(),
-        Some("libtv-app master is waiting on you: Approve export")
+        tui(&before, &next),
+        ["libtv-app master is waiting on you: Approve export"]
     );
-    policy.observe(&next, &next, now + 3000);
-    assert!(policy.take(now + 6000).is_none());
+    assert!(tui(&next, &next).is_empty());
+    // The legacy phrase is not a Feishu page; only the tag is.
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert!(policy.take(3000).is_none());
 }
 
 #[test]
@@ -81,7 +86,7 @@ fn developer_notification_coalesces_messages_without_extending_window() {
         .unwrap();
     let mut second = first.clone();
     second
-        .post_to_developer(master, agent, "waiting on you: second".into(), vec![], 2)
+        .post_to_developer(master, agent, "[waiting-on-you] second".into(), vec![], 2)
         .unwrap();
     let now = 1000_u64;
     let mut policy = enabled();
@@ -354,14 +359,23 @@ fn developer_notification_matches_tag_and_equivalent_whole_phrases() {
             1,
         )
         .unwrap();
-        let mut policy = enabled();
-        let now = 1000_u64;
-        policy.observe(&before, &next, now);
         assert_eq!(
-            policy.take(now + 2000).as_deref(),
-            Some("libtv-app master is waiting on you: Approve access"),
+            tui(&before, &next),
+            ["libtv-app master is waiting on you: Approve access"],
             "{marker}"
         );
+        let mut policy = enabled();
+        policy.observe(&before, &next, 1000);
+        let paged = policy.take(3000);
+        if marker.starts_with('[') {
+            assert_eq!(
+                paged.as_deref(),
+                Some("libtv-app master is waiting on you: Approve access"),
+                "{marker}"
+            );
+        } else {
+            assert!(paged.is_none(), "phrase {marker} must not page Feishu");
+        }
     }
 }
 
@@ -407,12 +421,20 @@ fn developer_notification_untagged_direct_messages_join_a_burst() {
         .unwrap();
     next.post_to_developer(master, agent, "Untagged too".into(), vec![], 3)
         .unwrap();
-    let mut policy = enabled();
-    let now = 1000_u64;
-    policy.observe(&before, &next, now);
     assert_eq!(
-        policy.take(now + 2000).as_deref(),
-        Some("libtv-app master to you: Untagged\nlibtv-app master is waiting on you: Approve\nlibtv-app master to you: Untagged too")
+        tui(&before, &next),
+        [
+            "libtv-app master to you: Untagged",
+            "libtv-app master is waiting on you: Approve",
+            "libtv-app master to you: Untagged too"
+        ]
+    );
+    // Feishu carries only the tagged hard blocker.
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    assert_eq!(
+        policy.take(3000).as_deref(),
+        Some("libtv-app master is waiting on you: Approve")
     );
 }
 
@@ -458,10 +480,7 @@ fn developer_notification_markdown_bold_phrase_heading_previews_the_next_bullet(
         1,
     )
     .unwrap();
-    let mut policy = enabled();
-    let now = 1000_u64;
-    policy.observe(&before, &next, now);
-    let text = policy.take(now + 2000).unwrap();
+    let text = tui(&before, &next).join("\n");
     assert!(
         text.contains("Approve claude-dev's push of feat/gallery"),
         "{text}"
@@ -493,11 +512,15 @@ fn notify_you_worker_posts_and_tagged_peer_messages_in_every_room() {
         let mut next = before.clone();
         next.post_to_developer(room, worker, "Decide release timing".into(), vec![], 1)
             .unwrap();
+        assert_eq!(
+            tui(&before, &next),
+            ["worker to you: Decide release timing"]
+        );
         let mut policy = enabled();
         policy.observe(&before, &next, 1000);
-        assert_eq!(
-            policy.take(3000).as_deref(),
-            Some("worker to you: Decide release timing")
+        assert!(
+            policy.take(3000).is_none(),
+            "untagged posts stay in the TUI"
         );
     }
     let mut next = before.clone();
@@ -691,9 +714,13 @@ fn explicit_you_mention_in_peer_traffic_alerts_but_partial_tokens_do_not() {
             1,
         )
         .unwrap();
+        assert_eq!(!tui(&before, &next).is_empty(), alerts, "{text}");
         let mut policy = enabled();
         policy.observe(&before, &next, 1000);
-        assert_eq!(policy.take(3000).is_some(), alerts, "{text}");
+        assert!(
+            policy.take(3000).is_none(),
+            "@you never pages Feishu: {text}"
+        );
     }
 }
 
@@ -736,10 +763,50 @@ fn coalesced_developer_and_peer_requests_keep_developer_phrase_context() {
         item["completed_at_ms"] = serde_json::json!(3);
     }
     let next: BusState = serde_json::from_value(value).unwrap();
-    let mut policy = enabled();
-    policy.observe(&before, &next, 1000);
     assert_eq!(
-        policy.take(3000).as_deref(),
-        Some("worker is waiting on you: Approve access")
+        tui(&before, &next),
+        ["worker is waiting on you: Approve access"]
     );
+}
+
+#[test]
+fn repeated_tagged_ask_from_the_same_sender_pages_once_per_half_hour() {
+    let (before, master, _, agent) = fixture();
+    let mut first = before.clone();
+    first
+        .post_to_developer(
+            master,
+            agent,
+            "[waiting-on-you] Restart Bus".into(),
+            vec![],
+            1,
+        )
+        .unwrap();
+    let mut second = first.clone();
+    second
+        .post_to_developer(
+            master,
+            agent,
+            "[waiting-on-you] Restart Bus".into(),
+            vec![],
+            2,
+        )
+        .unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &first, 1000);
+    assert!(policy.take(3000).is_some());
+    policy.observe(&first, &second, 60_000);
+    assert!(policy.take(70_000).is_none(), "same ask within 30 minutes");
+    let mut third = second.clone();
+    third
+        .post_to_developer(
+            master,
+            agent,
+            "[waiting-on-you] Restart Bus".into(),
+            vec![],
+            3,
+        )
+        .unwrap();
+    policy.observe(&second, &third, 31 * 60_000 + 1000);
+    assert!(policy.take(31 * 60_000 + 4000).is_some());
 }

@@ -216,13 +216,6 @@ fn sent_by(worker: &Worker, room: RoomId, about: AgentId) -> Vec<(Vec<AgentId>, 
     std::mem::take(&mut sent).into_values().collect()
 }
 
-fn expected_resolved(worker: &Worker, id: AgentId) -> String {
-    format!(
-        "{}. Resolved; dialog is gone; previous blocked notice needs no action",
-        worker.state.agent(id).unwrap().name
-    )
-}
-
 fn expected_blocked(worker: &Worker, id: AgentId) -> String {
     let body = format!(
         "{}. Blocked, needs help to continue.\nInspect: bus agent dialog '{}'",
@@ -313,21 +306,14 @@ fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
     screen.lock().unwrap().dialog = false;
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 3);
-    assert_eq!(
-        sent_by(&worker, room, agent),
-        [
-            blocked.clone(),
-            blocked,
-            (vec![orchestrator], expected_resolved(&worker, agent))
-        ]
-    );
+    assert_eq!(sent_by(&worker, room, agent), [blocked.clone(), blocked]);
     assert_only_bus_signed_notices(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn answering_resolves_old_help_and_a_new_dialog_is_a_new_episode() {
+fn answering_retires_old_help_and_a_new_dialog_is_a_new_episode() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
     screen.lock().unwrap().dialog = true;
@@ -341,24 +327,14 @@ fn answering_resolves_old_help_and_a_new_dialog_is_a_new_episode() {
     let blocked = (vec![orchestrator], expected_blocked(&worker, agent));
     assert_eq!(
         sent_by(&worker, room, agent),
-        [
-            blocked.clone(),
-            (vec![orchestrator], expected_resolved(&worker, agent))
-        ],
-        "previous help is explicitly resolved"
+        std::slice::from_ref(&blocked),
+        "closing posts nothing"
     );
 
     // The identical next prompt appears before any idle status poll.
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
-    assert_eq!(
-        sent_by(&worker, room, agent),
-        [
-            blocked.clone(),
-            (vec![orchestrator], expected_resolved(&worker, agent)),
-            blocked
-        ]
-    );
+    assert_eq!(sent_by(&worker, room, agent), [blocked.clone(), blocked]);
     assert_only_bus_signed_notices(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -429,11 +405,7 @@ fn an_undelivered_blocked_notice_keeps_its_failure_and_reaches_the_developer_onc
     polls(&mut worker, 3);
     assert_eq!(
         sent_by(&worker, room, agent),
-        [
-            (vec![orchestrator], blocked),
-            (Vec::new(), fallback),
-            (Vec::new(), expected_resolved(&worker, agent))
-        ]
+        [(vec![orchestrator], blocked), (Vec::new(), fallback)]
     );
     assert!(worker
         .state
@@ -603,14 +575,10 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
                     .unwrap()
             };
             assert_eq!(answered["outcome"], "closed");
-            assert_eq!(sent_by(&worker, room, sender).len(), 3);
-            assert_eq!(
-                sent_by(&worker, room, sender)[2].1,
-                expected_resolved(&worker, sender)
-            );
+            assert_eq!(sent_by(&worker, room, sender).len(), 2);
             screen.lock().unwrap().dialog = true;
             polls(&mut worker, 3);
-            assert_eq!(sent_by(&worker, room, sender).len(), 4);
+            assert_eq!(sent_by(&worker, room, sender).len(), 3);
             drop(worker);
             std::fs::remove_dir_all(dir).unwrap();
         }
@@ -624,18 +592,14 @@ fn an_unblocked_orchestrator_reports_a_new_dialog_as_a_new_episode() {
     let master = worker.state.master_room().unwrap().id;
     notify_steady(&mut worker, orchestrator, Some("dialog-id"));
     notify_steady(&mut worker, orchestrator, None);
-    assert_eq!(sent_by(&worker, master, orchestrator).len(), 2);
+    assert_eq!(sent_by(&worker, master, orchestrator).len(), 1);
     notify_steady(&mut worker, orchestrator, Some("question-id"));
     let blocked = (Vec::new(), expected_blocked(&worker, orchestrator));
     assert_eq!(
         sent_by(&worker, master, orchestrator),
-        [
-            blocked.clone(),
-            (Vec::new(), expected_resolved(&worker, orchestrator)),
-            blocked
-        ]
+        [blocked.clone(), blocked]
     );
-    assert_eq!(worker.state.room(master).unwrap().unread_count, 3);
+    assert_eq!(worker.state.room(master).unwrap().unread_count, 2);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1187,16 +1151,14 @@ fn settled_dialog_does_not_send_a_stale_blocked_notice() {
 }
 
 #[test]
-fn manual_dialog_close_marks_the_previous_notice_resolved_once() {
+fn manual_dialog_close_retires_the_notice_silently() {
     let (mut worker, agent, room, _, screen, dir) = worker(true);
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
     screen.lock().unwrap().dialog = false;
     polls(&mut worker, 4);
-    let messages = sent_by(&worker, room, agent);
-    assert_eq!(messages.len(), 2);
-    assert!(messages[1].1.contains("Resolved"));
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -1240,22 +1202,18 @@ fn closed_dialog_resolves_help_even_while_blocked_metadata_stays_cached() {
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
     screen.lock().unwrap().dialog = false;
     notify_steady(&mut worker, agent, Some(&episode));
-    assert_eq!(sent_by(&worker, room, agent).len(), 2);
-    assert_eq!(
-        sent_by(&worker, room, agent)[1].1,
-        expected_resolved(&worker, agent)
-    );
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
     // The stale generic blocked fallback must not resurrect the settled help.
     notify_steady(&mut worker, agent, Some(BLOCKED));
-    assert_eq!(sent_by(&worker, room, agent).len(), 2);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn uncertain_close_retains_help_until_a_readable_observation_confirms_settlement() {
-    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
     let episode = worker.state.agent(agent).unwrap().dialog_notice.clone();
@@ -1272,13 +1230,26 @@ fn uncertain_close_retains_help_until_a_readable_observation_confirms_settlement
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
     notify_steady(&mut worker, agent, episode.as_deref());
     assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, None);
-    assert_eq!(
-        sent_by(&worker, room, agent)[1],
-        (
-            vec![orchestrator.unwrap()],
-            expected_resolved(&worker, agent)
-        )
-    );
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn closing_a_dialog_through_choose_posts_no_resolved_notice() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let result = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
+    assert_eq!(result["outcome"], "closed");
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    // The answerer already knows; only the blocked notice was sent.
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

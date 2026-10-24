@@ -254,16 +254,9 @@ these events never log commands or message text.
 
 ### Who to message
 
-- **Worker:** Send progress, acknowledgements, hand-offs and finals to your
-  orchestrator (`--to orchestrator`). Send review and verification results
-  directly to the PR owner. Contact the developer only for something only they
-  can do: grant authorization (such as Figma login), unlock or plug in a device,
-  approve a destructive or outward-facing action, or make a product decision.
-  Use `[waiting-on-you]` and state the action or decision needed. Never send
-  status or “I’m ready/waiting” messages to the developer.
-- **Orchestrator:** Absorb worker progress into room notes. Send the developer
-  in MASTER only milestones (merged or failed), blockers or decisions with
-  `[waiting-on-you]`, and plan changes. Never relay routine worker acknowledgements.
+Who you message, when, and how to write it is in the
+[Bus communication guide](bus-communication-guide.md). This page only covers
+the commands.
 
 To post a milestone in MASTER as an orchestrator:
 
@@ -296,8 +289,9 @@ These posts create no agent requests: the result has `request_ids: []` and `stag
 are rejected. The developer cannot send to themselves.
 
 Every agent post to you, plus every agent message or final with an explicit `@you`,
-`[waiting-on-you]` or `[waiting_on_you]` marker, always notifies the developer, from every
-room and sender. The legacy whole phrase `waiting on you` qualifies only in developer-addressed
+`[waiting-on-you]` or `[waiting_on_you]` marker, shows as unread for the developer in the TUI
+and plays the developer-alert sound once per batch. Only the `[waiting-on-you]` or
+`[waiting_on_you]` tag also sends a Feishu DM; use it only for hard blockers. For the TUI alert only, the legacy whole phrase `waiting on you` also counts in developer-addressed
 notices and replies to developer-authored requests. In peer traffic a bare phrase does not trigger developer alerts
 because "you" refers to the receiving agent. Developer-authored sends never notify.
 The developer-alert system sound is configured separately from ordinary room sounds and ignores
@@ -309,8 +303,8 @@ or installed system sounds. The checkbox defaults on for existing setups and is 
 this audio; Feishu and other alerts continue. `bus state` and `bus settings` expose
 `developer_sound: {enabled, name}`, with null for the System default name.
 System default prefers Glass, then another installed sound; missing selections fall back to it.
-Feishu bot DMs use the existing two-second burst and first-action-line format; untagged direct
-posts use `sender to you: text`. Feishu notifications remain mandatory, including with a saved
+Feishu bot DMs carry only tagged asks, in the two-second burst and first-action-line format;
+the same ask from the same sender is not resent within 30 minutes. Feishu notifications remain mandatory, including with a saved
 legacy Feishu off preference.
 Recipient and CLI path remain editable. See [developer notifications](../docs/developer-notifications.md).
 
@@ -330,8 +324,8 @@ For assigned repository work, report these meaningful transitions yourself:
 
 Include repository, PR/merge-request number, exact head when available, status
 and the next action or owner. Send one update per meaningful transition; do not
-broadcast every merge in an unrelated repository. Route reports according to
-[Who to message](#who-to-message): workers report to their orchestrator, not the
+broadcast every merge in an unrelated repository. Route reports according to the
+[Bus communication guide](bus-communication-guide.md): workers report to their orchestrator, not the
 developer. A missing orchestrator or send failure is not permission to send routine
 status to the developer. These are agent-authored reports, not Bus-generated notices.
 
@@ -495,26 +489,23 @@ notices. It delivers these worker events to the room orchestrator's terminal:
 
 - A captured reply to an orchestrator-authored message, including a late final
   after that request closed without a reply.
-- A turn-final message from a turn the orchestrator did not start, including
-  another worker's request and a background job's wake turn. Autonomous full
-  text becomes a worker message in work-room history.
+- A turn-final message from an autonomous turn nobody's request started, such as a
+  background job's wake turn. Its full text becomes a worker message in work-room
+  history. A worker's reply to another worker's request goes to that worker only.
 - A request to a work-room worker that stalls or ends without a reply, with its
-  reason, including `abandoned`, `reply_not_captured` and provider errors.
-- Confirmed process exit with an open orchestrator request, or an idle worker
-  with an open orchestrator request after callback settlement.
-  Normal idle followed by a reply or no-reply settlement is folded into that
-  outcome. Background holds, including shells, stay open and report idle.
-  Queued or uncertain requests qualify on a genuine later idle edge; dialogs
-  and an initially idle queue do not. Resumed work can yield a new idle/stall
-  event, while unchanged polls or restarts never replay that event.
+  reason, including `reply_not_captured` and provider errors. Requests ended by
+  `bus agent interrupt` or by deleting the agent report nothing.
+- Confirmed process exit with an open orchestrator request.
+
+Bus sends no idle-worker or idle-request nudges: an agent waiting is not a problem.
 
 Each notification names the worker, event and message/request reference. Bus
 collects same-worker events for two seconds and combines them in one short
 message; new events can join a still-queued batch during its collection window.
 Long text uses a preview and `bus message status MESSAGE_ID` or
 `bus history --room ROOM` pointer. Different workers keep their own identity.
-No room monitoring, self-timer or surviving waiter is required. Blocked,
-Resolved notices keep their existing behavior. Startup failures are retained in agent state and diagnostic logs.
+No room monitoring, self-timer or surviving waiter is required. Blocked
+notices keep their existing behavior; a closed dialog posts nothing. Startup failures are retained in agent state and diagnostic logs.
 
 An author's `send --async --as ORCH` renews a three-second waiter lease, so its
 reply and no-reply outcome components wait for the combined output.
@@ -525,7 +516,7 @@ waiter marks only printed completed replies and the exact printed outcome
 including finals, exits and already-seen events; only unseen own outcomes are
 acknowledgeable through `event_acks`.
 It cannot hide an event that appeared after its output, an autonomous result,
-idle, an exit, or another message's events. Seeing a shared reply covers its group.
+an exit, or another message's events. Seeing a shared reply covers its group.
 A killed waiter stops renewing its lease, so unseen components are routed.
 
 Event decisions and queued batches are saved together before native submission.
@@ -1034,12 +1025,10 @@ like any message, or `bus → You: …` when it has none. The notice names the a
 but no options or fingerprint: look at the agent's terminal with that command (or
 `bus agent read AGENT --source visible`) and answer as below. It is posted once
 per dialog episode; selection changes and unreadable redraws do not repeat it.
-Once the dialog is confirmed closed, one `Resolved; dialog is gone` notice
-follows through the same route, also signed `bus`. A blocked MASTER
-orchestrator instead gets a Bus developer-attention notice in MASTER, since
-MASTER has no orchestrator of its own; its Resolved notice is a `bus` notice to
-the developer there. Numbered text in an editable Claude or Codex native
-composer is not a dialog and generates neither notice.
+When the dialog closes, Bus posts nothing more. A blocked MASTER orchestrator
+instead gets a Bus developer-attention notice in MASTER, since MASTER has no
+orchestrator of its own. Numbered text in an editable Claude or Codex native
+composer is not a dialog and generates no notice.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked

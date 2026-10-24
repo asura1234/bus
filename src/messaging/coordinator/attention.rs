@@ -45,6 +45,7 @@ impl Runtime {
         if let Some(job) = self.job.take() {
             self.retired.push(job);
         }
+        self.waiting.finish(false);
         self.cancel = Cancellation::default();
         self.waiting.configure(false);
         self.status = Status::default();
@@ -65,10 +66,12 @@ impl Runtime {
                     .unwrap_or_else(|_| Err("Feishu notification worker panicked".into()))
                 {
                     Ok(()) => {
+                        self.waiting.finish(true);
                         self.status.error = None;
                         tracing::info!(event = "bus.feishu.sent", "Feishu notification delivered");
                     }
                     Err(error) => {
+                        self.waiting.finish(false);
                         tracing::warn!(event = "bus.feishu.failed", %error, "Feishu notification failed; no automatic retry");
                         self.status.error = Some(error);
                     }
@@ -160,6 +163,7 @@ impl Runtime {
                         self.status.pending = true;
                     }
                     Err(error) => {
+                        self.waiting.finish(false);
                         tracing::warn!(event = "bus.feishu.failed", %error, "Could not start Feishu notification worker");
                         self.status.error = Some(error.to_string());
                     }

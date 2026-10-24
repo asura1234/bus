@@ -22,7 +22,7 @@ default warning or 6 GB for critical leaves that level latched. The notices
 and per-room latches are saved together, including rearming, so restarting
 Bus does not repeat an alert.
 
-The threshold settings are shared like the idle agents alert. The next
+The threshold settings are shared like the compaction limit. The next
 completed measurement uses the current saved settings.
 
 Tests inject a free-space source and a monotonic sampling clock. Scratch

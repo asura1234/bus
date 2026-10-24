@@ -38,8 +38,9 @@ fn routing_floor_blocks_inline_event_backfill_but_keeps_recent_and_open_work() {
     let mut state: BusState = serde_json::from_value(saved).unwrap();
     state.retain_worker_outcomes(now);
     let events = serde_json::to_value(&state).unwrap()["worker_events"].clone();
+    // Peer finals belong to the peer: none are copied to the orchestrator.
     assert!(events.get(format!("turn-final:{}", ids[0].0)).is_none());
-    assert!(events.get(format!("turn-final:{}", ids[1].0)).is_some());
+    assert!(events.get(format!("turn-final:{}", ids[1].0)).is_none());
     assert!(events
         .as_object()
         .unwrap()
@@ -152,4 +153,26 @@ fn real_format_2_snapshot_first_start_preserves_archive_without_old_wakes() {
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn legacy_idle_alert_latch_loads_and_drops_without_losing_other_room_state() {
+    let f = Fixture::new();
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    saved["state"]["rooms"][f.room.0.to_string()]["idle_alert_sent"] = json!(true);
+    saved["state"]["rooms"][f.room.0.to_string()]["notes"] = json!("preserve these notes");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let store = JsonStore::new(path.clone());
+    let loaded = store.load().unwrap().unwrap();
+    assert_eq!(loaded.room(f.room).unwrap().notes, "preserve these notes");
+    assert_eq!(loaded.agent(f.agent).unwrap().name, "builder");
+    store.save(&loaded).unwrap();
+    let rewritten: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(rewritten["state"]["rooms"][f.room.0.to_string()]
+        .get("idle_alert_sent")
+        .is_none());
+    assert_eq!(store.load().unwrap().unwrap(), loaded);
 }

@@ -196,6 +196,10 @@ fn embedded_docs_match_the_repository_copies() {
         std::fs::read_to_string(repo.join("workflows/create.md")).unwrap()
     );
     let sources = [
+        (
+            "bus-communication-guide.md",
+            "orchestration/bus-communication-guide.md",
+        ),
         ("how-to-bus-cli.md", "orchestration/how-to-bus-cli.md"),
         ("orchestrator-guide.md", "orchestration/guide.md"),
         ("orchestrator-rules.md", "orchestration/rules.md"),
@@ -439,19 +443,25 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
         "{rules}"
     );
     assert!(rules.contains("bus send --room master --as YOUR_NAME --to human"));
+    let communication =
+        flat(&std::fs::read_to_string(root.join("bus-communication-guide.md")).unwrap());
+    for phrase in [
+        "**Send a message only when it changes what the receiver does next.**",
+        "## Peer to peer first",
+        "## To the orchestrator",
+        "## To you (the developer)",
+        "**`[waiting-on-you]` means a hard blocker**",
+        "## Language and courtesy",
+    ] {
+        assert!(communication.contains(phrase), "missing {phrase}");
+    }
     let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
     assert!(cli.contains("With dev logging or `BUS_LOG=bus=debug`"));
     for phrase in [
         "A reply lands in the message's room, equally for developer and agent senders.",
         "A turn no message started posts in the orchestrator's work room.",
         "### Who to message",
-        "**Worker:** Send progress, acknowledgements, hand-offs and finals to your orchestrator (`--to orchestrator`).",
-        "Send review and verification results directly to the PR owner.",
-        "Contact the developer only for something only they can do:",
-        "Never send status or",
-        "**Orchestrator:** Absorb worker progress into room notes.",
-        "Send the developer in MASTER only milestones (merged or failed), blockers or decisions with `[waiting-on-you]`, and plan changes.",
-        "Never relay routine worker acknowledgements.",
+        "[Bus communication guide](bus-communication-guide.md)",
         "#### Reach the developer from any room",
         "For a developer-only request from any room:",
         "bus send --room master --as claude-orch --to human",
@@ -692,10 +702,11 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
         .unwrap();
     let text = agent_onboarding("codex1", agent, room, Path::new("/bus-docs"));
     assert!(text.contains("Bus messaging: you are codex1"));
+    assert!(text.contains("read /bus-docs/bus-communication-guide.md"));
+    assert!(text.contains("send only what changes the receiver's next step"));
     assert!(text.contains("Read /bus-docs/how-to-bus-cli.md"));
     assert!(text.contains("Send only the body"));
-    assert!(text
-        .contains("For who to message, follow the Who to message section in how-to-bus-cli.md."));
+    assert!(text.contains("use it only for a hard blocker only the developer can clear"));
     assert!(text
         .contains("bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\""));
     assert_eq!(state.requests().count(), 0);

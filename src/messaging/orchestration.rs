@@ -14,6 +14,10 @@ const WORKFLOW_CREATE: &str = include_str!("../../workflows/create.md");
 /// The docs the prompt references, written under `<BUS_DATA_DIR>/docs/`.
 const DOCS: &[(&str, &str)] = &[
     (
+        "bus-communication-guide.md",
+        include_str!("../../orchestration/bus-communication-guide.md"),
+    ),
+    (
         "how-to-bus-cli.md",
         include_str!("../../orchestration/how-to-bus-cli.md"),
     ),
@@ -145,11 +149,13 @@ pub(crate) fn agent_onboarding(
     docs: &Path,
 ) -> String {
     format!(
-        "Bus messaging: you are {name} (agent {}, room {}). Read {}/how-to-bus-cli.md. \
+        "Bus messaging: you are {name} (agent {}, room {}). Before your first message, read {}/bus-communication-guide.md: \
+         it decides who you message and when; send only what changes the receiver's next step. \
+         Read {}/how-to-bus-cli.md for the commands. \
          Use --as {} when sending messages. Every CLI agent selector accepts a name or ID; bus agent list maps names to IDs. Any agent can message any agent by name or ID; \
          current names are unique across all rooms and resolve globally, like IDs. \
          --to orchestrator names your home room's bound orchestrator. \
-         For things only the developer can do or decide, use [waiting-on-you] and state the action or decision needed (CLI: bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\"). \
+         [waiting-on-you] pages the developer on Feishu: use it only for a hard blocker only the developer can clear, and state the action needed (CLI: bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\"). \
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
          For verification, send VERIFIED with the PR/task and exact head or defects with file:line straight to the owner. \
          If you own a PR, re-send the head to verifier and reviewers on every push and use auto-merge-pr's owner-run path: \
@@ -162,7 +168,6 @@ pub(crate) fn agent_onboarding(
          comments adjudicated, recorded authority and no explicit hold. Enforce these checks during merge-pr too. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
          For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \
-         For who to message, follow the Who to message section in how-to-bus-cli.md. \
          The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit room notes or the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
@@ -170,6 +175,7 @@ pub(crate) fn agent_onboarding(
          Send only the body; do not add a 'from X', 'X here' or signature line.",
         id.0,
         room.0,
+        docs.display(),
         docs.display(),
         id.0,
         docs.display()

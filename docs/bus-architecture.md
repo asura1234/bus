@@ -187,7 +187,7 @@ Files are split by ownership, not by helper.
     - `mod.rs`, `types.rs` (ids, `Author`, `Room` and its MASTER kind, `RoomAgent`, `Prompt`, `Reply`), `state.rs` (`BusState`)
     - `rooms.rs`, `agents.rs` (participants, `orchestrates` link), `requests.rs` (queue, coalesce, steer, settle)
     - `callbacks.rs` (match neutral provider events to requests), `status.rs` (room rollup)
-    - `compactions.rs`, `idle_agents.rs` (per-tick limit notices with saved latches, via `rooms::post_bus_notice`)
+    - `compactions.rs` (per-tick limit notice with saved latches, via `rooms::post_bus_notice`)
     - `attention.rs` (MASTER developer-attention notices via `post_developer_attention`); both notice paths use
       `Author::Bus`, shown as the grey sender `bus`
     - `tests/{rooms_test,agents_test,requests_test,callbacks_test}.rs`

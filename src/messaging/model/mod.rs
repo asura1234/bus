@@ -8,7 +8,6 @@ mod developer_notifications;
 mod disk_space;
 mod error;
 mod history;
-mod idle_agents;
 mod interrupts;
 mod payload;
 mod provider_failure;
@@ -27,13 +26,11 @@ mod worker_notifications;
 use requests::rejection_reason;
 
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
-pub(crate) use developer_notifications::new_developer_notifications;
+pub(crate) use developer_notifications::{developer_alerts, new_developer_notifications};
 pub(crate) use error::ModelError;
 pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS};
 #[cfg(test)]
 pub(crate) use history::{ARCHIVE_AFTER_MS, HISTORY_RETENTION_MS};
-#[cfg(test)]
-pub(crate) use idle_agents::MIN_IDLE_FOR_ALERT_MS;
 pub(crate) use interrupts::INTERRUPTED;
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::{fingerprint_digest, BusState};

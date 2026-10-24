@@ -412,34 +412,6 @@ fn background_timeout_late_notifications_deduplicate_text_and_preserve_identity(
     assert!(!calls[0].contains("STALE RESULT"));
 }
 
-#[test]
-fn persistent_idle_background_hold_with_open_orchestrator_request_notifies_once() {
-    let mut f = Fixture::new();
-    let orch = f.orch;
-    let source = running(&mut f, Author::Agent(orch));
-    let cb = callback(&f, "owned", 2, CallbackEventKind::BackgroundPending);
-    let mut state = f.worker.state.clone();
-    assert_eq!(
-        state.accept_callback(cb),
-        CallbackDisposition::AcceptedProgress
-    );
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms() - 8_000)
-        .unwrap();
-    f.worker.save(state).unwrap();
-    collect(&mut f);
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
-    assert_eq!(
-        f.worker.state.request(source).unwrap().phase,
-        RequestPhase::Active
-    );
-    f.reopen();
-    collect(&mut f);
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
-}
-
 struct ExitProbe {
     calls: Arc<Mutex<Vec<String>>>,
     exited: bool,
@@ -653,40 +625,6 @@ fn killed_outcome_waiter_expires_its_lease_without_losing_the_wake() {
 }
 
 #[test]
-fn seen_idle_key_cannot_hide_an_outcome_created_after_the_print() {
-    let mut f = Fixture::new();
-    let orch = f.orch;
-    let source = running(&mut f, Author::Agent(orch));
-    let cb = callback(&f, "owned", 2, CallbackEventKind::BackgroundPending);
-    let mut state = f.worker.state.clone();
-    state.accept_callback(cb);
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms() - 8_000)
-        .unwrap();
-    f.worker.save(state).unwrap();
-    let message = f.worker.state.request(source).unwrap().prompt.id;
-    let status = f.call("message.status", json!({"message":message.0.to_string()}));
-    let keys = status.result["requests"][0]["event_acks"].clone();
-    assert_eq!(keys.as_array().unwrap().len(), 1);
-    let mut state = f.worker.state.clone();
-    state
-        .recover_idle_request(source, io::now_ms() - 4_000)
-        .unwrap();
-    f.worker.save(state).unwrap();
-    assert!(
-        f.call(
-            "message.seen",
-            json!({"request":source.0.to_string(),"as":orch.0.to_string(),"events":keys})
-        )
-        .ok
-    );
-    collect(&mut f);
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("abandoned"));
-    assert!(!f.calls.lock().unwrap()[0].contains("Idle with open request"));
-}
-
-#[test]
 fn late_stop_inside_settlement_grace_yields_one_reply_wake() {
     let mut f = Fixture::new();
     let orch = f.orch;
@@ -782,7 +720,7 @@ fn developer_owned_late_final_and_foreign_sessions_do_not_become_worker_reports(
 }
 
 #[test]
-fn worker_authored_request_final_also_reaches_the_orchestrator() {
+fn worker_authored_request_final_stays_with_the_peer() {
     let mut f = Fixture::new();
     let mut state = f.worker.state.clone();
     let peer = state
@@ -792,12 +730,39 @@ fn worker_authored_request_final_also_reaches_the_orchestrator() {
     let source = f.send(Author::Agent(peer), "peer request");
     f.finish(source, "Peer task finished.");
     collect(&mut f);
-    assert_eq!(
-        f.notices().len(),
-        1,
-        "a non-developer turn the orchestrator did not start must remain visible"
+    assert!(
+        f.notices().is_empty(),
+        "a reply to a peer's request goes to that peer, not to the orchestrator"
     );
-    assert!(f.calls.lock().unwrap()[0].contains("Peer task finished."));
+}
+
+#[test]
+fn interrupted_and_deleted_agent_requests_end_without_a_notice() {
+    for deleted in [false, true] {
+        let mut f = Fixture::new();
+        let orch = f.orch;
+        let source = f.send(Author::Agent(orch), "work");
+        let mut state = f.worker.state.clone();
+        if deleted {
+            state.prepare_delete_agent(f.agent).unwrap();
+            state
+                .recover_idle_request(source, io::now_ms() - 4_000)
+                .unwrap();
+        } else {
+            state.begin_interrupt(f.agent).unwrap();
+            state
+                .close_interrupted(f.agent, io::now_ms() - 4_000)
+                .unwrap();
+        }
+        let r = state.request(source).unwrap();
+        assert!(
+            matches!(r.phase, crate::messaging::model::RequestPhase::Abandoned),
+            "deleted={deleted} {r:?}"
+        );
+        f.worker.save(state).unwrap();
+        collect(&mut f);
+        assert!(f.notices().is_empty(), "deleted={deleted}");
+    }
 }
 
 #[test]
@@ -994,50 +959,6 @@ fn late_spooled_final_is_not_deferred_behind_a_new_unbound_request() {
 }
 
 #[test]
-fn outcome_ack_does_not_mark_a_reply_arriving_after_print_seen() {
-    let mut f = Fixture::new();
-    let orch = f.orch;
-    let source = running(&mut f, Author::Agent(orch));
-    let cb = callback(&f, "owned", 2, CallbackEventKind::BackgroundPending);
-    let mut state = f.worker.state.clone();
-    state.accept_callback(cb);
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms() - 8_000)
-        .unwrap();
-    f.worker.save(state).unwrap();
-    let message = f.worker.state.request(source).unwrap().prompt.id;
-    let printed = f.call("message.status", json!({"message":message.0.to_string()}));
-    let row = &printed.result["requests"][0];
-    assert_eq!(row["reply_ack"], false);
-    assert_eq!(row["event_acks"].as_array().unwrap().len(), 1);
-    let cb = callback(
-        &f,
-        "owned",
-        3,
-        CallbackEventKind::Final {
-            text: "New reply after the output.".into(),
-        },
-    );
-    let mut state = f.worker.state.clone();
-    assert_eq!(
-        state.accept_callback(cb),
-        CallbackDisposition::AcceptedCompleted
-    );
-    f.worker.save(state).unwrap();
-    assert!(f.call("message.seen", json!({"request":source.0.to_string(),"as":orch.0.to_string(),"events":row["event_acks"]})).ok);
-    f.reopen();
-    collect(&mut f);
-    assert_eq!(
-        f.notices().len(),
-        1,
-        "an old outcome acknowledgement cannot consume a new reply"
-    );
-    let calls = f.calls.lock().unwrap();
-    assert!(calls[0].contains("New reply after the output."));
-    assert!(!calls[0].contains("Idle with open request"));
-}
-
-#[test]
 fn long_failure_reason_keeps_event_and_original_reference_in_the_short_notice() {
     let mut f = Fixture::new();
     let orch = f.orch;
@@ -1136,129 +1057,6 @@ fn earlier_background_request_at(f: &mut Fixture, shell: bool, now: u64) -> Requ
 }
 
 #[test]
-fn idle_open_work_wakes_even_while_its_author_waiter_is_alive() {
-    let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
-    let message = f.worker.state.request(source).unwrap().prompt.id;
-    assert!(
-        f.call(
-            "message.status",
-            json!({"message":message.0.to_string(),"as":f.orch.0.to_string()})
-        )
-        .ok
-    );
-    assert!(f.worker.reply_waiters.contains_key(&message));
-    f.worker.submit_ready().unwrap();
-    assert_eq!(
-        f.calls.lock().unwrap().len(),
-        1,
-        "a waiting process that has printed nothing cannot replace idle awareness"
-    );
-    assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
-    assert_eq!(
-        f.worker.state.request(source).unwrap().phase,
-        RequestPhase::Active
-    );
-}
-
-#[test]
-fn known_background_shell_idle_is_reported_without_releasing_its_hold() {
-    let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, true);
-    f.worker.submit_ready().unwrap();
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
-    assert!(f.calls.lock().unwrap()[0].contains("background work"));
-    let request = f.worker.state.request(source).unwrap();
-    assert_eq!(request.phase, RequestPhase::Active);
-    assert!(request.awaiting_background && request.shell_hold.is_some());
-}
-
-#[test]
-fn genuine_idle_edge_reports_an_orchestrator_request_still_queued() {
-    let mut f = Fixture::new();
-    let now = io::now_ms();
-    ready_worker_at(&mut f, now - 30_000);
-    let mut state = f.worker.state.clone();
-    state
-        .observe_status(f.agent, RuntimeStatus::Working, now - 25_000)
-        .unwrap();
-    let source = state
-        .submit_message_from(
-            f.room,
-            Draft {
-                text: "still queued".into(),
-                files: vec![],
-                recipient_ids: [f.agent].into(),
-            },
-            Author::Agent(f.orch),
-            now - 20_000,
-        )
-        .unwrap()[0];
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
-        .unwrap();
-    state.route_worker_replies(now, &BTreeSet::new()).unwrap();
-    f.worker.save(state).unwrap();
-    assert_eq!(
-        f.notices().len(),
-        1,
-        "a queued request is still open when its worker goes idle"
-    );
-    assert_eq!(
-        f.worker.state.request(source).unwrap().phase,
-        RequestPhase::Queued
-    );
-    assert!(f.notices()[0]
-        .prompt
-        .text
-        .contains("Idle with open request"));
-}
-
-#[test]
-fn idle_after_uncertain_submission_reports_without_claiming_the_turn_ended() {
-    let mut f = Fixture::new();
-    let now = io::now_ms();
-    ready_worker_at(&mut f, now - 30_000);
-    let mut state = f.worker.state.clone();
-    let source = state
-        .submit_message_from(
-            f.room,
-            Draft {
-                text: "unconfirmed work".into(),
-                files: vec![],
-                recipient_ids: [f.agent].into(),
-            },
-            Author::Agent(f.orch),
-            now - 20_000,
-        )
-        .unwrap()[0];
-    state.begin_submission(source, "worker", 0).unwrap();
-    state
-        .record_submission(
-            source,
-            SubmissionOutcome::Uncertain {
-                message: "submit acknowledgement lost".into(),
-            },
-        )
-        .unwrap();
-    state
-        .observe_status(f.agent, RuntimeStatus::Working, now - 12_000)
-        .unwrap();
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
-        .unwrap();
-    assert!(!state.turn_ended(state.request(source).unwrap()));
-    f.worker.save(state).unwrap();
-    f.worker.submit_ready().unwrap();
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Idle with open request"));
-    let request = f.worker.state.request(source).unwrap();
-    assert_eq!(request.phase, RequestPhase::Submitting);
-    assert!(request.uncertain_outcome && !request.trusted_start_bound);
-}
-
-#[test]
 fn an_initially_idle_worker_with_a_new_queued_request_does_not_warn() {
     let mut f = Fixture::new();
     let now = io::now_ms();
@@ -1303,33 +1101,6 @@ fn continue_background_work(f: &mut Fixture, at: u64) {
 }
 
 #[test]
-fn a_new_background_idle_episode_wakes_once_after_the_first_notice_was_handled() {
-    let mut f = Fixture::new();
-    earlier_background_request(&mut f, false);
-    f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    let first = f.notices()[0].id;
-    f.finish(first, "acknowledged");
-    continue_background_work(&mut f, io::now_ms() - 8_000);
-    f.worker.submit_ready().unwrap();
-    assert_eq!(
-        f.notices().len(),
-        2,
-        "new work followed by idle is a new event"
-    );
-    let second = f.notices().into_iter().find(|r| r.id != first).unwrap().id;
-    f.finish(second, "acknowledged again");
-    f.reopen();
-    f.worker.submit_ready().unwrap();
-    assert_eq!(
-        f.notices().len(),
-        2,
-        "stable idle must not replay on restart"
-    );
-    assert_eq!(f.calls.lock().unwrap().len(), 2);
-}
-
-#[test]
 fn an_acknowledged_stall_does_not_hide_a_new_stall_after_work_resumes() {
     let mut f = Fixture::new();
     let source = earlier_background_request(&mut f, false);
@@ -1368,62 +1139,6 @@ fn an_acknowledged_stall_does_not_hide_a_new_stall_after_work_resumes() {
     assert_ne!(old, current);
     assert_eq!(state.request(source).unwrap().phase, RequestPhase::Active);
 }
-
-#[test]
-fn handled_old_idle_episodes_expire_only_after_new_work_supersedes_them() {
-    let mut f = Fixture::new();
-    let now = io::now_ms();
-    let old = now - crate::messaging::model::HISTORY_RETENTION_MS - 30_000;
-    let source = earlier_background_request_at(&mut f, false, old);
-    let mut state = f.worker.state.clone();
-    state.retain_worker_outcomes(old);
-    let keys: Vec<_> = state
-        .worker_outcomes_for(state.request(source).unwrap())
-        .into_iter()
-        .filter(|(_, text)| text.contains("Idle with open request"))
-        .map(|(key, _)| key)
-        .collect();
-    assert_eq!(keys.len(), 1);
-    state
-        .see_worker_outcomes(source, f.orch, &keys, old)
-        .unwrap();
-    state.archive(now);
-    assert!(
-        state
-            .worker_events_for(state.request(source).unwrap())
-            .iter()
-            .any(|(key, _)| keys.contains(key)),
-        "a current idle tombstone must prevent rediscovery even on a long-running request"
-    );
-    state
-        .observe_status(f.agent, RuntimeStatus::Working, now - 8_000)
-        .unwrap();
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, now - 6_000)
-        .unwrap();
-    state.archive(now);
-    let current = state.worker_events_for(state.request(source).unwrap());
-    assert!(
-        !current.iter().any(|(key, _)| keys.contains(key)),
-        "handled superseded history is bounded"
-    );
-    assert_eq!(
-        current
-            .iter()
-            .filter(|(_, text)| text.contains("Idle with open request"))
-            .count(),
-        1
-    );
-    state.route_worker_replies(now, &BTreeSet::new()).unwrap();
-    f.worker.save(state).unwrap();
-    f.reopen();
-    f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
-}
-
-#[path = "worker_event_waiter_overlap_test.rs"]
-mod waiter_overlap;
 
 fn late_final_after_new_input_joins_the_completed_turn(provider: Provider) {
     let mut f = Fixture::with_provider(provider);
@@ -1671,3 +1386,6 @@ fn replayed_autonomous_final_after_later_abandonment_claude() {
 fn replayed_autonomous_final_after_later_abandonment_codex() {
     replayed_autonomous_final_after_later_abandonment(Provider::Codex);
 }
+
+#[path = "worker_event_waiter_overlap_test.rs"]
+mod waiter_overlap;

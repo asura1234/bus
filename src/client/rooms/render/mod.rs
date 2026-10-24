@@ -68,8 +68,6 @@ pub(super) enum Action {
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
     AdjustCompactionLimit(bool),
-    /// Raises (true) or lowers the idle agents alert by one.
-    AdjustIdleAgentsAlert(bool),
     AdjustDiskWarningGb(bool),
     AdjustDiskCriticalGb(bool),
     /// Widens (true) or narrows the room sidebar by one cell.

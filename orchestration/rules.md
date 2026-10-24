@@ -133,19 +133,19 @@ the wrapper remains held.
   scripts (including dispatch wrappers, setup loops and result watchers) still
   hold it; keep those out of a dispatch-only shell. When it exits, your CLI
   wakes you and prints the replies. Bus also delivers worker replies,
-  autonomous turn-final results,
-  stalled/abandoned/no-reply outcomes with reasons, and idle/confirmed-exit
-  events with open orchestrator work directly to your terminal as agent
-  messages, like Blocked notices. Same-worker bursts are collected for two
+  autonomous turn-final results, stalled/no-reply outcomes with reasons and
+  confirmed-exit events with open orchestrator work directly to your terminal
+  as agent messages, like Blocked notices. Same-worker bursts are collected for two
   seconds into one short message with event and message references or pointers.
   Pending events survive waiter and Bus restarts, and each event routes once.
   You can rely on these notifications without room polling or self-timers.
   Normal idle waits for callback settlement, so a late Stop produces one reply
-  wake; persistent idle open work and confirmed exit remain visible. Blocked,
-  Resolved notices are unchanged; startup failures remain in lifecycle state and logs.
+  wake; idle open work surfaces as a stall, and confirmed exit stays visible.
+  Blocked notices are unchanged; a closed dialog posts nothing. Startup failures
+  remain in lifecycle state and logs.
   A live author waiter defers its own reply/outcome components and marks only
   flushed replies and exact printed event keys seen; use `wait --message ID
-  --as YOUR_NAME` to resume that behavior. Idle (including background shells), other-message, exit and autonomous
+  --as YOUR_NAME` to resume that behavior. Stall, other-message, exit and autonomous
   events remain independent. New work followed by idle/stall is a new event;
   unchanged polls and restarts never replay it. Seeing one part of a queued batch preserves its
   other events. Shared-turn replies route once per group. A late stdout/native
@@ -203,10 +203,8 @@ the wrapper remains held.
 - **Size the team to the current step.** Add workers with `bus agent add`
   when a parallel step starts and delete them with `bus agent delete` when
   their part is done and required follow-ups have owners; do not keep idle agents
-  around for later steps. When Bus sends the **Settings → Idle agents alert** notice:
-  `bus → orchestrator: You have N idle agents (name1, name2, …). Either put them to work in parallel on the open PRs, or close the ones you no longer need to save resources. Your call.`
-  The orchestrator chooses between parallel work and closing workers it no
-  longer needs. *Why:* work lives in files and commits, so a deleted
+  around for later steps. An agent waiting on a peer is not idle; never message
+  agents just to keep them busy. *Why:* work lives in files and commits, so a deleted
   worker loses nothing; a fresh one is briefed from those files.
 - **Keep follow-ups in the running workflow file, not in your context.**
   Unless the graph has a pause or developer check before them, execute them in

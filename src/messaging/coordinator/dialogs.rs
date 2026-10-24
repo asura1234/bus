@@ -1,4 +1,4 @@
-//! Reports a steady dialog wait to the room and resolves earlier help when it
+//! Reports a steady dialog wait to the room and quietly retires it when it
 //! settles. A readable native screen suppresses stale blocked metadata. The
 //! notice is signed "bus", once per episode; a blocked MASTER orchestrator gets
 //! a typed Bus developer-attention notice instead.
@@ -18,23 +18,11 @@ const STEADY_POLLS: u8 = 2;
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
-    /// Resolve earlier help and retire a closed dialog's notice so the next
-    /// form can start an episode even with identical text.
+    /// Retire a closed dialog's notice so the next form can start an episode even
+    /// with identical text. Closing posts nothing: the blocked notice already said
+    /// how to inspect it, and whoever answered it knows it is gone.
     pub(super) fn finish_closed_dialog(&mut self, id: AgentId) -> Result<(), String> {
         let mut state = self.state.clone();
-        if let Some(agent) = state
-            .agent(id)
-            .filter(|agent| agent.dialog_notice.is_some())
-        {
-            // The resolution follows the blocked notice to whoever got it.
-            let to_orchestrator = agent.dialog_notice.as_deref() != Some(BLOCKED)
-                && agent.dialog_notice_to != Some(DialogNoticeTo::Developer);
-            let text = format!(
-                "{}. Resolved; dialog is gone; previous blocked notice needs no action",
-                state.agent_message_label(id)
-            );
-            post_dialog_notice(&mut state, id, to_orchestrator, text)?;
-        }
         state
             .set_dialog_notice_to(id, None)
             .map_err(|error| error.to_string())?;

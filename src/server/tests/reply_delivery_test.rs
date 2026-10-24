@@ -469,20 +469,14 @@ async fn dialog_episodes_publish_once_despite_detection_flaps_and_restart() {
                 }
             }
             let notices: Vec<_> = f.state().notices(room).collect();
-            assert_eq!(notices.len(), episode * 2 - 1);
+            // One blocked notice per episode; a closed dialog posts nothing.
+            assert_eq!(notices.len(), episode);
             assert_eq!(
                 notices
                     .iter()
                     .filter(|n| n.text.contains("Blocked, needs help"))
                     .count(),
                 episode
-            );
-            assert_eq!(
-                notices
-                    .iter()
-                    .filter(|n| n.text.contains("Resolved; dialog"))
-                    .count(),
-                episode - 1
             );
             assert!(f.state().requests().next().is_none());
             // Provider output after the answer closes the native dialog.
@@ -495,14 +489,7 @@ async fn dialog_episodes_publish_once_despite_detection_flaps_and_restart() {
                 f.tick();
             }
             let notices: Vec<_> = f.state().notices(room).collect();
-            assert_eq!(notices.len(), episode * 2);
-            assert_eq!(
-                notices
-                    .iter()
-                    .filter(|n| n.text.contains("Resolved; dialog"))
-                    .count(),
-                episode
-            );
+            assert_eq!(notices.len(), episode);
             assert!(f.state().agent(agent).unwrap().dialog_notice.is_none());
             if !in_master {
                 assert_eq!(f.state().notices(f.master).count(), 0);
@@ -1341,16 +1328,8 @@ fn run_soak() {
         .requests()
         .all(|r| r.phase == RequestPhase::Completed));
     let notices: Vec<_> = f.state().notices(f.work).collect();
-    assert_eq!(
-        notices.len(),
-        round,
-        "one idle-worker notice per aged stall cycle: {notices:?}"
-    );
     assert!(
-        notices.iter().all(
-            |notice| notice.author == crate::messaging::model::Author::Bus
-                && notice.text.starts_with("You have 11 idle agents (")
-        ),
+        notices.is_empty(),
         "unexpected work-room notices: {notices:?}"
     );
     assert_eq!(
