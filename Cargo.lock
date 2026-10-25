@@ -157,6 +157,7 @@ dependencies = [
  "markdown-ratatui",
  "png 0.17.16",
  "portable-pty",
+ "pulldown-cmark",
  "ratatui",
  "regex",
  "schemars",

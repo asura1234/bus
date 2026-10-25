@@ -1,7 +1,7 @@
 //! Shared developer alert sources: explicit notices and tagged agent messages in every room.
 use super::{AgentId, Author, BusState, Prompt, PromptId, RequestId, RequestPhase};
 use crate::messaging::attention::{
-    has_you_mention, plain_line, waiting_action, waiting_tag_action,
+    has_you_mention, plain_action, plain_line, waiting_action, waiting_tag_action,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,7 +65,7 @@ pub(crate) fn developer_alerts(
                 waiting_tag_action(message.text)
             };
             let (body, line) = if let Some(action) = action {
-                let body = plain_line(action);
+                let body = plain_action(action);
                 let line = format!("{sender} is waiting on you: {body}");
                 (body, line)
             } else if !waiting_only && (message.directed || has_you_mention(message.text)) {
