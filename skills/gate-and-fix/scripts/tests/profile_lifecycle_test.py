@@ -14,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import bus_quality as quality  # noqa: E402
 import gate_and_fix as gate  # noqa: E402
+import gate_process  # noqa: E402
 
 
 def repository(root):
@@ -30,6 +31,48 @@ def repository(root):
     (root / "input.txt").write_text("head\n")
     subprocess.run(("git", "commit", "-qam", "head"), cwd=root, check=True)
     return base
+
+
+def process_running(pid):
+    result = subprocess.run(("ps", "-p", str(pid), "-o", "stat="),
+                            capture_output=True, text=True)
+    if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+        return False
+    result.check_returncode()
+    states = result.stdout.split()
+    if not states:
+        raise RuntimeError(f"cannot inspect child {pid}")
+    # kill(pid, 0) also succeeds for an exited child awaiting its reaper.
+    return any(not state.startswith("Z") for state in states)
+
+
+def kill_groups(groups):
+    for group in groups:
+        gate_process.signal_group(group, signal.SIGKILL)
+
+
+@unittest.skipUnless(os.name == "posix", "POSIX signal and process-group contract")
+class InterruptProcessStateTest(unittest.TestCase):
+    def test_exited_unreaped_child_is_not_running(self):
+        child = subprocess.Popen((sys.executable, "-c", "pass"),
+                                 stdout=subprocess.PIPE, start_new_session=True)
+        try:
+            # EOF observes exit without poll()/wait(), retaining a real zombie.
+            child.stdout.read()
+            self.assertFalse(process_running(child.pid))
+        finally:
+            child.wait(timeout=5)
+            child.stdout.close()
+
+    def test_live_child_is_running(self):
+        child = subprocess.Popen((sys.executable, "-c", "import time;time.sleep(60)"),
+                                 start_new_session=True)
+        try:
+            self.assertTrue(process_running(child.pid))
+        finally:
+            child.kill()
+            child.wait(timeout=5)
+
 
 class ProfileLifecycleTest(unittest.TestCase):
     @contextlib.contextmanager
@@ -285,15 +328,14 @@ class ProfileLifecycleTest(unittest.TestCase):
                 time.sleep(.05)
                 if proc.poll() is None:
                     proc.send_signal(signal.SIGTERM)
-                proc.communicate(timeout=10)
-                self.assertNotEqual(proc.returncode, 0)
+                _, stderr = proc.communicate(timeout=10)
+                self.assertEqual(proc.returncode, 128 + signal.SIGTERM, stderr.decode())
+                expected = (b"Bus quality gate interrupted; run profiles removed\n"
+                            if mode == "quality" else
+                            b"gate-and-fix interrupted; run profiles removed\n")
+                self.assertEqual(stderr, expected)
                 self.assertFalse(list((root / "target").rglob("*.profraw")))
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(identity["pid"], 0)
+                self.assertFalse(process_running(identity["pid"]), "instrumented child still running")
             finally:
-                for group in groups:
-                    try:
-                        os.killpg(group, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                kill_groups(groups)
                 proc.wait(timeout=5)
