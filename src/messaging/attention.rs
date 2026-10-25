@@ -1,3 +1,5 @@
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
 pub(crate) const TAG: &str = "[needs_developer_attention]";
 pub(crate) const WAITING_TAGS: [&str; 2] = ["[waiting-on-you]", "[waiting_on_you]"];
 
@@ -30,27 +32,15 @@ pub(crate) fn waiting_action(text: &str) -> Option<&str> {
 }
 
 fn waiting_tag_end(folded: &str) -> Option<usize> {
+    let code = code_ranges(folded);
     let mut offset = 0;
-    let mut fence = None;
-    let mut inline_ticks = 0;
     for line in folded.split_inclusive(is_line_break) {
         let prose = markdown_prefix(line);
-        let delimiter = code_fence(prose);
-        if let Some((marker, width)) = fence {
-            if delimiter.is_some_and(|(ch, count)| {
-                ch == marker && count >= width && prose[count..].trim().is_empty()
-            }) {
-                fence = None;
+        if let Some(tag) = WAITING_TAGS.iter().find(|tag| prose.starts_with(**tag)) {
+            let start = offset + line.len() - prose.len();
+            if !code.iter().any(|range| range.contains(&start)) {
+                return Some(start + tag.len());
             }
-        } else if let Some(delimiter) = delimiter.filter(|_| inline_ticks == 0) {
-            fence = Some(delimiter);
-        } else if !line.starts_with("    ") && !line.starts_with('\t') {
-            if inline_ticks == 0 {
-                if let Some(tag) = WAITING_TAGS.iter().find(|tag| prose.starts_with(**tag)) {
-                    return Some(offset + line.len() - prose.len() + tag.len());
-                }
-            }
-            update_inline_ticks(line, &mut inline_ticks);
         }
         offset += line.len();
     }
@@ -81,29 +71,24 @@ fn markdown_prefix(mut line: &str) -> &str {
     }
 }
 
-fn code_fence(line: &str) -> Option<(u8, usize)> {
-    let marker = *line.as_bytes().first()?;
-    let width = line.bytes().take_while(|ch| *ch == marker).count();
-    (matches!(marker, b'`' | b'~') && width >= 3).then_some((marker, width))
-}
-
-fn update_inline_ticks(line: &str, open: &mut usize) {
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' && *open == 0 {
-            chars.next();
-        } else if ch == '`' {
-            let mut width = 1;
-            while chars.next_if_eq(&'`').is_some() {
-                width += 1;
+/// Use Markdown's actual code boundaries: unmatched backticks are literal text,
+/// and list indentation alone does not imply an indented code block.
+fn code_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut block_start = None;
+    for (event, range) in Parser::new(text).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => block_start = Some(range.start),
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(start) = block_start.take() {
+                    ranges.push(start..range.end);
+                }
             }
-            if *open == 0 {
-                *open = width;
-            } else if *open == width {
-                *open = 0;
-            }
+            Event::Code(_) => ranges.push(range),
+            _ => {}
         }
     }
+    ranges
 }
 
 fn action_after(text: &str, end: usize) -> Option<&str> {

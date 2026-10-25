@@ -12,6 +12,8 @@ fn waiting_tags_must_open_a_prose_line() {
         "````md\n```\n[waiting-on-you] Approve access\n````",
         "    [waiting-on-you] Approve access",
         "An inline `code span\n[waiting-on-you] Approve access\nends here`.",
+        "An inline ``code span\r\n[waiting-on-you] Approve access\r\nends here``.",
+        "- Code example:\n\n      [waiting-on-you] Approve access",
     ] {
         assert_eq!(waiting_tag_action(message), None, "{message}");
         assert_eq!(waiting_action(message), None, "{message}");
@@ -94,4 +96,36 @@ fn waiting_action_body_bounds_context_without_shortening_the_action_line() {
         plain_action(&format!("Pick one:\n{}", "界".repeat(4100))),
         "Pick one:\n…"
     );
+}
+
+#[test]
+fn an_unmatched_backtick_does_not_hide_a_tag_in_a_later_paragraph() {
+    // CommonMark treats an unmatched backtick as literal, and code spans never cross a blank line.
+    for message in [
+        "Press the ` key to toggle.\n\n[waiting-on-you] Unlock the iPhone",
+        "Press the ` key to toggle.\n[waiting-on-you] Unlock the iPhone",
+        "An unmatched ``` mid-line.\n\n[waiting-on-you] Unlock the iPhone",
+        "An unmatched ` run.\n\n[waiting-on-you] Unlock the iPhone\nA later ` cannot close the earlier paragraph.",
+    ] {
+        let expected = message.split_once("[waiting-on-you] ").unwrap().1;
+        assert_eq!(waiting_tag_action(message), Some(expected), "{message}");
+        assert_eq!(waiting_action(message), Some(expected), "{message}");
+    }
+}
+
+#[test]
+fn a_tag_in_a_four_space_nested_list_item_still_pages() {
+    // Indented code cannot interrupt a list; a 4-space "- " here is a nested item.
+    for message in [
+        "- Status\n    - [waiting-on-you] Approve access",
+        "- Status\n\n    - **[waiting-on-you]** Approve access",
+        "- Status\n\t- [waiting-on-you] Approve access",
+    ] {
+        assert_eq!(
+            waiting_tag_action(message),
+            Some("Approve access"),
+            "{message}"
+        );
+        assert_eq!(waiting_action(message), Some("Approve access"), "{message}");
+    }
 }

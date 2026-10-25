@@ -82,6 +82,7 @@ libc = "0.2"
 markdown-ratatui = "0.1.0"
 portable-pty = "=0.9.0"
 png = "0.17"
+pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
