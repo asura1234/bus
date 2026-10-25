@@ -7,6 +7,7 @@ use crate::protocol::api::submission::{
     confirmation_budget, maximum_budget, withdrawal_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE,
 };
 use crate::terminal::emulator::PaneTerminal;
+use crate::terminal::pty::actor::InputCompletion;
 use bytes::Bytes;
 use std::{
     io,
@@ -211,12 +212,9 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other(PromptNotShown::NotSubmitted))?;
         self.diagnostics
             .paste(bytes.len(), delay.as_millis() as u64, self.clock.now());
-        let completion = self.io.queue_user_input_submission(
-            bytes,
-            Bytes::new(),
-            delay,
-            Some(self.deadline.get()),
-        )?;
+        let completion =
+            self.io
+                .queue_input_write(bytes, Bytes::new(), delay, Some(self.deadline.get()))?;
         drop(guard);
         let result = completion
             .recv_timeout(self.clock.remaining(self.deadline.get()))
@@ -285,12 +283,9 @@ impl ObservedSubmission {
         self.check_deadline()?;
         let write_deadline = self.deadline.get().min(progress.expires);
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only = true);
-        let completion = self.io.queue_user_input_submission(
-            key,
-            Bytes::new(),
-            Duration::ZERO,
-            Some(write_deadline),
-        )?;
+        let completion =
+            self.io
+                .queue_input_write(key, Bytes::new(), Duration::ZERO, Some(write_deadline))?;
         self.inspect.clearing(index);
         drop(guard);
         completion
@@ -364,9 +359,9 @@ impl ObservedSubmission {
     }
 
     // The caller holds content_lock while queueing, and releases it before waiting.
-    fn enqueue_enter(&self) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
+    fn enqueue_enter(&self) -> io::Result<InputCompletion> {
         self.diagnostics.enter(&self.enter, self.clock.now());
-        self.io.queue_user_input_submission(
+        self.io.queue_input_write(
             Bytes::new(),
             self.enter.clone(),
             Duration::ZERO,
@@ -374,10 +369,7 @@ impl ObservedSubmission {
         )
     }
 
-    fn finish_enter(
-        &self,
-        completion: io::Result<std::sync::mpsc::Receiver<io::Result<()>>>,
-    ) -> io::Result<()> {
+    fn finish_enter(&self, completion: io::Result<InputCompletion>) -> io::Result<()> {
         let result = completion.and_then(|completion| {
             completion
                 .recv_timeout(self.clock.remaining(self.deadline.get()))

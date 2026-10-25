@@ -1,4 +1,4 @@
-use crate::terminal::pty::actor::PtyIoActorHandle;
+use crate::terminal::pty::actor::{InputCompletion, PtyIoActorHandle};
 use crate::terminal::runtime::detection_policy::mark_detection_content_changed;
 use crate::terminal::runtime::TerminalRuntime;
 use crate::terminal::runtime::WheelRouting;
@@ -101,15 +101,25 @@ impl PaneRuntimeIo {
         delay: std::time::Duration,
         deadline: Option<std::time::Instant>,
     ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        self.queue_input_write(text, enter, delay, deadline)
+            .map(InputCompletion::into_receiver)
+    }
+
+    pub(super) fn queue_input_write(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+        deadline: Option<std::time::Instant>,
+    ) -> std::io::Result<InputCompletion> {
         match self {
             PaneRuntimeIo::Actor(actor) => {
                 #[cfg(windows)]
-                return actor.queue_user_input_submission(text, enter, delay, deadline);
+                return actor
+                    .queue_user_input_submission(text, enter, delay, deadline)
+                    .map(Into::into);
                 #[cfg(unix)]
-                {
-                    let _ = deadline;
-                    actor.queue_user_input_submission(text, enter, delay)
-                }
+                actor.queue_user_input_submission(text, enter, delay, deadline)
             }
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, clock, .. } => {
@@ -137,7 +147,7 @@ impl PaneRuntimeIo {
                     };
                     let _ = reply_tx.send(result);
                 });
-                Ok(reply_rx)
+                Ok(reply_rx.into())
             }
         }
     }

@@ -13,6 +13,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc::{self, error::TryRecvError as DataTryRecvError};
 use tracing::{debug, warn};
 
+use super::{input_completion::WritePermit, InputCompletion};
 use crate::terminal::pty::fd;
 
 // Actor handle methods must call wake_actor() after queuing work. The idle
@@ -75,6 +76,7 @@ enum PtyIoDataCommand {
         text: Bytes,
         enter: Bytes,
         delay: Duration,
+        permit: WritePermit,
         reply: std_mpsc::Sender<std::io::Result<()>>,
     },
 }
@@ -139,7 +141,8 @@ impl PtyIoActorHandle {
         text: Bytes,
         enter: Bytes,
         delay: Duration,
-    ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
+        deadline: Option<Instant>,
+    ) -> std::io::Result<InputCompletion> {
         let user_writes = self
             .user_writes
             .lock()
@@ -151,11 +154,13 @@ impl PtyIoActorHandle {
             ));
         }
         let (reply_tx, reply_rx) = std_mpsc::channel();
+        let permit = WritePermit::new(deadline, self.wake.clone());
         self.data_tx
             .try_send(PtyIoDataCommand::SubmitUserInput {
                 text,
                 enter,
                 delay,
+                permit: permit.clone(),
                 reply: reply_tx,
             })
             .map_err(|err| match err {
@@ -167,7 +172,7 @@ impl PtyIoActorHandle {
                 }
             })?;
         self.wake_actor();
-        Ok(reply_rx)
+        Ok(InputCompletion::tracked(reply_rx, permit))
     }
 
     pub(crate) fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
@@ -327,6 +332,7 @@ struct PtyIoActorRunner {
 }
 
 struct ActiveSubmission {
+    permit: WritePermit,
     enter: Bytes,
     delay: Duration,
     phase: SubmissionPhase,
@@ -364,6 +370,7 @@ impl PtyIoActorRunner {
     fn run(&mut self) {
         let mut should_exit = false;
         while !should_exit {
+            self.expire_submission();
             should_exit = self.drain_commands();
             if should_exit {
                 break;
@@ -564,6 +571,18 @@ impl PtyIoActorRunner {
 
     fn flush_pending_writes_once(&mut self) -> std::io::Result<Option<SubmissionBoundary>> {
         while let Some(write) = self.pending_writes.front() {
+            let permit = write.boundary.and_then(|_| {
+                self.active_submission
+                    .as_ref()
+                    .map(|submission| submission.permit.clone())
+            });
+            let _write_guard = match permit.as_ref().map(WritePermit::lock).transpose() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    self.fail_active_submission(error);
+                    continue;
+                }
+            };
             let chunk = &write.bytes[self.current_write_offset..];
             match self.file.write(chunk) {
                 Ok(0) => {

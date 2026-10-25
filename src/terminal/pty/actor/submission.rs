@@ -28,6 +28,7 @@ impl PtyIoActorRunner {
                 text,
                 enter,
                 delay,
+                permit,
                 reply,
             } => {
                 if self.state == ActorState::Running {
@@ -38,6 +39,7 @@ impl PtyIoActorRunner {
                         SubmissionPhase::WritingText
                     };
                     self.active_submission = Some(ActiveSubmission {
+                        permit,
                         enter,
                         delay,
                         phase,
@@ -74,6 +76,7 @@ impl PtyIoActorRunner {
     }
 
     pub(super) fn schedule_submission_enter(&mut self) {
+        self.expire_submission();
         let Some(ActiveSubmission {
             enter,
             phase: SubmissionPhase::WaitingUntil(deadline),
@@ -101,22 +104,47 @@ impl PtyIoActorRunner {
     }
 
     pub(super) fn poll_timeout_ms(&self) -> i32 {
-        let Some(ActiveSubmission {
-            phase: SubmissionPhase::WaitingUntil(deadline),
-            ..
-        }) = self.active_submission.as_ref()
-        else {
+        let Some(submission) = self.active_submission.as_ref() else {
             return ACTOR_IDLE_POLL_MS;
         };
-        deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .max(1)
-            .min(ACTOR_IDLE_POLL_MS as u128) as i32
+        let enter_at = match submission.phase {
+            SubmissionPhase::WaitingUntil(at) => Some(at),
+            _ => None,
+        };
+        enter_at
+            .into_iter()
+            .chain(submission.permit.deadline)
+            .min()
+            .map(|deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .max(1)
+                    .min(ACTOR_IDLE_POLL_MS as u128) as i32
+            })
+            .unwrap_or(ACTOR_IDLE_POLL_MS)
+    }
+
+    pub(super) fn expire_submission(&mut self) {
+        let expired = self
+            .active_submission
+            .as_ref()
+            .and_then(|submission| submission.permit.lock().err());
+        if let Some(error) = expired {
+            self.fail_active_submission(error);
+        }
     }
 
     pub(super) fn fail_active_submission(&mut self, err: std::io::Error) {
         if let Some(submission) = self.active_submission.take() {
+            if self
+                .pending_writes
+                .front()
+                .is_some_and(|write| write.boundary.is_some())
+            {
+                self.current_write_offset = 0;
+            }
+            self.pending_writes.retain(|write| write.boundary.is_none());
             let _ = submission.reply.send(Err(err));
         }
     }

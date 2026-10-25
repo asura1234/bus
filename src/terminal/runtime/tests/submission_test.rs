@@ -229,3 +229,7 @@ mod diagnostics_tests;
 
 #[path = "submission_write_failure_test.rs"]
 mod write_failure_tests;
+
+#[cfg(unix)]
+#[path = "submission_backpressure_test.rs"]
+mod backpressure_tests;
