@@ -48,6 +48,7 @@ impl Worker {
             C::SetMaxCompactionsPerAgent(limit) => {
                 return self.set_max_compactions_per_agent(limit, events);
             }
+            C::SetIdleAgentsAlert(limit) => return self.set_idle_agents_alert(limit, events),
             C::SetDiskWarningGb(value) => return self.set_disk_threshold(true, value, events),
             C::SetDiskCriticalGb(value) => return self.set_disk_threshold(false, value, events),
             C::SetFeishuRecipient(recipient) => {

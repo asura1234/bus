@@ -1,6 +1,6 @@
 //! Global settings the coordinator applies to its session: MASTER's sound, the
-//! All rooms sound, which new work rooms start with, and the compaction
-//! limit behind Bus's notice (see `bus::settings`).
+//! All rooms sound, which new work rooms start with, and the compaction and
+//! idle-agent limits behind Bus's notices (see `bus::settings`).
 use super::{mpsc, BusEvent, BusState, Room, RoomId, RoomKind, Worker};
 #[cfg(test)]
 use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
@@ -56,9 +56,31 @@ impl Worker {
         let compactions = state
             .notify_compaction_limits(saved.max_compactions_per_agent, now)
             .map_err(|error| error.to_string())?;
-        if compactions {
+        let mut alerted = self.idle_alerted_rooms.clone();
+        let idle = state
+            .notify_idle_agents(saved.idle_agents_alert, now, &mut alerted)
+            .map_err(|error| error.to_string())?;
+        if compactions || idle {
             self.save(state)?;
         }
+        // Commit the in-memory edge only after the notice is saved successfully.
+        self.idle_alerted_rooms = alerted;
+        Ok(())
+    }
+
+    pub(super) fn set_idle_agents_alert(
+        &mut self,
+        limit: u32,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        settings::validate_idle_agents_alert(limit)?;
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.idle_agents_alert = limit)?;
+        self.refresh_setting_notices()?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
         Ok(())
     }
 
@@ -233,3 +255,7 @@ fn room_sound(room: &Room) -> SoundPref {
 #[cfg(test)]
 #[path = "tests/settings_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/idle_agents_test.rs"]
+mod idle_agents_tests;

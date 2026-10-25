@@ -3,7 +3,7 @@
 //! Choices that are not tied to one room live here, so a change made in any
 //! Bus is what every Bus launched afterwards starts with: color blind mode,
 //! MASTER's sound (every session has MASTER), the last All rooms sound, and
-//! the worker compaction and disk alert limits. A room's own sound stays in
+//! the worker compaction, idle-agents and disk alert limits. A room's own sound stays in
 //! its session. Sounds are read at launch and room creation; the coordinator
 //! reads notice limits each tick and disk thresholds when a sample completes.
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,8 @@ mod developer_sound_tests;
 
 pub(crate) const MIN_COMPACTIONS_PER_AGENT: u32 = 1;
 pub(crate) const MAX_COMPACTIONS_PER_AGENT: u32 = 100;
+pub(crate) const MIN_IDLE_AGENTS_ALERT: u32 = 1;
+pub(crate) const MAX_IDLE_AGENTS_ALERT: u32 = 10;
 pub(crate) const MIN_DISK_FREE_GB: u32 = 1;
 pub(crate) const MAX_DISK_FREE_GB: u32 = 10_000;
 pub(crate) const MAX_BACKGROUND_SHELL_HOLD_MINUTES: u32 = 24 * 60;
@@ -59,6 +61,9 @@ pub(crate) struct BusSettings {
     /// Notify the room when a worker reaches this many compactions.
     #[serde(deserialize_with = "deserialize_compaction_limit")]
     pub(crate) max_compactions_per_agent: u32,
+    /// Notify its orchestrator when more than this many workers have sat idle for 60 seconds.
+    #[serde(deserialize_with = "deserialize_idle_agents_alert")]
+    pub(crate) idle_agents_alert: u32,
     #[serde(deserialize_with = "deserialize_disk_free_gb")]
     pub(crate) disk_warning_gb: u32,
     #[serde(deserialize_with = "deserialize_disk_free_gb")]
@@ -95,6 +100,7 @@ impl Default for BusSettings {
             },
             room_sound: SoundPref::default(),
             max_compactions_per_agent: 5,
+            idle_agents_alert: 5,
             disk_warning_gb: 20,
             disk_critical_gb: 5,
             background_shell_hold_minutes: 15,
@@ -133,6 +139,23 @@ where
 {
     let value = u32::deserialize(deserializer)?;
     validate_compaction_limit(value).map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
+pub(crate) fn validate_idle_agents_alert(value: u32) -> Result<(), String> {
+    if (MIN_IDLE_AGENTS_ALERT..=MAX_IDLE_AGENTS_ALERT).contains(&value) {
+        Ok(())
+    } else {
+        Err("Idle agents alert must be between 1 and 10.".into())
+    }
+}
+
+fn deserialize_idle_agents_alert<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    validate_idle_agents_alert(value).map_err(serde::de::Error::custom)?;
     Ok(value)
 }
 
@@ -238,6 +261,7 @@ pub(crate) fn update(
 
 pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
     validate_compaction_limit(settings.max_compactions_per_agent)?;
+    validate_idle_agents_alert(settings.idle_agents_alert)?;
     validate_disk_thresholds(settings.disk_warning_gb, settings.disk_critical_gb)?;
     let failed = |error: &dyn std::fmt::Display| {
         format!("Could not save Bus settings to {}: {error}", path.display())
@@ -318,15 +342,27 @@ mod tests {
     }
 
     #[test]
-    fn retired_idle_agents_alert_setting_is_ignored() {
+    fn idle_agents_alert_defaults_to_five_and_validates_config_values() {
         let root = crate::utils::test_temp::unique_temp_path("bus-idle-agents-settings");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.json");
-        // Settings saved before the idle-agents notice was removed, including invalid limits.
-        for value in ["7", "11"] {
+        assert_eq!(load(&path).unwrap().idle_agents_alert, 5);
+        for value in [1, 7, 10] {
             std::fs::write(&path, format!("{{\"idle_agents_alert\":{value}}}")).unwrap();
-            assert_eq!(load(&path).unwrap(), BusSettings::default());
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.idle_agents_alert, value);
+            save(&path, &loaded).unwrap();
+            assert_eq!(load(&path).unwrap(), loaded);
         }
+        for value in ["0", "11", "-1", "1.5", "\"seven\""] {
+            std::fs::write(&path, format!("{{\"idle_agents_alert\":{value}}}")).unwrap();
+            assert!(load(&path).is_err(), "invalid limit {value}");
+        }
+        let invalid = BusSettings {
+            idle_agents_alert: 11,
+            ..BusSettings::default()
+        };
+        assert!(save(&path, &invalid).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
