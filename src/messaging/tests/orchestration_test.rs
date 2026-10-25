@@ -705,6 +705,11 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("read /bus-docs/bus-communication-guide.md"));
     assert!(text.contains("send only what changes the receiver's next step"));
     assert!(text.contains("Read /bus-docs/how-to-bus-cli.md"));
+    assert!(text.contains("carry the inherited fix-round count"));
+    assert!(text.contains("use the fix-round cap in your brief, otherwise the room's workflow"));
+    assert!(text.contains("default 2; 'none' means iterate until every reviewer is Ready"));
+    assert!(text.contains("allow at most that many fix rounds"));
+    assert!(text.contains("stop and send a final to the orchestrator if another repair is needed"));
     assert!(text.contains("Send only the body"));
     assert!(text.contains("use it only for a hard blocker only the developer can clear"));
     assert!(text

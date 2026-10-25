@@ -5,8 +5,8 @@ agent per repository works in parallel from a shared spec, a joint review
 checks they agree, then each repository gets its own PR. -->
 
 Each repository uses the **owner-run variant** of `auto-merge-pr`. Its PR owner
-carries the inherited fix-round counter in the PR repair log and reports it in
-finals; the orchestrator mirrors status and handles shared product decisions.
+carries the inherited fix-round counter and cap in the PR repair log and reports
+both in finals; the orchestrator mirrors status and handles shared product decisions.
 
 ## Goal
 
@@ -24,7 +24,7 @@ flowchart TD
     start([Developer: share to gallery everywhere]):::developer --> spec
     spec[spec-writer: shared spec and API contract] --> agree{Developer approves spec?}:::developer
     agree -- no --> spec
-    agree -- yes --> initround["Each owner: record own new PR's fix_round = 0; carry counter on resume"]
+    agree -- yes --> initround["Each owner: record own new PR's fix_round = 0 and fix_round_cap (brief overrides workflow; default 2; none = uncapped); carry both on resume"]
     initround --> build
 
     subgraph build [Parallel, one agent per repo]
@@ -45,7 +45,7 @@ flowchart TD
     reapprove -- yes --> queuefix
     consistent -- repo issues --> queuefix[Affected owners: send own PR to its fix-budget gate]
     queuefix --> nextfix["Owner: next_fix_round = this PR's fix_round + 1"]
-    nextfix --> overbudget{"next_fix_round > 2?"}
+    nextfix --> overbudget{"Numeric fix_round_cap and next_fix_round > fix_round_cap?"}
     overbudget -- no --> countfix["Owner: record this PR's fix_round = next_fix_round"]
     countfix --> fixes[Owning dev: address-review-comments, approved spec correction or developer feedback; push]
     fixes --> reverify[Assigned verifiers: re-verify each repaired head]
@@ -89,14 +89,16 @@ flowchart TD
 
 - Reviewers flag any behavior that differs between repositories; the spec
   decides, and a spec gap goes to the developer.
-- Owners follow the owner-run variant and carry their own counter. Track at most two
-  fix rounds per PR, including spec corrections and developer-test feedback;
-  the initial review uses no round. A PR needing a third fix is held with its
-  cause and plan reported; independent work continues. The second repaired
+- Owners follow the owner-run variant and carry their own counter and cap.
+  Resolve `fix_round_cap` from each brief, otherwise the room's workflow,
+  otherwise `2`; `none` means iterate until every reviewer is Ready. Count spec
+  corrections and developer-test feedback; the initial review uses no round.
+  A PR needing a repair beyond a numeric cap is held with its count, cap, cause
+  and plan reported; independent work continues. The last permitted repaired
   head still receives joint review and requested developer acceptance.
 - After requested developer acceptance passes, use `auto-merge-pr` in the
   order web, app, desktop under recorded kickoff authority. Carry each PR's
-  consumed fix rounds and explicit holds into that workflow; merge only with
+  consumed fix rounds, cap and explicit holds into that workflow; merge only with
   every required review Ready, gates and requested acceptance passing on the
   exact head, comments adjudicated and no explicit hold.
 
@@ -115,7 +117,9 @@ Use these peers from your brief. If one is missing or replaced, message the
 orchestrator; it owns staffing, room notes, the roster and verifier allocation.
 Workers do not edit room notes or the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
-inherited `fix_round`, recorded merge authority and explicit holds.
+inherited `fix_round`, `fix_round_cap` (a nonnegative integer or `none`),
+recorded merge authority and explicit holds. The brief's cap overrides the
+room's workflow cap; if neither supplies one, the cap is `2`.
 
 Message peers directly. The verifier sends `VERIFIED <PR/task> @<full SHA>`
 with evidence, or defects with `file:line` and reproduction, straight to the
@@ -127,9 +131,12 @@ If you own a PR, use the owner-run path in `auto-merge-pr` and enforce these
 checks before every repair batch and merge, including inside `merge-pr`:
 
 - Carry the inherited fix-round counter and record each batch in the PR repair
-  log. Allow at most **2 fix rounds** across review, verification, gates, bots
-  and developer feedback. If another repair is needed after round 2, stop and
-  send a final with the count, cause and plan to the orchestrator.
+  log. Use the `fix_round_cap` in your brief, otherwise the room's workflow;
+  default to **2** if neither supplies one. A numeric cap limits the total fix
+  rounds across review, verification, gates, bots and developer feedback;
+  **`none`** means iterate until every reviewer is Ready, with all other merge
+  gates still required. If another repair would exceed a numeric cap, stop and
+  send a final with the count, cap, cause and plan to the orchestrator.
 - Never fix a finding outside the PR's locked goal in this PR. Exclude it and
   report it in the final as a follow-up for the orchestrator to decide and record.
 - Re-measure added plus removed lines against the pinned PR base, excluding
