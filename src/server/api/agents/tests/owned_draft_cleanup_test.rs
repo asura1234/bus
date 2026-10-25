@@ -295,7 +295,11 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
             b"\x01" | b"\x0b" | b"\x15" => {}
             other => panic!("unexpected key {other:?}; never paste again or send late Enter"),
         }
-        redraw(&app, AgentKind::Codex, &render(&text));
+        // An ignored key produces no provider output. A synthetic redraw would
+        // add a second clock wake and let the writer run ahead of this editor.
+        if !ignore_keys {
+            redraw(&app, AgentKind::Codex, &render(&text));
+        }
         // Production spaces editing keys 25ms apart (clear_step sleep).
         clock(&app).advance(Duration::from_millis(25));
     };
