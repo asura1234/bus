@@ -918,6 +918,18 @@ Read the permanent message history for a room (including deleted agents):
 bus history --room "$room_id"
 ```
 
+For large rooms, read the newest messages with `--limit 100`. Each page keeps
+messages in chronological order and returns `has_more` and `next_before`.
+When `has_more` is true, pass that numeric message ID to the next call:
+
+```sh
+bus history --room "$room_id" --limit 100 --before "$next_before"
+```
+
+`--before` is exclusive and requires `--limit`. Omitting both flags still
+returns the complete history. Responses are capped at 16 MiB; if a page is
+too large, reduce `--limit`.
+
 Messages and requests are retained after agent/room deletion and provider context
 clears, with no seven-day expiry. Deleted participants show `NAME [deleted]`.
 `history --room ID` also reads a deleted room. Live room names resolve first;

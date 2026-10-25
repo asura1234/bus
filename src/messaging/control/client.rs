@@ -2,7 +2,7 @@
 use super::protocol::{
     encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, Request, Response,
     IO_TIMEOUT, LEGACY_SOCKET_NAME, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL,
-    SOCKET_NAME, WAIT_SOCKET_NAME,
+    RESPONSE_WRITE_TIMEOUT, SOCKET_NAME, WAIT_SOCKET_NAME,
 };
 use crate::platform::ipc;
 use std::{
@@ -30,7 +30,7 @@ pub(crate) fn request(data_dir: &Path, request: &Request) -> Result<Response, St
     request_with_timeout(
         data_dir,
         request,
-        worker_timeout(&request.method) + IO_TIMEOUT * 3,
+        worker_timeout(&request.method) + RESPONSE_WRITE_TIMEOUT + IO_TIMEOUT * 2,
     )
 }
 
@@ -87,17 +87,40 @@ pub(crate) fn request_with_timeout(
             }
             Ok(None) => {}
             Err(FrameError::TooLarge) => {
-                return Err("response_too_large: response exceeds 16 MiB".into())
+                log_read_failure(request, frame.received_bytes(), "response_too_large");
+                return Err("response_too_large: response exceeds 16 MiB".into());
             }
-            Err(FrameError::Io(_)) => {
-                return Err("control_io: response connection closed or failed".into())
+            Err(FrameError::Io(error)) => {
+                let received = frame.received_bytes();
+                let code = if received > 0 {
+                    "response_incomplete"
+                } else {
+                    "control_io"
+                };
+                log_read_failure(request, received, code);
+                return Err(format!(
+                    "{code}: response connection closed or failed after {received} bytes ({:?})",
+                    error.kind()
+                ));
             }
         }
         if Instant::now() >= deadline {
+            log_read_failure(request, frame.received_bytes(), "response_timeout");
             return Err("response_timeout: response deadline elapsed".into());
         }
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+fn log_read_failure(request: &Request, received_bytes: usize, reason: &str) {
+    tracing::warn!(
+        event = "bus.control.response.failed",
+        control_request_id = %request.id.chars().take(128).collect::<String>(),
+        method = crate::messaging::perf::control_method_label(&request.method),
+        stage = "read", reason, received_bytes,
+        max_bytes = MAX_RESPONSE_BYTES,
+        "Control response could not be read"
+    );
 }
 
 /// Route all status reads to their own finite connection pool. Interactive

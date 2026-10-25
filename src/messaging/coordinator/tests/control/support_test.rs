@@ -10,6 +10,8 @@ mod dialogs_tests;
 mod identity_tests;
 #[path = "inspect_test.rs"]
 mod inspect_tests;
+#[path = "large_history_test.rs"]
+mod large_history_tests;
 #[path = "messages_test.rs"]
 mod messages_tests;
 #[path = "open_messaging_test.rs"]

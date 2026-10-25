@@ -220,19 +220,29 @@ fn oversized_worker_response_is_replaced_with_bounded_error() {
     let (tx, rx) = mpsc::sync_channel(1);
     let _server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
-        let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
-            panic!()
-        };
-        dev.reply
-            .try_send(Response::success(
-                &dev.request.id,
-                json!("x".repeat(16 * 1024 * 1024)),
-            ))
-            .unwrap();
+        for _ in 0..2 {
+            let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!()
+            };
+            dev.reply
+                .try_send(Response::success(
+                    &dev.request.id,
+                    json!("x".repeat(16 * 1024 * 1024)),
+                ))
+                .unwrap();
+        }
     });
-    let failed = request(&dir.0, &call("large")).unwrap();
-    assert_eq!(failed.id, "large");
-    assert_eq!(failed.error.unwrap().code, "response_too_large");
+    for method in ["state.get", "room.history"] {
+        let mut command = call(method);
+        command.method = method.into();
+        let failed = request(&dir.0, &command).unwrap();
+        assert_eq!(failed.id, method);
+        let error = failed.error.unwrap();
+        assert_eq!(error.code, "response_too_large");
+        assert_eq!(error.message.contains("--limit"), method == "room.history");
+        assert_eq!(error.message.contains("--before"), method == "room.history");
+    }
     worker.join().unwrap();
 }
 

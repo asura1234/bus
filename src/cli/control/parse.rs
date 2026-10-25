@@ -101,7 +101,12 @@ pub(super) fn cli() -> Command {
                         .allow_hyphen_values(true),
                 ),
         )
-        .subcommand(subcommand("history").arg(option("room")));
+        .subcommand(
+            subcommand("history")
+                .arg(option("room"))
+                .arg(value_arg("limit").long("limit"))
+                .arg(value_arg("before").long("before").requires("limit")),
+        );
     super::help::decorate(command, "", false)
 }
 
@@ -219,7 +224,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
             }
             ("message.status", params)
         }
-        "history" => ("room.history", json!({"room": required(args, "room")?})),
+        "history" => ("room.history", parse_history(args)?),
         _ => return Err("unknown command".into()),
     };
     Ok(ParsedCommand {
@@ -441,6 +446,21 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
         }
     }
     Ok((method, params))
+}
+
+fn parse_history(args: &ArgMatches) -> Result<Value, String> {
+    let mut params = json!({"room": required(args, "room")?});
+    for name in ["limit", "before"] {
+        if let Some(value) = args.get_one::<String>(name) {
+            let value = value
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| format!("history --{name} must be a positive integer"))?;
+            params[name] = json!(value);
+        }
+    }
+    Ok(params)
 }
 
 fn parse_room(args: &ArgMatches) -> Result<(&'static str, Value), String> {

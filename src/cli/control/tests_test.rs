@@ -15,6 +15,20 @@ fn command_help(args: &[&str]) -> String {
 }
 
 #[test]
+fn history_pagination_flags_are_explicit_positive_message_bounds() {
+    let parsed = command(&["history", "--room", "7", "--limit", "100", "--before", "42"]).unwrap();
+    assert_eq!(parsed.params, json!({"room":"7","limit":100,"before":42}));
+    for args in [
+        vec!["history", "--room", "7", "--limit", "0"],
+        vec!["history", "--room", "7", "--limit", "bad"],
+        vec!["history", "--room", "7", "--limit", "2", "--before", "0"],
+        vec!["history", "--room", "7", "--before", "42"],
+    ] {
+        assert!(command(&args).is_err(), "{args:?}");
+    }
+}
+
+#[test]
 fn feishu_cli_toggle_accepts_only_on_off_and_no_destination() {
     for (flag, on) in [("--on", true), ("--off", false)] {
         let parsed = command(&["settings", "feishu-notifications", flag]).unwrap();
@@ -3214,11 +3228,32 @@ fn transport_errors_say_whether_the_command_ran() {
         });
         assert!(outcome.is_err());
         assert_eq!(sends, 1, "{error}");
-        assert_eq!(response["error"]["code"], "transport_error", "{error}");
+        let code = if error.starts_with("response_timeout:") {
+            "response_timeout"
+        } else {
+            "transport_error"
+        };
+        assert_eq!(response["error"]["code"], code, "{error}");
         let message = response["error"]["message"].as_str().unwrap();
         assert!(message.starts_with(error), "{message}");
         assert!(message.contains(says), "{message}");
         assert_eq!(response["result"]["applied"], applied, "{error}");
+    }
+}
+
+#[test]
+fn history_reports_known_response_failures_without_losing_the_cause() {
+    for code in [
+        "response_too_large",
+        "response_incomplete",
+        "response_timeout",
+    ] {
+        let (outcome, response) = run_captured(&["history", "--room", "7"], |_, _| {
+            Err(format!("{code}: response failed"))
+        });
+        assert!(outcome.is_err());
+        assert_eq!(response["error"]["code"], code);
+        assert_eq!(response["result"]["applied"], "unknown");
     }
 }
 
