@@ -385,7 +385,13 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         true,
         Tier::Agent,
     ),
-    spec("room.history", "history", &["room"], false, Tier::Agent),
+    spec(
+        "room.history",
+        "history",
+        &["room", "limit", "before"],
+        false,
+        Tier::Agent,
+    ),
     spec(
         "agent.add",
         "agent add",

@@ -48,7 +48,9 @@ fn is_status_overloaded(response: &Response) -> bool {
 /// The endpoint accepted the connection, so Bus is up; a status read that
 /// lost its connection afterwards is retried.
 fn connected_failure(message: &str) -> bool {
-    message.starts_with("control_io:") || message.starts_with("control_unsent:")
+    message.starts_with("control_io:")
+        || message.starts_with("control_unsent:")
+        || message.starts_with("response_incomplete:")
 }
 
 fn next_busy_delay(delay: Duration) -> Duration {
@@ -281,11 +283,13 @@ fn transport_error(id: &str, method: &str, message: &str, status: Option<Value>)
             "may have run; check Bus state before retrying",
         )
     };
-    let mut response = Response::failure(
-        id,
-        "transport_error",
-        format!("{message}; {method} {outcome}"),
-    );
+    let code = message
+        .split_once(':')
+        .map_or("transport_error", |(code, _)| match code {
+            "response_too_large" | "response_incomplete" | "response_timeout" => code,
+            _ => "transport_error",
+        });
+    let mut response = Response::failure(id, code, format!("{message}; {method} {outcome}"));
     response.result = status.unwrap_or_else(|| json!({ "applied": applied }));
     response
 }

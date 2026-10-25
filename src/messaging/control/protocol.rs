@@ -11,6 +11,9 @@ use std::{
 pub(super) const MAX_REQUEST_BYTES: usize = 256 * 1024;
 pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(3);
+/// Large frames may need several socket-buffer drains. Keep the idle budget
+/// short while separately bounding a response that continues making progress.
+pub(super) const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const WORKER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A launch can spend the native startup budget waiting for a real shell prompt.
@@ -22,6 +25,9 @@ pub(super) fn worker_timeout(method: &str) -> Duration {
     }
 }
 pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(2);
+// Drain ready I/O in bounded bursts. Sleeping after each small I/O attempt makes a
+// valid large response exceed IO_TIMEOUT when timers are coalesced by the OS.
+const IO_BURST_CHUNKS: usize = 16;
 /// The control socket in a session's data directory. Every session runs it;
 /// the `--dev` flag only decides which methods answer.
 pub(crate) const SOCKET_NAME: &str = "control.sock";
@@ -117,32 +123,43 @@ pub(super) enum FrameError {
 }
 
 impl Frame {
+    pub(super) fn received_bytes(&self) -> usize {
+        self.bytes.len()
+    }
+
     pub(super) fn poll(
         &mut self,
         stream: &mut ipc::LocalStream,
         max: usize,
     ) -> Result<Option<Vec<u8>>, FrameError> {
         let mut buffer = [0; 64 * 1024];
-        match ipc::poll_local_stream_read_count(stream, &mut buffer).map_err(FrameError::Io)? {
-            ipc::LocalStreamReadCount::Data(n) => {
-                let end = buffer[..n].iter().position(|byte| *byte == b'\n');
-                let used = end.unwrap_or(n);
-                if self.bytes.len() + used > max {
-                    return Err(FrameError::TooLarge);
+        for _ in 0..IO_BURST_CHUNKS {
+            match ipc::poll_local_stream_read_count(stream, &mut buffer).map_err(FrameError::Io)? {
+                ipc::LocalStreamReadCount::Data(n) => {
+                    let end = buffer[..n].iter().position(|byte| *byte == b'\n');
+                    let used = end.unwrap_or(n);
+                    if self.bytes.len() + used > max {
+                        return Err(FrameError::TooLarge);
+                    }
+                    self.bytes.extend_from_slice(&buffer[..used]);
+                    if end.is_some() {
+                        return Ok(Some(std::mem::take(&mut self.bytes)));
+                    }
                 }
-                self.bytes.extend_from_slice(&buffer[..used]);
-                Ok(end.map(|_| std::mem::take(&mut self.bytes)))
+                ipc::LocalStreamReadCount::Pending => return Ok(None),
+                ipc::LocalStreamReadCount::Closed => {
+                    return Err(FrameError::Io(io::Error::new(
+                        if self.bytes.is_empty() {
+                            io::ErrorKind::UnexpectedEof
+                        } else {
+                            io::ErrorKind::InvalidData
+                        },
+                        "Incomplete control frame",
+                    )))
+                }
             }
-            ipc::LocalStreamReadCount::Pending => Ok(None),
-            ipc::LocalStreamReadCount::Closed => Err(FrameError::Io(io::Error::new(
-                if self.bytes.is_empty() {
-                    io::ErrorKind::UnexpectedEof
-                } else {
-                    io::ErrorKind::InvalidData
-                },
-                "Incomplete control frame",
-            ))),
         }
+        Ok(None)
     }
 }
 
@@ -151,16 +168,30 @@ pub(super) fn poll_write(
     bytes: &[u8],
     offset: &mut usize,
 ) -> io::Result<bool> {
-    // Bound each write so one large response does not monopolize a server pass.
-    let end = bytes.len().min(*offset + 64 * 1024);
-    match stream.write(&bytes[*offset..end]) {
-        Ok(n) => *offset += n,
-        Err(e)
-            if matches!(
-                e.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-            ) => {}
-        Err(e) => return Err(e),
+    // At most 1 MiB / 16 writes per pass preserves fairness between clients.
+    for _ in 0..IO_BURST_CHUNKS {
+        if *offset == bytes.len() {
+            return Ok(true);
+        }
+        let end = bytes.len().min(*offset + 64 * 1024);
+        match stream.write(&bytes[*offset..end]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "Control write made no progress",
+                ))
+            }
+            Ok(n) => *offset += n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                break
+            }
+            Err(e) => return Err(e),
+        }
     }
     Ok(*offset == bytes.len())
 }

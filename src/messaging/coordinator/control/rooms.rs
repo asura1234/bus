@@ -66,13 +66,28 @@ impl Worker {
             "room.delete" => self.control_command(BusCommand::DeleteRoom(
                 self.control_room(required(p, "room")?)?,
             )),
-            "room.history" => self.control_history(required(p, "room")?),
+            "room.history" => self.control_history(p),
             _ => Err("Unknown method".into()),
         }
     }
 
-    fn control_history(&mut self, selector: &str) -> Result<Value, String> {
-        let room = self.control_history_room(selector)?;
+    fn control_history(&mut self, p: &Value) -> Result<Value, String> {
+        let room = self.control_history_room(required(p, "room")?)?;
+        let positive = |name: &str| -> Result<Option<u64>, String> {
+            p.get(name)
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| format!("History {name} must be a positive integer"))
+                })
+                .transpose()
+        };
+        let limit = positive("limit")?;
+        let before = positive("before")?;
+        if before.is_some() && limit.is_none() {
+            return Err("History before requires limit".into());
+        }
         let now = super::super::io::now_ms();
         self.expire_queued_requests(now)?;
         // Group once: constructing each delivery must not rescan all history.
@@ -92,9 +107,23 @@ impl Worker {
             .map(|r| (r.prompt.id, (&r.prompt, true)))
             .collect::<BTreeMap<_, _>>();
         messages.extend(self.state.notices(room).map(|n| (n.id, (n, false))));
-        Ok(
-            json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.control_message_from(*id, now, deliveries.get(id).cloned().unwrap_or_default()).ok()).flatten()})).collect::<Vec<_>>()}),
-        )
+        if let Some(before) = before {
+            messages.retain(|id, _| id.0 < before);
+        }
+        let skip = limit.map_or(0, |limit| {
+            messages
+                .len()
+                .saturating_sub(usize::try_from(limit).unwrap_or(usize::MAX))
+        });
+        let next_before = (skip > 0)
+            .then(|| messages.keys().nth(skip).copied())
+            .flatten();
+        let mut result = json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().skip(skip).map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.control_message_from(*id, now, deliveries.get(id).cloned().unwrap_or_default()).ok()).flatten()})).collect::<Vec<_>>()});
+        if limit.is_some() {
+            result["has_more"] = json!(skip > 0);
+            result["next_before"] = json!(next_before);
+        }
+        Ok(result)
     }
 
     fn control_history_room(&self, selector: &str) -> Result<RoomId, String> {

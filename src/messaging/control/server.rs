@@ -3,7 +3,8 @@
 use super::client::{request, request_with_timeout};
 use super::protocol::{
     encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, SOCKET_NAME, WAIT_SOCKET_NAME,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, RESPONSE_WRITE_TIMEOUT, SOCKET_NAME,
+    WAIT_SOCKET_NAME,
 };
 pub(crate) use super::protocol::{ControlCall, Request, Response};
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
@@ -241,6 +242,7 @@ enum State {
     Writing {
         bytes: Vec<u8>,
         offset: usize,
+        expires: Instant,
     },
     Closing,
 }
@@ -258,18 +260,30 @@ impl Client {
 
     fn respond(&mut self, response: Response) -> bool {
         let bytes = encode(&response, MAX_RESPONSE_BYTES).or_else(|_| {
+            tracing::warn!(
+                event = "bus.control.response.failed",
+                control_request_id = %response.id.chars().take(128).collect::<String>(),
+                stage = "encode", reason = "response_too_large",
+                max_bytes = MAX_RESPONSE_BYTES,
+                "Control response exceeds the frame budget"
+            );
             encode(
                 &Response::failure(
                     &response.id,
                     "response_too_large",
-                    "Response exceeds 16 MiB",
+                    "Response exceeds 16 MiB; for room history, use --limit 100, then --before ID with the returned next_before to page; reduce --limit if a page is still too large",
                 ),
                 MAX_RESPONSE_BYTES,
             )
         });
         let Ok(bytes) = bytes else { return false };
-        self.state = State::Writing { bytes, offset: 0 };
-        self.deadline = Instant::now() + IO_TIMEOUT;
+        let now = Instant::now();
+        self.state = State::Writing {
+            bytes,
+            offset: 0,
+            expires: now + RESPONSE_WRITE_TIMEOUT,
+        };
+        self.deadline = now + IO_TIMEOUT;
         true
     }
 
@@ -280,34 +294,7 @@ impl Client {
         poll_budget: Option<&Arc<()>>,
     ) -> bool {
         if Instant::now() >= self.deadline {
-            return match &self.state {
-                State::Reading(_) => self.respond(Response::failure(
-                    "",
-                    "request_timeout",
-                    "Request deadline elapsed",
-                )),
-                State::Waiting {
-                    id,
-                    method,
-                    started,
-                    ..
-                } => {
-                    crate::messaging::perf::CONTROL_REQUEST.record_op(started.elapsed(), method);
-                    tracing::warn!(
-                        event = "bus.control.request.timeout",
-                        control_request_id = %id.chars().take(128).collect::<String>(), method,
-                        endpoint = if poll_budget.is_some() { "status" } else { "interactive" },
-                        elapsed_ms = started.elapsed().as_millis() as u64,
-                        "Coordinator deadline elapsed; the operation may still complete"
-                    );
-                    self.respond(Response::failure(
-                        id,
-                        "coordinator_timeout",
-                        "Coordinator deadline elapsed; the operation may still complete",
-                    ))
-                }
-                State::Writing { .. } | State::Closing => false,
-            };
+            return self.expire(poll_budget);
         }
         match &mut self.state {
             State::Reading(frame) => {
@@ -362,15 +349,29 @@ impl Client {
                     self.respond(response)
                 }
             },
-            State::Writing { bytes, offset } => match poll_write(&mut self.stream.0, bytes, offset)
-            {
-                Ok(true) => {
-                    self.state = State::Closing;
-                    true
+            State::Writing {
+                bytes,
+                offset,
+                expires,
+            } => {
+                let previous = *offset;
+                let result = poll_write(&mut self.stream.0, bytes, offset);
+                if *offset > previous {
+                    self.deadline = (Instant::now() + IO_TIMEOUT).min(*expires);
                 }
-                Ok(false) => true,
-                Err(_) => false,
-            },
+                match result {
+                    Ok(true) => {
+                        self.state = State::Closing;
+                        true
+                    }
+                    Ok(false) => true,
+                    Err(error) => {
+                        let (bytes, offset) = (bytes.len(), *offset);
+                        self.log_write_failure(&format!("{:?}", error.kind()), bytes, offset);
+                        false
+                    }
+                }
+            }
             // Keep replies counted until the peer closes after reading its
             // frame, or the original write deadline expires.
             State::Closing => matches!(
@@ -378,6 +379,67 @@ impl Client {
                 Ok(ipc::LocalStreamReadCount::Pending)
             ),
         }
+    }
+
+    fn expire(&mut self, poll_budget: Option<&Arc<()>>) -> bool {
+        match &self.state {
+            State::Reading(_) => self.respond(Response::failure(
+                "",
+                "request_timeout",
+                "Request deadline elapsed",
+            )),
+            State::Waiting {
+                id,
+                method,
+                started,
+                ..
+            } => {
+                crate::messaging::perf::CONTROL_REQUEST.record_op(started.elapsed(), method);
+                tracing::warn!(
+                    event = "bus.control.request.timeout",
+                    control_request_id = %id.chars().take(128).collect::<String>(), method,
+                    endpoint = if poll_budget.is_some() { "status" } else { "interactive" },
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Coordinator deadline elapsed; the operation may still complete"
+                );
+                self.respond(Response::failure(
+                    id,
+                    "coordinator_timeout",
+                    "Coordinator deadline elapsed; the operation may still complete",
+                ))
+            }
+            State::Writing {
+                bytes,
+                offset,
+                expires,
+            } => {
+                let reason = if Instant::now() >= *expires {
+                    "write_total_timeout"
+                } else {
+                    "write_timeout"
+                };
+                self.log_write_failure(reason, bytes.len(), *offset);
+                false
+            }
+            State::Closing => false,
+        }
+    }
+
+    fn log_write_failure(&self, reason: &str, response_bytes: usize, written_bytes: usize) {
+        let (id, method) = self
+            .request
+            .as_ref()
+            .map_or(("", "unread"), |(id, method)| (id.as_str(), *method));
+        tracing::warn!(
+            event = "bus.control.response.failed",
+            control_request_id = id,
+            method,
+            stage = "write",
+            reason,
+            response_bytes,
+            written_bytes,
+            "Control response could not be delivered"
+        );
     }
 
     fn dispatch_request(
@@ -464,3 +526,7 @@ impl Client {
 #[cfg(test)]
 #[path = "tests/server_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/large_response_test.rs"]
+mod large_response_tests;

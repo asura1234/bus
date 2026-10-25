@@ -44,6 +44,8 @@ fn argument_help(id: &str) -> &'static str {
         "system-prompt-file" => "Read the replacement orchestrator system prompt from a file",
         "source" => "Read the visible viewport or recent terminal history",
         "lines" => "Positive line count required for a recent terminal read",
+        "limit" => "Read at most this many newest history messages (positive integer)",
+        "before" => "Read messages older than this message ID; requires --limit",
         "option" => "Option number returned by agent dialog",
         "fingerprint" => "Single-use fingerprint returned by agent dialog",
         "text" => "Message, answer, notes, or follow-up text as one argument",
