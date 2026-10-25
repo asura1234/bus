@@ -267,11 +267,16 @@ impl Client {
                 max_bytes = MAX_RESPONSE_BYTES,
                 "Control response exceeds the frame budget"
             );
+            let message = if self.request.as_ref().is_some_and(|(_, method)| *method == "room.history") {
+                "Response exceeds 16 MiB; use --limit 100, then --before ID with the returned next_before to page; reduce --limit if a page is still too large"
+            } else {
+                "Response exceeds 16 MiB"
+            };
             encode(
                 &Response::failure(
                     &response.id,
                     "response_too_large",
-                    "Response exceeds 16 MiB; for room history, use --limit 100, then --before ID with the returned next_before to page; reduce --limit if a page is still too large",
+                    message,
                 ),
                 MAX_RESPONSE_BYTES,
             )
