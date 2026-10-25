@@ -119,6 +119,7 @@ impl BusState {
                     provider_prompt_id: None,
                     trusted_start_bound: false,
                     uncertain_outcome: false,
+                    submission_error: None,
                     dialog_delivery: None,
                     pending_final: None,
                     completed_at_ms: None,

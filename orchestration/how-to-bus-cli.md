@@ -658,6 +658,14 @@ settlement signal; async waits succeed only on it.
 A successful terminal write or a visually idle agent is
 not proof that the request completed.
 
+Guarded delivery retries Enter only while the unchanged Bus draft is visible;
+it never pastes the message again after an uncertain write. If native submission
+confirmation expires, Bus uses its reserved cleanup time to clear that draft.
+It stops clearing if the composer changes or becomes unavailable, and reports
+that cleanup could not be confirmed. `submission_unconfirmed` still means the
+message may have run, even when its remaining draft was cleared. Before resending,
+inspect the agent's transcript and composer and clear any leftover draft.
+
 ### Steer an agent while it works
 
 You never have to wait for an agent to finish before correcting it. A message

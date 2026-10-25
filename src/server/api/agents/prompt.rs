@@ -427,6 +427,8 @@ impl App {
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
+        let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
+        let _entered = span.enter();
         let completion = queue_prompt_input(
             runtime,
             expected_agent,
@@ -469,13 +471,13 @@ fn queue_prompt_input(
         &["ctrl+a".into(), "ctrl+k".into(), "ctrl+u".into()],
     )
     .map_err(|key| std::io::Error::other(format!("Invalid clear key: {key}")))?;
-    runtime.queue_observed_input_submission(
+    runtime.queue_observed_input_with_inspector(
         Bytes::from(encoded),
         Bytes::from(enter),
         clear.into_iter().map(Bytes::from).collect(),
         delay,
         deadline,
-        composer::observer(kind, text),
+        Box::new(composer::observer(kind, text)),
     )
 }
 

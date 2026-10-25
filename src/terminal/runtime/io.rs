@@ -112,7 +112,8 @@ impl PaneRuntimeIo {
                 }
             }
             #[cfg(test)]
-            PaneRuntimeIo::TestChannel { sender, .. } => {
+            PaneRuntimeIo::TestChannel { sender, clock, .. } => {
+                let failure = clock.take_write_failure();
                 let _ = deadline;
                 let sender = sender.clone();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
@@ -130,6 +131,10 @@ impl PaneRuntimeIo {
                             sender.try_send(enter).map_err(std::io::Error::other)
                         }
                     });
+                    let result = match failure {
+                        Some(fault) => fault.complete(result),
+                        None => result,
+                    };
                     let _ = reply_tx.send(result);
                 });
                 Ok(reply_rx)

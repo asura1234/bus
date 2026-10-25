@@ -3,32 +3,13 @@ use super::{styled_chars, StyledChar};
 use crate::agents::AgentKind;
 use crate::terminal::runtime::InputObservation;
 
+mod ownership;
+
 pub(super) fn observer(
     kind: AgentKind,
     expected: String,
-) -> impl Fn(&str) -> InputObservation + Send {
-    let owned = std::sync::Mutex::new(None::<String>);
-    move |screen| {
-        let observation = observe(kind, screen, &expected);
-        let Ok(mut owned) = owned.lock() else {
-            return InputObservation::Unavailable;
-        };
-        match observation {
-            InputObservation::Empty => {
-                *owned = None;
-                InputObservation::Empty
-            }
-            InputObservation::Pending => {
-                let body = input(kind, screen);
-                if owned.is_some() && *owned != body {
-                    return InputObservation::Other;
-                }
-                *owned = body;
-                InputObservation::Pending
-            }
-            other => other,
-        }
-    }
+) -> impl crate::terminal::runtime::SubmissionInspector {
+    ownership::OwnedComposer::new(kind, expected)
 }
 
 pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObservation {

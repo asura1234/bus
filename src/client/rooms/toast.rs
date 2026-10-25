@@ -126,7 +126,25 @@ impl BusUi {
             }
             self.observed_agent_notices = notices;
         }
-        let notice = self.visible_error().map(str::to_owned);
+        let notice = self.visible_error().map(str::to_owned).or_else(|| {
+            let notices = self
+                .snapshot
+                .state
+                .requests()
+                .filter(|request| Some(request.room_id) == self.room && request.group.is_none())
+                .filter_map(|request| {
+                    let notice = request.submission_notice()?;
+                    let agent = self.snapshot.state.agent(request.agent_id)?;
+                    let error = agent.actionable_error.as_deref()?;
+                    (error == notice
+                        || agent.current_request == Some(request.id)
+                            && request.submission_error.as_deref() == Some(error))
+                    .then_some(notice)
+                })
+                .collect::<Vec<_>>()
+                .join(" · ");
+            (!notices.is_empty()).then_some(notices)
+        });
         if notice == self.observed_notice {
             return;
         }

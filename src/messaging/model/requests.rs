@@ -65,6 +65,7 @@ impl BusState {
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
         request_state.phase = RequestPhase::Submitting;
+        request_state.submission_error = None;
         request_state.expected_launch_id = Some(launch_id.to_owned());
         request_state.submission_boundary = Some(callback_boundary);
         request_state.submission_status_revision = submission_status_revision;
@@ -139,9 +140,11 @@ impl BusState {
                 request_state.provider_session_id = provider_session_id;
                 request_state.provider_turn_id = provider_turn_id;
                 request_state.uncertain_outcome = false;
+                request_state.submission_error = None;
             }
             SubmissionOutcome::Uncertain { message } => {
                 request_state.uncertain_outcome = true;
+                request_state.submission_error = Some(message.clone());
                 self.agents
                     .get_mut(&agent_id)
                     .ok_or(ModelError::UnknownAgent(agent_id))?
@@ -394,7 +397,11 @@ impl BusState {
             .map(|request| (request.id, request.agent_id, request.prompt.id))
             .collect();
         for (request, agent, prompt) in unconfirmed {
-            let message = Self::unconfirmed_submission_message(prompt);
+            let message = self
+                .requests
+                .get(&request)
+                .and_then(Request::submission_notice)
+                .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
             self.set_agent_error(agent, Some(message))?;
             tracing::info!(
@@ -694,6 +701,22 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
 }
 
 impl Request {
+    /// Durable send outcome, never the agent's mutable latest error or a reply.
+    pub(crate) fn submission_notice(&self) -> Option<String> {
+        let unconfirmed = self.failure_reason.as_deref() == Some("submission_unconfirmed")
+            || self.phase == RequestPhase::Submitting
+                && self.uncertain_outcome
+                && !self.trusted_start_bound;
+        if !unconfirmed {
+            return None;
+        }
+        let guidance = BusState::unconfirmed_submission_message(self.prompt.id);
+        Some(match &self.submission_error {
+            Some(detail) => format!("{guidance}\n{detail}"),
+            None => guidance,
+        })
+    }
+
     /// A captured reply remains available at the cap across owned wake turns,
     /// including a wake whose Stop has no new text. Its original turn identity
     /// stays attached to the reply; a different session cannot inherit it.

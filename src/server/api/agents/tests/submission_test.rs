@@ -14,10 +14,15 @@ fn clock(app: &App) -> crate::terminal::runtime::SubmissionClock {
 }
 
 fn confirmation_expiry(method: &Method) -> Duration {
-    use crate::protocol::api::submission::{method_budget, WITHDRAW_GRACE};
+    use crate::protocol::api::submission::{method_budget, withdrawal_budget};
     // Provider paste delay varies on ConPTY. Keep the withdrawal reserve
     // while advancing beyond the declared confirmation window.
-    method_budget(method).unwrap() - WITHDRAW_GRACE + Duration::from_millis(100)
+    let text = match method {
+        Method::AgentPromptIfIdle(params) => params.text.as_bytes(),
+        Method::AgentPromptIfUnbound(params) => params.text.as_bytes(),
+        _ => panic!("expected guarded prompt"),
+    };
+    method_budget(method).unwrap() - withdrawal_budget(text) + Duration::from_millis(100)
 }
 
 fn provider_fixture(
@@ -140,7 +145,7 @@ async fn a_definite_withdrawal_after_the_writer_deadline_reaches_the_response() 
         |timeout| {
             if timeout >= result_delay {
                 Ok(Err(std::io::Error::other(
-                    crate::terminal::runtime::PromptNotShown,
+                    crate::terminal::runtime::PromptNotShown::NotSubmitted,
                 )))
             } else {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout)
@@ -343,18 +348,6 @@ async fn ignored_first_enter_is_verified_and_retried_without_repasting() {
     }
 }
 
-#[tokio::test]
-async fn stranded_draft_is_cleared_before_guarded_delivery_for_every_provider() {
-    for (kind, bound) in [
-        (AgentKind::Codex, true),
-        (AgentKind::Codex, false),
-        (AgentKind::Claude, true),
-        (AgentKind::Cursor, true),
-    ] {
-        stranded_draft(kind, bound).await;
-    }
-}
-
 pub(super) async fn accept_paste(
     app: &App,
     kind: AgentKind,
@@ -368,20 +361,6 @@ pub(super) async fn accept_paste(
     redraw(app, kind, text);
     assert_eq!(next_write(writes).await, Bytes::from_static(b"\r"));
     redraw(app, kind, "");
-}
-
-pub(super) async fn stranded_draft(kind: AgentKind, bound: bool) {
-    let (mut app, method, mut writes) = provider_fixture(kind, bound, "stranded draft");
-    let response = start(&mut app, method);
-    // Ink-based providers can decode a burst of control characters as one
-    // event. Send each editing key separately and allow a redraw between them.
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
-    redraw(&app, kind, "stranded draft");
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x0b"));
-    redraw(&app, kind, "");
-    accept_paste(&app, kind, "from bus", &mut writes).await;
-    let response = response.recv_timeout(WAIT).unwrap();
-    assert!(response.contains("agent_prompted"), "{kind:?}: {response}");
 }
 
 #[tokio::test]
@@ -451,6 +430,10 @@ async fn enter_never_accepted_times_out_without_repasting_or_reporting_success()
     clock(&app).advance(Duration::from_millis(250));
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
     clock(&app).advance(expiry);
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
+    redraw(&app, AgentKind::Cursor, "from bus");
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x0b"));
+    redraw(&app, AgentKind::Cursor, "");
     let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("timeout"), "{response}");
     assert!(!response.contains("agent_prompted"));
@@ -460,7 +443,7 @@ async fn enter_never_accepted_times_out_without_repasting_or_reporting_success()
 }
 
 #[tokio::test]
-async fn an_unrecognised_paste_is_cleared_and_reported_as_not_submitted() {
+async fn an_unrecognised_paste_is_preserved_without_being_retried() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
     let expiry = confirmation_expiry(&method);
     let response = start(&mut app, method);
@@ -468,21 +451,47 @@ async fn an_unrecognised_paste_is_cleared_and_reported_as_not_submitted() {
         next_write(&mut writes).await,
         Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
     );
-    // A rendering the observer cannot attribute to Bus: never press Enter on it.
     redraw(&app, AgentKind::Claude, "[Pasted text #3] from bus?");
     clock(&app).advance(expiry);
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
-    redraw(&app, AgentKind::Claude, "[Pasted text #3] from bus?");
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x0b"));
-    redraw(&app, AgentKind::Claude, "");
-    let response = response.recv_timeout(WAIT).unwrap();
-    assert!(response.contains("agent_prompt_not_shown"), "{response}");
-    assert!(!response.contains("agent_prompted"));
-    while let Ok(bytes) = writes.try_recv() {
-        assert_ne!(
-            bytes,
-            Bytes::from_static(b"\r"),
-            "never Enter an unrecognised draft"
+    let reply = response.recv_timeout(WAIT).unwrap();
+    assert!(reply.contains("draft was left"), "{reply}");
+    assert!(
+        !reply.contains("agent_prompt_not_shown"),
+        "unowned input is not safely replayable: {reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "no editing, Enter or second paste"
+    );
+}
+
+#[path = "paste_recovery_test.rs"]
+mod paste_recovery_tests;
+
+#[path = "owned_draft_cleanup_test.rs"]
+mod owned_draft_cleanup_tests;
+
+// Before this attempt pastes, even an exact text match does not prove ownership.
+pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
+    for draft in ["developer draft", "from bus"] {
+        let (mut app, method, mut writes) = provider_fixture(kind, bound, draft);
+        let response = start(&mut app, method);
+        let mut response =
+            tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+        let (reply, key) = tokio::select! {
+            result=&mut response=>(result.unwrap(),None),
+            key=writes.recv()=>{
+                clock(&app).advance(Duration::from_secs(20));
+                (response.await.unwrap(),key)
+            }
+        };
+        assert_eq!(key, None, "pre-paste cleanup touched unowned input");
+        assert!(reply.contains("agent_prompt_not_shown"), "{reply}");
+        assert!(reply.contains("Existing input was preserved"), "{reply}");
+        assert!(reply.contains("before retrying"), "{reply}");
+        assert!(
+            writes.try_recv().is_err(),
+            "no clear key, new paste or Enter"
         );
     }
 }

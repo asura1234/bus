@@ -211,7 +211,7 @@ struct SidebarAgent<'a> {
     agent: &'a RoomAgent,
     in_master: bool,
     paths: Vec<String>,
-    startup_failure: Vec<String>,
+    error_lines: Vec<String>,
     height: usize,
 }
 
@@ -381,7 +381,7 @@ impl BusUi {
                         agent,
                         in_master: true,
                         paths: Vec::new(),
-                        startup_failure: Vec::new(),
+                        error_lines: Vec::new(),
                         height: MASTER_AGENT_ROWS,
                     };
                 }
@@ -390,12 +390,7 @@ impl BusUi {
                 } else {
                     Vec::new()
                 };
-                let startup_failure = if agent.details_disclosed
-                    && agent
-                        .startup
-                        .as_ref()
-                        .is_some_and(|startup| startup.reported)
-                {
+                let error_lines = if agent.details_disclosed {
                     agent
                         .actionable_error
                         .as_deref()
@@ -407,12 +402,12 @@ impl BusUi {
                 let height = 3
                     + usize::from(agent.details_disclosed && agent.branch.is_some())
                     + paths.len()
-                    + startup_failure.len();
+                    + error_lines.len();
                 SidebarAgent {
                     agent,
                     in_master: false,
                     paths,
-                    startup_failure,
+                    error_lines,
                     height,
                 }
             })
@@ -539,7 +534,7 @@ impl BusUi {
             agent,
             in_master,
             paths,
-            startup_failure,
+            error_lines,
             height,
         } in agents
         {
@@ -590,7 +585,7 @@ impl BusUi {
                     view.row(viewport.at(1, y, sw), line, None, false, true);
                     y += 1;
                 }
-                for line in startup_failure {
+                for line in error_lines {
                     let rect = viewport.at(1, y, sw);
                     view.row(rect, line, None, false, false);
                     view.color_last_row(rect, BLOCKED_BRIGHT);
