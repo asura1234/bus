@@ -31,6 +31,65 @@ def repository(root):
     subprocess.run(("git", "commit", "-qam", "head"), cwd=root, check=True)
     return base
 
+
+def process_running(pid):
+    result = subprocess.run(("ps", "-p", str(pid), "-o", "stat="),
+                            capture_output=True, text=True)
+    if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+        return False
+    result.check_returncode()
+    states = result.stdout.split()
+    if not states:
+        raise RuntimeError(f"cannot inspect child {pid}")
+    # kill(pid, 0) also succeeds for an exited child awaiting its reaper.
+    return any(not state.startswith("Z") for state in states)
+
+
+def kill_groups(groups):
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            # macOS returns EPERM for a group containing only zombies. Do not
+            # hide a permission failure if the group still has a live member.
+            result = subprocess.run(("ps", "-axo", "pgid=,stat="),
+                                    capture_output=True, text=True, check=True)
+            if any(int(pgid) == group and not state.startswith("Z")
+                   for pgid, state in (line.split() for line in result.stdout.splitlines())):
+                raise
+
+
+@unittest.skipUnless(os.name == "posix", "POSIX signal and process-group contract")
+class InterruptProcessStateTest(unittest.TestCase):
+    def test_exited_unreaped_child_is_stopped_and_cleanup_is_safe(self):
+        child = subprocess.Popen((sys.executable, "-c", "pass"),
+                                 stdout=subprocess.PIPE, start_new_session=True)
+        try:
+            # EOF observes exit without poll()/wait(), retaining a real zombie.
+            child.stdout.read()
+            with self.subTest("state"):
+                self.assertFalse(process_running(child.pid))
+            with self.subTest("cleanup"):
+                kill_groups({child.pid})
+        finally:
+            child.wait(timeout=5)
+            child.stdout.close()
+
+    def test_live_child_is_running_and_permission_failure_is_not_hidden(self):
+        child = subprocess.Popen((sys.executable, "-c", "import time;time.sleep(60)"),
+                                 start_new_session=True)
+        try:
+            self.assertTrue(process_running(child.pid))
+            with patch.object(os, "killpg", side_effect=PermissionError("denied")):
+                with self.assertRaises(PermissionError):
+                    kill_groups({child.pid})
+        finally:
+            child.kill()
+            child.wait(timeout=5)
+
+
 class ProfileLifecycleTest(unittest.TestCase):
     @contextlib.contextmanager
     def fixture(self):
@@ -288,12 +347,7 @@ class ProfileLifecycleTest(unittest.TestCase):
                 proc.communicate(timeout=10)
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertFalse(list((root / "target").rglob("*.profraw")))
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(identity["pid"], 0)
+                self.assertFalse(process_running(identity["pid"]), "instrumented child still running")
             finally:
-                for group in groups:
-                    try:
-                        os.killpg(group, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                kill_groups(groups)
                 proc.wait(timeout=5)
