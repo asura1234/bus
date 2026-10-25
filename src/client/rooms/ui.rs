@@ -287,8 +287,12 @@ impl BusUi {
         self.room_sound_field(self.sound_settings_targets().len())
     }
 
-    pub(super) fn disk_warning_field(&self) -> usize {
+    pub(super) fn idle_agents_field(&self) -> usize {
         self.compaction_field() + 1
+    }
+
+    pub(super) fn disk_warning_field(&self) -> usize {
+        self.idle_agents_field() + 1
     }
 
     pub(super) fn disk_critical_field(&self) -> usize {

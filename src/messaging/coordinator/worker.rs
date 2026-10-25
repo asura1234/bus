@@ -17,6 +17,7 @@ mod control_reads;
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 
 pub(super) struct Worker {
+    pub(super) idle_alerted_rooms: BTreeSet<super::RoomId>, // In-memory idle episodes.
     pub(super) disk_space: super::disk_space::DiskSpace,
     pub(super) attention: super::attention::Runtime,
     pub(super) state: BusState,
@@ -135,6 +136,7 @@ impl Worker {
         }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
+            idle_alerted_rooms: BTreeSet::new(),
             disk_space: super::disk_space::DiskSpace::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
