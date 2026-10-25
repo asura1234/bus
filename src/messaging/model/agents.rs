@@ -61,6 +61,7 @@ impl BusState {
                 automatic_dialog_answer: None,
                 actionable_error: None,
                 update_error: None,
+                working_directory_error: None,
                 missing_binary: None,
                 current_request: None,
                 hook_setup_confirmed: false,
@@ -342,6 +343,27 @@ impl BusState {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Directory warnings never replace another error, and recovering the
+    /// directory never clears an error that arrived after this warning.
+    pub(crate) fn observe_working_directory_error(
+        &mut self,
+        id: AgentId,
+        error: Option<String>,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        let previous = std::mem::replace(&mut agent.working_directory_error, error);
+        if agent.actionable_error.is_none() || agent.actionable_error == previous {
+            agent.actionable_error = agent.working_directory_error.clone();
+        }
+        if previous.is_none() && agent.working_directory_error.is_some() {
+            agent.details_disclosed = true;
         }
         Ok(())
     }
