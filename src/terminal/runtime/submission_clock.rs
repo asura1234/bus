@@ -168,7 +168,7 @@ impl SubmissionClock {
 
 #[cfg(test)]
 pub(super) struct WriteCompletionFault {
-    kind: std::io::ErrorKind,
+    kind: Option<std::io::ErrorKind>,
     release: std::sync::mpsc::Receiver<()>,
 }
 
@@ -177,10 +177,13 @@ impl WriteCompletionFault {
     pub(super) fn complete(self, result: std::io::Result<()>) -> std::io::Result<()> {
         result?;
         self.release.recv_timeout(NATIVE_TEST_TIMEOUT).unwrap();
-        Err(std::io::Error::new(
-            self.kind,
-            "injected write acknowledgement failure",
-        ))
+        match self.kind {
+            Some(kind) => Err(std::io::Error::new(
+                kind,
+                "injected write acknowledgement failure",
+            )),
+            None => Ok(()),
+        }
     }
 }
 
@@ -189,6 +192,18 @@ impl SubmissionClock {
     pub(crate) fn fail_next_write_completion(
         &self,
         kind: std::io::ErrorKind,
+    ) -> std::sync::mpsc::Sender<()> {
+        self.control_next_write_completion(Some(kind))
+    }
+
+    /// Let a fake provider apply a key and advance time before acknowledging it.
+    pub(crate) fn hold_next_write_completion(&self) -> std::sync::mpsc::Sender<()> {
+        self.control_next_write_completion(None)
+    }
+
+    fn control_next_write_completion(
+        &self,
+        kind: Option<std::io::ErrorKind>,
     ) -> std::sync::mpsc::Sender<()> {
         let (release, receiver) = std::sync::mpsc::channel();
         let mut state = self.state.0.lock().unwrap();

@@ -2,11 +2,27 @@ use super::*;
 
 async fn write_or_done<T: std::fmt::Debug>(
     writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
-    response: &mut tokio::task::JoinHandle<T>,
+    response: &mut (
+        impl std::future::Future<Output = Result<T, tokio::task::JoinError>> + Unpin,
+        Option<T>,
+    ),
 ) -> Result<Bytes, T> {
-    tokio::select! {
-        bytes = next_write(writes) => Ok(bytes),
-        result = response => Err(result.unwrap()),
+    let (response, completed) = response;
+    if completed.is_none() {
+        tokio::select! {
+            bytes = next_write(writes) => return Ok(bytes),
+            result = response => *completed = Some(result.unwrap()),
+        }
+    }
+    // A key may have been queued before completion while the fake provider was
+    // descheduled. Apply every such input event before returning the reply.
+    // Keep the completed result: a JoinHandle must never be polled twice.
+    match writes.try_recv() {
+        Ok(bytes) => Ok(bytes),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Err(completed.take().unwrap()),
+        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+            panic!("native input channel closed")
+        }
     }
 }
 
@@ -18,7 +34,10 @@ async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
     };
     params.text = "header\nmiddle words\nlast".into();
     let response = start(&mut app, Method::AgentPromptIfIdle(params));
-    let mut response = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+    let mut response = (
+        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        None,
+    );
     assert_eq!(
         next_write(&mut writes).await,
         Bytes::from_static(b"\x1b[200~header\nmiddle words\nlast\x1b[201~")
@@ -42,7 +61,9 @@ async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
             Err(reply) => reply,
             Ok(key) => {
                 clock(&app).advance(Duration::from_secs(2));
-                let _ = response.await;
+                if response.1.is_none() {
+                    let _ = response.0.await;
+                }
                 panic!("cleanup sent {key:?} after a developer edit");
             }
         };
@@ -73,7 +94,7 @@ async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
         );
         redraw(&app, AgentKind::Codex, remaining);
     }
-    let reply = response.await.unwrap();
+    let reply = response.0.await.unwrap();
     assert!(reply.contains("remaining draft was cleared"), "{reply}");
     assert!(
         !reply.contains("agent_prompted"),
@@ -226,12 +247,16 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
     let render = |text: &str| text.trim_end_matches('\n').replace('\n', "\r\n  ");
     let response = start(&mut app, method);
     let started = clock(&app).now();
-    let mut response = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+    let mut response = (
+        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        None,
+    );
     let paste = next_write(&mut writes).await;
     assert!(paste.starts_with(b"\x1b[200~item 01"));
     redraw(&app, AgentKind::Codex, &render(&text));
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
     clock(&app).wait_for_enters(1);
+    let mut acknowledge_key = clock(&app).hold_next_write_completion();
     clock(&app).advance(expiry);
     let withdrawal_started = clock(&app).now();
     // Independent line-local fake editor; cursor starts at the end of paste.
@@ -273,9 +298,18 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
             b"\x01" | b"\x0b" | b"\x15" => {}
             other => panic!("unexpected key {other:?}; never paste again or send late Enter"),
         }
-        redraw(&app, AgentKind::Codex, &render(&text));
+        // An ignored key produces no provider output. A synthetic redraw would
+        // add a second clock wake and let the writer run ahead of this editor.
+        if !ignore_keys {
+            redraw(&app, AgentKind::Codex, &render(&text));
+        }
         // Production spaces editing keys 25ms apart (clear_step sleep).
+        // Hold the write acknowledgement until the fake editor has applied it
+        // and advanced time. Redraw wakes alone must not queue the next key.
         clock(&app).advance(Duration::from_millis(25));
+        let next_acknowledgement = clock(&app).hold_next_write_completion();
+        acknowledge_key.send(()).unwrap();
+        acknowledge_key = next_acknowledgement;
     };
     if ignore_keys {
         assert!(
@@ -367,4 +401,29 @@ fn native_method_budget_reserves_line_edit_cost_for_long_drafts() {
         budgets.windows(2).all(|pair| pair[0] == pair[1]),
         "CRLF is one line separator: {budgets:?}"
     );
+}
+
+/// Force the consumer to be descheduled until a write and completion are ready.
+/// The completion future enqueues the key while select! is polling it, so even
+/// a biased select that checks writes first cannot close this ordering gap.
+#[tokio::test]
+async fn a_write_queued_before_completion_is_applied_before_the_reply() {
+    let (sender, mut writes) = tokio::sync::mpsc::channel(1);
+    let mut response = (
+        std::future::poll_fn(move |_| {
+            sender.try_send(Bytes::from_static(b"\x01")).unwrap();
+            std::task::Poll::Ready(Ok("complete"))
+        }),
+        None,
+    );
+    assert_eq!(
+        write_or_done(&mut writes, &mut response).await,
+        Ok(Bytes::from_static(b"\x01")),
+        "apply the key queued before completion, even when completion wins select!"
+    );
+    assert_eq!(
+        write_or_done(&mut writes, &mut response).await,
+        Err("complete")
+    );
+    assert!(writes.try_recv().is_err(), "no unprocessed writes");
 }
