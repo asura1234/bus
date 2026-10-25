@@ -254,6 +254,7 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
     redraw(&app, AgentKind::Codex, &render(&text));
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
     clock(&app).wait_for_enters(1);
+    let mut acknowledge_key = clock(&app).hold_next_write_completion();
     clock(&app).advance(expiry);
     let withdrawal_started = clock(&app).now();
     // Independent line-local fake editor; cursor starts at the end of paste.
@@ -301,7 +302,12 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
             redraw(&app, AgentKind::Codex, &render(&text));
         }
         // Production spaces editing keys 25ms apart (clear_step sleep).
+        // Hold the write acknowledgement until the fake editor has applied it
+        // and advanced time. Redraw wakes alone must not queue the next key.
         clock(&app).advance(Duration::from_millis(25));
+        let next_acknowledgement = clock(&app).hold_next_write_completion();
+        acknowledge_key.send(()).unwrap();
+        acknowledge_key = next_acknowledgement;
     };
     if ignore_keys {
         assert!(
