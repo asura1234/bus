@@ -61,7 +61,9 @@ async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
             Err(reply) => reply,
             Ok(key) => {
                 clock(&app).advance(Duration::from_secs(2));
-                let _ = response.0.await;
+                if response.1.is_none() {
+                    let _ = response.0.await;
+                }
                 panic!("cleanup sent {key:?} after a developer edit");
             }
         };
