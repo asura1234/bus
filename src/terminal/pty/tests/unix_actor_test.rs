@@ -144,7 +144,7 @@ fn actor_delays_enter_from_completed_prompt_write() {
     });
 
     let completion = handle
-        .queue_user_input_submission(text, Bytes::from_static(b"\r"), delay)
+        .queue_user_input_submission(text, Bytes::from_static(b"\r"), delay, None)
         .expect("submission queues");
     handle
         .try_write_user_input(Bytes::from_static(b"user"))
@@ -163,6 +163,7 @@ fn actor_delays_enter_from_completed_prompt_write() {
         Bytes::from_static(b"prompt"),
         Bytes::from_static(b"\r"),
         Duration::ZERO,
+        None,
     ) {
         Ok(completion) => completion
             .recv()
@@ -186,7 +187,7 @@ fn actor_completes_empty_submission_parts() {
         .expect("peer timeout");
 
     let completion = handle
-        .queue_user_input_submission(Bytes::new(), Bytes::from_static(b"\r"), Duration::ZERO)
+        .queue_user_input_submission(Bytes::new(), Bytes::from_static(b"\r"), Duration::ZERO, None)
         .expect("empty prompt submission queues");
     let mut enter = [0; 1];
     peer.read_exact(&mut enter)
@@ -202,6 +203,7 @@ fn actor_completes_empty_submission_parts() {
             Bytes::from_static(b"prompt"),
             Bytes::new(),
             Duration::from_millis(40),
+            None,
         )
         .expect("empty enter submission queues");
     let mut prompt = [0; 6];
@@ -223,6 +225,7 @@ fn actor_reports_peer_closure_during_submission_delay() {
             Bytes::from_static(b"prompt"),
             Bytes::from_static(b"\r"),
             Duration::from_secs(1),
+            None,
         )
         .expect("submission queues");
     let mut prompt = [0; 6];
@@ -244,6 +247,7 @@ fn actor_fails_buffered_submissions_on_exit() {
             Bytes::from_static(b"first"),
             Bytes::from_static(b"\r"),
             Duration::from_secs(1),
+            None,
         )
         .expect("first submission queues");
     let mut prompt = [0; 5];
@@ -253,6 +257,7 @@ fn actor_fails_buffered_submissions_on_exit() {
             Bytes::from_static(b"second"),
             Bytes::from_static(b"\r"),
             Duration::ZERO,
+            None,
         )
         .expect("second submission queues");
 
@@ -305,6 +310,7 @@ fn actor_rejects_submission_after_io_loop_exits() {
             Bytes::from_static(b"prompt"),
             Bytes::from_static(b"\r"),
             Duration::ZERO,
+            None,
         )
         .expect_err("closed actor rejects submission");
 
@@ -375,7 +381,7 @@ fn actor_reads_output_while_input_is_backpressured() {
 
     let marker = Bytes::from_static(b"queued-input");
     let completion = handle
-        .queue_user_input_submission(marker.clone(), Bytes::from_static(b"\r"), Duration::ZERO)
+        .queue_user_input_submission(marker.clone(), Bytes::from_static(b"\r"), Duration::ZERO, None)
         .expect("submission accepted");
 
     const OUTPUT_LEN: usize = 128 * 1024;
@@ -603,6 +609,7 @@ fn queued_input_runs_promptly_after_text_only_submission_delay() {
             Bytes::from_static(b"prompt"),
             Bytes::new(),
             Duration::from_millis(150),
+            None,
         )
         .expect("text-only submission accepted");
     let mut prompt = [0; 6];
@@ -627,3 +634,5 @@ fn queued_input_runs_promptly_after_text_only_submission_delay() {
     received.expect("queued input must not wait for the one-second idle poll after completion");
     assert_eq!(&user, b"user");
 }
+
+include!("input_deadline_test.rs");

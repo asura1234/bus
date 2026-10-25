@@ -34,6 +34,7 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let expired = Instant::now() - Duration::from_secs(1);
     let submission = ObservedSubmission {
+        scope: Default::default(),
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
@@ -62,6 +63,7 @@ async fn startup_controls_between_initial_observation_and_paste_receive_no_messa
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
     let submission = ObservedSubmission {
+        scope: Default::default(),
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
@@ -104,6 +106,7 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = calls.clone();
     let submission = ObservedSubmission {
+        scope: Default::default(),
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
@@ -229,3 +232,7 @@ mod diagnostics_tests;
 
 #[path = "submission_write_failure_test.rs"]
 mod write_failure_tests;
+
+#[cfg(unix)]
+#[path = "submission_backpressure_test.rs"]
+mod backpressure_tests;

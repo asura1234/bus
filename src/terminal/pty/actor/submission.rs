@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 use super::{
     ActiveSubmission, ActorState, PendingWrite, PtyIoActorRunner, PtyIoDataCommand,
-    SubmissionBoundary, SubmissionPhase, ACTOR_IDLE_POLL_MS,
+    SubmissionBoundary, SubmissionPhase, WritePermit, ACTOR_IDLE_POLL_MS,
 };
 
 impl PtyIoActorRunner {
@@ -28,9 +28,21 @@ impl PtyIoActorRunner {
                 text,
                 enter,
                 delay,
+                mut permit,
                 reply,
             } => {
                 if self.state == ActorState::Running {
+                    let committed_deadline = if !text.is_empty() && !enter.is_empty() {
+                        match reserve_enter_delay(&mut permit, delay) {
+                            Ok(deadline) => deadline,
+                            Err(error) => {
+                                let _ = reply.send(Err(error));
+                                return false;
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let phase = if text.is_empty() {
                         SubmissionPhase::WaitingUntil(Instant::now() + delay)
                     } else {
@@ -38,6 +50,8 @@ impl PtyIoActorRunner {
                         SubmissionPhase::WritingText
                     };
                     self.active_submission = Some(ActiveSubmission {
+                        permit,
+                        committed_deadline,
                         enter,
                         delay,
                         phase,
@@ -52,6 +66,18 @@ impl PtyIoActorRunner {
             }
         }
         false
+    }
+
+    pub(super) fn commit_submission_text(&mut self) {
+        if let Some(submission) = self
+            .active_submission
+            .as_mut()
+            .filter(|s| !s.enter.is_empty())
+        {
+            // Commit text + Enter, but never beyond the bounded Enter-delay
+            // allowance. Tracked and API-scope cancellation remain write barriers.
+            submission.permit.deadline = submission.committed_deadline;
+        }
     }
 
     pub(super) fn complete_submission_boundary(&mut self, boundary: SubmissionBoundary) {
@@ -74,6 +100,7 @@ impl PtyIoActorRunner {
     }
 
     pub(super) fn schedule_submission_enter(&mut self) {
+        self.expire_submission();
         let Some(ActiveSubmission {
             enter,
             phase: SubmissionPhase::WaitingUntil(deadline),
@@ -101,22 +128,52 @@ impl PtyIoActorRunner {
     }
 
     pub(super) fn poll_timeout_ms(&self) -> i32 {
-        let Some(ActiveSubmission {
-            phase: SubmissionPhase::WaitingUntil(deadline),
-            ..
-        }) = self.active_submission.as_ref()
-        else {
+        let Some(submission) = self.active_submission.as_ref() else {
             return ACTOR_IDLE_POLL_MS;
         };
-        deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .max(1)
-            .min(ACTOR_IDLE_POLL_MS as u128) as i32
+        let enter_at = match submission.phase {
+            SubmissionPhase::WaitingUntil(at) => Some(at),
+            _ => None,
+        };
+        enter_at
+            .into_iter()
+            .chain(submission.permit.deadline)
+            .min()
+            .map(|deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .max(1)
+                    .min(ACTOR_IDLE_POLL_MS as u128) as i32
+            })
+            .unwrap_or(ACTOR_IDLE_POLL_MS)
+    }
+
+    pub(super) fn expire_submission(&mut self) {
+        let expired = self
+            .active_submission
+            .as_ref()
+            .and_then(|submission| submission.permit.lock().err());
+        if let Some(error) = expired {
+            self.fail_active_submission(error);
+        }
     }
 
     pub(super) fn fail_active_submission(&mut self, err: std::io::Error) {
         if let Some(submission) = self.active_submission.take() {
+            if self
+                .pending_writes
+                .front()
+                .is_some_and(|write| write.boundary.is_some())
+            {
+                self.current_write_offset = 0;
+            }
+            self.pending_writes.retain(|write| write.boundary.is_none());
+            let err = if submission.committed_deadline.is_some() {
+                submission.permit.with_draft_guidance(err)
+            } else {
+                err
+            };
             let _ = submission.reply.send(Err(err));
         }
     }
@@ -137,4 +194,27 @@ fn input_submission_closed_error() -> std::io::Error {
         std::io::ErrorKind::BrokenPipe,
         "PTY actor closed during input submission",
     )
+}
+
+fn reserve_enter_delay(
+    permit: &mut WritePermit,
+    delay: std::time::Duration,
+) -> std::io::Result<Option<Instant>> {
+    let Some(deadline) = permit.deadline else {
+        return Ok(None);
+    };
+    if deadline.saturating_duration_since(Instant::now()) <= delay {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "PTY input submission cannot fit its Enter delay",
+        ));
+    }
+    let committed_deadline = deadline.checked_add(delay).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "PTY input submission deadline overflow",
+        )
+    })?;
+    permit.deadline = deadline.checked_sub(delay);
+    Ok(Some(committed_deadline))
 }

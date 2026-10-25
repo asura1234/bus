@@ -3,6 +3,7 @@ use super::{agent_not_found, agent_not_ready};
 use crate::protocol::api::schema::{AgentPromptParams, ResponseResult};
 use crate::server::api::errors::{encode_error, encode_error_body, encode_success};
 use crate::server::app::App;
+use crate::terminal::pty::actor::InputCompletion;
 use bytes::Bytes;
 use std::time::Duration;
 
@@ -248,14 +249,23 @@ impl App {
                     let now = std::time::Instant::now();
                     #[cfg(test)]
                     let now = test_clock.as_ref().map_or(now, |clock| clock.now());
-                    let response =
-                        complete_agent_prompt(id, agent, hard_deadline, started, now, |timeout| {
-                            #[cfg(test)]
-                            let timeout = test_clock
-                                .as_ref()
-                                .map_or(timeout, |clock| clock.wait_timeout(timeout));
-                            completion.recv_timeout(timeout)
-                        });
+                    #[cfg(test)]
+                    let map_timeout = |timeout| {
+                        test_clock
+                            .as_ref()
+                            .map_or(timeout, |clock| clock.wait_timeout(timeout))
+                    };
+                    #[cfg(not(test))]
+                    let map_timeout = std::convert::identity;
+                    let response = complete_agent_prompt_submission(
+                        id,
+                        agent,
+                        hard_deadline,
+                        started,
+                        now,
+                        completion,
+                        map_timeout,
+                    );
                     let _ = respond_to.send(response);
                 });
             }
@@ -277,7 +287,7 @@ impl App {
         (
             String,
             crate::protocol::api::schema::AgentInfo,
-            std::sync::mpsc::Receiver<std::io::Result<()>>,
+            InputCompletion,
         ),
         String,
     > {
@@ -309,7 +319,7 @@ impl App {
         (
             String,
             crate::protocol::api::schema::AgentInfo,
-            std::sync::mpsc::Receiver<std::io::Result<()>>,
+            InputCompletion,
         ),
         String,
     > {
@@ -342,7 +352,7 @@ impl App {
         (
             String,
             crate::protocol::api::schema::AgentInfo,
-            std::sync::mpsc::Receiver<std::io::Result<()>>,
+            InputCompletion,
         ),
         String,
     > {
@@ -449,7 +459,7 @@ fn queue_prompt_input(
     observe: bool,
     delay: Duration,
     deadline: Option<std::time::Instant>,
-) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+) -> std::io::Result<InputCompletion> {
     use crate::agents::AgentKind;
     let (encoded, enter) =
         crate::server::api::input_encoding::encode_api_submission_parts(runtime, &text);
@@ -479,6 +489,23 @@ fn queue_prompt_input(
         deadline,
         Box::new(composer::observer(kind, text)),
     )
+}
+
+/// Keep cancellation owned until the response has been formatted, including
+/// the bounded extra Enter delay of an admitted combined submission.
+pub(super) fn complete_agent_prompt_submission(
+    id: String,
+    agent: crate::protocol::api::schema::AgentInfo,
+    hard_deadline: std::time::Instant,
+    started: std::time::Instant,
+    now: std::time::Instant,
+    completion: InputCompletion,
+    map_timeout: impl FnOnce(Duration) -> Duration,
+) -> String {
+    let completion_deadline = hard_deadline + completion.enter_delay_allowance();
+    complete_agent_prompt(id, agent, completion_deadline, started, now, |timeout| {
+        Ok(completion.wait_for_api(map_timeout(timeout)))
+    })
 }
 
 // The waiter is injectable so boundary races use a virtual response timeline.

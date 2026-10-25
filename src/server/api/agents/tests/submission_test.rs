@@ -495,3 +495,239 @@ pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
         );
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn legacy_api_timeout_cancels_committed_input_before_backpressure_lifts() {
+    use crate::terminal::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyReadResult};
+    use std::{
+        io::Read,
+        os::{fd::AsRawFd, unix::net::UnixStream},
+        time::Instant,
+    };
+
+    let (app, _, _) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let agent = app.agent_info(0, pane).unwrap();
+    let (socket, mut peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let actor = PtyIoActor::spawn(PtyIoActorConfig {
+        pane_id: 1,
+        master_fd: socket.into(),
+        initially_quiesced: false,
+        on_read: Box::new(|_| PtyReadResult::empty()),
+    })
+    .unwrap();
+    let text_len = 4 * 1024 * 1024;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(1);
+    let completion = actor
+        .queue_user_input_submission(
+            Bytes::from(vec![b'x'; text_len]),
+            Bytes::from_static(b"\r"),
+            Duration::from_millis(50),
+            Some(deadline),
+        )
+        .unwrap()
+        .into_receiver();
+    // Commit the real actor's first text byte, then stop draining its socket.
+    let mut first = [0; 1];
+    peer.read_exact(&mut first).unwrap();
+    assert_eq!(first, [b'x']);
+    let response = crate::server::api::agents::prompt::complete_agent_prompt(
+        "backpressured_legacy".into(),
+        agent,
+        deadline,
+        started,
+        Instant::now(),
+        move |timeout| completion.recv_timeout(timeout),
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(response["error"]["code"], "timeout");
+
+    // Separate bytes already in the kernel at the response boundary from any
+    // later actor writes: the pre-response prefix itself cannot be retracted.
+    let mut buffered: libc::c_int = 0;
+    assert_eq!(
+        unsafe { libc::ioctl(peer.as_raw_fd(), libc::FIONREAD, &mut buffered) },
+        0
+    );
+    assert!(buffered > 0 && (buffered as usize) < text_len - 1);
+    actor
+        .try_write_user_input(Bytes::from_static(b"after"))
+        .unwrap();
+    let mut prefix = vec![0; buffered as usize];
+    peer.read_exact(&mut prefix).unwrap();
+    assert!(prefix.iter().all(|byte| *byte == b'x'));
+    let mut after_response = Vec::new();
+    let read_result = loop {
+        if after_response.ends_with(b"after") {
+            break Ok(());
+        }
+        let mut chunk = [0; 8192];
+        match peer.read(&mut chunk) {
+            Ok(0) => break Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)),
+            Ok(n) => after_response.extend_from_slice(&chunk[..n]),
+            Err(error) => break Err(error),
+        }
+        if after_response.len() > text_len + 6 {
+            break Err(std::io::Error::other("unexpected actor output"));
+        }
+    };
+    actor.shutdown();
+    read_result.expect("actor must resume and flush the following input marker");
+    let late_text = after_response.iter().filter(|byte| **byte == b'x').count();
+    let late_enters = after_response.iter().filter(|byte| **byte == b'\r').count();
+    assert_eq!(
+        (late_text, late_enters),
+        (0, 0),
+        "submission bytes reached the PTY after API timeout; response={response}"
+    );
+    assert_eq!(after_response, b"after");
+    let guidance = response["error"]["message"].as_str().unwrap();
+    assert!(
+        guidance.contains("partial")
+            && guidance.contains("unsubmitted")
+            && guidance.contains("draft")
+            && guidance.contains("before resending"),
+        "partial unsubmitted draft needs actionable guidance: {guidance}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn api_waits_for_committed_enter_within_its_delay_allowance() {
+    use crate::terminal::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyReadResult};
+    use std::{io::Read, os::unix::net::UnixStream, time::Instant};
+    let (app, _, _) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let agent = app.agent_info(0, pane).unwrap();
+    let (socket, mut peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let actor = PtyIoActor::spawn(PtyIoActorConfig {
+        pane_id: 1,
+        master_fd: socket.into(),
+        initially_quiesced: false,
+        on_read: Box::new(|_| PtyReadResult::empty()),
+    })
+    .unwrap();
+    let text_len = 4 * 1024 * 1024;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(1);
+    let delay = crate::protocol::api::submission::SUBMIT_DELAY;
+    let completion = actor
+        .queue_user_input_submission(
+            Bytes::from(vec![b'x'; text_len]),
+            Bytes::from_static(b"\r"),
+            delay,
+            Some(deadline),
+        )
+        .unwrap();
+    let mut first = [0; 1];
+    peer.read_exact(&mut first).unwrap();
+    assert_eq!(first, [b'x']);
+    let reader = std::thread::spawn(move || {
+        // Text starts in time, but pressure lifts after its admission reserve.
+        // Enter then lands after the old API response bound, within the allowance.
+        std::thread::sleep((deadline - delay / 2).saturating_duration_since(Instant::now()));
+        let mut received = vec![0; text_len + 1];
+        received[0] = first[0];
+        let read = peer.read_exact(&mut received[1..]);
+        (read, received)
+    });
+    let response = crate::server::api::agents::prompt::complete_agent_prompt_submission(
+        "committed_enter".into(),
+        agent,
+        deadline,
+        started,
+        Instant::now(),
+        completion,
+        std::convert::identity,
+    );
+    actor.shutdown();
+    let (read, received) = reader.join().unwrap();
+    assert!(
+        response.contains("agent_prompted"),
+        "normal committed delivery timed out: {response}"
+    );
+    read.unwrap();
+    assert!(received[..text_len].iter().all(|byte| *byte == b'x'));
+    assert_eq!(received[text_len], b'\r');
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn api_timeout_revokes_future_observed_scope_keys() {
+    use crate::terminal::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyReadResult};
+    use std::{io::Read, os::unix::net::UnixStream, time::Instant};
+    let (app, _, _) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let agent = app.agent_info(0, pane).unwrap();
+    let (socket, mut peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let actor = PtyIoActor::spawn(PtyIoActorConfig {
+        pane_id: 1,
+        master_fd: socket.into(),
+        initially_quiesced: false,
+        on_read: Box::new(|_| PtyReadResult::empty()),
+    })
+    .unwrap();
+    let scope = actor.input_scope();
+    let paste = actor
+        .queue_user_input_submission_scoped(
+            Bytes::from_static(b"owned"),
+            Bytes::new(),
+            Duration::ZERO,
+            None,
+            &scope,
+        )
+        .unwrap();
+    let mut draft = [0; 5];
+    peer.read_exact(&mut draft).unwrap();
+    assert_eq!(&draft, b"owned");
+    paste.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    // Model an observer still waiting to finish after its successful paste.
+    let (_pending, pending_rx) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    let response = crate::server::api::agents::prompt::complete_agent_prompt_submission(
+        "observed_scope".into(),
+        agent,
+        started,
+        started,
+        started,
+        scope.completion(pending_rx),
+        std::convert::identity,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(response["error"]["code"], "timeout");
+    let late_key = actor
+        .queue_user_input_submission_scoped(
+            Bytes::from_static(b"\x01"),
+            Bytes::new(),
+            Duration::ZERO,
+            None,
+            &scope,
+        )
+        .unwrap();
+    let error = late_key
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    actor
+        .try_write_user_input(Bytes::from_static(b"after"))
+        .unwrap();
+    let mut following = [0; 5];
+    let read = peer.read_exact(&mut following);
+    actor.shutdown();
+    read.unwrap();
+    assert_eq!(
+        &following, b"after",
+        "an observed key escaped after API timeout"
+    );
+    let guidance = response["error"]["message"].as_str().unwrap();
+    assert!(
+        guidance.contains("draft") && guidance.contains("before resending"),
+        "{guidance}"
+    );
+}
