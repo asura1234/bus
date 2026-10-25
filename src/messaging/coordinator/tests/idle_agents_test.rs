@@ -455,3 +455,26 @@ fn any_status_change_restarts_the_idle_timer() {
     assert!(alerts(&r.worker, r.room).is_empty());
     cleanup(r);
 }
+
+#[test]
+fn an_unavailable_flicker_of_still_idle_workers_does_not_repeat_the_reminder() {
+    let mut r = setup(true, 2);
+    limit(&mut r.worker, 1);
+    idle(&mut r.worker, &r.workers);
+    refresh(&mut r.worker);
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
+    for status in [RuntimeStatus::Unavailable, RuntimeStatus::Launching] {
+        observe(&mut r.worker, &r.workers, status, 0);
+        refresh(&mut r.worker);
+        observe(&mut r.worker, &r.workers, RuntimeStatus::Idle, 0);
+        refresh(&mut r.worker);
+        idle(&mut r.worker, &r.workers);
+        refresh(&mut r.worker);
+        assert_eq!(
+            alerts(&r.worker, r.room).len(),
+            1,
+            "workers idle throughout are the same episode"
+        );
+    }
+    cleanup(r);
+}

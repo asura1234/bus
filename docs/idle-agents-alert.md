@@ -7,7 +7,7 @@ session and on the next coordinator tick in other sessions.
 
 A worker counts after 60 continuous seconds shown Idle, with no current or
 queued request. Agents with a dialog, pending deletion, or an unknown/launching
-status do not count. The orchestrator itself never counts.
+status do not count toward the first reminder. The orchestrator itself never counts.
 
 When a work room has **more than** the limit, Bus sends one Bus-authored notice
 only to that room's bound orchestrator. It names the room, count, limit and idle
@@ -18,7 +18,10 @@ require pane polling even when they have no work.
 The room stays quiet while the qualified count remains above the limit. Once
 it falls to the limit or below, the next crossing sends another notice. Raising
 the limit to the current count rearms it; lowering the limit while already over
-does not repeat the reminder. Rooms track independent episodes in memory only;
+does not repeat the reminder. For rearming, Idle workers of any age and workers
+temporarily Unavailable or Launching still hold the episode open, as in the
+original alert: losing a status reading is not evidence of new work. Rooms
+track independent episodes in memory only;
 restarting Bus starts fresh episodes after workers qualify as idle again.
 
 A room without an eligible bound orchestrator stays quiet. If one is later

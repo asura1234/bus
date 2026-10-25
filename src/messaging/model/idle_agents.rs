@@ -23,12 +23,16 @@ impl BusState {
         alerted.retain(|room| rooms.contains(room));
         let mut changed = false;
         for room in rooms {
-            let idle = self.idle_workers(room, now_ms);
-            if idle.len() <= limit as usize {
-                alerted.remove(&room);
+            if alerted.contains(&room) {
+                // A lost status or a reset idle clock is not evidence of new work.
+                // Preserve the original alert's conservative rearming rule.
+                if self.idle_workers(room, may_be_idle).len() <= limit as usize {
+                    alerted.remove(&room);
+                }
                 continue;
             }
-            if alerted.contains(&room) {
+            let idle = self.idle_workers(room, |agent| finished(agent, now_ms));
+            if idle.len() <= limit as usize {
                 continue;
             }
             // post_bus_notice(None) falls back to the developer; never take that route.
@@ -51,7 +55,7 @@ impl BusState {
     }
 
     /// Qualified workers in creation order, excluding the orchestrator and pending work.
-    fn idle_workers(&self, room: RoomId, now_ms: u64) -> Vec<String> {
+    fn idle_workers(&self, room: RoomId, test: impl Fn(&RoomAgent) -> bool) -> Vec<String> {
         self.agents
             .values()
             .filter(|agent| {
@@ -60,7 +64,7 @@ impl BusState {
                     && !agent.deletion_pending
                     && agent.current_request.is_none()
                     && self.queued_requests(agent.id).is_empty()
-                    && finished(agent, now_ms)
+                    && test(agent)
             })
             .map(|agent| self.agent_message_label(agent.id))
             .collect()
@@ -70,4 +74,11 @@ impl BusState {
 fn finished(agent: &RoomAgent, now_ms: u64) -> bool {
     agent.shown_status() == RuntimeStatus::Idle
         && now_ms.saturating_sub(agent.status_since_ms) >= MIN_IDLE_FOR_ALERT_MS
+}
+
+fn may_be_idle(agent: &RoomAgent) -> bool {
+    matches!(
+        agent.shown_status(),
+        RuntimeStatus::Idle | RuntimeStatus::Unavailable | RuntimeStatus::Launching
+    )
 }
