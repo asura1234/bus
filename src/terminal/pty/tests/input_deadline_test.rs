@@ -200,15 +200,17 @@ fn backpressured_legacy_text_expires_with_time_reserved_for_enter_delay() {
 }
 
 #[test]
-fn committed_legacy_submission_finishes_after_backpressure_passes_deadline() {
+fn committed_legacy_submission_finishes_after_backpressure_passes_admission_deadline() {
     let (actor, mut peer, _) = actor_with_socket_pair(false);
     let text_len = 4 * 1024 * 1024;
-    let deadline = Instant::now() + Duration::from_millis(300);
+    let delay = crate::protocol::api::submission::SUBMIT_DELAY;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let admission_deadline = deadline - delay;
     let completion = actor
         .queue_user_input_submission(
             Bytes::from(vec![b'x'; text_len]),
             Bytes::from_static(b"\r"),
-            Duration::from_millis(50),
+            delay,
             Some(deadline),
         )
         .unwrap()
@@ -222,7 +224,7 @@ fn committed_legacy_submission_finishes_after_backpressure_passes_deadline() {
         .unwrap();
     let reader = std::thread::spawn(move || {
         std::thread::sleep(
-            deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+            admission_deadline.saturating_duration_since(Instant::now()) + delay / 2,
         );
         let mut received = vec![0; text_len + 1 + 5];
         received[0] = first[0];

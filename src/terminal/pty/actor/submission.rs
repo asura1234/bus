@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 use super::{
     ActiveSubmission, ActorState, PendingWrite, PtyIoActorRunner, PtyIoDataCommand,
-    SubmissionBoundary, SubmissionPhase, ACTOR_IDLE_POLL_MS,
+    SubmissionBoundary, SubmissionPhase, WritePermit, ACTOR_IDLE_POLL_MS,
 };
 
 impl PtyIoActorRunner {
@@ -32,20 +32,17 @@ impl PtyIoActorRunner {
                 reply,
             } => {
                 if self.state == ActorState::Running {
-                    if !text.is_empty() && !enter.is_empty() {
-                        if let Some(deadline) = permit.deadline {
-                            if deadline.saturating_duration_since(Instant::now()) <= delay {
-                                let _ = reply.send(Err(std::io::Error::new(
-                                    std::io::ErrorKind::TimedOut,
-                                    "PTY input submission cannot fit its Enter delay",
-                                )));
+                    let committed_deadline = if !text.is_empty() && !enter.is_empty() {
+                        match reserve_enter_delay(&mut permit, delay) {
+                            Ok(deadline) => deadline,
+                            Err(error) => {
+                                let _ = reply.send(Err(error));
                                 return false;
                             }
-                            // Reserve the Enter delay while the text is still
-                            // queued. The first written byte commits both parts.
-                            permit.deadline = deadline.checked_sub(delay);
                         }
-                    }
+                    } else {
+                        None
+                    };
                     let phase = if text.is_empty() {
                         SubmissionPhase::WaitingUntil(Instant::now() + delay)
                     } else {
@@ -54,6 +51,7 @@ impl PtyIoActorRunner {
                     };
                     self.active_submission = Some(ActiveSubmission {
                         permit,
+                        committed_deadline,
                         enter,
                         delay,
                         phase,
@@ -76,10 +74,9 @@ impl PtyIoActorRunner {
             .as_mut()
             .filter(|s| !s.enter.is_empty())
         {
-            // A combined legacy submission must finish text + Enter once text
-            // starts, matching Windows. Tracked waiter cancellation still uses
-            // the shared flag; observed single-segment writes never commit here.
-            submission.permit.deadline = None;
+            // Commit text + Enter, but never beyond the bounded Enter-delay
+            // allowance. Tracked and API-scope cancellation remain write barriers.
+            submission.permit.deadline = submission.committed_deadline;
         }
     }
 
@@ -172,6 +169,11 @@ impl PtyIoActorRunner {
                 self.current_write_offset = 0;
             }
             self.pending_writes.retain(|write| write.boundary.is_none());
+            let err = if submission.committed_deadline.is_some() {
+                submission.permit.with_draft_guidance(err)
+            } else {
+                err
+            };
             let _ = submission.reply.send(Err(err));
         }
     }
@@ -192,4 +194,27 @@ fn input_submission_closed_error() -> std::io::Error {
         std::io::ErrorKind::BrokenPipe,
         "PTY actor closed during input submission",
     )
+}
+
+fn reserve_enter_delay(
+    permit: &mut WritePermit,
+    delay: std::time::Duration,
+) -> std::io::Result<Option<Instant>> {
+    let Some(deadline) = permit.deadline else {
+        return Ok(None);
+    };
+    if deadline.saturating_duration_since(Instant::now()) <= delay {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "PTY input submission cannot fit its Enter delay",
+        ));
+    }
+    let committed_deadline = deadline.checked_add(delay).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "PTY input submission deadline overflow",
+        )
+    })?;
+    permit.deadline = deadline.checked_sub(delay);
+    Ok(Some(committed_deadline))
 }

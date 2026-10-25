@@ -1,4 +1,4 @@
-use crate::terminal::pty::actor::{InputCompletion, PtyIoActorHandle};
+use crate::terminal::pty::actor::{InputCompletion, InputScope, PtyIoActorHandle};
 use crate::terminal::runtime::detection_policy::mark_detection_content_changed;
 use crate::terminal::runtime::TerminalRuntime;
 use crate::terminal::runtime::WheelRouting;
@@ -105,6 +105,17 @@ impl PaneRuntimeIo {
             .map(InputCompletion::into_receiver)
     }
 
+    pub(super) fn input_scope(&self) -> InputScope {
+        match self {
+            #[cfg(unix)]
+            Self::Actor(actor) => actor.input_scope(),
+            #[cfg(windows)]
+            Self::Actor(_) => InputScope::default(),
+            #[cfg(test)]
+            Self::TestChannel { .. } => InputScope::default(),
+        }
+    }
+
     pub(super) fn queue_input_write(
         &self,
         text: Bytes,
@@ -112,19 +123,38 @@ impl PaneRuntimeIo {
         delay: std::time::Duration,
         deadline: Option<std::time::Instant>,
     ) -> std::io::Result<InputCompletion> {
+        self.queue_input_write_scoped(text, enter, delay, deadline, &InputScope::default())
+    }
+
+    pub(super) fn queue_input_write_scoped(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+        deadline: Option<std::time::Instant>,
+        scope: &InputScope,
+    ) -> std::io::Result<InputCompletion> {
+        let allowance = if !text.is_empty() && !enter.is_empty() {
+            delay
+        } else {
+            std::time::Duration::ZERO
+        };
         match self {
             PaneRuntimeIo::Actor(actor) => {
                 #[cfg(windows)]
-                return actor
-                    .queue_user_input_submission(text, enter, delay, deadline)
-                    .map(Into::into);
+                {
+                    let _ = scope;
+                    actor
+                        .queue_user_input_submission(text, enter, delay, deadline)
+                        .map(InputCompletion::from)
+                }
                 #[cfg(unix)]
-                actor.queue_user_input_submission(text, enter, delay, deadline)
+                actor.queue_user_input_submission_scoped(text, enter, delay, deadline, scope)
             }
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, clock, .. } => {
                 let failure = clock.take_write_failure();
-                let _ = deadline;
+                let _ = (deadline, scope);
                 let sender = sender.clone();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
@@ -147,9 +177,10 @@ impl PaneRuntimeIo {
                     };
                     let _ = reply_tx.send(result);
                 });
-                Ok(reply_rx.into())
+                Ok(InputCompletion::from(reply_rx))
             }
         }
+        .map(|completion| completion.with_enter_delay_allowance(allowance))
     }
 }
 
@@ -213,10 +244,9 @@ impl TerminalRuntime {
         enter: Bytes,
         delay: std::time::Duration,
         deadline: Option<std::time::Instant>,
-    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+    ) -> std::io::Result<InputCompletion> {
         self.invalidate_shell_prompt();
-        self.io
-            .queue_user_input_submission(text, enter, delay, deadline)
+        self.io.queue_input_write(text, enter, delay, deadline)
     }
 
     pub fn try_send_paste(&self, text: String) -> Result<(), mpsc::error::TrySendError<Bytes>> {

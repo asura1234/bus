@@ -169,6 +169,7 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
     let release = clock.fail_next_write_completion(io::ErrorKind::TimedOut);
     let hard_deadline = clock.now() + hard_limit;
     let submission = ObservedSubmission {
+        scope: Default::default(),
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),

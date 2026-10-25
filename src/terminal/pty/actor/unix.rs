@@ -13,7 +13,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc::{self, error::TryRecvError as DataTryRecvError};
 use tracing::{debug, warn};
 
-use super::{input_completion::WritePermit, InputCompletion};
+use super::{input_completion::WritePermit, InputCompletion, InputScope};
 use crate::terminal::pty::fd;
 
 // Actor handle methods must call wake_actor() after queuing work. The idle
@@ -136,12 +136,34 @@ impl PtyIoActorHandle {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_user_input_submission(
         &self,
         text: Bytes,
         enter: Bytes,
         delay: Duration,
         deadline: Option<Instant>,
+    ) -> std::io::Result<InputCompletion> {
+        self.queue_user_input_submission_scoped(
+            text,
+            enter,
+            delay,
+            deadline,
+            &InputScope::default(),
+        )
+    }
+
+    pub(crate) fn input_scope(&self) -> InputScope {
+        InputScope::new(self.wake.clone())
+    }
+
+    pub(crate) fn queue_user_input_submission_scoped(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: Duration,
+        deadline: Option<Instant>,
+        scope: &InputScope,
     ) -> std::io::Result<InputCompletion> {
         let user_writes = self
             .user_writes
@@ -154,7 +176,12 @@ impl PtyIoActorHandle {
             ));
         }
         let (reply_tx, reply_rx) = std_mpsc::channel();
-        let permit = WritePermit::new(deadline, self.wake.clone());
+        let allowance = if !text.is_empty() && !enter.is_empty() {
+            delay
+        } else {
+            Duration::ZERO
+        };
+        let permit = WritePermit::in_scope(deadline, self.wake.clone(), scope);
         self.data_tx
             .try_send(PtyIoDataCommand::SubmitUserInput {
                 text,
@@ -172,7 +199,7 @@ impl PtyIoActorHandle {
                 }
             })?;
         self.wake_actor();
-        Ok(InputCompletion::tracked(reply_rx, permit))
+        Ok(InputCompletion::tracked(reply_rx, permit).with_enter_delay_allowance(allowance))
     }
 
     pub(crate) fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
@@ -333,6 +360,7 @@ struct PtyIoActorRunner {
 
 struct ActiveSubmission {
     permit: WritePermit,
+    committed_deadline: Option<Instant>,
     enter: Bytes,
     delay: Duration,
     phase: SubmissionPhase,
@@ -576,7 +604,7 @@ impl PtyIoActorRunner {
                     .as_ref()
                     .map(|submission| submission.permit.clone())
             });
-            let _write_guard = match permit.as_ref().map(WritePermit::lock).transpose() {
+            let mut write_guard = match permit.as_ref().map(WritePermit::lock).transpose() {
                 Ok(guard) => guard,
                 Err(error) => {
                     self.fail_active_submission(error);
@@ -594,6 +622,9 @@ impl PtyIoActorRunner {
                     ));
                 }
                 Ok(written) => {
+                    if let Some(guard) = write_guard.as_mut() {
+                        guard.mark_started();
+                    }
                     if writing_text {
                         self.commit_submission_text();
                     }

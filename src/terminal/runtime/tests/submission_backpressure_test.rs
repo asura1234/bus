@@ -63,6 +63,7 @@ fn backpressured_cleanup(master: OwnedFd, peer: OwnedFd) {
     let (runtime, _writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let hard_deadline = Instant::now() + Duration::from_millis(150);
     let submission = ObservedSubmission {
+        scope: Default::default(),
         terminal: runtime.terminal.clone(),
         io: PaneRuntimeIo::Actor(handle.clone()),
         content_lock: runtime.content_write_lock.clone(),

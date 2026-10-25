@@ -7,7 +7,7 @@ use crate::protocol::api::submission::{
     confirmation_budget, maximum_budget, withdrawal_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE,
 };
 use crate::terminal::emulator::PaneTerminal;
-use crate::terminal::pty::actor::InputCompletion;
+use crate::terminal::pty::actor::{InputCompletion, InputScope};
 use bytes::Bytes;
 use std::{
     io,
@@ -89,6 +89,7 @@ struct ClearProgress {
 struct ObservedSubmission {
     terminal: Arc<PaneTerminal>,
     io: PaneRuntimeIo,
+    scope: InputScope,
     content_lock: Arc<Mutex<()>>,
     inspect: Box<dyn SubmissionInspector>,
     enter: Bytes,
@@ -112,7 +113,7 @@ impl TerminalRuntime {
         delay: Duration,
         deadline: Option<Instant>,
         inspect: impl Fn(&str) -> InputObservation + Send + 'static,
-    ) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
+    ) -> io::Result<InputCompletion> {
         self.queue_observed_input_with_inspector(
             text,
             enter,
@@ -131,16 +132,18 @@ impl TerminalRuntime {
         delay: Duration,
         deadline: Option<Instant>,
         inspect: Box<dyn SubmissionInspector>,
-    ) -> io::Result<std::sync::mpsc::Receiver<io::Result<()>>> {
+    ) -> io::Result<InputCompletion> {
         let clock = self.io.submission_clock();
         let now = clock.now();
         let withdraw_grace = withdrawal_budget(&text);
         let hard_deadline = deadline
             .unwrap_or(now + maximum_budget(delay, &text))
             .min(now + maximum_budget(delay, &text));
+        let scope = self.io.input_scope();
         let submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             io: self.io.clone(),
+            scope: scope.clone(),
             content_lock: self.content_write_lock.clone(),
             inspect,
             enter,
@@ -172,7 +175,7 @@ impl TerminalRuntime {
                 let _ = tx.send(result);
             })
         });
-        Ok(rx)
+        Ok(scope.completion(rx))
     }
 }
 
@@ -212,9 +215,13 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other(PromptNotShown::NotSubmitted))?;
         self.diagnostics
             .paste(bytes.len(), delay.as_millis() as u64, self.clock.now());
-        let completion =
-            self.io
-                .queue_input_write(bytes, Bytes::new(), delay, Some(self.deadline.get()))?;
+        let completion = self.io.queue_input_write_scoped(
+            bytes,
+            Bytes::new(),
+            delay,
+            Some(self.deadline.get()),
+            &self.scope,
+        )?;
         drop(guard);
         let result = completion
             .recv_timeout(self.clock.remaining(self.deadline.get()))
@@ -283,9 +290,13 @@ impl ObservedSubmission {
         self.check_deadline()?;
         let write_deadline = self.deadline.get().min(progress.expires);
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only = true);
-        let completion =
-            self.io
-                .queue_input_write(key, Bytes::new(), Duration::ZERO, Some(write_deadline))?;
+        let completion = self.io.queue_input_write_scoped(
+            key,
+            Bytes::new(),
+            Duration::ZERO,
+            Some(write_deadline),
+            &self.scope,
+        )?;
         self.inspect.clearing(index);
         drop(guard);
         completion
@@ -361,11 +372,12 @@ impl ObservedSubmission {
     // The caller holds content_lock while queueing, and releases it before waiting.
     fn enqueue_enter(&self) -> io::Result<InputCompletion> {
         self.diagnostics.enter(&self.enter, self.clock.now());
-        self.io.queue_input_write(
+        self.io.queue_input_write_scoped(
             Bytes::new(),
             self.enter.clone(),
             Duration::ZERO,
             Some(self.deadline.get()),
+            &self.scope,
         )
     }
 
