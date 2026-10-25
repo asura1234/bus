@@ -254,7 +254,10 @@ the wrapper remains held.
   - Strongly encourage workers to use parallel subagents per checklist item or
     group for both investigation and fixes, under the write-ownership rules.
   - Run review, verification and any bot review concurrently on the same head.
-  - Allow at most two fix rounds per PR. If the core goal holds across the
+  - Set the PR's `fix_round_cap` in the worker brief or room workflow: the brief
+    takes precedence, the default is `2`, and `none` means iterate until every
+    reviewer is Ready. Carry the inherited count; stop and report if another
+    repair would exceed a numeric cap. If the core goal holds across the
     checklist, every reviewer is Ready and required gates pass, use
     `auto-merge-pr` under the [kickoff authority rule](#kickoff-authority). Turn
     remaining edge work into follow-up PR steps in the running workflow and execute them.

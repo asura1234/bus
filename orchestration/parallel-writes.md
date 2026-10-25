@@ -168,8 +168,11 @@ do not add a new per-PR merge OK.
   changed paths, commit/head, checks and any outstanding locks or blockers.
 - Use the PR peers named in your brief: send each pushed head to the verifier
   and reviewers; verifiers send `VERIFIED` or defects with `file:line` directly
-  to the owner. Owners use `auto-merge-pr`'s owner-run path: at most two fix
-  rounds, no out-of-goal repairs, no unresolved FLAG/developer decision, and
+  to the owner. Owners use `auto-merge-pr`'s owner-run path: carry the inherited
+  count and use the fix-round cap in the brief, otherwise the room's workflow
+  (default `2`; `none` means iterate until every reviewer is Ready). Stop and
+  send a final if another repair would exceed a numeric cap. No out-of-goal
+  repairs, no unresolved FLAG/developer decision, and
   re-measure against its 3000-line split threshold before merge. Send follow-ups,
   flags and exhausted-budget blockers to the orchestrator in finals.
 - Report a missing or replaced peer to the orchestrator, which owns room notes,

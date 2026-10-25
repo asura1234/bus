@@ -138,7 +138,7 @@ DONE / OPEN:
 [x] Spec agreed
 [x] Implement gallery (claude-dev)
 [x] CI green
-[ ] Review, verification and bots (fix round 2 of 2)
+[ ] Review, verification and bots (fix round 2; fix_round_cap 2, default)
 [ ] Manual test (if the workflow holds for it)
 [ ] Merge (auto-merge-pr / recorded hold)"
 ```
@@ -173,8 +173,10 @@ verifiers instead of making one verifier the room's hub.
    findings outside the locked goal and report them to the orchestrator in the
    final as follow-ups. Any FLAG or developer decision stops this PR's merge
    path and goes to the orchestrator for triage. Carry the inherited fix-round
-   counter: at most two repair batches, then stop and send a final if another
-   repair is needed. Re-measure added plus removed lines against the PR base,
+   counter and use the fix-round cap in the brief, otherwise the room's workflow
+   (default `2`; `none` means iterate until every reviewer is Ready). Stop and
+   send a final if another repair would exceed a numeric cap. Re-measure added
+   plus removed lines against the PR base,
    excluding `plans/`, after pushes and before merge; at **3000 lines**, stop
    and hand splitting back to the orchestrator. Merge only with exact-head
    `VERIFIED`, required reviews Ready, gates and requested acceptance passing,
@@ -409,12 +411,14 @@ Run checks and remediation as a bounded loop:
    orchestrator to decide and record. Turn remaining nonblocking work into follow-up
    steps with its recommendations and acceptance checks.
 4. Count one fix round as one consolidated set of fixes followed by gates and
-   concurrent review, verification and bot review of its new head. Allow at most
-   **two fix rounds per PR** after the initial checks; record the count in the
-   workflow. Do not start a third round automatically. If the core goal still
-   fails or a required gate or blocking issue remains, hold that PR and report
-   the cause and recovery plan. Keep independent work moving; ask only when
-   recovery needs a developer decision under the boundary below.
+   concurrent review, verification and bot review of its new head. Use the
+   `fix_round_cap` from the brief, otherwise the room's workflow, otherwise `2`;
+   `none` means iterate until every reviewer is Ready. Record the inherited
+   count and effective cap in the workflow. If another repair would exceed a
+   numeric cap, hold that PR and report the count, cap, cause and recovery plan.
+   The last permitted repaired head still receives review and verification.
+   Keep independent work moving; ask only when recovery needs a developer
+   decision under the boundary below.
 5. Once the core goal holds on the enumerated checklist and required gates pass,
    report the evidence and route the PR, once every reviewer is Ready, through
    [auto-merge-pr](workflows/auto-merge-pr.md). Reuse its recorded start answer;
@@ -428,8 +432,9 @@ Run checks and remediation as a bounded loop:
 Track PR age from its creation, including time spent as a draft. Any PR open
 longer than **four hours** is escalated in MASTER as `[waiting-on-you]`: link the
 PR, state the cause, show the fix-round count, and propose a concrete plan and
-the decision needed. Escalate even while checks are running or the two-round
-limit has not been reached. Update the workflow after the developer's decision.
+the decision needed. Escalate even while checks are running or the configured
+fix-round cap has not been reached (including `none`). Update the workflow after
+the developer's decision.
 
 ## Steer agents without waiting
 
