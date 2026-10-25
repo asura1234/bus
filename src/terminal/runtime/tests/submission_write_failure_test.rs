@@ -151,3 +151,81 @@ async fn a_paste_ack_timeout_preserves_a_changed_unrecognised_draft() {
 async fn a_render_timeout_preserves_a_changed_unrecognised_draft() {
     preserve_unrecognised_draft_on_withdrawal(false).await;
 }
+
+async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window: Duration) {
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    // Keep the real clock: a paused clock deliberately stretches channel waits
+    // and cannot exercise an acknowledgement that never arrives.
+    let reserve = withdrawal_budget(
+        (0..64)
+            .map(|_| "item")
+            .collect::<Vec<_>>()
+            .join("\n")
+            .as_bytes(),
+    );
+    assert!(reserve > WITHDRAW_GRACE);
+    runtime.test_process_pty_bytes(b"owned brief");
+    let release = clock.fail_next_write_completion(io::ErrorKind::TimedOut);
+    let hard_deadline = clock.now() + hard_limit;
+    let submission = ObservedSubmission {
+        terminal: runtime.terminal.clone(),
+        io: runtime.io.clone(),
+        content_lock: runtime.content_write_lock.clone(),
+        inspect: Box::new(|_: &str| InputObservation::Pending),
+        enter: Bytes::from_static(b"\r"),
+        clear: vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+        deadline: std::cell::Cell::new(hard_deadline),
+        hard_deadline,
+        withdraw_grace: reserve,
+        clock,
+        diagnostics: Default::default(),
+    };
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let result = submission
+            .withdraw_pending(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed Enter"));
+        result_tx.send((Instant::now(), result)).unwrap();
+    });
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x01"));
+    let outcome = result_rx.recv_timeout(assertion_window);
+    // Tear down the held test I/O even on RED; no sleeping native thread leaks.
+    release.send(()).unwrap();
+    if outcome.is_err() {
+        let _ = result_rx
+            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+            .unwrap();
+    }
+    writer.join().unwrap();
+    let (finished, result) = outcome.expect("cleanup ack wait exceeded the no-progress/hard bound");
+    let error = result.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(!PromptNotShown::is(&error), "Enter may have run: {error}");
+    assert!(
+        error.to_string().contains("could not be safely cleared"),
+        "{error}"
+    );
+    assert!(
+        !error.to_string().contains("remaining draft was cleared"),
+        "{error}"
+    );
+    assert!(
+        finished <= hard_deadline + Duration::from_millis(200),
+        "cleanup exceeded its original hard deadline"
+    );
+    assert!(runtime.terminal.visible_ansi().contains("owned brief"));
+    assert!(
+        writes.try_recv().is_err(),
+        "no further clear key, paste or Enter"
+    );
+}
+
+#[tokio::test]
+async fn a_stalled_cleanup_acknowledgement_obeys_the_no_progress_bound() {
+    stalled_cleanup_acknowledgement(Duration::from_secs(10), Duration::from_millis(1400)).await;
+}
+
+#[tokio::test]
+async fn a_stalled_cleanup_acknowledgement_also_honors_the_shorter_hard_deadline() {
+    stalled_cleanup_acknowledgement(Duration::from_millis(150), Duration::from_millis(500)).await;
+}

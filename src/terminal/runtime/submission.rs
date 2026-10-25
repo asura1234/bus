@@ -283,17 +283,18 @@ impl ObservedSubmission {
             ));
         }
         self.check_deadline()?;
+        let write_deadline = self.deadline.get().min(progress.expires);
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only = true);
         let completion = self.io.queue_user_input_submission(
             key,
             Bytes::new(),
             Duration::ZERO,
-            Some(self.deadline.get()),
+            Some(write_deadline),
         )?;
         self.inspect.clearing(index);
         drop(guard);
         completion
-            .recv_timeout(self.clock.remaining(self.deadline.get()))
+            .recv_timeout(self.clock.remaining(write_deadline))
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
         // Keep editing keys in separate input events for Ink providers. Check
         // for emptiness again before sending the next key or another line kill.
