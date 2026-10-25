@@ -28,10 +28,24 @@ impl PtyIoActorRunner {
                 text,
                 enter,
                 delay,
-                permit,
+                mut permit,
                 reply,
             } => {
                 if self.state == ActorState::Running {
+                    if !text.is_empty() && !enter.is_empty() {
+                        if let Some(deadline) = permit.deadline {
+                            if deadline.saturating_duration_since(Instant::now()) <= delay {
+                                let _ = reply.send(Err(std::io::Error::new(
+                                    std::io::ErrorKind::TimedOut,
+                                    "PTY input submission cannot fit its Enter delay",
+                                )));
+                                return false;
+                            }
+                            // Reserve the Enter delay while the text is still
+                            // queued. The first written byte commits both parts.
+                            permit.deadline = deadline.checked_sub(delay);
+                        }
+                    }
                     let phase = if text.is_empty() {
                         SubmissionPhase::WaitingUntil(Instant::now() + delay)
                     } else {
@@ -54,6 +68,19 @@ impl PtyIoActorRunner {
             }
         }
         false
+    }
+
+    pub(super) fn commit_submission_text(&mut self) {
+        if let Some(submission) = self
+            .active_submission
+            .as_mut()
+            .filter(|s| !s.enter.is_empty())
+        {
+            // A combined legacy submission must finish text + Enter once text
+            // starts, matching Windows. Tracked waiter cancellation still uses
+            // the shared flag; observed single-segment writes never commit here.
+            submission.permit.deadline = None;
+        }
     }
 
     pub(super) fn complete_submission_boundary(&mut self, boundary: SubmissionBoundary) {

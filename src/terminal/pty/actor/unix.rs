@@ -583,6 +583,8 @@ impl PtyIoActorRunner {
                     continue;
                 }
             };
+            let write_len = write.bytes.len();
+            let writing_text = write.boundary == Some(SubmissionBoundary::Text);
             let chunk = &write.bytes[self.current_write_offset..];
             match self.file.write(chunk) {
                 Ok(0) => {
@@ -592,8 +594,11 @@ impl PtyIoActorRunner {
                     ));
                 }
                 Ok(written) => {
+                    if writing_text {
+                        self.commit_submission_text();
+                    }
                     self.current_write_offset += written;
-                    if self.current_write_offset >= write.bytes.len() {
+                    if self.current_write_offset >= write_len {
                         // The front inspected above is still queued: only this
                         // actor mutates the deque, with no intervening command.
                         if let Some(completed) = self.pending_writes.pop_front() {

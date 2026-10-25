@@ -102,32 +102,41 @@ fn expired_command_is_dropped_when_dequeued_behind_another_submission() {
 }
 
 #[test]
-fn write_deadline_expires_during_enter_delay() {
+fn legacy_submission_never_leaves_text_without_enter() {
+    // An unobserved prompt has no withdrawal step: if its Enter cannot fit
+    // before the deadline, its text must not be written either.
     let (actor, mut peer, _) = actor_with_socket_pair(false);
-    let completion = actor
+    let result = actor
         .queue_user_input_submission(
-            Bytes::from_static(b"paste"),
+            Bytes::from_static(b"prompt"),
             Bytes::from_static(b"\r"),
-            Duration::from_secs(60),
+            Duration::from_millis(200),
             Some(Instant::now() + Duration::from_millis(100)),
         )
-        .unwrap();
-    let mut paste = [0; 5];
-    peer.read_exact(&mut paste).unwrap();
-    assert_eq!(&paste, b"paste");
-    let error = completion
-        .recv_timeout(Duration::from_secs(2))
         .unwrap()
-        .unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        .into_receiver()
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
     actor
         .try_write_user_input(Bytes::from_static(b"after"))
         .unwrap();
-    let mut after = [0; 5];
-    let read = peer.read_exact(&mut after);
+    let mut received = Vec::new();
+    while !received.ends_with(b"after") {
+        let mut chunk = [0; 64];
+        let n = peer.read(&mut chunk).unwrap();
+        received.extend_from_slice(&chunk[..n]);
+    }
     actor.shutdown();
-    read.unwrap();
-    assert_eq!(&after, b"after");
+    let expected: &[u8] = if result.is_ok() {
+        b"prompt\rafter"
+    } else {
+        b"after"
+    };
+    assert_eq!(
+        String::from_utf8_lossy(&received),
+        String::from_utf8_lossy(expected),
+        "submission result {result:?} left a partial prompt"
+    );
 }
 
 #[test]
@@ -165,4 +174,97 @@ fn cancelling_partial_text_preserves_protocol_writes_and_resets_the_offset() {
     let mut subsequent = [0; 13];
     peer.read_exact(&mut subsequent).unwrap();
     assert_eq!(&subsequent, b"responseafter");
+}
+
+#[test]
+fn backpressured_legacy_text_expires_with_time_reserved_for_enter_delay() {
+    let (actor, mut peer, prefilled) = backpressured_actor();
+    let completion = actor
+        .queue_user_input_submission(
+            Bytes::from_static(b"prompt"),
+            Bytes::from_static(b"\r"),
+            Duration::from_millis(59_900),
+            Some(Instant::now() + Duration::from_secs(60)),
+        )
+        .unwrap()
+        .into_receiver();
+    let result = completion.recv_timeout(Duration::from_secs(2));
+    if result.is_err() {
+        actor.shutdown();
+    }
+    let error = result
+        .expect("text must expire before consuming the Enter delay reserve")
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_only_following_input(&actor, &mut peer, prefilled);
+}
+
+#[test]
+fn committed_legacy_submission_finishes_after_backpressure_passes_deadline() {
+    let (actor, mut peer, _) = actor_with_socket_pair(false);
+    let text_len = 4 * 1024 * 1024;
+    let deadline = Instant::now() + Duration::from_millis(300);
+    let completion = actor
+        .queue_user_input_submission(
+            Bytes::from(vec![b'x'; text_len]),
+            Bytes::from_static(b"\r"),
+            Duration::from_millis(50),
+            Some(deadline),
+        )
+        .unwrap()
+        .into_receiver();
+    // Observe a real first byte before holding local pressure across expiry.
+    let mut first = [0; 1];
+    peer.read_exact(&mut first).unwrap();
+    assert_eq!(first, [b'x']);
+    actor
+        .try_write_user_input(Bytes::from_static(b"after"))
+        .unwrap();
+    let reader = std::thread::spawn(move || {
+        std::thread::sleep(
+            deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+        );
+        let mut received = vec![0; text_len + 1 + 5];
+        received[0] = first[0];
+        let read = peer.read_exact(&mut received[1..]);
+        (read, received)
+    });
+    let result = completion.recv_timeout(Duration::from_secs(3));
+    if !result.as_ref().is_ok_and(|result| result.is_ok()) {
+        actor.shutdown();
+    }
+    let (read, received) = reader.join().unwrap();
+    actor.shutdown();
+    result
+        .expect("committed text and Enter must finish")
+        .expect("must not discard a committed Enter");
+    read.unwrap();
+    assert!(received[..text_len].iter().all(|byte| *byte == b'x'));
+    assert_eq!(&received[text_len..], b"\rafter");
+}
+
+#[test]
+fn write_deadline_expires_during_enter_only_delay() {
+    let (actor, mut peer, _) = actor_with_socket_pair(false);
+    let completion = actor
+        .queue_user_input_submission(
+            Bytes::new(),
+            Bytes::from_static(b"\r"),
+            Duration::from_secs(60),
+            Some(Instant::now() + Duration::from_millis(100)),
+        )
+        .unwrap();
+    let error = completion
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    actor
+        .try_write_user_input(Bytes::from_static(b"after"))
+        .unwrap();
+    let mut after = [0; 5];
+    let read = peer.read_exact(&mut after);
+    actor.shutdown();
+    read.unwrap();
+    assert_eq!(&after, b"after");
 }
