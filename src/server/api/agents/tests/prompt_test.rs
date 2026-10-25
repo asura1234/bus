@@ -17,8 +17,8 @@ fn prompt_delay_only_scales_for_windows_codex() {
 }
 
 #[tokio::test]
-async fn guarded_claude_prompt_clears_stranded_text_before_delivery() {
-    submission_tests::stranded_draft(AgentKind::Claude, true).await;
+async fn guarded_claude_prompt_preserves_existing_input_before_delivery() {
+    submission_tests::preserve_existing_draft(AgentKind::Claude, true).await;
 }
 
 #[tokio::test]
@@ -255,8 +255,8 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
 }
 
 #[tokio::test]
-async fn guarded_codex_prompt_clears_stranded_text_before_delivery() {
-    submission_tests::stranded_draft(AgentKind::Codex, true).await;
+async fn guarded_codex_prompt_preserves_existing_input_before_delivery() {
+    submission_tests::preserve_existing_draft(AgentKind::Codex, true).await;
 }
 
 #[tokio::test]

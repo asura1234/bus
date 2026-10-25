@@ -207,3 +207,164 @@ async fn positive_acceptance_during_withdrawal_stops_further_clear_keys() {
 async fn whitespace_edits_after_partial_withdrawal_are_preserved() {
     withdraw_inline_draft(Some("header\r\n  middle  words")).await;
 }
+
+async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys: bool) {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .resize((line_count + 10) as u16, 100, 0, 0);
+    let Method::AgentPromptIfIdle(mut params) = method else {
+        unreachable!()
+    };
+    let lines: Vec<String> = (1..=line_count).map(|n| format!("item {n:02}")).collect();
+    let mut text = lines.join("\n");
+    params.text = lines.join(separator);
+    let method = Method::AgentPromptIfIdle(params);
+    let expiry = confirmation_expiry(&method);
+    let hard_budget = crate::protocol::api::submission::method_budget(&method).unwrap();
+    let render = |text: &str| text.trim_end_matches('\n').replace('\n', "\r\n  ");
+    let response = start(&mut app, method);
+    let started = clock(&app).now();
+    let mut response = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+    let paste = next_write(&mut writes).await;
+    assert!(paste.starts_with(b"\x1b[200~item 01"));
+    redraw(&app, AgentKind::Codex, &render(&text));
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    clock(&app).wait_for_enters(1);
+    clock(&app).advance(expiry);
+    let withdrawal_started = clock(&app).now();
+    // Independent line-local fake editor; cursor starts at the end of paste.
+    let mut cursor = text.len();
+    let mut keys = 0;
+    let reply = loop {
+        let key = match write_or_done(&mut writes, &mut response).await {
+            Ok(key) => key,
+            Err(reply) => break reply,
+        };
+        assert!(
+            clock(&app).now() < started + hard_budget,
+            "clear key after hard deadline"
+        );
+        keys += 1;
+        let start = text[..cursor].rfind('\n').map_or(0, |at| at + 1);
+        let end = text[cursor..]
+            .find('\n')
+            .map_or(text.len(), |at| cursor + at);
+        match key.as_ref() {
+            b"\x01" if !ignore_keys => cursor = start,
+            b"\x0b" if !ignore_keys => {
+                let end = if cursor == end && end < text.len() {
+                    end + 1
+                } else {
+                    end
+                };
+                text.replace_range(cursor..end, "");
+            }
+            b"\x15" if !ignore_keys => {
+                let start = if cursor == start {
+                    start.saturating_sub(1)
+                } else {
+                    start
+                };
+                text.replace_range(start..cursor, "");
+                cursor = start;
+            }
+            b"\x01" | b"\x0b" | b"\x15" => {}
+            other => panic!("unexpected key {other:?}; never paste again or send late Enter"),
+        }
+        redraw(&app, AgentKind::Codex, &render(&text));
+        // Production spaces editing keys 25ms apart (clear_step sleep).
+        clock(&app).advance(Duration::from_millis(25));
+    };
+    if ignore_keys {
+        assert!(
+            reply.contains("no owned-draft withdrawal progress"),
+            "{reply}"
+        );
+        assert!(clock(&app).now() - withdrawal_started <= Duration::from_millis(1100));
+        assert_eq!(text, lines.join("\n"));
+        assert!(!reply.contains("remaining draft was cleared"), "{reply}");
+    } else {
+        assert!(
+            reply.contains("remaining draft was cleared"),
+            "{keys} keys sent; left {:?}; reply={reply}",
+            render(&text)
+        );
+        assert!(
+            text.trim_end_matches('\n').is_empty(),
+            "fragment left: {text:?}"
+        );
+        assert!(
+            !reply.contains("agent_prompted"),
+            "clearing is not acceptance: {reply}"
+        );
+        assert!(
+            !reply.contains("agent_prompt_not_shown"),
+            "Enter may have run: {reply}"
+        );
+    }
+    assert!(clock(&app).now() <= started + hard_budget);
+    assert!(
+        writes.try_recv().is_err(),
+        "one paste/Enter and no keys after completion"
+    );
+}
+
+#[tokio::test]
+async fn a_long_inline_draft_is_fully_withdrawn_with_real_key_spacing() {
+    long_inline_withdrawal(16, "\n", false).await;
+}
+
+#[tokio::test]
+async fn sixty_four_line_drafts_allow_withdrawal_with_lf_crlf_and_cr() {
+    for separator in ["\n", "\r\n", "\r"] {
+        long_inline_withdrawal(64, separator, false).await;
+    }
+}
+
+#[tokio::test]
+async fn an_unresponsive_long_draft_stops_on_no_progress_without_spending_its_size_budget() {
+    long_inline_withdrawal(64, "\n", true).await;
+}
+
+#[tokio::test]
+async fn guarded_delivery_preserves_an_existing_unowned_draft() {
+    for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Cursor] {
+        preserve_existing_draft(kind, true).await;
+        if kind == AgentKind::Codex {
+            preserve_existing_draft(kind, false).await;
+        }
+    }
+}
+
+#[test]
+fn native_method_budget_reserves_line_edit_cost_for_long_drafts() {
+    let lines = (0..64).map(|_| "item").collect::<Vec<_>>();
+    let mut budgets = Vec::new();
+    for separator in ["\n", "\r\n", "\r"] {
+        let method = Method::AgentPromptIfIdle(AgentPromptIfIdleParams {
+            target: "pane".into(),
+            text: lines.join(separator),
+            expected_terminal_id: "terminal".into(),
+            expected_pane_id: "pane".into(),
+            expected_agent: "claude".into(),
+            expected_session_id: "session".into(),
+            steer: false,
+        });
+        let budget = crate::protocol::api::submission::method_budget(&method).unwrap();
+        assert!(
+            budget >= Duration::from_millis(300 + 2000 + 64 * 3 * 25),
+            "hard budget cannot fit the owned line edits: {budget:?}"
+        );
+        assert!(
+            budget <= Duration::from_secs(20),
+            "line edit cost must use lines, not payload bytes: {budget:?}"
+        );
+        budgets.push(budget);
+    }
+    assert!(
+        budgets.windows(2).all(|pair| pair[0] == pair[1]),
+        "CRLF is one line separator: {budgets:?}"
+    );
+}

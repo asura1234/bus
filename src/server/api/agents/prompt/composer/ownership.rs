@@ -15,6 +15,7 @@ struct Owned {
     cursor: usize,
     remainders: VecDeque<String>,
     lost: bool,
+    progress: u64,
 }
 
 fn normalize(text: &str) -> String {
@@ -33,6 +34,7 @@ impl OwnedComposer {
                 body: None,
                 remainders: VecDeque::new(),
                 lost: false,
+                progress: 0,
             }),
         }
     }
@@ -61,6 +63,7 @@ impl SubmissionInspector for OwnedComposer {
                 if owned.body.is_none() {
                     if observation == InputObservation::Pending {
                         owned.body = body;
+                        owned.progress = owned.progress.wrapping_add(1);
                     }
                     return observation;
                 }
@@ -74,6 +77,7 @@ impl SubmissionInspector for OwnedComposer {
                 {
                     owned.remainders.drain(..=at);
                     owned.body = body;
+                    owned.progress = owned.progress.wrapping_add(1);
                     return InputObservation::Pending;
                 }
                 owned.lost = true;
@@ -81,6 +85,10 @@ impl SubmissionInspector for OwnedComposer {
             }
             other => other,
         }
+    }
+
+    fn cleanup_progress(&self) -> u64 {
+        self.state.lock().map_or(0, |owned| owned.progress)
     }
 
     fn clearing(&self, index: usize) {

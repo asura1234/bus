@@ -37,16 +37,17 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
         terminal: runtime.terminal.clone(),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
-        inspect: Box::new(|_: &str| InputObservation::Other),
+        inspect: Box::new(|_: &str| InputObservation::Pending),
         enter: Bytes::from_static(b"\r"),
         clear: vec![Bytes::from_static(b"\x01")],
         deadline: std::cell::Cell::new(expired),
         hard_deadline: expired,
+        withdraw_grace: Duration::from_secs(10),
         clock: SubmissionClock::default(),
         diagnostics: Default::default(),
     };
     let result =
-        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"), false);
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
     assert!(result.is_err_and(|error| error.kind() == io::ErrorKind::TimedOut));
     assert!(
         writes.try_recv().is_err(),
@@ -55,7 +56,7 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
 }
 
 #[tokio::test]
-async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
+async fn startup_controls_between_initial_observation_and_paste_receive_no_message_bytes() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     runtime.test_process_pty_bytes("›\r\n\r\nGPT-6".as_bytes());
     let clock = runtime.test_submission_clock().unwrap();
@@ -75,10 +76,11 @@ async fn startup_controls_between_clear_and_paste_receive_no_message_bytes() {
         clear: vec![Bytes::from_static(b"\x01")],
         deadline: std::cell::Cell::new(clock.now() + Duration::from_secs(2)),
         hard_deadline: clock.now() + Duration::from_secs(3),
+        withdraw_grace: WITHDRAW_GRACE,
         clock,
         diagnostics: Default::default(),
     };
-    submission.clear_draft(false).unwrap();
+    assert_eq!(submission.observe("initial"), InputObservation::Empty);
     runtime.test_process_pty_bytes(
         concat!(
             "\x1b[2J\x1b[HHooks need review\r\n",
@@ -126,6 +128,7 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         clear: vec![Bytes::from_static(b"\x01")],
         deadline: std::cell::Cell::new(deadline),
         hard_deadline: deadline + Duration::from_secs(1),
+        withdraw_grace: WITHDRAW_GRACE,
         clock,
         diagnostics: Default::default(),
     };
