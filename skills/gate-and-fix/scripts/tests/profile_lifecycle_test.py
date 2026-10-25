@@ -63,7 +63,7 @@ def kill_groups(groups):
 
 @unittest.skipUnless(os.name == "posix", "POSIX signal and process-group contract")
 class InterruptProcessStateTest(unittest.TestCase):
-    def test_exited_unreaped_child_is_stopped_and_cleanup_is_safe(self):
+    def test_exited_unreaped_child_is_not_running_and_cleanup_is_safe(self):
         child = subprocess.Popen((sys.executable, "-c", "pass"),
                                  stdout=subprocess.PIPE, start_new_session=True)
         try:
@@ -344,8 +344,12 @@ class ProfileLifecycleTest(unittest.TestCase):
                 time.sleep(.05)
                 if proc.poll() is None:
                     proc.send_signal(signal.SIGTERM)
-                proc.communicate(timeout=10)
-                self.assertNotEqual(proc.returncode, 0)
+                _, stderr = proc.communicate(timeout=10)
+                self.assertEqual(proc.returncode, 128 + signal.SIGTERM, stderr.decode())
+                expected = (b"Bus quality gate interrupted; run profiles removed\n"
+                            if mode == "quality" else
+                            b"gate-and-fix interrupted; run profiles removed\n")
+                self.assertEqual(stderr, expected)
                 self.assertFalse(list((root / "target").rglob("*.profraw")))
                 self.assertFalse(process_running(identity["pid"]), "instrumented child still running")
             finally:

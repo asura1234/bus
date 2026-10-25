@@ -42,18 +42,38 @@ def cleanup_signals():
 
     previous = {sig: signal.signal(sig, defer)
                 for sig in (signal.SIGINT, signal.SIGTERM)}
+    completed = False
     try:
         yield
+        completed = True
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
-        if pending:
+        # A deferred interrupt must not replace a real teardown failure.
+        if pending and completed:
             signum = pending[0]
             handler = previous[signum]
             if callable(handler):
                 handler(signum, None)
             elif handler != signal.SIG_IGN:
                 raise Interrupted(signum)
+
+
+def signal_group(group: int, signum: int):
+    try:
+        os.killpg(group, signum)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS cannot signal a zombie-only group. Inspection errors and live
+        # members must retain a failure, rather than authorize cleanup.
+        result = subprocess.run(("ps", "-axo", "pgid=,stat="),
+                                capture_output=True, text=True, check=True)
+        rows = [line.split() for line in result.stdout.splitlines()]
+        if not rows or any(len(row) != 2 for row in rows):
+            raise OSError(f"cannot inspect process group {group}")
+        if any(int(pgid) == group and not state.startswith("Z") for pgid, state in rows):
+            raise
 
 
 class Children:
@@ -82,14 +102,21 @@ class Children:
             with self.lock:
                 self.stopped = True
                 active = list(self.active)
+            failures = []
             for process in active:
-                self._terminate(process)
+                try:
+                    self._terminate(process)
+                except Exception as error:
+                    failures.append(error)
+            if failures:
+                raise failures[0]
 
     def _terminate(self, process):
         group = os.name == "posix" and self.private_groups
+        failures = []
         try:
             if group:
-                os.killpg(process.pid, signal.SIGTERM)
+                signal_group(process.pid, signal.SIGTERM)
             elif os.name == "nt":
                 subprocess.run(
                     ("taskkill", "/PID", str(process.pid), "/T", "/F"),
@@ -98,18 +125,24 @@ class Children:
                 )
             elif process.poll() is None:
                 process.terminate()
-        except ProcessLookupError:
-            pass
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        except Exception as error:
+            failures.append(error)
         try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-        finally:
             if group:
                 # A leader may have exited while descendants still hold its pipe.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                signal_group(process.pid, signal.SIGKILL)
+        except Exception as error:
+            failures.append(error)
+        try:
             process.wait(timeout=2)
-            self.finished(process)
+        except Exception as error:
+            failures.append(error)
+        finally:
+            if process.returncode is not None:
+                self.finished(process)
+        if failures:
+            raise failures[0]
