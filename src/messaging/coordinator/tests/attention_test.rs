@@ -112,7 +112,7 @@ fn feishu_waiting_variants_invoke_bot_dm_once_with_exact_action_and_argv() {
     for marker in ["[waiting-on-you]", "[waiting_on_you]", "[WAITING_ON_YOU]"] {
         let mut f = Fixture::new();
         f.post(&format!(
-            "Summary\n{marker}\nApprove access\nPRIVATE attachment /tmp/secret"
+            "Summary\n{marker}\nPick one:\n- **B (recommended):** Approve access.\n- **A:** Keep waiting."
         ));
         f.flush();
         assert_eq!(f.worker.attention.status.error, None, "{marker}");
@@ -141,7 +141,7 @@ fn feishu_waiting_variants_invoke_bot_dm_once_with_exact_action_and_argv() {
                 "--user-id",
                 settings::DEFAULT_FEISHU_RECIPIENT,
                 "--text",
-                "orch is waiting on you: Approve access"
+                "orch is waiting on you: Pick one:\n- **B (recommended):** Approve access.\n- **A:** Keep waiting."
             ]
         );
         assert_eq!(&calls[0][8..9], ["--idempotency-key"]);
@@ -171,12 +171,17 @@ fn feishu_ignores_untagged_posts_and_the_legacy_phrase() {
 fn feishu_full_unicode_action_reaches_cli_without_truncation() {
     let mut f = Fixture::new();
     let action = "界 full action ".repeat(100);
-    f.post(&format!("[waiting_on_you] {action}\nPRIVATE"));
+    f.post(&format!(
+        "[waiting_on_you] {action}\nNext step: 开通访问权限"
+    ));
     f.flush();
     assert_eq!(f.calls().len(), 1);
     assert_eq!(
         f.calls()[0][7],
-        format!("orch is waiting on you: {}", action.trim())
+        format!(
+            "orch is waiting on you: {}\nNext step: 开通访问权限",
+            action.trim()
+        )
     );
 }
 
