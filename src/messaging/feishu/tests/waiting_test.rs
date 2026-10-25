@@ -23,6 +23,88 @@ fn tui(before: &BusState, next: &BusState) -> Vec<String> {
     new_developer_notifications(before, next, false)
 }
 
+#[test]
+fn quoted_or_empty_waiting_tags_do_not_page_from_peer_briefs() {
+    for text in [
+        "- It goes only to that room's bound orchestrator. Never to the developer, MASTER or Feishu. No `[waiting-on-you]`.",
+        "A mid-sentence [waiting-on-you] Ask",
+        "`[waiting_on_you] Ask`",
+        "```\n[waiting-on-you] Ask\n```",
+        "[waiting-on-you]",
+        "**[waiting-on-you]**: .\n\n---",
+    ] {
+        let (before, master, _, agent) = fixture();
+        let mut next = before.clone();
+        next.submit_message_from(master, crate::messaging::model::Draft {
+            text: text.into(), files: vec![], recipient_ids: [agent].into(),
+        }, Author::Agent(agent), 1).unwrap();
+        let mut policy = enabled();
+        policy.observe(&before, &next, 1000);
+        assert!(policy.take(3000).is_none(), "{text}");
+        assert!(tui(&before, &next).is_empty(), "{text}");
+    }
+}
+
+#[test]
+fn waiting_choices_and_next_line_reach_both_alert_routes() {
+    for (text, body) in [
+        ("[waiting-on-you] .\n\nUnlock the phone", "Unlock the phone"),
+        (
+            "[waiting-on-you] Pick one:\n- **B (recommended):** Keep the API.\n- **A:** Change it.",
+            "Pick one:\n- **B (recommended):** Keep the API.\n- **A:** Change it.",
+        ),
+    ] {
+        let (before, master, _, agent) = fixture();
+        let mut next = before.clone();
+        next.post_to_developer(master, agent, text.into(), vec![], 1)
+            .unwrap();
+        let expected = format!("libtv-app master is waiting on you: {body}");
+        let mut policy = enabled();
+        policy.observe(&before, &next, 1000);
+        assert_eq!(policy.take(3000).as_deref(), Some(expected.as_str()));
+        assert_eq!(tui(&before, &next), [expected]);
+        // The TUI history retains the complete original notice, independently of the alert body.
+        assert_eq!(next.notices(master).last().unwrap().text, text);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn waiting_multiline_body_is_one_literal_feishu_text_argument() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = crate::utils::test_temp::unique_temp_path("waiting-multiline");
+    std::fs::create_dir_all(&root).unwrap();
+    let script = root.join("lark-cli");
+    std::fs::write(&script, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--text' ]; then shift; printf '%s' \"$1\" > \"${0%/*}/text\"; break; fi\n  shift\ndone\nprintf '{\"ok\":true}'\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (before, master, _, agent) = fixture();
+    let mut next = before.clone();
+    next.post_to_developer(
+        master,
+        agent,
+        "[waiting-on-you] Pick one:\n- **B:** Keep `$HOME`.\n- **A:** Change it.".into(),
+        vec![],
+        1,
+    )
+    .unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    let body = policy.take(3000).unwrap();
+    let client = crate::messaging::feishu::Client::default();
+    client
+        .send(
+            "ou_test",
+            script.to_str(),
+            &body,
+            "test",
+            &crate::messaging::feishu::Cancellation::default(),
+        )
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(root.join("text")).unwrap(), body);
+    assert!(body.contains("\n- **B:** Keep `$HOME`.\n- **A:** Change it."));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn enabled() -> WaitingNotifications {
     let mut policy = WaitingNotifications::default();
     policy.configure(true);
@@ -30,13 +112,13 @@ fn enabled() -> WaitingNotifications {
 }
 
 #[test]
-fn developer_notification_to_human_has_only_sender_and_first_line() {
+fn developer_notification_to_human_keeps_following_action_lines() {
     let (before, master, _, agent) = fixture();
     let mut next = before.clone();
     next.post_to_developer(
         master,
         agent,
-        "Summary\n[waiting-on-you]\n- Need Figma access\nPRIVATE second line".into(),
+        "Summary\n[waiting-on-you]\n- Need Figma access\n- Grant project access too".into(),
         vec![],
         1,
     )
@@ -47,7 +129,7 @@ fn developer_notification_to_human_has_only_sender_and_first_line() {
     assert!(policy.take(now + 1000).is_none());
     assert_eq!(
         policy.take(now + 2000).as_deref(),
-        Some("libtv-app master is waiting on you: - Need Figma access")
+        Some("libtv-app master is waiting on you: - Need Figma access\n- Grant project access too")
     );
     assert!(policy.take(now + 4000).is_none());
     policy.observe(&next, &next, now + 5000);
@@ -150,7 +232,10 @@ fn developer_notification_full_action_is_unicode_and_control_free() {
     next.post_to_developer(
         master,
         agent,
-        format!("[waiting-on-you] {}\u{1b}\u{7}\nPRIVATE", "界".repeat(130)),
+        format!(
+            "[waiting-on-you] {}\u{1b}\u{7}\nNext\tstep\u{7}",
+            "界".repeat(130)
+        ),
         vec![],
         1,
     )
@@ -159,9 +244,11 @@ fn developer_notification_full_action_is_unicode_and_control_free() {
     let mut policy = enabled();
     policy.observe(&before, &next, now);
     let text = policy.take(now + 2000).unwrap();
-    assert_eq!(text.split_once(": ").unwrap().1, "界".repeat(130));
-    assert!(!text.chars().any(char::is_control));
-    assert!(!text.contains("PRIVATE"));
+    assert_eq!(
+        text.split_once(": ").unwrap().1,
+        format!("{}\nNext step", "界".repeat(130))
+    );
+    assert!(!text.chars().any(|ch| ch.is_control() && ch != '\n'));
 }
 
 #[test]
@@ -265,7 +352,7 @@ fn developer_notification_attention_preview_omits_internal_tag() {
 }
 
 #[test]
-fn developer_notification_tagged_final_uses_the_visible_first_line() {
+fn developer_notification_tagged_final_keeps_following_action_lines() {
     let (mut before, master, _, agent) = fixture();
     before.set_draft_text(master, "status").unwrap();
     before.set_draft_recipients(master, [agent]).unwrap();
@@ -273,7 +360,7 @@ fn developer_notification_tagged_final_uses_the_visible_first_line() {
     let mut value = serde_json::to_value(&before).unwrap();
     let item = &mut value["requests"][request.0.to_string()];
     item["phase"] = serde_json::json!("completed");
-    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":format!("{}\n[waiting-on-you]\nNeed Figma access\nPRIVATE", crate::messaging::attention::TAG), "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":format!("{}\n[waiting-on-you]\nNeed Figma access\nGrant project access too", crate::messaging::attention::TAG), "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
     item["completed_at_ms"] = serde_json::json!(2);
     let next: BusState = serde_json::from_value(value).unwrap();
     let now = 1000_u64;
@@ -281,7 +368,7 @@ fn developer_notification_tagged_final_uses_the_visible_first_line() {
     policy.observe(&before, &next, now);
     assert_eq!(
         policy.take(now + 3000).as_deref(),
-        Some("libtv-app master is waiting on you: Need Figma access")
+        Some("libtv-app master is waiting on you: Need Figma access\nGrant project access too")
     );
 }
 
@@ -354,14 +441,14 @@ fn developer_notification_matches_tag_and_equivalent_whole_phrases() {
         next.post_to_developer(
             master,
             agent,
-            format!("Summary\n{marker}: Approve access\nPRIVATE"),
+            format!("Summary\n{marker}: Approve access\nGrant project access too"),
             vec![],
             1,
         )
         .unwrap();
         assert_eq!(
             tui(&before, &next),
-            ["libtv-app master is waiting on you: Approve access"],
+            ["libtv-app master is waiting on you: Approve access\nGrant project access too"],
             "{marker}"
         );
         let mut policy = enabled();
@@ -370,7 +457,9 @@ fn developer_notification_matches_tag_and_equivalent_whole_phrases() {
         if marker.starts_with('[') {
             assert_eq!(
                 paged.as_deref(),
-                Some("libtv-app master is waiting on you: Approve access"),
+                Some(
+                    "libtv-app master is waiting on you: Approve access\nGrant project access too"
+                ),
                 "{marker}"
             );
         } else {
@@ -491,7 +580,6 @@ fn developer_notification_markdown_bold_phrase_heading_previews_the_next_bullet(
 fn developer_notification_markdown_markers_preserve_the_action() {
     for (message, expected) in [
         ("**[waiting-on-you]**\n- Approve", "- Approve"),
-        ("`[WAITING-ON-YOU]`: Approve", "Approve"),
         ("**waiting on you**: Approve", "Approve"),
         ("__[waiting-on-you]__\n- Approve", "- Approve"),
         ("[waiting-on-you] _identifier", "_identifier"),
