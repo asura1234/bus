@@ -101,8 +101,8 @@ impl Worker {
                     .observe_update_error(agent.id, info.update_error.clone())
                     .map_err(|e| e.to_string())?;
             }
-            observe_working_directory(&mut state, agent.id)?;
         }
+        self.directory_checks.poll(&mut state)?;
         self.apply_poll(state)?;
         self.close_exited_terminals()?;
         for (agent, previous, current) in rebound {
@@ -162,37 +162,6 @@ fn polled_agent<'a>(
                     })
         })
         .or_else(|| resume::restored_agent(state, agent, infos))
-}
-
-/// Providers choose the hook child's cwd before they spawn Bus's absolute
-/// command. A shell-level `cd` cannot repair that pre-spawn failure. Observe
-/// outside rendering, even if the provider is Working or temporarily absent.
-fn observe_working_directory(state: &mut BusState, id: AgentId) -> Result<(), String> {
-    let agent = state.agent(id).ok_or("Unknown agent")?;
-    if agent.deletion_pending {
-        return Ok(());
-    }
-    let missing = match std::fs::metadata(&agent.cwd) {
-        Ok(metadata) => !metadata.is_dir(),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            true
-        }
-        // An unreadable path is not evidence it disappeared. Preserve the
-        // previous observation rather than invent a missing/recovered episode.
-        Err(_) => return Ok(()),
-    };
-    let error = missing.then(|| format!(
-        "Working directory is missing: {}. Provider hooks may fail before Bus runs. Restore the worktree or re-add the agent with an existing --pwd.",
-        agent.cwd.display()
-    ));
-    state
-        .observe_working_directory_error(id, error)
-        .map_err(|e| e.to_string())
 }
 
 fn branch_for(cwd: &Path) -> Option<String> {

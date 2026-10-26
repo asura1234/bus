@@ -23,7 +23,7 @@ and restoration in the numbered steps are authorized scratch fixtures.
 1. Complete setup with `codex`, then click `room:cwd-lab`. `T bus state` shows
    worker idle, no actionable_error, and details_disclosed false.
 2. Remove only X. Within 10 seconds, worker's details expand and show
-   `Working directory is missing`, X, and the recovery choices `Restore the
+   `Working directory is unavailable`, X, and the recovery choices `Restore the
    worktree` and `--pwd`. `T bus state` corroborates actionable_error and
    working_directory_error. Take and open a screenshot: the warning must be
    readable in the agent's sidebar without clicking its details toggle.
@@ -36,7 +36,7 @@ and restoration in the numbered steps are authorized scratch fixtures.
 1. Complete setup with `claude`, then click `room:cwd-lab`. `T bus state` shows
    worker idle, no actionable_error, and details_disclosed false.
 2. Remove only X. Within 10 seconds, worker's details expand and show
-   `Working directory is missing`, X, and the recovery choices `Restore the
+   `Working directory is unavailable`, X, and the recovery choices `Restore the
    worktree` and `--pwd`. `T bus state` corroborates actionable_error and
    working_directory_error. Take and open a screenshot: the warning must be
    readable in the agent's sidebar without clicking its details toggle.
@@ -49,10 +49,24 @@ and restoration in the numbered steps are authorized scratch fixtures.
 1. Complete setup with `cursor`, then click `room:cwd-lab`. `T bus state` shows
    worker idle, no actionable_error, and details_disclosed false.
 2. Remove only X. Within 10 seconds, worker's details expand and show
-   `Working directory is missing`, X, and the recovery choices `Restore the
+   `Working directory is unavailable`, X, and the recovery choices `Restore the
    worktree` and `--pwd`. `T bus state` corroborates actionable_error and
    working_directory_error. Take and open a screenshot: the warning must be
    readable in the agent's sidebar without clicking its details toggle.
 3. Restore X from its scratch backup. Within 10 seconds both directory errors
    clear from `T bus state`, and the warning disappears from the UI. Agent ID
    and runtime identity are unchanged. Take and open a screenshot.
+
+### CWD-04 — MASTER orchestrator (Claude)
+
+1. Create the same scratch directory and room, but add `worker` to `--room master`
+   with `--provider claude --orchestrates cwd-lab --pwd X --consent-hooks`.
+   Click `room:MASTER`. Worker is idle with no actionable_error. Its healthy
+   row remains compact and the orchestrated room line opens `cwd-lab`.
+2. Remove only X. Within 10 seconds the MASTER sidebar shows
+   `Working directory is unavailable`, X, `Restore the worktree`, and `--pwd`
+   without an expansion toggle. `T bus state` corroborates both warnings.
+   Take and open a screenshot: all recovery instructions must be readable.
+3. Restore X from its scratch backup. Within 10 seconds both directory errors
+   clear and the MASTER row returns to its compact layout. Agent ID and runtime
+   identity remain unchanged. Take and open a screenshot.

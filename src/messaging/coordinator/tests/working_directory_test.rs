@@ -12,8 +12,8 @@ fn directory_fixture(
     let mut info = native_info("pane", native, "session");
     info.interactive_ready = true;
     info.agent_status = status;
-    let listing = Ok(ResponseResult::AgentList { agents: vec![info] });
-    let (mut worker, agent, _, dir, _) = fixture(provider, vec![listing; 5]);
+    let (mut worker, agent, _, dir, _) = fixture(provider, Vec::new());
+    worker.transport = Box::new(DirectoryTransport(info));
     let cwd = dir.join("worktree");
     std::fs::create_dir(&cwd).unwrap();
     let mut state = worker.state.clone();
@@ -22,6 +22,34 @@ fn directory_fixture(
         .unwrap();
     worker.save(state).unwrap();
     (worker, agent, dir, cwd)
+}
+
+struct DirectoryTransport(schema::AgentInfo);
+
+impl Transport for DirectoryTransport {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList {
+                agents: vec![self.0.clone()],
+            }),
+            _ => Ok(ResponseResult::Ok {}),
+        }
+    }
+}
+
+fn poll_until(worker: &mut Worker, agent: AgentId, predicate: impl Fn(&RoomAgent) -> bool) {
+    let started = std::time::Instant::now();
+    loop {
+        worker.poll().unwrap();
+        if predicate(worker.state.agent(agent).unwrap()) {
+            return;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "directory observation never reached expected state"
+        );
+        std::thread::yield_now();
+    }
 }
 
 #[test]
@@ -48,7 +76,7 @@ fn deleted_working_directory_surfaces_recovery_action_for_every_provider() {
             .actionable_error
             .is_none());
         std::fs::remove_dir(&cwd).unwrap();
-        worker.poll().unwrap();
+        poll_until(&mut worker, agent, |a| a.actionable_error.is_some());
         let observed = worker.state.agent(agent).unwrap();
         let error = observed
             .actionable_error
@@ -80,7 +108,7 @@ fn deleted_working_directory_surfaces_recovery_action_for_every_provider() {
             Some(error)
         );
         std::fs::create_dir(&cwd).unwrap();
-        worker.poll().unwrap();
+        poll_until(&mut worker, agent, |a| a.working_directory_error.is_none());
         assert!(worker
             .state
             .agent(agent)
@@ -97,7 +125,7 @@ fn directory_recovery_keeps_an_unrelated_agent_error() {
     let (mut worker, agent, dir, cwd) =
         directory_fixture(Provider::Codex, schema::AgentStatus::Idle);
     std::fs::remove_dir(&cwd).unwrap();
-    worker.poll().unwrap();
+    poll_until(&mut worker, agent, |a| a.working_directory_error.is_some());
     worker
         .state
         .set_agent_error(agent, Some("permission denied by provider".into()))
@@ -113,7 +141,7 @@ fn directory_recovery_keeps_an_unrelated_agent_error() {
         Some("permission denied by provider")
     );
     std::fs::create_dir(&cwd).unwrap();
-    worker.poll().unwrap();
+    poll_until(&mut worker, agent, |a| a.working_directory_error.is_none());
     assert_eq!(
         worker
             .state
@@ -133,7 +161,7 @@ fn a_file_replacing_the_working_directory_also_shows_the_warning() {
         directory_fixture(Provider::Codex, schema::AgentStatus::Idle);
     std::fs::remove_dir(&cwd).unwrap();
     std::fs::write(&cwd, b"not a directory").unwrap();
-    worker.poll().unwrap();
+    poll_until(&mut worker, agent, |a| a.actionable_error.is_some());
     assert!(worker
         .state
         .agent(agent)
@@ -149,15 +177,15 @@ fn a_later_callback_cannot_permanently_erase_a_missing_directory_warning() {
     let (mut worker, agent, dir, cwd) =
         directory_fixture(Provider::Codex, schema::AgentStatus::Idle);
     std::fs::remove_dir(&cwd).unwrap();
-    worker.poll().unwrap();
+    poll_until(&mut worker, agent, |a| a.working_directory_error.is_some());
     let warning = worker.state.agent(agent).unwrap().actionable_error.clone();
     assert!(warning.is_some());
     // Turn starts/completions legitimately clear the transient agent error.
     worker.state.set_agent_error(agent, None).unwrap();
-    worker.poll().unwrap();
+    poll_until(&mut worker, agent, |a| a.actionable_error.is_some());
     assert_eq!(worker.state.agent(agent).unwrap().actionable_error, warning);
     std::fs::create_dir(&cwd).unwrap();
-    worker.poll().unwrap();
+    poll_until(&mut worker, agent, |a| a.working_directory_error.is_none());
     assert!(worker
         .state
         .agent(agent)
@@ -166,4 +194,61 @@ fn a_later_callback_cannot_permanently_erase_a_missing_directory_warning() {
         .is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+struct MissingPane;
+
+impl Transport for MissingPane {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: Vec::new() }),
+            Method::PaneGet(_) => Err(TransportError {
+                code: Some("pane_not_found".into()),
+                message: "pane not found".into(),
+                definitely_rejected: false,
+            }),
+            _ => Ok(ResponseResult::Ok {}),
+        }
+    }
+}
+
+#[test]
+fn missing_directory_does_not_hide_detached_pane_recovery() {
+    let (mut worker, agent, dir, cwd) =
+        directory_fixture(Provider::Codex, schema::AgentStatus::Idle);
+    std::fs::remove_dir(&cwd).unwrap();
+    poll_until(&mut worker, agent, |a| a.working_directory_error.is_some());
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .working_directory_error
+        .is_some());
+    worker.transport = Box::new(MissingPane);
+    worker.poll().unwrap();
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .runtime_identity
+        .pane_id
+        .is_none());
+    let detached_error = worker.state.agent(agent).unwrap().actionable_error.clone();
+    std::fs::create_dir(&cwd).unwrap();
+    poll_until(&mut worker, agent, |a| a.working_directory_error.is_none());
+    let restored_error = worker.state.agent(agent).unwrap().actionable_error.clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        detached_error
+            .as_deref()
+            .is_some_and(|error| error.contains("bus agent resume")),
+        "missing pane recovery while directory absent: {detached_error:?}"
+    );
+    assert!(
+        restored_error
+            .as_deref()
+            .is_some_and(|error| error.contains("bus agent resume")),
+        "missing pane recovery after directory restoration: {restored_error:?}"
+    );
 }
