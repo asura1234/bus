@@ -1,4 +1,4 @@
-use super::{control_dispatch, mpsc, Arc, BusEvent, BusSnapshot, Mutex, Worker};
+use super::{control_dispatch, mpsc, Arc, BusCommand, BusEvent, BusSnapshot, Mutex, Worker};
 use crate::messaging::control::server::ControlCall;
 use std::time::Instant;
 
@@ -17,6 +17,13 @@ impl Worker {
         // Unchanged reads need no notification scan or copied UI state.
         // Due polls still run, so a follower flood cannot stop delivery.
         read && self.revision == revision && self.error == error && Instant::now() < next_poll
+    }
+}
+
+pub(super) fn interrupts_delivery(command: &BusCommand) -> bool {
+    match command {
+        BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
+        _ => true,
     }
 }
 

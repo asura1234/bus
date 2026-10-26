@@ -12,6 +12,7 @@ use std::path::Path;
 
 mod callback_spool;
 mod control_reads;
+use control_reads::interrupts_delivery;
 
 /// How often a tick moves settled history out of `state.json`.
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
@@ -818,11 +819,4 @@ fn collect_delivery_commands(
         }
     }
     true
-}
-
-fn interrupts_delivery(command: &BusCommand) -> bool {
-    match command {
-        BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
-        _ => true,
-    }
 }
