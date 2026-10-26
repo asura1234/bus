@@ -1167,3 +1167,39 @@ fn master_pwd_enter_completes_only_a_visible_highlight_when_more_than_three_sugg
         BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
     )));
 }
+
+#[test]
+fn master_directory_warning_is_visible_and_clears_after_recovery() {
+    let (mut ui, master, pr, _, agent) = master_fixture();
+    let identity = ui
+        .snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
+    let warning = "Working directory unavailable: /gone. Restore worktree or use --pwd.";
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .observe_working_directory_error(agent, Some(warning.into()))
+        .unwrap();
+    ui.snapshot = Arc::new(snapshot);
+    ui.open_room(master);
+    let text = sidebar_rows(&mut ui).join(" ");
+    for expected in ["/gone", "Restore worktree", "--pwd"] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    assert!(!hit_rows(&ui, render::Action::Room(pr)).is_empty());
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .observe_working_directory_error(agent, None)
+        .unwrap();
+    ui.snapshot = Arc::new(snapshot);
+    assert!(!sidebar_rows(&mut ui).join(" ").contains("/gone"));
+    assert_eq!(
+        ui.snapshot.state.agent(agent).unwrap().runtime_identity,
+        identity
+    );
+}

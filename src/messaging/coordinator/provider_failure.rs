@@ -102,7 +102,7 @@ fn clear_stale_pane(state: &mut BusState, agent: &RoomAgent) -> Result<(), Strin
     state
         .set_agent_runtime_identity(agent.id, identity)
         .map_err(|e| e.to_string())?;
-    if agent.actionable_error.is_none() {
+    if agent.actionable_error.is_none() || agent.actionable_error == agent.working_directory_error {
         state.set_agent_error(agent.id, Some(format!(
             "Agent terminal is no longer available at its recorded pane. Saved conversation and queued work retained; inspect the agent, then run: bus agent resume --room {}", agent.room_id.0
         ))).map_err(|e| e.to_string())?;

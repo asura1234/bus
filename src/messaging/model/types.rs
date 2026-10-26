@@ -382,6 +382,10 @@ pub(crate) struct RoomAgent {
     /// over after a coordinator restart, and only that error is cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) update_error: Option<String>,
+    /// The missing-directory warning Bus owns, so recovery clears only this
+    /// warning and a later callback cannot silently erase it for good.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) working_directory_error: Option<String>,
     /// A shared provider outage holds work until an explicit room resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) missing_binary: Option<String>,

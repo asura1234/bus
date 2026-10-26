@@ -372,30 +372,33 @@ impl BusUi {
             .agents()
             .filter(|a| Some(a.room_id) == room)
             .map(|agent| {
-                // MASTER agents show name, provider and orchestrated room only.
-                if state
+                let in_master = state
                     .master_room()
-                    .is_some_and(|master| master.id == agent.room_id)
-                {
+                    .is_some_and(|master| master.id == agent.room_id);
+                let error_lines = if in_master || agent.details_disclosed {
+                    agent
+                        .actionable_error
+                        .as_deref()
+                        .or(agent.working_directory_error.as_deref())
+                        .map(|error| wrap(error, sw))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                // Healthy MASTER rows stay compact; persistent errors remain
+                // visible without an expansion control.
+                if in_master {
+                    let height = MASTER_AGENT_ROWS + error_lines.len();
                     return SidebarAgent {
                         agent,
-                        in_master: true,
+                        in_master,
                         paths: Vec::new(),
-                        error_lines: Vec::new(),
-                        height: MASTER_AGENT_ROWS,
+                        error_lines,
+                        height,
                     };
                 }
                 let paths = if agent.details_disclosed {
                     wrap(&agent.cwd.to_string_lossy(), sw)
-                } else {
-                    Vec::new()
-                };
-                let error_lines = if agent.details_disclosed {
-                    agent
-                        .actionable_error
-                        .as_deref()
-                        .map(|error| wrap(error, sw))
-                        .unwrap_or_default()
                 } else {
                     Vec::new()
                 };
@@ -565,7 +568,14 @@ impl BusUi {
                     false,
                     true,
                 );
-                y += 2;
+                y += 1;
+                for line in error_lines {
+                    let rect = viewport.at(1, y, sw);
+                    view.row(rect, line, None, false, false);
+                    view.color_last_row(rect, BLOCKED_BRIGHT);
+                    y += 1;
+                }
+                y += 1;
                 continue;
             }
             view.row(

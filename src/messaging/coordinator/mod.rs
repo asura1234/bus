@@ -28,6 +28,7 @@ mod startup;
 mod startup_recovery;
 mod storage;
 mod worker;
+mod working_directory;
 use storage::{CoordinatorLease, StoragePause};
 use worker::Worker;
 

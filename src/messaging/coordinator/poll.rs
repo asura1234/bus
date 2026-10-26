@@ -102,6 +102,7 @@ impl Worker {
                     .map_err(|e| e.to_string())?;
             }
         }
+        self.directory_checks.poll(&mut state)?;
         self.apply_poll(state)?;
         self.close_exited_terminals()?;
         for (agent, previous, current) in rebound {

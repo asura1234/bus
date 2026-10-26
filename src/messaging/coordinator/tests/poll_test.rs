@@ -24,6 +24,9 @@ use support::*;
 #[path = "poll_recovery_test.rs"]
 mod poll_recovery;
 
+#[path = "working_directory_test.rs"]
+mod working_directory;
+
 #[test]
 fn exit_evidence_updates_lifecycle_without_developer_chat() {
     for (terminal, exited, expected) in [

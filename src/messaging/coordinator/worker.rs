@@ -12,6 +12,7 @@ use std::path::Path;
 
 mod callback_spool;
 mod control_reads;
+use control_reads::interrupts_delivery;
 
 /// How often a tick moves settled history out of `state.json`.
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
@@ -19,6 +20,7 @@ const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 pub(super) struct Worker {
     pub(super) idle_alerted_rooms: BTreeSet<super::RoomId>, // In-memory idle episodes.
     pub(super) disk_space: super::disk_space::DiskSpace,
+    pub(super) directory_checks: super::working_directory::DirectoryChecks,
     pub(super) attention: super::attention::Runtime,
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
@@ -138,6 +140,7 @@ impl Worker {
         Ok(Self {
             idle_alerted_rooms: BTreeSet::new(),
             disk_space: super::disk_space::DiskSpace::default(),
+            directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
             state,
@@ -816,11 +819,4 @@ fn collect_delivery_commands(
         }
     }
     true
-}
-
-fn interrupts_delivery(command: &BusCommand) -> bool {
-    match command {
-        BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
-        _ => true,
-    }
 }
