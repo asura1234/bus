@@ -100,10 +100,14 @@ chatter relayed by an orchestrator.
 
 ## Replies and turn finals
 
-Bus returns your turn's final text to whoever sent you the request. So:
+Answer a finished request with `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID
+--text ANSWER`, using the message ID and command in its delivered prompt. This
+completes your request immediately, including while a watcher turn stays open.
+Bus returns the turn's final only to requests that are still outstanding. So:
 
-- **One copy.** If your final carries the result, don't also send it as a
-  separate message, and the other way round.
+- **One copy.** Use `--reply-to` for a mid-turn answer; an ordinary separate
+  message does not complete the request. Once you answer it, do not repeat its
+  result in a separate message. A turn final can answer outstanding requests.
 - **A turn that changed nothing** ends with one short line ("No change."),
   not a recap of what the sender already knows.
 - **Messages that need no answer** (an FYI, a rule) get a one-line final at most.

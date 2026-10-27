@@ -561,7 +561,7 @@ The per-agent `stage` explains how far delivery progressed:
 | `awaiting_start` | Submission occurred, but no trusted provider turn start is bound yet. |
 | `delivered` | A trusted provider turn started and Bus is awaiting an explicit answer or turn final. |
 | `joined` | The message joined another message's turn; see `group`. |
-| `replied` | Bus recorded the final reply for that recipient. |
+| `replied` | Bus recorded that recipient's explicit `--reply-to` answer or the provider turn's final reply. |
 | `abandoned` | The request is closed and will not run later; `reason` explains a queued delivery failure. |
 | `stalled` | The message made no progress for a grace period; `reason` says why and `stalled_from` names the stage it stalled in. |
 
