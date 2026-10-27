@@ -949,3 +949,72 @@ async fn launch_prompt_relative_shell_uses_the_panes_cwd_for_image_proof() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[tokio::test]
+async fn startup_snapshot_preserves_blank_rows_osc_and_native_identity() {
+    let mut app = app_with_agent();
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.begin_managed_agent(
+        "bus-r1-a2".into(),
+        AgentKind::Codex,
+        std::time::Instant::now(),
+        Duration::ZERO,
+        Duration::from_secs(30),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    let (runtime, _writes) = TerminalRuntime::test_with_channel(80, 24);
+    runtime.test_process_pty_bytes("\x1b]2;⠋ Working\x07\x1b]9;4;1;\x07› Ask Codex to do anything\r\n\r\n  GPT-6.1-Sol xhigh · ~/scratch\r\n  ? for shortcuts".as_bytes());
+    app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+    let target = app.public_pane_id(0, pane).unwrap();
+    let request = |expected: &str| {
+        serde_json::from_value::<crate::protocol::api::schema::Request>(serde_json::json!({
+            "id":"diagnostics", "method":"agent.startup_snapshot",
+            "params":{"pane_id":target,"expected_terminal_id":expected}
+        }))
+        .expect("startup failure must support a guarded native snapshot")
+    };
+    let response = app.handle_api_request(request(terminal_id.as_str()));
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let snapshot = &value["result"]["snapshot"];
+    assert_eq!(snapshot["pane_id"], target);
+    assert_eq!(snapshot["terminal_id"], terminal_id.as_str());
+    assert_eq!(snapshot["native_agent"], "codex");
+    assert_eq!(snapshot["native_name"], "bus-r1-a2");
+    assert_eq!(snapshot["native_status"], "working");
+    assert_eq!(snapshot["osc_title"], "⠋ Working");
+    assert_eq!(snapshot["osc_progress"], "4;1;");
+    assert!(snapshot["screen"]
+        .as_str()
+        .unwrap()
+        .contains("› Ask Codex to do anything\n\n  GPT-6.1-Sol"));
+    let changed: serde_json::Value =
+        serde_json::from_str(&app.handle_api_request(request("replacement"))).unwrap();
+    assert_eq!(changed["error"]["code"], "agent_identity_changed");
+    assert!(!changed.to_string().contains("Ask Codex"));
+}
+
+#[tokio::test]
+async fn startup_snapshot_refuses_a_bound_conversation_screen() {
+    let (app, params, _writes) = claude_agent_with_input("PRIVATE_CONVERSATION_CONTENT");
+    let response = app.handle_agent_startup_snapshot(
+        "privacy".into(),
+        crate::protocol::api::schema::AgentStartupSnapshotParams {
+            pane_id: params.expected_pane_id,
+            expected_terminal_id: params.expected_terminal_id,
+        },
+    );
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(value["error"]["code"], "startup_snapshot_unavailable");
+    assert!(!response.contains("PRIVATE_CONVERSATION_CONTENT"));
+}
+
+#[tokio::test]
+async fn startup_snapshot_does_not_capture_an_unfinished_redraw() {
+    let runtime = TerminalRuntime::test_with_screen_bytes(80, 24, b"startup");
+    runtime.test_process_pty_bytes(b"\x1b[?2026hpartial");
+    assert!(runtime.startup_snapshot().is_none());
+    runtime.test_process_pty_bytes(b"\x1b[?2026l");
+    assert!(runtime.startup_snapshot().unwrap().0.contains("partial"));
+}

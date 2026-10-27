@@ -2,6 +2,7 @@ mod basic;
 mod dialog;
 mod prompt;
 mod read;
+mod startup_snapshot;
 
 use crate::server::api::errors::encode_error;
 

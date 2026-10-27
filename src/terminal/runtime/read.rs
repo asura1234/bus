@@ -345,6 +345,24 @@ impl TerminalRuntime {
         self.terminal.detection_text()
     }
 
+    /// One unfiltered startup viewport and its OSC evidence from the same update.
+    pub(crate) fn startup_snapshot(&self) -> Option<(String, String, String, u64)> {
+        for _ in 0..3 {
+            let before = self.content_seq.load(Ordering::Acquire);
+            if !before.is_multiple_of(2) || self.synchronized_output_active() {
+                continue;
+            }
+            let screen = self.terminal.visible_text();
+            let title = self.terminal.agent_osc_title();
+            let progress = self.terminal.agent_osc_progress();
+            let after = self.content_seq.load(Ordering::Acquire);
+            if before == after && !self.synchronized_output_active() {
+                return Some((screen, title, progress, after));
+            }
+        }
+        None
+    }
+
     pub fn terminal_title(&self) -> Option<String> {
         self.terminal.terminal_title()
     }

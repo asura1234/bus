@@ -71,6 +71,9 @@ pub enum ResponseResult {
     AgentInfo {
         agent: AgentInfo,
     },
+    AgentStartupSnapshot {
+        snapshot: super::agents::AgentStartupSnapshot,
+    },
     AgentStarted {
         agent: AgentInfo,
         argv: Vec<String>,

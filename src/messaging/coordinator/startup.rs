@@ -109,6 +109,12 @@ impl Worker {
             Err(error) if matches!(error.code.as_deref(), Some("agent_shell_starting" | "agent_shell_waiting")) => error,
             other => return self.agent_error(id, format!("Agent start outcome requires inspection of its owned terminal; startup is watched and will not be retried. {other:?}")),
         };
+        let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
+        let message = format!(
+            "{}\nStartup diagnostics:\n{}",
+            error.message,
+            self.startup_diagnostics(&agent)
+        );
         let mut state = self.state.clone();
         let mut startup = state
             .agent(id)
@@ -125,10 +131,10 @@ impl Worker {
             .set_agent_startup(id, Some(startup))
             .map_err(|e| e.to_string())?;
         state
-            .set_agent_error(id, Some(error.message.clone()))
+            .set_agent_error(id, Some(message.clone()))
             .map_err(|e| e.to_string())?;
         self.save(state)?;
-        Err(error.message)
+        Err(message)
     }
 
     pub(super) fn cleanup_failed_startups(
@@ -194,6 +200,7 @@ impl Worker {
             }
             if !startup.reported {
                 let evidence = self.startup_screen(agent.id);
+                let diagnostics = self.startup_diagnostics(&agent);
                 let reason = if let Some(reason) = native_error {
                     reason
                 } else if expired {
@@ -203,7 +210,7 @@ impl Worker {
                 };
                 let failure = startup_failure(reason, &evidence);
                 let text = format!(
-                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
+                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
                     failure.notice(), launch::provider_kind(agent.provider), startup.command
                 );
                 startup.failure = Some(failure);

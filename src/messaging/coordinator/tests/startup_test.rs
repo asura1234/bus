@@ -92,6 +92,20 @@ impl Transport for FailedLaunchNative {
                     "agent_status":"unknown", "revision":1
                 })).unwrap(),
             }),
+            Method::AgentStartupSnapshot(params) => {
+                if self.screen_terminal.is_some() {
+                    return Err(TransportError { code: Some("agent_identity_changed".into()),
+                        message: "Launch terminal is no longer available at its recorded pane".into(),
+                        definitely_rejected: true });
+                }
+                Ok(ResponseResult::AgentStartupSnapshot { snapshot: serde_json::from_value(json!({
+                    "pane_id": params.pane_id, "terminal_id": params.expected_terminal_id,
+                    "native_agent":"codex", "native_name":"bus-r1-a2", "native_status":"working",
+                    "launch_pending":true, "interactive_ready":false,
+                    "screen":"› Ask Codex to do anything\n\n  GPT-6.1-Sol xhigh\n  ? for shortcuts",
+                    "osc_title":"⠋ Working", "osc_progress":"4;1;", "content_revision":2
+                })).unwrap() })
+            }
             Method::PaneRead(_) => Ok(ResponseResult::PaneRead {
                 read: serde_json::from_value(json!({
                     "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1",
@@ -282,7 +296,7 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
         .submit_message_with(
             room,
             Draft {
-                text: "pending work".into(),
+                text: "QUEUED_MESSAGE_MUST_NOT_APPEAR_IN_DIAGNOSTICS".into(),
                 files: vec![],
                 recipient_ids: [agent].into(),
             },
@@ -307,6 +321,23 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
         "a retained launch failure must stop its queued/async waiters"
     );
     assert!(error.contains("Command:") && error.contains("Last screen lines:"));
+    let diagnostics: serde_json::Value = serde_json::from_str(
+        error
+            .split_once("Startup diagnostics:\n")
+            .expect("failure needs native diagnostics")
+            .1,
+    )
+    .unwrap();
+    assert_eq!(diagnostics["native"]["osc_title"], "⠋ Working");
+    assert_eq!(diagnostics["native"]["osc_progress"], "4;1;");
+    assert_eq!(diagnostics["native"]["native_agent"], "codex");
+    assert_eq!(diagnostics["native"]["pane_id"], "pane");
+    assert_eq!(diagnostics["native"]["terminal_id"], "terminal");
+    assert!(diagnostics["native"]["screen"]
+        .as_str()
+        .unwrap()
+        .contains("anything\n\n  GPT"));
+    assert!(!error.contains("QUEUED_MESSAGE_MUST_NOT_APPEAR_IN_DIAGNOSTICS"));
     assert_eq!(
         worker.state.request(request).unwrap().phase,
         RequestPhase::Abandoned
@@ -904,6 +935,10 @@ fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
             error.contains("STARTUP QUESTION"),
             "native evidence reached the worker: {error}"
         );
+        assert!(
+            error.contains("Startup diagnostics:"),
+            "shell readiness failure needs diagnostics: {error}"
+        );
         let agent = worker
             .state
             .agents()
@@ -937,7 +972,7 @@ fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
                 .unwrap()
                 .actionable_error
                 .as_deref(),
-            Some(SHELL_PROMPT_WAIT_ERROR),
+            Some(error.as_str()),
             "watchdog must preserve the actionable shell-wait error"
         );
         worker
@@ -973,7 +1008,7 @@ fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
                 .unwrap()
                 .actionable_error
                 .as_deref(),
-            Some(SHELL_PROMPT_WAIT_ERROR)
+            Some(error.as_str())
         );
         assert_eq!(
             worker.state.agent(agent).unwrap().runtime_identity,

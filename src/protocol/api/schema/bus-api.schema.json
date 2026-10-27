@@ -1352,6 +1352,22 @@
           ],
           "type": "object"
         },
+        "AgentStartupSnapshotParams": {
+          "description": "Capture only the exact owned launch terminal; never follow a replacement pane.",
+          "properties": {
+            "expected_terminal_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "expected_terminal_id"
+          ],
+          "type": "object"
+        },
         "AgentStatus": {
           "enum": [
             "idle",
@@ -3472,6 +3488,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.startup_snapshot",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentStartupSnapshotParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.read",
               "type": "string"
             },
@@ -4811,6 +4843,65 @@
             "path"
           ],
           "type": "string"
+        },
+        "AgentStartupSnapshot": {
+          "description": "Native startup evidence, independent of coordinator readiness interpretation.",
+          "properties": {
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "interactive_ready": {
+              "type": "boolean"
+            },
+            "launch_pending": {
+              "type": "boolean"
+            },
+            "native_agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "native_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "native_status": {
+              "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "osc_progress": {
+              "type": "string"
+            },
+            "osc_title": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "screen": {
+              "description": "Visible startup rows, including empty rows; no scrollback or request payloads.",
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "terminal_id",
+            "native_status",
+            "launch_pending",
+            "interactive_ready",
+            "screen",
+            "osc_title",
+            "osc_progress",
+            "content_revision"
+          ],
+          "type": "object"
         },
         "AgentStatus": {
           "enum": [
@@ -6229,6 +6320,22 @@
               "required": [
                 "type",
                 "agent"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "snapshot": {
+                  "$ref": "#/schemas/success_response/$defs/AgentStartupSnapshot"
+                },
+                "type": {
+                  "const": "agent_startup_snapshot",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "snapshot"
               ],
               "type": "object"
             },
