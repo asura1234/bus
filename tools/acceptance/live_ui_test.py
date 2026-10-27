@@ -34,7 +34,7 @@ if str(ROOT) not in sys.path:
 from tools.acceptance.screen_test import (  # noqa: E402
     ROWS, COLS, SIDEBAR, terminal_frame, assert_reply_cards,
 )
-BINARY = ROOT / "target/debug/bus"
+BINARY = Path(os.environ.get("BUS_TEST_BINARY", ROOT / "target/debug/bus"))
 # Exact executable plus steps from the Add form's default Codex selection.
 PROVIDERS = {"codex": ("codex", 0), "claude": ("claude", 1), "cursor": ("cursor-agent", 2)}
 
@@ -54,7 +54,7 @@ class LiveBus:
             result = subprocess.run([executable, "--version"], capture_output=True,
                                     text=True, check=True, timeout=10)
             self.versions[provider] = {"executable": executable, "version": result.stdout.strip()}
-        self.env = dict(os.environ, BUS_DATA_DIR=str(self.data), TERM="xterm-256color")
+        self.env = dict(os.environ, BUS_DATA_DIR=str(self.data), BUS_SKIP_SKILLS_OFFER="1", TERM="xterm-256color")
         for key in ("HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_CLIENT_SOCKET_PATH", "HERDR_CONFIG_PATH"):
             self.env.pop(key, None)
         self.master, slave = pty.openpty()

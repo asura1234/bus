@@ -41,7 +41,10 @@ pub(super) fn run(args: &[String]) -> io::Result<()> {
 }
 
 pub(super) fn on_launch() {
-    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+    if std::env::var("BUS_SKIP_SKILLS_OFFER").is_ok_and(|value| value == "1")
+        || !io::stdin().is_terminal()
+        || !io::stderr().is_terminal()
+    {
         return;
     }
     let result = (|| {
@@ -88,7 +91,7 @@ fn offer(
                 }
                 writeln!(
                     output,
-                    "Bus skills installed. Run bus skills status to inspect the copies."
+                    "Bus skills install finished. Run bus skills status to inspect copied or skipped skills."
                 )?;
                 return Ok(());
             }
