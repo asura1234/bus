@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
+from typing import Sequence
 
 from rebase_base import git
+
 
 def read_policy(repo: Path) -> dict:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gate-and-fix/scripts'))
@@ -32,6 +35,22 @@ def default_base(repo: Path, base: str | None = None) -> str:
     return base
 
 
+def require_ignored_artifacts(repo: Path, paths: Sequence[Path]) -> None:
+    """Admit fixed workflow handoff paths without editing ignore files or relocating them."""
+    repo = repo.resolve()
+    for path in paths:
+        path = (path if path.is_absolute() else repo / path).resolve()
+        if not path.is_relative_to(repo):
+            raise ValueError(f'workflow artifact path is outside target repository: {path}')
+        relative = path.relative_to(repo).as_posix()
+        tracked = subprocess.run(['git', '-C', str(repo), 'ls-files', '-z', '--', relative], capture_output=True, check=True)
+        if tracked.stdout:
+            raise ValueError(f'workflow artifact path contains tracked content: {relative}')
+        ignored = subprocess.run(['git', '-C', str(repo), 'check-ignore', '--quiet', '--', relative], capture_output=True)
+        if ignored.returncode != 0:
+            raise ValueError(f'workflow artifact path must be ignored before writes: {relative}')
+
+
 def plan_template(repo: Path, bundled: Path) -> Path:
     target = repo / 'docs/templates/plan-template.md'
     return target if target.is_file() else bundled
@@ -41,10 +60,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', type=Path, default=Path.cwd())
     parser.add_argument('--base')
+    parser.add_argument('--require-ignored', type=Path, action='append', default=[])
     args = parser.parse_args()
     try:
         repo = repository_root(args.repo)
         base = default_base(repo, args.base)
+        require_ignored_artifacts(repo, args.require_ignored)
         print(json.dumps({'repo': str(repo), 'base': base,
                           'base_commit': git(repo, 'rev-parse', f'{base}^{{commit}}'),
                           'policy': read_policy(repo)}, ensure_ascii=False))

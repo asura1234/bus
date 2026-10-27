@@ -19,6 +19,9 @@ from review_round_support import (
 )
 
 
+from repository_context import require_ignored_artifacts
+
+
 # Lane ownership and round claiming share one implementation with /review-pr, living in the repo-root
 # cli_extensions/. Take them from the real owner instead of relaying through
 # review_round_support — a pass-through re-export would make "who owns these symbols" unclear again.
@@ -129,6 +132,12 @@ def main(argv: list[str]) -> int:
     if args.check:
         print("PASS: 计划满足 /review-plan 前提门禁（模板 / 状态 / 决策 / 目标 / 实施步骤结构）")
         return 0
+
+    try:
+        require_ignored_artifacts(REPO_ROOT, [branch_dir, pointer])
+    except (ValueError, OSError) as error:
+        print(f"FAIL\n- {error}")
+        return 1
 
     # Once the plan passes the prerequisite checks, record it as this branch's "last reviewed plan" for later bare calls
     branch_dir.mkdir(parents=True, exist_ok=True)

@@ -146,16 +146,17 @@ def current_branch() -> str:
 def detect_branch_plan_docs(base: str | None = None) -> list[Path]:
     """Return changed plan documents against the caller/default base, including dirty files."""
     names: set[str] = set()
-    diff = git("diff", "--name-only", f"{default_base(REPO_ROOT, base)}...HEAD")
-    if diff.returncode == 0:
-        names.update(diff.stdout.split())
-    for line in git("status", "--porcelain").stdout.splitlines():
-        # A porcelain line looks like 'XY <path>'; strip the status code to get the path; rename/copy looks like 'old -> new', take the new path
-        path = line[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        if path:
-            names.add(path)
+    diff = git("diff", "--name-only", "-z", f"{default_base(REPO_ROOT, base)}...HEAD")
+    if diff.returncode != 0:
+        raise ValueError(f"cannot discover branch plans: {diff.stderr.strip()}")
+    names.update(path for path in diff.stdout.split("\0") if path)
+    records = iter(git("status", "--porcelain", "-z").stdout.split("\0"))
+    for record in records:
+        if not record:
+            continue
+        names.add(record[3:])
+        if "R" in record[:2] or "C" in record[:2]:
+            next(records, None)  # -z renames put the old name in the next record.
     plans = {REPO_ROOT / n for n in names if n.startswith(("plans/", "docs/plans/")) and n.endswith(".md")}
     return sorted(p for p in plans if p.is_file())
 

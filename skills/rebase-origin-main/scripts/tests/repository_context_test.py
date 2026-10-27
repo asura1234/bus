@@ -38,10 +38,44 @@ class RepositoryContextTest(unittest.TestCase):
             explicit = subprocess.run([sys.executable, str(CONTEXT), '--base', 'HEAD'], cwd=nested, text=True, capture_output=True)
             self.assertEqual(explicit.returncode, 0, explicit.stderr)
             self.assertEqual(json.loads(explicit.stdout)['base'], 'HEAD')
+            admission = [sys.executable, str(CONTEXT), '--base', 'HEAD', '--require-ignored', 'temp/review-pr/feature']
+            unignored = subprocess.run(admission, cwd=nested, text=True, capture_output=True)
+            self.assertEqual(unignored.returncode, 2)
+            self.assertIn('must be ignored before writes', unignored.stderr)
+            (repo / '.git/info/exclude').write_text('temp/\n')
+            admitted = subprocess.run(admission, cwd=nested, text=True, capture_output=True)
+            self.assertEqual(admitted.returncode, 0, admitted.stderr)
+            self.assertFalse((repo / 'temp').exists())
             git('symbolic-ref', '--delete', 'refs/remotes/origin/HEAD')
             missing = subprocess.run([sys.executable, str(CONTEXT)], cwd=nested, text=True, capture_output=True)
             self.assertEqual(missing.returncode, 2)
             self.assertIn('--base', missing.stderr)
+
+    def test_fixed_artifact_paths_require_ignore_and_reject_tracked_content(self):
+        self.assertTrue(CONTEXT.exists())
+        spec = importlib.util.spec_from_file_location('repository_context', CONTEXT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertTrue(hasattr(module, 'require_ignored_artifacts'), 'artifact admission helper is missing')
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            root = repo / 'temp/review-plan/feature'
+            with self.assertRaisesRegex(ValueError, 'ignored'):
+                module.require_ignored_artifacts(repo, [root])
+            self.assertFalse(root.exists())
+            (repo / '.git/info/exclude').write_text('temp/\n')
+            module.require_ignored_artifacts(repo, [root, root / '.last-plan'])
+            self.assertFalse(root.exists())
+            root.mkdir(parents=True)
+            tracked = root / 'tracked.md'
+            tracked.write_text('retain tracked data')
+            subprocess.run(['git', '-C', str(repo), 'add', '--force', str(tracked)], check=True)
+            with self.assertRaisesRegex(ValueError, 'tracked'):
+                module.require_ignored_artifacts(repo, [root])
+            self.assertEqual(tracked.read_text(), 'retain tracked data')
+            with self.assertRaisesRegex(ValueError, 'outside'):
+                module.require_ignored_artifacts(repo, [repo.parent / 'outside'])
 
     def test_review_template_uses_target_override_with_bundled_fallback(self):
         self.assertTrue(CONTEXT.exists(), 'repository policy accessor is missing')

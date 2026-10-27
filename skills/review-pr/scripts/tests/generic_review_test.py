@@ -45,6 +45,24 @@ class GenericReviewTest(unittest.TestCase):
         self.assertEqual((self.locks / '.locked-goal').read_text(), 'Deliver the requested behavior\n')
         self.assertEqual(self.git('status', '--porcelain'), '')
 
+    def test_review_pr_refuses_unignored_artifact_writes_and_preserves_locks(self):
+        (self.repo / '.gitignore').write_text('')
+        self.git('commit', '-qam', 'no temp ignore contract')
+        run = subprocess.run([sys.executable, str(SKILLS / 'review-pr/scripts/review_round.py'), '--reviewer', 'unignored'], cwd=self.repo, text=True, capture_output=True)
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn('ignored', run.stdout)
+        self.assertFalse((self.locks / 'unignored').exists())
+        self.assertEqual((self.locks / '.locked-goal').read_text(), 'Deliver the requested behavior\n')
+
+    def test_review_plan_discovery_preserves_spaces_and_dirty_paths(self):
+        self.git('mv', 'docs/plans/work.md', 'docs/plans/space plan.md')
+        self.git('commit', '-qm', 'plan name with spaces')
+        (self.repo / 'docs/plans/dirty plan.md').write_text('# Dirty plan\n')
+        script = "import sys,json;sys.path.insert(0,sys.argv[1]);import review_round_support as r;print(json.dumps([str(p) for p in r.detect_branch_plan_docs()]))"
+        run = subprocess.run([sys.executable, '-c', script, str(SKILLS / 'review-plan/scripts')], cwd=self.repo, text=True, capture_output=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [str(self.repo / 'docs/plans/dirty plan.md'), str(self.repo / 'docs/plans/space plan.md')])
+
     def test_review_plan_discovers_target_plan_without_origin_master(self):
         script = "import sys,json;sys.path.insert(0,sys.argv[1]);import review_round_support as r;print(json.dumps([str(p) for p in r.detect_branch_plan_docs()]))"
         run = subprocess.run([sys.executable, '-c', script, str(SKILLS / 'review-plan/scripts')], cwd=self.repo, text=True, capture_output=True)
