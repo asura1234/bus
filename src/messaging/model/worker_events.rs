@@ -178,11 +178,11 @@ impl BusState {
                 && lead
                     .submission_boundary
                     .is_some_and(|b| callback.sequence > b)
+                && r.completed_reply
+                    .as_ref()
+                    .is_none_or(|reply| reply.group.is_some())
                 && (r.phase == RequestPhase::Abandoned
                     || r.phase == RequestPhase::Completed
-                        && r.completed_reply
-                            .as_ref()
-                            .is_some_and(|reply| reply.group.is_some())
                         && lead.trusted_start_bound
                         && matches!(&callback.kind, CallbackEventKind::Final { text }
                             if r.reply().is_some_and(|reply| reply.text != *text)))

@@ -46,7 +46,7 @@ fn reply_to_completes_the_lead_without_ending_its_turn_or_stopping_later_steerin
     );
     let next = start(&mut f, "one task");
     assert_eq!(f.request(next).group, Some(lead));
-    assert_eq!(f.typed().last().unwrap().1, true);
+    assert!(f.typed().last().unwrap().1);
     assert_eq!(status(&mut f, next)["complete"], false);
     assert_eq!(
         f.worker.state.requests().count(),
@@ -336,5 +336,70 @@ fn reply_to_does_not_hide_a_steering_start_callback_that_arrives_after_the_answe
     assert_eq!(
         status(&mut f, follow)["requests"][0]["reply"]["text"],
         "done before hook consumption"
+    );
+}
+
+#[test]
+fn reply_to_does_not_publish_a_late_final_after_the_answered_anchor_is_abandoned() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let master = f.worker.state.ensure_master_room();
+    let sender = f
+        .worker
+        .state
+        .create_agent(master, "orchestrator", Provider::Codex, f.dir.clone(), None)
+        .unwrap();
+    f.worker.state.bind_orchestrator(sender, f.room).unwrap();
+    let lead = f
+        .worker
+        .state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "watch forever".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(sender),
+            f.now,
+        )
+        .unwrap()[0];
+    f.deliver();
+    let payload = f.typed().last().unwrap().0.clone();
+    f.started("infinite-turn", &payload);
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    let message = f.request(lead).prompt.id;
+    let agent = f.agent;
+    assert!(answer(&mut f, message, agent, "already answered").ok);
+
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, f.now)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(
+            agent,
+            f.now + crate::messaging::model::TURN_SETTLE_MS + 1,
+            |_| None,
+        ),
+        Some(lead)
+    );
+    f.worker.save(state).unwrap();
+    assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+    let notices = f.worker.state.notices(f.room).count();
+    let events = serde_json::to_value(&f.worker.state).unwrap()["worker_events"].clone();
+    let requests = f.worker.state.requests().count();
+
+    f.stopped("infinite-turn", "a different eventual final");
+    f.consume();
+    assert_eq!(f.worker.state.notices(f.room).count(), notices);
+    assert_eq!(
+        serde_json::to_value(&f.worker.state).unwrap()["worker_events"],
+        events
+    );
+    assert_eq!(f.worker.state.requests().count(), requests);
+    assert_eq!(
+        status(&mut f, lead)["requests"][0]["reply"]["text"],
+        "already answered"
     );
 }
