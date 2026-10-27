@@ -276,7 +276,7 @@ fn configure_honors_explicit_editor_and_does_not_nest_an_inherited_wrapper() {
     configure(&mut command, "w1:p2", &[]).unwrap();
     assert_eq!(command.get_env(FALLBACK).unwrap(), "'custom editor' --wait");
     let path = directory("../../pane:1");
-    assert!(path.starts_with(super::super::paths::data_dir().join("private/drafts")));
+    assert!(path.starts_with(crate::utils::paths::data_dir().join("private/drafts")));
     assert!(!path.file_name().unwrap().to_string_lossy().contains('.'));
     assert!(run(&["bus".into(), "--bus-callback".into(), "draft-editor".into()]).is_err());
 }
