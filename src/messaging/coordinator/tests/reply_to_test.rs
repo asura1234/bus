@@ -188,8 +188,11 @@ fn reply_to_is_durable_and_deletion_preserves_answered_success() {
 #[test]
 fn reply_to_delivery_includes_each_batched_message_id_and_exact_recipient_command() {
     let mut f = Fixture::new(Provider::ClaudeCode);
+    f.status(RuntimeStatus::Launching);
     let first = f.send("first", false);
     let second = f.send("second", false);
+    f.deliver();
+    f.status(RuntimeStatus::Idle);
     f.deliver();
     let payload = f.typed().last().unwrap().0.clone();
     for id in [first, second] {

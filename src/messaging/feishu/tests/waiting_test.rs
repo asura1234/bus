@@ -142,12 +142,8 @@ fn developer_notification_final_reply_to_developer_triggers_once() {
     before.set_draft_text(master, "status").unwrap();
     before.set_draft_recipients(master, [agent]).unwrap();
     let request = before.submit_draft(master, 1).unwrap()[0];
-    let mut value = serde_json::to_value(&before).unwrap();
-    let item = &mut value["requests"][request.0.to_string()];
-    item["phase"] = serde_json::json!("completed");
-    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"Still waiting on you: Approve export", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
-    item["completed_at_ms"] = serde_json::json!(2);
-    let next: BusState = serde_json::from_value(value).unwrap();
+    let mut next = before.clone();
+    next.finish_for_test(request, "Still waiting on you: Approve export", 2);
     assert_eq!(
         tui(&before, &next),
         ["libtv-app master is waiting on you: Approve export"]
