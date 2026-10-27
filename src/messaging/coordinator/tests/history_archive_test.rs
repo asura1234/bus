@@ -401,18 +401,6 @@ fn callback_pruning_keeps_ids_that_can_still_match_an_open_request() {
         state.accept_callback(background.clone()),
         CallbackDisposition::AcceptedProgress
     );
-    assert_eq!(
-        state.accept_callback(callback(
-            "final",
-            3,
-            io::now_ms(),
-            CallbackEventKind::Final {
-                text: "completed after background work".into()
-            }
-        )),
-        CallbackDisposition::AcceptedPendingSettlement
-    );
-    assert!(state.request(request).unwrap().pending_final.is_some());
     state.archive(io::now_ms());
     assert_eq!(
         state.accept_callback(background),
@@ -420,8 +408,8 @@ fn callback_pruning_keeps_ids_that_can_still_match_an_open_request() {
         "an old background callback still matches the open request and must remain single-use"
     );
     assert!(
-        state.request(request).unwrap().pending_final.is_some(),
-        "replaying an old background event must not erase a captured final reply"
+        state.request(request).unwrap().awaiting_background,
+        "replaying an old background event must not settle the open request"
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

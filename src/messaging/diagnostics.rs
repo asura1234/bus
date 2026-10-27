@@ -39,7 +39,6 @@ pub(crate) fn request(state: &BusState, id: RequestId, event: &'static str, reas
         turn_ended_at_ms = ?request.turn_ended_at_ms,
         progress_at_ms = ?request.progress_at_ms,
         pending_final_bytes = ?request.pending_final.as_ref().map(|answer| answer.text.len()),
-        held_reply_bytes = ?request.shell_hold.as_ref().map(|hold| hold.interim.text.len()),
         elapsed_ms = super::storage::io::now_ms().saturating_sub(request.prompt.submitted_at_ms),
         "Bus delivery"
     );

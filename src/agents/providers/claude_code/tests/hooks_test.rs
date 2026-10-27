@@ -1,4 +1,4 @@
-use super::{claude_image_placeholders, claude_running_shells, is_bus_control, parse};
+use super::{claude_image_placeholders, claude_running_shells, parse};
 use crate::agents::providers::{hook_json::HookContract, spool::Parsed, ProviderKind};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -294,203 +294,6 @@ fn claude_stop_failure_with_blank_or_non_text_error_fields_falls_back_to_the_cat
 /// `bus send --async` waits on workers, which run for minutes or hours. Bus's
 /// waits are not work the reply depends on; other shells still hold it.
 #[test]
-fn claude_running_shells_leave_out_bus_send_and_wait_commands() {
-    let shell = |id: &str, command: &str| json!({"id":id,"type":"shell","status":"running","description":"Run","command":command});
-    let value = json!({"background_tasks":[
-        shell("b1", "bus send --async --room qa --as orch --to worker --text 'go'"),
-        shell("b2", "/Users/me/work/bus/target/debug/bus --dev send --room master --to orch --text hi"),
-        shell("b3", "cd /tmp && bus --dev wait 42 --timeout 600"),
-        shell("b4", "bus.exe wait 7"),
-        shell("b5", "cargo test --locked"),
-        shell("b6", "bus history --room 0 | grep send"),
-        shell("b7", "sleep 45"),
-    ]});
-    assert_eq!(
-        claude_running_shells(&value)
-            .into_iter()
-            .collect::<Vec<_>>(),
-        ["b5", "b6", "b7"]
-    );
-    assert!(is_bus_control("bus send --to a --text b"));
-    assert!(is_bus_control("BUS_DATA_DIR=/x ./bus --dev --yolo wait 3"));
-    assert!(is_bus_control("bus state"));
-    assert!(!is_bus_control("busybox send"));
-    assert!(!is_bus_control("echo bus"));
-}
-
-#[test]
-fn direct_bus_control_shells_do_not_hold_replies() {
-    for command in [
-        "bus history --room 0",
-        "bus agent read worker --source recent --lines 20",
-        "bus message status 19",
-        "bus room notes 1 --text ready",
-        "bus request recover 19 --confirm",
-        "bus settings",
-        "bus diagnostics",
-        "bus sounds",
-        "cd '/tmp/a b' && '/tmp/a b/bus' --dev send --async --to worker --text go",
-    ] {
-        assert!(is_bus_control(command), "Bus control only: {command}");
-    }
-    for command in [
-        "bus agent read worker | python3 report.py",
-        "bus history --room 0 && cargo test",
-        "./rev_send.sh worker brief.md",
-        "until bus state; do sleep 3; done; bus send --to worker --text go",
-        "bus e2e",
-        "bus tui start",
-        "bus resume --last",
-        "bus --unknown-option wait 19",
-    ] {
-        assert!(
-            !is_bus_control(command),
-            "Work or opaque command: {command}"
-        );
-    }
-}
-
-#[test]
-fn async_dispatch_file_arguments_and_completion_echo_do_not_hold_replies() {
-    for command in [
-        r#"bus send --to worker --async --text "$(cat brief.md)""#,
-        r#"cd /tmp; ./bus send --async --to worker --text "$(cat 'brief with spaces.md')" > out.json 2>&1; echo sent"#,
-        r#"bus send --to worker --async --text $(cat brief.md)"#,
-        r#"bus send --to worker --async --text go >/dev/null; echo sent"#,
-    ] {
-        assert!(is_bus_control(command), "dispatch only: {command}");
-    }
-}
-
-#[test]
-fn async_dispatch_wrappers_cannot_hide_real_work() {
-    for command in [
-        r#"bus send --async --text "$(cat brief.md; cargo test)""#,
-        r#"bus send --async --text "$(cat $(generate-brief))""#,
-        r#"bus send --async --text "$(cat <(cargo test))""#,
-        r#"bus send --async --text "$(cat)""#,
-        r#"bus send --async --text "$(cat -)""#,
-        r#"bus send --async --text "$(cat brief.md)"; cargo test"#,
-        r#"bus send --async --text "$(cat brief.md)"; echo "$(cargo test)""#,
-        r#"bus send --async --text "$(cat brief.md)" | tee out.json"#,
-        r#"bus send --async --text "$(cat 'brief.md)""#,
-    ] {
-        assert!(!is_bus_control(command), "must hold work: {command}");
-    }
-}
-
-/// A background shell that runs real work and only then reports over Bus
-/// (`cargo build && bus send ...`) is work the reply waits on: its exit
-/// wakes the turn with the build's outcome, so it still holds the reply.
-#[test]
-fn claude_running_shells_keep_work_that_ends_with_a_bus_send() {
-    let value = json!({"background_tasks":[
-        {"id":"b1","type":"shell","status":"running","description":"Build","command":"cargo build --release && bus send --to qa --text 'build ready'"},
-    ]});
-    assert_eq!(
-        claude_running_shells(&value)
-            .into_iter()
-            .collect::<Vec<_>>(),
-        ["b1"]
-    );
-}
-
-#[test]
-fn bus_wait_shells_preserve_work_on_either_side_and_quoted_message_text() {
-    for command in [
-        "bus wait 7 && cargo build",
-        "cargo build; bus send --to qa --text ready",
-        "echo bus send --to qa --text ready",
-        "bus send --to qa --text \"$(cargo build)\"",
-        "bus send --to qa --text `cargo build`",
-        "(bus wait 7)",
-        "cd /tmp",
-    ] {
-        assert!(!is_bus_control(command), "must hold work: {command}");
-    }
-    for command in [
-        "cd /tmp && BUS_DATA_DIR=/scratch bus --dev wait 7",
-        "bus wait 7; bus send --to qa --text 'ready && checked; a | b'",
-        "bus send --to qa --text 'literal $(cargo build)'",
-        "bus send --to qa --text ready\\;checked",
-    ] {
-        assert!(is_bus_control(command), "only Bus waits: {command}");
-    }
-}
-
-/// A stream redirection such as `2>&1` belongs to the Bus command it follows;
-/// its `&` is not a command separator, so the shell is still only a Bus wait.
-#[test]
-fn bus_wait_shells_with_stream_redirections_are_still_bus_waits() {
-    for command in [
-        "bus send --to qa --async --text ready 2>&1",
-        "bus wait --message 7 --timeout 600 2>&1",
-        "bus wait 7 >&2 <&0",
-        "bus wait 7 &>/tmp/bus-wait.log",
-        "bus wait 7 >|/tmp/bus-wait.log",
-    ] {
-        assert!(is_bus_control(command), "only Bus waits: {command}");
-    }
-}
-
-/// Real work after a redirected Bus wait still holds the reply: only the
-/// redirection's own `&` or `|` is joined to the command, never a separator.
-#[test]
-fn bus_wait_shells_keep_work_after_a_stream_redirection() {
-    for command in [
-        "bus wait 7 2>&1 && cargo build",
-        "bus wait 7 2>&1&& cargo build",
-        "bus wait 7 >&2; cargo build",
-        "bus wait 7 2>&1 | tee /tmp/log",
-        "bus wait 7 &>/tmp/log & cargo build",
-        "bus wait 7 >|/tmp/log || cargo build",
-        "bus wait 7 &&>/tmp/log cargo build",
-    ] {
-        assert!(!is_bus_control(command), "must hold work: {command}");
-    }
-}
-
-/// The repository shim is a wrapper, retained for foreground controls.
-/// Background dispatches must name the Bus executable directly.
-#[test]
-fn repository_dev_control_dispatch_is_a_wrapper_and_stays_held() {
-    assert!(!is_bus_control(
-        "./run dev-control send --room work --as orch --to worker --async --text go"
-    ));
-}
-
-/// Inside double quotes a shell keeps a backslash that does not precede
-/// `$`, backtick, `"`, `\` or a newline, so a Windows path stays intact.
-#[test]
-fn double_quoted_windows_bus_path_is_a_direct_bus_control() {
-    assert!(is_bus_control(
-        r#""C:\Users\dev\bin\bus.exe" send --to worker --async --text go"#
-    ));
-}
-
-/// A backslash-newline is a line continuation that the shell removes.
-#[test]
-fn line_continued_bus_controls_are_direct() {
-    for command in [
-        "bus send --room work --as orch --to worker --async \\\n  --text go",
-        "'/tmp/a b/bus' --dev \\\n  send --to worker --async --text go",
-    ] {
-        assert!(is_bus_control(command), "Bus control only: {command:?}");
-    }
-}
-
-#[test]
-fn line_continuations_do_not_hide_real_work_around_bus_controls() {
-    for command in [
-        "cargo build \\\n && bus wait 7",
-        "bus wait 7 \\\n && cargo build",
-        "\"C:\\tools\\bus.exe\" wait 7 | cargo build",
-    ] {
-        assert!(!is_bus_control(command), "must hold work: {command:?}");
-    }
-}
-
-#[test]
 fn prompt_origin_requires_matching_provider_metadata_in_a_bounded_tail() {
     let root = crate::utils::test_temp::unique_temp_path("claude-scheduled");
     std::fs::create_dir_all(&root).unwrap();
@@ -543,50 +346,6 @@ fn prompt_origin_requires_matching_provider_metadata_in_a_bounded_tail() {
 }
 
 #[test]
-fn dispatch_completion_echo_cannot_smuggle_real_work() {
-    for command in [
-        r#"bus send --to w --async --text "$(cat brief.md)"; echo sent >(cargo test)"#,
-        r#"bus send --to w --async --text "$(cat brief.md)"; echo sent; exec cargo test"#,
-        "bus send --to w --async --text \"$(cat <<'EOF'\ncargo test\nEOF\n)\"",
-        r#"bus send --to w --async --text "$(cat brief.md)"; echo "${RESULT:=$(cargo test)}""#,
-        r#"echo sent; cargo test"#,
-        r#"$(cat runner.txt) send --to w --async --text go"#,
-        r#"bus $(cat subcommand.txt) --to w"#,
-    ] {
-        assert!(!is_bus_control(command), "must hold work: {command}");
-    }
-}
-
-#[test]
-fn dispatch_reading_several_brief_files_or_assigning_one_does_not_hold() {
-    for command in [
-        r#"bus send --to w --async --text "$(cat header.md brief.md)" > out.json 2>&1; echo sent"#,
-        r#"BRIEF="$(cat brief.md)" bus send --to w --async --text "$BRIEF""#,
-        r#"bus send --to w --async --text '$(cargo test)'; echo sent"#,
-    ] {
-        assert!(is_bus_control(command), "dispatch only: {command}");
-    }
-}
-
-// The classifier documents stdin reads as opaque work.
-#[test]
-fn dispatch_reading_stdin_through_a_device_path_still_holds() {
-    for command in [
-        r#"bus send --async --text "$(cat /dev/stdin)""#,
-        r#"bus send --async --text "$(cat /dev/fd/0)""#,
-    ] {
-        assert!(!is_bus_control(command), "must hold work: {command}");
-    }
-}
-
-// A shell comment inside the substitution hides the real closing parenthesis.
-#[test]
-fn file_substitution_with_a_comment_cannot_hide_real_work() {
-    let command = "bus send --async --to w --text \"$(cat brief.md #)\ncargo test)\"";
-    assert!(!is_bus_control(command), "must hold work: {command}");
-}
-
-#[test]
 fn task_notifications_require_a_whole_envelope_but_not_a_task_id() {
     assert_eq!(
         super::task_notification_body(" \n<task-notification>finished</task-notification>\n"),
@@ -605,4 +364,20 @@ fn task_notifications_require_a_whole_envelope_but_not_a_task_id() {
     ] {
         assert_eq!(super::task_notification_body(prompt), None, "{prompt}");
     }
+}
+
+#[test]
+fn running_shell_inventory_includes_opaque_commands_and_bus_controls() {
+    let value = json!({"background_tasks":[
+        {"id":"opaque","type":"shell","status":"running","command":"opaque-wrapper"},
+        {"id":"bus","type":"shell","status":"running","command":"bus send --async"},
+        {"id":"missing-command","type":"shell","status":"running"},
+        {"id":"done","type":"shell","status":"completed"},
+        {"id":"agent","type":"local_agent","status":"running"}]});
+    assert_eq!(
+        claude_running_shells(&value)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["bus", "missing-command", "opaque"]
+    );
 }

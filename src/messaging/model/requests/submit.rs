@@ -132,7 +132,6 @@ impl BusState {
                     progress_at_ms: None,
                     turn_ended_at_ms: None,
                     awaiting_background: false,
-                    shell_hold: None,
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);

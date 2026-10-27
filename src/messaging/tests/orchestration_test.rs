@@ -456,7 +456,6 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
         assert!(communication.contains(phrase), "missing {phrase}");
     }
     let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
-    assert!(cli.contains("With dev logging or `BUS_LOG=bus=debug`"));
     for phrase in [
         "A reply lands in the message's room, equally for developer and agent senders.",
         "A turn no message started posts in the orchestrator's work room.",

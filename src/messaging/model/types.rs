@@ -581,20 +581,9 @@ pub(crate) struct Request {
     /// First settled observation after this turn, while reply capture catches up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) turn_ended_at_ms: Option<u64>,
-    /// A provider explicitly paused this turn for background work that will resume it.
+    /// A provider paused without an answer for background work that will resume it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) awaiting_background: bool,
-    /// Captured background Stop reply, delivered at the hold cap. The legacy
-    /// `shell_hold` storage name also covers cron and background-agent waits.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) shell_hold: Option<ShellHold>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct ShellHold {
-    /// The first hold; wake turns that hold again do not restart the cap.
-    pub(crate) since_ms: u64,
-    pub(crate) interim: PendingFinal,
 }
 
 impl Request {
@@ -636,12 +625,6 @@ pub(crate) const UNBOUND_SETTLE_MS: u64 = 5_000;
 
 /// Allow completion hooks and transcript writes to arrive after the idle poll.
 pub(crate) const TURN_SETTLE_MS: u64 = 5_000;
-/// How long a turn that ended without a `Stop` keeps the door open for a late
-/// one before its shell-held interim becomes the reply. Claude's `Stop` can
-/// trail the idle screen by seconds (its hooks run first), and a folded task
-/// notification starts a new turn that restarts this wait.
-pub(crate) const HELD_REPLY_SETTLE_MS: u64 = 30_000;
-
 /// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
 pub(super) fn clock(at_ms: u64) -> String {
     i64::try_from(at_ms / 1000)

@@ -1,8 +1,7 @@
 //! Callbacks operations for the messaging state.
 use super::{
     AgentId, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, ModelError,
-    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase, RuntimeStatus,
-    STEERING_SETTLE_MS,
+    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase, STEERING_SETTLE_MS,
 };
 
 impl BusState {
@@ -190,8 +189,6 @@ impl BusState {
         let Some(request) = self.requests.get(&request_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
-        let settled_after_submission = agent.status == RuntimeStatus::Idle
-            && agent.status_revision > request.submission_status_revision;
         if let Err(reason) = check_callback_identity(request, &callback) {
             return CallbackDisposition::Rejected(reason);
         }
@@ -231,12 +228,10 @@ impl BusState {
         // A turn that wakes after the request paused for background work carries
         // the real reply. Once the request holds a final reply, a new turn is the
         // agent's own activity and must not replace or discard that reply.
-        // A shell-held interim still leaves that door open if another shell
-        // wakes a turn during the no-Stop settlement window.
         let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
             && request.trusted_start_bound
             && request.pending_final.is_none()
-            && (request.turn_ended_at_ms.is_none() || Self::held_interim(request).is_some())
+            && request.turn_ended_at_ms.is_none()
             && request.provider_session_id.is_some()
             && callback.provider_session_id == request.provider_session_id
             && request.provider_turn_id.is_some()
@@ -267,13 +262,7 @@ impl BusState {
             return CallbackDisposition::Rejected(reason);
         }
 
-        self.apply_callback_kind(
-            request_id,
-            callback,
-            turn_key,
-            continuation,
-            settled_after_submission,
-        )
+        self.apply_callback_kind(request_id, callback, turn_key, continuation)
     }
 
     fn apply_callback_kind(
@@ -282,7 +271,6 @@ impl BusState {
         callback: ProviderCallback,
         turn_key: Option<String>,
         continuation: bool,
-        settled_after_submission: bool,
     ) -> CallbackDisposition {
         let Some(request) = self.requests.get(&request_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
@@ -352,12 +340,6 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
                 }
-                // A textless wake ends the hold without erasing its captured answer.
-                let text = if text.trim().is_empty() {
-                    Self::held_interim(request).map_or(text, |interim| interim.text)
-                } else {
-                    text
-                };
                 let Some(request) = self.requests.get_mut(&request_id) else {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
@@ -369,14 +351,10 @@ impl BusState {
                     provider_turn_id: callback.provider_turn_id,
                 });
                 request.awaiting_background = false;
-                if settled_after_submission {
-                    match self.complete_pending_final(callback.agent_id, callback.occurred_at_ms) {
-                        Ok(true) => CallbackDisposition::AcceptedCompleted,
-                        Ok(false) => CallbackDisposition::AcceptedPendingSettlement,
-                        Err(_) => CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest),
-                    }
-                } else {
-                    CallbackDisposition::AcceptedPendingSettlement
+                match self.complete_pending_final(callback.agent_id, callback.occurred_at_ms) {
+                    Ok(true) => CallbackDisposition::AcceptedCompleted,
+                    Ok(false) => CallbackDisposition::AcceptedPendingSettlement,
+                    Err(_) => CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest),
                 }
             }
             CallbackEventKind::Error { .. } => {
@@ -536,16 +514,6 @@ impl BusState {
             callback.provider_session_id.as_deref(),
             callback.provider_turn_id.as_deref(),
         ));
-    }
-
-    pub(crate) fn is_unrelated_provider_turn(
-        &self,
-        launch: &str,
-        session: &str,
-        turn: &str,
-    ) -> bool {
-        provider_turn_key(launch, Some(session), Some(turn))
-            .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
     }
 
     /// Settles the agent's current request, and every request in its group,

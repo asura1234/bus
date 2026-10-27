@@ -22,9 +22,6 @@ mod turn_settlement_tests;
 #[path = "rollout_attribution_test.rs"]
 mod rollout_attribution_tests;
 
-#[path = "capped_background_test.rs"]
-mod capped_background_tests;
-
 #[path = "interrupt_test.rs"]
 mod interrupt_tests;
 
@@ -341,10 +338,10 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
         }
         fixture.stopped(steered_turn, "parser written with the streaming API");
         fixture.consume();
-        // Idle seen before the typing does not settle the extended turn.
+        // The matching Stop settles the extended turn independently of native Idle.
         assert_eq!(
             fixture.request(lead).phase,
-            RequestPhase::Active,
+            RequestPhase::Completed,
             "{provider:?}"
         );
         fixture.status(RuntimeStatus::Idle);
@@ -631,7 +628,7 @@ fn old_saved_requests_load_without_group_fields() {
 /// `send --async` returns once every recipient's `turn_ended` is true, so a
 /// reply held for shells the request started must not read as an ended turn.
 #[test]
-fn a_claude_reply_held_for_its_own_shells_does_not_report_the_turn_ended() {
+fn a_captured_claude_stop_reports_the_turn_ended_despite_running_shells() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     fixture.record(
         json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
@@ -643,19 +640,19 @@ fn a_claude_reply_held_for_its_own_shells_does_not_report_the_turn_ended() {
         "background_tasks":[{"id":"b1","type":"shell","status":"running","description":"Run","command":"sleep 45"}]}));
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     let status = fixture
         .worker
         .control_message(fixture.request(lead).prompt.id)
         .unwrap();
-    assert_eq!(status["requests"][0]["turn_ended"], false, "{status}");
+    assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
 }
 
 /// A reply held for shells the request started (the live case ran about eight
 /// minutes) is waiting on known work, so `send --async` must not end it as a
 /// stalled message once the agent has been idle past the stall threshold.
 #[test]
-fn a_claude_reply_held_for_its_own_shells_is_not_reported_stalled() {
+fn a_delivered_claude_stop_answer_never_becomes_stalled() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     fixture.record(
         json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
@@ -670,7 +667,7 @@ fn a_claude_reply_held_for_its_own_shells_is_not_reported_stalled() {
     fixture.now += crate::messaging::model::DELIVERED_STALL_MS + 1;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     let status = fixture
         .worker
         .control_message_at(fixture.request(lead).prompt.id, fixture.now)
@@ -812,13 +809,14 @@ fn shell_held_turns_keep_their_replies_and_folded_messages_share_them() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     let second = fixture.send("is it ready?", false);
-    let folded = fixture.send("and the docs?", false);
-    fixture.deliver();
     fixture.deliver();
     fixture.started("turn-2", "is it ready?");
-    fixture.started("turn-2", "and the docs?");
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
+    let folded = fixture.send("and the docs?", false);
+    fixture.deliver();
+    fixture.started("turn-2", "and the docs?");
+    fixture.consume();
     claude_stop_holding(&fixture, "turn-2", "Not yet; docs pending.", &["b1", "b2"]);
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);

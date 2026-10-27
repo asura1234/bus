@@ -57,9 +57,6 @@ mod global_agent_names_tests;
 #[path = "send_recovery_test.rs"]
 mod send_recovery_tests;
 
-#[path = "shell_hold_test.rs"]
-mod shell_hold_tests;
-
 #[path = "unconfirmed_submission_test.rs"]
 mod unconfirmed_submission_tests;
 
@@ -510,7 +507,7 @@ fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whi
             "[Image #1]Look",
             "finished",
         )),
-        CallbackDisposition::AcceptedPendingSettlement
+        CallbackDisposition::AcceptedCompleted
     );
     state
         .observe_status(agent, RuntimeStatus::Idle, 13)

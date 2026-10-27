@@ -1,7 +1,7 @@
 //! Close finished turns after giving their completion callbacks time to arrive.
 use super::{
-    callbacks::provider_turn_key, types::ShellHold, AgentId, BusState, ModelError, PendingFinal,
-    Request, RequestId, RequestPhase, RuntimeStatus, HELD_REPLY_SETTLE_MS, TURN_SETTLE_MS,
+    callbacks::provider_turn_key, AgentId, BusState, ModelError, PendingFinal, Request, RequestId,
+    RequestPhase, RuntimeStatus, TURN_SETTLE_MS,
 };
 
 /// How the provider's own record says a turn ended, for a turn whose
@@ -42,62 +42,7 @@ impl BusState {
         }
     }
 
-    /// Retain the agent's current reply while background work remains.
-    /// The cap counts from the first hold, on the status
-    /// clock that `release_shell_hold` reads; the newest interim text is what
-    /// the cap delivers.
-    pub(crate) fn hold_background_reply(&mut self, agent: AgentId, interim: PendingFinal) {
-        let Some((id, observed_at_ms)) = self
-            .agents
-            .get(&agent)
-            .and_then(|a| Some((a.current_request?, a.observed_at_ms)))
-        else {
-            return;
-        };
-        let Some(request) = self.requests.get_mut(&id).filter(|request| {
-            request.awaiting_background
-                && request.provider_session_id == interim.provider_session_id
-                && request.provider_turn_id == interim.provider_turn_id
-        }) else {
-            return;
-        };
-        let since_ms = request
-            .shell_hold
-            .as_ref()
-            .map_or(observed_at_ms, |hold| hold.since_ms);
-        request.shell_hold = Some(ShellHold { since_ms, interim });
-    }
-
-    /// Past `cap_ms` of holding for its shells, the request takes its newest
-    /// interim text as the reply, with reason `background_shells_timeout`, so
-    /// background work that never exits cannot hold it or its queue forever.
-    /// The historical reason and setting names remain compatible.
-    pub(crate) fn release_shell_hold(
-        &mut self,
-        agent: AgentId,
-        now_ms: u64,
-        cap_ms: u64,
-    ) -> Option<RequestId> {
-        let id = self.agents.get(&agent)?.current_request?;
-        let request = self.requests.get(&id)?;
-        let hold = request.shell_hold.as_ref()?;
-        if !request.has_held_background_reply()
-            || matches!(
-                request.phase,
-                RequestPhase::Completed | RequestPhase::Abandoned
-            )
-            || now_ms < hold.since_ms.saturating_add(cap_ms)
-        {
-            return None;
-        }
-        let interim = hold.interim.clone();
-        self.deliver_held_interim(agent, id, interim, now_ms, "background_shells_timeout")
-    }
-
-    /// A held Stop ends generation even though its background work remains.
-    /// Give an idle orchestrator's queued inbox its own turn, preserving the
-    /// captured answer under the old request just as a separately bound turn
-    /// does. Workers retain their ordinary bounded background waits.
+    /// A textless background pause must not block an idle orchestrator's inbox.
     pub(crate) fn release_orchestrator_inbox(
         &mut self,
         agent: AgentId,
@@ -122,51 +67,8 @@ impl BusState {
         {
             return None;
         }
-        if let Some(interim) = Self::held_interim(request) {
-            self.deliver_held_interim(agent, id, interim, now_ms, "background_shells_new_turn")
-        } else {
-            // A textless Stop still frees the inbox; no answer is invented.
-            self.close_turn_with_reason(id, now_ms, "background_shells_new_turn".into())
-                .ok()?;
-            Some(id)
-        }
-    }
-
-    /// Settles the agent's current request `id`, with its group, on `interim`:
-    /// the newest text a `Stop` gave while the turn held for its shells.
-    /// `reason` says why the hold ended short of the real reply.
-    fn deliver_held_interim(
-        &mut self,
-        agent: AgentId,
-        id: RequestId,
-        interim: PendingFinal,
-        now_ms: u64,
-        reason: &str,
-    ) -> Option<RequestId> {
-        let mut closed = self.group_members(id);
-        closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        if self.request(id).is_some_and(|request| !request.settled()) {
-            closed.push(id);
-        }
-        let request = self.requests.get_mut(&id)?;
-        request.awaiting_background = false;
-        request.turn_ended_at_ms = None;
-        request.pending_final = Some(interim);
-        if !self.complete_pending_final(agent, now_ms).ok()? {
-            return None;
-        }
-        for request in closed {
-            if let Some(request) = self.requests.get_mut(&request) {
-                request.failure_reason = Some(reason.to_owned());
-            }
-        }
-        tracing::info!(
-            event = "bus.message.recovered",
-            request_id = id.0,
-            agent_id = agent.0,
-            reason,
-            "Held reply delivered"
-        );
+        self.close_turn_with_reason(id, now_ms, "background_wait_superseded".into())
+            .ok()?;
         Some(id)
     }
 
@@ -183,12 +85,7 @@ impl BusState {
             .requests
             .get(&lead)
             .ok_or(ModelError::UnknownRequest(lead))?;
-        let held = previous.pending_final.is_none();
-        let Some(answer) = previous
-            .pending_final
-            .clone()
-            .or_else(|| Self::held_interim(previous))
-        else {
+        if previous.pending_final.is_none() {
             // A running generation can be replaced before it answers (Cursor
             // does this for follow-ups). Its messages still await one answer.
             return Ok(false);
@@ -205,17 +102,7 @@ impl BusState {
                 member.submission_boundary = boundary;
             }
         }
-        if held {
-            self.deliver_held_interim(
-                callback.agent_id,
-                lead,
-                answer,
-                callback.occurred_at_ms,
-                "background_shells_new_turn",
-            );
-        } else {
-            self.complete_pending_final(callback.agent_id, callback.occurred_at_ms)?;
-        }
+        self.complete_pending_final(callback.agent_id, callback.occurred_at_ms)?;
         let member = self
             .requests
             .get_mut(&next)
@@ -234,18 +121,6 @@ impl BusState {
         member.submission_status_revision = agent.status_revision;
         agent.current_request = Some(next);
         Ok(true)
-    }
-
-    /// The interim text a `Stop` gave while this request held for its shells,
-    /// when it belongs to the request's current provider session. A wake turn
-    /// that ends without a `Stop` (Bus restarted under it, or Claude folded the
-    /// next task notification into it) leaves it as the reply Bus captured.
-    pub(super) fn held_interim(request: &Request) -> Option<PendingFinal> {
-        request
-            .shell_hold
-            .as_ref()
-            .filter(|hold| hold.interim.provider_session_id == request.provider_session_id)
-            .map(|hold| hold.interim.clone())
     }
 
     /// The agent's current request when its turn ended without a reply and
@@ -292,13 +167,7 @@ impl BusState {
     /// turn, else `reply_not_captured`, or `agent_unavailable` when the agent
     /// is unavailable. An unavailable agent gets the window again from when it
     /// went unavailable, so one that only reattaches (a Bus restart) and is
-    /// Idle again settles as usual. A reply captured earlier and held for
-    /// the turn's shells is never lost that way: once `HELD_REPLY_SETTLE_MS`
-    /// has passed with no late `Stop`, it is delivered with reason
-    /// `background_shells_interim` (live, 2026-10-16: an orchestrator's wake
-    /// turns ended without a `Stop`, under a Bus restart and under a folded
-    /// task notification, and both groups of MASTER messages were abandoned
-    /// with their captured replies).
+    /// Idle again settles as usual.
     pub(crate) fn settle_ended_request(
         &mut self,
         agent: AgentId,
@@ -307,19 +176,13 @@ impl BusState {
     ) -> Option<RequestId> {
         let request = self.settle_candidate(agent)?;
         let id = request.id;
-        let held = Self::held_interim(request);
-        let settle_ms = if held.is_some() {
-            HELD_REPLY_SETTLE_MS
-        } else {
-            TURN_SETTLE_MS
-        };
         let agent_state = self.agents.get(&agent)?;
         let unavailable = agent_state.status == RuntimeStatus::Unavailable;
         let mut since = request.turn_ended_at_ms?;
         if unavailable {
             since = since.max(agent_state.status_since_ms);
         }
-        if now_ms < since.saturating_add(settle_ms) {
+        if now_ms < since.saturating_add(TURN_SETTLE_MS) {
             return None;
         }
         let provider_error = match recorded_end(request) {
@@ -343,15 +206,6 @@ impl BusState {
             Some(RecordedTurnEnd::Error(message)) => Some(message),
             None => None,
         };
-        if let (None, Some(interim)) = (&provider_error, held) {
-            return self.deliver_held_interim(
-                agent,
-                id,
-                interim,
-                now_ms,
-                "background_shells_interim",
-            );
-        }
         let (reason, error) = match &provider_error {
             Some(message) => provider_error_outcome(message),
             None if unavailable => (

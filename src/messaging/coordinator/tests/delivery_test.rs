@@ -278,22 +278,17 @@ fn delivery_logs_do_not_claim_reply_persisted_when_storage_fails() {
         Provider::Codex,
         json!({"hook_event_name":"Stop","session_id":"session","turn_id":"turn","last_assistant_message":"PRIVATE_REPLY"}),
     );
-    worker
-        .consume_callbacks(agent, &dir.join("callbacks/launch"))
-        .unwrap();
-    let mut state = worker.state.clone();
-    state
-        .observe_status(agent, RuntimeStatus::Idle, 100)
-        .unwrap();
-    assert_eq!(
-        state.request(request).unwrap().phase,
-        RequestPhase::Completed
-    );
     std::fs::rename(worker.store.path(), dir.join("original-state.json")).unwrap();
     std::fs::create_dir(worker.store.path()).unwrap();
     capture.run(|| {
-        assert!(worker.save(state).is_err());
+        assert!(worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .is_err());
     });
+    assert_ne!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
     let logs = capture.text();
     assert!(logs.contains("bus.storage.failed"), "{logs}");
     assert!(!logs.contains("bus.reply.persisted"), "{logs}");
@@ -800,10 +795,13 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
         .consume_callbacks(agent, &dir.join("callbacks/launch"))
         .unwrap();
     assert_eq!(
-        worker.state.agent(agent).unwrap().current_request,
-        Some(request)
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
     );
-    assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+    assert_eq!(
+        worker.state.room(room).unwrap().latest_replies[&agent].text,
+        "real final"
+    );
     worker
         .state
         .observe_status(agent, RuntimeStatus::Working, 5)
@@ -916,7 +914,7 @@ fn claude_background_pending_reply_stays_active_until_its_trusted_continuation_s
     worker.submit_ready().unwrap();
     for value in [
         json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":"prompt-1","prompt":"review the plan"}),
-        json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"prompt-1","last_assistant_message":"Waiting for reviewers","background_tasks":[{"task_id":"reviewer-1","status":"running"}],"session_crons":[]}),
+        json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"prompt-1","background_tasks":[{"task_id":"reviewer-1","status":"running"}],"session_crons":[]}),
     ] {
         record(&dir, Provider::ClaudeCode, value);
     }

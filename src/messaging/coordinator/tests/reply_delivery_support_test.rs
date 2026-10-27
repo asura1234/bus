@@ -813,14 +813,7 @@ impl Delivery {
                     pending.insert("received_at_ms".into(), json!(at.saturating_sub(millis)));
                 }
             }
-            for path in [["shell_hold", "since_ms"], ["turn_ended_at_ms", ""]] {
-                let at = if path[1].is_empty() {
-                    &mut request[path[0]]
-                } else if request[path[0]].is_object() {
-                    &mut request[path[0]][path[1]]
-                } else {
-                    continue;
-                };
+            if let Some(at) = request.get_mut("turn_ended_at_ms") {
                 if let Some(value) = at.as_u64() {
                     *at = json!(value.saturating_sub(millis));
                 }

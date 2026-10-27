@@ -1056,47 +1056,20 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
             state.accept_callback(callback(1, CallbackEventKind::PromptStarted, Some(payload))),
             CallbackDisposition::AcceptedBinding
         );
-        if provider == Provider::ClaudeCode {
-            assert_eq!(
-                state.accept_callback(callback(2, CallbackEventKind::BackgroundPending, None)),
-                CallbackDisposition::AcceptedProgress
-            );
-            state.hold_background_reply(
-                f.agent,
-                crate::messaging::model::PendingFinal {
-                    callback_id: "group-interim".into(),
+
+        state
+            .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+            .unwrap();
+        assert_eq!(
+            state.accept_callback(callback(
+                2,
+                CallbackEventKind::Final {
                     text: "Shared work still running.".into(),
-                    received_at_ms: io::now_ms() - 4_000,
-                    provider_session_id: Some("worker-session".into()),
-                    provider_turn_id: Some("shared-turn".into()),
                 },
-            );
-            let since = state
-                .request(lead)
-                .unwrap()
-                .shell_hold
-                .as_ref()
-                .unwrap()
-                .since_ms;
-            assert_eq!(
-                state.release_shell_hold(f.agent, since + 900_000, 900_000),
-                Some(lead)
-            );
-        } else {
-            state
-                .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
-                .unwrap();
-            assert_eq!(
-                state.accept_callback(callback(
-                    2,
-                    CallbackEventKind::Final {
-                        text: "Shared work still running.".into(),
-                    },
-                    None,
-                )),
-                CallbackDisposition::AcceptedCompleted
-            );
-        }
+                None,
+            )),
+            CallbackDisposition::AcceptedCompleted
+        );
         assert_eq!(
             state.request(member).unwrap().phase,
             RequestPhase::Completed

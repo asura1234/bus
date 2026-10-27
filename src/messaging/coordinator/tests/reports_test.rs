@@ -172,9 +172,9 @@ impl Fixture {
     fn reply(&self) -> Option<(RoomId, String)> {
         let state = &self.worker.state;
         let request = state
-            .agent(self.orchestrator)?
-            .current_request
-            .and_then(|request| state.request(request))?;
+            .requests()
+            .filter(|r| r.agent_id == self.orchestrator)
+            .max_by_key(|r| r.id)?;
         let reply = request.pending_final.as_ref()?;
         Some((request.room_id, reply.text.clone()))
     }
@@ -251,17 +251,10 @@ fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
     );
     // The final was taken as the reply, which already shows in MASTER under
     // the developer's message.
-    let request = bus
-        .worker
-        .state
-        .agent(orchestrator)
-        .unwrap()
-        .current_request;
-    let reply = request
-        .and_then(|request| bus.worker.state.request(request))
-        .and_then(|request| request.pending_final.as_ref())
-        .map(|reply| reply.text.clone());
-    assert_eq!(reply.as_deref(), Some("Review is done; merging next."));
+    assert_eq!(
+        bus.reply(),
+        Some((master, "Review is done; merging next.".into()))
+    );
     assert!(bus.reports().is_empty(), "{:?}", bus.reports());
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
 }

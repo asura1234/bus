@@ -63,10 +63,8 @@ pub(super) struct Worker {
     /// Each Codex agent's rollout, from its hooks. A turn that a provider
     /// error ended fires no Stop hook; only the rollout records why.
     pub(super) codex_rollouts: BTreeMap<AgentId, PathBuf>,
-    /// The background shells each Claude agent had running when its last
-    /// reply settled. Shells beyond these were started by the current
-    /// request's turns, and its reply waits for them. In memory only: after a
-    /// restart every running shell counts as older.
+    /// Shells inherited from the preceding request. Their wakes must not
+    /// steal the current request's turn or delay a captured final.
     pub(super) claude_settled_shells: BTreeMap<AgentId, BTreeSet<String>>,
     /// Last observed shells and the request that observed them. A different
     /// request inherits these shells instead of waiting for their replies.
@@ -614,17 +612,7 @@ impl Worker {
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
         let mut settled_groups = Vec::new();
-        let hold_cap_ms = u64::from(
-            self.settings_path
-                .as_deref()
-                .and_then(|path| crate::messaging::prefs::settings::load(path).ok())
-                .unwrap_or_default()
-                .background_shell_hold_minutes,
-        ) * 60_000;
         for (agent, observed_at_ms) in agents {
-            changed |= state
-                .release_shell_hold(agent, observed_at_ms, hold_cap_ms)
-                .is_some();
             let rollout = self.codex_rollouts.get(&agent);
             let recorded_end =
                 |request: &crate::messaging::model::Request| recorded_codex_end(rollout?, request);

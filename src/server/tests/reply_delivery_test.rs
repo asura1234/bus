@@ -595,7 +595,7 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
     );
     assert_eq!(
         f.state().request(first).unwrap().phase,
-        RequestPhase::Active
+        RequestPhase::Completed
     );
     let follow = f.blocked_worker_notice(agent);
     f.tick();
@@ -624,7 +624,7 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
 }
 
 #[tokio::test]
-async fn held_interim_survives_no_stop_wake_restart_and_releases_queued_request() {
+async fn captured_stop_survives_a_no_stop_wake_and_restart_before_the_next_request() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
     let agent = f.agents[0];
     let first = f.send(agent, f.work, "first", false, None);
@@ -637,15 +637,14 @@ async fn held_interim_survives_no_stop_wake_restart_and_releases_queued_request(
         json!([{"id":"shell","type":"shell","status":"running","command":"sleep 600"}]),
         json!([]),
     );
-    let next = f.send(agent, f.work, "queued", true, None);
-    f.tick();
-    assert_eq!(f.state().request(next).unwrap().phase, RequestPhase::Queued);
     f.start(agent, "wake", "<task-notification>\n<task-id>shell</task-id>\n<status>completed</status>\n</task-notification>");
     f.reopen();
     f.status(agent, AgentState::Idle);
     f.tick();
     f.elapse(31_000);
     f.assert_reply(first, "captured before wake");
+    let next = f.send(agent, f.work, "queued", true, None);
+    f.tick();
     f.start(agent, "two", "queued");
     f.stop(agent, "two", "queued answer", json!([]), json!([]));
     f.assert_reply(next, "queued answer");
@@ -1272,13 +1271,10 @@ fn delivery_cycle(f: &mut Delivery, round: usize) {
         for &(_, agent, first, next) in &expected {
             if f.state().agent(agent).unwrap().provider == Provider::ClaudeCode {
                 let request = if queued { next } else { first };
-                assert!(
-                    f.state().request(request).unwrap().shell_hold.is_some(),
-                    "round {round} {phase}: Claude reply must actually wait on its own shell"
-                );
                 assert_eq!(
                     f.state().request(request).unwrap().phase,
-                    RequestPhase::Active
+                    RequestPhase::Completed,
+                    "round {round} {phase}: Stop must complete despite running shells"
                 );
             }
         }
@@ -1600,8 +1596,8 @@ fn orchestrator_inbox_burst(round: usize) {
                     .unwrap()
                     .failure_reason
                     .as_deref(),
-                Some("background_shells_new_turn"),
-                "turn {n} did not release its real hold"
+                None,
+                "turn {n} must complete at Stop without a recovery reason"
             );
         }
         if n % 7 == 0 {
