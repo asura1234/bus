@@ -278,7 +278,7 @@ mod orchestrator_turn_routing {
         assert!(bus.notices(master).is_empty(), "{:?}", bus.notices(master));
         let request = bus.worker.state.request(request).unwrap();
         assert_eq!(
-            request.pending_final.as_ref().map(|f| f.text.as_str()),
+            request.reply().map(|f| f.text.as_str()),
             Some("All green; merging."),
             "{request:?}"
         );

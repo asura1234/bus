@@ -45,7 +45,7 @@ fn diag(f: &Fixture, label: &str, id: RequestId) {
         r.failure_reason,
         r.provider_turn_id,
         r.awaiting_background,
-        r.pending_final.as_ref().map(|p| p.text.clone())
+        r.reply().map(|p| p.text.clone())
     );
 }
 
