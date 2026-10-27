@@ -335,6 +335,33 @@ fn reply_routing_keeps_undelivered_notices_across_expiry_and_restart() {
 }
 
 #[test]
+fn reply_waiter_lease_keeps_the_reply_until_exactly_three_seconds() {
+    let mut f = Fixture::new();
+    let now = std::time::Instant::now();
+    f.worker.test_reply_waiter_now = Some(now);
+    let source = f.send(Author::Agent(f.orch), "build this");
+    let message = f.worker.state.request(source).unwrap().prompt.id;
+    assert!(
+        f.call(
+            "message.status",
+            json!({"message":message.0.to_string(),"as":f.orch.0.to_string()})
+        )
+        .ok
+    );
+    f.finish(source, "One reply after the waiter expires");
+    f.worker.test_reply_waiter_now = Some(now + Duration::from_millis(2_999));
+    f.worker.submit_ready().unwrap();
+    assert!(f.notices().is_empty(), "the waiter still owns the reply");
+    f.worker.test_reply_waiter_now = Some(now + Duration::from_secs(3));
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.notices().len(), 1);
+    assert!(f.notices()[0]
+        .prompt
+        .text
+        .contains("One reply after the waiter expires"));
+}
+
+#[test]
 fn reply_routing_an_expired_waiter_lease_releases_the_reply() {
     let mut f = Fixture::new();
     let source = f.send(Author::Agent(f.orch), "build this");

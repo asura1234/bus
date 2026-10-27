@@ -347,6 +347,10 @@ pub(crate) struct Delivery {
 }
 
 impl Delivery {
+    pub(crate) fn set_reply_waiter_time(&mut self, now: Instant) {
+        self.worker_mut().test_reply_waiter_now = Some(now);
+    }
+
     pub(crate) fn real_submission_time(&self, agent: AgentId) {
         self.native.lock().unwrap().terminals[&agent].clock.resume();
     }

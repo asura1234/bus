@@ -932,6 +932,10 @@ async fn codex_startup_dialog_keeps_requests_queued_until_composer_recovers() {
 #[tokio::test]
 async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
+    // This is a continuously live waiter in the scripted provider timeline;
+    // host scheduling must not expire its lease between scripted status reads.
+    let waiter_time = std::time::Instant::now();
+    f.set_reply_waiter_time(waiter_time);
     let agent = f.agents[0];
     let orch = f.add_orchestrator();
     let request = f.send(agent, f.work, "owned work", false, Some(orch));
@@ -973,6 +977,16 @@ async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter()
         "a live waiter owns the original reply; typed payloads: {typed:#?}"
     );
     f.assert_reply(request, "owned result");
+    f.set_reply_waiter_time(waiter_time + std::time::Duration::from_secs(3));
+    f.tick();
+    assert_eq!(
+        f.state()
+            .requests()
+            .filter(|r| r.agent_id == orch && r.prompt.text.contains("owned result"))
+            .count(),
+        1,
+        "the same unacknowledged reply routes once its waiter lease expires"
+    );
 }
 
 #[tokio::test]

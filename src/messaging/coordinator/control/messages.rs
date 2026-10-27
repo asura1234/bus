@@ -24,8 +24,8 @@ impl Worker {
                     if let Some(source) = self.state.requests_for_message(message).next() {
                         let author = self.control_author(source.room_id, selector)?;
                         if self.state.reply_orchestrator(source) == Some(author) {
-                            self.reply_waiters
-                                .insert(message, std::time::Instant::now());
+                            let now = self.reply_waiter_now();
+                            self.reply_waiters.insert(message, now);
                         }
                     }
                 }
