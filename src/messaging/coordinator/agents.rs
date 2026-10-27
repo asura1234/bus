@@ -4,7 +4,7 @@ use super::{
     LeftOpenTerminal, Method, Provider, ResponseResult, RoomId, RoomKind, Worker,
     MASTER_AGENT_NEEDS_ROOM,
 };
-use crate::agents::providers::{cursor, hook_json::HookContext, launch, spool};
+use crate::agents::providers::{codex, cursor, hook_json::HookContext, launch, spool};
 use crate::messaging::identity;
 use crate::messaging::orchestration::{self as orchestrator, OrchestratorSpec};
 
@@ -661,6 +661,9 @@ impl Worker {
             orchestrator::check_new_orchestrator(input.provider)?;
         }
         let cwd = launch::canonical_directory(&input.cwd)?;
+        if input.provider == Provider::Codex {
+            codex::launch::validate_project_trust(&cwd)?;
+        }
         // One provider session belongs to one Bus agent: bound by its hook, or
         // reserved by a launch that adopted it and has not reported yet.
         if let Some(session) =

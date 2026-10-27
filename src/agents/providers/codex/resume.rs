@@ -11,6 +11,7 @@ pub(crate) fn capture_args(
     hooks: &HookContext,
     project: &Path,
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
+    super::launch::validate_project_trust(project)?;
     let path = project.join(".codex/hooks.json");
     let rebound = resume_hooks(
         &path,

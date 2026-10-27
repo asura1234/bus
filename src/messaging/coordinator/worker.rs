@@ -124,6 +124,7 @@ impl Worker {
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
+            super::recovery::check_saved_project_hooks(&mut state, id)?;
             if let Some(request) = state.agent(id).and_then(|agent| agent.current_request) {
                 diagnostics::request(
                     &state,

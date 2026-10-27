@@ -11,3 +11,6 @@ mod hooks_tests;
 #[cfg(test)]
 #[path = "tests/launch_test.rs"]
 mod launch_tests;
+#[cfg(test)]
+#[path = "tests/trust_test.rs"]
+mod trust_tests;

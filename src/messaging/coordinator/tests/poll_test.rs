@@ -27,6 +27,9 @@ mod poll_recovery;
 #[path = "working_directory_test.rs"]
 mod working_directory;
 
+#[path = "codex_project_trust_test.rs"]
+mod codex_project_trust;
+
 #[test]
 fn exit_evidence_updates_lifecycle_without_developer_chat() {
     for (terminal, exited, expected) in [
