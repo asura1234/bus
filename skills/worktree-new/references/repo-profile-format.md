@@ -79,7 +79,9 @@ root into workspace/source directories; use a private install for those graphs.
 Only recognized dependency installs at that package root are skipped (including
 install aliases and corepack); overlapping/ambiguous custom preparation is refused.
 Smoke still runs. `private_paths` identifies mutable state that may not resolve
-outside the checkout, including through a symlinked ancestor. `extra_manifests`
+outside the checkout, including through a symlinked ancestor. The runner validates
+these paths before and after each prepare/smoke command and immediately before
+recording ready. `extra_manifests`
 adds existing repository-local files to the manifest fingerprint. Visible directory
 links are reported generically; no project-specific runtime paths are assumed.
 

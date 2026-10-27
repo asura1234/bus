@@ -256,6 +256,14 @@ def share_dependencies(repo: Path, profile: dict) -> set[int]:
     return skips
 
 
+def verify_private_paths(repo: Path, profile: dict) -> None:
+    for name in profile["recipe"]["private_paths"]:
+        if not (repo / name).resolve().is_relative_to(repo):
+            raise ValueError(
+                f"private runtime state must stay inside this worktree: {name}"
+            )
+
+
 def execute(repo: Path, item: dict, env: dict) -> None:
     cwd = (repo / item["cwd"]).resolve()
     if not cwd.is_relative_to(repo) or not cwd.is_dir():
@@ -376,21 +384,19 @@ def _provision(
             raise ValueError("; ".join(profile["recipe"]["unresolved"]))
         if not profile["recipe"]["smoke"]:
             raise ValueError("no headless smoke recipe; cannot report ready")
-        for name in profile["recipe"]["private_paths"]:
-            if not (repo / name).resolve().is_relative_to(repo):
-                raise ValueError(
-                    f"private runtime state must stay inside this worktree: {name}"
-                )
+        verify_private_paths(repo, profile)
         skipped = share_dependencies(repo, profile)
         for stage in ("prepare", "smoke"):
             for index, item in enumerate(profile["recipe"][stage]):
                 if stage == "prepare" and index in skipped:
                     continue
+                verify_private_paths(repo, profile)
                 free_space(repo)
                 step_env = env.copy()
                 verify_node(repo, profile, step_env, item["cwd"], tool_bins or [])
                 evidence["commands"].append(item)
                 execute(repo, item, step_env)
+                verify_private_paths(repo, profile)
         if (
             git(repo, "rev-parse", "HEAD") != evidence["head"]
             or git(repo, "status", "--porcelain", "--untracked-files=no")
@@ -399,6 +405,7 @@ def _provision(
             raise ValueError(
                 "HEAD, tracked content, or manifests changed during provisioning"
             )
+        verify_private_paths(repo, profile)
         evidence["status"] = "ready"
     except (OSError, ValueError) as error:
         evidence["error"] = str(error)

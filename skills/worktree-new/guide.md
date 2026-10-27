@@ -53,7 +53,9 @@ unexpected symlink. Inspect smoke scripts before sharing if they mutate dependen
 
 Declare mutable state using `worktree.private_paths`, and custom dependency locks
 using `extra_manifests`. A private path may not resolve outside the checkout, even
-through an ancestor link. Keep mutable activation receipts private while sharing
+through an ancestor link. The runner checks before and after each recipe command
+and immediately before recording readiness, so preparation cannot expose shared
+state to a later step. Keep mutable activation receipts private while sharing
 only immutable cache children. Generic visible-link warnings carry actual paths;
 project-specific signatures belong in configuration and fixtures.
 
