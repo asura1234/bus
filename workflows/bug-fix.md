@@ -62,6 +62,13 @@ Templates:
    reproduce the bug, in new test files of its own, and must not touch source
    code or shared files. A failing test alone counts as a reproduction; an
    agent-driven UI run on a scratch Bus (e2e-test skill) is the other way.
+   **Messaging bugs are test-driven, always.** Messaging reliability is what
+   Bus is for, so any bug in delivery, replies, callbacks, queues, routing,
+   notices or settlement needs a failing automated test before the fix, run
+   red on the base; a UI run alone is not enough. Cover the reported case and
+   its neighbours: every affected provider, restart/resume, concurrent and
+   queued messages, and the timing edges around it. The fix PR keeps all of
+   these tests.
    It reads the logs of its own runs and any logs attached to the bug, then
    fills in the investigation report. The report records facts and evidence
    only: no fix proposals, no priority, no verification plan.
