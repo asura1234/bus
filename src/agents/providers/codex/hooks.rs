@@ -22,6 +22,24 @@ pub(crate) fn image_paste_parts(text: &str) -> (Vec<&str>, String) {
     (images, remaining)
 }
 
+/// Codex separates image chips, and the text after them, with one space in its
+/// submit hook (0.164.0). Remove only those separators, preserving body whitespace.
+pub(crate) fn image_prompt_parts(mut prompt: &str) -> (usize, &str) {
+    let mut count = 0;
+    loop {
+        let (length, images) = super::super::claude_code::hooks::claude_image_placeholders(prompt);
+        if images == 0 {
+            return (count, prompt);
+        }
+        count += images;
+        prompt = &prompt[length..];
+        match prompt.strip_prefix(' ') {
+            Some(next) => prompt = next,
+            None => return (count, prompt),
+        }
+    }
+}
+
 pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
     let event = field(value, "hook_event_name")?;
     // Title/memory sessions inherit hooks but have no interactive transcript.

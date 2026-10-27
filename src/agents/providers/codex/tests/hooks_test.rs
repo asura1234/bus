@@ -8,6 +8,22 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 #[test]
+fn image_prompt_parts_remove_only_the_providers_chip_separators() {
+    use super::hooks::image_prompt_parts;
+    assert_eq!(image_prompt_parts("[Image #1]"), (1, ""));
+    assert_eq!(
+        image_prompt_parts("[Image #1] [Image #2] reply\n\nbody"),
+        (2, "reply\n\nbody")
+    );
+    assert_eq!(image_prompt_parts("[Image #1]  indented"), (1, " indented"));
+    assert_eq!(
+        image_prompt_parts("[Image #x] body"),
+        (0, "[Image #x] body")
+    );
+    assert_eq!(image_prompt_parts("body"), (0, "body"));
+}
+
+#[test]
 fn image_paste_parts_preserve_text_and_only_extract_exact_image_lines() {
     use super::hooks::image_paste_parts;
     let text =

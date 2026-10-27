@@ -153,13 +153,13 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
     let (length, images) = claude_image_placeholders(&payload);
     let (lifted, remaining) = claude_lifted_images(&typed);
     let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
-    let (codex_images, codex_text) =
+    if images > 0 && images == lifted && &payload[length..] == remaining {
+        return true;
+    }
+    let (images, remaining) = crate::agents::providers::codex::hooks::image_prompt_parts(&payload);
+    let (expected_images, expected_text) =
         crate::agents::providers::codex::hooks::image_paste_parts(&typed);
-    let codex_text = normalized_payload(&codex_text);
-    let actual = &payload[length..];
-    images > 0
-        && (actual == remaining && images == lifted
-            || images == codex_images.len() && actual == codex_text.as_str())
+    images > 0 && images == expected_images.len() && remaining == normalized_payload(&expected_text)
 }
 
 fn normalized_payload(value: &str) -> String {

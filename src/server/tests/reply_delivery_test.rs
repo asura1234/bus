@@ -873,7 +873,7 @@ async fn codex_image_and_correlation_text_are_submitted_together_and_bind_the_re
     );
     let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
     let text = f.correlated_text(request);
-    let expected = format!("[Image #1]{}", text.trim_end_matches('\n'));
+    let expected = format!("[Image #1] {}", text.trim_end_matches('\n'));
     f.captured_composer(
         agent,
         &include_str!("../api/agents/tests/fixtures/codex_image_only_paste.txt")

@@ -453,18 +453,27 @@ fn codex_image_placeholder_matching_preserves_correlation_and_body_blank_lines()
     let command = "[Bus message 3; answer with bus send --reply-to 3 --as 2 --text 'YOUR ANSWER']";
     let typed = format!("{command}\nFirst \t\n\n  Last\n\"/tmp/a.png\"");
     assert!(payload_matches(
-        &format!("[Image #1]{command}\nFirst \t\n\n  Last"),
+        &format!("[Image #1] {command}\nFirst \t\n\n  Last"),
         &typed
     ));
     assert!(!payload_matches(
-        &format!("[Image #1]{command}\nFirst\n\n  Last"),
+        &format!("[Image #1] {command}\nFirst\n\n  Last"),
         &typed
     ));
     assert!(!payload_matches(
-        &format!("[Image #1][Image #2]{command}\nFirst \t\n\n  Last"),
+        &format!("[Image #1] [Image #2] {command}\nFirst \t\n\n  Last"),
         &typed
     ));
-    assert!(!payload_matches("[Image #1]First \t\n\n  Last", &typed));
+    assert!(!payload_matches("[Image #1] First \t\n\n  Last", &typed));
+    assert!(!payload_matches(
+        &format!("[Image #1]  {command}\nFirst \t\n\n  Last"),
+        &typed
+    ));
+    let two_images = format!("{typed}\n\"/tmp/b.png\"");
+    assert!(payload_matches(
+        &format!("[Image #1] [Image #2] {command}\nFirst \t\n\n  Last"),
+        &two_images
+    ));
 }
 
 #[test]

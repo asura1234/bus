@@ -172,6 +172,7 @@ def scenario(binary, codex, root):
         evidence["screen"] = bus.cli("agent", "read", "image-worker", "--source", "visible")
         def bound():
             status = bus.cli("message", "status", str(receipt["message_id"]))
+            evidence["status"] = status
             return status if status["requests"] and all(request["start_bound"] for request in status["requests"]) else None
 
         evidence["status"] = until(bound)
@@ -185,6 +186,15 @@ def scenario(binary, codex, root):
     finally:
         with lock:
             evidence["captures"] = list(captures)
+        evidence["callbacks"] = {}
+        if bus is not None:
+            for path in bus.data.rglob("*.json"):
+                if "callbacks" not in path.relative_to(bus.data).parts:
+                    continue
+                try:
+                    evidence["callbacks"][str(path.relative_to(bus.data))] = json.loads(path.read_text())
+                except (OSError, ValueError) as error:
+                    evidence["callbacks"][str(path.relative_to(bus.data))] = {"read_error": str(error)}
         try:
             evidence["cleanup"] = bus.stop() if bus is not None else {}
         except Exception as error:

@@ -154,7 +154,7 @@ impl NativeServer {
                 } else if text == "\r" {
                     let images = std::mem::take(&mut terminal.images);
                     let chips = (1..=images.len())
-                        .map(|n| format!("[Image #{n}]"))
+                        .map(|n| format!("[Image #{n}] "))
                         .collect::<String>();
                     terminal
                         .submitted
