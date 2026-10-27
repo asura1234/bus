@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -174,14 +176,58 @@ def execute(repo: Path, item: dict, env: dict) -> None:
         raise ValueError(f"command cwd escapes or is missing: {item['cwd']}")
     argv = item["argv"]
     print("+ " + json.dumps(item), flush=True)
-    result = subprocess.run(
-        (["nice", "-n", "19"] if os.name == "posix" else []) + argv, cwd=cwd, env=env
+    process = subprocess.Popen(
+        (["nice", "-n", "19"] if os.name == "posix" else []) + argv,
+        cwd=cwd,
+        env=env,
+        start_new_session=os.name == "posix",
     )
-    if result.returncode:
-        raise ValueError(f"command exited {result.returncode}: {argv}")
+    try:
+        code = process.wait()
+    except BaseException:
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.wait()
+        raise
+    if code:
+        raise ValueError(f"command exited {code}: {argv}")
+
+
+@contextmanager
+def interruption():
+    def stop(signum, _frame):
+        raise InterruptedError(f"provisioning interrupted by signal {signum}")
+
+    previous = {
+        sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def provision(
+    repo: Path, *, build_slot: Path, tool_bins: list[Path] | None = None
+) -> dict:
+    with interruption():
+        return _provision(repo, build_slot=build_slot, tool_bins=tool_bins)
+
+
+def _provision(
     repo: Path, *, build_slot: Path, tool_bins: list[Path] | None = None
 ) -> dict:
     repo = Path(git(repo.resolve(), "rev-parse", "--show-toplevel")).resolve()
