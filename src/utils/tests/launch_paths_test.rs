@@ -69,7 +69,5 @@ fn state_components_and_link_targets_cannot_enter_protected_roots() {
     assert!(validate(&home, Some(&root.join("actual-state-sibling")), &protected).is_ok());
     symlink("cycle", root.join("cycle")).unwrap();
     assert!(validate(&home, Some(&root.join("cycle")), &protected).is_err());
-    symlink("cycle", root.join("cycle")).unwrap();
-    assert!(validate(&home, Some(&root.join("cycle")), &protected).is_err());
     std::fs::remove_dir_all(root).unwrap();
 }
