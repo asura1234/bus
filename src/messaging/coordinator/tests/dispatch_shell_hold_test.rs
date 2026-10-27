@@ -126,7 +126,7 @@ fn master_reply(author_is_agent: bool, command: &str, held: bool) {
     } else {
         "status please".into()
     };
-    assert_eq!(f.typed(), [(payload.clone(), false)]);
+    assert_eq!(f.typed_content(), [(payload.clone(), false)]);
     f.started("turn-1", &payload);
     f.consume();
     f.status(RuntimeStatus::Working);

@@ -1,3 +1,4 @@
+use super::tests::support::test_prompt_content;
 use crate::agents::AgentState;
 use crate::messaging::coordinator::reply_delivery_support::Delivery;
 use crate::messaging::model::{Author, BusState, Draft, Provider, RequestPhase};
@@ -76,10 +77,12 @@ async fn operational_notice_pending_upgrade_turn_is_retired_without_touching_use
         None,
     );
     f.tick();
-    assert!(f
-        .typed(agent)
-        .iter()
-        .any(|text| text == "Bus messaging rules updated. User-provided text"));
+    assert!(
+        f.typed(agent)
+            .iter()
+            .any(|text| test_prompt_content(text)
+                == "Bus messaging rules updated. User-provided text")
+    );
     assert_ne!(
         f.state().request(user).unwrap().phase,
         RequestPhase::Abandoned

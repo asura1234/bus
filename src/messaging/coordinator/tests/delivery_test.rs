@@ -214,24 +214,32 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
         let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
         let request = queue(&mut worker, room, agent, "round trip payload ");
         worker.submit_ready().unwrap();
+        let prompt = worker
+            .state
+            .request(request)
+            .unwrap()
+            .submitted_payload
+            .as_ref()
+            .unwrap()
+            .trim_end();
         let callback = match provider {
             Provider::ClaudeCode => json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "session",
                 "prompt_id": "turn",
-                "prompt": "round trip payload"
+                "prompt": prompt
             }),
             Provider::Codex => json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "session",
                 "turn_id": "turn",
-                "prompt": "round trip payload"
+                "prompt": prompt
             }),
             Provider::Cursor => json!({
                 "hook_event_name": "beforeSubmitPrompt",
                 "conversation_id": "session",
                 "generation_id": "turn",
-                "prompt": "round trip payload"
+                "prompt": prompt
             }),
         };
         record(&dir, provider, callback);

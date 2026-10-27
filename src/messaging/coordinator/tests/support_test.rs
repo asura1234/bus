@@ -367,7 +367,41 @@ fn spool_record(
     .unwrap();
 }
 
-/// Provider fixtures submit the complete frozen delivery, including Bus's correlation header.
+/// Remove only Bus's generated correlation instruction for semantic body assertions.
+pub(in crate::messaging::coordinator) fn test_prompt_content(prompt: &str) -> String {
+    prompt
+        .split_inclusive('\n')
+        .filter(|line| {
+            let Some((message, command)) = line
+                .trim_end_matches('\n')
+                .strip_prefix("[Bus message ")
+                .and_then(|line| line.split_once("; answer with bus send --reply-to "))
+            else {
+                return true;
+            };
+            let Some((reply, recipient)) = command.split_once(" --as ") else {
+                return true;
+            };
+            let Some(recipient) = recipient.strip_suffix(" --text 'YOUR ANSWER']") else {
+                return true;
+            };
+            !(message == reply
+                && message.parse::<u64>().is_ok()
+                && recipient.parse::<u64>().is_ok())
+        })
+        .collect()
+}
+
+pub(in crate::messaging::coordinator) fn test_request_payload(
+    state: &mut BusState,
+    request: RequestId,
+) -> Option<String> {
+    state
+        .render_request_payload(request)
+        .map(|prompt| test_prompt_content(&prompt))
+}
+
+/// Provider fixtures submit the complete frozen delivery, including Bus's correlation instruction.
 pub(in crate::messaging::coordinator) fn delivered_test_prompt(
     state: &BusState,
     prompt: &str,
@@ -375,11 +409,7 @@ pub(in crate::messaging::coordinator) fn delivered_test_prompt(
     state
         .requests()
         .filter_map(|r| r.submitted_payload.as_ref())
-        .filter(|payload| {
-            payload
-                .split_once('\n')
-                .is_some_and(|(header, body)| header.starts_with("[Bus message ") && body == prompt)
-        })
+        .filter(|payload| test_prompt_content(payload) == prompt)
         .last()
         .cloned()
         .unwrap_or_else(|| prompt.to_owned())

@@ -57,6 +57,10 @@ impl BusState {
             return Some(text.clone());
         }
         let mut text = request.prompt.rendered_payload();
+        let answer = format!(
+            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']",
+            request.prompt.id.0, request.prompt.id.0, request.agent_id.0,
+        );
         if let Author::Agent(sender) = request.prompt.author {
             let identity = request
                 .sender_identity
@@ -94,15 +98,13 @@ impl BusState {
                     .map_or(String::new(), |(_, body)| body.to_owned());
             }
             text = if text.is_empty() {
-                header
+                format!("{header}\n{answer}")
             } else {
-                format!("{header}\n{text}")
+                format!("{header}\n{answer}\n{text}")
             };
+        } else {
+            text = format!("{answer}\n{text}");
         }
-        text = format!(
-            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']\n{text}",
-            request.prompt.id.0, request.prompt.id.0, request.agent_id.0,
-        );
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)
     }

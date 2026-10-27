@@ -32,7 +32,7 @@ struct Terminal {
     input: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     draft: String,
     submitted: Vec<String>,
-    captured_screen: Option<&'static str>,
+    captured_screen: Option<String>,
     clock: crate::terminal::runtime::SubmissionClock,
 }
 
@@ -145,6 +145,7 @@ impl NativeServer {
                 // never transform the draft with the observer's production rule.
                 let display = if let Some(captured) = terminal
                     .captured_screen
+                    .as_ref()
                     .filter(|_| !terminal.draft.is_empty())
                 {
                     format!("\x1b[2J\x1b[H{captured}")
@@ -605,6 +606,19 @@ impl Delivery {
             .submitted
             .clone()
     }
+    pub(crate) fn typed_content(&self, agent: AgentId) -> Vec<String> {
+        self.typed(agent)
+            .iter()
+            .map(|text| super::tests::support::test_prompt_content(text))
+            .collect()
+    }
+    pub(crate) fn correlated_text(&self, request: RequestId) -> String {
+        let request = self.state().request(request).unwrap();
+        format!(
+            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']\n{}",
+            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.text,
+        )
+    }
     pub(crate) fn record(&self, agent: AgentId, mut value: Value) {
         let provider = self.state().agent(agent).unwrap().provider;
         value["session_id"] = json!(format!("session-{}", agent.0));
@@ -636,21 +650,15 @@ impl Delivery {
             .unwrap();
         writeln!(file, "{row}").unwrap();
     }
-    pub(crate) fn captured_image_composer(&mut self, agent: AgentId) {
-        self.captured_composer(
-            agent,
-            include_str!("../../../server/api/agents/tests/fixtures/claude_image_paste.txt"),
-        );
-    }
     /// Shows `screen`, a composer captured from the real provider, for any draft.
-    pub(crate) fn captured_composer(&mut self, agent: AgentId, screen: &'static str) {
+    pub(crate) fn captured_composer(&mut self, agent: AgentId, screen: &str) {
         self.native
             .lock()
             .unwrap()
             .terminals
             .get_mut(&agent)
             .unwrap()
-            .captured_screen = Some(screen);
+            .captured_screen = Some(screen.to_owned());
     }
     pub(crate) fn provider_startup(&mut self) {
         for agent in self.agents.clone() {
@@ -682,6 +690,12 @@ impl Delivery {
         self.tick();
     }
     pub(crate) fn spool_start(&mut self, agent: AgentId, turn: &str, text: &str) {
+        let text = self
+            .typed(agent)
+            .into_iter()
+            .rev()
+            .find(|payload| super::tests::support::test_prompt_content(payload) == text)
+            .unwrap_or_else(|| text.to_owned());
         let provider = self.state().agent(agent).unwrap().provider;
         let key = match provider {
             Provider::Codex => "turn_id",

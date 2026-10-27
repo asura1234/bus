@@ -148,7 +148,7 @@ fn identity_headers_prefer_unique_names_and_disambiguate_reused_historical_names
                 1,
             )
             .unwrap()[0];
-        w.state.render_request_payload(id).unwrap()
+        test_request_payload(&mut w.state, id).unwrap()
     };
     assert_eq!(send_payload(&mut w, "hello"), "codex1:\nhello");
     assert_eq!(send_payload(&mut w, "codex1:\nhello"), "codex1:\nhello");
@@ -174,7 +174,7 @@ fn identity_headers_prefer_unique_names_and_disambiguate_reused_historical_names
         .create_agent(room, "codex1", Provider::Codex, dir.clone(), None)
         .unwrap();
     assert_eq!(
-        w.state.render_request_payload(historical).unwrap(),
+        test_request_payload(&mut w.state, historical).unwrap(),
         format!("codex1 (agent {}):\nbefore rename", sender.0)
     );
     drop(w);

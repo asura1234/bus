@@ -1,4 +1,4 @@
-use super::tests::support::delivered_test_prompt;
+use super::tests::support::{delivered_test_prompt, test_prompt_content};
 use super::*;
 use crate::{
     agents::providers::spool as callbacks,
@@ -216,6 +216,13 @@ impl Fixture {
             .collect()
     }
 
+    fn typed_content(&self) -> Vec<(String, bool)> {
+        self.typed()
+            .into_iter()
+            .map(|(text, steer)| (test_prompt_content(&text), steer))
+            .collect()
+    }
+
     fn started(&self, turn: &str, prompt: &str) {
         let value = match self.provider {
             Provider::ClaudeCode => {
@@ -313,7 +320,7 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
         let correction = fixture.send("use the streaming API instead", false);
         fixture.deliver();
         assert_eq!(
-            fixture.typed(),
+            fixture.typed_content(),
             [
                 ("write the parser".to_owned(), false),
                 ("use the streaming API instead".to_owned(), true)
@@ -514,7 +521,7 @@ fn blocked_agents_dialogs_and_queue_only_messages_are_never_typed_into_a_turn() 
     assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
     fixture.deliver();
     assert_eq!(
-        fixture.typed()[1],
+        fixture.typed_content()[1],
         ("wait for your own turn".to_owned(), false)
     );
     assert_eq!(fixture.request(waiting).group, None);
@@ -531,7 +538,7 @@ fn messages_that_waited_for_an_unavailable_agent_are_coalesced_into_one_prompt()
     assert!(fixture.typed().is_empty());
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
-    let typed = fixture.typed();
+    let typed = fixture.typed_content();
     assert_eq!(typed.len(), 1);
     let text = &typed[0].0;
     assert!(text.starts_with("[1/2 from the developer at "), "{text}");
@@ -555,7 +562,7 @@ fn messages_that_waited_for_an_unavailable_agent_are_coalesced_into_one_prompt()
     assert_eq!(fixture.reply(second).as_deref(), Some("both done"));
     // Messages queued while the agent was ready go one turn each, as before.
     fixture.deliver();
-    assert_eq!(fixture.typed()[1], ("own turn".to_owned(), false));
+    assert_eq!(fixture.typed_content()[1], ("own turn".to_owned(), false));
 }
 
 #[test]
@@ -776,9 +783,11 @@ fn identical_typed_messages_answered_in_separate_turns_keep_their_own_replies() 
     fixture.deliver();
     fixture.deliver();
     fixture.stopped("turn-1", "parser written");
-    fixture.started("turn-2", "yes");
+    let first_prompt = fixture.request(first).submitted_payload.clone().unwrap();
+    let second_prompt = fixture.request(second).submitted_payload.clone().unwrap();
+    fixture.started("turn-2", &first_prompt);
     fixture.stopped("turn-2", "first yes done");
-    fixture.started("turn-3", "yes");
+    fixture.started("turn-3", &second_prompt);
     fixture.stopped("turn-3", "second yes done");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);

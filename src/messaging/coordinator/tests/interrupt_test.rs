@@ -123,7 +123,7 @@ fn the_interrupted_turn_and_the_queue_close_as_interrupted_once_the_agent_is_idl
         fixture.deliver();
         assert_eq!(fixture.request(next).group, None);
         assert_eq!(
-            fixture.typed().last().unwrap(),
+            fixture.typed_content().last().unwrap(),
             &("pause and report your status".into(), false),
             "{provider:?}"
         );

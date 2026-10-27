@@ -1,4 +1,5 @@
 //! Retired workflow automation must not wake an otherwise idle orchestrator.
+use super::tests::support::test_prompt_content;
 use crate::agents::AgentState;
 use crate::messaging::coordinator::reply_delivery_support::Delivery;
 use crate::messaging::model::{Author, BusState, Draft, Provider, RequestPhase};
@@ -100,7 +101,7 @@ async fn retired_room_digest_queued_legacy_message_is_closed_without_typing_afte
     assert!(f
         .typed(orch)
         .iter()
-        .any(|text| text == "Room digest: ordinary user text"));
+        .any(|text| test_prompt_content(text) == "Room digest: ordinary user text"));
     assert_ne!(
         f.state().request(ordinary).unwrap().phase,
         RequestPhase::Abandoned

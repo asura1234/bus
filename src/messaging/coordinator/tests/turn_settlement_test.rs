@@ -155,7 +155,7 @@ fn failed_provider_turn_closes_its_group_and_releases_the_queue() {
         fixture.deliver();
         assert_eq!(fixture.request(next).group, None);
         assert_eq!(
-            fixture.typed().last().unwrap(),
+            fixture.typed_content().last().unwrap(),
             &("review the next change".into(), false)
         );
     }
@@ -214,7 +214,7 @@ fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
         fixture.deliver();
         assert_eq!(fixture.request(next).group, None);
         assert_eq!(
-            fixture.typed().last().unwrap(),
+            fixture.typed_content().last().unwrap(),
             &("review the next change".into(), false)
         );
         let persisted = fixture.worker.store.load().unwrap().unwrap();
@@ -256,7 +256,7 @@ fn ended_codex_turn_closes_existing_joins_and_cannot_collect_new_joins() {
     }
     fixture.deliver();
     assert_eq!(
-        fixture.typed().last().unwrap(),
+        fixture.typed_content().last().unwrap(),
         &("an independent task".into(), false)
     );
 }
@@ -776,7 +776,7 @@ fn a_claude_reply_held_past_the_shell_cap_is_delivered_as_its_interim_text() {
     // The agent's queue moves on.
     fixture.deliver();
     assert_eq!(
-        fixture.typed().last().unwrap(),
+        fixture.typed_content().last().unwrap(),
         &("review the next change".into(), false)
     );
     assert_eq!(fixture.request(next).phase, RequestPhase::Active);
@@ -847,7 +847,7 @@ fn messages_to_an_agent_holding_its_reply_for_shells_are_typed_into_that_turn() 
     fixture.deliver();
     fixture.deliver();
     assert_eq!(
-        fixture.typed()[1..],
+        fixture.typed_content()[1..],
         [
             ("is the first pr ready to merge?".to_owned(), true),
             ("Blocked, needs help to continue.".to_owned(), true)
@@ -951,7 +951,7 @@ fn a_queued_message_survives_the_wake_up_turn_that_ends_a_shell_hold() {
     assert_eq!(fixture.reply(lead).as_deref(), Some("Build done."));
     fixture.deliver();
     assert_eq!(
-        fixture.typed().last().unwrap(),
+        fixture.typed_content().last().unwrap(),
         &("review the next change".into(), false)
     );
     assert_eq!(fixture.request(next).phase, RequestPhase::Active);
@@ -1072,7 +1072,7 @@ fn a_shell_held_reply_does_not_stall_its_sender_or_block_later_messages() {
     fixture.deliver();
     assert_eq!(fixture.request(next).group, Some(lead));
     assert_eq!(
-        fixture.typed().last().unwrap(),
+        fixture.typed_content().last().unwrap(),
         &("go, run the approved cleanup".into(), true)
     );
     fixture.now += SHELL_HOLD_MS;

@@ -105,7 +105,7 @@ fn description(path: &str) -> (&'static str, &'static str) {
         "agent rename" => ("Rename an agent", "Example: bus agent rename worker implementer"),
         "agent setup-confirm" => ("Approve pending project hook setup", "Example: bus agent setup-confirm worker --confirm"),
         "agent delete" => ("Delete an agent and close its terminal", "Example: bus agent delete worker --confirm"),
-        "send" => ("Send a message or complete a request with a correlated reply", "Examples: bus send --room feature-work --to worker --text 'Inspect the change'\n          bus send --reply-to 123 --as worker --text 'Inspection complete'"),
+        "send" => ("Send a message or complete a request with a correlated reply", "Example: bus send --room feature-work --to worker --text 'Inspect the change'\n         bus send --reply-to 123 --as worker --text 'Inspection complete'"),
         "message" => ("Inspect delivery or acknowledge a reply", "Example: bus message status 123"),
         "message status" => ("Read message delivery status and replies", "Example: bus message status 123"),
         "message seen" => ("Acknowledge a reply after reading its output", "Example: bus message seen 456 --as coordinator"),

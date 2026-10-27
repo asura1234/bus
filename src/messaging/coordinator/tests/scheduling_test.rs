@@ -1,3 +1,4 @@
+use super::support::test_prompt_content;
 use super::*;
 
 struct FreshLaunchNative {
@@ -131,7 +132,7 @@ fn freshly_added_codex_gets_its_first_prompt_without_a_session_or_prior_hooks() 
     thread.join().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
     let params = result.expect("fresh ready agent must not be starved by async status polls");
-    assert_eq!(params.text, "first fresh prompt");
+    assert_eq!(test_prompt_content(&params.text), "first fresh prompt");
     assert_eq!(params.target, "fresh-pane");
     assert_eq!(
         params.expected_managed_name,

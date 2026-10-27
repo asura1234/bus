@@ -37,7 +37,7 @@ async fn provider_fixture_descheduling_is_distinct_from_a_real_submission_timeou
             ));
         } else {
             assert_eq!(response["result"]["type"], "agent_prompted", "{response}");
-            assert_eq!(f.typed(agent), ["delayed fake provider"]);
+            assert_eq!(f.typed_content(agent), ["delayed fake provider"]);
             assert_eq!(
                 f.state().request(request).unwrap().phase,
                 RequestPhase::Active
@@ -66,7 +66,7 @@ async fn open_messaging_pending_cross_room_messages_do_not_coalesce() {
     assert_eq!(f.state().request(next).unwrap().phase, RequestPhase::Queued);
     assert_eq!(f.state().request(next).unwrap().group, None);
     let payload = f.typed(recipient).last().unwrap().clone();
-    assert_eq!(payload, "developer task");
+    assert_eq!(f.typed_content(recipient).last().unwrap(), "developer task");
     f.start(recipient, "developer", &payload);
     f.stop(
         recipient,
@@ -103,7 +103,7 @@ async fn open_messaging_cross_room_session_delivery_has_its_own_reply() {
         f.tick();
         let payload = f.typed(recipient).last().unwrap().clone();
         let expected = format!("agent-0 (room {}):\ncross-room question", source.0);
-        assert_eq!(payload, expected);
+        assert_eq!(f.typed_content(recipient).last().unwrap(), &expected);
         f.reopen();
         f.start(recipient, "cross-room-turn", &payload);
         assert!(f.state().request(request).unwrap().trusted_start_bound);
@@ -320,7 +320,9 @@ async fn worker_message_typed_into_orchestrator_names_its_worker_and_room() {
     let typed = f.typed(orchestrator).last().unwrap().clone();
     let name = f.state().agent(worker).unwrap().name.clone();
     assert!(
-        typed == format!("{name} (room {}):\nI am blocked", f.work.0),
+        typed.lines().next() == Some(format!("{name} (room {}):", f.work.0).as_str())
+            && f.typed_content(orchestrator).last().unwrap()
+                == &format!("{name} (room {}):\nI am blocked", f.work.0),
         "the orchestrator cannot tell this worker message from a developer prompt: {typed:?}"
     );
     let request = f.state().requests().next().unwrap().id;
@@ -369,8 +371,8 @@ async fn work_room_message_never_types_into_orchestrators_own_running_turn() {
     f.tick();
     let payload = f.typed(orchestrator).last().unwrap().clone();
     assert_eq!(
-        payload,
-        format!("agent-0 (room {}):\nI am blocked", f.work.0)
+        f.typed_content(orchestrator).last().unwrap(),
+        &format!("agent-0 (room {}):\nI am blocked", f.work.0)
     );
     f.start(orchestrator, "independent-worker-turn", &payload);
     f.stop(
@@ -529,10 +531,11 @@ async fn cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final(
         let request = f.send(agent, f.work, "review", false, None);
         f.tick();
         f.start(agent, "review-turn", "review");
+        let prompt = f.typed(agent).last().unwrap().clone();
         for row in [
             json!({"role":"assistant","message":{"content":[{"type":"text","text":format!("Checking.{omitted_suffix}")},{"type":"tool_use","name":"Read"}]}}),
             json!({"role":"user","message":{"content":[{"type":"text","text":"<available_subagent_types>...</available_subagent_types>"}]}}),
-            json!({"role":"user","message":{"content":[{"type":"text","text":"review"}]}}),
+            json!({"role":"user","message":{"content":[{"type":"text","text":prompt}]}}),
             json!({"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}),
             json!({"role":"assistant","message":{"content":[{"type":"text","text":"Ready"}]}}),
             json!({"role":"user","message":{"content":[{"type":"text","text":"newer request"}]}}),
@@ -795,18 +798,27 @@ async fn flagged_nested_provider_callbacks_do_not_steal_active_request_identity(
 async fn claude_image_chip_and_long_paste_bind_to_the_delivered_request() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let agent = f.agents[0];
-    f.captured_image_composer(agent);
     let image = f.dir.join("attachment.png");
     image::RgbImage::new(2, 2).save(&image).unwrap();
     let sent = f.call("message.send", json!({"room":"master","to":[agent.0.to_string()],"text":"please review this screenshot","files":[image]}));
     let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
+    let text = f.correlated_text(request);
+    f.captured_composer(
+        agent,
+        &include_str!("../api/agents/tests/fixtures/claude_image_paste.txt")
+            .replace("please review this screenshot", &text),
+    );
     f.tick();
     assert_eq!(
         f.typed(agent).len(),
         1,
         "native image composer must receive Enter"
     );
-    f.start(agent, "image", "[Image #1]<pasted_content id=\"image\">\nplease review this screenshot\n</pasted_content id=\"image\">");
+    f.start(
+        agent,
+        "image",
+        &format!("[Image #1]<pasted_content id=\"image\">\n{text}\n</pasted_content id=\"image\">"),
+    );
     f.stop(agent, "image", "screenshot reviewed", json!([]), json!([]));
     f.assert_reply(request, "screenshot reviewed");
 }
@@ -820,7 +832,8 @@ async fn claude_image_chip_beside_a_collapsed_paste_is_submitted_and_binds_its_r
     let agent = f.agents[0];
     f.captured_composer(
         agent,
-        include_str!("../api/agents/tests/fixtures/claude_image_long_paste.txt"),
+        &include_str!("../api/agents/tests/fixtures/claude_image_long_paste.txt")
+            .replace("+3 lines", "+4 lines"),
     );
     let image = f.dir.join("attachment.png");
     image::RgbImage::new(2, 2).save(&image).unwrap();
@@ -830,6 +843,7 @@ async fn claude_image_chip_beside_a_collapsed_paste_is_submitted_and_binds_its_r
         json!({"room":"master","to":[agent.0.to_string()],"text":text,"files":[image]}),
     );
     let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
+    let text = f.correlated_text(request);
     f.tick();
     assert_eq!(
         f.typed(agent).len(),
@@ -845,16 +859,12 @@ async fn claude_image_chip_beside_a_collapsed_paste_is_submitted_and_binds_its_r
     f.assert_reply(request, "templates reviewed");
 }
 
-/// codex-cli 0.163.0 shows a message that is only an image as `[Image #1]`
-/// and its submit hook reports that same text as the prompt.
+/// Correlation text makes this a text-and-image-path paste. Codex's native
+/// image-only chip path remains covered by the native submission tests.
 #[tokio::test]
-async fn codex_image_only_message_is_submitted_and_binds_its_reply() {
+async fn codex_image_message_with_correlation_text_is_submitted_and_binds_its_reply() {
     let mut f = Delivery::new(&[Provider::Codex], true);
     let agent = f.agents[0];
-    f.captured_composer(
-        agent,
-        include_str!("../api/agents/tests/fixtures/codex_image_only_paste.txt"),
-    );
     let image = f.dir.join("attachment.png");
     image::RgbImage::new(2, 2).save(&image).unwrap();
     let sent = f.call(
@@ -866,9 +876,12 @@ async fn codex_image_only_message_is_submitted_and_binds_its_reply() {
     assert_eq!(
         f.typed(agent).len(),
         1,
-        "a lone image chip is our draft and must receive Enter"
+        "the correlated image-path draft must receive Enter"
     );
-    f.start(agent, "image", "[Image #1]");
+    let expected = format!("{}\"{}\"", f.correlated_text(request), image.display());
+    assert_eq!(f.typed(agent), [expected.as_str()]);
+    f.start(agent, "image", &expected);
+    assert!(f.state().request(request).unwrap().trusted_start_bound);
     f.stop(agent, "image", "image reviewed", json!([]), json!([]));
     f.assert_reply(request, "image reviewed");
 }
@@ -1456,7 +1469,7 @@ async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_a
     f.stop(orch, "notice-turn", "help given", json!([]), json!([]));
     f.elapse(31_000);
     f.assert_reply(notice, "help given");
-    assert_eq!(f.typed(orch).last().unwrap(), "ordinary followup");
+    assert_eq!(f.typed_content(orch).last().unwrap(), "ordinary followup");
     f.start(orch, "ordinary-turn", "ordinary followup");
     f.stop(
         orch,
@@ -1590,7 +1603,7 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
     f.stop(orch, "held", "", json!([]), json!([{"cron_id":"cron"}]));
     let next = f.send(orch, f.master, "next", true, None);
     f.tick();
-    assert_eq!(f.typed(orch).last().unwrap(), "next");
+    assert_eq!(f.typed_content(orch).last().unwrap(), "next");
     assert_eq!(
         f.state().request(held).unwrap().phase,
         RequestPhase::Abandoned
@@ -1629,7 +1642,7 @@ async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() 
     .await;
     f.tick();
     assert_eq!(
-        f.typed(orch).last().unwrap(),
+        f.typed_content(orch).last().unwrap(),
         "new room",
         "folded steering blocked the inbox"
     );

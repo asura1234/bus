@@ -11,7 +11,7 @@ fn claude_messages_reach_an_unbound_busy_turn_without_waiting_for_idle() {
         let request = fixture.send("developer correction", false);
         fixture.deliver();
         assert_eq!(
-            fixture.typed(),
+            fixture.typed_content(),
             [("developer correction".to_owned(), true)],
             "{status:?}: do not wait for the own-turn grace or an idle poll"
         );
@@ -41,7 +41,10 @@ fn queue_only_claude_message_waits_for_an_unbound_turn_to_end() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
-    assert_eq!(fixture.typed(), [("separate turn".to_owned(), false)]);
+    assert_eq!(
+        fixture.typed_content(),
+        [("separate turn".to_owned(), false)]
+    );
 }
 
 #[test]
@@ -172,7 +175,7 @@ fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
     let typed = fixture.typed()[1].0.clone();
-    assert_eq!(typed, "developer follow-up");
+    assert_eq!(test_prompt_content(&typed), "developer follow-up");
     fixture.started("master-turn", &typed);
     fixture.stopped("master-turn", "follow-up answered");
     fixture.consume();
