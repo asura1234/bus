@@ -6,6 +6,10 @@ Consumers call the scanner and consume its returned JSON (or verify the hash bef
 manifests, and the cache holds the last scanned checkout. This is a cache, never
 proof of provisioning or readiness. There is no legacy format.
 
+Read-only consumers may use `scan --no-cache --repo PATH`: it returns the same
+schema with freshly inferred values, never reads or writes the cache, and never
+creates `temp/`. This keeps repositories without a `temp/` ignore rule clean.
+
 ## Schema 1
 
 All listed fields are required; no additional fields are allowed. JSON object

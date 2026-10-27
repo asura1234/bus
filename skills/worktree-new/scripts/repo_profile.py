@@ -701,7 +701,7 @@ def reusable(
         return False
 
 
-def scan(repo: Path) -> dict:
+def scan(repo: Path, *, use_cache: bool = True) -> dict:
     repo = Path(git(Path(repo).resolve(), "rev-parse", "--show-toplevel"))
     main = main_worktree(repo)
     subs = sorted(submodules(repo), key=lambda s: s["path"])
@@ -722,11 +722,17 @@ def scan(repo: Path) -> dict:
         "submodule_update": config.get("submodules", {}).get("update", "recursive"),
     }
     cache = main / "temp/.bus/repo-profile.json"
-    try:
-        cached = json.loads(cache.read_text())
-    except (OSError, ValueError):
-        cached = None
-    if reusable(cached, main, digest, manifests, subs) and cached["policy"] == policy:
+    cached = None
+    if use_cache:
+        try:
+            cached = json.loads(cache.read_text())
+        except (OSError, ValueError):
+            pass
+    if (
+        use_cache
+        and reusable(cached, main, digest, manifests, subs)
+        and cached["policy"] == policy
+    ):
         current_hazards = hazards(repo, paths, subs, cached["toolchains"])
         if current_hazards != cached["hazards"]:
             cached["hazards"] = current_hazards
@@ -747,7 +753,8 @@ def scan(repo: Path) -> dict:
         "recipe": infer_recipe(repo, paths, packages, config),
         "hazards": hazards(repo, paths, subs, tools),
     }
-    atomic_json(cache, result)
+    if use_cache:
+        atomic_json(cache, result)
     return result
 
 
@@ -755,9 +762,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["scan"])
     parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="fresh JSON without cache access or directory creation",
+    )
     args = parser.parse_args()
     try:
-        result = scan(args.repo)
+        result = scan(args.repo, use_cache=not args.no_cache)
         print(json.dumps(result, indent=2, sort_keys=True))
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"repo-profile: {error}", file=sys.stderr)
