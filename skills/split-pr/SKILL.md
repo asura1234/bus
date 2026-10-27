@@ -148,17 +148,17 @@ or a root part when base_ref is not origin/master (`pr` only targets master):
       ERROR unless that SHA equals the local branch tip (a resumed publish);
     ELSE: git push origin refs/heads/<branch>:refs/heads/<branch>
     Write goal and non-goal files from this part's purpose, then:
-      python3 "$SKILL_DIR/../pr/scripts/pr_goal_context.py" --branch <branch> \
+      python3 "$SKILL_DIR/../_bus/cli_extensions/pr_goal_context.py" --branch <branch> \
         --output <ctx> --goal-file <goal> --non-goal-file <non-goals> \
         --origin-file <origin>
     (origin = the source branch's temp/review-pr/<source-slug>/.locked-origin, else the
     confirmed split plan's entry for this part)
-    Read skills/pr/references/pr-template.md and .github/pull_request_template.md.
+    Read "$SKILL_DIR/../_bus/docs/pr-template.md" and "$SKILL_DIR/../_bus/docs/pull-request-template.md".
     Write a Draft body (its self-test boxes `- [ ] <name> — pending`) from
     git diff <onto>...<branch> only, with `H stack PLAN --part <id>` output as
     a bullet in 摘要, then:
-      python3 "$SKILL_DIR/../pr/scripts/pr_format_check.py" --phase draft \
-        --template "$SKILL_DIR/../pr/references/pr-template.md" --title "<title>" \
+      python3 "$SKILL_DIR/../_bus/cli_extensions/pr_format_check.py" --phase draft \
+        --template "$SKILL_DIR/../_bus/docs/pr-template.md" --title "<title>" \
         --body-file <body> --goal-context-file <ctx> --locked-goal-file <locked goal>
     existing = gh pr list --head <branch> --base <base_branch> --state open --json number
     IF existing: gh pr edit <number> --title "<title>" --body-file <body>

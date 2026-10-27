@@ -1,0 +1,1 @@
+../../pr/scripts/pr_format_check.py

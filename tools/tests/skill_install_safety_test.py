@@ -148,6 +148,12 @@ class SkillInstallSafetyTests(unittest.TestCase):
                                 cwd=repo, env=self.env, capture_output=True, text=True, check=False, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("ROUND=1", result.stdout)
+        shared = self.home / ".agents/skills/_bus"
+        formatter = subprocess.run([sys.executable, str(shared / "cli_extensions/pr_format_check.py"), "--help"],
+                                  cwd=repo, env=self.env, capture_output=True, text=True, check=False)
+        self.assertEqual(formatter.returncode, 0, formatter.stdout + formatter.stderr)
+        self.assertTrue((shared / "docs/pr-template.md").is_file())
+        self.assertTrue((shared / "docs/pull-request-template.md").is_file())
         self.assertEqual((user / "SKILL.md").read_text(), "user-authored PR workflow")
 
 if __name__ == "__main__":

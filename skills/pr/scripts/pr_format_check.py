@@ -42,8 +42,7 @@ _CHECKBOX_PREFIX = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*")
 _CHECKBOX = re.compile(r"^- \[([ x])\] (\S.*)$")
 # A required box is ticked only on evidence: the head it proves and the report that proves it.
 _BOX_EVIDENCE = re.compile(r"head `[0-9a-f]{7,40}`.*report `[^`]+`")
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_BODY_TEMPLATE = REPO_ROOT / ".github" / "pull_request_template.md"
+DEFAULT_BODY_TEMPLATE = Path(__file__).resolve().parents[2] / "_bus/docs/pull-request-template.md"
 
 
 def _lines_outside_fences(text: str) -> list[str]:
