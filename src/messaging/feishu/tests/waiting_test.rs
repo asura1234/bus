@@ -283,7 +283,7 @@ fn developer_notification_coalesced_request_group_is_one_final() {
         } else {
             serde_json::json!(first.0)
         };
-        item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"[waiting-on-you] one answer", "received_at_ms":3, "provider_session_id":null, "provider_turn_id":null});
+        item["completed_reply"] = serde_json::json!({"group":first.0, "content":{"callback_id":"done", "text":"[waiting-on-you] one answer", "received_at_ms":3, "provider_session_id":null, "provider_turn_id":null}});
         item["completed_at_ms"] = serde_json::json!(3);
     }
     let next: BusState = serde_json::from_value(value).unwrap();
@@ -356,7 +356,7 @@ fn developer_notification_tagged_final_keeps_following_action_lines() {
     let mut value = serde_json::to_value(&before).unwrap();
     let item = &mut value["requests"][request.0.to_string()];
     item["phase"] = serde_json::json!("completed");
-    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":format!("{}\n[waiting-on-you]\nNeed Figma access\nGrant project access too", crate::messaging::attention::TAG), "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_reply"] = serde_json::json!({"group":request.0, "content":{"callback_id":"done", "text":format!("{}\n[waiting-on-you]\nNeed Figma access\nGrant project access too", crate::messaging::attention::TAG), "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null}});
     item["completed_at_ms"] = serde_json::json!(2);
     let next: BusState = serde_json::from_value(value).unwrap();
     let now = 1000_u64;
@@ -544,7 +544,7 @@ fn developer_notification_untagged_final_is_quiet() {
     let mut value = serde_json::to_value(&before).unwrap();
     let item = &mut value["requests"][request.0.to_string()];
     item["phase"] = serde_json::json!("completed");
-    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"Complete", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_reply"] = serde_json::json!({"group":request.0, "content":{"callback_id":"done", "text":"Complete", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null}});
     item["completed_at_ms"] = serde_json::json!(2);
     let next: BusState = serde_json::from_value(value).unwrap();
     let mut policy = enabled();
@@ -648,7 +648,7 @@ fn notify_you_tagged_worker_final_to_an_agent_notifies_once() {
     let mut value = serde_json::to_value(&before).unwrap();
     let item = &mut value["requests"][request.0.to_string()];
     item["phase"] = serde_json::json!("completed");
-    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"[waiting-on-you] Decide release", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_reply"] = serde_json::json!({"group":request.0, "content":{"callback_id":"done", "text":"[waiting-on-you] Decide release", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null}});
     item["completed_at_ms"] = serde_json::json!(2);
     let next: BusState = serde_json::from_value(value).unwrap();
     let mut policy = enabled();
@@ -702,7 +702,7 @@ fn notify_you_forwarded_worker_reply_and_ack_do_not_repeat_the_alert() {
     let mut value = serde_json::to_value(&before).unwrap();
     let item = &mut value["requests"][request.0.to_string()];
     item["phase"] = serde_json::json!("completed");
-    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"[waiting-on-you] Decide release", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_reply"] = serde_json::json!({"group":request.0, "content":{"callback_id":"done", "text":"[waiting-on-you] Decide release", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null}});
     item["completed_at_ms"] = serde_json::json!(2);
     let mut next: BusState = serde_json::from_value(value).unwrap();
     let mut policy = enabled();
@@ -765,7 +765,7 @@ fn untagged_waiting_phrase_in_a_worker_final_to_an_agent_does_not_alert_the_deve
     let mut value = serde_json::to_value(&before).unwrap();
     let item = &mut value["requests"][request.0.to_string()];
     item["phase"] = serde_json::json!("completed");
-    item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"BLOCKED: waiting on you to pick the base branch", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null});
+    item["completed_reply"] = serde_json::json!({"group":request.0, "content":{"callback_id":"done", "text":"BLOCKED: waiting on you to pick the base branch", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null}});
     item["completed_at_ms"] = serde_json::json!(2);
     let next: BusState = serde_json::from_value(value).unwrap();
     let mut policy = enabled();
@@ -843,7 +843,7 @@ fn coalesced_developer_and_peer_requests_keep_developer_phrase_context() {
     for request in [first, second] {
         let item = &mut value["requests"][request.0.to_string()];
         item["phase"] = serde_json::json!("completed");
-        item["pending_final"] = serde_json::json!({"callback_id":"done", "text":"Still waiting on you: Approve access", "received_at_ms":3, "provider_session_id":null, "provider_turn_id":null});
+        item["completed_reply"] = serde_json::json!({"group":first.0, "content":{"callback_id":"done", "text":"Still waiting on you: Approve access", "received_at_ms":3, "provider_session_id":null, "provider_turn_id":null}});
         item["completed_at_ms"] = serde_json::json!(3);
     }
     let next: BusState = serde_json::from_value(value).unwrap();
