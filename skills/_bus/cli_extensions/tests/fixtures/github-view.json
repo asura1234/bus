@@ -1,0 +1,15 @@
+{
+  "baseRefName": "master",
+  "body": "Fixture body",
+  "headRefName": "feat/fixture",
+  "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "isDraft": false,
+  "mergeCommit": {
+    "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "mergedAt": "2026-10-26T00:56:48Z",
+  "number": 42,
+  "state": "MERGED",
+  "title": "Fixture request",
+  "url": "https://github.com/example/project/pull/42"
+}

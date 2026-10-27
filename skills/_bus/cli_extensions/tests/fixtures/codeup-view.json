@@ -1,0 +1,11 @@
+{
+  "localId": 5,
+  "title": "Fixture request",
+  "description": "Fixture body",
+  "status": "MERGED",
+  "sourceBranch": "feat/fixture",
+  "targetBranch": "main",
+  "detailUrl": "https://codeup.aliyun.com/org/team/project/change/5",
+  "conflictCheckStatus": "NO_CONFLICT",
+  "mergedRevision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
