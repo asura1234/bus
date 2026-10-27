@@ -5,6 +5,8 @@ description: Feature-branch PR workflow. Land uncommitted work, rebase onto orig
 
 # PR
 
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md.
+
 ```text
 INPUT $ARGUMENTS = [--plan <plan-file>]... [--origin <file>] [--relock <file>] [--lock-only] [--verification <file>]
 plans = every plan path the developer supplied this time, in order of appearance; never guess from diff, commits, or historical state.
@@ -141,7 +143,7 @@ IF verification given AND any line names a commit other than `head`:
 
 ========== WRITE BODY ==========
 
-Read(references/pr-template.md) and Read(`.github/pull_request_template.md`)
+Read(`$SKILL_DIR/../_bus/docs/pr-template.md`) and Read(`$SKILL_DIR/../_bus/docs/pull-request-template.md`)
 Write the English title and narrative under one hard constraint: **the narrative may come only from the
 immutable `copy_diff` / `copy_commits`; goal and non-goals come only from GOAL_CONTEXT_FILE.** Never re-derive
 from the live worktree, live `HEAD`, or the mutable `origin/master`.
@@ -161,7 +163,7 @@ Write `body_file` under ignored `temp/`, then run:
 
   python3 "$SKILL_DIR/../_bus/cli_extensions/pr_format_check.py" --phase <phase> \
     --template "$SKILL_DIR/../_bus/docs/pr-template.md" \
-    --body-template .github/pull_request_template.md --title "<title>" \
+    --body-template "$SKILL_DIR/../_bus/docs/pull-request-template.md" --title "<title>" \
     --body-file "<body-file>" --goal-context-file "<GOAL_CONTEXT_FILE>" \
     --locked-goal-file "<LOCKED_GOAL_FILE>"
 
