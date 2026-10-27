@@ -10,6 +10,11 @@ Read-only consumers may use `scan --no-cache --repo PATH`: it returns the same
 schema with freshly inferred values, never reads or writes the cache, and never
 creates `temp/`. This keeps repositories without a `temp/` ignore rule clean.
 
+The `policy --repo PATH` command returns exactly `{ "policy": <policy object> }`
+using the same defaults and validation of policy-relevant TOML fields. It reads
+no manifests, inventory, hazards or cache, and makes no repository/Git metadata
+writes. Unrelated worktree overrides do not block this policy-only read.
+
 ## Schema 1
 
 All listed fields are required; no additional fields are allowed. JSON object

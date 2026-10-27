@@ -115,7 +115,7 @@ def keys(value: object, allowed: set[str]) -> dict:
     return value
 
 
-def overrides(repo: Path) -> dict:
+def overrides(repo: Path, *, policy_only=False) -> dict:
     path = repo / ".bus/repo.toml"
     if path.is_symlink() or not path.resolve().is_relative_to(repo.resolve()):
         raise ValueError("override path escapes checkout or is a symlink")
@@ -139,6 +139,8 @@ def overrides(repo: Path) -> dict:
     sub = keys(data.get("submodules", {}), {"update"})
     if sub.get("update", "recursive") not in {"recursive", "none"}:
         raise ValueError("submodules.update must be recursive or none")
+    if policy_only:
+        return data
     wt = keys(
         data.get("worktree", {}),
         {"prepare", "smoke", "disk_estimate_gib", "shared_dependencies"},
@@ -701,6 +703,20 @@ def reusable(
         return False
 
 
+def policy_values(config):
+    return {
+        "gate_command": config.get("gate_command"),
+        "commit_style": config.get("commit_style"),
+        "require_exact_head_gate": config.get("require_exact_head_gate", False),
+        "submodule_update": config.get("submodules", {}).get("update", "recursive"),
+    }
+
+
+def read_policy(repo):
+    repo = Path(git(Path(repo).resolve(), "rev-parse", "--show-toplevel"))
+    return {"policy": policy_values(overrides(repo, policy_only=True))}
+
+
 def scan(repo: Path, *, use_cache: bool = True) -> dict:
     repo = Path(git(Path(repo).resolve(), "rev-parse", "--show-toplevel"))
     main = main_worktree(repo)
@@ -715,12 +731,7 @@ def scan(repo: Path, *, use_cache: bool = True) -> dict:
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     config = overrides(repo)
-    policy = {
-        "gate_command": config.get("gate_command"),
-        "commit_style": config.get("commit_style"),
-        "require_exact_head_gate": config.get("require_exact_head_gate", False),
-        "submodule_update": config.get("submodules", {}).get("update", "recursive"),
-    }
+    policy = policy_values(config)
     cache = main / "temp/.bus/repo-profile.json"
     cached = None
     if use_cache:
@@ -760,7 +771,7 @@ def scan(repo: Path, *, use_cache: bool = True) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["scan"])
+    parser.add_argument("action", choices=["scan", "policy"])
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument(
         "--no-cache",
@@ -769,7 +780,11 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        result = scan(args.repo, use_cache=not args.no_cache)
+        result = (
+            read_policy(args.repo)
+            if args.action == "policy"
+            else scan(args.repo, use_cache=not args.no_cache)
+        )
         print(json.dumps(result, indent=2, sort_keys=True))
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"repo-profile: {error}", file=sys.stderr)
