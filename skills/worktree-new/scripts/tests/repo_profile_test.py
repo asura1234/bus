@@ -67,6 +67,36 @@ class ProfileTests(Fixture):
         super().setUp()
         self.profile = load("repo_profile")
 
+    def test_unchanged_manifest_cache_skips_inference_but_refreshes_local_hazards(self):
+        self.rust()
+        first = self.profile.scan(self.repo)
+        with patch.object(
+            self.profile, "inventory", side_effect=AssertionError("rescanned")
+        ):
+            self.assertEqual(self.profile.scan(self.repo), first)
+            self.git("config", "rerere.enabled", "true")
+            refreshed = self.profile.scan(self.repo)
+        self.assertIn("rerere", {h["id"] for h in refreshed["hazards"]})
+        self.write("rust-toolchain.toml", '[toolchain]\nchannel="1.95.0"\n')
+        changed = self.profile.scan(self.repo)
+        self.assertNotEqual(changed["manifest_hash"], first["manifest_hash"])
+        self.assertEqual(changed["toolchains"][0]["pin"], "1.95.0")
+
+    def test_malformed_cache_is_recomputed_instead_of_used(self):
+        self.rust()
+        first = self.profile.scan(self.repo)
+        cache = self.repo / "temp/.bus/repo-profile.json"
+        missing_policy = dict(first)
+        del missing_policy["policy"]
+        for malformed in (
+            dict(first, recipe={"smoke": [{"argv": []}]}),
+            missing_policy,
+            dict(first, package_managers=[{}]),
+        ):
+            with self.subTest(cache=malformed):
+                cache.write_text(json.dumps(malformed))
+                self.assertEqual(self.profile.scan(self.repo), first)
+
     def test_rust_locked_recipe_and_cache_shared_by_linked_worktrees(self):
         self.rust()
         self.commit()
