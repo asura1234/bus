@@ -128,3 +128,25 @@ def test_bus_refuses_a_test_launch_with_protected_home_before_any_state_write(tm
         assert result.returncode != 0
         assert "test isolation refused" in result.stderr, result.stdout + result.stderr
         assert not list(protected.iterdir()), "the guard must run before state or offer locks"
+
+
+def test_scripted_acceptance_is_saved_even_when_a_corrupt_manifest_stops_install(tmp_path):
+    import json
+    import pytest
+    binary = os.environ.get("BUS_TEST_BINARY")
+    if not binary:
+        pytest.skip("requires the gate's exact binary")
+    home = tmp_path / "home"
+    state = home / ".local/share/bus"
+    state.mkdir(parents=True)
+    (state / "skills-manifest.json").write_text("corrupt")
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_", "XDG_"))}
+    env.update(HOME=str(home), USERPROFILE=str(home))
+    result = subprocess.run([binary, "skills", "install", "--yes"], env=env, cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode != 0
+    path = state / "settings.json"
+    assert path.is_file(), "an explicit answer must persist even when installation fails"
+    saved = json.loads(path.read_text())
+    assert saved["skills_answer"]["accepted"] is True
+    assert saved["skills_answer"]["bundle_hash"]
+    assert not (home / ".agents").exists()

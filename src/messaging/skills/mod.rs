@@ -112,6 +112,8 @@ pub(crate) fn status(home: &Path) -> io::Result<Status> {
 pub(crate) fn install(home: &Path) -> io::Result<Status> {
     bus_io::private_dir(&data_dir(home))?;
     let _lease = bus_io::append_lock(&data_dir(home).join("skills-install.lock"))?;
+    // Keep explicit consent when installation fails.
+    record_answer(home, true)?;
     let mut manifest = install::load_manifest(home)?;
     for (provider, directory) in PROVIDERS {
         let root = home.join(directory).join("skills");
@@ -121,7 +123,6 @@ pub(crate) fn install(home: &Path) -> io::Result<Status> {
     }
     manifest.bundle_hash = bundle_hash();
     install::save_manifest(home, &manifest)?;
-    record_answer(home, true)?;
     status(home)
 }
 
