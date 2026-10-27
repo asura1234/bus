@@ -73,9 +73,9 @@ Exit codes:
   0 — pass; 1 — prereq failed ("FAIL" + "- <reason>" lines); 2 — usage error
 
 Usage:
-    python3 skills/review-plan/scripts/review_round.py [<plan.md>] \
+    python3 "$SKILL_DIR/scripts/review_round.py" [<plan.md>] \
         [--reviewer <lane>] [--devils-advocate]
-    python3 skills/review-plan/scripts/review_round.py <plan.md> --check   # structure/status gate only, read-only; can verify a plan whose review is complete
+    python3 "$SKILL_DIR/scripts/review_round.py" <plan.md> --check   # structure/status gate only, read-only; can verify a plan whose review is complete
 """
 
 import re

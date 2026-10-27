@@ -6,14 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
+REPO_ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], check=False, capture_output=True, text=True).stdout.strip() or Path.cwd()).resolve()
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus"))
 
 _PREPARATION_PREFIX = "<!-- address-review-comments-preparation-v1 "
 _PREPARATION_SUFFIX = " -->"

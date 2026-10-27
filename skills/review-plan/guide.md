@@ -23,7 +23,7 @@ has no worktree yet, its author first creates the feature worktree with
 slot, coordinated with the owner. This skill remains read-only over plans and
 repository content; reports stay under ignored `temp/review-plan/`. If a separate
 investigation needs test probes, follow the test-only write and saved-patch/restore
-lifecycle in [Parallel writes](../../orchestration/parallel-writes.md#reviews-and-investigations),
+lifecycle in [Parallel writes](../_bus/orchestration/parallel-writes.md#reviews-and-investigations),
 without changing production files or the plan.
 
 ## A lane is one independent viewpoint

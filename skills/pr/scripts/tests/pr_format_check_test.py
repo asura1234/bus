@@ -13,7 +13,7 @@ from pr_format_check import (  # noqa: E402
     parse_title_types,
     run,
 )
-from pr_goal_context import (  # noqa: E402
+from cli_extensions.pr_goal_context import (  # noqa: E402
     build_context,
     extract_plan_section,
     locked_context_paths,

@@ -26,7 +26,8 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from pr_goal_context import parse_context, split_h2_sections
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus"))
+from cli_extensions.pr_goal_context import parse_context, split_h2_sections  # noqa: E402
 
 
 SELF_TEST_SECTION = "自测 / Agent 测"

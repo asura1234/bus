@@ -125,7 +125,7 @@ class ScopeRoundTests(unittest.TestCase):
         self.root = Path(temporary.name)
         for name in (
             "skills/review-pr/scripts/review_round.py",
-            "skills/pr/scripts/pr_goal_context.py",
+            "skills/_bus/cli_extensions/pr_goal_context.py",
             "cli_extensions/review_round_common.py",
             "cli_extensions/review_scope.py",
         ):

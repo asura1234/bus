@@ -158,7 +158,7 @@ or a root part when base_ref is not origin/master (`pr` only targets master):
     git diff <onto>...<branch> only, with `H stack PLAN --part <id>` output as
     a bullet in 摘要, then:
       python3 "$SKILL_DIR/../pr/scripts/pr_format_check.py" --phase draft \
-        --template skills/pr/references/pr-template.md --title "<title>" \
+        --template "$SKILL_DIR/../pr/references/pr-template.md" --title "<title>" \
         --body-file <body> --goal-context-file <ctx> --locked-goal-file <locked goal>
     existing = gh pr list --head <branch> --base <base_branch> --state open --json number
     IF existing: gh pr edit <number> --title "<title>" --body-file <body>

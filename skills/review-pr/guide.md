@@ -11,7 +11,7 @@ using its already-built binary when available. Do not create a reviewer clone,
 worktree or target, and never build in the main checkout. Coordinate test writes
 and builds with the author; compilation uses the owner's single target and the
 room build slot, never concurrently with its gate. The full
-[review/investigation rules](../../orchestration/parallel-writes.md#reviews-and-investigations)
+[review/investigation rules](../_bus/orchestration/parallel-writes.md#reviews-and-investigations)
 also apply to subagents. Reports, logs and patches go in ignored round artifacts.
 
 ## A lane is one independent viewpoint

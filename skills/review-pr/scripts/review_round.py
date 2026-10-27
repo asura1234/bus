@@ -70,7 +70,7 @@ Exit codes:
   0 — pass; 1 — prereq failed ("FAIL" + "- <reason>" lines); 2 — usage error
 
 Usage:
-    python3 skills/review-pr/scripts/review_round.py \
+    python3 "$SKILL_DIR/scripts/review_round.py" \
         [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan.md>]
         [--scope <FILE_LIST|chunk.json>]
 """
@@ -110,12 +110,9 @@ from review_scope import (  # noqa: E402
     snapshot_scope,
 )
 
-PR_SCRIPTS = Path(__file__).resolve().parents[2] / "pr" / "scripts"
-if str(PR_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(PR_SCRIPTS))
-
-# The lock writer owns plan section parsing; exact-match checks reuse that single parser.
-from pr_goal_context import build_context  # noqa: E402
+# Public sibling skills may belong to the user; shared runtime code is Bus-owned.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus"))
+from cli_extensions.pr_goal_context import build_context  # noqa: E402
 
 
 LOCKED_GOAL_NAME = ".locked-goal"
@@ -281,7 +278,7 @@ def main(argv: list[str]) -> int:
     except (LockedContextError, ValueError, OSError, UnicodeError) as error:
         print("FAIL")
         print(
-            f"- {error}。两份 locks 只由 skills/pr/scripts/pr_goal_context.py 生成"
+            f"- {error}。两份 locks 只由 <skills>/_bus/cli_extensions/pr_goal_context.py 生成"
             "（--plan，或开发者提供的 --goal-file、--non-goal-file 与 --origin-file）；"
             "不得从 diff、commit 或 PR 描述自行推断。"
         )

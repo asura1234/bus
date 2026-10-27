@@ -21,7 +21,7 @@ def test_review_scripts_find_bundled_support_and_target_the_callers_repo(tmp_pat
     else:
         for name in ("review-pr", "pr"):
             shutil.copytree(ROOT / "skills" / name, skills / name)
-        shutil.copytree(ROOT / "cli_extensions", skills / "_bus" / "cli_extensions")
+        shutil.copytree(ROOT / "skills" / "_bus", skills / "_bus")
     repo = tmp_path / "other-repo"
     repo.mkdir()
     for args in (["init", "--initial-branch=feature"], ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "base"]):

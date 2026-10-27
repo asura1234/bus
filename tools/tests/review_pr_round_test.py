@@ -17,7 +17,7 @@ REVIEW_ROUND_SCRIPT = REPO_ROOT / "skills/review-pr/scripts/review_round.py"
 # shared module must come along too — in the real repository the script always sits inside REPO_ROOT,
 # so the dependency holds naturally.
 REVIEW_ROUND_COMMON = REPO_ROOT / "cli_extensions/review_round_common.py"
-PR_GOAL_CONTEXT = REPO_ROOT / "skills/pr/scripts/pr_goal_context.py"
+PR_GOAL_CONTEXT = REPO_ROOT / "skills/_bus/cli_extensions/pr_goal_context.py"
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -39,9 +39,7 @@ class ReviewPrRoundTests(unittest.TestCase):
         shared.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_COMMON, shared)
         shutil.copy2(REPO_ROOT / "cli_extensions/review_scope.py", shared.parent / "review_scope.py")
-        pr = repo / "skills/pr/scripts/pr_goal_context.py"
-        pr.parent.mkdir(parents=True)
-        shutil.copy2(PR_GOAL_CONTEXT, pr)
+        shutil.copy2(PR_GOAL_CONTEXT, shared.parent / "pr_goal_context.py")
 
         for args in (
             ("git", "init", "-b", "main"),
