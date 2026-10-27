@@ -122,20 +122,20 @@ pub(in crate::server) fn apply_client_pane_input_events(
                 let bytes = runtime.encode_terminal_key(key);
                 if !bytes.is_empty() {
                     runtime
-                        .try_send_bytes(Bytes::from(bytes))
+                        .try_send_developer_bytes(Bytes::from(bytes))
                         .map_err(|err| format!("targeted pane key input failed: {err}"))?;
                 }
             }
             crate::protocol::keys::host::RawInputEvent::Text(text) => {
                 runtime.scroll_reset();
                 runtime
-                    .try_send_bytes(Bytes::copy_from_slice(text.as_str().as_bytes()))
+                    .try_send_developer_bytes(Bytes::copy_from_slice(text.as_str().as_bytes()))
                     .map_err(|err| format!("targeted pane text input failed: {err}"))?;
             }
             crate::protocol::keys::host::RawInputEvent::Paste(text) => {
                 runtime.scroll_reset();
                 runtime
-                    .try_send_paste(text)
+                    .try_send_developer_paste(text)
                     .map_err(|err| format!("targeted pane paste failed: {err}"))?;
             }
             crate::protocol::keys::host::RawInputEvent::Mouse(_)

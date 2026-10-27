@@ -24,6 +24,8 @@ impl RoomAgent {
             })
         } else if self.current_request.is_some() {
             Some("prior_request_active")
+        } else if self.delivery_rejection.as_deref() == Some("composer_busy") {
+            Some("composer_busy")
         } else if identity.launch_id.is_none()
             || identity.terminal_id.is_none()
             || identity.pane_id.is_none()

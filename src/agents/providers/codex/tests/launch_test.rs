@@ -80,3 +80,46 @@ fn launch_disables_startup_update_checks() {
         "{argv:?}"
     );
 }
+
+#[test]
+fn draft_action_pins_override_user_remaps_on_new_and_resumed_launches() {
+    use crate::agents::providers::{launch as provider_launch, ProviderKind};
+    let id = "160d1f8b-9023-44b8-9bc7-24333effb185";
+    let remaps = "-c 'tui.keymap.global.open_external_editor=[\"ctrl-x\"]' --config 'tui.keymap.editor.delete_backward=[\"ctrl-h\"]' -- 'literal prompt'";
+    for prefix in [String::new(), format!("resume {id} ")] {
+        let (mut argv, adopted) =
+            provider_launch::launch_args(ProviderKind::Codex, &format!("{prefix}{remaps}"))
+                .unwrap();
+        assert_eq!(adopted.is_some(), !prefix.is_empty());
+        // Native resume preparation may append the same leaf overrides again.
+        provider_launch::extend_generated_args(
+            ProviderKind::Codex,
+            &mut argv,
+            launch::runtime_args(),
+        );
+        let separator = argv.iter().position(|arg| arg == "--").unwrap();
+        assert_eq!(&argv[separator..], ["--", "literal prompt"]);
+        for (key, shortcut) in [
+            ("tui.keymap.global.open_external_editor", "ctrl-g"),
+            ("tui.keymap.editor.delete_backward", "backspace"),
+        ] {
+            let value = argv[..separator]
+                .iter()
+                .enumerate()
+                .filter_map(|(index, arg)| match arg.as_str() {
+                    "-c" | "--config" => argv.get(index + 1).map(String::as_str),
+                    value => value.strip_prefix("--config="),
+                })
+                .filter_map(|assignment| assignment.split_once('='))
+                .filter_map(|(name, value)| (name == key).then_some(value))
+                .next_back()
+                .unwrap();
+            let decoded: toml::Table = toml::from_str(&format!("binding={value}")).unwrap();
+            assert_eq!(
+                decoded["binding"].as_array().unwrap(),
+                &vec![toml::Value::String(shortcut.into())],
+                "effective binding for {key}: {argv:?}"
+            );
+        }
+    }
+}

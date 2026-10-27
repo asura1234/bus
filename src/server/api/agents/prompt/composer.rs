@@ -4,6 +4,21 @@ use crate::agents::AgentKind;
 use crate::terminal::runtime::InputObservation;
 
 mod ownership;
+mod preservation;
+
+pub(super) fn preserving_observer(
+    kind: AgentKind,
+    expected: String,
+    directory: std::path::PathBuf,
+    keys: Vec<bytes::Bytes>,
+) -> impl crate::terminal::runtime::SubmissionInspector {
+    let keys = if kind == AgentKind::Claude && !preservation::default_claude_stash_binding() {
+        Vec::new()
+    } else {
+        keys
+    };
+    preservation::PreservingComposer::new(kind, expected, directory, keys)
+}
 
 pub(super) fn observer(
     kind: AgentKind,

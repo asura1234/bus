@@ -104,7 +104,9 @@ async fn an_expired_dispatch_budget_is_definitely_rejected_before_any_input() {
     // native budget, but the coordinator's 4.3 s read is still open.
     assert!(
         app.handle_deferred_agent_api_message(crate::server::api::ApiRequestMessage {
-            received_at: std::time::Instant::now() - Duration::from_secs(4),
+            received_at: std::time::Instant::now()
+                - crate::protocol::api::submission::method_budget(&method).unwrap()
+                - Duration::from_secs(1),
             request: Request {
                 id: "delayed_dispatch".into(),
                 method
@@ -473,8 +475,17 @@ mod owned_draft_cleanup_tests;
 
 // Before this attempt pastes, even an exact text match does not prove ownership.
 pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
-    for draft in ["developer draft", "from bus"] {
+    for draft in [
+        "[Image #138] developer draft",
+        "[Pasted text #147 +20 lines]",
+    ] {
         let (mut app, method, mut writes) = provider_fixture(kind, bound, draft);
+        if kind == AgentKind::Claude {
+            let pane = app.state.workspaces[0].tabs[0].root_pane;
+            app.lookup_runtime_sender(0, pane)
+                .unwrap()
+                .test_process_pty_bytes(b"\r\nPrompt stashed");
+        }
         let response = start(&mut app, method);
         let mut response =
             tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
@@ -486,9 +497,8 @@ pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
             }
         };
         assert_eq!(key, None, "pre-paste cleanup touched unowned input");
-        assert!(reply.contains("agent_prompt_not_shown"), "{reply}");
-        assert!(reply.contains("Existing input was preserved"), "{reply}");
-        assert!(reply.contains("before retrying"), "{reply}");
+        assert!(reply.contains("agent_composer_busy"), "{reply}");
+        assert!(!reply.contains("agent_prompt_not_shown"), "{reply}");
         assert!(
             writes.try_recv().is_err(),
             "no clear key, new paste or Enter"

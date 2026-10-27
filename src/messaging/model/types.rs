@@ -654,6 +654,8 @@ fn normalized_payload(value: &str) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SubmissionOutcome {
+    /// No input was sent: retain the message until its composer is available.
+    ComposerBusy,
     DefinitelyRejected {
         message: String,
     },

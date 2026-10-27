@@ -538,7 +538,11 @@ fn unstarted_resume_replays_saved_options() {
             "gpt-test",
             "--no-daemon",
             "-c",
-            "check_for_update_on_startup=false"
+            "check_for_update_on_startup=false",
+            "-c",
+            r#"tui.keymap.global.open_external_editor=["ctrl-g"]"#,
+            "-c",
+            r#"tui.keymap.editor.delete_backward=["backspace"]"#
         ]
     );
 }
@@ -559,7 +563,11 @@ fn resume_does_not_duplicate_an_explicit_private_runtime_option() {
             "--yolo",
             "--no-daemon",
             "-c",
-            "check_for_update_on_startup=false"
+            "check_for_update_on_startup=false",
+            "-c",
+            r#"tui.keymap.global.open_external_editor=["ctrl-g"]"#,
+            "-c",
+            r#"tui.keymap.editor.delete_backward=["backspace"]"#
         ]
     );
 }
@@ -1005,7 +1013,14 @@ fn unstarted_resume_from_saved_launch_argv_does_not_repeat_original_options() {
         .cloned()
         .collect();
     let mut expected = launch_argv;
-    expected.extend(["-c".into(), "check_for_update_on_startup=false".into()]);
+    expected.extend([
+        "-c".into(),
+        "check_for_update_on_startup=false".into(),
+        "-c".into(),
+        r#"tui.keymap.global.open_external_editor=["ctrl-g"]"#.into(),
+        "-c".into(),
+        r#"tui.keymap.editor.delete_backward=["backspace"]"#.into(),
+    ]);
     assert_eq!(argv, expected);
 }
 
@@ -1177,6 +1192,10 @@ fn unstarted_resume_preserves_literal_initial_input_with_capture_options_before_
             "--no-daemon",
             "-c",
             "check_for_update_on_startup=false",
+            "-c",
+            r#"tui.keymap.global.open_external_editor=["ctrl-g"]"#,
+            "-c",
+            r#"tui.keymap.editor.delete_backward=["backspace"]"#,
             "--",
             "first prompt"
         ]

@@ -155,7 +155,11 @@ fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
                 "gpt-test",
                 "--no-daemon",
                 "-c",
-                "check_for_update_on_startup=false"
+                "check_for_update_on_startup=false",
+                "-c",
+                "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+                "-c",
+                "tui.keymap.editor.delete_backward=[\"backspace\"]"
             ]),
             Some(id.into())
         )
@@ -169,7 +173,11 @@ fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
                 "resume",
                 "--no-daemon",
                 "-c",
-                "check_for_update_on_startup=false"
+                "check_for_update_on_startup=false",
+                "-c",
+                "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+                "-c",
+                "tui.keymap.editor.delete_backward=[\"backspace\"]"
             ]),
             None
         )
@@ -219,7 +227,15 @@ fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
 fn codex_launches_host_their_own_runtime_so_hooks_inherit_launch_env() {
     assert_eq!(
         runtime_args(Provider::Codex),
-        vec!["--no-daemon", "-c", "check_for_update_on_startup=false"]
+        vec![
+            "--no-daemon",
+            "-c",
+            "check_for_update_on_startup=false",
+            "-c",
+            "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+            "-c",
+            "tui.keymap.editor.delete_backward=[\"backspace\"]"
+        ]
     );
     assert!(runtime_args(Provider::ClaudeCode).is_empty());
     assert_eq!(
@@ -239,7 +255,11 @@ fn codex_launch_does_not_duplicate_an_explicit_private_runtime_option() {
             "--yolo",
             "--no-daemon",
             "-c",
-            "check_for_update_on_startup=false"
+            "check_for_update_on_startup=false",
+            "-c",
+            "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+            "-c",
+            "tui.keymap.editor.delete_backward=[\"backspace\"]"
         ]
     );
     assert_eq!(
@@ -250,7 +270,11 @@ fn codex_launch_does_not_duplicate_an_explicit_private_runtime_option() {
             "first prompt",
             "--no-daemon",
             "-c",
-            "check_for_update_on_startup=false"
+            "check_for_update_on_startup=false",
+            "-c",
+            "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+            "-c",
+            "tui.keymap.editor.delete_backward=[\"backspace\"]"
         ]
     );
 }
@@ -265,6 +289,10 @@ fn codex_capture_runtime_precedes_a_literal_argument_tail() {
             "--no-daemon",
             "-c",
             "check_for_update_on_startup=false",
+            "-c",
+            "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+            "-c",
+            "tui.keymap.editor.delete_backward=[\"backspace\"]",
             "--",
             "--yolo literal prompt"
         ]
@@ -281,7 +309,11 @@ fn generated_args_do_not_split_an_option_from_a_value_named_separator() {
             "--",
             "--no-daemon",
             "-c",
-            "check_for_update_on_startup=false"
+            "check_for_update_on_startup=false",
+            "-c",
+            "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+            "-c",
+            "tui.keymap.editor.delete_backward=[\"backspace\"]"
         ]
     );
 }
@@ -316,7 +348,11 @@ fn launch_args_adoption_distinguishes_selectors_from_literal_option_values() {
                 "key=value",
                 "--no-daemon",
                 "-c",
-                "check_for_update_on_startup=false"
+                "check_for_update_on_startup=false",
+                "-c",
+                "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+                "-c",
+                "tui.keymap.editor.delete_backward=[\"backspace\"]"
             ]
             .into_iter()
             .map(str::to_owned)
@@ -469,6 +505,10 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
                 "--no-daemon",
                 "-c",
                 "check_for_update_on_startup=false",
+                "-c",
+                "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+                "-c",
+                "tui.keymap.editor.delete_backward=[\"backspace\"]",
                 "--",
                 "--approve-for-me",
             ]
@@ -483,6 +523,10 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
                 "--no-daemon",
                 "-c",
                 "check_for_update_on_startup=false",
+                "-c",
+                "tui.keymap.global.open_external_editor=[\"ctrl-g\"]",
+                "-c",
+                "tui.keymap.editor.delete_backward=[\"backspace\"]",
                 "--",
                 "--approve-for-me",
             ]
@@ -528,8 +572,11 @@ fn repeated_runtime_defaults_do_not_duplicate_update_arguments_or_consume_litera
             runtime_args(Provider::Codex),
         );
         assert_eq!(
-            &args[args.len() - 2..],
-            ["-c", "check_for_update_on_startup=false"]
+            args.windows(2)
+                .filter(|pair| pair[0] == "-c" && pair[1] == "check_for_update_on_startup=false")
+                .count(),
+            2,
+            "a later explicit enable requires one final disabling override: {args:?}"
         );
     }
     for provider in [Provider::Codex, Provider::Cursor] {
@@ -550,7 +597,22 @@ fn repeated_runtime_defaults_do_not_duplicate_update_arguments_or_consume_litera
             &mut args,
             runtime_args(provider),
         );
-        assert_eq!(args, once, "{provider:?}");
+        if provider == Provider::Cursor {
+            assert_eq!(args, once, "{provider:?}");
+        } else {
+            assert_eq!(
+                args.iter()
+                    .filter(|arg| arg.as_str() == "--no-daemon")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                args.iter()
+                    .filter(|arg| arg.as_str() == "check_for_update_on_startup=false")
+                    .count(),
+                2
+            );
+        }
         assert_eq!(&args[args.len() - literal.len()..], literal);
     }
 }
@@ -582,16 +644,24 @@ fn codex_update_suppression_overrides_explicit_enable_before_literal_prompt() {
                 Some("false"),
                 "the effective startup-update setting must stay disabled: {args:?}"
             );
-            let once = args.clone();
             crate::agents::providers::launch::extend_generated_args(
                 Provider::Codex,
                 &mut args,
                 runtime_args(Provider::Codex),
             );
             assert_eq!(
-                args, once,
-                "native startup must not duplicate runtime defaults"
+                args.iter()
+                    .filter(|arg| arg.as_str() == "--no-daemon")
+                    .count(),
+                1
             );
+            assert_eq!(
+                args.iter()
+                    .filter(|arg| arg.as_str() == "check_for_update_on_startup=false")
+                    .count(),
+                1
+            );
+            assert_eq!(&args[args.len() - 2..], ["--", "initial prompt"]);
         }
     }
 }
