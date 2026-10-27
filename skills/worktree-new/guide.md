@@ -44,21 +44,25 @@ provisioning rather than silently changing dependencies. For Bus, the same
 inferred Cargo path keeps cargo fetch --locked and runs the headless Rust tests;
 there is no repository-name special case.
 
-Sharing node_modules is an explicit optimization, only when main and feature
-Node manifests/locks match. The runner creates the requested link and skips only
-the dependency install, still building and testing the feature checkout. It
-never replaces an existing directory or an unexpected symlink. Inspect project
-scripts before sharing if they mutate dependency contents. Other caches stay
-private. In particular build/deps can contain writable media-runtime activation
-receipts: a lock change in one checkout can invalidate every other checkout.
-Do not run a recipe against a shared build/deps symlink; privatize the runtime
-child before a lock edit. build/media-runtime is a separate per-checkout stage.
+Sharing node_modules is an explicit optimization for matching lock-owning package
+roots. Links that escape into another checkout's workspace/source require a private
+install; a passing smoke must exercise the feature checkout. Install aliases are
+recognized, while ambiguous/overlapping preparation is refused before it can write
+through a shared link. The runner never replaces an existing directory or an
+unexpected symlink. Inspect smoke scripts before sharing if they mutate dependencies.
+
+Declare mutable state using `worktree.private_paths`, and custom dependency locks
+using `extra_manifests`. A private path may not resolve outside the checkout, even
+through an ancestor link. Keep mutable activation receipts private while sharing
+only immutable cache children. Generic visible-link warnings carry actual paths;
+project-specific signatures belong in configuration and fixtures.
 
 ## Toolchains, disk and evidence
 
-The pinned Node must precede Homebrew's Node for every command, or native-module
+The governing Node pin must match each command's environment, or native-module
 ABI errors can masquerade as source regressions. `--tool-bin` selects an existing
-installation and its reported version is checked against each discovered pin.
+installation for the command's nearest pin. Numeric major/minor/full pins match
+by prefix; unused nested pins are inventoried without blocking unrelated commands.
 Rust's own per-directory toolchain selection respects nested rust-toolchain
 files. Never remove Rust or another SDK just because a root-only search found
 no pin; initialized submodule pins are part of the inventory.

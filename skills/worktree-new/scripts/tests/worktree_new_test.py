@@ -157,6 +157,8 @@ class ProvisionTests(Fixture):
         )
 
     def test_shared_runtime_directory_cannot_be_written_by_smoke(self):
+        self.override(extra='private_paths=["build/deps/media-runtime"]\n')
+        self.commit()
         deps = self.root / "runtime-deps"
         deps.mkdir()
         (self.repo / "build").mkdir()
@@ -192,9 +194,16 @@ class ProvisionTests(Fixture):
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal/lease contract")
     def test_terminated_smoke_releases_lease_and_records_failure(self):
+        self.check_signal_cleanup(signal.SIGTERM)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX hangup contract")
+    def test_hangup_releases_lease_and_stops_smoke(self):
+        self.check_signal_cleanup(signal.SIGHUP)
+
+    def check_signal_cleanup(self, stop_signal):
         self.write(
             "smoke.py",
-            'from pathlib import Path\nimport time\nPath("started").touch()\ntime.sleep(30)\n',
+            'from pathlib import Path\nimport os, time\nPath("started").write_text(str(os.getpid()))\ntime.sleep(30)\n',
         )
         self.commit()
         script = Path(__file__).resolve().parents[1] / "worktree_new.py"
@@ -231,8 +240,11 @@ class ProvisionTests(Fixture):
             self.assertTrue(
                 (self.repo / "started").exists(), "smoke must start before termination"
             )
-            process.send_signal(signal.SIGTERM)
+            child_pid = int((self.repo / "started").read_text())
+            process.send_signal(stop_signal)
             self.assertNotEqual(process.wait(timeout=10), 0)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
             self.assertFalse(
                 self.slot.exists(), "interrupted provisioning leaked its lease"
             )
@@ -247,6 +259,11 @@ class ProvisionTests(Fixture):
             except ProcessLookupError:
                 pass
             process.wait()
+            if (self.repo / "started").exists():
+                try:
+                    os.killpg(int((self.repo / "started").read_text()), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
 
     def test_create_uses_remote_main_with_no_master_upstream_and_rejects_other_directory(
         self,
@@ -284,9 +301,16 @@ class HazardTests(Fixture):
         (self.repo / "build").mkdir()
         (self.repo / "build/deps").symlink_to(shared, target_is_directory=True)
         self.write("ci/deps/media-runtime-lock.json", '{"releaseId":"older"}')
+        self.write(
+            ".bus/repo.toml",
+            '[worktree]\nprivate_paths=["build/deps/media-runtime"]\nextra_manifests=["ci/deps/media-runtime-lock.json"]\n',
+        )
         result = self.profile.scan(self.repo)
         hazard = next(h for h in result["hazards"] if h["id"] == "shared-deps")
-        self.assertIn("releaseId", hazard["reason"])
+        self.assertEqual(hazard["paths"], ["build/deps"])
+        self.assertEqual(
+            result["recipe"]["private_paths"], ["build/deps/media-runtime"]
+        )
         self.write(".bus/repo.toml", '[worktree]\nshared_dependencies=["build/deps"]\n')
         with self.assertRaisesRegex(ValueError, "runtime"):
             self.profile.scan(self.repo)

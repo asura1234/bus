@@ -215,6 +215,7 @@ class ProfileTests(Fixture):
         self.commit()
         first = self.profile.scan(self.repo)
         self.assertIn("1.85.0", [t["pin"] for t in first["toolchains"]])
+        self.assertEqual(first["recipe"]["target_paths"], [])
         self.assertEqual(first["submodules"][0]["path"], "native/core")
         (self.repo / "native/core/rust-toolchain.toml").write_text(
             '[toolchain]\nchannel="1.86.0"\n'

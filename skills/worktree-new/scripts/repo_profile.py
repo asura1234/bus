@@ -15,6 +15,9 @@ import sys
 import tempfile
 import tomllib
 
+from repo_support import git
+from repo_inference import infer_recipe, hazards
+
 NAMES = {
     "package.json",
     "package-lock.json",
@@ -48,7 +51,6 @@ NAMES = {
     "gradle.properties",
     "gradle-wrapper.properties",
     "gradlew",
-    "media-runtime-lock.json",
 }
 LOCKS = {
     "npm": ("npm-shrinkwrap.json", "package-lock.json"),
@@ -67,15 +69,6 @@ SKIP = {
     "Pods",
     ".gradle",
 }
-
-
-def git(repo: Path, *args: str) -> str:
-    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True)
-    if result.returncode:
-        raise ValueError(
-            f"git {' '.join(args)}: {result.stderr.decode('utf-8', 'surrogateescape').strip()}"
-        )
-    return result.stdout.removesuffix(b"\n").decode("utf-8", "surrogateescape")
 
 
 def main_worktree(repo: Path) -> Path:
@@ -137,13 +130,22 @@ def overrides(repo: Path, *, policy_only=False) -> dict:
         if name in data and (not isinstance(data[name], str) or not data[name].strip()):
             raise ValueError(f"{name} must be a nonempty string")
     sub = keys(data.get("submodules", {}), {"update"})
-    if sub.get("update", "recursive") not in {"recursive", "none"}:
+    if not isinstance(sub.get("update", "recursive"), str) or sub.get(
+        "update", "recursive"
+    ) not in {"recursive", "none"}:
         raise ValueError("submodules.update must be recursive or none")
     if policy_only:
         return data
     wt = keys(
         data.get("worktree", {}),
-        {"prepare", "smoke", "disk_estimate_gib", "shared_dependencies"},
+        {
+            "prepare",
+            "smoke",
+            "disk_estimate_gib",
+            "shared_dependencies",
+            "private_paths",
+            "extra_manifests",
+        },
     )
     for name in ("prepare", "smoke"):
         if name in wt:
@@ -154,13 +156,21 @@ def overrides(repo: Path, *, policy_only=False) -> dict:
         estimate = wt["disk_estimate_gib"]
         if type(estimate) not in (int, float) or not 0 < estimate < 100000:
             raise ValueError("disk_estimate_gib must be positive and finite")
+    for label in ("shared_dependencies", "private_paths", "extra_manifests"):
+        values = wt.get(label, [])
+        if (
+            not isinstance(values, list)
+            or any(not isinstance(p, str) for p in values)
+            or len(set(values)) != len(values)
+        ):
+            raise ValueError(f"{label} must be a unique relative-path list")
+        for name in values:
+            relative(name)
     shared = wt.get("shared_dependencies", [])
-    if not isinstance(shared, list) or len(set(shared)) != len(shared):
-        raise ValueError("shared_dependencies must be a unique list")
     for path in shared:
         if Path(relative(path)).name != "node_modules":
             raise ValueError(
-                "only node_modules may be shared; build/deps contains writable runtime state"
+                "only node_modules may be shared; mutable runtime state belongs in private_paths"
             )
     return data
 
@@ -198,8 +208,8 @@ def submodules(repo: Path, prefix: str = "") -> list[dict]:
     return result
 
 
-def input_paths(repo: Path, subs: list[dict]) -> list[str]:
-    paths = set()
+def input_paths(repo: Path, subs: list[dict], extra=()) -> list[str]:
+    paths = set(extra)
     if (repo / ".bus/repo.toml").exists():
         paths.add(".bus/repo.toml")
     roots = [(repo, "")] + [
@@ -214,7 +224,11 @@ def input_paths(repo: Path, subs: list[dict]) -> list[str]:
             path = Path(name)
             if any(part in SKIP for part in path.parts[:-1]):
                 continue
-            if path.name not in NAMES and name != ".bus/repo.toml":
+            if (
+                path.name not in NAMES
+                and not path.name.endswith("-lock.json")
+                and name != ".bus/repo.toml"
+            ):
                 continue
             full = root / name
             if full.is_symlink() or not full.resolve().is_relative_to(repo.resolve()):
@@ -223,11 +237,15 @@ def input_paths(repo: Path, subs: list[dict]) -> list[str]:
                 )
             if full.is_file():
                 paths.add(prefix + name)
+    for name in extra:
+        full = repo / name
+        if (
+            not full.is_file()
+            or full.is_symlink()
+            or not full.resolve().is_relative_to(repo)
+        ):
+            raise ValueError(f"extra manifest missing or escapes checkout: {name}")
     return sorted(paths)
-
-
-def command(argv: list[str], cwd: str = ".") -> dict:
-    return {"cwd": cwd, "argv": argv}
 
 
 def package_info(repo: Path, paths: list[str]) -> list[dict]:
@@ -348,227 +366,6 @@ def inventory(repo: Path, paths: list[str]) -> tuple[list[dict], list[dict]]:
     return sorted(tools, key=lambda t: (t["path"], t["kind"])), entries
 
 
-def infer_recipe(
-    repo: Path, paths: list[str], packages: list[dict], config: dict
-) -> dict:
-    prepare, smoke, unresolved = [], [], []
-    cargo = [
-        p
-        for p in paths
-        if Path(p).name == "Cargo.toml" and not p.startswith(("vendor/", "external/"))
-    ]
-    cargo = [
-        p
-        for p in cargo
-        if not any(
-            Path(other).parent in Path(p).parents for other in cargo if other != p
-        )
-    ]
-    for name in cargo:
-        cwd = Path(name).parent.as_posix()
-        if (Path(cwd) / "Cargo.lock").as_posix() not in paths:
-            unresolved.append(
-                f"{name}: locked Cargo dependency resolution requires Cargo.lock"
-            )
-        prepare.append(command(["cargo", "fetch", "--locked"], cwd))
-        smoke.extend(
-            [
-                command(["cargo", "build", "--locked"], cwd),
-                command(["cargo", "test", "--locked"], cwd),
-            ]
-        )
-    root_package = next((p for p in packages if p["path"] == "package.json"), None)
-    if root_package:
-        manager, version = root_package["manager"], root_package["version"]
-        if not root_package["lockfile"]:
-            unresolved.append(
-                "package.json: a committed package-manager lockfile is required"
-            )
-        install = {
-            "npm": ["ci"],
-            "pnpm": ["install", "--frozen-lockfile"],
-            "bun": ["install", "--frozen-lockfile"],
-            "yarn": ["install", "--immutable"]
-            if version and not version.startswith("1.")
-            else ["install", "--frozen-lockfile"],
-        }[manager]
-        prepare.append(command([manager, *install]))
-        scripts = json.loads((repo / "package.json").read_text()).get("scripts", {})
-        test = next(
-            (
-                s
-                for s in ("test:ci", "test")
-                if s in scripts
-                and not re.search(
-                    r"\b(watch|electron|run-ios|run-android)\b", scripts[s]
-                )
-            ),
-            None,
-        )
-        if "build" in scripts and test:
-            smoke.extend(
-                [command([manager, "run", "build"]), command([manager, "run", test])]
-            )
-        else:
-            unresolved.append(
-                "package.json: configure worktree.smoke with a build and non-GUI test/run"
-            )
-    if not cargo and not root_package and "CMakeLists.txt" in paths:
-        smoke.extend(
-            [
-                command(["cmake", "-S", ".", "-B", "build"]),
-                command(["cmake", "--build", "build"]),
-                command(
-                    [
-                        "ctest",
-                        "--test-dir",
-                        "build",
-                        "--no-tests=error",
-                        "--output-on-failure",
-                    ]
-                ),
-            ]
-        )
-    if not smoke:
-        unresolved.append(
-            "No headless build and test recipe inferred; configure worktree.smoke"
-        )
-    wt = config.get("worktree", {})
-    if "smoke" in wt:
-        smoke, unresolved = wt["smoke"], []
-    if "prepare" in wt:
-        prepare = wt["prepare"]
-    targets = sorted(
-        {
-            (Path(p).parent / "target").as_posix()
-            for p in paths
-            if Path(p).name == "Cargo.toml" and not p.startswith("vendor/")
-        }
-    )
-    nested_count = sum(p != "target" for p in targets)
-    return {
-        "prepare": prepare,
-        "smoke": smoke,
-        "unresolved": unresolved,
-        "shared_dependencies": wt.get("shared_dependencies", []),
-        "target_paths": targets,
-        "disk_estimate_gib": wt.get("disk_estimate_gib", 15 + 4 * nested_count),
-        "disk_estimate_basis": "15 GiB planning allowance; native Rust targets add 4 GiB each",
-    }
-
-
-def hazards(
-    repo: Path, paths: list[str], subs: list[dict], tools: list[dict]
-) -> list[dict]:
-    result = []
-
-    def add(identity, affected, reason, action):
-        result.append(
-            {"id": identity, "paths": affected, "reason": reason, "action": action}
-        )
-
-    if (repo / "build/deps").is_symlink() or any(
-        Path(p).name == "media-runtime-lock.json" for p in paths
-    ):
-        add(
-            "shared-deps",
-            ["build/deps", "ci/deps/media-runtime-lock.json"],
-            "Shared build/deps activation receipts carry a releaseId and are writable; another checkout can invalidate them.",
-            "Do not share build/deps. Before a runtime-lock edit, privatize media-runtime and link only other children; re-import stale receipts before attributing a failure.",
-        )
-    if subs:
-        local = subprocess.run(
-            ["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-        )
-        branch = local.stdout.strip() or "<integration-base>"
-        # Prefer the origin default; a local fixture without an origin uses its own branch.
-        remote = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repo),
-                "symbolic-ref",
-                "--short",
-                "refs/remotes/origin/HEAD",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        base = remote.stdout.strip() or "origin/" + branch
-        comparisons = "; ".join(f"git ls-tree {base} {s['path']}" for s in subs)
-        add(
-            "fresh-gitlink",
-            [s["path"] for s in subs],
-            "A pinned gitlink may contain a real type gap hidden by ignored generated files in older checkouts.",
-            f"On fresh-only failure compare {comparisons} with each upstream branch tip; run the gate itself (for TypeScript: pnpm exec tsc --noEmit --pretty false --incremental false). Do not copy generated files or reorder gates.",
-        )
-    pinned_subs = [
-        t["path"]
-        for t in tools
-        if t["pin"] and any(t["path"].startswith(s["path"] + "/") for s in subs)
-    ]
-    if pinned_subs or any(not s["initialized"] for s in subs):
-        add(
-            "submodule-pins",
-            pinned_subs,
-            "Toolchain pins inside submodules can differ from root pins.",
-            "Preserve every discovered pinned SDK/toolchain; Rust toolchains are outside cleanup scope.",
-        )
-    nodes = [t["path"] for t in tools if t["kind"] == "node"]
-    if nodes:
-        add(
-            "node-abi",
-            nodes,
-            "A different Node ABI can fail native modules even when CI passes.",
-            "Require the exact pinned Node on PATH for every command; supply --tool-bin if necessary.",
-        )
-    add(
-        "disk-floor",
-        [],
-        "Builds and apps can fail before logging when disk is full.",
-        "Check free space before every provisioning command; require at least 25 GiB.",
-    )
-    rerere = subprocess.run(
-        ["git", "-C", str(repo), "config", "--bool", "--get", "rerere.enabled"],
-        capture_output=True,
-        text=True,
-    )
-    if rerere.stdout.strip() == "true":
-        add(
-            "rerere",
-            [],
-            "Common Git config and rr-cache are shared; stale resolutions can silently drop content.",
-            "Disable rerere for the entire rebase including continue; compare original and rebased git show --name-only commit file lists and audit unexpected drops. In zsh use while IFS= read -r. Provisioning does not rebase or alter Git config.",
-        )
-    count = sum(
-        record.startswith("worktree ")
-        for record in git(repo, "worktree", "list", "--porcelain").splitlines()
-    )
-    add(
-        "worktree-budget",
-        [],
-        "Each checkout owns build outputs and consumes the disk budget.",
-        f"Existing worktrees: {count}. Budget the estimate against free space; reuse an authorized lane for replacement work.",
-    )
-    targets = [
-        (Path(p).parent / "target").as_posix()
-        for p in paths
-        if Path(p).name == "Cargo.toml"
-        and Path(p).parent != Path(".")
-        and not p.startswith("vendor/")
-    ]
-    if targets:
-        add(
-            "nested-target",
-            sorted(targets),
-            "Nested Rust target directories can consume about 4 GiB each and evade root-only cleanup.",
-            f"Include {', '.join(sorted(targets))} in the budget and worktree-close inventory; never delete outputs of a live or unverified checkout.",
-        )
-    return sorted(result, key=lambda h: h["id"])
-
-
 def atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".profile-", dir=path.parent)
@@ -588,26 +385,10 @@ def reusable(
     """Reject malformed cache entries; cached policy is never an inferred default."""
     try:
         expected = set(
-            "schema_version main_worktree manifest_hash manifests package_managers submodules toolchains entry_points policy recipe hazards".split()
+            "schema_version scanner_hash main_worktree manifest_hash manifests package_managers submodules toolchains entry_points policy recipe hazards".split()
         )
         if not isinstance(cached, dict) or set(cached) != expected:
             return False
-        keys(
-            cached,
-            {
-                "schema_version",
-                "main_worktree",
-                "manifest_hash",
-                "manifests",
-                "package_managers",
-                "submodules",
-                "toolchains",
-                "entry_points",
-                "policy",
-                "recipe",
-                "hazards",
-            },
-        )
         if (
             cached["schema_version"] != 1
             or cached["main_worktree"] != str(main)
@@ -624,6 +405,7 @@ def reusable(
                 "smoke",
                 "unresolved",
                 "shared_dependencies",
+                "private_paths",
                 "target_paths",
                 "disk_estimate_gib",
                 "disk_estimate_basis",
@@ -631,14 +413,19 @@ def reusable(
         )
         commands(recipe["prepare"])
         commands(recipe["smoke"])
-        for name in ("unresolved", "shared_dependencies", "target_paths"):
+        for name in (
+            "unresolved",
+            "shared_dependencies",
+            "private_paths",
+            "target_paths",
+        ):
             if not isinstance(recipe[name], list) or any(
                 not isinstance(p, str) for p in recipe[name]
             ):
                 return False
         if not recipe["smoke"] and not recipe["unresolved"]:
             return False
-        for name in ("shared_dependencies", "target_paths"):
+        for name in ("shared_dependencies", "private_paths", "target_paths"):
             for path in recipe[name]:
                 relative(path)
         if (
@@ -703,6 +490,36 @@ def reusable(
         return False
 
 
+def scanner_hash():
+    digest = hashlib.sha256()
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def exclude_artifacts(repo):
+    if (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "check-ignore",
+                "-q",
+                "temp/.bus/repo-profile.json",
+            ]
+        ).returncode
+        == 0
+    ):
+        return
+    common = Path(git(repo, "rev-parse", "--git-common-dir"))
+    common = common if common.is_absolute() else repo / common
+    path = common / "info/exclude"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as output:
+        output.write("\n/temp/.bus/\n")
+
+
 def policy_values(config):
     return {
         "gate_command": config.get("gate_command"),
@@ -721,7 +538,10 @@ def scan(repo: Path, *, use_cache: bool = True) -> dict:
     repo = Path(git(Path(repo).resolve(), "rev-parse", "--show-toplevel"))
     main = main_worktree(repo)
     subs = sorted(submodules(repo), key=lambda s: s["path"])
-    paths = input_paths(repo, subs)
+    config = overrides(repo)
+    paths = input_paths(
+        repo, subs, config.get("worktree", {}).get("extra_manifests", [])
+    )
     manifests = [
         {"path": p, "sha256": hashlib.sha256((repo / p).read_bytes()).hexdigest()}
         for p in paths
@@ -730,11 +550,12 @@ def scan(repo: Path, *, use_cache: bool = True) -> dict:
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    config = overrides(repo)
+    producer = scanner_hash()
     policy = policy_values(config)
     cache = main / "temp/.bus/repo-profile.json"
     cached = None
     if use_cache:
+        exclude_artifacts(main)
         try:
             cached = json.loads(cache.read_text())
         except (OSError, ValueError):
@@ -742,17 +563,23 @@ def scan(repo: Path, *, use_cache: bool = True) -> dict:
     if (
         use_cache
         and reusable(cached, main, digest, manifests, subs)
+        and cached["scanner_hash"] == producer
         and cached["policy"] == policy
     ):
-        current_hazards = hazards(repo, paths, subs, cached["toolchains"])
+        current_hazards = hazards(
+            repo, paths, subs, cached["toolchains"], cached["recipe"]
+        )
         if current_hazards != cached["hazards"]:
             cached["hazards"] = current_hazards
+            exclude_artifacts(main)
             atomic_json(cache, cached)
         return cached
     packages = package_info(repo, paths)
     tools, entries = inventory(repo, paths)
+    recipe = infer_recipe(repo, paths, packages, config, tools, subs)
     result = {
         "schema_version": 1,
+        "scanner_hash": producer,
         "main_worktree": str(main),
         "manifest_hash": digest,
         "manifests": manifests,
@@ -761,10 +588,11 @@ def scan(repo: Path, *, use_cache: bool = True) -> dict:
         "toolchains": tools,
         "entry_points": entries,
         "policy": policy,
-        "recipe": infer_recipe(repo, paths, packages, config),
-        "hazards": hazards(repo, paths, subs, tools),
+        "recipe": recipe,
+        "hazards": hazards(repo, paths, subs, tools, recipe),
     }
     if use_cache:
+        exclude_artifacts(main)
         atomic_json(cache, result)
     return result
 
