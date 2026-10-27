@@ -154,7 +154,8 @@ impl BusState {
                     SubmissionOutcome::Confirmed { .. } => {
                         request.dialog_delivery = Some(DialogNoticeDelivery::Confirmed);
                     }
-                    SubmissionOutcome::DefinitelyRejected { .. } => request.dialog_delivery = None,
+                    SubmissionOutcome::DefinitelyRejected { .. }
+                    | SubmissionOutcome::ComposerBusy => request.dialog_delivery = None,
                     SubmissionOutcome::Uncertain { .. } => {}
                 }
             }
@@ -172,6 +173,11 @@ impl BusState {
             .values()
             .filter(|request| request.phase == RequestPhase::Queued)
             .filter(|request| !self.is_reply_notification(request.id))
+            .filter(|request| {
+                self.agents.get(&request.agent_id).is_none_or(|agent| {
+                    agent.delivery_rejection.as_deref() != Some("composer_busy")
+                })
+            })
             .filter_map(|request| {
                 self.stall_reason(request, now_ms)
                     .or_else(|| {

@@ -23,6 +23,9 @@ pub(crate) fn dispatch(
     if args.get(1).map(String::as_str) != Some("--bus-callback") {
         return None;
     }
+    if args.get(2).map(String::as_str) == Some("draft-editor") {
+        return Some(crate::platform::draft_editor::run(args));
+    }
     if args.get(2).map(String::as_str) == Some("claude-statusline") {
         if args.len() == 3 {
             statusline::run();

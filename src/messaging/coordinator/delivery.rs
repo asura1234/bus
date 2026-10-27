@@ -236,6 +236,11 @@ impl Worker {
             Ok(other) => SubmissionOutcome::Uncertain {
                 message: format!("Unexpected submit response; no automatic retry: {other:?}"),
             },
+            Err(error)
+                if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) =>
+            {
+                SubmissionOutcome::ComposerBusy
+            }
             Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
                 message: error.message,
             },
@@ -247,6 +252,7 @@ impl Worker {
             },
         };
         let outcome_name = match &outcome {
+            SubmissionOutcome::ComposerBusy => "composer_wait",
             SubmissionOutcome::Confirmed { .. } => "confirmed",
             SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
             SubmissionOutcome::Uncertain { .. } => "uncertain",
@@ -339,6 +345,11 @@ impl Worker {
             Ok(other) => SubmissionOutcome::Uncertain {
                 message: format!("Unexpected steering response: {other:?}"),
             },
+            Err(error)
+                if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) =>
+            {
+                SubmissionOutcome::ComposerBusy
+            }
             Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
                 message: error.message,
             },

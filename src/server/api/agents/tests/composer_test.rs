@@ -628,6 +628,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         true,
         std::time::Duration::ZERO,
         Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
+        None,
     )
     .unwrap();
     let paste = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())

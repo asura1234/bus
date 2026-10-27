@@ -11,6 +11,12 @@ pub(crate) fn runtime_args() -> Vec<String> {
         "--no-daemon".into(),
         "-c".into(),
         "check_for_update_on_startup=false".into(),
+        // Draft transfers use these verified native actions. Codex rejects
+        // colliding user bindings at startup before any composer can be edited.
+        "-c".into(),
+        "tui.keymap.global.open_external_editor=[\"ctrl-g\"]".into(),
+        "-c".into(),
+        "tui.keymap.editor.delete_backward=[\"backspace\"]".into(),
     ]
 }
 

@@ -119,7 +119,8 @@ fn classify_error(error: ApiClientError) -> TransportError {
     // error after partial send, leaves submission ownership intact.
     let definitely_rejected = matches!(&error, ApiClientError::ErrorResponse(response) if matches!(response.error.code.as_str(),
         "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request" | "agent_shell_starting" | "agent_shell_waiting")
-        || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN);
+        || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
+        || response.error.code == crate::protocol::api::AGENT_COMPOSER_BUSY);
     TransportError {
         code: match &error {
             ApiClientError::ErrorResponse(response) => Some(response.error.code.clone()),
@@ -269,6 +270,7 @@ mod tests {
             ("invalid_request", true),
             ("unknown_method", true),
             ("agent_prompt_not_shown", true),
+            ("agent_composer_busy", true),
             ("timeout", false),
             ("agent_prompt_failed", false),
         ] {

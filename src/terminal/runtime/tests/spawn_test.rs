@@ -15,7 +15,7 @@ fn pane_launch_env_keeps_yolo_private_to_bus() {
         if override_marker {
             extra.push(("BUS_YOLO".into(), "1".into()));
         }
-        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extra));
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extra)).unwrap();
         let mut spawned =
             crate::terminal::runtime::spawn::spawn_with_portable_pty(24, 80, cmd).unwrap();
         assert!(
@@ -30,7 +30,7 @@ fn pane_launch_env_removes_outer_codex_thread_id() {
     let mut cmd = CommandBuilder::new("shell");
     cmd.env("CODEX_THREAD_ID", "outer-session");
 
-    apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+    apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default()).unwrap();
 
     assert!(cmd.get_env("CODEX_THREAD_ID").is_none());
 }
@@ -90,7 +90,7 @@ fn pane_launch_env_isolates_agent_sessions_without_losing_configuration() {
         if restore_from_launch_env {
             extra.extend(session.map(|(key, value)| (key.into(), value.into())));
         }
-        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extra));
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extra)).unwrap();
 
         for (key, _) in session {
             assert!(
@@ -499,11 +499,11 @@ fn native_pane_defaults_disable_claude_updates_and_keep_explicit_settings() {
     let old = std::env::var_os("DISABLE_AUTOUPDATER");
     std::env::remove_var("DISABLE_AUTOUPDATER");
     let mut cmd = CommandBuilder::new("shell");
-    apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+    apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default()).unwrap();
     let default = cmd.get_env("DISABLE_AUTOUPDATER").map(|v| v.to_owned());
     std::env::set_var("DISABLE_AUTOUPDATER", "0");
     let mut inherited = CommandBuilder::new("shell");
-    apply_pane_launch_env(&mut inherited, &PaneLaunchEnv::default());
+    apply_pane_launch_env(&mut inherited, &PaneLaunchEnv::default()).unwrap();
     let inherited = inherited
         .get_env("DISABLE_AUTOUPDATER")
         .map(|v| v.to_owned());
@@ -511,7 +511,8 @@ fn native_pane_defaults_disable_claude_updates_and_keep_explicit_settings() {
     apply_pane_launch_env(
         &mut explicit,
         &PaneLaunchEnv::from_extra(vec![("DISABLE_AUTOUPDATER".into(), "user".into())]),
-    );
+    )
+    .unwrap();
     let explicit = explicit
         .get_env("DISABLE_AUTOUPDATER")
         .map(|v| v.to_owned());

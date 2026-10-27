@@ -13,6 +13,9 @@ use std::path::PathBuf;
 /// Definite non-delivery: no Enter was sent. A paste, if queued, was
 /// withdrawn before returning this error; the wire code remains compatible.
 pub(crate) const AGENT_PROMPT_NOT_SHOWN: &str = "agent_prompt_not_shown";
+/// Definite non-delivery while preserving a developer-owned composer. Keep
+/// the message queued and retry automatically; this is not a submission error.
+pub(crate) const AGENT_COMPOSER_BUSY: &str = "agent_composer_busy";
 /// One budget for an agent pane's shell startup to settle and for confirming
 /// provider startup. Ordinary busy-shell retries retain their shorter window.
 pub(crate) const AGENT_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);

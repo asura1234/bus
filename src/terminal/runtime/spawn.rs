@@ -98,7 +98,10 @@ impl PaneLaunchEnv {
     }
 }
 
-pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
+pub(super) fn apply_pane_launch_env(
+    cmd: &mut CommandBuilder,
+    launch_env: &PaneLaunchEnv,
+) -> io::Result<()> {
     // Native agent.start uses an existing pane shell, so establish Claude's
     // updater default before that shell starts. Explicit pane env wins below.
     for (key, value) in crate::agents::providers::launch::runtime_env(
@@ -125,6 +128,7 @@ pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneL
             cmd.env(BUS_WORKSPACE_ID_ENV_VAR, workspace_id);
             cmd.env(BUS_TAB_ID_ENV_VAR, tab_id);
             cmd.env(BUS_PANE_ID_ENV_VAR, pane_id);
+            crate::platform::draft_editor::configure(cmd, pane_id, &launch_env.extra)?;
         }
     }
     // New panes and cold resumes are independent provider sessions, even when
@@ -155,6 +159,7 @@ pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneL
     ] {
         cmd.env_remove(key);
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Default)]
@@ -589,7 +594,7 @@ impl TerminalRuntime {
         let mut cmd = pane_shell_command_builder(shell_config)?;
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
-        apply_pane_launch_env(&mut cmd, launch_env);
+        apply_pane_launch_env(&mut cmd, launch_env)?;
         let mut integration = super::shell_integration::ShellIntegration::install_for_agent_launch(
             &mut cmd, launch_env,
         )?;
@@ -644,7 +649,7 @@ impl TerminalRuntime {
         ]);
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
-        apply_pane_launch_env(&mut cmd, launch_env);
+        apply_pane_launch_env(&mut cmd, launch_env)?;
         Self::spawn_command_builder(
             pane_id,
             rows,
@@ -691,7 +696,7 @@ impl TerminalRuntime {
         }
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
-        apply_pane_launch_env(&mut cmd, launch_env);
+        apply_pane_launch_env(&mut cmd, launch_env)?;
         Self::spawn_command_builder(
             pane_id,
             rows,
@@ -810,6 +815,7 @@ impl TerminalRuntime {
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq,
             content_write_lock,
+            draft_input: Default::default(),
             #[cfg(test)]
             dialog_wait_test: Mutex::default(),
             detection_content_seq,

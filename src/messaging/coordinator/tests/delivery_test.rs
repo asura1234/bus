@@ -1,5 +1,187 @@
 use super::*;
 
+fn composer_busy() -> Result<ResponseResult, TransportError> {
+    Err(TransportError {
+        message: "Waiting for the developer's composer".into(),
+        code: Some(crate::protocol::api::AGENT_COMPOSER_BUSY.into()),
+        definitely_rejected: true,
+    })
+}
+
+fn composer_available() -> Result<ResponseResult, TransportError> {
+    Ok(ResponseResult::AgentPrompted {
+        agent: native_info("pane", "codex", "session"),
+    })
+}
+
+#[test]
+fn occupied_composer_retains_fifo_without_failure_or_expiry_across_reload() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        let (mut worker, agent, room, dir, calls) = fixture(
+            provider,
+            vec![composer_busy(), composer_busy(), composer_available()],
+        );
+        let first = queue(&mut worker, room, agent, "first");
+        let second = queue(&mut worker, room, agent, "second");
+        worker.submit_ready().unwrap();
+        assert_eq!(worker.state.queued_requests(agent), &[first, second]);
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        assert_eq!(
+            worker.state.agent(agent).unwrap().wait_reason(),
+            Some("composer_busy")
+        );
+        let mut restored = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        let future = io::now_ms() + 10 * crate::messaging::model::QUEUED_STALL_MS;
+        assert!(restored
+            .expire_stalled_queued_requests(future)
+            .unwrap()
+            .is_empty());
+        worker.save(restored).unwrap();
+        // A repeated occupied observation can coalesce a waited queue, but
+        // rollback must restore every member in its original order.
+        worker.submit_ready().unwrap();
+        assert_eq!(worker.state.queued_requests(agent), &[first, second]);
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        for id in [first, second] {
+            assert_eq!(
+                worker.state.request(id).unwrap().phase,
+                RequestPhase::Queued
+            );
+            assert!(worker.state.request(id).unwrap().failure_reason.is_none());
+        }
+        assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+        assert_eq!(worker.state.notices(room).count(), 0);
+        worker.submit_ready().unwrap();
+        assert_eq!(calls.lock().unwrap().len(), 3);
+        assert!(worker.state.queued_requests(agent).is_empty());
+        assert_eq!(
+            worker.state.request(first).unwrap().phase,
+            RequestPhase::Active
+        );
+        assert_eq!(worker.state.request(second).unwrap().group, Some(first));
+        assert_eq!(worker.state.agent(agent).unwrap().delivery_rejection, None);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn occupied_composer_retries_steering_without_changing_the_lead_turn() {
+    for (provider, lead_finishes) in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor]
+        .into_iter()
+        .flat_map(|provider| [false, true].map(|ends| (provider, ends)))
+    {
+        let (mut worker, agent, room, dir, calls) = fixture(
+            provider,
+            vec![composer_available(), composer_busy(), composer_available()],
+        );
+        let lead = queue(&mut worker, room, agent, "lead");
+        worker.submit_ready().unwrap();
+        let hook = match provider {
+            Provider::ClaudeCode => {
+                json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":"turn","prompt":"lead"})
+            }
+            Provider::Codex => {
+                json!({"hook_event_name":"UserPromptSubmit","session_id":"session","turn_id":"turn","prompt":"lead"})
+            }
+            Provider::Cursor => {
+                json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn","prompt":"lead"})
+            }
+        };
+        record(&dir, provider, hook);
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Working, io::now_ms())
+            .unwrap();
+        let follow = queue(&mut worker, room, agent, "follow");
+        let revision = worker
+            .state
+            .request(lead)
+            .unwrap()
+            .submission_status_revision;
+        worker.submit_ready().unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().current_request,
+            Some(lead)
+        );
+        assert_eq!(
+            worker
+                .state
+                .request(lead)
+                .unwrap()
+                .submission_status_revision,
+            revision
+        );
+        assert_eq!(worker.state.queued_requests(agent), &[follow]);
+        assert_eq!(worker.state.request(follow).unwrap().group, None);
+        assert!(!worker.state.request(follow).unwrap().steered);
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        if lead_finishes {
+            // A finished lead must settle; it cannot be revived by another
+            // Working observation just to retry the held steering message.
+            worker
+                .state
+                .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+                .unwrap();
+            let future = io::now_ms() + 10 * crate::messaging::model::QUEUED_STALL_MS;
+            worker.expire_queued_requests(future).unwrap();
+            assert_eq!(worker.state.queued_requests(agent), &[follow]);
+            assert_eq!(
+                worker.state.settle_ended_request(agent, future, |_| {
+                    Some(crate::messaging::model::RecordedTurnEnd::Final {
+                        turn_id: "turn".into(),
+                        text: "lead final".into(),
+                        prompts: vec!["lead".into()],
+                    })
+                }),
+                Some(lead)
+            );
+            assert_eq!(
+                worker.state.request(lead).unwrap().phase,
+                RequestPhase::Completed
+            );
+        }
+        worker.submit_ready().unwrap();
+        assert_eq!(calls.lock().unwrap().len(), 3);
+        assert_eq!(
+            worker.state.request(follow).unwrap().phase,
+            RequestPhase::Active
+        );
+        assert_eq!(
+            worker.state.request(follow).unwrap().group,
+            (!lead_finishes).then_some(lead)
+        );
+        assert_eq!(
+            worker.state.agent(agent).unwrap().current_request,
+            Some(if lead_finishes { follow } else { lead })
+        );
+        assert_eq!(worker.state.agent(agent).unwrap().delivery_rejection, None);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn delivery_logs_correlate_submission_callback_and_persisted_reply() {
     let capture = crate::utils::logging::test_capture::Capture::default();

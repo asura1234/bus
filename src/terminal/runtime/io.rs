@@ -185,6 +185,21 @@ impl PaneRuntimeIo {
 }
 
 impl TerminalRuntime {
+    /// Only developer key/text/paste events use this path; terminal replies,
+    /// focus reports and Bus automation do not count as typing.
+    pub(crate) fn try_send_developer_bytes(
+        &self,
+        bytes: Bytes,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.invalidate_shell_prompt();
+        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
+    }
+    pub(crate) fn try_send_developer_paste(
+        &self,
+        text: String,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.try_send_developer_bytes(self.paste_payload(text))
+    }
     /// Resize if the dimensions actually changed.
     pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) {
         let rows = rows.max(2);
@@ -247,10 +262,6 @@ impl TerminalRuntime {
     ) -> std::io::Result<InputCompletion> {
         self.invalidate_shell_prompt();
         self.io.queue_input_write(text, enter, delay, deadline)
-    }
-
-    pub fn try_send_paste(&self, text: String) -> Result<(), mpsc::error::TrySendError<Bytes>> {
-        self.try_send_bytes(self.paste_payload(text))
     }
 
     pub fn try_send_focus_event(&self, event: crate::terminal::vt::FocusEvent) -> bool {
