@@ -252,6 +252,7 @@ mod tests {
                 cwd: None,
                 focus: true,
                 label: None,
+                agent_launch: None,
                 env: Default::default(),
             },
         );

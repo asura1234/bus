@@ -1,3 +1,4 @@
+mod agent_launch;
 use std::path::PathBuf;
 
 use crate::protocol::api::schema::{
@@ -51,6 +52,7 @@ impl App {
             cwd,
             focus,
             label,
+            agent_launch,
             env,
         } = params;
         let ws_idx = if let Some(workspace_id) = workspace_id {
@@ -71,10 +73,32 @@ impl App {
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
         let host_terminal_theme = self.state.host_terminal_theme;
         let host_terminal_appearance = self.state.host_terminal_appearance;
-        let extra_env = match super::env::normalize_launch_env(env) {
+        let mut extra_env = match super::env::normalize_launch_env(env) {
             Ok(env) => env,
             Err((code, message)) => return encode_error(id, &code, message),
         };
+        let shell_config = crate::terminal::runtime::spawn::PaneShellConfig::new(
+            &default_shell,
+            self.state.shell_mode,
+        );
+        let launch = match agent_launch::prepare(agent_launch, shell_config) {
+            Ok(launch) => launch,
+            Err(error) => return encode_error(id, "invalid_agent_launch", error),
+        };
+        if let Some(launch) = &launch {
+            launch.apply_shell_env(&mut extra_env);
+            if self
+                .collect_agent_infos()
+                .iter()
+                .any(|agent| agent.name.as_deref() == Some(&launch.name))
+            {
+                return encode_error(
+                    id,
+                    "agent_name_taken",
+                    "Provider launch name is already used",
+                );
+            }
+        }
         let result = self
             .state
             .workspaces
@@ -92,44 +116,73 @@ impl App {
                         &default_shell,
                         self.state.shell_mode,
                     ),
+                    launch.as_ref().map(|launch| launch.shell_argv.as_slice()),
                     extra_env,
                 )
             });
         match result {
-            Ok((tab_idx, terminal, runtime)) => {
-                self.terminal_runtimes.insert(terminal.id.clone(), runtime);
-                self.state.terminals.insert(terminal.id.clone(), terminal);
-                self.state.remove_alias_shadowed_by_new_pane(
-                    self.state.workspaces[ws_idx].tabs[tab_idx].root_pane,
-                );
-                if let Some(label) = label {
-                    let workspace_id = self.state.workspaces[ws_idx].id.clone();
-                    let tab_id = self
-                        .public_tab_id(ws_idx, tab_idx)
-                        .expect("new tab should have a public id");
-                    if let Some(tab) = self
-                        .state
-                        .workspaces
-                        .get_mut(ws_idx)
-                        .and_then(|ws| ws.tabs.get_mut(tab_idx))
-                    {
-                        tab.set_custom_name(label);
-                        crate::utils::logging::tab_renamed(&workspace_id, &tab_id);
-                    }
-                }
-                if focus {
-                    self.state.switch_workspace_tab(ws_idx, tab_idx);
-                    self.state.mode = Mode::Terminal;
-                }
-                self.schedule_session_save();
-                self.emit_tab_created_events(ws_idx, tab_idx);
-                encode_success(
-                    id,
-                    self.tab_created_result(ws_idx, tab_idx)
-                        .expect("new tab should produce a complete create response"),
-                )
-            }
+            Ok(created) => self.publish_created_tab(id, ws_idx, created, launch, focus, label),
             Err(err) => encode_error(id, "tab_create_failed", err.to_string()),
+        }
+    }
+
+    fn publish_created_tab(
+        &mut self,
+        id: String,
+        ws_idx: usize,
+        (tab_idx, mut terminal, runtime): (
+            usize,
+            crate::terminal::TerminalState,
+            crate::terminal::TerminalRuntime,
+        ),
+        launch: Option<agent_launch::PreparedAgent>,
+        focus: bool,
+        label: Option<String>,
+    ) -> String {
+        let agent_started = launch.is_some();
+        if let Some(launch) = launch {
+            launch.bind(&mut terminal, &runtime);
+        }
+        self.terminal_runtimes.insert(terminal.id.clone(), runtime);
+        self.state.terminals.insert(terminal.id.clone(), terminal);
+        self.state.remove_alias_shadowed_by_new_pane(
+            self.state.workspaces[ws_idx].tabs[tab_idx].root_pane,
+        );
+        self.label_created_tab(ws_idx, tab_idx, label);
+        if focus {
+            self.state.switch_workspace_tab(ws_idx, tab_idx);
+            self.state.mode = Mode::Terminal;
+        }
+        self.schedule_session_save();
+        self.emit_tab_created_events(ws_idx, tab_idx);
+        let mut result = self
+            .tab_created_result(ws_idx, tab_idx)
+            .expect("new tab should produce a complete create response");
+        if let ResponseResult::TabCreated {
+            agent_started: started,
+            ..
+        } = &mut result
+        {
+            *started = agent_started;
+        }
+        encode_success(id, result)
+    }
+
+    fn label_created_tab(&mut self, ws_idx: usize, tab_idx: usize, label: Option<String>) {
+        if let Some(label) = label {
+            let workspace_id = self.state.workspaces[ws_idx].id.clone();
+            let tab_id = self
+                .public_tab_id(ws_idx, tab_idx)
+                .expect("new tab should have a public id");
+            if let Some(tab) = self
+                .state
+                .workspaces
+                .get_mut(ws_idx)
+                .and_then(|ws| ws.tabs.get_mut(tab_idx))
+            {
+                tab.set_custom_name(label);
+                crate::utils::logging::tab_renamed(&workspace_id, &tab_id);
+            }
         }
     }
 
@@ -436,6 +489,7 @@ mod tests {
                 cwd: None,
                 focus: false,
                 label: None,
+                agent_launch: None,
                 env: Default::default(),
             },
         );

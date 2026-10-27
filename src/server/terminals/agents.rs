@@ -12,7 +12,7 @@ const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
 
-fn valid_agent_name(name: &str) -> bool {
+pub(crate) fn valid_agent_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some('a'..='z'))
         && name.len() <= 32
@@ -66,6 +66,25 @@ fn agent_start_argv(
         (_, None) => {}
     }
     Ok(argv)
+}
+
+pub(crate) fn provider_launch_argv(
+    kind: crate::agents::AgentKind,
+    args: Vec<String>,
+) -> Vec<String> {
+    let mut args = args;
+    let launch =
+        crate::agents::providers::launch::native_provider(crate::agents::agent_label(kind));
+    if let Some(provider) = launch {
+        crate::agents::providers::launch::extend_generated_args(
+            provider,
+            &mut args,
+            crate::agents::providers::launch::runtime_args(provider),
+        );
+    }
+    let mut argv = vec![crate::agents::interactive_agent_executable(kind).to_string()];
+    argv.extend(args.iter().cloned());
+    argv
 }
 
 impl App {

@@ -1,3 +1,6 @@
+#[cfg(unix)]
+#[path = "direct_launch_test.rs"]
+mod direct_launch;
 use super::*;
 use crate::{
     agents::{AgentKind, AgentState},

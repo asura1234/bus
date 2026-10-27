@@ -173,6 +173,7 @@ impl Worker {
                 cwd: Some(agent.cwd.to_string_lossy().into()),
                 focus: false,
                 label: Some(agent.name.clone()),
+                agent_launch: None,
                 env: extras.env.into_iter().collect(),
             }))
             .map_err(|e| e.message)?;

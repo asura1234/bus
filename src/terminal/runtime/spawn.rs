@@ -1,3 +1,4 @@
+pub(crate) use super::shell_exec::agent_exec_argv;
 use crate::agents::AgentKind;
 use crate::terminal::emulator::GhosttyPaneTerminal;
 use crate::terminal::emulator::PaneTerminal;

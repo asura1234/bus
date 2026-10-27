@@ -81,6 +81,7 @@ impl Transport for RecoveryNative {
                     Some("launch")
                 );
                 Ok(ResponseResult::TabCreated {
+                agent_started: false,
                     tab: serde_json::from_value(json!({"tab_id":"new", "workspace_id":"w1", "number":2, "label":"resumed", "focused":false, "pane_count":1, "agent_status":"unknown"})).unwrap(),
                     root_pane: serde_json::from_value(json!({"pane_id":"new-pane", "terminal_id":"new-terminal", "workspace_id":"w1", "tab_id":"new", "focused":false, "agent_status":"unknown", "revision":1})).unwrap(),
                 })

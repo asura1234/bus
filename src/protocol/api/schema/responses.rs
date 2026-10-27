@@ -59,6 +59,9 @@ pub enum ResponseResult {
         tab: TabInfo,
     },
     TabCreated {
+        /// The provider launch already owns the tab; never type a second start.
+        #[serde(default, skip_serializing_if = "super::is_false")]
+        agent_started: bool,
         tab: TabInfo,
         root_pane: PaneInfo,
     },

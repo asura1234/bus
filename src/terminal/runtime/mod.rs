@@ -6,6 +6,7 @@ mod dialog;
 mod draft_input;
 mod io;
 mod read;
+mod shell_exec;
 mod shell_integration;
 mod shutdown;
 mod submission;

@@ -16,6 +16,9 @@ pub struct TabCreateParams {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
+    /// Prefer an argv-based provider exec after shell rc files, without prompt input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_launch: Option<TabAgentLaunch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
@@ -39,4 +42,12 @@ pub struct TabInfo {
     pub focused: bool,
     pub pane_count: usize,
     pub agent_status: AgentStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TabAgentLaunch {
+    pub name: String,
+    pub kind: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }

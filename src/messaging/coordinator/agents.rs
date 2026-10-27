@@ -449,12 +449,19 @@ impl Worker {
                 cwd: Some(prepared.cwd.to_string_lossy().into_owned()),
                 focus: false,
                 label: Some(input.name.clone()),
+                agent_launch: Some(schema::TabAgentLaunch {
+                    name: identity::managed_name(input.room, id),
+                    kind: identity::provider_kind(input.provider).label().into(),
+                    args: prepared.args.clone(),
+                }),
                 env: prepared.env,
             }));
-        let (pane, terminal) = match created {
-            Ok(ResponseResult::TabCreated { root_pane, .. }) => {
-                (root_pane.pane_id, root_pane.terminal_id)
-            }
+        let (pane, terminal, direct) = match created {
+            Ok(ResponseResult::TabCreated {
+                root_pane,
+                agent_started,
+                ..
+            }) => (root_pane.pane_id, root_pane.terminal_id, agent_started),
             other => {
                 return self.agent_error(
                     id,
@@ -480,6 +487,13 @@ impl Worker {
             .unwrap_or_else(|| launch::executable(input.provider).to_owned())];
         argv.extend(prepared.args.iter().cloned());
         self.watch_agent_startup(id, argv)?;
+        if direct {
+            let _ = events.send(BusEvent::AgentAdded(id));
+            return match identity.session_id {
+                Some(session) => self.report_adopted_session(id, input.provider, pane, session),
+                None => Ok(()),
+            };
+        }
         let started = self
             .transport
             .request(Method::AgentStart(schema::AgentStartParams {

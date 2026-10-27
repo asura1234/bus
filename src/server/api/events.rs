@@ -537,6 +537,7 @@ impl App {
         tab_idx: usize,
     ) -> Option<crate::protocol::api::schema::ResponseResult> {
         Some(crate::protocol::api::schema::ResponseResult::TabCreated {
+            agent_started: false,
             tab: self.tab_info(ws_idx, tab_idx)?,
             root_pane: self.root_pane_info(ws_idx, tab_idx)?,
         })

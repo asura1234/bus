@@ -386,6 +386,7 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
                     pane.pane_id = format!("w1:p{}", self.tabs);
                     pane.terminal_id = format!("terminal-{}", self.tabs);
                     Ok(ResponseResult::TabCreated {
+                        agent_started: false,
                         tab: serde_json::from_value(json!({
                             "tab_id": format!("t{}", self.tabs), "workspace_id": "w1",
                             "number": self.tabs, "label": "adopted", "focused": false,
@@ -479,6 +480,7 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
                     pane.pane_id = format!("w1:p{}", self.tabs);
                     pane.terminal_id = format!("terminal-{}", self.tabs);
                     Ok(ResponseResult::TabCreated {
+                        agent_started: false,
                         tab: serde_json::from_value(json!({
                             "tab_id": format!("t{}", self.tabs), "workspace_id": "w1",
                             "number": self.tabs, "label": "adopted", "focused": false,

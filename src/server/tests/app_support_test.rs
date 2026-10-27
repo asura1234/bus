@@ -291,7 +291,7 @@ fn tab_create_response_includes_root_pane() {
     app.state.active = Some(0);
     app.state.selected = 0;
 
-    let schema::ResponseResult::TabCreated { tab, root_pane } =
+    let schema::ResponseResult::TabCreated { tab, root_pane, .. } =
         app.tab_created_result(0, 1).unwrap()
     else {
         panic!("expected tab_created response");
