@@ -670,11 +670,14 @@ fn interactive_ready_releases_setup_gate_but_pending_deletion_stays_closed() {
                 restored.actionable_error.as_deref(),
                 Some("keep setup or deletion warning")
             );
-            assert_ne!(
+            assert_eq!(
                 worker.state.request(request).unwrap().phase,
                 RequestPhase::Completed
             );
-            assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+            assert_eq!(
+                worker.state.room(room).unwrap().latest_replies[&agent].text,
+                "pending final"
+            );
         } else {
             assert_eq!(restored.status, RuntimeStatus::Idle);
             assert!(restored.actionable_error.is_none());

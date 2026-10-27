@@ -2,6 +2,12 @@
 //! Mounted as a child of `steering_tests`, reusing that module's `Fixture`.
 use super::*;
 
+#[path = "lostreply_test.rs"]
+mod lostreply_tests;
+
+#[path = "master_reply_ownership_test.rs"]
+mod ownership;
+
 // Exact background commands from the incident transcripts.
 const A_DISPATCH: &str = r#"/Users/dylanliu/work/bus/target/debug/bus send --room 13389 --as "mobile master" --to wt-close --async --text "Task: clean up the mobile (libtv-app) worktrees." >/dev/null; echo sent"#;
 const C_DISPATCH_1: &str = r#"cd /Users/dylanliu/work/bus; target/debug/bus send --room 568 --as "bus master" --to fix-reply-lost --async --text "$(cat temp/briefs/fix-reply-lost.md)" > temp/briefs/fix-reply-lost.out.json 2>&1"#;
@@ -34,13 +40,12 @@ fn master() -> Fixture {
 fn diag(f: &Fixture, label: &str, id: RequestId) {
     let r = f.request(id);
     eprintln!(
-        "{label}: phase={:?} failure={:?} turn={:?} held={} awaiting_background={} reply={:?}",
+        "{label}: phase={:?} failure={:?} turn={:?} awaiting_background={} reply={:?}",
         r.phase,
         r.failure_reason,
         r.provider_turn_id,
-        r.shell_hold.is_some(),
         r.awaiting_background,
-        r.pending_final.as_ref().map(|p| p.text.clone())
+        r.reply().map(|p| p.text.clone())
     );
 }
 
@@ -215,7 +220,6 @@ fn real_shell_then_wake(f: &mut Fixture) -> (RequestId, RequestPhase) {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    f.now += crate::messaging::model::HELD_REPLY_SETTLE_MS + 1;
     f.status(RuntimeStatus::Idle);
     f.consume();
     (lead, held_phase)
@@ -224,43 +228,34 @@ fn real_shell_then_wake(f: &mut Fixture) -> (RequestId, RequestPhase) {
 /// Worker in a work room, developer asks directly; the turn's only real
 /// answer comes from the wake turn after the background suite finishes.
 #[test]
-fn verify_worker_real_background_shell_result_is_the_reply() {
+fn verify_worker_stop_answer_is_not_replaced_by_a_background_result() {
     let mut f = Fixture::new(Provider::ClaudeCode);
     f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
     let (lead, held_phase) = real_shell_then_wake(&mut f);
     diag(&f, "V worker after wake turn", lead);
     eprintln!("V worker held phase after turn-1: {held_phase:?}");
     eprintln!("V worker room notices: {:?}", notice_texts(&f, f.room));
-    assert_eq!(f.reply(lead).as_deref(), Some("All 812 tests passed."));
+    assert_eq!(
+        f.reply(lead).as_deref(),
+        Some("Running the suite in the background.")
+    );
 }
 
 /// Same in MASTER: the developer's MASTER message waits on a real shell.
 #[test]
-fn verify_master_real_background_shell_result_is_the_reply() {
+fn verify_master_stop_answer_is_not_replaced_by_a_background_result() {
     let mut f = master();
     let (lead, held_phase) = real_shell_then_wake(&mut f);
     diag(&f, "V master after wake turn", lead);
     eprintln!("V master held phase after turn-1: {held_phase:?}");
     eprintln!("V master room notices: {:?}", notice_texts(&f, f.room));
-    assert_eq!(f.reply(lead).as_deref(), Some("All 812 tests passed."));
+    assert_eq!(
+        f.reply(lead).as_deref(),
+        Some("Running the suite in the background.")
+    );
 }
 
-/// A wrapper that hides real work in backticks after the dispatch still holds.
-#[test]
-fn verify_backtick_work_after_dispatch_still_holds() {
-    use crate::agents::providers::claude_code::hooks::is_bus_control;
-    for command in [
-        r#"bus send --to w --async --text go; echo `cargo test`"#,
-        r#"bus send --to w --async --text "`cargo test`""#,
-        r#"bus send --to w --async --text "$(cat brief.md)" && echo $(cargo test)"#,
-    ] {
-        assert!(!is_bus_control(command), "must hold work: {command}");
-    }
-}
-
-#[path = "master_reply_ownership_test.rs"]
-mod ownership;
-
+/// A folded task notification cannot change a final already delivered.
 #[test]
 fn a_folded_task_notification_preserves_an_already_captured_final() {
     let mut f = master();
@@ -268,16 +263,13 @@ fn a_folded_task_notification_preserves_an_already_captured_final() {
     let lead = running(&mut f, "report the result", "turn-1");
     stop(&f, "turn-1", "The build passed.", &[]);
     f.consume();
-    assert_eq!(f.request(lead).phase, RequestPhase::Active);
-    assert!(f.request(lead).pending_final.is_some());
+    assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+    assert!(f.request(lead).reply().is_some());
 
     f.started("turn-1", &notification("older-dispatch"));
     f.consume();
     assert_eq!(
-        f.request(lead)
-            .pending_final
-            .as_ref()
-            .map(|reply| reply.text.as_str()),
+        f.request(lead).reply().map(|reply| reply.text.as_str()),
         Some("The build passed.")
     );
     assert_eq!(f.error(), None);
@@ -287,7 +279,7 @@ fn a_folded_task_notification_preserves_an_already_captured_final() {
 }
 
 #[test]
-fn real_work_after_a_commented_parenthesis_in_a_file_substitution_keeps_the_reply_open() {
+fn opaque_shell_syntax_cannot_delay_or_replace_the_stop_answer() {
     let command =
         "bus send --to worker --async --text \"$(cat brief.md # 1) task context\ncargo test\n)\"";
     let mut f = master();
@@ -304,10 +296,13 @@ fn real_work_after_a_commented_parenthesis_in_a_file_substitution_keeps_the_repl
     f.consume();
     assert_eq!(
         f.request(lead).phase,
-        RequestPhase::Active,
-        "real work inside the substitution must hold the reply until its result arrives"
+        RequestPhase::Completed,
+        "opaque shell syntax must not delay a captured answer"
     );
-    assert!(f.reply(lead).is_none());
+    assert_eq!(
+        f.reply(lead).as_deref(),
+        Some("Running the tests in the background.")
+    );
 
     f.status(RuntimeStatus::Working);
     f.started("turn-2", &notification("tests-and-dispatch"));
@@ -315,7 +310,9 @@ fn real_work_after_a_commented_parenthesis_in_a_file_substitution_keeps_the_repl
     stop(&f, "turn-2", "All tests passed.", &[]);
     f.consume();
     f.status(RuntimeStatus::Idle);
-    f.now += crate::messaging::model::HELD_REPLY_SETTLE_MS + 1;
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("All tests passed."));
+    assert_eq!(
+        f.reply(lead).as_deref(),
+        Some("Running the tests in the background.")
+    );
 }

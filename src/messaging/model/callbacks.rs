@@ -1,11 +1,20 @@
 //! Callbacks operations for the messaging state.
 use super::{
     AgentId, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, ModelError,
-    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase, RuntimeStatus,
-    STEERING_SETTLE_MS,
+    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase,
 };
 
 impl BusState {
+    /// Report identity ignores incidental changes to the hook envelope. Keep
+    /// these guards with callback keys so they persist and retire by launch.
+    pub(crate) fn has_reported_final(&self, key: &str) -> bool {
+        self.consumed_callbacks.contains_key(key)
+    }
+
+    pub(crate) fn record_reported_final(&mut self, key: String, launch: String) {
+        std::sync::Arc::make_mut(&mut self.consumed_callbacks).insert(key, Some(launch));
+    }
+
     pub(crate) fn accept_callback(
         &mut self,
         mut callback: ProviderCallback,
@@ -190,8 +199,6 @@ impl BusState {
         let Some(request) = self.requests.get(&request_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
-        let settled_after_submission = agent.status == RuntimeStatus::Idle
-            && agent.status_revision > request.submission_status_revision;
         if let Err(reason) = check_callback_identity(request, &callback) {
             return CallbackDisposition::Rejected(reason);
         }
@@ -210,6 +217,7 @@ impl BusState {
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
         if self.apply_callback_steering(request_id, &mut callback) {
+            let _ = self.complete_pending_final(callback.agent_id, callback.occurred_at_ms);
             return CallbackDisposition::AcceptedSteering;
         }
         // Steering that did not match leaves the current request unchanged.
@@ -231,12 +239,10 @@ impl BusState {
         // A turn that wakes after the request paused for background work carries
         // the real reply. Once the request holds a final reply, a new turn is the
         // agent's own activity and must not replace or discard that reply.
-        // A shell-held interim still leaves that door open if another shell
-        // wakes a turn during the no-Stop settlement window.
         let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
             && request.trusted_start_bound
             && request.pending_final.is_none()
-            && (request.turn_ended_at_ms.is_none() || Self::held_interim(request).is_some())
+            && request.turn_ended_at_ms.is_none()
             && request.provider_session_id.is_some()
             && callback.provider_session_id == request.provider_session_id
             && request.provider_turn_id.is_some()
@@ -267,13 +273,7 @@ impl BusState {
             return CallbackDisposition::Rejected(reason);
         }
 
-        self.apply_callback_kind(
-            request_id,
-            callback,
-            turn_key,
-            continuation,
-            settled_after_submission,
-        )
+        self.apply_callback_kind(request_id, callback, turn_key, continuation)
     }
 
     fn apply_callback_kind(
@@ -282,7 +282,6 @@ impl BusState {
         callback: ProviderCallback,
         turn_key: Option<String>,
         continuation: bool,
-        settled_after_submission: bool,
     ) -> CallbackDisposition {
         let Some(request) = self.requests.get(&request_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
@@ -322,6 +321,9 @@ impl BusState {
                 }
             }
             CallbackEventKind::BackgroundPending => {
+                if request.pending_final.is_some() {
+                    return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
+                }
                 if !request.trusted_start_bound
                     || request.provider_session_id.is_none()
                     || request.provider_turn_id.is_none()
@@ -352,12 +354,6 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
                 }
-                // A textless wake ends the hold without erasing its captured answer.
-                let text = if text.trim().is_empty() {
-                    Self::held_interim(request).map_or(text, |interim| interim.text)
-                } else {
-                    text
-                };
                 let Some(request) = self.requests.get_mut(&request_id) else {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
@@ -369,14 +365,10 @@ impl BusState {
                     provider_turn_id: callback.provider_turn_id,
                 });
                 request.awaiting_background = false;
-                if settled_after_submission {
-                    match self.complete_pending_final(callback.agent_id, callback.occurred_at_ms) {
-                        Ok(true) => CallbackDisposition::AcceptedCompleted,
-                        Ok(false) => CallbackDisposition::AcceptedPendingSettlement,
-                        Err(_) => CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest),
-                    }
-                } else {
-                    CallbackDisposition::AcceptedPendingSettlement
+                match self.complete_pending_final(callback.agent_id, callback.occurred_at_ms) {
+                    Ok(true) => CallbackDisposition::AcceptedCompleted,
+                    Ok(false) => CallbackDisposition::AcceptedPendingSettlement,
+                    Err(_) => CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest),
                 }
             }
             CallbackEventKind::Error { .. } => {
@@ -473,8 +465,10 @@ impl BusState {
                     return true;
                 }
                 if let Some(member) = self.requests.get_mut(&member) {
+                    member.phase = RequestPhase::Active;
                     member.trusted_start_bound = true;
                     member.uncertain_outcome = false;
+                    member.submission_error = None;
                     member.provider_session_id = callback.provider_session_id.clone();
                     member.provider_turn_id = callback.provider_turn_id.clone();
                 }
@@ -520,11 +514,11 @@ impl BusState {
                 .chain(self.group_members(lead))
                 .any(|id| {
                     self.requests.get(&id).is_some_and(|request| {
-                        matches!(
+                        (matches!(
                             request.phase,
                             RequestPhase::Submitting | RequestPhase::Active
-                        ) && (request.matches_callback_payload(payload)
-                            || bound_callback_turn(request, callback))
+                        ) && request.matches_callback_payload(payload))
+                            || (id == lead && bound_callback_turn(request, callback))
                     })
                 });
             if owned {
@@ -538,20 +532,10 @@ impl BusState {
         ));
     }
 
-    pub(crate) fn is_unrelated_provider_turn(
-        &self,
-        launch: &str,
-        session: &str,
-        turn: &str,
-    ) -> bool {
-        provider_turn_key(launch, Some(session), Some(turn))
-            .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
-    }
-
     /// Settles the agent's current request, and every request in its group,
-    /// with its pending final reply. Returns whether it settled: a group with
-    /// typed input whose submit hook has not arrived waits a few seconds, in
-    /// case the provider runs that input as a turn of its own.
+    /// with its captured final reply. Confirmed members publish immediately.
+    /// Unconfirmed steering needs turn proof, with the completed lead retained
+    /// as an anchor while the provider can still claim those inputs.
     pub(super) fn complete_pending_final(
         &mut self,
         agent_id: AgentId,
@@ -573,29 +557,39 @@ impl BusState {
             return Ok(false);
         };
         let members = self.group_members(request_id);
+        let (members, unresolved): (Vec<_>, Vec<_>) = members.into_iter().partition(|member| {
+            self.requests
+                .get(member)
+                .is_none_or(|m| !m.steered || m.trusted_start_bound || m.settled())
+        });
         // Already answered requests own their reply keys. The shared final gets
         // an outstanding representative, so it cannot overwrite or spend those replies.
-        let reply_group = std::iter::once(request_id)
-            .chain(members.iter().copied())
-            .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
-            .unwrap_or(request_id);
-        let unseen_steering = members.iter().any(|member| {
-            self.requests.get(member).is_some_and(|m| {
-                m.steered
-                    && !m.trusted_start_bound
-                    && matches!(m.phase, RequestPhase::Submitting | RequestPhase::Active)
+        let reply_group = request
+            .completed_reply
+            .as_ref()
+            .filter(|reply| reply.content == pending)
+            .and_then(|reply| reply.group)
+            .or_else(|| {
+                std::iter::once(request_id)
+                    .chain(members.iter().copied())
+                    .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
             })
-        });
-        if unseen_steering
-            && completed_at_ms < pending.received_at_ms.saturating_add(STEERING_SETTLE_MS)
-        {
-            return Ok(false);
-        }
+            .unwrap_or(request_id);
         let turn_key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
             pending.provider_session_id.as_deref(),
             pending.provider_turn_id.as_deref(),
         );
+        for member in &unresolved {
+            if let Some(member) = self.requests.get_mut(member) {
+                member.phase = RequestPhase::Submitting;
+                member.uncertain_outcome = true;
+                member.submission_error = Some(
+                    "Provider turn ended without claiming this input; awaiting turn ownership proof."
+                        .into(),
+                );
+            }
+        }
         self.publish_group_reply(request_id, &members, &pending)?;
         for member in members {
             if let Some(member) = self.requests.get_mut(&member) {
@@ -624,7 +618,10 @@ impl BusState {
             });
         }
         request.phase = RequestPhase::Completed;
-        request.pending_final = None;
+        request.completed_at_ms.get_or_insert(completed_at_ms);
+        if unresolved.is_empty() {
+            request.pending_final = None;
+        }
         if let Some(key) = turn_key {
             self.consumed_provider_turns.insert(key);
         }
@@ -632,9 +629,11 @@ impl BusState {
             .agents
             .get_mut(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
-        agent.current_request = None;
+        if unresolved.is_empty() {
+            agent.current_request = None;
+        }
         agent.actionable_error = None;
-        Ok(true)
+        Ok(unresolved.is_empty())
     }
 
     /// One shared turn can answer messages in a work room and MASTER. Publish
@@ -649,13 +648,21 @@ impl BusState {
         if pending.text.trim().is_empty() {
             return Ok(());
         }
+        let published_rooms: std::collections::BTreeSet<_> = std::iter::once(&lead)
+            .chain(members)
+            .filter_map(|id| self.requests.get(id))
+            .filter(|request| {
+                request.phase == RequestPhase::Completed && request.reply() == Some(pending)
+            })
+            .map(|request| request.room_id)
+            .collect();
         let mut replies = std::collections::BTreeMap::new();
         for id in std::iter::once(&lead).chain(members) {
             let request = self
                 .requests
                 .get(id)
                 .ok_or(ModelError::UnknownRequest(*id))?;
-            if request.settled() {
+            if request.settled() || published_rooms.contains(&request.room_id) {
                 continue;
             }
             replies.insert(
@@ -680,10 +687,11 @@ impl BusState {
 }
 
 fn bound_callback_turn(request: &Request, callback: &ProviderCallback) -> bool {
-    matches!(
+    (matches!(
         request.phase,
         RequestPhase::Submitting | RequestPhase::Active
-    ) && request.trusted_start_bound
+    ) || request.pending_final.is_some())
+        && request.trusted_start_bound
         && request.provider_session_id.is_some()
         && request.provider_turn_id.is_some()
         && request.provider_turn_id == callback.provider_turn_id

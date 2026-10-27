@@ -106,7 +106,7 @@ fn confirmed_provider_ids_cannot_bypass_trusted_prompt_start_binding() {
             "same prompt",
             "publish this",
         )),
-        CallbackDisposition::AcceptedPendingSettlement
+        CallbackDisposition::AcceptedCompleted
     );
 }
 
@@ -159,7 +159,7 @@ fn callback_prompt_matching_normalizes_terminal_line_endings_and_releases_queue(
             "first line\n  second line\nthird line",
             "finished",
         )),
-        CallbackDisposition::AcceptedPendingSettlement
+        CallbackDisposition::AcceptedCompleted
     );
 
     state
@@ -390,8 +390,11 @@ fn final_is_joined_with_settled_status_and_routes_by_stable_ids_not_visible_room
             text: "finished".into(),
         },
     });
-    assert_eq!(disposition, CallbackDisposition::AcceptedPendingSettlement);
-    assert!(state.room(room).expect("room").latest_replies.is_empty());
+    assert_eq!(disposition, CallbackDisposition::AcceptedCompleted);
+    assert_eq!(
+        state.room(room).expect("room").latest_replies[&agent].text,
+        "finished"
+    );
 
     state
         .observe_status(agent, RuntimeStatus::Idle, 30)
@@ -535,7 +538,7 @@ fn duplicate_wrong_session_and_stale_pre_submit_finals_are_rejected() {
     );
     assert_eq!(
         state.accept_callback(valid.clone()),
-        CallbackDisposition::AcceptedPendingSettlement
+        CallbackDisposition::AcceptedCompleted
     );
     assert_eq!(
         state.accept_callback(valid),
@@ -626,7 +629,7 @@ fn uncertain_submission_is_not_retried_but_authoritative_callback_can_finish_it(
             "deploy",
             "done",
         )),
-        CallbackDisposition::AcceptedPendingSettlement
+        CallbackDisposition::AcceptedCompleted
     );
     state
         .observe_status(agent, RuntimeStatus::Idle, 50)
@@ -676,7 +679,7 @@ fn error_callback_is_visible_and_never_becomes_a_reply() {
 }
 
 #[test]
-fn idle_observed_before_submission_is_not_enough_to_settle_a_later_final() {
+fn captured_final_settles_independently_of_native_idle_observations() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state
         .observe_status(agent, RuntimeStatus::Idle, 1)
@@ -695,11 +698,11 @@ fn idle_observed_before_submission_is_not_enough_to_settle_a_later_final() {
             "prompt",
             "done",
         )),
-        CallbackDisposition::AcceptedPendingSettlement
+        CallbackDisposition::AcceptedCompleted
     );
     assert_eq!(
         state.request(request).expect("request").phase,
-        RequestPhase::Active
+        RequestPhase::Completed
     );
 
     state
@@ -885,7 +888,7 @@ fn developer_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
         ),
         (
             CallbackDisposition::AcceptedBinding,
-            CallbackDisposition::AcceptedPendingSettlement,
+            CallbackDisposition::AcceptedCompleted,
             RequestPhase::Completed,
             Some("explained"),
         )

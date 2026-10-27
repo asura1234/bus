@@ -48,8 +48,7 @@ pub(crate) use {
         DialogNoticeDelivery, DialogNoticeTo, Draft, ExitSnapshot, PendingFinal, Prompt, PromptId,
         Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, Room, RoomId,
         RoomKind, RuntimeStatus, StartupRecovery, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER,
-        DELIVERED_STALL_MS, HELD_REPLY_SETTLE_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS,
-        STEERING_SETTLE_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
+        DELIVERED_STALL_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },
 };
 

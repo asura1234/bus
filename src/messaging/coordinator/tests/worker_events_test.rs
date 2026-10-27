@@ -166,7 +166,7 @@ fn reply_not_captured_then_late_final_keeps_the_actual_result() {
     assert!(calls[0].contains("Late reply"));
 }
 
-fn capped_background_request(f: &mut Fixture) -> RequestId {
+fn answered_background_request(f: &mut Fixture) -> RequestId {
     let orch = f.orch;
     let source = running(f, Author::Agent(orch));
     let mut state = f.worker.state.clone();
@@ -175,30 +175,11 @@ fn capped_background_request(f: &mut Fixture) -> RequestId {
             f,
             "owned",
             2,
-            CallbackEventKind::BackgroundPending
+            CallbackEventKind::Final {
+                text: "Waiting for CI and background reviewers.".into(),
+            }
         )),
-        CallbackDisposition::AcceptedProgress
-    );
-    state.hold_background_reply(
-        f.agent,
-        crate::messaging::model::PendingFinal {
-            callback_id: "interim".into(),
-            text: "Waiting for CI and background reviewers.".into(),
-            received_at_ms: io::now_ms() - 4_000,
-            provider_session_id: Some("worker-session".into()),
-            provider_turn_id: Some("owned".into()),
-        },
-    );
-    let since = state
-        .request(source)
-        .unwrap()
-        .shell_hold
-        .as_ref()
-        .unwrap()
-        .since_ms;
-    assert_eq!(
-        state.release_shell_hold(f.agent, since + 900_000, 900_000),
-        Some(source)
+        CallbackDisposition::AcceptedCompleted
     );
     // The async sender already printed/acknowledged the interim and exited.
     state
@@ -209,11 +190,11 @@ fn capped_background_request(f: &mut Fixture) -> RequestId {
 }
 
 #[test]
-fn background_timeout_or_codex_stop_late_same_turn_final_wakes_sender_after_restart() {
+fn captured_stop_late_same_turn_final_wakes_sender_after_restart() {
     for provider in [Provider::Codex, Provider::ClaudeCode] {
         let mut f = Fixture::with_provider(provider);
         let source = if provider == Provider::ClaudeCode {
-            capped_background_request(&mut f)
+            answered_background_request(&mut f)
         } else {
             // Codex Stop has no task census: its initial Stop completes normally.
             let orch = f.orch;
@@ -312,11 +293,7 @@ fn background_timeout_or_codex_stop_late_same_turn_final_wakes_sender_after_rest
                 .unwrap()
                 .failure_reason
                 .as_deref(),
-            if provider == Provider::ClaudeCode {
-                Some("background_shells_timeout")
-            } else {
-                None
-            }
+            None
         );
         assert_eq!(
             f.worker
@@ -334,7 +311,7 @@ fn background_timeout_or_codex_stop_late_same_turn_final_wakes_sender_after_rest
 #[test]
 fn background_timeout_does_not_spend_subsequent_changed_same_turn_finals() {
     let mut f = Fixture::new();
-    capped_background_request(&mut f);
+    answered_background_request(&mut f);
     // A shell-only Stop after the cap can itself still be an interim report.
     // Its notification must not consume the later real final of that turn.
     autonomous(&mut f, "owned", "Still waiting for the last reviewer.");
@@ -358,7 +335,7 @@ fn background_timeout_does_not_spend_subsequent_changed_same_turn_finals() {
 #[test]
 fn background_timeout_late_notifications_deduplicate_text_and_preserve_identity() {
     let mut f = Fixture::new();
-    capped_background_request(&mut f);
+    answered_background_request(&mut f);
     let mut state = f.worker.state.clone();
     for (sequence, text) in [
         (0, "STALE RESULT"),
@@ -1037,16 +1014,14 @@ fn earlier_background_request_at(f: &mut Fixture, shell: bool, now: u64) -> Requ
     pending.occurred_at_ms = now - 11_000;
     state.accept_callback(pending);
     if shell {
-        state.hold_background_reply(
-            f.agent,
-            crate::messaging::model::PendingFinal {
-                callback_id: "held-interim".into(),
+        state.accept_callback(callback(
+            f,
+            "held",
+            3,
+            CallbackEventKind::Final {
                 text: "Shell still running".into(),
-                received_at_ms: now - 11_000,
-                provider_session_id: Some("worker-session".into()),
-                provider_turn_id: Some("held".into()),
             },
-        );
+        ));
     }
     state
         .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
@@ -1142,7 +1117,7 @@ fn an_acknowledged_stall_does_not_hide_a_new_stall_after_work_resumes() {
 fn late_final_after_new_input_joins_the_completed_turn(provider: Provider) {
     let mut f = Fixture::with_provider(provider);
     let source = if provider == Provider::ClaudeCode {
-        capped_background_request(&mut f)
+        answered_background_request(&mut f)
     } else {
         let orch = f.orch;
         let source = running(&mut f, Author::Agent(orch));
@@ -1214,7 +1189,7 @@ fn late_final_after_new_input_joins_the_completed_turn_codex() {
 #[test]
 fn background_wake_on_a_new_claude_prompt_after_the_cap_notifies_the_sender() {
     let mut f = Fixture::new();
-    let source = capped_background_request(&mut f);
+    let source = answered_background_request(&mut f);
     // Claude wakes for a finished background shell with a task notification,
     // which can open a turn under a new prompt_id rather than the capped one.
     let mut state = f.worker.state.clone();

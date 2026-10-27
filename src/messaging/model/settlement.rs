@@ -1,7 +1,7 @@
 //! Close finished turns after giving their completion callbacks time to arrive.
 use super::{
-    callbacks::provider_turn_key, types::ShellHold, AgentId, BusState, ModelError, PendingFinal,
-    Request, RequestId, RequestPhase, RuntimeStatus, HELD_REPLY_SETTLE_MS, TURN_SETTLE_MS,
+    callbacks::provider_turn_key, AgentId, BusState, ModelError, PendingFinal, Request, RequestId,
+    RequestPhase, RuntimeStatus, TURN_SETTLE_MS,
 };
 
 /// How the provider's own record says a turn ended, for a turn whose
@@ -23,6 +23,150 @@ pub(crate) enum RecordedTurnEnd {
 const AGENT_UNAVAILABLE: &str = "agent_unavailable";
 
 impl BusState {
+    /// Reconcile unclaimed steering after this tick's hooks. Native Idle is
+    /// an end boundary, never evidence that input shared the previous answer.
+    pub(crate) fn settle_unclaimed_steering(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+        mut recorded_end: impl FnMut(&Request) -> Option<RecordedTurnEnd>,
+    ) -> bool {
+        let Some(owner) = self.agents.get(&agent).filter(|a| {
+            matches!(a.status, RuntimeStatus::Idle | RuntimeStatus::Unavailable)
+                && !a.dialog
+                && !a.deletion_pending
+                && !a.session_binding_invalidated
+        }) else {
+            return false;
+        };
+        let Some(lead) = owner
+            .current_request
+            .and_then(|id| self.requests.get(&id))
+            .filter(|r| r.phase == RequestPhase::Completed && r.pending_final.is_some())
+            .cloned()
+        else {
+            return false;
+        };
+        let members = self.group_members(lead.id);
+        if let Some(RecordedTurnEnd::Final {
+            turn_id, prompts, ..
+        }) = recorded_end(&lead)
+        {
+            if lead.provider_turn_id.as_deref() == Some(&turn_id) {
+                for id in &members {
+                    if self.requests.get(id).is_some_and(|member| {
+                        member.steered
+                            && !member.trusted_start_bound
+                            && !member.settled()
+                            && self.recorded_for(member, lead.id, &members, &prompts)
+                    }) {
+                        self.bind_recorded_member(*id, lead.provider_session_id.clone(), &turn_id);
+                    }
+                }
+            }
+        }
+        let _ = self.complete_pending_final(agent, now_ms);
+        let mut uncertain = None;
+        for id in &members {
+            let Some(member) = self.requests.get(id).filter(|m| !m.settled()).cloned() else {
+                continue;
+            };
+            self.recover_steered_answer(&lead, &member, &members, recorded_end(&member), now_ms);
+        }
+        // A later member's transcript lookup can prove earlier inputs too.
+        // Resolve all available evidence before declaring any member uncertain.
+        for id in &members {
+            if let Some(member) = self.requests.get_mut(id).filter(|m| !m.settled()) {
+                member.group = None;
+                member.phase = RequestPhase::Abandoned;
+                member.completed_at_ms = Some(now_ms);
+                member.failure_reason = Some("submission_unconfirmed".into());
+                member.uncertain_outcome = true;
+                uncertain.get_or_insert(member.prompt.id);
+            }
+        }
+        if let Some(request) = self.requests.get_mut(&lead.id) {
+            request.pending_final = None;
+        }
+        if let Some(owner) = self.agents.get_mut(&agent) {
+            owner.current_request = None;
+            owner.actionable_error = uncertain.map(Self::unconfirmed_submission_message);
+        }
+        true
+    }
+
+    fn bind_recorded_member(&mut self, id: RequestId, session: Option<String>, turn: &str) {
+        if let Some(member) = self.requests.get_mut(&id) {
+            member.phase = RequestPhase::Active;
+            member.trusted_start_bound = true;
+            member.uncertain_outcome = false;
+            member.submission_error = None;
+            member.provider_session_id = session;
+            member.provider_turn_id = Some(turn.to_owned());
+        }
+    }
+
+    /// A transcript can claim the input in a distinct turn even without its
+    /// submit hook. Recover that turn's answer independently of the old lead.
+    fn recover_steered_answer(
+        &mut self,
+        lead: &Request,
+        member: &Request,
+        members: &[RequestId],
+        recorded: Option<RecordedTurnEnd>,
+        now_ms: u64,
+    ) -> bool {
+        let Some(RecordedTurnEnd::Final {
+            turn_id,
+            text,
+            prompts,
+        }) = recorded
+        else {
+            return false;
+        };
+        if lead.provider_turn_id.as_deref() == Some(&turn_id) {
+            return false;
+        }
+        // Evaluate the whole claim against the original group before changing
+        // it. Spending the recorded turn for one member would hide its answer
+        // from the other inputs that this very same evidence proves.
+        let proved: Vec<_> = members
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.requests.get(id).is_some_and(|candidate| {
+                    !candidate.settled() && self.recorded_for(candidate, lead.id, members, &prompts)
+                })
+            })
+            .collect();
+        if !proved.contains(&member.id) {
+            return false;
+        }
+        for id in proved {
+            self.bind_recorded_member(id, lead.provider_session_id.clone(), &turn_id);
+            if let Some(candidate) = self.requests.get_mut(&id) {
+                candidate.group = (id != member.id).then_some(member.id);
+            }
+        }
+        if let Some(owner) = self.agents.get_mut(&lead.agent_id) {
+            owner.current_request = Some(member.id);
+        }
+        let answer = PendingFinal {
+            callback_id: format!("rollout:{turn_id}"),
+            text,
+            received_at_ms: now_ms,
+            provider_session_id: lead.provider_session_id.clone(),
+            provider_turn_id: Some(turn_id),
+        };
+        let recovered = self
+            .deliver_recorded_final(lead.agent_id, member.id, answer, &prompts, now_ms)
+            .is_some();
+        if let Some(owner) = self.agents.get_mut(&lead.agent_id) {
+            owner.current_request = Some(lead.id);
+        }
+        recovered
+    }
+
     pub(super) fn note_turn_end(&mut self, agent: AgentId, now_ms: u64) {
         let Some(agent_state) = self.agents.get(&agent).filter(|agent| !agent.dialog) else {
             return;
@@ -42,62 +186,7 @@ impl BusState {
         }
     }
 
-    /// Retain the agent's current reply while background work remains.
-    /// The cap counts from the first hold, on the status
-    /// clock that `release_shell_hold` reads; the newest interim text is what
-    /// the cap delivers.
-    pub(crate) fn hold_background_reply(&mut self, agent: AgentId, interim: PendingFinal) {
-        let Some((id, observed_at_ms)) = self
-            .agents
-            .get(&agent)
-            .and_then(|a| Some((a.current_request?, a.observed_at_ms)))
-        else {
-            return;
-        };
-        let Some(request) = self.requests.get_mut(&id).filter(|request| {
-            request.awaiting_background
-                && request.provider_session_id == interim.provider_session_id
-                && request.provider_turn_id == interim.provider_turn_id
-        }) else {
-            return;
-        };
-        let since_ms = request
-            .shell_hold
-            .as_ref()
-            .map_or(observed_at_ms, |hold| hold.since_ms);
-        request.shell_hold = Some(ShellHold { since_ms, interim });
-    }
-
-    /// Past `cap_ms` of holding for its shells, the request takes its newest
-    /// interim text as the reply, with reason `background_shells_timeout`, so
-    /// background work that never exits cannot hold it or its queue forever.
-    /// The historical reason and setting names remain compatible.
-    pub(crate) fn release_shell_hold(
-        &mut self,
-        agent: AgentId,
-        now_ms: u64,
-        cap_ms: u64,
-    ) -> Option<RequestId> {
-        let id = self.agents.get(&agent)?.current_request?;
-        let request = self.requests.get(&id)?;
-        let hold = request.shell_hold.as_ref()?;
-        if !request.has_held_background_reply()
-            || matches!(
-                request.phase,
-                RequestPhase::Completed | RequestPhase::Abandoned
-            )
-            || now_ms < hold.since_ms.saturating_add(cap_ms)
-        {
-            return None;
-        }
-        let interim = hold.interim.clone();
-        self.deliver_held_interim(agent, id, interim, now_ms, "background_shells_timeout")
-    }
-
-    /// A held Stop ends generation even though its background work remains.
-    /// Give an idle orchestrator's queued inbox its own turn, preserving the
-    /// captured answer under the old request just as a separately bound turn
-    /// does. Workers retain their ordinary bounded background waits.
+    /// A textless background pause must not block an idle orchestrator's inbox.
     pub(crate) fn release_orchestrator_inbox(
         &mut self,
         agent: AgentId,
@@ -122,51 +211,8 @@ impl BusState {
         {
             return None;
         }
-        if let Some(interim) = Self::held_interim(request) {
-            self.deliver_held_interim(agent, id, interim, now_ms, "background_shells_new_turn")
-        } else {
-            // A textless Stop still frees the inbox; no answer is invented.
-            self.close_turn_with_reason(id, now_ms, "background_shells_new_turn".into())
-                .ok()?;
-            Some(id)
-        }
-    }
-
-    /// Settles the agent's current request `id`, with its group, on `interim`:
-    /// the newest text a `Stop` gave while the turn held for its shells.
-    /// `reason` says why the hold ended short of the real reply.
-    fn deliver_held_interim(
-        &mut self,
-        agent: AgentId,
-        id: RequestId,
-        interim: PendingFinal,
-        now_ms: u64,
-        reason: &str,
-    ) -> Option<RequestId> {
-        let mut closed = self.group_members(id);
-        closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        if self.request(id).is_some_and(|request| !request.settled()) {
-            closed.push(id);
-        }
-        let request = self.requests.get_mut(&id)?;
-        request.awaiting_background = false;
-        request.turn_ended_at_ms = None;
-        request.pending_final = Some(interim);
-        if !self.complete_pending_final(agent, now_ms).ok()? {
-            return None;
-        }
-        for request in closed {
-            if let Some(request) = self.requests.get_mut(&request) {
-                request.failure_reason = Some(reason.to_owned());
-            }
-        }
-        tracing::info!(
-            event = "bus.message.recovered",
-            request_id = id.0,
-            agent_id = agent.0,
-            reason,
-            "Held reply delivered"
-        );
+        self.close_turn_with_reason(id, now_ms, "background_wait_superseded".into())
+            .ok()?;
         Some(id)
     }
 
@@ -183,12 +229,7 @@ impl BusState {
             .requests
             .get(&lead)
             .ok_or(ModelError::UnknownRequest(lead))?;
-        let held = previous.pending_final.is_none();
-        let Some(answer) = previous
-            .pending_final
-            .clone()
-            .or_else(|| Self::held_interim(previous))
-        else {
+        if previous.pending_final.is_none() {
             // A running generation can be replaced before it answers (Cursor
             // does this for follow-ups). Its messages still await one answer.
             return Ok(false);
@@ -205,17 +246,7 @@ impl BusState {
                 member.submission_boundary = boundary;
             }
         }
-        if held {
-            self.deliver_held_interim(
-                callback.agent_id,
-                lead,
-                answer,
-                callback.occurred_at_ms,
-                "background_shells_new_turn",
-            );
-        } else {
-            self.complete_pending_final(callback.agent_id, callback.occurred_at_ms)?;
-        }
+        self.complete_pending_final(callback.agent_id, callback.occurred_at_ms)?;
         let member = self
             .requests
             .get_mut(&next)
@@ -234,18 +265,6 @@ impl BusState {
         member.submission_status_revision = agent.status_revision;
         agent.current_request = Some(next);
         Ok(true)
-    }
-
-    /// The interim text a `Stop` gave while this request held for its shells,
-    /// when it belongs to the request's current provider session. A wake turn
-    /// that ends without a `Stop` (Bus restarted under it, or Claude folded the
-    /// next task notification into it) leaves it as the reply Bus captured.
-    pub(super) fn held_interim(request: &Request) -> Option<PendingFinal> {
-        request
-            .shell_hold
-            .as_ref()
-            .filter(|hold| hold.interim.provider_session_id == request.provider_session_id)
-            .map(|hold| hold.interim.clone())
     }
 
     /// The agent's current request when its turn ended without a reply and
@@ -292,13 +311,7 @@ impl BusState {
     /// turn, else `reply_not_captured`, or `agent_unavailable` when the agent
     /// is unavailable. An unavailable agent gets the window again from when it
     /// went unavailable, so one that only reattaches (a Bus restart) and is
-    /// Idle again settles as usual. A reply captured earlier and held for
-    /// the turn's shells is never lost that way: once `HELD_REPLY_SETTLE_MS`
-    /// has passed with no late `Stop`, it is delivered with reason
-    /// `background_shells_interim` (live, 2026-10-16: an orchestrator's wake
-    /// turns ended without a `Stop`, under a Bus restart and under a folded
-    /// task notification, and both groups of MASTER messages were abandoned
-    /// with their captured replies).
+    /// Idle again settles as usual.
     pub(crate) fn settle_ended_request(
         &mut self,
         agent: AgentId,
@@ -307,19 +320,13 @@ impl BusState {
     ) -> Option<RequestId> {
         let request = self.settle_candidate(agent)?;
         let id = request.id;
-        let held = Self::held_interim(request);
-        let settle_ms = if held.is_some() {
-            HELD_REPLY_SETTLE_MS
-        } else {
-            TURN_SETTLE_MS
-        };
         let agent_state = self.agents.get(&agent)?;
         let unavailable = agent_state.status == RuntimeStatus::Unavailable;
         let mut since = request.turn_ended_at_ms?;
         if unavailable {
             since = since.max(agent_state.status_since_ms);
         }
-        if now_ms < since.saturating_add(settle_ms) {
+        if now_ms < since.saturating_add(TURN_SETTLE_MS) {
             return None;
         }
         let provider_error = match recorded_end(request) {
@@ -343,15 +350,6 @@ impl BusState {
             Some(RecordedTurnEnd::Error(message)) => Some(message),
             None => None,
         };
-        if let (None, Some(interim)) = (&provider_error, held) {
-            return self.deliver_held_interim(
-                agent,
-                id,
-                interim,
-                now_ms,
-                "background_shells_interim",
-            );
-        }
         let (reason, error) = match &provider_error {
             Some(message) => provider_error_outcome(message),
             None if unavailable => (
@@ -415,11 +413,19 @@ impl BusState {
             member.completed_at_ms = Some(now_ms);
             member.failure_reason = Some("reply_not_captured".to_owned());
         }
+        let session = self.requests.get(&id)?.provider_session_id.clone();
+        if let Some(turn) = answer.provider_turn_id.as_deref() {
+            for member in members {
+                if self.requests.get(&member).is_some_and(|m| !m.settled()) {
+                    self.bind_recorded_member(member, session.clone(), turn);
+                }
+            }
+        }
         let request = self.requests.get_mut(&id)?;
         request.turn_ended_at_ms = None;
         answer.provider_session_id = request.provider_session_id.clone();
         request.pending_final = Some(answer);
-        // Unseen steering keeps the final pending for its settle window.
+        // Only hook- or transcript-proven members share the captured answer.
         self.complete_pending_final(agent, now_ms).ok()?;
         tracing::info!(
             event = "bus.message.recovered",
@@ -476,6 +482,7 @@ impl BusState {
             })
             .flatten();
         let mut closed = self.group_members(id);
+
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
         if self.request(id).is_some_and(|r| !r.settled()) {
             closed.push(id);

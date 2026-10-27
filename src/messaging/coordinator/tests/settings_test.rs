@@ -291,7 +291,6 @@ fn dev_settings_show_and_set_the_global_sounds() {
             "idle_agents_alert": 5,
             "disk_warning_gb": 20,
             "disk_critical_gb": 5,
-            "background_shell_hold_minutes": 15,
             "sidebar_width": 28,
             "master_sound": {"enabled": false, "name": "Blow"},
             "room_sound": {"enabled": true, "name": null},

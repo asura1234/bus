@@ -27,8 +27,8 @@ fn inherited_work_notification_folded_into_a_bound_turn_keeps_its_reply() {
     assert_eq!(f.error(), None);
 }
 
-// Claude may report a wake turn under the held turn's own prompt id; the
-// build's real result must still be the reply.
+// Claude may report a wake under the original prompt id. The initial answer
+// stays immutable; the later result is a separate follow-up.
 #[test]
 fn real_work_wake_under_the_held_prompt_id_still_delivers_its_result() {
     let mut f = master();
@@ -46,14 +46,13 @@ fn real_work_wake_under_the_held_prompt_id_still_delivers_its_result() {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    f.now += crate::messaging::model::HELD_REPLY_SETTLE_MS + 1;
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("All 812 tests passed."));
+    assert_eq!(f.reply(lead).as_deref(), Some("Running the suite."));
 }
 
-// A dispatch shell beside real work: the dispatch's wake must not end the
-// request before the build's own result arrives.
+// A dispatch shell beside real work: neither wake can replace the already
+// captured answer to the original request.
 #[test]
 fn dispatch_beside_real_work_still_delivers_the_work_result() {
     let mut f = master();
@@ -88,10 +87,9 @@ fn dispatch_beside_real_work_still_delivers_the_work_result() {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    f.now += crate::messaging::model::HELD_REPLY_SETTLE_MS + 1;
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("All 812 tests passed."));
+    assert_eq!(f.reply(lead).as_deref(), Some("Dispatched; suite running."));
 }
 
 // Claude may submit the finished shell's notification into the next turn

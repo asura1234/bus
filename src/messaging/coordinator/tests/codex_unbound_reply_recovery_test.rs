@@ -1,5 +1,5 @@
 use super::*;
-use crate::messaging::model::{STEERING_SETTLE_MS, TURN_SETTLE_MS};
+use crate::messaging::model::TURN_SETTLE_MS;
 
 fn stamp(ms: u64) -> String {
     time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)
@@ -111,7 +111,7 @@ fn steered_input_run_as_its_own_turn_does_not_take_the_lead_turn_recorded_answer
     fixture.now += TURN_SETTLE_MS;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    fixture.now += STEERING_SETTLE_MS;
+    fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(fixture.reply(lead).as_deref(), Some("Merged."));
@@ -161,7 +161,7 @@ fn steered_input_recorded_in_the_lead_turn_shares_its_recorded_answer() {
     fixture.now += TURN_SETTLE_MS;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    fixture.now += STEERING_SETTLE_MS;
+    fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     for id in [lead, follow] {
@@ -201,7 +201,7 @@ fn reply_capture_diagnostics_record_a_follower_detached_by_transcript_recovery()
         fixture.now += TURN_SETTLE_MS;
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
-        fixture.now += STEERING_SETTLE_MS;
+        fixture.now += 5_000;
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
         assert_eq!(

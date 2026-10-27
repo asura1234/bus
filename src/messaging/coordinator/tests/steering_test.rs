@@ -22,9 +22,6 @@ mod turn_settlement_tests;
 #[path = "rollout_attribution_test.rs"]
 mod rollout_attribution_tests;
 
-#[path = "capped_background_test.rs"]
-mod capped_background_tests;
-
 #[path = "interrupt_test.rs"]
 mod interrupt_tests;
 
@@ -302,7 +299,13 @@ fn running(fixture: &mut Fixture, task: &str, turn: &str) -> RequestId {
     fixture.started(turn, task);
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
-    assert!(fixture.request(lead).trusted_start_bound);
+    assert!(
+        fixture.request(lead).trusted_start_bound,
+        "request={:?}; agent={:?}; typed={:?}",
+        fixture.request(lead),
+        fixture.worker.state.agent(fixture.agent),
+        fixture.typed()
+    );
     lead
 }
 
@@ -341,10 +344,10 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
         }
         fixture.stopped(steered_turn, "parser written with the streaming API");
         fixture.consume();
-        // Idle seen before the typing does not settle the extended turn.
+        // The matching Stop settles the extended turn independently of native Idle.
         assert_eq!(
             fixture.request(lead).phase,
-            RequestPhase::Active,
+            RequestPhase::Completed,
             "{provider:?}"
         );
         fixture.status(RuntimeStatus::Idle);
@@ -379,7 +382,7 @@ fn typed_input_answered_in_its_own_turn_keeps_both_answers() {
     fixture.stopped("turn-1", "parser written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     // ...then runs the typed input as the next turn.
     fixture.started("turn-2", "also add tests");
     fixture.stopped("turn-2", "parser and tests written");
@@ -395,7 +398,7 @@ fn typed_input_answered_in_its_own_turn_keeps_both_answers() {
 }
 
 #[test]
-fn typed_input_without_a_submit_hook_settles_after_a_short_wait() {
+fn typed_input_without_turn_proof_surfaces_an_uncertain_outcome() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "write the parser", "turn-1");
     let correction = fixture.send("also add tests", false);
@@ -403,21 +406,21 @@ fn typed_input_without_a_submit_hook_settles_after_a_short_wait() {
     fixture.stopped("turn-1", "parser and tests written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
-    fixture.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
-    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    fixture.consume();
+    assert!(fixture.reply(correction).is_none());
+    assert_eq!(fixture.request(correction).phase, RequestPhase::Abandoned);
     assert_eq!(
-        fixture.reply(correction).as_deref(),
-        Some("parser and tests written")
+        fixture.request(correction).failure_reason.as_deref(),
+        Some("submission_unconfirmed")
     );
+    assert!(fixture.request(correction).submission_notice().is_some());
 }
 
-/// Live e2e (#121's 100-follower run): for `STEERING_SETTLE_MS` after the lead
-/// turn's reply arrives, a joined message reads ended and not settling, yet is
-/// incomplete. Async followers must keep waiting through this window.
+/// Async followers need a terminal outcome. Unclaimed steering exposes its
+/// uncertainty immediately and cannot borrow the lead's completed answer.
 #[test]
-fn a_joined_message_reads_ended_but_incomplete_while_its_group_reply_settles() {
+fn an_unclaimed_joined_message_exposes_uncertainty_until_reconciled() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     running(&mut fixture, "write the parser", "turn-1");
     let correction = fixture.send("also add tests", false);
@@ -428,19 +431,19 @@ fn a_joined_message_reads_ended_but_incomplete_while_its_group_reply_settles() {
     let message = fixture.request(correction).prompt.id;
     let status = fixture.worker.control_message(message).unwrap();
     assert_eq!(status["complete"], false);
-    assert_eq!(status["requests"][0]["stage"], "joined");
-    assert_eq!(status["requests"][0]["turn_ended"], true);
-    assert_eq!(status["requests"][0]["settling"], false);
-    fixture.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
-    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(status["requests"][0]["stage"], "submitting");
+    assert_eq!(status["requests"][0]["turn_ended"], false);
+    assert_eq!(status["requests"][0]["uncertain_outcome"], true);
+    fixture.consume();
     let status = fixture.worker.control_message(message).unwrap();
     assert_eq!(status["complete"], true);
-    assert_eq!(status["requests"][0]["stage"], "replied");
+    assert_eq!(status["requests"][0]["stage"], "abandoned");
+    assert_eq!(status["requests"][0]["reason"], "submission_unconfirmed");
+    assert!(status["requests"][0]["reply"].is_null());
 }
 
 #[test]
-fn uncertain_steering_without_its_own_start_can_complete_with_a_group_reply() {
+fn uncertain_steering_without_turn_proof_cannot_take_a_group_reply() {
     struct UncertainNative;
     impl Transport for UncertainNative {
         fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
@@ -457,13 +460,11 @@ fn uncertain_steering_without_its_own_start_can_complete_with_a_group_reply() {
     fixture.stopped("turn-1", "parser and tests written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    fixture.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
-    fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(correction).phase, RequestPhase::Completed);
+    assert_eq!(fixture.request(correction).phase, RequestPhase::Abandoned);
+    assert!(fixture.reply(correction).is_none());
     assert_eq!(
-        fixture.reply(correction).as_deref(),
+        fixture.reply(lead).as_deref(),
         Some("parser and tests written")
     );
     let status = fixture
@@ -471,10 +472,11 @@ fn uncertain_steering_without_its_own_start_can_complete_with_a_group_reply() {
         .control_message(fixture.request(correction).prompt.id)
         .unwrap();
     assert_eq!(status["complete"], true);
-    assert_eq!(status["requests"][0]["turn_ended"], true);
+    assert_eq!(status["requests"][0]["reason"], "submission_unconfirmed");
+    assert_eq!(status["requests"][0]["turn_ended"], false);
     assert_eq!(status["requests"][0]["uncertain_outcome"], true);
     assert_eq!(status["requests"][0]["start_bound"], false);
-    assert_eq!(status["requests"][0]["group"], lead.0);
+    assert!(status["requests"][0]["group"].is_null());
 }
 
 #[test]
@@ -629,9 +631,9 @@ fn old_saved_requests_load_without_group_fields() {
 }
 
 /// `send --async` returns once every recipient's `turn_ended` is true, so a
-/// reply held for shells the request started must not read as an ended turn.
+/// captured Stop answer must read as ended even while its shells still run.
 #[test]
-fn a_claude_reply_held_for_its_own_shells_does_not_report_the_turn_ended() {
+fn a_captured_claude_stop_reports_the_turn_ended_despite_running_shells() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     fixture.record(
         json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
@@ -643,19 +645,18 @@ fn a_claude_reply_held_for_its_own_shells_does_not_report_the_turn_ended() {
         "background_tasks":[{"id":"b1","type":"shell","status":"running","description":"Run","command":"sleep 45"}]}));
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     let status = fixture
         .worker
         .control_message(fixture.request(lead).prompt.id)
         .unwrap();
-    assert_eq!(status["requests"][0]["turn_ended"], false, "{status}");
+    assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
 }
 
-/// A reply held for shells the request started (the live case ran about eight
-/// minutes) is waiting on known work, so `send --async` must not end it as a
-/// stalled message once the agent has been idle past the stall threshold.
+/// A delivered Stop answer cannot later become a stalled request merely
+/// because its background shells keep running.
 #[test]
-fn a_claude_reply_held_for_its_own_shells_is_not_reported_stalled() {
+fn a_delivered_claude_stop_answer_never_becomes_stalled() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     fixture.record(
         json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
@@ -670,7 +671,7 @@ fn a_claude_reply_held_for_its_own_shells_is_not_reported_stalled() {
     fixture.now += crate::messaging::model::DELIVERED_STALL_MS + 1;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     let status = fixture
         .worker
         .control_message_at(fixture.request(lead).prompt.id, fixture.now)
@@ -812,13 +813,14 @@ fn shell_held_turns_keep_their_replies_and_folded_messages_share_them() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     let second = fixture.send("is it ready?", false);
-    let folded = fixture.send("and the docs?", false);
-    fixture.deliver();
     fixture.deliver();
     fixture.started("turn-2", "is it ready?");
-    fixture.started("turn-2", "and the docs?");
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
+    let folded = fixture.send("and the docs?", false);
+    fixture.deliver();
+    fixture.started("turn-2", "and the docs?");
+    fixture.consume();
     claude_stop_holding(&fixture, "turn-2", "Not yet; docs pending.", &["b1", "b2"]);
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
@@ -862,9 +864,9 @@ fn async_waiters_exit_zero(status: &Value) -> bool {
 
 /// The goal of the async-wait fix: an interrupted message never exits 0. A
 /// message typed into a turn whose reply arrived, then run by the agent and
-/// interrupted inside the steering settle window, must not read replied.
+/// interrupted before its ownership hook arrives, must not read replied.
 #[test]
-fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_replied() {
+fn an_unclaimed_steered_message_interrupted_before_turn_proof_does_not_read_replied() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     running(&mut fixture, "write the parser", "turn-1");
     let correction = fixture.send("also add tests", false);
@@ -876,7 +878,7 @@ fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_r
     fixture.status(RuntimeStatus::Working);
     let response = fixture.worker.control_response_with_events(
         &crate::messaging::control::Request {
-            id: "probe-interrupt-window".into(),
+            id: "probe-interrupt-unclaimed-input".into(),
             method: "agent.interrupt".into(),
             params: json!({"agent": "builder"}),
         },
@@ -885,8 +887,7 @@ fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_r
     assert!(response.ok, "{response:?}");
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    fixture.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.now = crate::messaging::storage::io::now_ms() + 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     let status = fixture
@@ -1157,7 +1158,7 @@ fn an_uncertain_steered_dialog_notice_reaches_the_developer_even_if_its_turn_set
     f.stopped("turn-1", "MASTER status done");
     f.consume();
     f.status(RuntimeStatus::Idle);
-    f.now = crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    f.now = crate::messaging::storage::io::now_ms() + 5_000;
     f.status(RuntimeStatus::Idle);
     f.consume();
     let Some(crate::messaging::model::DialogNoticeDelivery::Unconfirmed { since_ms: at }) =

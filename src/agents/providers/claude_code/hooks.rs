@@ -67,7 +67,12 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
                 prompt: unwrap_claude_paste(prompt),
             })
         }
-        "Stop" if claude_turn_awaits_background(value) => {
+        "Stop"
+            if optional_text(value, "last_assistant_message")?
+                .trim()
+                .is_empty()
+                && claude_turn_awaits_background(value) =>
+        {
             Ok(Parsed::BackgroundPending { session, turn })
         }
         "Stop" => Ok(Parsed::Final {
@@ -234,9 +239,7 @@ fn claude_turn_awaits_background(value: &Value) -> bool {
 
 /// The ids of the background shells a Claude `Stop` lists as running. Each one
 /// that finishes wakes a turn of its own, whose `Stop` no longer lists it.
-/// Bus's own control commands are not work the reply depends on:
-/// an orchestrator's reply is final while its waits on workers run for
-/// minutes or hours, so they are left out.
+/// This inventory only guards wake ownership; it never delays an answer.
 pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet<String> {
     value
         .get("background_tasks")
@@ -246,22 +249,6 @@ pub(crate) fn claude_running_shells(value: &Value) -> std::collections::BTreeSet
         .filter(|task| {
             task.get("type").and_then(Value::as_str) == Some("shell")
                 && task.get("status").and_then(Value::as_str) == Some("running")
-        })
-        .filter(|task| {
-            let reason = match task.get("command").and_then(Value::as_str) {
-                Some(command) if is_bus_control(command) => "bus_control",
-                Some(_) => "work_or_opaque_command",
-                None => "missing_command",
-            };
-            let shell_id = task.get("id").and_then(Value::as_str);
-            tracing::debug!(
-                event = "bus.callback.shell_classified",
-                shell_id,
-                reason,
-                held = reason != "bus_control",
-                "Background shell classification"
-            );
-            reason != "bus_control"
         })
         .filter_map(|task| task.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect()
@@ -274,215 +261,6 @@ pub(crate) fn task_notification_body(prompt: &str) -> Option<&str> {
         .trim()
         .strip_prefix("<task-notification>")?
         .strip_suffix("</task-notification>")
-}
-
-/// Exclude only shells made up of Bus controls and setup. A build that reports
-/// through Bus is still real background work. Quotes and escapes keep message
-/// text from being mistaken for command separators; unfamiliar shell constructs
-/// conservatively keep the hold.
-pub(crate) fn is_bus_control(command: &str) -> bool {
-    let Some(command) = bus_control_file_arguments(command) else {
-        return false;
-    };
-    let Some(segments) = bus_control_segments(&command) else {
-        return false;
-    };
-    let mut saw_bus = false;
-    for segment in segments {
-        let words = shell_words(segment);
-        let mut words = words.iter().map(String::as_str).peekable();
-        while words.peek().is_some_and(|word| shell_assignment(word)) {
-            words.next();
-        }
-        let Some(program) = words.next() else {
-            continue;
-        };
-        if program == "cd" {
-            continue;
-        }
-        if program == "echo" && saw_bus {
-            continue;
-        }
-        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-        if name != "bus" && name != "bus.exe" {
-            return false;
-        }
-        while words
-            .peek()
-            .is_some_and(|next| matches!(*next, "--dev" | "--yolo"))
-        {
-            words.next();
-        }
-        if !matches!(
-            words.next(),
-            Some(
-                "send"
-                    | "wait"
-                    | "history"
-                    | "state"
-                    | "agent"
-                    | "room"
-                    | "message"
-                    | "request"
-                    | "settings"
-                    | "diagnostics"
-                    | "sounds"
-                    | "quit"
-            )
-        ) {
-            return false;
-        }
-        saw_bus = true;
-    }
-    saw_bus
-}
-
-/// Reading a literal brief file is part of dispatch, not background work.
-/// Replace only that expansion for lexical classification; never read or run it.
-/// Other substitutions, stdin reads and compound commands remain opaque.
-fn bus_control_file_arguments(command: &str) -> Option<String> {
-    let mut result = String::with_capacity(command.len());
-    let mut chars = command.char_indices().peekable();
-    let mut quote = None;
-    let mut escaped = false;
-    while let Some((index, ch)) = chars.next() {
-        if escaped {
-            escaped = false;
-        } else if ch == '\\' && quote != Some('\'') {
-            escaped = true;
-        } else if quote != Some('\'')
-            && ch == '$'
-            && chars.peek().is_some_and(|(_, next)| *next == '(')
-        {
-            let rest = &command[index + 2..];
-            let end = rest.find(')')?;
-            let read = &rest[..end];
-            if read.contains(['$', '`', ';', '&', '|', '<', '>', '(', '{', '}', '#', '\n']) {
-                return None;
-            }
-            bus_control_segments(read)?;
-            let words = shell_words(read);
-            if words.first().map(String::as_str) != Some("cat")
-                || words.len() < 2
-                || words[1..]
-                    .iter()
-                    .any(|word| word.starts_with('-') || word.starts_with("/dev/"))
-            {
-                return None;
-            }
-            result.push_str("brief-file");
-            while chars
-                .peek()
-                .is_some_and(|(next, _)| *next <= index + 2 + end)
-            {
-                chars.next();
-            }
-            continue;
-        } else if quote == Some(ch) {
-            quote = None;
-        } else if quote.is_none() && matches!(ch, '\'' | '"') {
-            quote = Some(ch);
-        }
-        result.push(ch);
-    }
-    Some(result)
-}
-
-fn shell_assignment(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        !name.is_empty()
-            && name.chars().enumerate().all(|(index, ch)| {
-                ch == '_' || ch.is_ascii_alphabetic() || (index > 0 && ch.is_ascii_digit())
-            })
-    })
-}
-
-// Segmentation already validated quoting and rejected command substitution.
-// Decode shell words so quoted executable paths and setup paths remain direct.
-fn shell_words(segment: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for ch in segment.chars() {
-        if escaped {
-            if quote == Some('"') && !matches!(ch, '$' | '`' | '"' | '\\' | '\n') {
-                word.push('\\');
-            }
-            if ch != '\n' {
-                word.push(ch);
-            }
-            escaped = false;
-        } else if ch == '\\' && quote != Some('\'') {
-            escaped = true;
-        } else if quote == Some(ch) {
-            quote = None;
-        } else if quote.is_none() && matches!(ch, '\'' | '"') {
-            quote = Some(ch);
-        } else if quote.is_none() && ch.is_whitespace() {
-            if !word.is_empty() {
-                words.push(std::mem::take(&mut word));
-            }
-        } else {
-            word.push(ch);
-        }
-    }
-    if !word.is_empty() {
-        words.push(word);
-    }
-    words
-}
-
-// Keep unsupported compound shell syntax held instead of guessing its work.
-fn bus_control_segments(command: &str) -> Option<Vec<&str>> {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut start = 0;
-    let mut chars = command.char_indices().peekable();
-    let mut segments = Vec::new();
-    while let Some((index, ch)) = chars.next() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' && quote != Some('\'') {
-            escaped = true;
-            continue;
-        }
-        if is_redirect_operator(command, index, ch) {
-            continue;
-        }
-        if quote != Some('\'')
-            && (ch == '`' || (ch == '$' && chars.peek().is_some_and(|(_, ch)| *ch == '(')))
-        {
-            return None;
-        }
-        if let Some(open) = quote {
-            if ch == open {
-                quote = None;
-            }
-        } else if matches!(ch, '\'' | '"') {
-            quote = Some(ch);
-        } else if matches!(ch, '(' | ')' | '{' | '}') {
-            return None;
-        } else if matches!(ch, '&' | '|' | ';' | '\n') {
-            segments.push(&command[start..index]);
-            start = index + ch.len_utf8();
-        }
-    }
-    if quote.is_some() || escaped {
-        return None;
-    }
-    segments.push(&command[start..]);
-    Some(segments)
-}
-
-fn is_redirect_operator(command: &str, index: usize, ch: char) -> bool {
-    match ch {
-        '&' => command[..index].ends_with(['>', '<']) || command[index + 1..].starts_with('>'),
-        '|' => command[..index].ends_with('>'),
-        _ => false,
-    }
 }
 
 /// Claude's recurring self reminders are independent turns, not continuations

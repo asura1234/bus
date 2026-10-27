@@ -16,7 +16,7 @@ fn codex_background_sessions_without_transcripts_are_not_terminal_callbacks() {
 
 #[cfg(test)]
 #[test]
-fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
+fn claude_stop_with_text_is_final_despite_live_background_work() {
     for extra in [
         serde_json::json!({"background_tasks":[{"task_id":"task-1","status":"running"}],"session_crons":[]}),
         serde_json::json!({"background_tasks":[],"session_crons":[{"cron_id":"cron-1","status":"running"}]}),
@@ -33,9 +33,10 @@ fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
             .extend(extra.as_object().unwrap().clone());
         assert_eq!(
             parse(Provider::ClaudeCode, &value).unwrap(),
-            Parsed::BackgroundPending {
+            Parsed::Final {
                 session: "claude-session".into(),
                 turn: "prompt-1".into(),
+                text: "Still waiting on a background reviewer".into(),
             }
         );
     }
@@ -75,7 +76,7 @@ fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
     });
     assert!(matches!(
         parse(Provider::ClaudeCode, &agent_beside_shell).unwrap(),
-        Parsed::BackgroundPending { .. }
+        Parsed::Final { text, .. } if text == "Waiting for reviewers"
     ));
 }
 

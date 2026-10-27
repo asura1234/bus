@@ -595,7 +595,7 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
     );
     assert_eq!(
         f.state().request(first).unwrap().phase,
-        RequestPhase::Active
+        RequestPhase::Completed
     );
     let follow = f.blocked_worker_notice(agent);
     f.tick();
@@ -624,7 +624,7 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
 }
 
 #[tokio::test]
-async fn held_interim_survives_no_stop_wake_restart_and_releases_queued_request() {
+async fn captured_stop_survives_a_no_stop_wake_and_restart_before_the_next_request() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
     let agent = f.agents[0];
     let first = f.send(agent, f.work, "first", false, None);
@@ -637,15 +637,14 @@ async fn held_interim_survives_no_stop_wake_restart_and_releases_queued_request(
         json!([{"id":"shell","type":"shell","status":"running","command":"sleep 600"}]),
         json!([]),
     );
-    let next = f.send(agent, f.work, "queued", true, None);
-    f.tick();
-    assert_eq!(f.state().request(next).unwrap().phase, RequestPhase::Queued);
     f.start(agent, "wake", "<task-notification>\n<task-id>shell</task-id>\n<status>completed</status>\n</task-notification>");
     f.reopen();
     f.status(agent, AgentState::Idle);
     f.tick();
     f.elapse(31_000);
     f.assert_reply(first, "captured before wake");
+    let next = f.send(agent, f.work, "queued", true, None);
+    f.tick();
     f.start(agent, "two", "queued");
     f.stop(agent, "two", "queued answer", json!([]), json!([]));
     f.assert_reply(next, "queued answer");
@@ -1272,13 +1271,10 @@ fn delivery_cycle(f: &mut Delivery, round: usize) {
         for &(_, agent, first, next) in &expected {
             if f.state().agent(agent).unwrap().provider == Provider::ClaudeCode {
                 let request = if queued { next } else { first };
-                assert!(
-                    f.state().request(request).unwrap().shell_hold.is_some(),
-                    "round {round} {phase}: Claude reply must actually wait on its own shell"
-                );
                 assert_eq!(
                     f.state().request(request).unwrap().phase,
-                    RequestPhase::Active
+                    RequestPhase::Completed,
+                    "round {round} {phase}: Stop must complete despite running shells"
                 );
             }
         }
@@ -1468,24 +1464,30 @@ async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_a
         "the real blocked notice must reach the live turn"
     );
     assert_eq!(f.state().request(notice).unwrap().group, Some(held));
-    f.stop(
+    let payload = f.typed(orch).last().unwrap().clone();
+    assert!(
+        payload.contains("Blocked, needs help"),
+        "notice did not take priority: {payload}"
+    );
+    f.spool_stop(
         orch,
         "status-turn",
         "captured status",
         json!([{"id":"watcher","type":"shell","status":"running","command":"sleep 3600"}]),
         json!([]),
     );
-    let payload = f.typed(orch).last().unwrap().clone();
-    assert!(
-        payload.contains("Blocked, needs help"),
-        "notice did not take priority: {payload}"
-    );
+    // The notice starts its own turn before an idle boundary can leave it
+    // unclaimed. Both hooks are reconciled before settlement in this tick.
+    f.spool_start(orch, "notice-turn", &payload);
+    f.tick();
     assert_eq!(
         f.state().request(ordinary).unwrap().phase,
         RequestPhase::Queued
     );
-    assert_eq!(f.state().request(held).unwrap().phase, RequestPhase::Active);
-    f.start(orch, "notice-turn", &payload);
+    assert_eq!(
+        f.state().request(held).unwrap().phase,
+        RequestPhase::Completed
+    );
     // The provider ran the steered input as a separate turn. Its submit hook
     // detaches the notice while preserving the captured earlier answer.
     assert_eq!(f.state().request(notice).unwrap().group, None);
@@ -1559,21 +1561,25 @@ fn orchestrator_inbox_burst(round: usize) {
         requests.push((f.send(orch, room, &prompt, true, Some(sender)), prompt));
     }
     let blocker = f.blocked_worker_notice(orch);
-    f.stop(
-        orch,
-        "held",
-        "held reply",
-        json!([{"id":"long-wait","type":"shell","status":"running","command":"sleep 3600"}]),
-        json!([]),
-    );
     let payload = f.typed(orch).last().unwrap().clone();
     assert!(
         payload.contains("Blocked, needs help"),
         "28 queued messages hid a dialog: {payload}"
     );
     assert_eq!(f.state().request(blocker).unwrap().group, Some(held));
-    assert_eq!(f.state().request(held).unwrap().phase, RequestPhase::Active);
-    f.start(orch, "blocker", &payload);
+    f.spool_stop(
+        orch,
+        "held",
+        "held reply",
+        json!([{"id":"long-wait","type":"shell","status":"running","command":"sleep 3600"}]),
+        json!([]),
+    );
+    f.spool_start(orch, "blocker", &payload);
+    f.tick();
+    assert_eq!(
+        f.state().request(held).unwrap().phase,
+        RequestPhase::Completed
+    );
     assert_eq!(f.state().request(blocker).unwrap().group, None);
     f.assert_reply(held, "held reply");
     f.stop(orch, "blocker", "blocker reply", json!([]), json!([]));
@@ -1600,8 +1606,8 @@ fn orchestrator_inbox_burst(round: usize) {
                     .unwrap()
                     .failure_reason
                     .as_deref(),
-                Some("background_shells_new_turn"),
-                "turn {n} did not release its real hold"
+                None,
+                "turn {n} must complete at Stop without a recovery reason"
             );
         }
         if n % 7 == 0 {
@@ -1640,7 +1646,7 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
 }
 
 #[tokio::test]
-async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() {
+async fn orchestrator_inbox_unclaimed_steering_is_uncertain_without_blocking_the_next_room() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
     let lead = f.send(orch, f.master, "first", false, None);
@@ -1658,12 +1664,8 @@ async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() 
         json!([]),
     );
     let next = f.send(orch, f.work, "new room", true, None);
-    // The production grace allows a separate submit hook to arrive. Once it
-    // expires, a genuinely folded member shares the captured old answer.
-    tokio::time::sleep(std::time::Duration::from_millis(
-        crate::messaging::model::STEERING_SETTLE_MS + 100,
-    ))
-    .await;
+    // No matching hook or transcript claimed this input. At the idle boundary
+    // it must surface uncertainty immediately, without borrowing the answer.
     f.tick();
     assert_eq!(
         f.typed_content(orch).last().unwrap(),
@@ -1671,7 +1673,16 @@ async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() 
         "folded steering blocked the inbox"
     );
     f.assert_reply(lead, "combined answer");
-    f.assert_reply(folded, "combined answer");
+    assert_eq!(
+        f.state().request(folded).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(
+        f.state().request(folded).unwrap().failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(f.state().request(folded).unwrap().pending_final.is_none());
+    assert!(f.state().request(folded).unwrap().uncertain_outcome);
     assert_eq!(f.state().request(next).unwrap().group, None);
     f.start(orch, "new", "new room");
     f.stop(orch, "new", "new answer", json!([]), json!([]));

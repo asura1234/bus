@@ -233,17 +233,6 @@ impl BusState {
             {
                 None
             }
-            // A reply held for background work is known work with a
-            // cap of its own; the queue behind it waits, it has not stalled.
-            // Background waits with no captured text still report stalls.
-            RequestPhase::Queued
-                if agent
-                    .current_request
-                    .and_then(|id| self.requests.get(&id))
-                    .is_some_and(Request::has_held_background_reply) =>
-            {
-                None
-            }
             // An unconfirmed write ahead of it is failed at its own bound
             // (`fail_unconfirmed_submissions`); until then nothing refuses it.
             RequestPhase::Queued
@@ -273,12 +262,6 @@ impl BusState {
                 let progress = lead.progress_at_ms.unwrap_or(agent.status_since_ms);
                 let invalidated =
                     agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
-                // The captured interim reply waits on known work, bounded by
-                // its shell cap. It has not failed transcript capture. Keep
-                // unavailable/session-invalidated requests recoverable.
-                if agent.status == RuntimeStatus::Idle && lead.has_held_background_reply() {
-                    return None;
-                }
                 if (agent.status != RuntimeStatus::Idle && !invalidated)
                     || !since(DELIVERED_STALL_MS, progress.max(agent.status_since_ms))
                 {
@@ -334,7 +317,7 @@ impl BusState {
         if request.uncertain_outcome && !request.trusted_start_bound {
             return false;
         }
-        // Background work (agents, crons, shells the turn started) will wake
+        // Background work without a captured answer will wake
         // the turn with the real reply, for its joined messages too.
         let lead = request
             .group
@@ -438,8 +421,8 @@ impl BusState {
     }
 
     /// The request a message may steer into: the agent's current request while
-    /// its turn visibly runs, or while the idle agent holds its reply for
-    /// background work that turn started (shells, agents, session crons),
+    /// its turn visibly runs, or while the idle agent has no answer yet and
+    /// waits for background work that turn started (shells, agents, crons),
     /// bound by its submit hook, with no final reply yet. Only the lead's own
     /// room can steer ordinary work; blocked-dialog notices may interrupt any
     /// room's turn, including when older cross-room work heads the queue.
@@ -474,8 +457,8 @@ impl BusState {
     }
 
     /// Moves `request` from the queue into `lead`'s group before Bus types it
-    /// into the running turn. The lead then settles only on an idle status
-    /// observed after this, so the turn the typing extends is not cut short.
+    /// into the running turn. A captured answer settles the members that its
+    /// hook or transcript claims; an unclaimed input retains its uncertainty.
     pub(crate) fn begin_steering(
         &mut self,
         request: RequestId,
@@ -749,17 +732,5 @@ impl Request {
             Some(detail) => format!("{guidance}\n{detail}"),
             None => guidance,
         })
-    }
-
-    /// A captured reply remains available at the cap across owned wake turns,
-    /// including a wake whose Stop has no new text. Its original turn identity
-    /// stays attached to the reply; a different session cannot inherit it.
-    pub(crate) fn has_held_background_reply(&self) -> bool {
-        self.awaiting_background
-            && self.provider_turn_id.is_some()
-            && self
-                .shell_hold
-                .as_ref()
-                .is_some_and(|hold| hold.interim.provider_session_id == self.provider_session_id)
     }
 }

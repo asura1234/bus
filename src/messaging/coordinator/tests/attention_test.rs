@@ -343,7 +343,6 @@ fn feishu_upgrade_starts_mandatory_dms_and_ignores_legacy_off_choice() {
   "master_sound": { "enabled": true, "name": null },
   "room_sound": { "enabled": false, "name": null },
   "max_compactions_per_agent": 5,
-  "background_shell_hold_minutes": 15,
   "sidebar_width": 28
 }"#,
     )

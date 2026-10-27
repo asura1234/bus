@@ -157,23 +157,20 @@ def steering_correction(old, new):
 def background_prompt(token, orchestrator=False):
     return ("We are testing Bus delivery. " + (OWN_COMMAND if orchestrator else "") + "Do not use skills. Start the shell command `sleep 20` "
             "with your Bash tool's run_in_background option. Do not wait for, poll, read or stop it. "
-            f"For this initial turn reply with exactly INTERIM_{token} and nothing else. "
+            f"For this initial turn reply with exactly {token} and nothing else. "
             "When this shell finishes and its task notification starts a later turn, "
-            f"reply with exactly {token} and nothing else. That later token is the final result.")
+            f"reply with exactly FOLLOWUP_{token} and nothing else. This is a separate follow-up.")
 
 
 def verify_background_reply(request, reply):
-    """The captured interim stays intact; the reply comes from the later owned wake."""
-    interim = (request.get("shell_hold") or {}).get("interim")
-    assert interim, "background reply has no captured interim"
-    assert interim["text"] == "INTERIM_" + reply["text"].strip(), f"wrong held interim: {interim}"
-    assert interim.get("provider_session_id"), "held interim has no provider session"
-    assert reply.get("provider_session_id") == interim["provider_session_id"], "background session changed"
-    assert interim.get("provider_turn_id"), "held interim has no provider turn"
-    assert reply.get("provider_turn_id") and reply["provider_turn_id"] != interim["provider_turn_id"], \
-        "background reply came from the initial turn instead of its wake"
-    assert reply["received_at_ms"] > interim["received_at_ms"], "background result preceded its interim"
-    return {"interim": interim, "final": reply}
+    """The initial Stop answer is delivered without waiting for the shell wake."""
+    answer = request.get("pending_final")
+    assert request.get("phase") == "completed", "background Stop did not complete its request"
+    assert answer, "background Stop has no captured answer"
+    for key in ("text", "provider_session_id", "provider_turn_id", "received_at_ms"):
+        assert answer.get(key) == reply.get(key), f"background answer changed: {key}"
+    assert reply.get("provider_session_id") and reply.get("provider_turn_id"), "answer has no provider identity"
+    return {"final": reply}
 
 
 def attachment_prompt(token):
@@ -423,7 +420,7 @@ class Run:
         stored = json.loads((self.data / "state.json").read_text())["state"]["requests"][str(delivered["request_id"])]
         evidence = verify_background_reply(stored, delivered["reply"])
         row.setdefault("background", []).append({"case": case, "request_id": delivered["request_id"], **evidence})
-        # The shell wake supplied the final; wait for native readiness before the follow-up.
+        # The initial answer is final; native readiness is independent of reply delivery.
         deadline = time.monotonic() + self.args.timeout
         while True:
             agent = next(a for a in self.bus.cli("diagnostics", row=row)["agents"]

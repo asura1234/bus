@@ -48,6 +48,7 @@ impl BusState {
                 cwd,
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
+                claude_shells: None,
                 startup: None,
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
@@ -178,11 +179,71 @@ impl BusState {
         id: AgentId,
         identity: AgentRuntimeIdentity,
     ) -> Result<(), ModelError> {
-        self.agents
+        let agent = self
+            .agents
             .get_mut(&id)
-            .ok_or(ModelError::UnknownAgent(id))?
-            .runtime_identity = identity;
+            .ok_or(ModelError::UnknownAgent(id))?;
+        if agent.runtime_identity.launch_id != identity.launch_id
+            || agent.runtime_identity.session_id != identity.session_id
+        {
+            agent.claude_shells = None;
+        }
+        agent.runtime_identity = identity;
         Ok(())
+    }
+
+    /// A fresh provider startup proves an empty initial boundary. Retried
+    /// startup envelopes must not erase shells subsequently observed here.
+    pub(crate) fn initialize_claude_shells(&mut self, id: AgentId) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        agent
+            .claude_shells
+            .get_or_insert_with(|| super::types::ClaudeShells {
+                owner: agent.current_request,
+                ..Default::default()
+            });
+        Ok(())
+    }
+
+    /// Returns whether the census contains work started since this request's
+    /// known boundary. An unknown census is never proof of ownership.
+    pub(crate) fn observe_claude_shells(
+        &mut self,
+        id: AgentId,
+        running: Option<std::collections::BTreeSet<String>>,
+    ) -> Result<bool, ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        if agent.claude_shells.is_none() {
+            let Some(running) = running else {
+                return Ok(false);
+            };
+            agent.claude_shells = Some(super::types::ClaudeShells {
+                owner: agent.current_request,
+                inherited: running.clone(),
+                running,
+            });
+            return Ok(false);
+        }
+        let Some(shells) = agent.claude_shells.as_mut() else {
+            return Ok(false);
+        };
+        if shells.owner != agent.current_request {
+            shells.inherited = shells.running.clone();
+            shells.owner = agent.current_request;
+        }
+        if let Some(running) = running {
+            shells.running = running;
+        }
+        Ok(shells
+            .running
+            .iter()
+            .any(|task| !shells.inherited.contains(task)))
     }
 
     pub(crate) fn confirm_hook_setup(&mut self, id: AgentId) -> Result<(), ModelError> {
@@ -243,6 +304,9 @@ impl BusState {
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
         let previous = agent.runtime_identity.session_id.replace(session.clone());
+        if previous.as_deref() != Some(&session) {
+            agent.claude_shells = None;
+        }
         agent.session_reset_pending = false;
         agent.compactions = Compactions::default();
         // A message already sent into the fresh context was recorded under the
@@ -499,7 +563,8 @@ impl BusState {
             }
         }
         // A provider that went away cannot extend its turn, so a reply it
-        // already gave completes the turn as an idle screen would.
+        // already gave completes the turn as an idle screen would. Status
+        // cannot prove which turn accepted unconfirmed steering.
         if gone {
             self.complete_pending_final(agent, now_ms)?;
         }

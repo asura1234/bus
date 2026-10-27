@@ -238,19 +238,10 @@ An agent-authored message sent in MASTER gets its reply in MASTER, just like
 one from the developer. A worker message in the work room gets its reply there.
 A turn no message started posts in the orchestrator's work room.
 
-Direct Bus control commands (`send`, `wait`, `history`, `agent`, `room`,
-`message`, `request`, `state`, `settings`, and other control commands) do
-not hold Claude's turn-final reply while running in a background shell. A
-quoted Bus executable path and a leading `cd` or environment assignment are
-supported. Real work before or after a Bus command, pipes to other programs,
-setup loops, unknown syntax and opaque script wrappers still hold the reply.
-For dispatches use the direct Bus executable; do setup and result processing
-separately. With dev logging or `BUS_LOG=bus=debug`,
-`bus.callback.shell_classified` records each running shell's id,
-content-free reason and hold decision. At info level,
-`bus.callback.background_shells` adds
-the request, sender kind and captured-reply size to explain a held final;
-these events never log commands or message text.
+A captured Stop answer is delivered to its matching requests and marks their
+turn ended immediately, even while background shells keep the agent Working.
+Shell commands and wrappers do not affect reply delivery. Later background
+results are follow-ups; they do not replace the answer already delivered.
 
 ### Who to message
 
@@ -636,11 +627,8 @@ new message when ready. Typed requests remain `stalled` for explicit recovery.
 | `delivered`, `joined` | 3 minutes idle with no hook event | `transcript_unmatched`: the turn ended but no final reply matched the transcript |
 | Any typed stage | 3 minutes without progress after the agent becomes unavailable with its session binding invalidated | `session_invalidated`: the turn cannot continue in that session; recover the current lead request with `request recover REQUEST_ID --confirm` to close its group |
 
-A captured reply held for background shells its own turn started does not
-stall while that current shell hold lasts. The `background_shell_hold_minutes`
-cap settles the hold with its latest interim reply if the shells never finish;
-non-queued follow-ups can join the held turn. An uncapped cron hold is still
-subject to stalled-status reporting.
+A captured Stop answer completes its requests without waiting for background
+work. A background pause without a captured answer can still report a stall.
 
 A Working agent never stalls, however long its turn. A Blocked agent does not
 stall either: it already asked for help. After 5 minutes blocked, `reason`

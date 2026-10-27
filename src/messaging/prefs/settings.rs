@@ -25,7 +25,6 @@ pub(crate) const MIN_IDLE_AGENTS_ALERT: u32 = 1;
 pub(crate) const MAX_IDLE_AGENTS_ALERT: u32 = 10;
 pub(crate) const MIN_DISK_FREE_GB: u32 = 1;
 pub(crate) const MAX_DISK_FREE_GB: u32 = 10_000;
-pub(crate) const MAX_BACKGROUND_SHELL_HOLD_MINUTES: u32 = 24 * 60;
 /// The sidebar width before it was adjustable, so unchanged settings look
 /// the same as before.
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: u16 = 28;
@@ -68,10 +67,6 @@ pub(crate) struct BusSettings {
     pub(crate) disk_warning_gb: u32,
     #[serde(deserialize_with = "deserialize_disk_free_gb")]
     pub(crate) disk_critical_gb: u32,
-    /// How long a Claude reply waits for background shells its own turn
-    /// started; then the latest interim text is delivered as the reply.
-    #[serde(deserialize_with = "deserialize_shell_hold_minutes")]
-    pub(crate) background_shell_hold_minutes: u32,
     /// The room sidebar's width in cells; the layout clamps it again on a
     /// narrow terminal.
     #[serde(deserialize_with = "deserialize_sidebar_width")]
@@ -103,7 +98,6 @@ impl Default for BusSettings {
             idle_agents_alert: 5,
             disk_warning_gb: 20,
             disk_critical_gb: 5,
-            background_shell_hold_minutes: 15,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         }
     }
@@ -180,20 +174,6 @@ pub(crate) fn validate_disk_thresholds(warning: u32, critical: u32) -> Result<()
         Err("Disk thresholds must be between 1 and 10000 GB, with critical below warning.".into())
     } else {
         Ok(())
-    }
-}
-
-fn deserialize_shell_hold_minutes<'de, D>(deserializer: D) -> Result<u32, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = u32::deserialize(deserializer)?;
-    if (1..=MAX_BACKGROUND_SHELL_HOLD_MINUTES).contains(&value) {
-        Ok(value)
-    } else {
-        Err(serde::de::Error::custom(
-            "background_shell_hold_minutes must be between 1 and 1440",
-        ))
     }
 }
 
@@ -410,29 +390,6 @@ mod tests {
         assert_eq!(load(&path), Ok(enabled));
         std::fs::write(&path, b"not json").unwrap();
         assert!(load(&path).is_err());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn background_shell_hold_defaults_to_fifteen_minutes_within_its_range() {
-        let root = std::env::temp_dir().join(format!(
-            "bus-settings-hold-{}-{}",
-            std::process::id(),
-            io::now_ns()
-        ));
-        let path = root.join("settings.json");
-        std::fs::create_dir_all(&root).unwrap();
-        assert_eq!(BusSettings::default().background_shell_hold_minutes, 15);
-        std::fs::write(&path, br#"{"background_shell_hold_minutes":2}"#).unwrap();
-        assert_eq!(load(&path).unwrap().background_shell_hold_minutes, 2);
-        for invalid in ["0", "1441"] {
-            std::fs::write(
-                &path,
-                format!(r#"{{"background_shell_hold_minutes":{invalid}}}"#),
-            )
-            .unwrap();
-            assert!(load(&path).is_err(), "{invalid}");
-        }
         let _ = std::fs::remove_dir_all(root);
     }
 

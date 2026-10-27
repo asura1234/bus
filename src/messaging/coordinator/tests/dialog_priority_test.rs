@@ -24,10 +24,13 @@ fn blocked_behind_other_room(
     f.consume();
     let lead = running(&mut f, "keep working", "turn-1");
     if background {
-        claude_stop_holding(&f, "turn-1", "pending", &["shell"]);
+        f.record(
+            json!({"hook_event_name":"Stop", "session_id":"session", "prompt_id":"turn-1",
+            "background_tasks":[{"type":"local_agent"}]}),
+        );
         f.consume();
         f.status(RuntimeStatus::Working);
-        assert!(f.request(lead).has_held_background_reply());
+        assert!(f.request(lead).awaiting_background);
     }
     f.room = if master_turn { work } else { master };
     let head = f.send("ordinary cross-room message", false);
@@ -52,7 +55,10 @@ fn blocked_dialog_reaches_an_idle_background_orchestrator_in_a_new_turn() {
     let (mut f, codex, lead, head, notice) = blocked_behind_other_room(true, false);
     f.status(RuntimeStatus::Idle);
     f.deliver();
-    assert_eq!(f.reply(lead).as_deref(), Some("pending"));
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("background_wait_superseded")
+    );
     assert_eq!(f.request(notice).phase, RequestPhase::Active);
     assert_eq!(f.request(notice).group, None);
     assert_eq!(f.worker.state.queued_requests(f.agent), &[head]);
@@ -102,7 +108,7 @@ fn blocked_dialog_notice_bypasses_cross_room_head_during_active_or_background_tu
         f.stopped("turn-1", "notice handled");
         f.consume();
         f.status(RuntimeStatus::Idle);
-        f.now += crate::messaging::model::STEERING_SETTLE_MS + 1;
+        f.now += 5_000 + 1;
         f.consume();
         assert_eq!(f.reply(notice).as_deref(), Some("notice handled"));
         assert_eq!(f.reply(lead).as_deref(), Some("notice handled"));

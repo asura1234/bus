@@ -63,14 +63,6 @@ pub(super) struct Worker {
     /// Each Codex agent's rollout, from its hooks. A turn that a provider
     /// error ended fires no Stop hook; only the rollout records why.
     pub(super) codex_rollouts: BTreeMap<AgentId, PathBuf>,
-    /// The background shells each Claude agent had running when its last
-    /// reply settled. Shells beyond these were started by the current
-    /// request's turns, and its reply waits for them. In memory only: after a
-    /// restart every running shell counts as older.
-    pub(super) claude_settled_shells: BTreeMap<AgentId, BTreeSet<String>>,
-    /// Last observed shells and the request that observed them. A different
-    /// request inherits these shells instead of waiting for their replies.
-    pub(super) claude_shell_observations: BTreeMap<AgentId, (Option<RequestId>, BTreeSet<String>)>,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
@@ -173,8 +165,6 @@ impl Worker {
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
             codex_rollouts: BTreeMap::new(),
-            claude_settled_shells: BTreeMap::new(),
-            claude_shell_observations: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
             batch: None,
@@ -614,20 +604,11 @@ impl Worker {
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
         let mut settled_groups = Vec::new();
-        let hold_cap_ms = u64::from(
-            self.settings_path
-                .as_deref()
-                .and_then(|path| crate::messaging::prefs::settings::load(path).ok())
-                .unwrap_or_default()
-                .background_shell_hold_minutes,
-        ) * 60_000;
         for (agent, observed_at_ms) in agents {
-            changed |= state
-                .release_shell_hold(agent, observed_at_ms, hold_cap_ms)
-                .is_some();
             let rollout = self.codex_rollouts.get(&agent);
             let recorded_end =
                 |request: &crate::messaging::model::Request| recorded_codex_end(rollout?, request);
+            changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
             if let Some(lead) = state.settle_ended_request(agent, observed_at_ms, recorded_end) {
                 changed = true;
                 // Use the previous group: transcript recovery can detach an

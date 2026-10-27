@@ -8,7 +8,6 @@ use super::{
 #[cfg(test)]
 use super::{AgentRuntimeIdentity, Draft, Transport};
 use crate::agents::providers::{spool as callbacks, spool::Parsed, ProviderKind};
-use crate::messaging::model::PendingFinal;
 use std::ops::ControlFlow;
 
 type CallbackRecordResult = ControlFlow<(), (BusState, Option<ProviderCallback>, Vec<PathBuf>)>;
@@ -129,12 +128,16 @@ impl Worker {
         callback: ProviderCallback,
     ) -> Result<bool, String> {
         let _binding = binding::span(state, &callback).entered();
-        let late_worker_final = matches!(callback.kind, CallbackEventKind::Final { .. })
-            && state.late_worker_request(&callback).is_some();
+        let report = reports::pending_report(state, &callback);
+        let late_final = matches!(callback.kind, CallbackEventKind::Final { .. })
+            && (state.late_worker_request(&callback).is_some()
+                || report
+                    .as_ref()
+                    .is_some_and(reports::PendingReport::answers_completed_turn));
         if matches!(
             callback.kind,
             CallbackEventKind::Final { .. } | CallbackEventKind::BackgroundPending
-        ) && !late_worker_final
+        ) && !late_final
             && !state.is_unrelated_turn(&callback)
             && state
                 .agent(id)
@@ -155,10 +158,9 @@ impl Worker {
             return Ok(false);
         }
         let started = matches!(callback.kind, CallbackEventKind::PromptStarted);
-        if started && self.is_inherited_shell_wake(id, &callback) {
+        if started && Self::is_inherited_shell_wake(state, id, &callback) {
             state.mark_unowned_background_turn(&callback);
         }
-        let report = reports::pending_report(state, &callback);
         let disposition = state.accept_callback(callback);
         if let Some(report) = report {
             reports::post_report(
@@ -179,7 +181,7 @@ impl Worker {
             ) => {
                 self.own_turns.insert(id, std::time::Instant::now());
             }
-            (_, false) if !late_worker_final => {
+            (_, false) if !late_final => {
                 self.own_turns.remove(&id);
             }
             _ => {}
@@ -192,7 +194,7 @@ impl Worker {
                 "Agent activity outside the Bus request"
             );
         }
-        if !late_worker_final
+        if !late_final
             && matches!(
                 disposition,
                 CallbackDisposition::Rejected(
@@ -318,6 +320,12 @@ impl Worker {
             // A reset agent that had no session yet binds its first one here.
             state
                 .rebind_reset_session(id, session)
+                .map_err(|e| e.to_string())?;
+        }
+        if record.manifest.provider == Provider::ClaudeCode && source.as_deref() == Some("startup")
+        {
+            state
+                .initialize_claude_shells(id)
                 .map_err(|e| e.to_string())?;
         }
         // Identical hooks share one spool file, so a hook retry counts once.
@@ -663,16 +671,16 @@ impl Worker {
             crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
             return Ok(CallbackFlow::Next);
         }
-        let parsed = match self.parse_observed_callback(id, dir, path, record)? {
+        let mut parsed = match self.parse_observed_callback(id, dir, path, record)? {
             ControlFlow::Continue(parsed) => parsed,
             ControlFlow::Break(flow) => return Ok(flow),
         };
-        let (parsed, interim) = self.hold_background_reply(id, record, parsed);
         let state = self.state.clone();
-        let state = match self.check_callback_session(id, dir, path, record, &parsed, state)? {
+        let mut state = match self.check_callback_session(id, dir, path, record, &parsed, state)? {
             ControlFlow::Continue(state) => state,
             ControlFlow::Break(flow) => return Ok(flow),
         };
+        Self::observe_background_shells(&mut state, id, record, &mut parsed)?;
         if record.manifest.provider == Provider::Codex {
             if let Some(path) =
                 crate::agents::providers::codex::usage::codex_rollout_path(&record.value)
@@ -692,18 +700,8 @@ impl Worker {
             if !Self::mark_scheduled_turn(&mut state, &callback, record) {
                 return Ok(CallbackFlow::Stop);
             }
-            let interim = interim.map(|text| PendingFinal {
-                callback_id: callback.callback_id.clone(),
-                text,
-                received_at_ms: callback.occurred_at_ms,
-                provider_session_id: callback.provider_session_id.clone(),
-                provider_turn_id: callback.provider_turn_id.clone(),
-            });
             if !self.apply_request_callback(id, &mut state, callback)? {
                 return Ok(CallbackFlow::Next);
-            }
-            if let Some(interim) = interim {
-                state.hold_background_reply(id, interim);
             }
         }
         self.save_callback_state(state)?;

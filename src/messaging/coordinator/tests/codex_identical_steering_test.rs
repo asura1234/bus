@@ -23,7 +23,7 @@ fn identical_steered_input_in_a_later_turn_does_not_take_the_lead_turn_answer() 
                 + &recorded_turn(fixture.now + 2, "turn-2", &typed, "SECOND STATUS")),
         );
         idle_past_settle(&mut fixture);
-        fixture.now += STEERING_SETTLE_MS;
+        fixture.now += 5_000;
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
         assert_eq!(fixture.reply(lead).as_deref(), Some("FIRST STATUS"));
@@ -64,7 +64,7 @@ fn identical_steered_input_recorded_twice_in_the_lead_turn_shares_its_answer() {
     let (head, complete) = turn.trim_end().rsplit_once('\n').unwrap();
     append_lines(&rollout, &format!("{head}\n{again}\n{complete}\n"));
     idle_past_settle(&mut fixture);
-    fixture.now += STEERING_SETTLE_MS;
+    fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     for id in [lead, follow] {
