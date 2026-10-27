@@ -60,11 +60,11 @@ pub(crate) fn directory(pane: &str) -> PathBuf {
             }
         })
         .collect();
-    super::paths::data_dir()
+    crate::utils::paths::data_dir()
         .join("private/drafts")
         .join(format!(
             "{name}-{}",
-            &super::time::digest(pane.as_bytes())[..16]
+            &crate::utils::time::digest(pane.as_bytes())[..16]
         ))
 }
 
@@ -141,7 +141,7 @@ impl Exchange {
             }
         }
         if read_request(&dir)?.is_some_and(|request| {
-            request.expires_ms > super::time::now_ms()
+            request.expires_ms > crate::utils::time::now_ms()
                 || request.operation != Operation::Idle && !has_ack(&dir, &request)
         }) {
             return Err(io::Error::new(
@@ -153,13 +153,13 @@ impl Exchange {
         let token = format!(
             "{:x}-{:x}-{:x}",
             std::process::id(),
-            super::time::now_ns(),
+            crate::utils::time::now_ns(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         );
         let request = Request {
             token: token.clone(),
             sequence: 0,
-            expires_ms: super::time::now_ms()
+            expires_ms: crate::utils::time::now_ms()
                 .saturating_add(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
             operation: Operation::Idle,
         };
@@ -248,7 +248,7 @@ impl Exchange {
     pub(crate) fn remove_recovery(&self) -> io::Result<()> {
         let _lock = lock(&self.dir)?;
         fs::remove_file(&self.recovery)?;
-        crate::platform::sync_parent_directory(&self.recovery)
+        crate::platform::sync_parent_directory(&self.dir)
     }
 }
 
@@ -338,7 +338,7 @@ fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
 }
 
 fn check_expiry(request: &Request) -> io::Result<()> {
-    if super::time::now_ms() >= request.expires_ms {
+    if crate::utils::time::now_ms() >= request.expires_ms {
         Err(io::Error::new(
             io::ErrorKind::TimedOut,
             "Draft exchange expired",

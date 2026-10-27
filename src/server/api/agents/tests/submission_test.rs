@@ -484,7 +484,7 @@ pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
             let pane = app.state.workspaces[0].tabs[0].root_pane;
             app.lookup_runtime_sender(0, pane)
                 .unwrap()
-                .test_process_pty_bytes(b"\r\nPrompt stashed");
+                .test_process_pty_bytes("\r\n› stashed".as_bytes());
         }
         let response = start(&mut app, method);
         let mut response =
@@ -740,4 +740,62 @@ async fn api_timeout_revokes_future_observed_scope_keys() {
         guidance.contains("draft") && guidance.contains("before resending"),
         "{guidance}"
     );
+}
+
+async fn claude_empty_composer_receives_the_prompt_below(above: &str) {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(
+            format!(
+                "\x1b[2J\x1b[H{above}\r\n────────────────────────\r\n❯ \r\n────────────────────────"
+            )
+            .as_bytes(),
+        );
+    let response = start(&mut app, method);
+    let mut response = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+    tokio::select! {
+        reply = &mut response => panic!("empty composer was not typed into: {}", reply.unwrap()),
+        paste = next_write(&mut writes) => {
+            assert_eq!(paste, Bytes::from_static(b"\x1b[200~from bus\x1b[201~"));
+        }
+    }
+    redraw(&app, AgentKind::Claude, "from bus");
+    if above.contains("› stashed") {
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes("\r\n› stashed".as_bytes());
+    }
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    redraw(
+        &app,
+        AgentKind::Claude,
+        if above.contains("› stashed") {
+            "developer saved draft"
+        } else {
+            ""
+        },
+    );
+    assert!(response.await.unwrap().contains("agent_prompted"));
+    assert!(
+        writes.try_recv().is_err(),
+        "restored draft must not receive another Enter"
+    );
+}
+
+#[tokio::test]
+async fn claude_empty_composer_below_a_transcript_mentioning_stashed_receives_the_prompt() {
+    claude_empty_composer_receives_the_prompt_below(
+        "⏺ I stashed the local changes before rebasing.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_empty_composer_with_a_developer_stash_receives_the_prompt() {
+    claude_empty_composer_receives_the_prompt_below(
+        "                    ◐ medium · /effort · › stashed",
+    )
+    .await;
 }

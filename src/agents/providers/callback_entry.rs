@@ -24,7 +24,7 @@ pub(crate) fn dispatch(
         return None;
     }
     if args.get(2).map(String::as_str) == Some("draft-editor") {
-        return Some(crate::utils::draft_editor::run(args));
+        return Some(crate::platform::draft_editor::run(args));
     }
     if args.get(2).map(String::as_str) == Some("claude-statusline") {
         if args.len() == 3 {

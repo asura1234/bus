@@ -71,7 +71,7 @@ fn each_supported_provider_selects_its_verified_draft_preservation_path() {
 fn an_existing_native_stash_and_an_unconfigured_binding_are_left_untouched() {
     let observer = inspector(AgentKind::Claude);
     let occupied_slot = format!(
-        "{}\nPrompt stashed",
+        "{}\n› stashed",
         screen(AgentKind::Claude, "new developer draft")
     );
     assert!(observer.draft_preservation(&occupied_slot).is_none());
@@ -96,7 +96,7 @@ fn native_restore_requires_the_same_rich_draft_and_a_consumed_stash_slot() {
     assert!(
         !observer.native_draft_restored(&screen(AgentKind::Claude, "[Image #138] developer edit"))
     );
-    assert!(!observer.native_draft_restored(&format!("{saved}\nPrompt stashed")));
+    assert!(!observer.native_draft_restored(&format!("{saved}\n› stashed")));
     assert!(!observer.native_draft_restored(&screen(AgentKind::Claude, "")));
 }
 

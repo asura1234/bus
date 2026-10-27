@@ -446,7 +446,7 @@ impl App {
             observe,
             submit_delay,
             submit_deadline,
-            Some(crate::utils::draft_editor::directory(&agent.pane_id)),
+            Some(crate::platform::draft_editor::directory(&agent.pane_id)),
         )
         .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
         Ok((id, agent, completion))

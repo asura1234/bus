@@ -69,5 +69,10 @@ pub(crate) fn method_budget(method: &Method) -> Option<Duration> {
         ),
         _ => return None,
     };
-    Some(maximum_budget(delay, text) + DRAFT_TRANSFER_BUDGET)
+    let transfer = if matches!(method, Method::AgentPrompt(_)) {
+        Duration::ZERO
+    } else {
+        DRAFT_TRANSFER_BUDGET
+    };
+    Some(maximum_budget(delay, text) + transfer)
 }

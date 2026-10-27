@@ -9,7 +9,12 @@ pub(super) struct PreservingComposer {
     owned: OwnedComposer,
     directory: PathBuf,
     keys: Vec<Bytes>,
-    native_draft: Mutex<Option<String>>,
+    native_draft: Mutex<Option<NativeDraft>>,
+}
+
+enum NativeDraft {
+    Captured(String),
+    ExistingStash,
 }
 
 impl PreservingComposer {
@@ -39,10 +44,10 @@ impl PreservingComposer {
             AgentKind::Claude => {
                 // Claude's stash has one slot. Preserve any stash the developer
                 // already owns; a second stash would silently replace it.
-                if screen.contains(" stashed") {
+                if native_stash_present(screen) {
                     return None;
                 }
-                *self.native_draft.lock().ok()? = Some(body.clone());
+                *self.native_draft.lock().ok()? = Some(NativeDraft::Captured(body.clone()));
                 Some(DraftPreservation::Native {
                     key: self.keys[0].clone(),
                     directory: self.directory.clone(),
@@ -93,28 +98,65 @@ impl SubmissionInspector for PreservingComposer {
         screen: &str,
         cursor: Option<(u16, u16)>,
     ) -> Option<DraftPreservation> {
-        if self.kind == AgentKind::Claude && screen.contains(" stashed") {
-            return Some(DraftPreservation::Hold);
+        let invisible = invisible_content(self.kind, screen, cursor);
+        if self.kind == AgentKind::Claude
+            && !invisible
+            && native_stash_present(screen)
+            && input(self.kind, screen).is_some_and(|body| body.is_empty())
+        {
+            *self.native_draft.lock().ok()? = Some(NativeDraft::ExistingStash);
+            return None;
         }
-        self.choose(screen, invisible_content(self.kind, screen, cursor))
+        self.choose(screen, invisible)
+            .or_else(|| invisible.then_some(DraftPreservation::Hold))
     }
     fn native_stash_visible(&self, screen: &str) -> bool {
-        screen.contains(" stashed")
+        native_stash_present(screen)
     }
 
     fn native_draft_restored(&self, screen: &str) -> bool {
-        self.native_draft
-            .lock()
-            .ok()
-            .and_then(|draft| draft.clone())
-            .is_some_and(|draft| {
-                input(self.kind, screen).as_ref() == Some(&draft) && !screen.contains(" stashed")
-            })
+        if native_stash_present(screen) {
+            return false;
+        }
+        let Ok(saved) = self.native_draft.lock() else {
+            return false;
+        };
+        match saved.as_ref() {
+            Some(NativeDraft::Captured(draft)) => input(self.kind, screen).as_ref() == Some(draft),
+            Some(NativeDraft::ExistingStash) => input(self.kind, screen).is_some(),
+            None => false,
+        }
     }
 
     fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
         input(self.kind, screen).is_some_and(|body| body.ends_with(marker))
     }
+}
+
+fn native_stash_present(screen: &str) -> bool {
+    let rows: Vec<String> = screen
+        .lines()
+        .map(|line| {
+            super::styled_chars(line)
+                .iter()
+                .map(|c| c.character)
+                .collect()
+        })
+        .collect();
+    let Some(top) = rows
+        .windows(2)
+        .rposition(|pair| pair[0].trim().starts_with('─') && pair[1].trim().starts_with('❯'))
+    else {
+        return false;
+    };
+    let below = rows[top + 2..]
+        .iter()
+        .position(|row| row.trim().starts_with('─'))
+        .and_then(|end| rows.get(top + 3 + end));
+    rows.get(top.wrapping_sub(1))
+        .into_iter()
+        .chain(below)
+        .any(|row| row.trim_end().ends_with("› stashed"))
 }
 
 fn invisible_content(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) -> bool {
@@ -144,6 +186,13 @@ fn invisible_content(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) 
     }) else {
         return false;
     };
+    if !lines[row][offset..]
+        .trim_start_matches(markers)
+        .trim()
+        .is_empty()
+    {
+        return false;
+    }
     let end = lines[row + 1..]
         .iter()
         .position(|line| {

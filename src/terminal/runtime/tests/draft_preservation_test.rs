@@ -184,7 +184,7 @@ async fn editor_roundtrip_preserves_exact_codex_and_cursor_drafts_before_replayi
                 b"\x07" => {
                     editors += 1;
                     std::fs::write(&file, &draft).unwrap();
-                    crate::utils::draft_editor::test_run_at(&exchange, &file).unwrap();
+                    crate::platform::draft_editor::test_run_at(&exchange, &file).unwrap();
                     let text = std::fs::read_to_string(&file).unwrap();
                     // Reproduce the installed CLIs' different editor readers.
                     draft = if codex {

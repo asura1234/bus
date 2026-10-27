@@ -1,7 +1,7 @@
 //! Transfer a developer draft only while pane input is exclusively reserved.
 use super::{InputObservation, ObservedSubmission, PromptNotShown};
+use crate::platform::draft_editor::Exchange;
 use crate::protocol::api::submission::confirmation_budget;
-use crate::utils::draft_editor::Exchange;
 use bytes::Bytes;
 use std::{io, path::PathBuf, time::Duration};
 
@@ -36,10 +36,14 @@ impl ObservedSubmission {
         match initial {
             InputObservation::Empty if preservation.is_none() => {
                 let result = self.run(text, delay);
-                if matches!(
-                    self.observe("input_replay_preflight"),
-                    InputObservation::Empty | InputObservation::Accepted
-                ) {
+                if self
+                    .inspect
+                    .native_draft_restored(&self.terminal.visible_ansi())
+                    || matches!(
+                        self.observe("input_replay_preflight"),
+                        InputObservation::Empty | InputObservation::Accepted
+                    )
+                {
                     lease.restored();
                 }
                 return result;

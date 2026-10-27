@@ -128,7 +128,7 @@ pub(super) fn apply_pane_launch_env(
             cmd.env(BUS_WORKSPACE_ID_ENV_VAR, workspace_id);
             cmd.env(BUS_TAB_ID_ENV_VAR, tab_id);
             cmd.env(BUS_PANE_ID_ENV_VAR, pane_id);
-            crate::utils::draft_editor::configure(cmd, pane_id, &launch_env.extra)?;
+            crate::platform::draft_editor::configure(cmd, pane_id, &launch_env.extra)?;
         }
     }
     // New panes and cold resumes are independent provider sessions, even when
