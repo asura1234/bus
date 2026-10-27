@@ -72,10 +72,17 @@ pub(crate) fn record_answer(home: &Path, accepted: bool) -> io::Result<()> {
         bundle_hash: bundle_hash(),
         accepted,
     };
-    settings::update(&settings_path(home), |settings| {
-        settings.skills_answer = Some(answer)
-    })
-    .map_err(io::Error::other)?;
+    let path = settings_path(home);
+    bus_io::private_dir(&data_dir(home))?;
+    let _lease = bus_io::append_lock(&path.with_extension("json.lock"))?;
+    let mut settings = settings::load(&path).map_err(|error| {
+        io::Error::other(format!(
+            "Skills consent left settings at {} unchanged: {error}",
+            path.display()
+        ))
+    })?;
+    settings.skills_answer = Some(answer);
+    settings::save(&path, &settings).map_err(io::Error::other)?;
     Ok(())
 }
 
