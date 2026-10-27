@@ -21,6 +21,12 @@ impl FakeAgent {
     pub(super) fn record_prompt(&mut self, turn: &str, prompt: &str) {
         self.hooks_lost |= self.codex() && prompt.contains(LOSE_CWD);
         self.record(json!({"type":"task_started","turn_id":turn}));
+        self.record_steering(turn, prompt);
+    }
+
+    /// Records input consumed by an already-running turn, without inventing
+    /// another task-start event for the same turn.
+    pub(super) fn record_steering(&self, turn: &str, prompt: &str) {
         self.record(json!({"type":"item_completed","turn_id":turn,
             "item":{"type":"UserMessage","content":[{"type":"text","text":prompt}]}}));
     }

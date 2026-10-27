@@ -1464,18 +1464,22 @@ async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_a
         "the real blocked notice must reach the live turn"
     );
     assert_eq!(f.state().request(notice).unwrap().group, Some(held));
-    f.stop(
+    let payload = f.typed(orch).last().unwrap().clone();
+    assert!(
+        payload.contains("Blocked, needs help"),
+        "notice did not take priority: {payload}"
+    );
+    f.spool_stop(
         orch,
         "status-turn",
         "captured status",
         json!([{"id":"watcher","type":"shell","status":"running","command":"sleep 3600"}]),
         json!([]),
     );
-    let payload = f.typed(orch).last().unwrap().clone();
-    assert!(
-        payload.contains("Blocked, needs help"),
-        "notice did not take priority: {payload}"
-    );
+    // The notice starts its own turn before an idle boundary can leave it
+    // unclaimed. Both hooks are reconciled before settlement in this tick.
+    f.spool_start(orch, "notice-turn", &payload);
+    f.tick();
     assert_eq!(
         f.state().request(ordinary).unwrap().phase,
         RequestPhase::Queued
@@ -1484,7 +1488,6 @@ async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_a
         f.state().request(held).unwrap().phase,
         RequestPhase::Completed
     );
-    f.start(orch, "notice-turn", &payload);
     // The provider ran the steered input as a separate turn. Its submit hook
     // detaches the notice while preserving the captured earlier answer.
     assert_eq!(f.state().request(notice).unwrap().group, None);
@@ -1558,24 +1561,25 @@ fn orchestrator_inbox_burst(round: usize) {
         requests.push((f.send(orch, room, &prompt, true, Some(sender)), prompt));
     }
     let blocker = f.blocked_worker_notice(orch);
-    f.stop(
-        orch,
-        "held",
-        "held reply",
-        json!([{"id":"long-wait","type":"shell","status":"running","command":"sleep 3600"}]),
-        json!([]),
-    );
     let payload = f.typed(orch).last().unwrap().clone();
     assert!(
         payload.contains("Blocked, needs help"),
         "28 queued messages hid a dialog: {payload}"
     );
     assert_eq!(f.state().request(blocker).unwrap().group, Some(held));
+    f.spool_stop(
+        orch,
+        "held",
+        "held reply",
+        json!([{"id":"long-wait","type":"shell","status":"running","command":"sleep 3600"}]),
+        json!([]),
+    );
+    f.spool_start(orch, "blocker", &payload);
+    f.tick();
     assert_eq!(
         f.state().request(held).unwrap().phase,
         RequestPhase::Completed
     );
-    f.start(orch, "blocker", &payload);
     assert_eq!(f.state().request(blocker).unwrap().group, None);
     f.assert_reply(held, "held reply");
     f.stop(orch, "blocker", "blocker reply", json!([]), json!([]));

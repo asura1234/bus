@@ -332,7 +332,7 @@ impl FakeAgent {
         }
         let mut stopped = false;
         match work_seconds(prompt) {
-            Some(seconds) if self.live_turn() => match self.work(seconds) {
+            Some(seconds) if self.live_turn() => match self.work(seconds, &turn) {
                 Ok(Turn::Done(steered)) => {
                     prompts.extend(steered.iter().map(|p| p.trim().to_owned()));
                 }
@@ -450,7 +450,7 @@ impl FakeAgent {
     /// prompt entered meanwhile joins the turn, whose one reply answers it
     /// too. Returns those prompts and whether the stop key ended the turn
     /// early, or the exit code when the provider was quit.
-    fn work(&mut self, seconds: u64) -> Result<Turn, i32> {
+    fn work(&mut self, seconds: u64, turn: &str) -> Result<Turn, i32> {
         let mut steered = Vec::new();
         while let Some((started, frame)) = self.working {
             if started.elapsed().as_secs() >= seconds {
@@ -468,7 +468,19 @@ impl FakeAgent {
             self.pending.extend_from_slice(&bytes);
             for input in drain_input(&mut self.pending) {
                 match self.apply(input) {
-                    Some(Typed::Submit(prompt)) => steered.push(prompt),
+                    Some(Typed::Submit(prompt)) => {
+                        // This fake actually consumes the input in this turn.
+                        // Publish that ownership, rather than asking Bus to
+                        // infer it from a working/idle screen or elapsed time.
+                        let event = if self.cursor() {
+                            "beforeSubmitPrompt"
+                        } else {
+                            "UserPromptSubmit"
+                        };
+                        self.hook(event, Some(turn), json!({"prompt":prompt}));
+                        self.record_steering(turn, &prompt);
+                        steered.push(prompt);
+                    }
                     Some(Typed::Stop) => return Ok(Turn::Stopped(steered)),
                     Some(Typed::Exit) => return Err(0),
                     None => {}
