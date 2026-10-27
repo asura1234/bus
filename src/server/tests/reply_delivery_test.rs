@@ -1480,7 +1480,10 @@ async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_a
         f.state().request(ordinary).unwrap().phase,
         RequestPhase::Queued
     );
-    assert_eq!(f.state().request(held).unwrap().phase, RequestPhase::Active);
+    assert_eq!(
+        f.state().request(held).unwrap().phase,
+        RequestPhase::Completed
+    );
     f.start(orch, "notice-turn", &payload);
     // The provider ran the steered input as a separate turn. Its submit hook
     // detaches the notice while preserving the captured earlier answer.
@@ -1568,7 +1571,10 @@ fn orchestrator_inbox_burst(round: usize) {
         "28 queued messages hid a dialog: {payload}"
     );
     assert_eq!(f.state().request(blocker).unwrap().group, Some(held));
-    assert_eq!(f.state().request(held).unwrap().phase, RequestPhase::Active);
+    assert_eq!(
+        f.state().request(held).unwrap().phase,
+        RequestPhase::Completed
+    );
     f.start(orch, "blocker", &payload);
     assert_eq!(f.state().request(blocker).unwrap().group, None);
     f.assert_reply(held, "held reply");

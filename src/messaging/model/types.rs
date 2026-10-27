@@ -390,6 +390,8 @@ pub(crate) struct RoomAgent {
     /// A shared provider outage holds work until an explicit room resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) missing_binary: Option<String>,
+    /// Delivery/correlation owner. A completed lead can remain here briefly
+    /// while unconfirmed steering is matched, without withholding its answer.
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
     pub(crate) hook_setup_confirmed: bool,

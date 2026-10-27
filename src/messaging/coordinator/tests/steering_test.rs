@@ -299,7 +299,13 @@ fn running(fixture: &mut Fixture, task: &str, turn: &str) -> RequestId {
     fixture.started(turn, task);
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
-    assert!(fixture.request(lead).trusted_start_bound);
+    assert!(
+        fixture.request(lead).trusted_start_bound,
+        "request={:?}; agent={:?}; typed={:?}",
+        fixture.request(lead),
+        fixture.worker.state.agent(fixture.agent),
+        fixture.typed()
+    );
     lead
 }
 
@@ -376,7 +382,7 @@ fn typed_input_answered_in_its_own_turn_keeps_both_answers() {
     fixture.stopped("turn-1", "parser written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     // ...then runs the typed input as the next turn.
     fixture.started("turn-2", "also add tests");
     fixture.stopped("turn-2", "parser and tests written");
@@ -400,7 +406,7 @@ fn typed_input_without_a_submit_hook_settles_after_a_short_wait() {
     fixture.stopped("turn-1", "parser and tests written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     fixture.now =
         crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
     fixture.status(RuntimeStatus::Idle);

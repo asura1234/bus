@@ -334,10 +334,17 @@ impl BusState {
             }
             return Ok(());
         }
+        let correlation_anchor = request_state.phase == RequestPhase::Completed
+            && self.group_members(request).iter().any(|id| {
+                self.requests
+                    .get(id)
+                    .is_some_and(|member| !member.settled())
+            });
         if !matches!(
             request_state.phase,
             RequestPhase::Submitting | RequestPhase::Active
-        ) {
+        ) && !correlation_anchor
+        {
             return Err(ModelError::InvalidTransition);
         }
         let agent = self
@@ -368,6 +375,7 @@ impl BusState {
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
         let agent_id = request_state.agent_id;
+
         request_state.phase = RequestPhase::Abandoned;
         request_state.pending_final = None;
         if request_state.completed_reply.is_none() {

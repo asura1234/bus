@@ -330,6 +330,7 @@ impl BusState {
             })
             .flatten();
         let mut closed = self.group_members(id);
+
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
         if self.request(id).is_some_and(|r| !r.settled()) {
             closed.push(id);

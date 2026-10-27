@@ -5,6 +5,9 @@ use super::*;
 #[path = "lostreply_test.rs"]
 mod lostreply_tests;
 
+#[path = "master_reply_ownership_test.rs"]
+mod ownership;
+
 // Exact background commands from the incident transcripts.
 const A_DISPATCH: &str = r#"/Users/dylanliu/work/bus/target/debug/bus send --room 13389 --as "mobile master" --to wt-close --async --text "Task: clean up the mobile (libtv-app) worktrees." >/dev/null; echo sent"#;
 const C_DISPATCH_1: &str = r#"cd /Users/dylanliu/work/bus; target/debug/bus send --room 568 --as "bus master" --to fix-reply-lost --async --text "$(cat temp/briefs/fix-reply-lost.md)" > temp/briefs/fix-reply-lost.out.json 2>&1"#;
