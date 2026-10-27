@@ -68,7 +68,8 @@ IF rebase_root exists:
 `git fetch origin`
 Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
 `--base "<caller base>"` only when supplied, and always add `--refresh-default --check-branch "<branch>"`.
-This refreshes origin/HEAD with `git remote set-head origin --auto` after the fetch and rechecks protection.
+This discovers origin's live default with `git ls-remote --symref origin HEAD` and rechecks protection.
+An explicit base needs no local tracking commit for that default; only its name is used by the guard.
 Capture its sole stdout line as base. Never refresh/fetch when resuming a paused rebase.
 IF resolution fails: STOP with stderr. Never substitute master/main for a missing origin HEAD.
 The resolver uses origin's symbolic HEAD by default and pins the chosen base to a commit.
