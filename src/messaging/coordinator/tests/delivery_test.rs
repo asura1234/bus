@@ -857,7 +857,7 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
         let original = worker.state.request(id).unwrap();
         assert_eq!(original.phase, RequestPhase::Completed);
         assert_eq!(original.provider_turn_id.as_deref(), Some(turn));
-        assert_eq!(original.pending_final.as_ref().unwrap().text, "real final");
+        assert_eq!(original.reply().unwrap().text, "real final");
     }
     assert_eq!(worker.state.room(room).unwrap().unread_count, 2);
     assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
@@ -1289,7 +1289,7 @@ fn text_typed_into_a_turn_the_agent_began_itself_binds_to_that_turn() {
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert_eq!(settled.pending_final.as_ref().unwrap().text, "Answered");
+    assert_eq!(settled.reply().unwrap().text, "Answered");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

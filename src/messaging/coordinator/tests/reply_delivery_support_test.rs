@@ -846,7 +846,7 @@ impl Delivery {
                 .state()
                 .requests()
                 .filter(|r| r.room_id == room.id && r.phase == RequestPhase::Completed)
-                .filter_map(|r| r.pending_final.as_ref().map(|p| p.callback_id.clone()))
+                .filter_map(|r| r.reply().map(|p| p.callback_id.clone()))
                 .collect();
             let sends: BTreeSet<_> = self
                 .state()
@@ -876,7 +876,7 @@ impl Delivery {
             RequestPhase::Completed,
             "request {request:?}: {r:?}"
         );
-        assert_eq!(r.pending_final.as_ref().unwrap().text, text);
+        assert_eq!(r.reply().unwrap().text, text);
         self.assert_publications();
         for room in self.state().rooms() {
             assert_eq!(

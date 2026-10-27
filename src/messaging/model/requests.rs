@@ -191,6 +191,9 @@ impl BusState {
     /// `blocked_unanswered`). This only reports; the coordinator closes queued
     /// stalls before delivery, while typed work needs explicit recovery.
     pub(crate) fn stall_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
+        if request.settled() {
+            return None;
+        }
         // A member typed into another request's turn shares that turn's fate.
         let lead = match request.group {
             Some(lead) => self.requests.get(&lead).unwrap_or(request),
@@ -305,10 +308,7 @@ impl BusState {
     /// nobody answered in `message status`, without ending `send --async`,
     /// which waits on through a block by design.
     pub(crate) fn blocked_unanswered(&self, request: &Request, now_ms: u64) -> bool {
-        if matches!(
-            request.phase,
-            RequestPhase::Completed | RequestPhase::Abandoned
-        ) {
+        if request.settled() {
             return false;
         }
         self.agents.get(&request.agent_id).is_some_and(|agent| {
@@ -323,7 +323,7 @@ impl BusState {
 
     /// Whether `request`'s agent took the message and finished its turn: the
     /// agent was seen Working or Blocked, or its provider reported the turn,
-    /// after Bus submitted the message, and has been seen Idle since. A captured reply also counts. Status
+    /// after Bus submitted the message, and has been seen Idle since. A captured provider final also counts. Status
     /// transitions decide it, not reply capture, which can miss a reply.
     pub(crate) fn turn_ended(&self, request: &Request) -> bool {
         if request.phase == RequestPhase::Completed {
@@ -663,7 +663,8 @@ impl BusState {
     pub(crate) fn groups(&self) -> std::collections::BTreeMap<RequestId, Vec<RequestId>> {
         let mut groups = std::collections::BTreeMap::<RequestId, Vec<RequestId>>::new();
         for request in self.requests() {
-            if let Some(lead) = request.group {
+            let lead = request.reply_key();
+            if lead != request.id {
                 groups.entry(lead).or_default().push(request.id);
             }
         }

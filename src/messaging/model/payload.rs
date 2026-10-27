@@ -99,6 +99,10 @@ impl BusState {
                 format!("{header}\n{text}")
             };
         }
+        text = format!(
+            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']\n{text}",
+            request.prompt.id.0, request.prompt.id.0, request.agent_id.0,
+        );
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)
     }

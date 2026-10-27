@@ -455,7 +455,9 @@ recipient's turn has ended (`turn_ended: true` in `message status`) once,
 after the message was submitted, Bus saw it Working or Blocked or its provider
 reported the turn start for the message, and Bus has seen it Idle since. The
 provider's turn start covers a turn that starts and ends between two status
-polls. A captured reply also counts. An ended turn is not yet done: a message
+polls. A captured provider final also counts. A recipient can instead complete its own
+request mid-turn with `send --reply-to MESSAGE_ID --as AGENT --text ANSWER`;
+that completion does not report the provider turn as ended. An ended turn is not yet done: a message
 typed into a running turn reads ended for a few seconds while Bus holds the
 group's reply, and the command waits until it is `replied`. A turn that ended without a captured
 reply is `settling: true` for a few seconds while Bus waits for a late reply;
@@ -557,7 +559,7 @@ The per-agent `stage` explains how far delivery progressed:
 | `queued` | The request is persisted but has not begun submission. |
 | `submitting` | Bus is writing the request to the provider terminal. |
 | `awaiting_start` | Submission occurred, but no trusted provider turn start is bound yet. |
-| `delivered` | A trusted provider turn started and Bus is awaiting its final reply. |
+| `delivered` | A trusted provider turn started and Bus is awaiting an explicit answer or turn final. |
 | `joined` | The message joined another message's turn; see `group`. |
 | `replied` | Bus recorded the final reply for that recipient. |
 | `abandoned` | The request is closed and will not run later; `reason` explains a queued delivery failure. |
@@ -668,6 +670,28 @@ inspect the agent's transcript and composer and clear any leftover draft.
 
 ### Steer an agent while it works
 
+Every delivered request includes its message ID and a reply command naming the
+recipient. Answer that specific request as soon as its work is done, including
+inside a standing watch loop or any other turn that stays open:
+
+```sh
+bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text "The requested work is done."
+```
+
+This completes only your recipient request and posts your answer once in the
+original sender's conversation. It infers the room and sender: do not pass
+`--room`, `--to`, `--queue`, `--async` or attachments. You must be a recipient
+of that message. An identical repeated reply is a no-op; a different answer to
+an already answered request is rejected. A separate ordinary `bus send`, even
+one whose text mentions the message ID, does not complete the original request.
+
+The answer is durable across restart and remains successful if the agent is
+later deleted. `message status` can report `complete: true` and `stage: replied`
+while `turn_ended: false`: answering a request does not end its provider turn.
+For multiple recipients, the whole message becomes complete only after every
+recipient request settles. Use this reply command instead of posting an
+uncorrelated answer or keeping the sender waiting until your watch loop ends.
+
 You never have to wait for an agent to finish before correcting it. A message
 sent to an agent that is working on a Bus message is typed into its terminal
 right away, the way a person types while an agent works, and the provider takes
@@ -677,12 +701,15 @@ it into the running turn:
 bus send --room "$room_id" --to "$agent_id" --text "Use the streaming API instead."
 ```
 
-The message joins the agent's current group: the message that started the turn
-plus every message typed into it. The turn's final reply belongs to the whole
-group. `message status` and `wait` for any message in the group return that
-shared reply and `complete: true` once the group settles; each joined request
+The message joins the agent's current turn group: the message that started the
+turn plus every message typed into it. Explicit `--reply-to` answers complete
+their own requests immediately and leave that turn anchor and later steering
+intact. The eventual turn final answers only requests still outstanding; it
+never replaces earlier individual answers. Requests answered by that final
+share its reply and become complete once the group settles; each joined request
 reports the first message's request ID as `group`. The room history shows the
-group's messages stacked, with one reply under the newest.
+group's outstanding messages stacked, with their shared final under the newest;
+individual correlated answers stay with their original messages.
 
 Verified live with each provider:
 

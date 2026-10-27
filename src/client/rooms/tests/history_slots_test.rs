@@ -932,12 +932,13 @@ fn a_steered_group_shows_its_messages_stacked_with_one_reply() {
         let record = &mut json["requests"][id.0.to_string()];
         record["phase"] = "completed".into();
         record["completed_at_ms"] = 3_000.into();
-        record["pending_final"] = serde_json::json!({
+        record["completed_reply"] = serde_json::json!({"group":record["group"].as_u64().unwrap_or(record["id"].as_u64().unwrap()),"content":serde_json::json!({
             "callback_id": "final", "text": "streaming parser written",
             "received_at_ms": 3_000, "provider_session_id": "s", "provider_turn_id": "t"
-        });
+        })});
     }
     json["requests"][ids[1].0.to_string()]["group"] = ids[0].0.into();
+    json["requests"][ids[1].0.to_string()]["completed_reply"]["group"] = ids[0].0.into();
     json["requests"][ids[1].0.to_string()]["steered"] = true.into();
     snapshot.state = serde_json::from_value(json).unwrap();
     snapshot.revision += 1;

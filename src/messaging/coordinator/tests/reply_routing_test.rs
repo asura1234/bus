@@ -1077,7 +1077,7 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
         state
             .see_worker_reply(member, f.orch, io::now_ms())
             .unwrap();
-        let original = state.request(member).unwrap().pending_final.clone();
+        let original = state.request(member).unwrap().reply().cloned();
         for (index, mut invalid) in [
             callback(
                 0,
@@ -1126,8 +1126,8 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
             },
             None,
         ));
-        assert_eq!(state.request(member).unwrap().pending_final, original);
-        assert_eq!(state.request(lead).unwrap().pending_final, original);
+        assert_eq!(state.request(member).unwrap().reply().cloned(), original);
+        assert_eq!(state.request(lead).unwrap().reply().cloned(), original);
         state
             .route_worker_replies(io::now_ms() + 10_000, &BTreeSet::new())
             .unwrap();
@@ -1205,8 +1205,7 @@ fn reply_routing_format_2_upgrade_keeps_old_history_without_waking_old_replies()
             .state
             .request(source)
             .unwrap()
-            .pending_final
-            .as_ref()
+            .reply()
             .map(|r| r.text.as_str()),
         Some("Old verdict")
     );
@@ -1357,5 +1356,45 @@ fn identity_batched_worker_notification_has_exactly_one_sender_line() {
     assert!(
         payload.contains(&format!("rev-claude8 (room {}):", f.room.0)),
         "{payload}"
+    );
+}
+
+#[test]
+fn reply_to_each_request_routes_once_and_reading_one_does_not_spend_the_other() {
+    let mut f = Fixture::new();
+    let first = f.send(Author::Agent(f.orch), "first watcher task");
+    let second = f.send(Author::Agent(f.orch), "second watcher task");
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["requests"][first.0.to_string()]["phase"] = "active".into();
+    document["requests"][second.0.to_string()]["phase"] = "active".into();
+    document["requests"][second.0.to_string()]["group"] = first.0.into();
+    let mut state: BusState = serde_json::from_value(document).unwrap();
+    let first_message = state.request(first).unwrap().prompt.id;
+    let second_message = state.request(second).unwrap().prompt.id;
+    let now = io::now_ms() - 4000;
+    state
+        .answer_message(first_message, f.agent, "first answer".into(), now)
+        .unwrap();
+    state
+        .answer_message(second_message, f.agent, "second answer".into(), now)
+        .unwrap();
+    state.see_worker_reply(first, f.orch, now).unwrap();
+    state
+        .route_worker_replies(io::now_ms(), &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let notices = f.notices();
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].prompt.text.contains("second answer"));
+    assert!(!notices[0].prompt.text.contains("first answer"));
+    let mut state = f.worker.state.clone();
+    state
+        .route_worker_replies(io::now_ms() + 4000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    assert_eq!(
+        f.notices().len(),
+        1,
+        "a repeated routing pass must not duplicate the answer"
     );
 }

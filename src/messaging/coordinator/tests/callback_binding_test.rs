@@ -53,7 +53,7 @@ fn empty_stop_settles_without_sender_errors_or_orchestrator_notices() {
                 .unwrap();
             let result = worker.state.request(request).unwrap();
             assert_eq!(result.phase, RequestPhase::Completed);
-            assert_eq!(result.pending_final.as_ref().unwrap().text, "");
+            assert_eq!(result.reply().unwrap().text, "");
             assert!(result.failure_reason.is_none());
             assert!(worker
                 .state
@@ -125,8 +125,7 @@ fn empty_stop_preexisting_retained_record_recovers_after_restart_by_turn_id() {
             .state
             .request(request)
             .unwrap()
-            .pending_final
-            .as_ref()
+            .reply()
             .unwrap()
             .provider_turn_id
             .as_deref(),
@@ -383,14 +382,7 @@ fn same_turn_claude_input_is_progress_without_exposing_content() {
         );
         consume(&mut worker, agent, &dir);
         assert_eq!(
-            worker
-                .state
-                .request(request)
-                .unwrap()
-                .pending_final
-                .as_ref()
-                .unwrap()
-                .text,
+            worker.state.request(request).unwrap().reply().unwrap().text,
             "PRIVATE_REPLY"
         );
         assert!(worker
@@ -726,19 +718,9 @@ fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_
             RequestPhase::Completed,
             "next_started={next_started}"
         );
+        assert_eq!(next_request.reply().unwrap().text, "Second reply.");
         assert_eq!(
-            next_request.pending_final.as_ref().unwrap().text,
-            "Second reply."
-        );
-        assert_eq!(
-            worker
-                .state
-                .request(source)
-                .unwrap()
-                .pending_final
-                .as_ref()
-                .unwrap()
-                .text,
+            worker.state.request(source).unwrap().reply().unwrap().text,
             "Waiting for CI."
         );
         drop(worker);

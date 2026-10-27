@@ -108,7 +108,7 @@ impl BusState {
         }
         for (key, group) in replies {
             let source = group[0];
-            let Some(reply) = source.pending_final.as_ref() else {
+            let Some(reply) = source.reply() else {
                 continue;
             };
             let messages = group

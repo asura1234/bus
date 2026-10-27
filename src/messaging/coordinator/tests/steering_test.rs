@@ -1,3 +1,4 @@
+use super::tests::support::delivered_test_prompt;
 use super::*;
 use crate::{
     agents::providers::spool as callbacks,
@@ -32,6 +33,9 @@ mod delivery_batch_tests;
 
 #[path = "dispatch_shell_hold_test.rs"]
 mod dispatch_shell_hold_tests;
+
+#[path = "reply_to_test.rs"]
+mod reply_to_tests;
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -238,7 +242,10 @@ impl Fixture {
         }
     }
 
-    fn record(&self, value: Value) {
+    fn record(&self, mut value: Value) {
+        if let Some(prompt) = value.get("prompt").and_then(Value::as_str) {
+            value["prompt"] = json!(delivered_test_prompt(&self.worker.state, prompt));
+        }
         callbacks::append(
             &self.dir.join("callbacks/launch"),
             "launch",
@@ -262,14 +269,7 @@ impl Fixture {
 
     fn reply(&self, id: RequestId) -> Option<String> {
         let request = self.request(id);
-        (request.phase == RequestPhase::Completed)
-            .then(|| {
-                request
-                    .pending_final
-                    .as_ref()
-                    .map(|reply| reply.text.clone())
-            })
-            .flatten()
+        request.reply().map(|reply| reply.text.clone())
     }
 
     fn error(&self) -> Option<String> {

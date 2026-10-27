@@ -170,7 +170,7 @@ impl BusState {
             // Coalesced and steered members share the lead's submission and
             // final. The member proves who awaits the answer; the lead proves
             // which provider turn owns it, including its callback boundary.
-            let Some(lead) = self.request(reply_key(r)) else {
+            let Some(lead) = self.request(r.group.unwrap_or(r.id)) else {
                 return false;
             };
             r.agent_id == callback.agent_id
@@ -180,9 +180,12 @@ impl BusState {
                     .is_some_and(|b| callback.sequence > b)
                 && (r.phase == RequestPhase::Abandoned
                     || r.phase == RequestPhase::Completed
+                        && r.completed_reply
+                            .as_ref()
+                            .is_some_and(|reply| reply.group.is_some())
                         && lead.trusted_start_bound
                         && matches!(&callback.kind, CallbackEventKind::Final { text }
-                            if r.pending_final.as_ref().is_some_and(|reply| reply.text != *text)))
+                            if r.reply().is_some_and(|reply| reply.text != *text)))
                 && self.reply_orchestrator(r).is_some()
                 && lead.expected_launch_id.as_deref() == Some(&callback.launch_id)
                 && lead.provider_session_id == callback.provider_session_id
@@ -206,7 +209,7 @@ impl BusState {
             })
             // A reply to a peer-started request belongs to that peer; copying it to the
             // orchestrator duplicated what the worker reports itself (bus-communication-guide.md).
-            .filter(|r| r.pending_final.is_none())
+            .filter(|r| r.reply().is_none())
             .filter(|r| {
                 !r.settled()
                     || !self

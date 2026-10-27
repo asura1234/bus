@@ -13,6 +13,7 @@ mod interrupts;
 mod payload;
 mod provider_failure;
 mod recovery;
+mod replies;
 mod reply_routing;
 mod requests;
 mod rooms;

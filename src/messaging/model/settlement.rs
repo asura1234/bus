@@ -82,7 +82,10 @@ impl BusState {
         let request = self.requests.get(&id)?;
         let hold = request.shell_hold.as_ref()?;
         if !request.has_held_background_reply()
-            || request.settled()
+            || matches!(
+                request.phase,
+                RequestPhase::Completed | RequestPhase::Abandoned
+            )
             || now_ms < hold.since_ms.saturating_add(cap_ms)
         {
             return None;
@@ -142,7 +145,9 @@ impl BusState {
     ) -> Option<RequestId> {
         let mut closed = self.group_members(id);
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        closed.push(id);
+        if self.request(id).is_some_and(|request| !request.settled()) {
+            closed.push(id);
+        }
         let request = self.requests.get_mut(&id)?;
         request.awaiting_background = false;
         request.turn_ended_at_ms = None;
@@ -191,8 +196,10 @@ impl BusState {
         let boundary = previous.submission_boundary;
         for id in self.group_members(lead) {
             if let Some(member) = self.requests.get_mut(&id).filter(|member| {
-                !member.settled()
-                    && (member.id == next || (member.steered && !member.trusted_start_bound))
+                matches!(
+                    member.phase,
+                    RequestPhase::Submitting | RequestPhase::Active
+                ) && (member.id == next || (member.steered && !member.trusted_start_bound))
             }) {
                 member.group = (id != next).then_some(next);
                 member.submission_boundary = boundary;
@@ -469,7 +476,9 @@ impl BusState {
             .flatten();
         let mut closed = self.group_members(id);
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        closed.push(id);
+        if self.request(id).is_some_and(|r| !r.settled()) {
+            closed.push(id);
+        }
         for request in closed {
             if let Some(request) = self.requests.get_mut(&request) {
                 request.failure_reason = Some(reason.clone());

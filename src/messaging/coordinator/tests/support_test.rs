@@ -118,7 +118,7 @@ pub(super) fn native_info(
     .unwrap()
 }
 
-pub(super) fn fixture(
+pub(in crate::messaging::coordinator) fn fixture(
     provider: Provider,
     replies: Vec<Result<ResponseResult, TransportError>>,
 ) -> (
@@ -172,7 +172,12 @@ pub(super) fn fixture(
     (worker, agent, room, dir, calls)
 }
 
-pub(super) fn queue(worker: &mut Worker, room: RoomId, agent: AgentId, text: &str) -> RequestId {
+pub(in crate::messaging::coordinator) fn queue(
+    worker: &mut Worker,
+    room: RoomId,
+    agent: AgentId,
+    text: &str,
+) -> RequestId {
     let mut state = worker.state.clone();
     state.set_draft_text(room, text).unwrap();
     state.set_draft_recipients(room, [agent]).unwrap();
@@ -318,7 +323,11 @@ impl Transport for NativeBoundClose {
     }
 }
 
-pub(super) fn record(dir: &std::path::Path, provider: Provider, value: serde_json::Value) {
+pub(in crate::messaging::coordinator) fn record(
+    dir: &std::path::Path,
+    provider: Provider,
+    value: serde_json::Value,
+) {
     spool_record(dir, provider, value, false);
 }
 
@@ -333,6 +342,11 @@ fn spool_record(
     mut value: serde_json::Value,
     nested_provider: bool,
 ) {
+    if let Some(prompt) = value.get("prompt").and_then(serde_json::Value::as_str) {
+        if let Some(state) = JsonStore::new(dir.join("state.json")).load().ok().flatten() {
+            value["prompt"] = json!(delivered_test_prompt(&state, prompt));
+        }
+    }
     if provider == Provider::Codex {
         // Root interactive Codex callbacks have a transcript; explicit null
         // fixtures model its title/memory background sessions instead.
@@ -353,6 +367,24 @@ fn spool_record(
     .unwrap();
 }
 
+/// Provider fixtures submit the complete frozen delivery, including Bus's correlation header.
+pub(in crate::messaging::coordinator) fn delivered_test_prompt(
+    state: &BusState,
+    prompt: &str,
+) -> String {
+    state
+        .requests()
+        .filter_map(|r| r.submitted_payload.as_ref())
+        .filter(|payload| {
+            payload
+                .split_once('\n')
+                .is_some_and(|(header, body)| header.starts_with("[Bus message ") && body == prompt)
+        })
+        .last()
+        .cloned()
+        .unwrap_or_else(|| prompt.to_owned())
+}
+
 pub(super) fn open_saved_document(document: serde_json::Value) -> (Worker, PathBuf) {
     let dir = std::env::temp_dir().join(format!(
         "bus-worker-saved-{}-{}-{}",
@@ -370,7 +402,7 @@ pub(super) fn open_saved_document(document: serde_json::Value) -> (Worker, PathB
     (worker, dir)
 }
 
-pub(super) fn reopen_saved(dir: &std::path::Path) -> Worker {
+pub(in crate::messaging::coordinator) fn reopen_saved(dir: &std::path::Path) -> Worker {
     Worker::open(
         dir.to_path_buf(),
         Box::new(FakeTransport {
@@ -422,7 +454,7 @@ pub(super) fn claude(event: &str, turn: &str, extra: serde_json::Value) -> serde
     value
 }
 
-pub(super) fn consume(worker: &mut Worker, agent: AgentId, dir: &Path) {
+pub(in crate::messaging::coordinator) fn consume(worker: &mut Worker, agent: AgentId, dir: &Path) {
     worker
         .consume_callbacks(agent, &dir.join("callbacks/launch"))
         .unwrap();

@@ -25,11 +25,11 @@ fn history_with(ui: &mut BusUi, room: RoomId, agent: AgentId, count: usize, need
         let record = &mut json["requests"][id.0.to_string()];
         record["phase"] = "completed".into();
         record["completed_at_ms"] = (1500 + i as u64 * 1000).into();
-        record["pending_final"] = serde_json::json!({
+        record["completed_reply"] = serde_json::json!({"group":record["group"].as_u64().unwrap_or(record["id"].as_u64().unwrap()),"content":serde_json::json!({
             "callback_id": format!("final-{i}"), "text": format!("answer-{i:02}"),
             "received_at_ms": 1500 + i as u64 * 1000,
             "provider_session_id": "session", "provider_turn_id": format!("turn-{i}")
-        });
+        })});
     }
     snapshot.state = serde_json::from_value(json).unwrap();
     snapshot.revision += 1;

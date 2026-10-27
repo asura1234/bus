@@ -47,13 +47,7 @@ fn routing_floor_blocks_inline_event_backfill_but_keeps_recent_and_open_work() {
         .keys()
         .any(|key| key.starts_with(&format!("stalled:{}:", ids[2].0))));
     assert_eq!(
-        state
-            .request(ids[0])
-            .unwrap()
-            .pending_final
-            .as_ref()
-            .unwrap()
-            .text,
+        state.request(ids[0]).unwrap().reply().unwrap().text,
         "peer verdict"
     );
 }
@@ -117,7 +111,7 @@ fn real_format_2_snapshot_first_start_preserves_archive_without_old_wakes() {
         .filter(|r| {
             r.phase == RequestPhase::Completed
                 && matches!(r.prompt.author, Author::Agent(_))
-                && r.pending_final.is_some()
+                && r.reply().is_some()
                 && r.completed_at_ms.is_some_and(|at| at < incident_cutoff)
         })
         .collect();

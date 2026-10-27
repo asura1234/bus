@@ -5,7 +5,7 @@ use super::{
     History, LayoutKey, Line, LinkScope, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone,
 };
 use crate::messaging::model::{
-    AgentId, Author, BusState, Prompt, Request, RequestId, RequestPhase, Room, RoomId,
+    AgentId, Author, BusState, Prompt, Request, RequestId, Room, RoomId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -252,9 +252,14 @@ impl History {
             let request = exchange.requests.get(agent_id).copied();
             // A group's messages share one reply per room, shown under that
             // room's newest visible message even when the group spans MASTER.
-            if let Some(request) = request {
+            if let Some(request) = request.filter(|request| {
+                request
+                    .completed_reply
+                    .as_ref()
+                    .is_none_or(|reply| reply.group.is_some())
+            }) {
                 let members = groups
-                    .get(&request.group.unwrap_or(request.id))
+                    .get(&request.reply_key())
                     .map_or(&[][..], Vec::as_slice);
                 let newest = members.iter().rev().find(|id| {
                     state
@@ -544,11 +549,7 @@ fn exchange_reply<'a>(
     agent: AgentId,
 ) -> (std::borrow::Cow<'a, str>, Option<RequestId>) {
     if let Some(request) = request {
-        if let Some(reply) = request
-            .pending_final
-            .as_ref()
-            .filter(|_| request.phase == RequestPhase::Completed)
-        {
+        if let Some(reply) = request.reply() {
             return (std::borrow::Cow::Borrowed(&reply.text), Some(request.id));
         }
         let submission = request
@@ -585,12 +586,8 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         outcome.uncertain_outcome.hash(&mut hash);
         outcome.failure_reason.hash(&mut hash);
         outcome.submission_error.hash(&mut hash);
-        if request.phase == RequestPhase::Completed {
-            request
-                .pending_final
-                .as_ref()
-                .map(|r| r.received_at_ms)
-                .hash(&mut hash);
+        if request.reply().is_some() {
+            request.reply().map(|r| r.received_at_ms).hash(&mut hash);
         }
     }
     room.latest_prompt.as_ref().map(|p| p.id.0).hash(&mut hash);
@@ -636,11 +633,8 @@ pub(in crate::client::rooms) fn reply(
     room: RoomId,
     id: RequestId,
 ) -> Option<(AgentId, &str)> {
-    if let Some(request) = state
-        .request(id)
-        .filter(|r| r.room_id == room && r.phase == RequestPhase::Completed)
-    {
-        if let Some(reply) = &request.pending_final {
+    if let Some(request) = state.request(id).filter(|r| r.room_id == room) {
+        if let Some(reply) = request.reply() {
             return Some((request.agent_id, &reply.text));
         }
     }
