@@ -45,6 +45,9 @@ pub(super) enum Tone {
 #[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub(super) struct Line {
     pub text: String,
+    /// Addressing derived from this message's author, recipients and explicit
+    /// developer mentions before rendering. It never depends on header text.
+    pub to_developer: bool,
     pub action: Option<Action>,
     pub tone: Tone,
     pub spans: Vec<(String, Tone)>,
@@ -68,6 +71,17 @@ pub(super) struct Line {
     /// Message text rows, whose URLs and file paths are clickable.
     pub links: Option<LinkScope>,
     anchor: RowAnchor,
+}
+
+impl Line {
+    /// Empty filtered searches select one header per message, even when wrapped.
+    pub(super) fn starts_message(&self) -> bool {
+        self.anchor.position == 0
+            && matches!(
+                self.anchor.kind,
+                RowKind::PromptHeader | RowKind::ReplyHeader
+            )
+    }
 }
 
 /// Relative paths in a message resolve against `cwd`, its authoring agent's

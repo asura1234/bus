@@ -306,6 +306,7 @@ fn line_from_buffer(
         links: None,
         thumbnail: None,
         raw_markdown: Some((request, Arc::clone(source))),
+        to_developer: false,
         // Set by `mark_soft_wraps` once every row of the message exists.
         continued: false,
         rejoin_space: false,
@@ -333,6 +334,7 @@ fn literal_reply_lines(
             links: None,
             thumbnail: None,
             raw_markdown: Some((request, Arc::clone(source))),
+            to_developer: false,
             continued: index > 0 && rows[index - 1].end == row.start,
             rejoin_space: false,
             copy_from: indent.len(),

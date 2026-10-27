@@ -96,7 +96,9 @@ impl BusUi {
             .saturating_sub(usize::from(view.history.height));
         view.search_matches = chat_search
             .as_ref()
-            .map(|search| super::super::chat_search::find_matches(content, &search.query))
+            .map(|search| {
+                super::super::chat_search::find_matches(content, &search.query, search.you_only)
+            })
             .unwrap_or_default();
         update_chat_search(
             &mut self.chat_search,

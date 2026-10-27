@@ -399,7 +399,7 @@ impl BusUi {
 pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: u16, count: usize) {
     let panel = view.search_box;
     if panel.height > 0 {
-        let counter = match (search.query.is_empty(), count) {
+        let counter = match (search.query.is_empty() && !search.you_only, count) {
             (true, _) => String::new(),
             (false, 0) => "no matches".to_owned(),
             (false, _) => format!("{}/{count}", search.current + 1),
@@ -440,18 +440,18 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
             false,
             true,
         );
-        // The longest hint that fits a narrow pane.
+        // Keep the filter and its state visible even in a narrow pane.
+        let toggle = format!(
+            "Tab → You only: {}",
+            if search.you_only { "on" } else { "off" }
+        );
+        let available = usize::from(width)
+            .saturating_sub(unicode_width::UnicodeWidthStr::width(toggle.as_str()) + 3);
         let hint = SEARCH_HINTS
             .iter()
-            .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= usize::from(width))
-            .unwrap_or(&SEARCH_HINTS[2]);
-        view.row(
-            Rect::new(x, field_y + 3, width, 1),
-            *hint,
-            None,
-            false,
-            true,
-        );
+            .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= available);
+        let hint = hint.map_or(toggle.clone(), |hint| format!("{toggle} · {hint}"));
+        view.row(Rect::new(x, field_y + 3, width, 1), hint, None, false, true);
         let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
         view.cursor = Some(crate::protocol::wire::CursorState {
             x: x + label_width + 1 + typed.min(inner.saturating_sub(1)),
