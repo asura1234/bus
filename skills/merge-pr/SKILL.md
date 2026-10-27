@@ -123,7 +123,7 @@ round is opened.
 -- Why 🟢 cannot be a release condition, and why this path does not need `--admin`, are in guide.md
 --   "The merge gate is 'the author adjudicated', not 'the reviewer agreed'".
 
--- Sections 2/5 advance HEAD and therefore loop; keep fixing until every required reviewer is Ready. Hold and escalate sharp reviewer disagreements, goal changes, or destructive or outward-facing actions without existing authorization.
+-- Sections 2/5 advance HEAD and therefore loop; continue until the merge conditions in section 6 hold, with no round cap. Hold and escalate sharp reviewer disagreements, goal changes, or destructive or outward-facing actions without existing authorization.
 -- **The convergence criterion is "nothing left to handle", not "someone reviewed"**; the loop must include one `fetch` (guide.md).
 
 ========== 3. Wait for CI to converge (wait last) ==========
