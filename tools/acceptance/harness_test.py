@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 E2E = ROOT / "temp/e2e"
 WORKSPACE = E2E / "workspace"
 SCRUB_PREFIXES = ("BUS_", "HERDR_", "CLAUDE_CODE_")
-SCRUB_NAMES = ("CLAUDECODE",)
+SCRUB_NAMES = ("CLAUDECODE", "CODEX_HOME", "CLAUDE_CONFIG_DIR")
 
 class CliError(AssertionError):
     pass
@@ -38,7 +38,9 @@ def bus_argv(binary):
 
 def scrubbed_env(environ, data_dir):
     env = {k: v for k, v in environ.items() if not k.startswith(SCRUB_PREFIXES) and k not in SCRUB_NAMES}
-    env.update(BUS_DATA_DIR=str(data_dir), TERM="xterm-256color")
+    home = str(Path(data_dir).with_name(Path(data_dir).name + "-home"))
+    env.update(BUS_DATA_DIR=str(data_dir), HOME=home, USERPROFILE=home, TERM="xterm-256color")
+    env.setdefault("TEST_BUS_PROTECTED_HOME", environ.get("HOME", str(Path.home())))
     return env
 
 
@@ -55,14 +57,32 @@ class Bus:
     """One throwaway Bus: a TUI client in a pty plus the dev CLI against its data dir."""
 
     def __init__(self, binary, run_dir, env, workspace=None):
-        self.binary, self.run_dir, self.env = binary, run_dir, env
+        self.binary, self.run_dir, self.env = binary, run_dir, dict(env)
+        self.env.setdefault("TEST_BUS_PROTECTED_HOME", os.environ.get("TEST_BUS_PROTECTED_HOME", str(Path.home())))
         self.workspace = Path(workspace) if workspace is not None else WORKSPACE
         self.data = Path(env["BUS_DATA_DIR"])
         self.child = None
         self.master = None
         self.pump_thread = None
 
+    def prepare_skills(self):
+        home = Path(self.env["HOME"])
+        protected = Path(self.env["TEST_BUS_PROTECTED_HOME"])
+        if not home.is_absolute() or home.resolve() == protected.resolve():
+            raise AssertionError("test isolation refused: acceptance Bus needs its own HOME")
+        result = subprocess.run([str(self.binary), "skills", "status"], env=self.env,
+                                capture_output=True, text=True, check=True)
+        report = json.loads(result.stdout)
+        if (report.get("answer") or {}).get("bundle_hash") == report["bundle_hash"]:
+            return
+        path = home / ".local/share/bus/settings.json"
+        settings = json.loads(path.read_text()) if path.exists() else {}
+        settings["skills_answer"] = {"accepted": False, "bundle_hash": report["bundle_hash"]}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings))
+
     def start(self):
+        self.prepare_skills()
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 160, 0, 0))
         tty_log = open(self.run_dir / "tui.log", "ab")
