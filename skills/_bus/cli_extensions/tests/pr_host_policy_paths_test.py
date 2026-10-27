@@ -1,6 +1,5 @@
 """Behavioral probes for repository policy resolution."""
 
-import json
 import os
 import subprocess
 import sys
@@ -33,8 +32,8 @@ def test_profile_preserves_policy_for_main_worktree_path(tmp_path, monkeypatch, 
     repo = tmp_path / name
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     expected = {"gate_command": "just ci", "require_exact_head_gate": True}
-    profile = repo / "temp/.bus/repo-profile.json"
-    profile.parent.mkdir(parents=True)
-    profile.write_text(json.dumps({"policy": expected}), encoding="utf-8")
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text('gate_command = "just ci"\nrequire_exact_head_gate = true\n', encoding="utf-8")
 
     assert pr_host.repository_policy(repo) == expected

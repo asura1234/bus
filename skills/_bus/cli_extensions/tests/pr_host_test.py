@@ -654,30 +654,33 @@ def test_profile_reads_main_worktree_and_defaults(tmp_path):
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     assert pr_host.repository_policy(repo) == {"gate_command": None, "require_exact_head_gate": False}
-    profile = repo / "temp/.bus/repo-profile.json"
-    profile.parent.mkdir(parents=True)
-    profile.write_text(json.dumps({"policy": {"gate_command": "just ci", "require_exact_head_gate": True}}))
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text('gate_command = "just ci"\nrequire_exact_head_gate = true\n')
     assert pr_host.repository_policy(repo) == {"gate_command": "just ci", "require_exact_head_gate": True}
+    assert not (repo / "temp").exists()
 
 
-def test_profile_linked_worktree_reads_main_profile(tmp_path):
+def test_profile_scans_linked_worktree_without_writing_main_cache(tmp_path):
     repo, linked = tmp_path / "repo", tmp_path / "linked"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture", "--allow-empty"], check=True)
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text('gate_command = "custom gate"\nrequire_exact_head_gate = true\n')
+    subprocess.run(["git", "-C", str(repo), "add", ".bus/repo.toml"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"], check=True)
     subprocess.run(["git", "-C", str(repo), "worktree", "add", "-qb", "feat/linked", str(linked)], check=True)
-    profile = repo / "temp/.bus/repo-profile.json"
-    profile.parent.mkdir(parents=True)
-    profile.write_text(json.dumps({"policy": {"gate_command": "custom gate", "require_exact_head_gate": True}}))
-    assert pr_host.repository_policy(linked)["require_exact_head_gate"] is True
+    assert pr_host.repository_policy(linked) == {"gate_command": "custom gate", "require_exact_head_gate": True}
+    assert not (repo / "temp").exists() and not (linked / "temp").exists()
 
 
 @pytest.mark.parametrize("policy", [{"require_exact_head_gate": "false"}, {"gate_command": []}])
 def test_profile_rejects_wrong_policy_types(tmp_path, policy):
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    profile = repo / "temp/.bus/repo-profile.json"
-    profile.parent.mkdir(parents=True)
-    profile.write_text(json.dumps({"policy": policy}))
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text("".join(f"{key} = {json.dumps(value)}\n" for key, value in policy.items()))
     with pytest.raises(HostError):
         pr_host.repository_policy(repo)
 
@@ -719,3 +722,52 @@ def test_recorded_codeup_view_selects_latest_source_patch_set(codeup_env):
     latest = next(p["commitId"] for p in patches if (p["relatedMergeItemType"], p["versionNo"]) == ("MERGE_SOURCE", 2))
     assert latest == HEAD
     assert latest not in stale, "fixture cannot distinguish older or target patch sets"
+
+
+def test_profile_honors_checked_in_override_without_scan_cache(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text('gate_command = "just ci"\nrequire_exact_head_gate = true\n')
+    assert pr_host.repository_policy(repo) == {"gate_command": "just ci", "require_exact_head_gate": True}
+    assert not (repo / "temp").exists()
+
+
+def test_profile_ignores_stale_cache_without_rewriting_it(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text('gate_command = "old gate"\nrequire_exact_head_gate = false\n')
+    scanner = Path(pr_host.__file__).resolve().parents[2] / "worktree-new/scripts/repo_profile.py"
+    subprocess.run([sys.executable, str(scanner), "scan", "--repo", str(repo)], check=True, capture_output=True)
+    cache = repo / "temp/.bus/repo-profile.json"
+    before = cache.read_bytes()
+    override.write_text('gate_command = "just ci"\nrequire_exact_head_gate = true\n')
+    assert pr_host.repository_policy(repo) == {"gate_command": "just ci", "require_exact_head_gate": True}
+    assert cache.read_bytes() == before
+
+
+@pytest.mark.parametrize("layout", [".claude/skills", ".agents/skills"])
+def test_profile_cli_uses_installed_schema_owner(tmp_path, layout):
+    import shutil
+
+    support = Path(pr_host.__file__).resolve().parent
+    skills = tmp_path / layout
+    installed = skills / "_bus/cli_extensions"
+    installed.mkdir(parents=True)
+    for filename in ("pr_host.py", "pr_host_common.py", "pr_host_codeup.py"):
+        shutil.copyfile(support / filename, installed / filename)
+    source = support.parents[1] / "worktree-new/scripts"
+    shutil.copytree(source, skills / "worktree-new/scripts", ignore=shutil.ignore_patterns("__pycache__", "tests"))
+    repo = tmp_path / "foreign repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text('gate_command = "just ci"\nrequire_exact_head_gate = true\n')
+    done = subprocess.run([sys.executable, str(installed / "pr_host.py"), "profile"], cwd=repo,
+                          text=True, capture_output=True)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == {"policy": {"gate_command": "just ci", "require_exact_head_gate": True}}
+    assert not (repo / "temp").exists()

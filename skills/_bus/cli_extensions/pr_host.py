@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -160,26 +159,23 @@ def _codeup_only(host, command: str):
 
 
 def repository_policy(repo: Path | None = None) -> dict:
-    """Read policy from the main worktree; missing profiles use upstream defaults."""
-    done = subprocess.run(["git", "worktree", "list", "--porcelain", "-z"], cwd=repo,
-                          capture_output=True, check=False)
-    if done.returncode or not done.stdout.startswith(b"worktree "):
-        raise HostError("Cannot resolve the target repository's main worktree")
-    main = Path(os.fsdecode(done.stdout.split(b"\0", 1)[0].removeprefix(b"worktree ")))
-    path = main / "temp/.bus/repo-profile.json"
-    policy = {}
-    if path.is_file():
-        try:
-            policy = json.loads(path.read_text(encoding="utf-8"))["policy"]
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise HostError("Malformed repository profile") from error
-    if not isinstance(policy, dict):
-        raise HostError("Malformed repository policy")
-    command = policy.get("gate_command")
-    required = policy.get("require_exact_head_gate", False)
-    if (command is not None and (not isinstance(command, str) or not command.strip())) or type(required) is not bool:
-        raise HostError("Invalid gate_command or require_exact_head_gate policy")
-    return {"gate_command": command, "require_exact_head_gate": required}
+    """Read fresh policy through the repository-profile schema owner."""
+    scanner = Path(__file__).resolve().parents[2] / "worktree-new/scripts/repo_profile.py"
+    target = Path(repo).resolve() if repo is not None else Path.cwd()
+    try:
+        done = subprocess.run(
+            [sys.executable, str(scanner), "scan", "--no-cache", "--repo", str(target)],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError as error:
+        raise HostError(f"Cannot run repository profile scanner: {error}") from error
+    if done.returncode:
+        raise HostError(f"Repository profile scan failed: {done.stderr.strip()}")
+    try:
+        policy = json.loads(done.stdout)["policy"]
+        return {key: policy[key] for key in ("gate_command", "require_exact_head_gate")}
+    except (ValueError, KeyError, TypeError) as error:
+        raise HostError("Repository profile scanner returned invalid policy") from error
 
 
 def run(args: argparse.Namespace, host) -> object:
