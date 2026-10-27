@@ -163,7 +163,11 @@ fn failed_provider_turn_closes_its_group_and_releases_the_queue() {
 #[test]
 fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
     for provider in [Provider::Cursor, Provider::ClaudeCode] {
-        let expected = RequestPhase::Abandoned;
+        let expected = if provider == Provider::ClaudeCode {
+            RequestPhase::Completed
+        } else {
+            RequestPhase::Abandoned
+        };
         let mut fixture = Fixture::new(provider);
         let lead = running(&mut fixture, "review this change", "turn-1");
         let next = fixture.send("review the next change", true);
@@ -176,18 +180,26 @@ fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
             fixture.record(json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn-1","text":"Checking.Ready","transcript_path":transcript}));
             fixture.record(json!({"hook_event_name":"stop","conversation_id":"session","generation_id":"turn-1","status":"completed"}));
         } else {
-            // A textless Stop ends the turn without inventing an answer.
+            // A completed Claude hook with no assistant text is an empty final.
             fixture.record(
                 json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1"}),
             );
         }
         fixture.consume();
         fixture.status(RuntimeStatus::Idle);
-        assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
-        fixture.now = fixture.request(lead).turn_ended_at_ms.unwrap() + CALLBACK_GRACE_MS + 1;
+        assert_eq!(
+            fixture.request(lead).phase,
+            if provider == Provider::ClaudeCode {
+                expected
+            } else {
+                RequestPhase::Active
+            }
+        );
+        fixture.now += CALLBACK_GRACE_MS;
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
         assert_eq!(fixture.request(lead).phase, expected, "{provider:?}");
+
 
         if provider == Provider::ClaudeCode {
             assert_eq!(fixture.request(lead).reply().unwrap().text, "");

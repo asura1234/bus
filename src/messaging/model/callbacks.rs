@@ -348,13 +348,6 @@ impl BusState {
                 if request.pending_final.is_some() {
                     return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
                 }
-                if text.trim().is_empty() {
-                    if let Some(request) = self.requests.get_mut(&request_id) {
-                        request.turn_ended_at_ms = Some(callback.occurred_at_ms);
-                        request.awaiting_background = false;
-                    }
-                    return CallbackDisposition::AcceptedProgress;
-                }
                 if turn_key
                     .as_ref()
                     .is_some_and(|key| self.consumed_provider_turns.contains(key))

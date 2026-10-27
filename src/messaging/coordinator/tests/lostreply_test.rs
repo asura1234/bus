@@ -611,24 +611,6 @@ fn a_recorded_turn_claims_steering_without_borrowing_another_turns_answer() {
 }
 
 #[test]
-fn a_textless_stop_without_owned_work_does_not_invent_an_empty_answer() {
-    let mut f = orchestrator();
-    let lead = running(&mut f, "answer the question", "turn-1");
-    stop(&f, "turn-1", "", &[]);
-    f.consume();
-    assert!(f.reply(lead).is_none());
-    f.status(RuntimeStatus::Idle);
-    f.now = f.request(lead).turn_ended_at_ms.unwrap() + crate::messaging::model::TURN_SETTLE_MS + 1;
-    f.status(RuntimeStatus::Idle);
-    f.consume();
-    assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
-    assert_eq!(
-        f.request(lead).failure_reason.as_deref(),
-        Some("reply_not_captured")
-    );
-}
-
-#[test]
 fn a_changed_late_master_final_is_visible_while_new_work_awaits_its_answer() {
     for next_is_bound in [true, false] {
         let mut f = orchestrator();
