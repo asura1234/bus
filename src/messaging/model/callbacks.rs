@@ -408,13 +408,12 @@ impl BusState {
             (true, Some(error)) => {
                 let (reason, message) = super::settlement::provider_error_outcome(&error);
                 let at_ms = callback.occurred_at_ms;
-                if self
-                    .close_turn_with_reason(request_id, at_ms, reason)
-                    .is_err()
-                {
-                    return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+                match self.close_turn_with_reason(request_id, at_ms, reason) {
+                    Ok(closed) => closed.then_some(message),
+                    Err(_) => {
+                        return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest)
+                    }
                 }
-                message
             }
             (true, None) => {
                 if self
@@ -423,17 +422,19 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 }
-                message
+                Some(message)
             }
             // The request stays open, so the error must not say it closed.
-            (false, Some(error)) => format!("Provider turn failed: {error}; inspect its terminal."),
-            (false, None) => message,
+            (false, Some(error)) => Some(format!(
+                "Provider turn failed: {error}; inspect its terminal."
+            )),
+            (false, None) => Some(message),
         };
         if bound {
             self.consumed_provider_turns.extend(turn_key);
         }
         if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
-            agent.actionable_error = Some(message);
+            agent.actionable_error = message;
         }
         CallbackDisposition::AcceptedError
     }

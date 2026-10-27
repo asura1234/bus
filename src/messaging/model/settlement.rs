@@ -363,9 +363,9 @@ impl BusState {
                 "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.".to_owned(),
             ),
         };
-        self.close_turn_with_reason(id, now_ms, reason).ok()?;
+        let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
         if let Some(agent) = self.agents.get_mut(&agent) {
-            agent.actionable_error = Some(error);
+            agent.actionable_error = closed.then_some(error);
         }
         Some(id)
     }
@@ -460,13 +460,14 @@ impl BusState {
 
     /// Abandon `id`'s turn with `reason`. Messages typed or coalesced into
     /// this turn close with it and share its reason; members that already
-    /// settled keep their own outcome.
+    /// settled keep their own outcome. Returns whether outstanding work closed,
+    /// so caller feedback describes the requests actually affected.
     pub(super) fn close_turn_with_reason(
         &mut self,
         id: RequestId,
         now_ms: u64,
         reason: String,
-    ) -> Result<(), ModelError> {
+    ) -> Result<bool, ModelError> {
         let detail = (reason == "submission_unconfirmed")
             .then(|| {
                 self.requests
@@ -479,6 +480,7 @@ impl BusState {
         if self.request(id).is_some_and(|r| !r.settled()) {
             closed.push(id);
         }
+        let affected = !closed.is_empty();
         for request in closed {
             if let Some(request) = self.requests.get_mut(&request) {
                 request.failure_reason = Some(reason.clone());
@@ -489,7 +491,7 @@ impl BusState {
         }
         // Retain the provider outcome before abandoning the group.
         self.abandon_current_request(id, now_ms)?;
-        Ok(())
+        Ok(affected)
     }
 }
 

@@ -1,5 +1,6 @@
 use super::*;
 use crate::messaging::control::{Request as ControlRequest, Response};
+use crate::messaging::model::RecordedTurnEnd;
 
 fn answer(f: &mut Fixture, message: PromptId, author: AgentId, text: &str) -> Response {
     f.worker.control_response_with_events(
@@ -402,4 +403,102 @@ fn reply_to_does_not_publish_a_late_final_after_the_answered_anchor_is_abandoned
         status(&mut f, lead)["requests"][0]["reply"]["text"],
         "already answered"
     );
+}
+
+#[test]
+fn reply_to_success_does_not_become_a_resend_error_when_the_turn_fails() {
+    for also_answer_follower in [false, true] {
+        let mut f = Fixture::new(Provider::ClaudeCode);
+        let lead = start(&mut f, "watch forever");
+        let follower = also_answer_follower.then(|| start(&mut f, "completed follow-up"));
+        let agent = f.agent;
+        for id in std::iter::once(lead).chain(follower) {
+            let message = f.request(id).prompt.id;
+            assert!(answer(&mut f, message, agent, "answered mid-turn").ok);
+        }
+        f.record(json!({"hook_event_name":"StopFailure","session_id":"session",
+            "prompt_id":"infinite-turn","error":"server_error","error_details":"Connection lost mid-response"}));
+        f.consume();
+        assert_eq!(f.worker.state.agent(agent).unwrap().current_request, None);
+        assert_eq!(
+            f.error(),
+            None,
+            "successful work must not be presented as closed/retryable"
+        );
+        for id in std::iter::once(lead).chain(follower) {
+            let outcome = status(&mut f, id);
+            assert_eq!(outcome["complete"], true);
+            assert_eq!(outcome["requests"][0]["stage"], "replied");
+            assert_eq!(outcome["requests"][0]["reason"], Value::Null);
+            assert_eq!(outcome["requests"][0]["reply"]["text"], "answered mid-turn");
+        }
+    }
+}
+
+#[test]
+fn reply_to_success_closes_without_a_missing_reply_error_on_idle_or_unavailable() {
+    for runtime in [RuntimeStatus::Idle, RuntimeStatus::Unavailable] {
+        for recorded_error in [false, true] {
+            let mut f = Fixture::new(Provider::ClaudeCode);
+            let lead = start(&mut f, "watch forever");
+            let message = f.request(lead).prompt.id;
+            let agent = f.agent;
+            assert!(answer(&mut f, message, agent, "answered mid-turn").ok);
+            let mut state = f.worker.state.clone();
+            // Unavailable settlement applies after an observed turn end.
+            state
+                .observe_status(agent, RuntimeStatus::Idle, f.now)
+                .unwrap();
+            state.observe_status(agent, runtime, f.now).unwrap();
+            assert_eq!(
+                state.settle_ended_request(
+                    agent,
+                    f.now + crate::messaging::model::TURN_SETTLE_MS + 1,
+                    |_| recorded_error.then(|| RecordedTurnEnd::Error("Connection lost".into())),
+                ),
+                Some(lead)
+            );
+            f.worker.save(state).unwrap();
+            assert_eq!(f.worker.state.agent(agent).unwrap().current_request, None);
+            assert_eq!(f.error(), None);
+            let outcome = status(&mut f, lead);
+            assert_eq!(outcome["complete"], true);
+            assert_eq!(outcome["requests"][0]["reason"], Value::Null);
+            assert_eq!(outcome["requests"][0]["reply"]["text"], "answered mid-turn");
+        }
+    }
+}
+
+#[test]
+fn reply_to_does_not_hide_a_turn_error_for_an_outstanding_group_member() {
+    for answer_lead in [false, true] {
+        let mut f = Fixture::new(Provider::ClaudeCode);
+        let lead = start(&mut f, "watch forever");
+        let follower = start(&mut f, "follow-up");
+        let (answered, outstanding) = if answer_lead {
+            (lead, follower)
+        } else {
+            (follower, lead)
+        };
+        let message = f.request(answered).prompt.id;
+        let agent = f.agent;
+        assert!(answer(&mut f, message, agent, "answered mid-turn").ok);
+        f.record(
+            json!({"hook_event_name":"StopFailure","session_id":"session",
+            "prompt_id":"infinite-turn","error":"server_error","error_details":"Connection lost"}),
+        );
+        f.consume();
+        assert_eq!(
+            status(&mut f, answered)["requests"][0]["reply"]["text"],
+            "answered mid-turn"
+        );
+        let failed = status(&mut f, outstanding);
+        assert_eq!(failed["requests"][0]["stage"], "abandoned");
+        assert!(failed["requests"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("provider_error:"));
+        assert!(f.error().unwrap().contains("Resend it to retry"));
+        assert_eq!(f.worker.state.agent(agent).unwrap().current_request, None);
+    }
 }
