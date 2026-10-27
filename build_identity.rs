@@ -112,4 +112,3 @@ fn record_dev_build_identity(
         }
     }
 }
-
