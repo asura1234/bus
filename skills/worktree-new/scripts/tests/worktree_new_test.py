@@ -198,10 +198,18 @@ class ProvisionTests(Fixture):
         )
         self.commit()
         script = Path(__file__).resolve().parents[1] / "worktree_new.py"
+        # The fixture tests signals, not the CI host's available capacity.
+        driver = (
+            f"import sys; sys.path.insert(0, {str(script.parent)!r})\n"
+            "import shutil\nfrom unittest.mock import patch\nimport worktree_new\n"
+            "with patch.object(shutil, 'disk_usage', return_value=shutil._ntuple_diskusage(100*2**30, 0, 60*2**30)):\n"
+            "    raise SystemExit(worktree_new.main())\n"
+        )
         process = subprocess.Popen(
             [
                 sys.executable,
-                str(script),
+                "-c",
+                driver,
                 "provision",
                 "--repo",
                 str(self.repo),
