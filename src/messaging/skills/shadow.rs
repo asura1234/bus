@@ -16,11 +16,18 @@ pub(crate) fn warnings_for_launch(
         ProviderKind::Cursor => return Ok(Vec::new()),
     };
     let user = home.join(user_scope);
+    let canonical_user = user.canonicalize().ok();
     let cwd = cwd.canonicalize()?;
     let root = launch::project_root(&cwd);
     let mut warnings = Vec::new();
     for directory in cwd.ancestors() {
         let local = directory.join(repo_scope);
+        if canonical_user.is_some() && local.canonicalize().ok() == canonical_user {
+            if directory == root {
+                break;
+            }
+            continue;
+        }
         match std::fs::read_dir(&local) {
             Ok(entries) => {
                 for entry in entries {
@@ -28,8 +35,21 @@ pub(crate) fn warnings_for_launch(
                     let name = entry.file_name();
                     let skill = entry.path().join("SKILL.md");
                     let user_skill: PathBuf = user.join(&name).join("SKILL.md");
-                    if skill.is_file() && user_skill.is_file() {
-                        warnings.push(format!("Repo skill {} shadows user skill {}. Remove or rename the repo copy to use the user skill.", skill.display(), user_skill.display()));
+                    if skill.is_file()
+                        && user_skill.is_file()
+                        && skill.canonicalize()? != user_skill.canonicalize()?
+                    {
+                        let behavior = match provider {
+                            ProviderKind::ClaudeCode => {
+                                "Claude Code gives the user copy precedence"
+                            }
+                            _ => "Codex lists both copies",
+                        };
+                        warnings.push(format!(
+                            "Same-name repo skill {} and user skill {}: {behavior}.",
+                            skill.display(),
+                            user_skill.display()
+                        ));
                     }
                 }
             }
