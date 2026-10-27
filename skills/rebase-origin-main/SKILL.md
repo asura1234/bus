@@ -69,6 +69,7 @@ IF rebase_root exists:
 Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
 `--base "<caller base>"` only when supplied, and always add `--refresh-default --check-branch "<branch>"`.
 This discovers origin's live default with `git ls-remote --symref origin HEAD` and rechecks protection.
+It persists the full symbolic origin/HEAD name so subsequent local guards protect the same default.
 An explicit base needs no local tracking commit for that default; only its name is used by the guard.
 Capture its sole stdout line as base. Never refresh/fetch when resuming a paused rebase.
 IF resolution fails: STOP with stderr. Never substitute master/main for a missing origin HEAD.

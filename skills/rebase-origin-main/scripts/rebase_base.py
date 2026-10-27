@@ -53,6 +53,8 @@ def main() -> int:
             if len(names) != 1 or not names[0]:
                 raise ValueError("origin has no unambiguous symbolic default branch; pass --base without refresh")
             default_ref = "refs/remotes/origin/" + names[0]
+            # Persist the name for later local guards, even in a selective clone.
+            git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", default_ref)
         if args.check_branch is not None:
             ensure_feature_branch(repo, args.check_branch, default_ref)
         base = args.base
