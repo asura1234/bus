@@ -1,6 +1,11 @@
 import json
+import os
+from pathlib import Path
 import shutil
+import signal
+import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -184,6 +189,56 @@ class ProvisionTests(Fixture):
             self.provision()
         self.assertEqual(owner.read_text(), "other worker")
         self.assertFalse((self.repo / "built").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal/lease contract")
+    def test_terminated_smoke_releases_lease_and_records_failure(self):
+        self.write(
+            "smoke.py",
+            'from pathlib import Path\nimport time\nPath("started").touch()\ntime.sleep(30)\n',
+        )
+        self.commit()
+        script = Path(__file__).resolve().parents[1] / "worktree_new.py"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(script),
+                "provision",
+                "--repo",
+                str(self.repo),
+                "--build-slot",
+                str(self.slot),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while (
+                not (self.repo / "started").exists()
+                and process.poll() is None
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.02)
+            self.assertTrue(
+                (self.repo / "started").exists(), "smoke must start before termination"
+            )
+            process.send_signal(signal.SIGTERM)
+            self.assertNotEqual(process.wait(timeout=10), 0)
+            self.assertFalse(
+                self.slot.exists(), "interrupted provisioning leaked its lease"
+            )
+            evidence = json.loads(
+                (self.repo / "temp/.bus/worktree-ready.json").read_text()
+            )
+            self.assertEqual(evidence["status"], "failed")
+            self.assertTrue(evidence["error"])
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
 
     def test_create_uses_remote_main_with_no_master_upstream_and_rejects_other_directory(
         self,
