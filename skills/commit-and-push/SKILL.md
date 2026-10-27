@@ -9,21 +9,21 @@ Analyze the current changes, split them into commits following "each commit does
 INPUT = [--base <ref-or-commit>]
 -- Target and policy: use the cwd Git root, never the installed skill directory.
 repo = `git rev-parse --show-toplevel`
-Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/repository_context.py" --repo "<repo>" [--base "<caller base>"]`.
+Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/repository_context.py" --repo "<repo>" --optional-base [--base "<caller base>"]`.
 Read its JSON as context; STOP on error. base = context.base; commit_style = context.policy.commit_style.
 Read target repository instructions and its Git/commit policy before staging.
 branch = `git branch --show-current`
 IF detached: STOP.
 IF the developer did not explicitly authorize committing to this exact protected branch:
-  Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>" --base "<base>" --check-branch "<branch>"`.
-  IF it fails: STOP; suggest a --no-track feature branch from context.base.
+  Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/repository_context.py" --repo "<repo>" --optional-base --check-branch "<branch>"`.
+  IF it fails: STOP; suggest a feature branch from context.base when available, otherwise use target instructions to choose its base.
 Also honor any target-declared protected-branch patterns; do not impose another repo's release patterns.
 An explicit direct-branch request permits an ordinary same-name push, never a force push.
 
 -- Rules
 Follow commit_style when present; otherwise follow target instructions without inventing a language or format.
 When commit_style == "conventional", validate with the bundled conventional_commits.py command below.
-Other style strings are target-authored instructions, not a closed enum. Never substitute Bus or LibTV style.
+Other style strings are target-authored instructions, not a closed enum. Never substitute another repository's style.
 Never use `git add -A` or `git add .` — add files individually
 Each commit should do exactly one thing:
   - one feature slice

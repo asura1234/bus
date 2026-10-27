@@ -77,6 +77,32 @@ class RepositoryContextTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'outside'):
                 module.require_ignored_artifacts(repo, [repo.parent / 'outside'])
 
+    def test_optional_base_admits_policy_in_a_local_only_repo_but_rejects_bad_explicit_base(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            subprocess.run(['git', 'init', '-q', '-b', 'trunk', str(repo)], check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-qm', 'base'], check=True)
+            result = subprocess.run([sys.executable, str(CONTEXT), '--optional-base'], cwd=repo, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads(result.stdout)
+            self.assertIsNone(data['base'])
+            self.assertIsNone(data['base_commit'])
+            self.assertIn('commit_style', data['policy'])
+            invalid = subprocess.run([sys.executable, str(CONTEXT), '--optional-base', '--base', 'missing'], cwd=repo, text=True, capture_output=True)
+            self.assertEqual(invalid.returncode, 2, invalid.stderr)
+
+    def test_branch_guard_needs_no_base_or_first_commit_and_still_protects_main(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            subprocess.run(['git', 'init', '-q', '-b', 'feature', str(repo)], check=True)
+            args = [sys.executable, str(CONTEXT), '--optional-base', '--check-branch']
+            allowed = subprocess.run([*args, 'feature'], cwd=repo, text=True, capture_output=True)
+            self.assertEqual(allowed.returncode, 0, allowed.stderr)
+            self.assertIsNone(json.loads(allowed.stdout)['base'])
+            protected = subprocess.run([*args, 'main'], cwd=repo, text=True, capture_output=True)
+            self.assertEqual(protected.returncode, 2)
+            self.assertIn('protected branch', protected.stderr)
+
     def test_review_template_uses_target_override_with_bundled_fallback(self):
         self.assertTrue(CONTEXT.exists(), 'repository policy accessor is missing')
         spec = importlib.util.spec_from_file_location('repository_context', CONTEXT)

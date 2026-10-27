@@ -9,7 +9,7 @@ import subprocess
 import sys
 from typing import Sequence
 
-from rebase_base import git
+from rebase_base import ensure_feature_branch, git
 
 
 def read_policy(repo: Path) -> dict:
@@ -22,12 +22,14 @@ def repository_root(path: Path | None = None) -> Path:
     return Path(git(path or Path.cwd(), 'rev-parse', '--show-toplevel')).resolve()
 
 
-def default_base(repo: Path, base: str | None = None) -> str:
+def default_base(repo: Path, base: str | None = None, *, required: bool = True) -> str | None:
     """Read-only lookup: fetching/refreshing belongs to the invoking workflow."""
     if base is None:
         try:
             base = git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD')
         except ValueError as error:
+            if not required:
+                return None
             raise ValueError('origin default branch unavailable; caller must fetch or pass --base') from error
         if not base.startswith('refs/remotes/origin/'):
             raise ValueError('origin/HEAD must point to an origin branch')
@@ -60,14 +62,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', type=Path, default=Path.cwd())
     parser.add_argument('--base')
+    parser.add_argument('--optional-base', action='store_true', help='report null when origin has no symbolic default')
+    parser.add_argument('--check-branch', help='check branch protection without requiring a base commit')
     parser.add_argument('--require-ignored', type=Path, action='append', default=[])
     args = parser.parse_args()
     try:
         repo = repository_root(args.repo)
-        base = default_base(repo, args.base)
+        if args.check_branch is not None:
+            ensure_feature_branch(repo, args.check_branch)
+        base = default_base(repo, args.base, required=not args.optional_base)
         require_ignored_artifacts(repo, args.require_ignored)
         print(json.dumps({'repo': str(repo), 'base': base,
-                          'base_commit': git(repo, 'rev-parse', f'{base}^{{commit}}'),
+                          'base_commit': git(repo, 'rev-parse', f'{base}^{{commit}}') if base is not None else None,
                           'policy': read_policy(repo)}, ensure_ascii=False))
     except (OSError, ValueError) as error:
         print(f'repository context failed: {error}', file=sys.stderr)

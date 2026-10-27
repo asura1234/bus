@@ -37,7 +37,7 @@ class GenericGateTest(unittest.TestCase):
         # A local scanner executable represents the producer's documented stdout contract.
         self.scanner.write_text(
             "import json, pathlib, sys\n"
-            "assert sys.argv[1:3] == ['scan', '--repo']\n"
+            "assert sys.argv[1:3] == ['policy', '--repo']\n"
             "repo = pathlib.Path(sys.argv[3])\n"
             "print((repo / 'policy.json').read_text())\n"
         )

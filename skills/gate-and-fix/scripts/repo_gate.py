@@ -11,11 +11,11 @@ SCANNER = Path(__file__).resolve().parents[2] / "worktree-new/scripts/repo_profi
 
 
 def read_policy(repo: Path) -> dict:
-    """Consume the producer's fresh policy without creating target artifacts."""
+    """Consume validated policy without invoking unrelated recipe discovery."""
     if not SCANNER.is_file():
         raise ValueError("repository profile scanner is not installed")
     result = subprocess.run(
-        [sys.executable, str(SCANNER), "scan", "--repo", str(repo), "--no-cache"],
+        [sys.executable, str(SCANNER), "policy", "--repo", str(repo)],
         cwd=repo, capture_output=True, text=True,
     )
     if result.returncode:
