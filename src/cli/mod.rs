@@ -145,9 +145,6 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         return run_tui(dev, args);
     }
 
-    if let Action::Skills(args) = &invocation.action {
-        return skills::run(args);
-    }
     if matches!(invocation.action, Action::Run | Action::Resume(_)) {
         skills::on_launch();
     }
