@@ -2,7 +2,7 @@
 name: worktree-close
 description: Remove a git worktree that is no longer needed. Before removal it explicitly checks the worktree for uncommitted changes and unpushed commits, and only uses --force after the user confirms discarding them. PRs to this repo may be squash-merged, so whether a branch has landed is decided by content rather than ancestry; a local branch judged landed is deleted with -D without asking, one that has not landed or cannot be judged is kept and handed back, and the remote branch is deleted only when the user explicitly asks. Use when the user asks to "delete a worktree", "clean up a worktree", "close a worktree", "wrap up a worktree", or "I don't need this isolated copy anymore". Works across agents; mainly git, plus basic shell tools such as sed/du/mkdir/cp, and reads and writes the Claude memory directory. It refuses to remove the worktree its own agent session runs in and hands that back. Argument — worktree name or path (defaults to the worktree containing the current directory, which is refused when that is the session's own worktree).
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Remove a git worktree you no longer need. Mostly git, plus basic shell tools (sed/du/mkdir/cp) and a
 read-write touch of the Claude memory directory; runnable by any AI agent.
 

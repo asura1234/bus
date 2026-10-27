@@ -2,7 +2,7 @@
 name: delete-dead-code
 description: Clean up entropy on two tracks. The dead-code track fans out per module to find and delete dead code, dead branches, fake optionals, and zombie tests; the duplicate track discovers text clones and semantic duplicates across the whole scope and consolidates observably equivalent duplicates per owner set. The scope has two sources - by default the modules the current PR touches (derived mechanically by a script from base...HEAD), or --directories when the user names directories. Both tracks verify their artifacts for out-of-scope edits and self-consistency instead of relying on agent discipline; the dead-code track lands first, then the duplicate track runs on the cleaned tree. Use when the user asks to "delete dead code", "clean up dead code", "dead code", "clean up duplicate implementations", "find duplicate code", "find dead code in X", or when an orchestrator sequences it before the gates.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Judgment principles are in [guide.md](./guide.md). Artifact structure: the dead-code track uses [references/dead-code-findings-format.md](./references/dead-code-findings-format.md),
 the duplicate track uses [references/duplicate-findings-format.md](./references/duplicate-findings-format.md). This file defines only the executable flow; the
 reason for every step is in the same-named section of guide.md.
@@ -28,7 +28,7 @@ artifact_root = temp/delete-dead-code/<branch_slug>
 
 ========== PREFLIGHT (must hold before each track starts) ==========
 
-Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py preflight --repo "<repo>" --base "<base>"
+Run: python3 "$SKILL_DIR/../delete-dead-code/scripts/dead_code_scope.py" preflight --repo "<repo>" --base "<base>"
 exit 0 = holds; exit 1 = not on a feature branch, or a unit this invocation owns has uncommitted changes (each listed); exit 2 = the scope cannot be derived.
 exit != 0 → STOP.
 -- Only this invocation's units are checked; other units' in-flight changes are no reason to STOP (guide.md "Why share one worktree").
@@ -36,7 +36,7 @@ exit != 0 → STOP.
 
 ========== 1. SCOPE (shared by both tracks) ==========
 
-Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py scope --repo "<repo>" --base "<base>"
+Run: python3 "$SKILL_DIR/../delete-dead-code/scripts/dead_code_scope.py" scope --repo "<repo>" --base "<base>"
 Exit 2 = the scope cannot be derived → STOP; never guess a scope and continue.
 
 -- The output is the units in scope (by file count, descending). In PR mode a unit = a top-level subtree such as `src`;
@@ -52,7 +52,7 @@ TRACK A — dead-code track: discover per module, handle per module, delete only
 
 ========== A2. PLAN BATCHES ==========
 
-Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py batches --repo "<repo>" --base "<base>" --max-parallel "<N>"
+Run: python3 "$SKILL_DIR/../delete-dead-code/scripts/dead_code_scope.py" batches --repo "<repo>" --base "<base>" --max-parallel "<N>"
 Capture `roundCount` and `rounds`. Rounds are serial, modules within a round parallel. Never regroup them yourself.
 
 ========== A3. FAN-OUT LOOP ==========
@@ -83,7 +83,7 @@ FOR round IN rounds:
   Wait for every subagent in this round. No short-interval polling.
 
   FOR EACH module artifact produced this round:
-    Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py verify --repo "<repo>" --base "<base>" --artifact "<artifact>" --unit "<module>"
+    Run: python3 "$SKILL_DIR/../delete-dead-code/scripts/dead_code_scope.py" verify --repo "<repo>" --base "<base>" --artifact "<artifact>" --unit "<module>"
     exit 0 = pass; exit 1 = out of scope or structurally self-contradictory; exit 2 = cannot verify.
     IF exit != 0
       STOP with the offending lines; the main agent reverts out-of-scope edits before deciding, never carries them into the next round.
@@ -106,7 +106,7 @@ Split by whether the blocking module is inside the stage-1 scope:
 
 ========== A4. REVIEW (the main agent does it, never delegated) ==========
 
-Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py review --repo "<repo>" --base "<base>" --artifact <every artifact of this track…>
+Run: python3 "$SKILL_DIR/../delete-dead-code/scripts/dead_code_scope.py" review --repo "<repo>" --base "<base>" --artifact <every artifact of this track…>
 exit 1 = items pending review; exit 0 = no assertion rewrites, skip this stage.
 
 FOR EACH rewritten assertion it lists:
@@ -147,7 +147,7 @@ Re-run PREFLIGHT.
 
 ========== B1. DISCOVER (read-only, whole scope, not split per module) ==========
 
-Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py clones --repo "<repo>" --base "<base>" [--min-lines 8] [--limit 200]
+Run: python3 "$SKILL_DIR/../delete-dead-code/scripts/dead_code_scope.py" clones --repo "<repo>" --base "<base>" [--min-lines 8] [--limit 200]
 Report a nonzero `truncated` or `skippedBoilerplateWindows` in OUTPUT as is; rerun with a larger `--limit` when needed; never drop candidates yourself.
 
 `git grep` the whole scope for version traces (`[Vv][0-9]` names, `/v[0-9]+/` paths, `-v[0-9]+\.json`, version checks) and add two versions of the same thing as candidate
@@ -204,7 +204,7 @@ IF any component agent reported a blocker or a needed shared-config change: STOP
 
 ========== B5. REVIEW (the main agent does it, never delegated; guide.md "The main agent must review consolidations itself") ==========
 
-Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py review --repo "<repo>" --base "<base>" --artifact <every artifact of this track…>
+Run: python3 "$SKILL_DIR/../delete-dead-code/scripts/dead_code_scope.py" review --repo "<repo>" --base "<base>" --artifact <every artifact of this track…>
 exit 1 = items pending review (the normal case); exit 0 = no consolidation and no assertion rewrite, skip this stage.
 
 FOR EACH CONSOLIDATED anchor it lists:

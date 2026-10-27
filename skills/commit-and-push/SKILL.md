@@ -2,7 +2,7 @@
 name: commit-and-push
 description: Analyze the current git changes, split them into commits following "each commit does exactly one thing" with lowercase Conventional Commit subjects, and push with an explicit source:destination refspec. Works on a feature branch and pushes to the same-name branch on origin, never upstream; refuses to commit on master (local commits included) unless the developer explicitly asked to commit or push directly to master.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Analyze the current changes, split them into commits following "each commit does exactly one thing", then push to the remote branch. Pure git/gh; runnable by any AI agent (claude / cursor / codex).
 
 ```
@@ -25,7 +25,7 @@ IF branch IN {main, master} AND the developer did NOT explicitly ask to commit o
 --   judged mechanically; the developer gates them.
 
 -- Rules
-Commit subject is a lowercase Conventional Commit accepted by `python3 scripts/conventional_commits.py --message-file <message-file>`
+Commit subject is a lowercase Conventional Commit accepted by `python3 "$SKILL_DIR/../_bus/scripts/conventional_commits.py" --message-file <message-file>`
   (types: the validator's ALLOWED_TYPES — feat, fix, perf, docs, ci, test, refactor, chore, release)
 Never use `git add -A` or `git add .` — add files individually
 Each commit should do exactly one thing:
@@ -102,7 +102,7 @@ FOR EACH planned commit group:
     body  = 2-3 sentence description if useful (reason, issue reference)
     Append the Co-Authored-By trailer per your agent's own convention (if it has one);
       Do NOT hardcode a model name.
-  Validate: `python3 scripts/conventional_commits.py --message-file <message-file>`
+  Validate: `python3 "$SKILL_DIR/../_bus/scripts/conventional_commits.py" --message-file <message-file>`
     IF it rejects the subject: fix the subject and re-validate before committing.
 
   Run `git commit` with HEREDOC:

@@ -53,7 +53,11 @@ fn client_sees_headless_startup_config_diagnostic() {
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
-    cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
+    cmd.env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("HOME", runtime_dir.join("home"))
+        .env("USERPROFILE", runtime_dir.join("home"));
+    cmd.env("HOME", runtime_dir.join("home"));
+    cmd.env("USERPROFILE", runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", &api_socket);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
@@ -115,6 +119,8 @@ fn server_unreachable_shows_clear_error() {
         .env("BUS_DISABLE_SOUND", "1")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("HOME", runtime_dir.join("home"))
+        .env("USERPROFILE", runtime_dir.join("home"))
         .env("XDG_STATE_HOME", runtime_dir.join("state"))
         .env("HERDR_SOCKET_PATH", &api_socket)
         .env_remove("HERDR_CLIENT_SOCKET_PATH")
