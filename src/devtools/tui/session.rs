@@ -732,7 +732,7 @@ pub(super) fn scratch_env(
         ),
     ]);
     #[cfg(unix)]
-    env.push(("SHELL".into(), "/bin/sh".into()));
+    env.push(("SHELL".into(), "/bin/bash".into()));
     env
 }
 

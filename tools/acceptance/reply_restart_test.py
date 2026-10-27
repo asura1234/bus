@@ -54,7 +54,7 @@ def scenario(binary, root, provider, master):
     # Closed environment: provider and effects names resolve only to our stand-ins.
     env = {"PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home),
            "BUS_DATA_DIR": str(data), "BUS_TUI_FAKE_AGENT": "1", "TERM": "xterm-256color",
-           "SHELL": "/bin/sh", "XDG_CONFIG_HOME": str(root / "xdg"),
+           "SHELL": "/bin/bash", "XDG_CONFIG_HOME": str(root / "xdg"),
            "BUS_TUI_EFFECTS": str(root / "effects.jsonl")}
     bus = Bus(binary, root, env, workspace=work)
     began = time.monotonic()
