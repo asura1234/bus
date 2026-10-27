@@ -86,9 +86,13 @@ impl BusTransport {
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
-            let result = response
-                .map(|response| response.result)
-                .map_err(classify_error);
+            let result = response.map(|response| response.result).map_err(|error| {
+                let creation_rejected = matches!(&request.method, Method::TabCreate(_))
+                    && matches!(&error, ApiClientError::ErrorResponse(_));
+                let mut error = classify_error(error);
+                error.definitely_rejected |= creation_rejected;
+                error
+            });
             tracing::debug!(event = "bus.api.result", api_request_id = %request.id, method = method_name,
                 outcome = if result.is_ok() { "ok" } else { "error" },
                 error_code = ?result.as_ref().err().and_then(|e| e.code.as_deref()),
@@ -118,7 +122,7 @@ fn classify_error(error: ApiClientError) -> TransportError {
     // withdrew a paste it never submitted. Every other failure, including an IO
     // error after partial send, leaves submission ownership intact.
     let definitely_rejected = matches!(&error, ApiClientError::ErrorResponse(response) if matches!(response.error.code.as_str(),
-        "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request" | "agent_shell_starting" | "agent_shell_waiting")
+        "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request" | "agent_shell_starting" | "agent_shell_waiting" | "agent_shell_integration_unavailable")
         || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
         || response.error.code == crate::protocol::api::AGENT_COMPOSER_BUSY);
     TransportError {
@@ -325,5 +329,22 @@ mod tests {
         assert!(outcome.unwrap_err().definitely_rejected);
         server.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod creation_failure_tests {
+    use super::*;
+    #[test]
+    fn native_creation_error_is_definite_but_lost_transport_is_uncertain() {
+        for transport_failure in [false, true] {
+            let mut client = BusTransport::new(ConnectionTarget::SocketPath("unused".into()));
+            let method = Method::TabCreate(serde_json::from_value(serde_json::json!({})).unwrap());
+            let error=client.request_using(method,|_,request,_| {
+                if transport_failure { Err(ApiClientError::Io(std::io::Error::other("lost response"))) }
+                else { Ok(serde_json::json!({"id":request.id,"error":{"code":"tab_create_failed","message":"login shell is not executable"}})) }
+            }).unwrap_err();
+            assert_eq!(error.definitely_rejected, !transport_failure);
+        }
     }
 }

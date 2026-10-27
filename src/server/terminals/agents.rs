@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
-
 use crate::protocol::api::schema::AgentStartParams;
 use crate::server::{app::App, workspaces::ids::TerminalTargetError};
 
@@ -66,25 +64,6 @@ fn agent_start_argv(
         (_, None) => {}
     }
     Ok(argv)
-}
-
-pub(crate) fn provider_launch_argv(
-    kind: crate::agents::AgentKind,
-    args: Vec<String>,
-) -> Vec<String> {
-    let mut args = args;
-    let launch =
-        crate::agents::providers::launch::native_provider(crate::agents::agent_label(kind));
-    if let Some(provider) = launch {
-        crate::agents::providers::launch::extend_generated_args(
-            provider,
-            &mut args,
-            crate::agents::providers::launch::runtime_args(provider),
-        );
-    }
-    let mut argv = vec![crate::agents::interactive_agent_executable(kind).to_string()];
-    argv.extend(args.iter().cloned());
-    argv
 }
 
 impl App {
@@ -276,7 +255,7 @@ impl App {
             .terminal_runtimes
             .get(&terminal_id)
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
-        let shell_name = available_shell_name(runtime).ok_or_else(|| {
+        available_shell_name(runtime).ok_or_else(|| {
             if runtime.waiting_for_shell_prompt() {
                 AgentStartError::ShellStarting(params.pane_id.clone())
             } else {
@@ -286,9 +265,6 @@ impl App {
 
         let args = params.args;
         let argv = agent_start_argv(kind, params.executable, params.grok_home, &args)?;
-        let command = crate::platform::interactive_shell_command(&argv, &shell_name)
-            .ok_or(AgentStartError::InvalidArgument)?;
-        let bytes = crate::server::api::input_encoding::encode_api_submission(runtime, &command);
         let timeout = Duration::from_millis(
             params
                 .timeout_ms
@@ -307,9 +283,13 @@ impl App {
         terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         runtime.mark_agent_launch();
-        if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
+        if let Err(err) = runtime.queue_shell_command(&argv, timeout) {
             terminal.clear_agent_name();
-            return Err(AgentStartError::InputFailed(err.to_string()));
+            return Err(if err.kind() == std::io::ErrorKind::Unsupported {
+                AgentStartError::NoShellEditor(err.to_string())
+            } else {
+                AgentStartError::InputFailed(err.to_string())
+            });
         }
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
@@ -356,6 +336,9 @@ impl App {
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
                 message: format!("agent target pane {target} has no live terminal"),
+            },
+            AgentStartError::NoShellEditor(message) => crate::protocol::api::schema::ErrorBody {
+                code: "agent_shell_integration_unavailable".into(), message,
             },
             AgentStartError::InputFailed(message) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_start_input_failed".into(),
@@ -639,6 +622,7 @@ pub(in crate::server) enum AgentStartError {
     TargetBusy(String),
     TargetUnavailable(String),
     InputFailed(String),
+    NoShellEditor(String),
     DuplicateName {
         name: String,
         candidates: Vec<crate::protocol::api::schema::AgentInfo>,

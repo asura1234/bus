@@ -99,6 +99,44 @@ impl Worker {
         self.save(state)
     }
 
+    pub(super) fn record_failed_launch_creation(
+        &mut self,
+        id: AgentId,
+        argv: Vec<String>,
+        reason: &str,
+    ) -> Result<(), String> {
+        let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
+        let diagnostics = self.startup_diagnostics(&agent);
+        let recovery = if agent.runtime_identity.session_id.is_some() {
+            "Repair the configured shell and provider setup, then resume the saved conversation."
+        } else {
+            "Repair the configured shell and provider setup, then delete and recreate this sessionless agent and rebrief the retained work."
+        };
+        let message = format!("Startup failed before terminal creation: {reason}. Queued work and message IDs are retained. {recovery} Do not resend queued messages to retry a wait.\nStartup diagnostics:\n{diagnostics}");
+        let mut state = self.state.clone();
+        state
+            .set_agent_startup(
+                id,
+                Some(AgentStartup {
+                    command: crate::platform::interactive_shell_command(&argv, "sh")
+                        .ok_or("Invalid launch command")?,
+                    started_at_ms: io::now_ms(),
+                    reported: true,
+                    native_terminal_id: None,
+                    recovery: None,
+                }),
+            )
+            .map_err(|error| error.to_string())?;
+        state
+            .set_agent_error(id, Some(message.clone()))
+            .map_err(|error| error.to_string())?;
+        state
+            .observe_status(id, super::RuntimeStatus::Unavailable, io::now_ms())
+            .map_err(|error| error.to_string())?;
+        self.save(state)?;
+        Err(message)
+    }
+
     pub(super) fn record_failed_agent_start(
         &mut self,
         id: AgentId,
@@ -106,7 +144,7 @@ impl Worker {
         outcome: Result<ResponseResult, crate::messaging::native::TransportError>,
     ) -> Result<(), String> {
         let error = match outcome {
-            Err(error) if matches!(error.code.as_deref(), Some("agent_shell_starting" | "agent_shell_waiting")) => error,
+            Err(error) if matches!(error.code.as_deref(), Some("agent_shell_starting" | "agent_shell_waiting" | "agent_shell_integration_unavailable")) => error,
             other => return self.agent_error(id, format!("Agent start outcome requires inspection of its owned terminal; startup is watched and will not be retried. {other:?}")),
         };
         let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
@@ -124,7 +162,9 @@ impl Worker {
         // and the reported marker together, so the watchdog cannot replace it
         // and queued work remains held until actual startup confirmation.
         startup.reported = true;
-        if error.definitely_rejected {
+        if error.definitely_rejected
+            && error.code.as_deref() != Some("agent_shell_integration_unavailable")
+        {
             startup.recovery = Some(StartupRecovery::Unsubmitted { args });
         }
         state

@@ -226,7 +226,7 @@ fn restored_native_server_for_restart() -> (HeadlessServer, crate::utils::ids::T
         .as_mut()
         .unwrap()
         .argv = vec!["/bin/sh".into(), "-c".into(), "read line".into()];
-    server.app.state.default_shell = "/bin/sh".into();
+    server.app.state.default_shell = "/bin/bash".into();
     server.render_and_stream();
     (server, terminal_id)
 }

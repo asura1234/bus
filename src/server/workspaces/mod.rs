@@ -259,7 +259,31 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn create_tab(
+    pub fn create_tab(
+        &mut self,
+        rows: u16,
+        cols: u16,
+        cwd: PathBuf,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
+        extra_env: Vec<(String, String)>,
+    ) -> std::io::Result<(usize, TerminalState, TerminalRuntime)> {
+        self.create_tab_with_runtime(
+            rows,
+            cols,
+            cwd,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            shell_config,
+            None,
+            extra_env,
+        )
+    }
+
+    fn create_tab_with_runtime(
         &mut self,
         rows: u16,
         cols: u16,

@@ -26,7 +26,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::LayoutSetSplitRatio(_)
             | Method::AgentRename(_)
             | Method::AgentFocus(_)
-            | Method::AgentCreate(_)
             | Method::AgentStart(_)
             | Method::AgentStartIfIdentity(_)
             | Method::AgentPrompt(_)
@@ -164,7 +163,6 @@ impl App {
             Method::AgentStartupSnapshot(params) => self.handle_agent_startup_snapshot(id, params),
             Method::AgentFocus(target) => self.handle_agent_focus(id, target),
             Method::AgentRename(params) => self.handle_agent_rename(id, params),
-            Method::AgentCreate(params) => self.handle_agent_create(id, params),
             Method::AgentStart(params) => self.handle_agent_start(id, params),
             Method::AgentStartIfIdentity(params) => self.handle_agent_start_if_identity(id, params),
             Method::AgentPrompt(_)

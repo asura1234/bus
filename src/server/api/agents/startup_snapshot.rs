@@ -45,6 +45,9 @@ impl App {
         else {
             return identity_changed();
         };
+        let input_error = self
+            .lookup_runtime_sender(ws_idx, pane_id)
+            .and_then(|runtime| runtime.launch_input_error());
         let Some((screen, osc_title, osc_progress, content_revision)) = self
             .lookup_runtime_sender(ws_idx, pane_id)
             .and_then(|runtime| runtime.startup_snapshot())
@@ -70,6 +73,7 @@ impl App {
                     osc_title,
                     osc_progress,
                     content_revision,
+                    input_error,
                 },
             },
         )

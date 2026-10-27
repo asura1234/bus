@@ -383,4 +383,5 @@ pub struct AgentStartupSnapshot {
     pub osc_title: String,
     pub osc_progress: String,
     pub content_revision: u64,
+    pub input_error: Option<String>,
 }

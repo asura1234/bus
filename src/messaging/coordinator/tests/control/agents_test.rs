@@ -380,13 +380,12 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
     impl Transport for Launches {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::AgentCreate(_) => {
+                Method::TabCreate(_) => {
                     self.tabs += 1;
                     let mut pane = owned_pane_info();
                     pane.pane_id = format!("w1:p{}", self.tabs);
                     pane.terminal_id = format!("terminal-{}", self.tabs);
                     Ok(ResponseResult::TabCreated {
-                        agent_started: false,
                         tab: serde_json::from_value(json!({
                             "tab_id": format!("t{}", self.tabs), "workspace_id": "w1",
                             "number": self.tabs, "label": "adopted", "focused": false,
@@ -474,13 +473,12 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
     impl Transport for SuccessfulLaunches {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::AgentCreate(_) => {
+                Method::TabCreate(_) => {
                     self.tabs += 1;
                     let mut pane = owned_pane_info();
                     pane.pane_id = format!("w1:p{}", self.tabs);
                     pane.terminal_id = format!("terminal-{}", self.tabs);
                     Ok(ResponseResult::TabCreated {
-                        agent_started: false,
                         tab: serde_json::from_value(json!({
                             "tab_id": format!("t{}", self.tabs), "workspace_id": "w1",
                             "number": self.tabs, "label": "adopted", "focused": false,
@@ -826,6 +824,53 @@ fn notify_you_reserves_developer_names_for_create_and_rename() {
             Err(ModelError::ReservedAgentName)
         );
     }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejected_launch_creation_releases_waiters_without_a_pane_or_session() {
+    let (mut worker, room, _, dir) = fixture();
+    struct Rejected;
+    impl Transport for Rejected {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::TabCreate(_)));
+            Err(TransportError {
+                code: Some("tab_create_failed".into()),
+                message: "login shell is not executable".into(),
+                definitely_rejected: true,
+            })
+        }
+    }
+    worker.transport = Box::new(Rejected);
+    let result = worker.add_agent(
+        AddAgent {
+            room,
+            name: "creation-failed".into(),
+            provider: Provider::Codex,
+            cwd: dir.to_string_lossy().into(),
+            extra_args: String::new(),
+            consent_project_hooks: true,
+        },
+        None,
+        &mpsc::channel().0,
+    );
+    assert!(result
+        .unwrap_err()
+        .contains("login shell is not executable"));
+    let agent = worker
+        .state
+        .agents()
+        .find(|agent| agent.name == "creation-failed")
+        .unwrap();
+    assert!(
+        agent.runtime_identity.pane_id.is_none() && agent.runtime_identity.terminal_id.is_none()
+    );
+    assert!(agent
+        .delivery_error()
+        .unwrap()
+        .contains("delete and recreate"));
+    assert!(agent.startup.as_ref().unwrap().reported);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

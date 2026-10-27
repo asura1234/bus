@@ -921,46 +921,6 @@
     },
     "request": {
       "$defs": {
-        "AgentCreateParams": {
-          "description": "Atomic native provider-tab creation; the existing tab.create contract stays unchanged.",
-          "properties": {
-            "cwd": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "env": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "type": "object"
-            },
-            "focus": {
-              "default": false,
-              "type": "boolean"
-            },
-            "label": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "launch": {
-              "$ref": "#/schemas/request/$defs/TabAgentLaunch"
-            },
-            "workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "launch"
-          ],
-          "type": "object"
-        },
         "AgentDialogAnswerParams": {
           "additionalProperties": false,
           "properties": {
@@ -2925,28 +2885,6 @@
             }
           ]
         },
-        "TabAgentLaunch": {
-          "properties": {
-            "args": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "kind": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "name",
-            "kind"
-          ],
-          "type": "object"
-        },
         "TabCreateParams": {
           "properties": {
             "cwd": {
@@ -3605,22 +3543,6 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentTarget"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "agent.create",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/AgentCreateParams"
             }
           },
           "required": [
@@ -4851,6 +4773,12 @@
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
+            },
+            "input_error": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "interactive_ready": {
               "type": "boolean"
@@ -6266,10 +6194,6 @@
             },
             {
               "properties": {
-                "agent_started": {
-                  "description": "The provider launch already owns the tab; never type a second start.",
-                  "type": "boolean"
-                },
                 "root_pane": {
                   "$ref": "#/schemas/success_response/$defs/PaneInfo"
                 },

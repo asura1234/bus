@@ -44,8 +44,9 @@ async fn wait_for_text(runtime: &TerminalRuntime, text: &str) {
     while !runtime.recent_unwrapped_text(100).contains(text) {
         assert!(
             std::time::Instant::now() < deadline,
-            "missing {text}: {}",
-            runtime.visible_text()
+            "missing {text}: {}; input_error={:?}",
+            runtime.visible_text(),
+            runtime.launch_input_error()
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -80,6 +81,22 @@ fn fixture_shell_with_launch_identity(
 ) -> TerminalRuntime {
     let mut extra = vec![
         ("HOME".into(), dir.display().to_string()),
+        (
+            "XDG_CONFIG_HOME".into(),
+            dir.join("config").display().to_string(),
+        ),
+        (
+            "XDG_DATA_HOME".into(),
+            dir.join("data").display().to_string(),
+        ),
+        (
+            "XDG_STATE_HOME".into(),
+            dir.join("state").display().to_string(),
+        ),
+        (
+            "XDG_CACHE_HOME".into(),
+            dir.join("cache").display().to_string(),
+        ),
         ("ZDOTDIR".into(), dir.display().to_string()),
         (
             "PATH".into(),
@@ -1018,3 +1035,6 @@ async fn startup_snapshot_does_not_capture_an_unfinished_redraw() {
     runtime.test_process_pty_bytes(b"\x1b[?2026l");
     assert!(runtime.startup_snapshot().unwrap().0.contains("partial"));
 }
+
+#[path = "verified_launch_test.rs"]
+mod verified_launch;

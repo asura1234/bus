@@ -40,19 +40,3 @@ pub struct TabInfo {
     pub pane_count: usize,
     pub agent_status: AgentStatus,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct TabAgentLaunch {
-    pub name: String,
-    pub kind: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
-/// Atomic native provider-tab creation; the existing tab.create contract stays unchanged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentCreateParams {
-    #[serde(flatten)]
-    pub tab: TabCreateParams,
-    pub launch: TabAgentLaunch,
-}

@@ -148,8 +148,11 @@ fn api_session_kind_keeps_domain_id_and_path_serialized_spellings() {
 #[cfg(unix)]
 fn test_app() -> App {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut config = crate::utils::config::Config::default();
+    config.terminal.default_shell = "/bin/bash".into();
+    config.terminal.shell_mode = crate::utils::config::ShellModeConfig::NonLogin;
     App::new(
-        &crate::utils::config::Config::default(),
+        &config,
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -170,7 +173,7 @@ async fn restored_provider_is_launching_until_the_resumed_process_is_confirmed()
     app.state.workspaces = vec![workspace];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    app.state.default_shell = "/bin/sh".into();
+    app.state.default_shell = "/bin/bash".into();
     let dir = crate::utils::test_temp::unique_temp_path("bus-failed-resume-cli");
     std::fs::create_dir_all(&dir).unwrap();
     let provider = dir.join("fake-claude.sh");
@@ -845,32 +848,34 @@ async fn recorded_native_resume(label: &str, kind: crate::agents::AgentKind) -> 
     app.state.workspaces = vec![workspace];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    // A shell that records the typed resume command instead of running it.
+    // Execute a recording provider through the real, integrated shell. A raw
+    // `head` process cannot acknowledge an editor buffer and must not get input.
     let dir = crate::utils::test_temp::unique_temp_path("bus-resume-recording-shell");
     std::fs::create_dir_all(&dir).unwrap();
     let typed = dir.join("typed");
     let env = dir.join("env");
-    let shell = dir.join("sh");
+    let provider = dir.join("record-provider");
     std::fs::write(
-        &shell,
+        &provider,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$DISABLE_AUTOUPDATER\" > '{}'\nexec head -n 1 > '{}'\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$DISABLE_AUTOUPDATER\" > '{}'\nprintf '%s ' \"$@\" > '{}'\nprintf '\\n' >> '{}'\n",
             env.display(),
+            typed.display(),
             typed.display()
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
-    app.state.default_shell = shell.to_string_lossy().into_owned();
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
     app.state.shell_mode = crate::utils::config::ShellModeConfig::NonLogin;
     let session = crate::agents::resume::catalog::PersistedAgentSession {
         source: format!("herdr:{label}"),
         agent: label.into(),
         session_ref: crate::agents::resume::catalog::AgentSessionRef::id("saved-session").unwrap(),
     };
-    let plan =
+    let mut plan =
         crate::agents::resume::catalog::plan(&session.source, &session.agent, &session.session_ref)
             .unwrap();
+    plan.argv[0] = provider.to_string_lossy().into_owned();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.restore_managed_agent("saved-worker".into(), kind);
     terminal.set_persisted_agent_session(session);
@@ -968,7 +973,7 @@ fn native_attempt_app(
     app.state.workspaces = vec![ws];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    app.state.default_shell = "/bin/sh".into();
+    app.state.default_shell = "/bin/bash".into();
     let t = app.state.terminals.get_mut(&id).unwrap();
     t.restore_managed_agent("bus-r1-a2".into(), kind);
     t.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {

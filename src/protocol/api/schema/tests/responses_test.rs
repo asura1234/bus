@@ -266,7 +266,6 @@ fn create_response_round_trips_with_root_pane() {
     let response = SuccessResponse {
         id: "req_2".into(),
         result: ResponseResult::TabCreated {
-            agent_started: false,
             tab: TabInfo {
                 tab_id: "w_1:2".into(),
                 workspace_id: "w_1".into(),
