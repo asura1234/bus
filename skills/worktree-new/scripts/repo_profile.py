@@ -70,12 +70,12 @@ SKIP = {
 
 
 def git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True
-    )
+    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True)
     if result.returncode:
-        raise ValueError(f"git {' '.join(args)}: {result.stderr.strip()}")
-    return result.stdout.rstrip("\n")
+        raise ValueError(
+            f"git {' '.join(args)}: {result.stderr.decode('utf-8', 'surrogateescape').strip()}"
+        )
+    return result.stdout.removesuffix(b"\n").decode("utf-8", "surrogateescape")
 
 
 def main_worktree(repo: Path) -> Path:
