@@ -15,7 +15,7 @@ def gate_policy(repo: Path, command: str | None) -> tuple[str, bool]:
     configured = None
     if SCANNER.is_file():
         result = subprocess.run(
-            [sys.executable, str(SCANNER), "scan", "--repo", str(repo)],
+            [sys.executable, str(SCANNER), "scan", "--repo", str(repo), "--no-cache"],
             cwd=repo, capture_output=True, text=True,
         )
         if result.returncode:
@@ -39,3 +39,34 @@ def gate_policy(repo: Path, command: str | None) -> tuple[str, bool]:
 def command_argv(command: str) -> tuple[str, ...]:
     """Profile gate commands intentionally support shell syntax, as repo.toml specifies."""
     return ("cmd", "/d", "/s", "/c", command) if os.name == "nt" else ("sh", "-c", command)
+
+
+def artifact_root(repo: Path, requested: str | None) -> Path:
+    """Keep evidence out of source status without changing ignore configuration."""
+    def git(*args: str) -> str:
+        result = subprocess.run(["git", "-C", str(repo), *args], text=True, capture_output=True)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or "cannot resolve evidence metadata")
+        return result.stdout.strip()
+
+    common = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+    fallback = common / "bus/gate-and-fix"
+    if requested is None:
+        return fallback
+    requested_path = Path(requested).resolve()
+    if requested_path.is_relative_to(common):
+        return requested_path
+    # A linked worktree's scanner/evidence must not dirty its main checkout either.
+    for record in git("worktree", "list", "--porcelain").splitlines():
+        if not record.startswith("worktree "):
+            continue
+        worktree = Path(record.removeprefix("worktree ")).resolve()
+        if requested_path.is_relative_to(worktree):
+            ignored = subprocess.run(
+                ["git", "-C", str(worktree), "check-ignore", "--quiet", "--", str(requested_path)],
+                capture_output=True,
+            )
+            if ignored.returncode not in (0, 1):
+                raise ValueError("cannot determine whether the evidence root is ignored")
+            return requested_path if ignored.returncode == 0 else fallback
+    return requested_path

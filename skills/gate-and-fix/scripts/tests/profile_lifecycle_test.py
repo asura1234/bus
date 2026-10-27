@@ -19,7 +19,7 @@ import gate_process  # noqa: E402
 
 def repository(root):
     for argv in (
-        ("init", "-q"), ("config", "user.email", "fixture@example.test"),
+        ("init", "-q", "-b", "feature"), ("config", "user.email", "fixture@example.test"),
         ("config", "user.name", "fixture"),
     ):
         subprocess.run(("git", *argv), cwd=root, check=True)

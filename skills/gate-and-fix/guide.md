@@ -9,9 +9,9 @@ replace `rebase-origin-main` or PR creation.
 The target is the Git top level of the caller's cwd (or `--repo`); installed support paths
 never identify the target. Commands in SKILL.md resolve from the loaded skill directory.
 Shared support, when needed, is `Path(__file__).resolve().parents[2] / '_bus'`.
-The runner executes the sibling `worktree-new/scripts/repo_profile.py scan --repo PATH`
+The runner executes the sibling `worktree-new/scripts/repo_profile.py scan --repo PATH --no-cache`
 and consumes its stdout, rather than trusting the main-worktree cache across checkouts.
-The schema is owned by worktree-new's `references/repo-profile-format.md`.
+The read-only scan creates no target-tree cache. The schema is owned by worktree-new's `references/repo-profile-format.md`.
 
 `--command` is the caller's selected gate command; when omitted, use `policy.gate_command`.
 A missing scanner without an explicit command, or a null/empty command, reports
@@ -30,8 +30,8 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
 - The sole source of the diff is the immutable `base...HEAD` resolved when the invocation starts.
   Before starting any gate the runner checks the worktree with
   `git status --porcelain --untracked-files=all`; any tracked or untracked change makes it exit
-  with `2` without producing an artifact. The caller must obtain a clean worktree first; an
-  in-repository artifact root must be ignored.
+  with `2` without producing an artifact. The caller must obtain a clean worktree first. Evidence defaults below the absolute Git common
+  directory. An explicit unignored source-tree artifact root relocates there; an ignored or external request is honored. The printed path is authoritative.
 - After all checks, the runner rechecks the worktree and HEAD before writing the artifact. A
   concurrent edit or commit invalidates the round (`2`, no artifact), even if every command passed.
 - Never run the release build (`just build`), the live end-to-end check (`just e2e`), or manual UI

@@ -12,21 +12,23 @@ INPUT = [--base <immutable commit>] [--command "<repo gate command>"]
 
 repo   = git rev-parse --show-toplevel
 branch = git branch --show-current
+IF caller base is absent: run `git fetch origin` before refreshing its default.
 base   = caller-provided immutable commit, otherwise resolve origin's default branch with:
-  python3 "<SKILL_DIR>/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>"
+  python3 "<SKILL_DIR>/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>" --refresh-default
 STOP if base resolution fails; never assume master/main.
 command = caller-provided --command, otherwise policy.gate_command from the fresh repo scan.
 The runner owns scanning; missing configuration is STOP "no gate configured", never PASS.
 
-IF branch is empty OR branch IN {main, master}
-  STOP "gate-and-fix runs only on a feature branch."
+Run the branch guard (it uses the full origin symbolic ref, never --short):
+  python3 "<SKILL_DIR>/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>" --base HEAD --check-branch "<branch>"
+IF it fails: STOP with stderr.
 IF git status --porcelain --untracked-files=all is nonempty
   STOP "The worktree is not clean; commit or remove every tracked and untracked change first."
 IF git diff --name-only <base>...HEAD is empty
   STOP "There are no committed changes against the base."
 
 branch_slug = branch with every character outside [A-Za-z0-9_-] replaced by `-`
-artifact_root = temp/gate-and-fix/<branch_slug>
+artifact_root = <absolute Git common directory>/bus/gate-and-fix/<branch_slug>
 round = 1
 LOOP:
   Run:

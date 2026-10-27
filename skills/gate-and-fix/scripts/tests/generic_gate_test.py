@@ -41,6 +41,7 @@ class GenericGateTest(unittest.TestCase):
             "repo = pathlib.Path(sys.argv[3])\n"
             "print((repo / 'policy.json').read_text())\n"
         )
+        shutil.copytree(SCRIPTS.parents[1] / "rebase-origin-main/scripts", self.bundle / "rebase-origin-main/scripts")
         self.profile(None)
 
     def git(self, *args):
@@ -53,10 +54,11 @@ class GenericGateTest(unittest.TestCase):
         self.git("add", "policy.json")
         self.git("commit", "-qm", "gate policy")
 
-    def run_gate(self, *args):
+    def run_gate(self, *args, env_extra=None):
         nested = self.repo / "nested"
         nested.mkdir(exist_ok=True)
         env = {k: v for k, v in os.environ.items() if not k.startswith(("BUS_", "HERDR_"))}
+        env.update(env_extra or {})
         return subprocess.run([
             sys.executable, str(self.runner), "--base", self.base, "--round", "1",
             "--artifact-root", str(self.repo / "temp/evidence"), *args
@@ -104,11 +106,12 @@ class GenericGateTest(unittest.TestCase):
         self.assertEqual(result.stdout, "")
 
     def test_malformed_profile_is_not_masked_by_command(self):
-        (self.repo / "policy.json").write_text('{"policy": {"gate_command": 42}}')
+        (self.repo / "policy.json").write_text('{"policy": {"gate_command": 42, "require_exact_head_gate": true}}')
         self.git("commit", "-qam", "malformed policy")
         result = self.run_gate("--command", "true")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
+        self.assertIn("gate_command must be a nonempty string or null", result.stderr)
 
     def test_explicit_just_ci_does_not_opt_non_bus_profile_into_bus_lanes(self):
         fake_bin = self.root / "bin"
@@ -129,6 +132,67 @@ class GenericGateTest(unittest.TestCase):
         result = self.run_gate("--command", "true")
         self.assertEqual(result.returncode, 2)
         self.assertIn("repo profile scan failed", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_shell_commands_with_backticks_and_newlines_roundtrip(self):
+        for command, expected in [("printf '%s' `printf shell-gate`", "shell-gate"),
+                                  ("printf first\nprintf second", "firstsecond")]:
+            with self.subTest(command=command):
+                self.profile(command)
+                result = self.run_gate()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                shown = subprocess.run([
+                    sys.executable, str(self.runner), "show", "--artifact", result.stdout.strip(),
+                    "--base", self.base, "--gate", "repository-gate", "--stream", "stdout"
+                ], text=True, capture_output=True, check=True)
+                self.assertEqual(shown.stdout, expected)
+
+    def test_generic_gate_scrubs_live_session_env_but_keeps_target_env(self):
+        self.profile('printf "%s" "${BUS_DATA_DIR-absent}:${HERDR_COORDINATE-absent}:${TARGET_GATE_VALUE}"')
+        result = self.run_gate(env_extra={"BUS_DATA_DIR": "/isolated/sentinel", "HERDR_COORDINATE": "sentinel", "TARGET_GATE_VALUE": "kept"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        shown = subprocess.run([
+            sys.executable, str(self.runner), "show", "--artifact", result.stdout.strip(),
+            "--base", self.base, "--gate", "repository-gate", "--stream", "stdout"
+        ], text=True, capture_output=True, check=True)
+        self.assertEqual(shown.stdout, "absent:absent:kept")
+
+    def test_unignored_evidence_is_relocated_to_git_metadata(self):
+        (self.repo / ".gitignore").write_text("")
+        self.git("commit", "-qam", "no temporary directory convention")
+        self.profile("printf clean-gate")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assertTrue(Path(result.stdout.strip()).is_relative_to(self.repo / ".git"))
+
+    def test_real_scanner_keeps_unignored_linked_worktree_and_main_clean(self):
+        (self.repo / ".gitignore").write_text("")
+        policy = self.repo / ".bus/repo.toml"
+        policy.parent.mkdir()
+        policy.write_text('gate_command = "printf scanned-gate"\n')
+        self.git("add", ".bus/repo.toml", ".gitignore")
+        self.git("commit", "-qm", "real policy and no temporary directory ignore")
+        scanner = SCRIPTS.parents[1] / "worktree-new/scripts/repo_profile.py"
+        shutil.copyfile(scanner, self.scanner)
+        linked = self.root / "linked"
+        self.git("worktree", "add", "-qb", "linked-feature", str(linked))
+        result = self.run_gate("--repo", str(linked))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assertEqual(subprocess.check_output(["git", "-C", str(linked), "status", "--porcelain", "--untracked-files=all"], text=True), "")
+        self.assertFalse((self.repo / "temp").exists())
+        self.assertFalse((linked / "temp").exists())
+
+    def test_gate_rejects_origin_default_branch_even_with_explicit_base(self):
+        self.profile("printf should-not-run")
+        self.git("update-ref", "refs/remotes/origin/trunk", self.git("rev-parse", "HEAD"))
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+        self.git("checkout", "-q", "trunk")
+        self.git("merge", "--ff-only", "feature")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("protected branch", result.stderr)
         self.assertEqual(result.stdout, "")
 
     def test_gate_edit_invalidates_passing_exit(self):

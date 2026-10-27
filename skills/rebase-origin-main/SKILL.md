@@ -28,8 +28,8 @@ Pure git; runnable by any AI agent.
 
 INPUT = [--base <ref-or-commit>]
 repo = `git rev-parse --show-toplevel`; run Git commands in repo.
-default_ref = `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` if available.
-protected = main, master, and default_ref with its `origin/` prefix removed.
+default_ref = `git symbolic-ref --quiet refs/remotes/origin/HEAD` if available.
+Use only the full `refs/remotes/origin/` prefix to derive a protected branch; never --short.
 
 rebase_root = the single existing path from
   `git rev-parse --git-path rebase-merge` / `git rev-parse --git-path rebase-apply`
@@ -54,8 +54,8 @@ ELSE:
 -- The protected-branch guard applies equally to both entry paths. The resume path also ends in the
 --   final force push; checking only inside ELSE would let "a rebase paused on master" bypass the guard
 --   and rewrite a protected branch directly.
-IF branch IN protected
-  ERROR "Rebasing or rewriting history is not allowed on protected branches."
+Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>" --base HEAD --check-branch "<branch>"`.
+IF it fails: STOP with stderr; the same guard protects fresh and paused invocations.
 
 IF rebase_root exists:
   base = contents of `<rebase_root>/onto`, verified as a commit.
@@ -67,7 +67,9 @@ IF rebase_root exists:
 
 `git fetch origin`
 Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
-`--base "<caller base>"` only when supplied. Capture its sole stdout line as base.
+`--base "<caller base>"` only when supplied, and always add `--refresh-default --check-branch "<branch>"`.
+This refreshes origin/HEAD with `git remote set-head origin --auto` after the fetch and rechecks protection.
+Capture its sole stdout line as base. Never refresh/fetch when resuming a paused rebase.
 IF resolution fails: STOP with stderr. Never substitute master/main for a missing origin HEAD.
 The resolver uses origin's symbolic HEAD by default and pins the chosen base to a commit.
 

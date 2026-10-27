@@ -28,6 +28,19 @@ _CI_TOOLS = frozenset({"just", "cargo-nextest"})
 
 
 class GateAndFixTest(unittest.TestCase):
+    def test_command_argv_roundtrips_shell_syntax_and_rejects_malformed_arrays(self):
+        from gate_artifact import _parse_round
+        import json
+        argv = ("sh", "-c", "printf `whoami`\nprintf '值'", "")
+        artifact = render_round(round_number=1, base="base", head="head", changed_files=["file"],
+                                results=[GateResult("gate", argv, 0, 0, "output", "")])
+        self.assertEqual(_parse_round(artifact, expected_base="base")[1]["gate"].argv, argv)
+        command_line = "- Command argv: " + json.dumps(argv, ensure_ascii=True)
+        for bad in ("[]", "42", '["sh", 42]', '["", "arg"]', "not-json"):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(ValueError, "Command argv"):
+                    validate_round(artifact.replace(command_line, "- Command argv: " + bad), expected_base="base")
+
     def test_every_diff_always_runs_four_checks_and_diff(self) -> None:
         for changed in (
             ["src/main.rs"],
@@ -287,7 +300,7 @@ class GateAndFixTest(unittest.TestCase):
             source = repo / "skills/gate-and-fix/scripts/example.py"
             source.parent.mkdir(parents=True)
             source.write_text("before\n", encoding="utf-8")
-            self._git(repo, "init", "-q")
+            self._git(repo, "init", "-q", "-b", "feature")
             self._git(repo, "config", "user.email", "test@example.com")
             self._git(repo, "config", "user.name", "Test User")
             self._git(repo, "add", ".")
@@ -325,7 +338,7 @@ class GateAndFixTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertEqual(stdout.getvalue(), "")
             self.assertIn("changed while gates ran", stderr.getvalue())
-            self.assertEqual(len(list(artifact_root.glob("*.md"))), 2)
+            self.assertEqual(len(list(first.parent.glob("*.md"))), 2)
 
     def test_main_rejects_a_dirty_worktree_without_an_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -334,7 +347,7 @@ class GateAndFixTest(unittest.TestCase):
             source = repo / "skills/gate-and-fix/scripts/example.py"
             source.parent.mkdir(parents=True)
             source.write_text("before\n", encoding="utf-8")
-            self._git(repo, "init", "-q")
+            self._git(repo, "init", "-q", "-b", "feature")
             self._git(repo, "config", "user.email", "test@example.com")
             self._git(repo, "config", "user.name", "Test User")
             self._git(repo, "add", ".")

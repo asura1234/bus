@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,10 @@ from typing import Sequence
 from gate_artifact import GateResult, _parse_round, render_round, validate_round
 from coverage_run import Run
 from gate_process import Children, Interrupted, interrupt_signals
-from repo_gate import command_argv, gate_policy
+from repo_gate import artifact_root, command_argv, gate_policy
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main/scripts"))
+from rebase_base import ensure_feature_branch  # noqa: E402
 
 
 CI_TOOLS = frozenset({"just", "cargo-nextest"})
@@ -38,6 +42,7 @@ class Gate:
     argv: tuple[str, ...]
     resources: frozenset[str] = frozenset()
     requires_exclusive_execution: bool = False
+    scrub_session_env: bool = False
 
 
 def _validate_paths(changed_files: Sequence[str]) -> tuple[str, ...]:
@@ -90,6 +95,8 @@ def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env={key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_"))}
+            if gate.scrub_session_env else None,
         )
     except OSError as error:
         return GateResult(
@@ -264,13 +271,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--base", required=True, help="immutable baseline commit after rebase")
     parser.add_argument("--command", help="gate command supplied by the caller's repository policy")
     parser.add_argument("--round", required=True, type=int)
-    parser.add_argument("--artifact-root", required=True, help="artifact root dedicated to this invocation")
+    parser.add_argument("--artifact-root", help="evidence root; unignored source paths relocate below Git metadata")
     args = parser.parse_args(arguments)
 
     try:
         if args.round < 1:
             raise ValueError("round must be greater than 0")
         repo = Path(_git_output(Path(args.repo).resolve(), "rev-parse", "--show-toplevel"))
+        ensure_feature_branch(repo, _git_output(repo, "branch", "--show-current"))
         if _git_output(repo, "status", "--porcelain", "--untracked-files=all"):
             raise ValueError(
                 "worktree is not clean: commit or remove every tracked and untracked change before running gate-and-fix"
@@ -289,8 +297,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             gates = [
-                Gate("repository-gate", command_argv(command), requires_exclusive_execution=True),
-                Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD")),
+                Gate("repository-gate", command_argv(command), requires_exclusive_execution=True, scrub_session_env=True),
+                Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD"), scrub_session_env=True),
             ]
         coverage = Run(repo, repo / "temp/gate-and-fix/coverage", "gate") if is_bus else nullcontext()
         with interrupt_signals(), coverage:
@@ -303,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "HEAD or worktree changed while gates ran; discard this round and run on a clean committed tip"
             )
         artifact_path = _write_artifact(
-            Path(args.artifact_root).resolve(),
+            artifact_root(repo, args.artifact_root),
             round_number=args.round,
             artifact=render_round(
                 round_number=args.round,

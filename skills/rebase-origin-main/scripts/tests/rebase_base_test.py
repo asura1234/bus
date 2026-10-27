@@ -9,6 +9,22 @@ RESOLVER = Path(__file__).resolve().parents[1] / "rebase_base.py"
 
 
 class RebaseBaseTest(unittest.TestCase):
+    def test_full_default_ref_protects_ambiguous_local_branch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+            git("init", "-q", "-b", "trunk")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-qm", "initial")
+            head = git("rev-parse", "HEAD")
+            git("update-ref", "refs/remotes/origin/trunk", head)
+            git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+            git("branch", "origin/trunk")
+            result = subprocess.run([sys.executable, str(RESOLVER), "--base", head, "--check-branch", "trunk"], cwd=repo, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("protected branch", result.stderr)
+            self.assertEqual(result.stdout, "")
+
     def test_default_and_explicit_base_drive_real_rebase(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -43,6 +59,19 @@ class RebaseBaseTest(unittest.TestCase):
             explicit = subprocess.run([sys.executable, str(RESOLVER), "--base", first], cwd=repo, text=True, capture_output=True)
             self.assertEqual(explicit.returncode, 0, explicit.stderr)
             self.assertEqual(explicit.stdout.strip(), first)
+            # A normal fetch leaves origin/HEAD stale after the forge switches defaults.
+            git("checkout", "-qb", "new-trunk")
+            (repo / "new-base").write_text("new default\n")
+            git("add", "new-base")
+            git("commit", "-qm", "new default")
+            git("push", "-q", "origin", "new-trunk:new-trunk")
+            subprocess.run(["git", "-C", str(origin), "symbolic-ref", "HEAD", "refs/heads/new-trunk"], check=True)
+            git("checkout", "-q", "feature")
+            git("-c", "fetch.followRemoteHEAD=never", "fetch", "-q", "origin")
+            self.assertEqual(git("symbolic-ref", "refs/remotes/origin/HEAD"), "refs/remotes/origin/trunk")
+            refreshed = subprocess.run([sys.executable, str(RESOLVER), "--refresh-default"], cwd=repo, text=True, capture_output=True)
+            self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
+            self.assertEqual(refreshed.stdout.strip(), git("rev-parse", "origin/new-trunk"))
             git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
             missing = subprocess.run([sys.executable, str(RESOLVER)], cwd=repo, text=True, capture_output=True)
             self.assertNotEqual(missing.returncode, 0)

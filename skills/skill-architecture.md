@@ -174,7 +174,7 @@ When modifying or adding a workflow skill:
 
 ## Repository handoff for gate and rebase
 
-`pr` / `merge-pr` pass `rebase-origin-main --base <origin/default-or-explicit-base>`
+The caller handoff contract requires `pr` / `merge-pr` to pass `rebase-origin-main --base <origin/default-or-explicit-base>`
 and `gate-and-fix --base <immutable-baseline> --command "<policy.gate_command>"`.
 Omit `--command` for a null policy; gate-and-fix rescans with worktree-new and reports
 "no gate configured" rather than PASS. Omit `--base` for rebase-origin-main to resolve
