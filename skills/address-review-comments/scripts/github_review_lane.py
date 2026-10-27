@@ -20,6 +20,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import sys
@@ -311,9 +312,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "fetch":
-            repo = Path(args.repo) if args.repo else Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
-            with __import__("contextlib").chdir(repo):
-                payload = fetch(args.pr, repo.resolve(), args.lane)
+            repo = Path(args.repo).resolve() if args.repo else Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+            with contextlib.chdir(repo):
+                payload = fetch(args.pr, repo, args.lane)
         elif args.command == "reviews":
             payload = review_coverage(args.pr)
         elif args.command == "verdict":
@@ -326,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = post_triage(args.pr, Path(args.triage), Path(args.round_dir) if args.round_dir else None)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
-    except LaneError as error:
+    except (LaneError, OSError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
