@@ -127,6 +127,7 @@ class SkillInstallSafetyTests(unittest.TestCase):
         repo.mkdir()
         subprocess.run(["git", "init", "--initial-branch=feature", "--template="], cwd=repo,
                        env=self.env, capture_output=True, check=True)
+        (repo / ".git/info").mkdir()
         (repo / ".git/info/exclude").write_text("temp/\n")
         for content in ("base", "change"):
             (repo / "file.txt").write_text(content)
