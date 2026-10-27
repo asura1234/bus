@@ -1,9 +1,57 @@
 //! Native draft mechanisms used by the scratch provider CLIs.
-use super::FakeAgent;
+use super::{kill_line, FakeAgent, Input, Typed};
 use std::io::Write;
 use std::process::Command;
 
 impl FakeAgent {
+    /// Applies one input to the draft, redrawing it.
+    pub(super) fn apply(&mut self, input: Input) -> Option<Typed> {
+        match input {
+            Input::Text(text) => self.draft.push_str(&text),
+            Input::Paste(text) => {
+                self.draft.push_str(&text);
+                self.collapsed_paste = true;
+            }
+            // Nothing to erase: nothing to redraw.
+            Input::Backspace => {
+                self.draft.pop()?;
+            }
+            Input::KillLine => {
+                if self.collapsed_paste {
+                    self.draft.clear();
+                } else {
+                    kill_line(&mut self.draft);
+                }
+            }
+            Input::Stash if !self.live_turn() => self.stash(),
+            Input::Editor if self.live_turn() => self.edit_draft(),
+            Input::Stash | Input::Editor => return None,
+            Input::Enter if !self.draft.trim().is_empty() => {
+                let draft = std::mem::take(&mut self.draft);
+                self.collapsed_paste = false;
+                let (prompt, images) = self.lift(&draft);
+                self.images += images;
+                if let Some((draft, collapsed)) = self.stashed.take() {
+                    self.draft = draft;
+                    self.collapsed_paste = collapsed;
+                }
+                return Some(Typed::Submit(prompt));
+            }
+            Input::Enter => return None,
+            Input::Escape if self.working.is_some() && !self.cursor() => return Some(Typed::Stop),
+            Input::Escape => return None,
+            Input::Interrupt if self.working.is_some() && self.cursor() => {
+                return Some(Typed::Stop)
+            }
+            Input::Interrupt => return Some(Typed::Exit),
+        }
+        if self.draft.is_empty() {
+            self.collapsed_paste = false;
+        }
+        self.redraw();
+        None
+    }
+
     pub(super) fn stash(&mut self) {
         if self.draft.trim().is_empty() {
             if let Some((draft, collapsed)) = self.stashed.take() {

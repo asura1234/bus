@@ -101,8 +101,10 @@ pub(super) fn run(provider: &str, args: &[String]) -> i32 {
     if crossterm::terminal::enable_raw_mode().is_err() {
         return 1;
     }
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
     agent.input = Some(read_input());
     let code = agent.read_loop();
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     let _ = crossterm::terminal::disable_raw_mode();
     code
 }
@@ -289,54 +291,6 @@ impl FakeAgent {
         let mut out = std::io::stdout();
         let _ = write!(out, "{frame}");
         let _ = out.flush();
-    }
-
-    /// Applies one input to the draft, redrawing it.
-    fn apply(&mut self, input: Input) -> Option<Typed> {
-        match input {
-            Input::Text(text) => self.draft.push_str(&text),
-            Input::Paste(text) => {
-                self.draft.push_str(&text);
-                self.collapsed_paste = true;
-            }
-            // Nothing to erase: nothing to redraw.
-            Input::Backspace => {
-                self.draft.pop()?;
-            }
-            Input::KillLine => {
-                if self.collapsed_paste {
-                    self.draft.clear();
-                } else {
-                    kill_line(&mut self.draft);
-                }
-            }
-            Input::Stash if !self.live_turn() => self.stash(),
-            Input::Editor if self.live_turn() => self.edit_draft(),
-            Input::Stash | Input::Editor => return None,
-            Input::Enter if !self.draft.trim().is_empty() => {
-                let draft = std::mem::take(&mut self.draft);
-                self.collapsed_paste = false;
-                let (prompt, images) = self.lift(&draft);
-                self.images += images;
-                if let Some((draft, collapsed)) = self.stashed.take() {
-                    self.draft = draft;
-                    self.collapsed_paste = collapsed;
-                }
-                return Some(Typed::Submit(prompt));
-            }
-            Input::Enter => return None,
-            Input::Escape if self.working.is_some() && !self.cursor() => return Some(Typed::Stop),
-            Input::Escape => return None,
-            Input::Interrupt if self.working.is_some() && self.cursor() => {
-                return Some(Typed::Stop)
-            }
-            Input::Interrupt => return Some(Typed::Exit),
-        }
-        if self.draft.is_empty() {
-            self.collapsed_paste = false;
-        }
-        self.redraw();
-        None
     }
 
     /// Answers `prompt` in one turn; the exit code when interrupted meanwhile.
