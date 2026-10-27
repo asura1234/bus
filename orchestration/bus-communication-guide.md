@@ -48,7 +48,8 @@ peer traffic.
 - **Done:** PR merged (link, SHA), task finished, worktree closed.
 - **Blocked:** you can't proceed and your peers can't unblock you.
 - **Decision needed:** scope (in or out of the locked goal), a gate-failure
-  release, a FLAG, a product question, the fix-round cap or the 3000-line split
+  release, a FLAG, a product question, sharp reviewer disagreement, a goal
+  change, an unauthorized outward/destructive action or the 3000-line split
   threshold reached.
 - **Staffing:** a named peer is missing, unresponsive or replaced.
 - **A conflict** you couldn't settle with the other party (shared file, slot,

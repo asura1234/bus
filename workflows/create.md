@@ -36,7 +36,7 @@ room workflow and does not require drafting a new room workflow or kickoff.
 | Pipeline | Many items through the same stages | each item moves on as soon as it is ready |
 | Explore then commit | Uncertain approach | research → parallel spikes → measure against gates → pick |
 | Best-of-N | A judgment call | N agents propose independently → compare → pick or ask the developer |
-| Review loop | Code must converge | reviewers on different models → author fixes → repeat until all ready, capped |
+| Review loop | Code must converge | reviewers on different models → author fixes → repeat until every reviewer is Ready |
 | Cross-repo | Same feature on several platforms | one agent per repo in parallel, shared spec, joint review |
 | Bug-fix (`DOCS/workflows/bug-fix.md`) | A list of bugs needs investigation and triage | parallel investigators → triage → fix or add diagnostics → verify → PR up |
 
@@ -46,7 +46,9 @@ Always add:
   author (tests, a reviewer, the developer).
 - **A failure route:** where work goes when a gate fails (back to research, a
   rethink with the developer), not just the happy path.
-- **A cap:** maximum review rounds or attempts before you stop and ask the developer.
+- **A decision route:** keep fixing until every reviewer is Ready. Hold and
+  escalate sharp reviewer disagreements, goal changes, or destructive or
+  outward-facing actions without existing authorization.
 
 ## 3. Write workflow.md
 

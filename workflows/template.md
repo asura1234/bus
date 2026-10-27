@@ -53,28 +53,26 @@ flowchart TD
         plan[<agent>: plan] --> implement[<agent>: implement, open PR]
     end
 
-    implement --> initround["Orchestrator: record or resume fix_round and fix_round_cap (brief overrides workflow; default 2; none = uncapped; new PR count: 0)"]
-    initround --> verify1[Developer: manual check]:::developer
-    verify1 -- behavior wrong --> nextfix
+    implement --> verify1[Developer: manual check]:::developer
+    verify1 -- behavior wrong --> decision
     verify1 -- ok --> review
 
     subgraph reviewloop [4. Review]
         review[Fan out reviewers on different models: review-pr]
         review --> ready{All reviewers ready?}
-        ready -- no --> nextfix["Orchestrator: next_fix_round = fix_round + 1"]
-        nextfix --> overbudget{"Numeric fix_round_cap and next_fix_round > fix_round_cap?"}
-        overbudget -- no --> countfix["Orchestrator: record fix_round = next_fix_round"]
-        countfix --> fix[Author: address-review-comments or developer feedback; push]
+        ready -- no --> decision{"Sharp reviewer disagreement, goal change or unauthorized outward/destructive action?"}
+        decision -- no --> fix[Author: address-review-comments or developer feedback; push]
         fix -- review findings --> review
         fix -- verify1 feedback --> verify1
         fix -- verify2 feedback --> verify2
     end
 
-    overbudget -- yes --> hold[Orchestrator: hold this PR; report cause and plan; keep independent work moving]
+    decision -- yes --> hold[Orchestrator: hold affected work; resolve decision; keep independent work moving]
+    hold -- resolved --> decision
 
     ready -- yes --> verify2[Developer: regression test]:::developer
-    verify2 -- problem --> nextfix
-    verify2 -- ok --> merge[Author: auto-merge-pr under kickoff authority; carry the fix counter, cap and holds]
+    verify2 -- problem --> decision
+    verify2 -- ok --> merge[Author: auto-merge-pr under kickoff authority; honor explicit holds]
     merge --> done([Merged])
 
     classDef developer fill:#fde2e4,stroke:#c9184a
@@ -119,14 +117,14 @@ to their peers. Assign one verifier per 1–2 PRs.
 ## Decision rules
 
 - <What the orchestrator may decide alone, and what must go to the developer.>
-- Follow the binding orchestrator rules. Resolve `fix_round_cap` from the brief,
-  otherwise the room's workflow, otherwise `2`; `none` means iterate until every
-  reviewer is Ready. Count all repairs per PR, including developer feedback;
-  review and verify the last permitted repaired head before deciding whether it
-  can merge. Hold a PR needing a repair beyond a numeric cap, report the count,
-  cap, cause and plan, and keep independent work moving.
+- Follow the binding orchestrator rules. Keep fixing until every reviewer is
+  Ready, including repairs from developer feedback. Review and verify each new
+  head before it can merge. Hold and escalate sharp reviewer disagreements,
+  goal changes, or destructive or outward-facing actions without existing
+  authorization; keep independent work moving while a decision is pending.
 - For technical disagreement, the author runs `best-of-n` and applies its
-  top-ranked option for in-goal technical issues without a FLAG. Anything
+  top-ranked option for in-goal technical issues without a FLAG unless reviewers
+  disagree sharply, in which case the orchestrator resolves the decision. Anything
   FLAGGED or needing a developer decision goes to the orchestrator in a final;
   it handles triage and takes product decisions to the developer.
 
@@ -147,9 +145,7 @@ Use these peers from your brief. If one is missing or replaced, message the
 orchestrator; it owns staffing, room notes, the roster and verifier allocation.
 Workers do not edit room notes or the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
-inherited `fix_round`, `fix_round_cap` (a nonnegative integer or `none`),
-recorded merge authority and explicit holds. The brief's cap overrides the
-room's workflow cap; if neither supplies one, the cap is `2`.
+recorded merge authority and explicit holds.
 
 Message peers directly. The verifier sends `VERIFIED <PR/task> @<full SHA>`
 with evidence, or defects with `file:line` and reproduction, straight to the
@@ -160,13 +156,10 @@ head to verifier and reviewers on every push and gets current-head evidence.
 If you own a PR, use the owner-run path in `auto-merge-pr` and enforce these
 checks before every repair batch and merge, including inside `merge-pr`:
 
-- Carry the inherited fix-round counter and record each batch in the PR repair
-  log. Use the `fix_round_cap` in your brief, otherwise the room's workflow;
-  default to **2** if neither supplies one. A numeric cap limits the total fix
-  rounds across review, verification, gates, bots and developer feedback;
-  **`none`** means iterate until every reviewer is Ready, with all other merge
-  gates still required. If another repair would exceed a numeric cap, stop and
-  send a final with the count, cap, cause and plan to the orchestrator.
+- Keep fixing until every reviewer is Ready, with all other merge gates still
+  required. Apply this to review, verification, gates, bots and developer feedback.
+  Hold and escalate sharp reviewer disagreements, goal changes, and destructive
+  or outward-facing actions without existing authorization to the orchestrator.
 - Never fix a finding outside the PR's locked goal in this PR. Exclude it and
   report it in the final as a follow-up for the orchestrator to decide and record.
 - Re-measure added plus removed lines against the pinned PR base, excluding

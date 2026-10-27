@@ -233,7 +233,8 @@ the wrapper remains held.
 - **Resolve review issues through the author.** Peers send findings and
   recommendations straight to the PR owner (the author). For in-goal technical
   disagreements without a FLAG, the author collects recommendations and runs
-  `best-of-n`, then applies its top-ranked option. Owners never fix out-of-goal
+  `best-of-n`, then applies its top-ranked option. Sharp reviewer disagreements
+  go to you for a decision before repairs continue. Owners never fix out-of-goal
   findings in the PR: they report them in finals as follow-ups for you to decide
   and record in the deferred list. Any FLAG or developer decision stops the
   owner's merge path and goes to you in a final for triage; unresolved items
@@ -272,21 +273,17 @@ the wrapper remains held.
   - Strongly encourage workers to use parallel subagents per checklist item or
     group for both investigation and fixes, under the write-ownership rules.
   - Run review, verification and any bot review concurrently on the same head.
-  - Set the PR's `fix_round_cap` in the worker brief or room workflow: the brief
-    takes precedence, the default is `2`, and `none` means iterate until every
-    reviewer is Ready. Carry the inherited count; stop and report if another
-    repair would exceed a numeric cap. If the core goal holds across the
-    checklist, every reviewer is Ready and required gates pass, use
-    `auto-merge-pr` under the [kickoff authority rule](#kickoff-authority). Turn
-    remaining edge work into follow-up PR steps in the running workflow and execute them.
-    Otherwise hold that PR, report the cause and plan, and keep independent
-    work moving.
-  - Escalate any PR open longer than four hours to the developer in MASTER with
-    `[waiting-on-you]`, the cause and a plan.
+  - Keep fixing until every reviewer is Ready. If the core goal holds across
+    the checklist and required gates pass, use `auto-merge-pr` under the
+    [kickoff authority rule](#kickoff-authority). Turn remaining edge work into
+    follow-up PR steps in the running workflow and execute them. Hold and
+    escalate only real decisions: sharp reviewer disagreements, goal changes,
+    or destructive or outward-facing actions without existing authorization.
+    Keep independent work moving while a decision is pending.
   - A review finding outside the checklist means enumeration was incomplete:
     update it and recheck the whole category, not just that instance.
 
-  *Why:* a complete checklist and bounded, parallel checks prevent each missed
+  *Why:* a complete checklist and focused, parallel checks prevent each missed
   place from costing another full review loop.
 
 - **Brief workers directly.** You act on the developer's behalf: state the task,
