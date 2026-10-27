@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -160,11 +161,11 @@ def _codeup_only(host, command: str):
 
 def repository_policy(repo: Path | None = None) -> dict:
     """Read policy from the main worktree; missing profiles use upstream defaults."""
-    done = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=repo,
-                          text=True, capture_output=True, check=False)
-    if done.returncode or not done.stdout.startswith("worktree "):
+    done = subprocess.run(["git", "worktree", "list", "--porcelain", "-z"], cwd=repo,
+                          capture_output=True, check=False)
+    if done.returncode or not done.stdout.startswith(b"worktree "):
         raise HostError("Cannot resolve the target repository's main worktree")
-    main = Path(done.stdout.splitlines()[0].removeprefix("worktree "))
+    main = Path(os.fsdecode(done.stdout.split(b"\0", 1)[0].removeprefix(b"worktree ")))
     path = main / "temp/.bus/repo-profile.json"
     policy = {}
     if path.is_file():
