@@ -16,9 +16,6 @@ pub struct TabCreateParams {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
-    /// Prefer an argv-based provider exec after shell rc files, without prompt input.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_launch: Option<TabAgentLaunch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
@@ -50,4 +47,12 @@ pub struct TabAgentLaunch {
     pub kind: String,
     #[serde(default)]
     pub args: Vec<String>,
+}
+
+/// Atomic native provider-tab creation; the existing tab.create contract stays unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentCreateParams {
+    #[serde(flatten)]
+    pub tab: TabCreateParams,
+    pub launch: TabAgentLaunch,
 }

@@ -5,7 +5,7 @@ use super::*;
 /// if a launch is submitted as terminal input while precmd is running.
 #[tokio::test]
 async fn direct_launch_keeps_login_environment_and_bypasses_slow_prompt_input() {
-    use crate::protocol::api::schema::{SuccessResponse, TabCreateParams};
+    use crate::protocol::api::schema::{AgentCreateParams, SuccessResponse};
     use std::os::unix::fs::PermissionsExt;
     for shell in ["/bin/zsh", "/bin/bash"] {
         if !std::path::Path::new(shell).exists() {
@@ -34,12 +34,12 @@ async fn direct_launch_keeps_login_environment_and_bypasses_slow_prompt_input() 
                 let mut app = app_with_agent();
                 app.state.default_shell = shell.into();
                 app.state.shell_mode = mode;
-                let params: TabCreateParams = serde_json::from_value(serde_json::json!({
+                let params: AgentCreateParams = serde_json::from_value(serde_json::json!({
                 "cwd": dir, "focus": false,
                 "env": {"HOME":dir,"ZDOTDIR":dir,"PATH":"/usr/bin:/bin","BUS_LAUNCH_ID":"direct-fixture"},
-                "agent_launch": {"name":"direct-fixture","kind":provider,"args":["one two","quote'and;$()","中文"]}
+                "launch": {"name":"direct-fixture","kind":provider,"args":["one two","quote'and;$()","中文"]}
             })).unwrap();
-                let response = app.handle_tab_create("direct".into(), params);
+                let response = app.handle_agent_create("direct".into(), params);
                 let success: SuccessResponse = serde_json::from_str(&response).unwrap();
                 let ResponseResult::TabCreated {
                     root_pane,

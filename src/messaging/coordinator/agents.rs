@@ -442,20 +442,7 @@ impl Worker {
             hooks.launch_id,
             prepared.adopted_session.clone(),
         )?;
-        let created = self
-            .transport
-            .request(Method::TabCreate(schema::TabCreateParams {
-                workspace_id: None,
-                cwd: Some(prepared.cwd.to_string_lossy().into_owned()),
-                focus: false,
-                label: Some(input.name.clone()),
-                agent_launch: Some(schema::TabAgentLaunch {
-                    name: identity::managed_name(input.room, id),
-                    kind: identity::provider_kind(input.provider).label().into(),
-                    args: prepared.args.clone(),
-                }),
-                env: prepared.env,
-            }));
+        let created = self.create_agent_tab(&input, id, &mut prepared);
         let (pane, terminal, direct) = match created {
             Ok(ResponseResult::TabCreated {
                 root_pane,
@@ -515,6 +502,29 @@ impl Worker {
             }
             other => self.record_failed_agent_start(id, prepared.args, other),
         }
+    }
+
+    fn create_agent_tab(
+        &mut self,
+        input: &AddAgent,
+        id: AgentId,
+        prepared: &mut launch::PreparedLaunch,
+    ) -> Result<ResponseResult, crate::messaging::native::TransportError> {
+        self.transport
+            .request(Method::AgentCreate(schema::AgentCreateParams {
+                tab: schema::TabCreateParams {
+                    workspace_id: None,
+                    cwd: Some(prepared.cwd.to_string_lossy().into_owned()),
+                    focus: false,
+                    label: Some(input.name.clone()),
+                    env: std::mem::take(&mut prepared.env),
+                },
+                launch: schema::TabAgentLaunch {
+                    name: identity::managed_name(input.room, id),
+                    kind: identity::provider_kind(input.provider).label().into(),
+                    args: prepared.args.clone(),
+                },
+            }))
     }
 
     /// Bus owns messaging identity and routing; providers receive capture facts.

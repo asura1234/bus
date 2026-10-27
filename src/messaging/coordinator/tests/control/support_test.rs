@@ -112,7 +112,7 @@ struct NoTabs;
 
 impl Transport for NoTabs {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        assert!(matches!(method, Method::TabCreate(_)), "{method:?}");
+        assert!(matches!(method, Method::AgentCreate(_)), "{method:?}");
         Err(TransportError {
             code: None,
             message: "no tabs in tests".into(),

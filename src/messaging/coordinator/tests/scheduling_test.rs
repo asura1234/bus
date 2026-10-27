@@ -12,7 +12,7 @@ struct FreshLaunchNative {
 impl Transport for FreshLaunchNative {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::TabCreate(_) => Ok(ResponseResult::TabCreated {
+            Method::AgentCreate(_) => Ok(ResponseResult::TabCreated {
                 agent_started: false,
                 tab: serde_json::from_value(json!({
                     "tab_id":"t1", "workspace_id":"w1", "number":1,

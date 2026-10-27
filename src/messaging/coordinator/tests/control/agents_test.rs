@@ -380,7 +380,7 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
     impl Transport for Launches {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::TabCreate(_) => {
+                Method::AgentCreate(_) => {
                     self.tabs += 1;
                     let mut pane = owned_pane_info();
                     pane.pane_id = format!("w1:p{}", self.tabs);
@@ -474,7 +474,7 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
     impl Transport for SuccessfulLaunches {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::TabCreate(_) => {
+                Method::AgentCreate(_) => {
                     self.tabs += 1;
                     let mut pane = owned_pane_info();
                     pane.pane_id = format!("w1:p{}", self.tabs);

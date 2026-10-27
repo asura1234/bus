@@ -47,12 +47,28 @@ impl App {
     }
 
     pub(super) fn handle_tab_create(&mut self, id: String, params: TabCreateParams) -> String {
+        self.create_tab(id, params, None)
+    }
+
+    pub(super) fn handle_agent_create(
+        &mut self,
+        id: String,
+        params: crate::protocol::api::schema::AgentCreateParams,
+    ) -> String {
+        self.create_tab(id, params.tab, Some(params.launch))
+    }
+
+    fn create_tab(
+        &mut self,
+        id: String,
+        params: TabCreateParams,
+        agent_launch: Option<crate::protocol::api::schema::TabAgentLaunch>,
+    ) -> String {
         let TabCreateParams {
             workspace_id,
             cwd,
             focus,
             label,
-            agent_launch,
             env,
         } = params;
         let ws_idx = if let Some(workspace_id) = workspace_id {
@@ -489,7 +505,6 @@ mod tests {
                 cwd: None,
                 focus: false,
                 label: None,
-                agent_launch: None,
                 env: Default::default(),
             },
         );

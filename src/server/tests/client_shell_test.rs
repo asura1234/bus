@@ -390,7 +390,6 @@ async fn public_background_tab_create_preserves_client_locations() {
                     cwd: None,
                     focus: false,
                     label: Some("background".into()),
-                    agent_launch: None,
                     env: std::collections::HashMap::new(),
                 },
             ),
