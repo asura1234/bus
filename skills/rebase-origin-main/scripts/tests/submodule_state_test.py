@@ -66,7 +66,7 @@ class SubmoduleStateTest(unittest.TestCase):
         self.assertNotEqual(blocked.returncode, 0)
         self.assertEqual((self.child / 'file').read_text(), 'uncommitted\n')
         self.git(self.child, 'restore', 'file')
-        result = self.run_tool('sync')
+        result = self.run_tool('sync', '--before', 'HEAD')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.git(self.child, 'rev-parse', 'HEAD'), self.two)
         self.assertFalse(json.loads(result.stdout)[0]['moved'])
@@ -84,6 +84,47 @@ class SubmoduleStateTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), [])
         self.assertFalse((self.child / '.git').exists())
+
+    def test_check_reports_clean_pinned_but_unpushed_child_commits(self):
+        (self.child / 'file').write_text('unpushed pinned implementation\n')
+        self.git(self.child, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'child-only work')
+        head = self.git(self.child, 'rev-parse', 'HEAD')
+        self.git(self.repo, 'add', 'dependency with spaces')
+        self.git(self.repo, 'commit', '-qm', 'record child-only work')
+        result = self.run_tool('check')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        state = json.loads(result.stdout)[0]
+        self.assertEqual(state['dirty'], '')
+        self.assertFalse(state['moved'])
+        self.assertIn(head, state['unpushed'])
+
+    def test_sync_preserves_published_but_unrecorded_child_head(self):
+        (self.child / 'file').write_text('published child work made while paused\n')
+        self.git(self.child, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'unrecorded child work')
+        head = self.git(self.child, 'rev-parse', 'HEAD')
+        self.git(self.child, 'update-ref', 'refs/remotes/origin/published', head)
+        result = self.run_tool('sync')
+        self.assertNotEqual(result.returncode, 0, 'sync silently moved an unrecorded child')
+        self.assertIn('unrecorded', result.stderr)
+        self.assertEqual(self.git(self.child, 'rev-parse', 'HEAD'), head)
+        resumed = self.run_tool('sync', '--before', 'HEAD')
+        self.assertNotEqual(resumed.returncode, 0)
+        self.assertIn('unrecorded', resumed.stderr)
+        self.assertEqual(self.git(self.child, 'rev-parse', 'HEAD'), head)
+
+    def test_resume_checks_old_pin_even_with_an_unresolved_parent_gitlink(self):
+        self.git(self.repo, 'update-index', '--force-remove', 'dependency with spaces')
+        record = '\n'.join(f'160000 {sha} {stage}\tdependency with spaces' for stage, sha in [(1, self.one), (2, self.two), (3, self.one)])+'\n'
+        subprocess.run(['git', '-C', str(self.repo), 'update-index', '--index-info'], input=record, env=self.env, text=True, check=True)
+        before = self.git(self.repo, 'ls-files', '--stage', 'dependency with spaces')
+        result = self.run_tool('check', '--before', 'HEAD')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.child / 'file').write_text('new paused child work\n')
+        self.git(self.child, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'paused child work')
+        result = self.run_tool('check', '--before', 'HEAD')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('paused child work', result.stdout)
+        self.assertEqual(self.git(self.repo, 'ls-files', '--stage', 'dependency with spaces'), before)
 
     def test_non_conflict_gitlink_is_not_rewritten(self):
         before = self.git(self.repo, 'ls-files', '--stage', 'dependency with spaces')
@@ -110,6 +151,30 @@ class SubmoduleStateTest(unittest.TestCase):
         self.assertEqual(states[0]['dirty'], '')
         self.assertIn('file', states[1]['dirty'])
         self.assertEqual(states[1]['path'], 'dependency with spaces/nested dependency')
+
+    def test_check_reports_only_the_nested_unpushed_commit_when_parent_child_is_published(self):
+        inner = self.root / 'nested source'
+        inner.mkdir()
+        self.git(inner, 'init', '-q', '-b', 'trunk')
+        (inner / 'file').write_text('base\n')
+        self.git(inner, 'add', 'file')
+        self.git(inner, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'base')
+        self.git(self.child, 'submodule', 'add', '-q', str(inner), 'nested')
+        nested = self.child / 'nested'
+        (nested / 'file').write_text('nested unpublished work\n')
+        self.git(nested, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'nested-only work')
+        nested_head = self.git(nested, 'rev-parse', 'HEAD')
+        self.git(self.child, 'add', '.gitmodules', 'nested')
+        self.git(self.child, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'record nested')
+        self.git(self.child, 'update-ref', 'refs/remotes/origin/published', self.git(self.child, 'rev-parse', 'HEAD'))
+        self.git(self.repo, 'add', 'dependency with spaces')
+        self.git(self.repo, 'commit', '-qm', 'record published outer child')
+        result = self.run_tool('check')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        states = json.loads(result.stdout)
+        self.assertEqual(states[0]['unpushed'], '')
+        self.assertIn(nested_head, states[1]['unpushed'])
+        self.assertFalse(any(state['dirty'] or state['moved'] for state in states))
 
     def test_take_base_gitlink_records_stage_two_not_checked_out_child(self):
         self.git(self.repo, 'update-index', '--force-remove', 'dependency with spaces')

@@ -33,36 +33,49 @@ def paths(repo: Path) -> list[str]:
     return sorted(found)
 
 
-def inspect(repo: Path, prefix: str = '') -> list[dict]:
+def recorded_pin(repo: Path, path: str, before: str | None) -> str | None:
+    if before is not None:
+        fields = git(repo, 'ls-tree', '-z', before, '--', path).partition('\t')[0].split()
+        return fields[2] if len(fields) == 3 and fields[:2] == ['160000', 'commit'] else None
+    records = git(repo, 'ls-files', '--stage', '-z', '--', path).split('\0')
+    pins = [fields[1] for row in records if row
+            for fields in [row.partition('\t')[0].split()]
+            if len(fields) == 3 and fields[0] == '160000' and fields[2] == '0']
+    return pins[0] if len(pins) == 1 else None
+
+
+def inspect(repo: Path, prefix: str = '', before: str | None = None) -> list[dict]:
     states = []
     for path in paths(repo):
         full = repo / path
         if repository_root(full) != full.resolve():
             raise ValueError(f'submodule Git root mismatch: {path}')
-        record = git(repo, 'ls-files', '--stage', '--', path).split('\t', 1)[0].split()
-        if len(record) != 3 or record[0] != '160000' or record[2] != '0':
+        previous = recorded_pin(repo, path, before) if before is not None else None
+        pin = recorded_pin(repo, path, None) or previous
+        if pin is None:
             raise ValueError(f'unresolved or missing gitlink: {path}')
         head = git(full, 'rev-parse', 'HEAD')
-        states.append({'path': prefix + path, 'pin': record[1], 'head': head,
-                       'moved': head != record[1],
+        states.append({'path': prefix + path, 'pin': pin, 'head': head,
+                       'moved': head != pin, 'unrecorded': head not in (pin, previous),
+                       'unpushed': git(full, 'log', '--format=%H %s', 'HEAD', '--not', '--remotes'),
                        'dirty': git(full, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=all')})
-        states.extend(inspect(full, prefix + path + '/'))
+        states.extend(inspect(full, prefix + path + '/', previous))
     return states
 
 
-def sync(repo: Path) -> list[dict]:
+def sync(repo: Path, before: str | None = None) -> list[dict]:
     policy = read_policy(repo)['submodule_update']
     if policy not in ('recursive', 'none'):
         raise ValueError('unsupported submodule_update policy')
-    before = inspect(repo)
-    if any(state['dirty'] for state in before):
-        raise ValueError('submodule has uncommitted work; refusing resync: ' + json.dumps(before))
+    states = inspect(repo, before=before)
+    if any(state['dirty'] or state['unpushed'] or state['unrecorded'] for state in states):
+        raise ValueError('submodule has uncommitted, unpushed or unrecorded work; refusing resync: ' + json.dumps(states))
     initialized = paths(repo)
     if policy == 'recursive' and initialized:
         git(repo, 'submodule', 'update', '--checkout', '--recursive', '--', *initialized)
     after = inspect(repo)
-    if any(state['dirty'] or state['moved'] for state in after):
-        raise ValueError('submodules still differ from recorded gitlinks; no push: ' + json.dumps(after))
+    if any(state['dirty'] or state['moved'] or state['unpushed'] for state in after):
+        raise ValueError('submodules differ from recorded gitlinks or have unpushed work; no push: ' + json.dumps(after))
     return after
 
 
@@ -81,19 +94,21 @@ def main() -> int:
     parser.add_argument('action', choices=('inspect', 'check', 'sync', 'take-base-gitlink'))
     parser.add_argument('--repo', type=Path, default=Path.cwd())
     parser.add_argument('--path')
+    parser.add_argument('--before', help='pre-rebase parent commit whose recorded pins may remain checked out')
     args = parser.parse_args()
     try:
         repo = repository_root(args.repo)
+        before = git(repo, 'rev-parse', '--verify', '--end-of-options', f'{args.before}^{{commit}}') if args.before else None
         if args.action == 'sync':
-            result = sync(repo)
+            result = sync(repo, before)
         elif args.action == 'take-base-gitlink':
             if not args.path:
                 raise ValueError('--path is required')
             result = take_base_gitlink(repo, args.path)
         else:
-            result = inspect(repo)
+            result = inspect(repo, before=before)
         print(json.dumps(result, ensure_ascii=False))
-        return int(args.action == 'check' and any(state['dirty'] or state['moved'] for state in result))
+        return int(args.action == 'check' and any(state['dirty'] or state['unpushed'] or state['unrecorded'] for state in result))
     except (OSError, ValueError) as error:
         print(f'submodule safety failed: {error}', file=sys.stderr)
         return 2

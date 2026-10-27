@@ -58,6 +58,8 @@ IF rebase_root exists:
   base = contents of `<rebase_root>/onto`, verified as a commit.
   IF --base was supplied:
     Resolve it with the command below and STOP if it differs from onto; never change a paused rebase's base.
+  Run `python3 "$SKILL_DIR/scripts/submodule_state.py" check --repo "<repo>" --before "<pre_rebase_head>"`.
+  STOP on dirty, unpushed or unrecorded child work before continuing the paused operation.
   Continue at `RESOLVE CONFLICTS` using the existing paused index/worktree.
 
 ========== FETCH & REBASE ==========
@@ -131,10 +133,11 @@ REPEAT until rebase completes
 
 ========== SYNC INITIALIZED SUBMODULES ==========
 
-Run `python3 "$SKILL_DIR/scripts/submodule_state.py" sync --repo "<repo>"`.
+Run `python3 "$SKILL_DIR/scripts/submodule_state.py" sync --repo "<repo>" --before "<pre_rebase_head>"`.
 It consumes policy.submodule_update: recursive checks out recorded pins for initialized paths only;
 none performs no update and fails if a path still differs. It never initializes paths, forces checkout,
-chases a branch tip or overwrites dirty child work. Report any error and STOP before push.
+chases a branch tip or moves a child off unpushed/unrecorded work. Only old/new recorded pins are admitted.
+Report any error and STOP before push.
 
 ========== PUSH ==========
 

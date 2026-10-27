@@ -17,8 +17,8 @@ default is refused below when it is the session's own working directory)
 ```
 INPUT = [target] [--base <ref-or-commit>]
 repo = `git rev-parse --show-toplevel`
-Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/repository_context.py" --repo "<repo>" [--base "<caller base>"]`.
-Use context.base for content checks; STOP on an unavailable default/base rather than guessing main/master.
+base = unresolved unless the caller supplied --base; validate an explicit base with sibling rebase_base.py --repo "<repo>" --base "<caller base>" before removal.
+No default base is needed to check or remove a worktree; resolve it only for the branch-landing decision below.
 
 ========== RESOLVE TARGET ==========
 
@@ -60,7 +60,7 @@ IF <session_cwd> is <worktree_path> or below it
 ========== CHECK FOR UNSAVED WORK ==========
 
 Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/submodule_state.py" inspect --repo "<worktree_path>"`.
-STOP if it fails. Capture initialized paths, each dirty status, and drift from the recorded gitlink.
+STOP if it fails. Capture initialized paths recursively, each dirty status, gitlink drift, and child unpushed commits.
 Submodules require force removal even when clean; this is not permission to discard work.
 
 dirty_super = `git -C <worktree_path> status --short`
@@ -79,14 +79,16 @@ in_progress = any of MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase-merge 
 --   prints the branch's ENTIRE history as "unpushed" for work that is fully landed. Before reporting
 --   it, run merged_by_content(<branch>) from the BRANCH section; when it says MERGED, say
 --   "already squash-landed on <base>; these commits will not be lost" instead of raising the alarm.
+--   If no base is available, keep the warning; unavailable landing evidence never permits discarding work.
 unpushed_super = `git -C <worktree_path> log --oneline HEAD --not --remotes`
 
 dirty_subs = every initialized submodule whose dirty status is nonempty
 moved_subs = every initialized submodule whose HEAD differs from the parent index gitlink
+unpushed_subs = each child's `git log --oneline HEAD --not --remotes` result from the recursive inspection
 needs_force = initialized submodule set is nonempty
-IF any of dirty_super, in_progress, unpushed_super, dirty_subs, moved_subs is nonempty
+IF any of dirty_super, in_progress, unpushed_super, dirty_subs, moved_subs, unpushed_subs is nonempty
   Print "⚠️ <worktree_path> has work that would be discarded:"
-  Print the non-empty results, labelled (uncommitted / operation in progress / unpushed / child uncommitted / child gitlink drift)
+  Print the non-empty results, labelled (uncommitted / operation in progress / unpushed / child uncommitted / child gitlink drift / child unpushed)
   Print "Force removal permanently loses the above. Confirm to continue?"
   -- STOP and wait for explicit user confirmation. Do NOT proceed on your own judgement.
   needs_force = true after the user confirms
@@ -136,13 +138,15 @@ ELSE
 --   The REMOTE branch is never in scope here regardless — see below.
 
 IF <branch> is non-empty
+  IF base is unresolved: resolve origin's default with sibling rebase_base.py, without refreshing/fetching.
+  IF no default resolves: merged = UNKNOWN; retain the branch and skip all landing tiers. Never guess main/master.
   -- Do NOT use `git branch --merged <base>`, and do NOT use plain `git branch -d`: both answer
   --   "is <branch> an ANCESTOR of <base>", and a squash-merged PR discards ancestry. So a
   --   fully landed branch reports "not fully merged" and -d refuses. Following that signal produces
   --   exactly the wrong two messages: it scares the user off deleting dead branches, and when they
   --   insist it claims -D "loses its unique commits" about work that is already in master. Ask by
   --   CONTENT instead.
-  merged = merged_by_content(<branch>)   -- see below; three tiers, first conclusive one wins.
+  merged = UNKNOWN if base unresolved else merged_by_content(<branch>)   -- see below; first conclusive tier wins.
                                          --   MERGED | NOT_MERGED | UNKNOWN
 
   IF merged is MERGED
