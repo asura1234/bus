@@ -359,6 +359,9 @@ pub(crate) fn prepare(
     initialize: impl FnOnce(&HookContext) -> Result<(), String>,
 ) -> Result<PreparedLaunch, String> {
     let cwd = canonical_directory(&spec.cwd)?;
+    if spec.provider == ProviderKind::Codex {
+        codex::launch::validate_project_trust(&cwd)?;
+    }
     let (mut args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
     if !binary_available(spec.provider) {
         return Err(format!(

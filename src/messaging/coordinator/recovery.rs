@@ -8,6 +8,32 @@ use crate::agents::resume::catalog::{self, AgentSessionRefKind};
 use crate::messaging::identity;
 use serde_json::{json, Value};
 
+/// Old snapshots may have confirmed hooks solely from file contents. Hold
+/// their work before the first poll when Codex cannot load that project layer.
+pub(super) fn check_saved_project_hooks(
+    state: &mut super::BusState,
+    id: AgentId,
+) -> Result<(), String> {
+    let Some(agent) = state
+        .agent(id)
+        .filter(|agent| agent.provider == super::Provider::Codex && !agent.deletion_pending)
+    else {
+        return Ok(());
+    };
+    if let Err(error) = crate::agents::providers::codex::launch::validate_project_trust(&agent.cwd)
+    {
+        state
+            .invalidate_agent_session(id)
+            .map_err(|e| e.to_string())?;
+        state
+            .set_agent_error(id, Some(error.clone()))
+            .map_err(|e| e.to_string())?;
+        tracing::warn!(event = "bus.hooks.unavailable", agent_id = id.0,
+            reason = %error, "Saved Codex hook setup is no longer confirmed; queued work is held");
+    }
+    Ok(())
+}
+
 impl Worker {
     pub(super) fn resume_room(&mut self, room: RoomId) -> Result<Value, String> {
         // A fresh native list prevents relaunching a provider which recovered on its own.
