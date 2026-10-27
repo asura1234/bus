@@ -274,12 +274,15 @@ impl BusState {
         let request = self.requests.get_mut(&id).expect("request");
         request.phase = super::RequestPhase::Completed;
         request.completed_at_ms = Some(at_ms);
-        request.pending_final = Some(super::PendingFinal {
-            callback_id: format!("final-{}", id.0),
-            text: reply.to_owned(),
-            received_at_ms: at_ms,
-            provider_session_id: None,
-            provider_turn_id: None,
+        request.completed_reply = Some(super::types::CompletedReply {
+            group: Some(request.group.unwrap_or(id)),
+            content: super::PendingFinal {
+                callback_id: format!("final-{}", id.0),
+                text: reply.to_owned(),
+                received_at_ms: at_ms,
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
         });
         let agent = request.agent_id;
         if let Some(queue) = self.queues.get_mut(&agent) {

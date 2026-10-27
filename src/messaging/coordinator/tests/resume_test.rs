@@ -1,3 +1,4 @@
+use super::support::{test_prompt_content, test_request_payload};
 use super::*;
 
 #[test]
@@ -86,9 +87,14 @@ fn assert_global_names_legacy_sender(snapshot: Option<&str>, submitted: Option<&
             Some(name) => format!("{name} (agent {}):\nlegacy question", author.0),
             None => format!("author (agent {}):\nlegacy question", author.0),
         });
+    let actual = worker.state.render_request_payload(request).unwrap();
+    let actual = if submitted.is_some() {
+        actual
+    } else {
+        test_request_payload(&mut worker.state, request).unwrap()
+    };
     assert_eq!(
-        worker.state.render_request_payload(request).unwrap(),
-        expected,
+        actual, expected,
         "migration must preserve the historical sender name of a legacy queued message"
     );
     drop(worker);
@@ -743,7 +749,10 @@ fn cold_resume_delivers_queued_prompt_once_using_the_durably_rebound_identity() 
     assert_eq!(calls[0]["target"], "pane");
     assert_eq!(calls[0]["expected_terminal_id"], "restored-terminal");
     assert_eq!(calls[0]["expected_session_id"], "session");
-    assert_eq!(calls[0]["text"], "only once after resume");
+    assert_eq!(
+        test_prompt_content(calls[0]["text"].as_str().unwrap()),
+        "only once after resume"
+    );
     assert!(worker.state.request(request).unwrap().uncertain_outcome);
     drop(calls);
     drop(worker);

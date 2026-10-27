@@ -234,11 +234,11 @@ pub(super) fn saved_history(
         let record = &mut json["requests"][id.0.to_string()];
         record["phase"] = "completed".into();
         record["completed_at_ms"] = (1500 + i as u64 * 1000).into();
-        record["pending_final"] = serde_json::json!({
+        record["completed_reply"] = serde_json::json!({"group":record["group"].as_u64().unwrap_or(record["id"].as_u64().unwrap()),"content":serde_json::json!({
             "callback_id": format!("final-{i}"), "text": format!("answer-{i:02}"),
             "received_at_ms": 1500 + i as u64 * 1000,
             "provider_session_id": "session", "provider_turn_id": format!("turn-{i}")
-        });
+        })});
     }
     snapshot.state = serde_json::from_value(json).unwrap();
     snapshot.revision += 1;
@@ -268,10 +268,10 @@ pub(super) fn saved_exchange(
     let record = &mut json["requests"][request.0.to_string()];
     record["phase"] = "completed".into();
     record["completed_at_ms"] = 1500.into();
-    record["pending_final"] = serde_json::json!({
+    record["completed_reply"] = serde_json::json!({"group":record["group"].as_u64().unwrap_or(record["id"].as_u64().unwrap()),"content":serde_json::json!({
         "callback_id": "final", "text": reply, "received_at_ms": 1500,
         "provider_session_id": "session", "provider_turn_id": "turn"
-    });
+    })});
     snapshot.state = serde_json::from_value(json).unwrap();
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));
@@ -307,11 +307,11 @@ pub(super) fn complete_requests(
         let record = &mut json["requests"][id.0.to_string()];
         record["phase"] = "completed".into();
         record["completed_at_ms"] = received_at_ms.into();
-        record["pending_final"] = serde_json::json!({
+        record["completed_reply"] = serde_json::json!({"group":record["group"].as_u64().unwrap_or(record["id"].as_u64().unwrap()),"content":serde_json::json!({
             "callback_id": format!("final-{}", id.0), "text": text,
             "received_at_ms": received_at_ms,
             "provider_session_id": "session", "provider_turn_id": format!("turn-{}", id.0)
-        });
+        })});
     }
     snapshot.state = serde_json::from_value(json).unwrap();
     snapshot.revision += 1;

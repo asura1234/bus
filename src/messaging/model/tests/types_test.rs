@@ -449,6 +449,34 @@ fn claude_image_placeholder_matching_preserves_internal_and_non_ascii_whitespace
 }
 
 #[test]
+fn codex_image_placeholder_matching_preserves_correlation_and_body_blank_lines() {
+    let command = "[Bus message 3; answer with bus send --reply-to 3 --as 2 --text 'YOUR ANSWER']";
+    let typed = format!("{command}\nFirst \t\n\n  Last\n\"/tmp/a.png\"");
+    assert!(payload_matches(
+        &format!("[Image #1] {command}\nFirst \t\n\n  Last"),
+        &typed
+    ));
+    assert!(!payload_matches(
+        &format!("[Image #1] {command}\nFirst\n\n  Last"),
+        &typed
+    ));
+    assert!(!payload_matches(
+        &format!("[Image #1] [Image #2] {command}\nFirst \t\n\n  Last"),
+        &typed
+    ));
+    assert!(!payload_matches("[Image #1] First \t\n\n  Last", &typed));
+    assert!(!payload_matches(
+        &format!("[Image #1]  {command}\nFirst \t\n\n  Last"),
+        &typed
+    ));
+    let two_images = format!("{typed}\n\"/tmp/b.png\"");
+    assert!(payload_matches(
+        &format!("[Image #1] [Image #2] {command}\nFirst \t\n\n  Last"),
+        &two_images
+    ));
+}
+
+#[test]
 fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whitespace() {
     let (mut state, room, _, agent) = state_with_room_and_agents();
     state.attach_file(room, "/tmp/a.png".into()).unwrap();
@@ -535,4 +563,45 @@ fn retired_github_watch_legacy_state_load_preserves_rooms_and_drops_watch_fields
             "retired watch field {field} was written again"
         );
     }
+}
+
+#[test]
+fn codex_image_paste_fallback_callbacks_keep_every_path_and_exact_reply_body() {
+    let text = "[Bus message 3; answer with bus send --reply-to 3 --as 2 --text 'YOUR ANSWER']\nFirst \t\n\n  Last";
+    let first = "\"/tmp/image.png\"";
+    let second = "\"/tmp/another image.png\"";
+    // Images may have been interleaved with text; the native writer pastes
+    // images first, then preserves the remaining text (including blank lines).
+    let typed = format!("{first}\n{text}\n{second}");
+    for prefix in [
+        format!("{first}{second}"),
+        format!("[Image #1] {second}"),
+        format!("{first}[Image #1] "),
+        "[Image #1] [Image #2] ".into(),
+    ] {
+        let payload = format!("{prefix}{text}");
+        assert!(payload_matches(&payload, &typed), "{payload}");
+        for changed in [
+            payload.replace("reply-to 3", "reply-to 30"),
+            payload.replace("--as 2", "--as 20"),
+            payload.replace("First \t", "First"),
+            payload.replace("\n\n", "\n"),
+        ] {
+            assert!(!payload_matches(&changed, &typed), "{changed}");
+        }
+    }
+    for prefix in [
+        first.to_owned(),
+        format!("{second}{first}"),
+        format!("[Image #1] {first}"),
+        format!("[Image #1] {first}{second}"),
+        "[Image #1] [Image #2] [Image #3] ".into(),
+        "\"/tmp/unrelated.png\"".into(),
+    ] {
+        assert!(!payload_matches(&format!("{prefix}{text}"), &typed));
+    }
+    assert!(payload_matches(
+        &format!("{first}{text}"),
+        &format!("{text}\n{first}")
+    ));
 }

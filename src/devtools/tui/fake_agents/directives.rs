@@ -5,6 +5,14 @@ use std::io::Write;
 
 /// A raw final lets acceptance tests exercise protocols that depend on a prefix.
 pub(super) fn reply(prompt: &str) -> String {
+    // Bus's per-request reply instructions are transport metadata, not the work to echo.
+    let prompt = prompt
+        .split_inclusive('\n')
+        .filter(|line| {
+            !(line.starts_with("[Bus message ")
+                && line.contains("; answer with bus send --reply-to "))
+        })
+        .collect::<String>();
     prompt.split_once("fake:raw-reply ").map_or_else(
         || format!("fake reply: {prompt}"),
         |(_, reply)| reply.to_owned(),
@@ -85,5 +93,10 @@ mod tests {
             "[needs_developer_attention] Choose target"
         );
         assert_eq!(super::reply("hello"), "fake reply: hello");
+    }
+
+    #[test]
+    fn fake_reply_echoes_the_task_after_bus_correlation_metadata() {
+        assert_eq!(super::reply("[Bus message 42; answer with bus send --reply-to 42 --as 7 --text 'YOUR ANSWER']\nInspect the parser"), "fake reply: Inspect the parser");
     }
 }

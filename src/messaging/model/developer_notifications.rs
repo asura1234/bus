@@ -1,5 +1,5 @@
 //! Shared developer alert sources: explicit notices and tagged agent messages in every room.
-use super::{AgentId, Author, BusState, Prompt, PromptId, RequestId, RequestPhase};
+use super::{AgentId, Author, BusState, Prompt, PromptId, RequestId};
 use crate::messaging::attention::{
     has_you_mention, plain_action, plain_line, waiting_action, waiting_tag_action,
 };
@@ -116,27 +116,25 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
                 message.text = "";
             }
         }
-        if request.phase == RequestPhase::Completed {
-            if let Some(reply) = &request.pending_final {
-                let key = Key::Final(request.group.unwrap_or(request.id));
-                let developer_context = request.prompt.author == Author::Developer
-                    || result
-                        .get(&key)
-                        .is_some_and(|message| message.developer_context);
-                result.insert(
-                    key,
-                    Message {
-                        sender: state
-                            .agent(request.agent_id)
-                            .map_or("Bus", |a| a.name.as_str()),
-                        sender_id: Some(request.agent_id),
-                        text: crate::messaging::attention::text(&reply.text).unwrap_or(&reply.text),
-                        directed: false,
-                        developer_context,
-                        at_ms: request.completed_at_ms.unwrap_or(reply.received_at_ms),
-                    },
-                );
-            }
+        if let Some(reply) = request.reply() {
+            let key = Key::Final(request.reply_key());
+            let developer_context = request.prompt.author == Author::Developer
+                || result
+                    .get(&key)
+                    .is_some_and(|message| message.developer_context);
+            result.insert(
+                key,
+                Message {
+                    sender: state
+                        .agent(request.agent_id)
+                        .map_or("Bus", |a| a.name.as_str()),
+                    sender_id: Some(request.agent_id),
+                    text: crate::messaging::attention::text(&reply.text).unwrap_or(&reply.text),
+                    directed: false,
+                    developer_context,
+                    at_ms: request.completed_at_ms.unwrap_or(reply.received_at_ms),
+                },
+            );
         }
     }
     result

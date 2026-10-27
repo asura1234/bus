@@ -280,7 +280,7 @@ impl BusState {
             });
         let replies = self.requests().filter_map(move |request| {
             if Some(request.room_id) != master
-                || request.phase != super::RequestPhase::Completed
+                || request.reply().is_none()
                 || !self.is_developer_attention_author(
                     request.room_id,
                     &Author::Agent(request.agent_id),
@@ -288,7 +288,7 @@ impl BusState {
             {
                 return None;
             }
-            let reply = request.pending_final.as_ref()?;
+            let reply = request.reply()?;
             crate::messaging::attention::text(&reply.text)?;
             Some((
                 format!("final:{}:{}", request.id.0, reply.callback_id),

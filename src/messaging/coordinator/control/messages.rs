@@ -24,8 +24,8 @@ impl Worker {
                     if let Some(source) = self.state.requests_for_message(message).next() {
                         let author = self.control_author(source.room_id, selector)?;
                         if self.state.reply_orchestrator(source) == Some(author) {
-                            self.reply_waiters
-                                .insert(message, std::time::Instant::now());
+                            let now = self.reply_waiter_now();
+                            self.reply_waiters.insert(message, now);
                         }
                     }
                 }
@@ -113,6 +113,9 @@ impl Worker {
         &mut self,
         p: &Value,
     ) -> Result<Value, String> {
+        if p.get("reply_to").is_some() {
+            return self.control_reply(p);
+        }
         let room = self.control_room(required(p, "room")?)?;
         let author = match p.get("as") {
             None => None,
@@ -200,6 +203,43 @@ impl Worker {
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
     }
 
+    fn control_reply(&mut self, p: &Value) -> Result<Value, String> {
+        if ["room", "to", "queue", "files"]
+            .iter()
+            .any(|key| p.get(key).is_some())
+        {
+            return Err("reply_to infers the original conversation; do not specify room, to, queue or files".into());
+        }
+        let message = PromptId(
+            required(p, "reply_to")?
+                .parse::<u64>()
+                .map_err(|_| "reply_to must be a numeric message ID")?,
+        );
+        let room = self
+            .state
+            .requests_for_message(message)
+            .next()
+            .ok_or("Unknown reply-to message ID")?
+            .room_id;
+        let author = self.control_author(room, required(p, "as")?)?;
+        if self
+            .state
+            .agent(author)
+            .is_some_and(|agent| agent.deletion_pending)
+        {
+            return Err("The replying agent is being deleted".into());
+        }
+        let mut state = self.state.clone();
+        let request = state.answer_message(
+            message,
+            author,
+            required(p, "text")?.into(),
+            crate::messaging::storage::io::now_ms(),
+        )?;
+        self.save(state)?;
+        Ok(json!({"message_id":message,"request_ids":[request],"stage":"replied"}))
+    }
+
     pub(in crate::messaging::coordinator) fn control_author(
         &self,
         room: RoomId,
@@ -256,12 +296,7 @@ impl Worker {
         let agents: std::collections::BTreeSet<_> = self
             .state
             .requests_for_message(message)
-            .filter(|request| {
-                !matches!(
-                    request.phase,
-                    RequestPhase::Completed | RequestPhase::Abandoned
-                )
-            })
+            .filter(|request| !request.settled())
             .filter_map(|request| self.state.agent(request.agent_id))
             .filter(|agent| agent.dialog)
             .map(|agent| agent.id)
@@ -337,11 +372,11 @@ impl Worker {
                 .unwrap_or(usize::MAX)
         });
         Ok(
-            json!({"message_id":message,"prompt":requests[0].prompt,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
+            json!({"message_id":message,"prompt":requests[0].prompt,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|r.settled()),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);
             let outcomes = self.state.worker_outcomes_for(r);
             let worker_events = self.state.worker_events_for(r);
-            let phase_stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
+            let phase_stage = if r.reply().is_some() { "replied" } else { match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" }};
             // A stalled request reports why instead of its phase; `stalled_from`
             // keeps the phase it stalled in.
             let stall = self.state.stall_reason(r, now_ms);
@@ -353,20 +388,18 @@ impl Worker {
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
             let submission = r.group.and_then(|lead| self.state.request(lead)).unwrap_or(r);
             let detail = submission.submission_notice().and(submission.submission_error.as_ref());
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
         }).collect::<Vec<_>>()}),
         )
     }
 
     /// An unsettled request whose agent shows a readable or pending dialog.
     pub(in crate::messaging::coordinator) fn waiting_on_dialog(&self, request: &Request) -> bool {
-        !matches!(
-            request.phase,
-            RequestPhase::Completed | RequestPhase::Abandoned
-        ) && self
-            .state
-            .agent(request.agent_id)
-            .is_some_and(|agent| agent.dialog)
+        !request.settled()
+            && self
+                .state
+                .agent(request.agent_id)
+                .is_some_and(|agent| agent.dialog)
     }
 }
 

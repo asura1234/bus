@@ -31,8 +31,10 @@ struct Terminal {
     provider: Provider,
     input: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     draft: String,
+    images: Vec<String>,
     submitted: Vec<String>,
-    captured_screen: Option<&'static str>,
+    submitted_images: Vec<Vec<String>>,
+    captured_screen: Option<String>,
     clock: crate::terminal::runtime::SubmissionClock,
 }
 
@@ -112,7 +114,9 @@ impl NativeServer {
                 provider,
                 input,
                 draft: String::new(),
+                images: Vec::new(),
                 submitted: Vec::new(),
+                submitted_images: Vec::new(),
                 captured_screen: None,
                 clock,
             },
@@ -129,15 +133,36 @@ impl NativeServer {
         for terminal in self.terminals.values_mut() {
             while let Ok(bytes) = terminal.input.try_recv() {
                 let text = std::str::from_utf8(&bytes).unwrap();
-                if let Some(paste) = text
-                    .strip_prefix("\x1b[200~")
-                    .and_then(|s| s.strip_suffix("\x1b[201~"))
-                {
-                    terminal.draft = paste.into();
+                if text.starts_with("\x1b[200~") {
+                    let mut remaining = text;
+                    while let Some(paste) = remaining.strip_prefix("\x1b[200~") {
+                        let (paste, rest) = paste.split_once("\x1b[201~").unwrap();
+                        // Codex attaches only an image pasted on its own. This
+                        // oracle reads the image, independently of our matcher.
+                        let image = paste.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
+                        if let Some(image) = image.filter(|path| {
+                            terminal.provider == Provider::Codex
+                                && image::image_dimensions(path).is_ok()
+                        }) {
+                            terminal.images.push(image.to_owned());
+                        } else {
+                            terminal.draft.push_str(paste);
+                        }
+                        remaining = rest;
+                    }
+                    assert!(remaining.is_empty(), "unexpected paste suffix");
                 } else if text == "\r" {
-                    terminal.submitted.push(std::mem::take(&mut terminal.draft));
+                    let images = std::mem::take(&mut terminal.images);
+                    let chips = (1..=images.len())
+                        .map(|n| format!("[Image #{n}] "))
+                        .collect::<String>();
+                    terminal
+                        .submitted
+                        .push(format!("{chips}{}", std::mem::take(&mut terminal.draft)));
+                    terminal.submitted_images.push(images);
                 } else if text == "\x0b" {
                     terminal.draft.clear();
+                    terminal.images.clear();
                 } else {
                     assert_eq!(text, "\x01", "unexpected terminal input");
                 }
@@ -145,11 +170,15 @@ impl NativeServer {
                 // never transform the draft with the observer's production rule.
                 let display = if let Some(captured) = terminal
                     .captured_screen
-                    .filter(|_| !terminal.draft.is_empty())
+                    .as_ref()
+                    .filter(|_| !terminal.draft.is_empty() || !terminal.images.is_empty())
                 {
                     format!("\x1b[2J\x1b[H{captured}")
                 } else {
-                    screen(terminal.provider, &terminal.draft)
+                    let chips = (1..=terminal.images.len())
+                        .map(|n| format!("[Image #{n}] "))
+                        .collect::<String>();
+                    screen(terminal.provider, &format!("{chips}{}", terminal.draft))
                 };
                 self.app
                     .state
@@ -318,6 +347,10 @@ pub(crate) struct Delivery {
 }
 
 impl Delivery {
+    pub(crate) fn set_reply_waiter_time(&mut self, now: Instant) {
+        self.worker_mut().test_reply_waiter_now = Some(now);
+    }
+
     pub(crate) fn real_submission_time(&self, agent: AgentId) {
         self.native.lock().unwrap().terminals[&agent].clock.resume();
     }
@@ -605,6 +638,24 @@ impl Delivery {
             .submitted
             .clone()
     }
+    pub(crate) fn typed_content(&self, agent: AgentId) -> Vec<String> {
+        self.typed(agent)
+            .iter()
+            .map(|text| super::tests::support::test_prompt_content(text))
+            .collect()
+    }
+    pub(crate) fn attached_images(&self, agent: AgentId) -> Vec<Vec<String>> {
+        self.native.lock().unwrap().terminals[&agent]
+            .submitted_images
+            .clone()
+    }
+    pub(crate) fn correlated_text(&self, request: RequestId) -> String {
+        let request = self.state().request(request).unwrap();
+        format!(
+            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']\n{}",
+            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.text,
+        )
+    }
     pub(crate) fn record(&self, agent: AgentId, mut value: Value) {
         let provider = self.state().agent(agent).unwrap().provider;
         value["session_id"] = json!(format!("session-{}", agent.0));
@@ -636,21 +687,15 @@ impl Delivery {
             .unwrap();
         writeln!(file, "{row}").unwrap();
     }
-    pub(crate) fn captured_image_composer(&mut self, agent: AgentId) {
-        self.captured_composer(
-            agent,
-            include_str!("../../../server/api/agents/tests/fixtures/claude_image_paste.txt"),
-        );
-    }
     /// Shows `screen`, a composer captured from the real provider, for any draft.
-    pub(crate) fn captured_composer(&mut self, agent: AgentId, screen: &'static str) {
+    pub(crate) fn captured_composer(&mut self, agent: AgentId, screen: &str) {
         self.native
             .lock()
             .unwrap()
             .terminals
             .get_mut(&agent)
             .unwrap()
-            .captured_screen = Some(screen);
+            .captured_screen = Some(screen.to_owned());
     }
     pub(crate) fn provider_startup(&mut self) {
         for agent in self.agents.clone() {
@@ -682,6 +727,12 @@ impl Delivery {
         self.tick();
     }
     pub(crate) fn spool_start(&mut self, agent: AgentId, turn: &str, text: &str) {
+        let text = self
+            .typed(agent)
+            .into_iter()
+            .rev()
+            .find(|payload| super::tests::support::test_prompt_content(payload) == text)
+            .unwrap_or_else(|| text.to_owned());
         let provider = self.state().agent(agent).unwrap().provider;
         let key = match provider {
             Provider::Codex => "turn_id",
@@ -846,7 +897,7 @@ impl Delivery {
                 .state()
                 .requests()
                 .filter(|r| r.room_id == room.id && r.phase == RequestPhase::Completed)
-                .filter_map(|r| r.pending_final.as_ref().map(|p| p.callback_id.clone()))
+                .filter_map(|r| r.reply().map(|p| p.callback_id.clone()))
                 .collect();
             let sends: BTreeSet<_> = self
                 .state()
@@ -876,7 +927,7 @@ impl Delivery {
             RequestPhase::Completed,
             "request {request:?}: {r:?}"
         );
-        assert_eq!(r.pending_final.as_ref().unwrap().text, text);
+        assert_eq!(r.reply().unwrap().text, text);
         self.assert_publications();
         for room in self.state().rooms() {
             assert_eq!(

@@ -64,7 +64,12 @@ impl BusState {
             request.matches_callback_payload(text)
                 || self.group_members(request.id).iter().any(|id| {
                     self.requests.get(id).is_some_and(|member| {
-                        member.steered && !member.settled() && member.matches_callback_payload(text)
+                        member.steered
+                            && matches!(
+                                member.phase,
+                                RequestPhase::Submitting | RequestPhase::Active
+                            )
+                            && member.matches_callback_payload(text)
                     })
                 })
         }) {
@@ -403,13 +408,12 @@ impl BusState {
             (true, Some(error)) => {
                 let (reason, message) = super::settlement::provider_error_outcome(&error);
                 let at_ms = callback.occurred_at_ms;
-                if self
-                    .close_turn_with_reason(request_id, at_ms, reason)
-                    .is_err()
-                {
-                    return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+                match self.close_turn_with_reason(request_id, at_ms, reason) {
+                    Ok(closed) => closed.then_some(message),
+                    Err(_) => {
+                        return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest)
+                    }
                 }
-                message
             }
             (true, None) => {
                 if self
@@ -418,17 +422,19 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 }
-                message
+                Some(message)
             }
             // The request stays open, so the error must not say it closed.
-            (false, Some(error)) => format!("Provider turn failed: {error}; inspect its terminal."),
-            (false, None) => message,
+            (false, Some(error)) => Some(format!(
+                "Provider turn failed: {error}; inspect its terminal."
+            )),
+            (false, None) => Some(message),
         };
         if bound {
             self.consumed_provider_turns.extend(turn_key);
         }
         if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
-            agent.actionable_error = Some(message);
+            agent.actionable_error = message;
         }
         CallbackDisposition::AcceptedError
     }
@@ -453,7 +459,7 @@ impl BusState {
                 self.requests.get(member).is_some_and(|m| {
                     m.steered
                         && !m.trusted_start_bound
-                        && !m.settled()
+                        && matches!(m.phase, RequestPhase::Submitting | RequestPhase::Active)
                         && m.matches_callback_payload(payload)
                 })
             });
@@ -514,9 +520,11 @@ impl BusState {
                 .chain(self.group_members(lead))
                 .any(|id| {
                     self.requests.get(&id).is_some_and(|request| {
-                        !request.settled()
-                            && (request.matches_callback_payload(payload)
-                                || bound_callback_turn(request, callback))
+                        matches!(
+                            request.phase,
+                            RequestPhase::Submitting | RequestPhase::Active
+                        ) && (request.matches_callback_payload(payload)
+                            || bound_callback_turn(request, callback))
                     })
                 });
             if owned {
@@ -565,10 +573,18 @@ impl BusState {
             return Ok(false);
         };
         let members = self.group_members(request_id);
+        // Already answered requests own their reply keys. The shared final gets
+        // an outstanding representative, so it cannot overwrite or spend those replies.
+        let reply_group = std::iter::once(request_id)
+            .chain(members.iter().copied())
+            .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
+            .unwrap_or(request_id);
         let unseen_steering = members.iter().any(|member| {
-            self.requests
-                .get(member)
-                .is_some_and(|m| m.steered && !m.trusted_start_bound && !m.settled())
+            self.requests.get(member).is_some_and(|m| {
+                m.steered
+                    && !m.trusted_start_bound
+                    && matches!(m.phase, RequestPhase::Submitting | RequestPhase::Active)
+            })
         });
         if unseen_steering
             && completed_at_ms < pending.received_at_ms.saturating_add(STEERING_SETTLE_MS)
@@ -582,18 +598,33 @@ impl BusState {
         );
         self.publish_group_reply(request_id, &members, &pending)?;
         for member in members {
-            if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
-                member.phase = RequestPhase::Completed;
-                member.completed_at_ms = Some(completed_at_ms);
-                member.pending_final = Some(pending.clone());
+            if let Some(member) = self.requests.get_mut(&member) {
+                if !member.settled() {
+                    member.completed_at_ms = Some(completed_at_ms);
+                    member.completed_reply = Some(super::types::CompletedReply {
+                        content: pending.clone(),
+                        group: Some(reply_group),
+                    });
+                }
+                if member.phase != RequestPhase::Abandoned {
+                    member.phase = RequestPhase::Completed;
+                }
+                member.pending_final = None;
             }
         }
         let request = self
             .requests
             .get_mut(&request_id)
             .ok_or(ModelError::UnknownRequest(request_id))?;
+        if !request.settled() {
+            request.completed_at_ms = Some(completed_at_ms);
+            request.completed_reply = Some(super::types::CompletedReply {
+                content: pending,
+                group: Some(reply_group),
+            });
+        }
         request.phase = RequestPhase::Completed;
-        request.completed_at_ms = Some(completed_at_ms);
+        request.pending_final = None;
         if let Some(key) = turn_key {
             self.consumed_provider_turns.insert(key);
         }
@@ -649,8 +680,10 @@ impl BusState {
 }
 
 fn bound_callback_turn(request: &Request, callback: &ProviderCallback) -> bool {
-    !request.settled()
-        && request.trusted_start_bound
+    matches!(
+        request.phase,
+        RequestPhase::Submitting | RequestPhase::Active
+    ) && request.trusted_start_bound
         && request.provider_session_id.is_some()
         && request.provider_turn_id.is_some()
         && request.provider_turn_id == callback.provider_turn_id

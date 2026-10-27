@@ -2,6 +2,52 @@ use super::*;
 use crate::messaging::model::{Draft, Provider};
 
 #[test]
+fn an_individual_answer_stays_visible_when_later_messages_join_the_same_open_turn() {
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(
+            room,
+            "watcher",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    state.set_draft_text(room, "watch").unwrap();
+    let lead = state.submit_draft(room, 1000).unwrap()[0];
+    state.set_draft_text(room, "follow up").unwrap();
+    let follow = state.submit_draft(room, 1001).unwrap()[0];
+    let mut document = serde_json::to_value(state).unwrap();
+    document["requests"][lead.0.to_string()]["phase"] = "active".into();
+    document["requests"][follow.0.to_string()]["phase"] = "active".into();
+    document["requests"][follow.0.to_string()]["group"] = lead.0.into();
+    let mut state: BusState = serde_json::from_value(document).unwrap();
+    let message = state.request(lead).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "INDIVIDUAL RESULT".into(), 2000)
+        .unwrap();
+    let mut history = History::default();
+    let mut thumbnails = Thumbnails::default();
+    let text = history
+        .lines(
+            &state,
+            state.room(room).unwrap(),
+            100,
+            1,
+            2001,
+            &mut thumbnails,
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(text.matches("INDIVIDUAL RESULT").count(), 1, "{text}");
+    assert!(text.contains("follow up"), "{text}");
+}
+
+#[test]
 fn hidden_waiting_tag_does_not_color_visible_plain_text() {
     let mut state = BusState::default();
     let room = state.create_room("work").unwrap();
@@ -124,12 +170,13 @@ fn a_cross_room_group_shows_its_reply_once_in_each_room() {
     for id in &requests {
         let request = &mut saved["requests"][id.0.to_string()];
         request["phase"] = "completed".into();
-        request["pending_final"] = serde_json::json!({
+        request["completed_reply"] = serde_json::json!({"group":request["group"].as_u64().unwrap_or(request["id"].as_u64().unwrap()),"content":serde_json::json!({
             "callback_id": "final", "text": "shared reply", "received_at_ms": 2_000,
             "provider_session_id": "session", "provider_turn_id": "turn"
-        });
+        })});
         if *id != requests[0] {
             request["group"] = requests[0].0.into();
+            request["completed_reply"]["group"] = requests[0].0.into();
         }
     }
     let state: BusState = serde_json::from_value(saved).unwrap();
@@ -247,10 +294,10 @@ fn consecutive_replies_to_one_message_are_separated_by_one_blank_row() {
     let mut saved = serde_json::to_value(&state).unwrap();
     let request = &mut saved["requests"][requests[0].0.to_string()];
     request["phase"] = "completed".into();
-    request["pending_final"] = serde_json::json!({
+    request["completed_reply"] = serde_json::json!({"group":request["group"].as_u64().unwrap_or(request["id"].as_u64().unwrap()),"content":serde_json::json!({
         "callback_id": "final", "text": "fake reply: first", "received_at_ms": 2_000,
         "provider_session_id": "session", "provider_turn_id": "turn"
-    });
+    })});
     let state: BusState = serde_json::from_value(saved).unwrap();
     let mut history = History::default();
     let lines = history.lines(

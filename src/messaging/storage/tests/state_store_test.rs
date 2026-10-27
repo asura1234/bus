@@ -494,8 +494,7 @@ fn history_append_after_failed_torn_tail_compaction_remains_reloadable() {
             .unwrap()
             .request(request)
             .unwrap()
-            .pending_final
-            .as_ref()
+            .reply()
             .unwrap()
             .text,
         "durable answer"

@@ -122,6 +122,7 @@ impl BusState {
                     submission_error: None,
                     dialog_delivery: None,
                     pending_final: None,
+                    completed_reply: None,
                     completed_at_ms: None,
                     queue_only,
                     group: None,

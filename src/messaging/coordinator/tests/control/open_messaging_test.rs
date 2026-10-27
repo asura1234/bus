@@ -95,7 +95,7 @@ fn open_messaging_all_agent_payloads_name_the_sender_and_its_home_room() {
     let id = w.state.requests().last().unwrap().id;
     let expected = format!("codex1 (room {}):\nhello", room.0);
     assert_eq!(
-        w.state.render_request_payload(id).as_deref(),
+        test_request_payload(&mut w.state, id).as_deref(),
         Some(expected.as_str())
     );
     assert_eq!(w.state.request(id).unwrap().prompt.text, "hello");
@@ -103,7 +103,7 @@ fn open_messaging_all_agent_payloads_name_the_sender_and_its_home_room() {
         serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     restored.rename_agent(author, "renamed").unwrap();
     assert_eq!(
-        restored.render_request_payload(id).as_deref(),
+        test_request_payload(&mut restored, id).as_deref(),
         Some(expected.as_str())
     );
     drop(w);
@@ -132,7 +132,7 @@ fn open_messaging_does_not_duplicate_an_existing_sender_identity() {
         assert!(send(&mut w, room, author, &peer.0.to_string(), &text).ok);
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
-            w.state.render_request_payload(id).as_deref(),
+            test_request_payload(&mut w.state, id).as_deref(),
             Some(format!("codex1 (room {}):\nready for verification", room.0).as_str())
         );
         drop(w);
@@ -154,7 +154,7 @@ fn open_messaging_a_different_or_embedded_identity_does_not_hide_the_sender() {
         assert!(send(&mut w, room, author, &peer.0.to_string(), text).ok);
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
-            w.state.render_request_payload(id).unwrap(),
+            test_request_payload(&mut w.state, id).unwrap(),
             format!("codex1:\n{text}")
         );
         drop(w);
@@ -227,7 +227,7 @@ fn open_messaging_queued_attribution_survives_sender_rename_and_deletion() {
     let mut restored: BusState =
         serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     assert_eq!(
-        restored.render_request_payload(id).unwrap(),
+        test_request_payload(&mut restored, id).unwrap(),
         // A historical sender keeps its old name and stable ID after deletion.
         format!(
             "codex1 (agent {}) (room {}):\nqueued question",
@@ -321,7 +321,7 @@ fn open_messaging_an_existing_header_matches_names_that_begin_with_from() {
         assert!(send(&mut w, room, author, &peer.0.to_string(), &text).ok);
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
-            w.state.render_request_payload(id).as_deref(),
+            test_request_payload(&mut w.state, id).as_deref(),
             Some(format!("{name}:\nready").as_str())
         );
         drop(w);
@@ -359,7 +359,7 @@ fn open_messaging_sentence_starting_with_the_senders_name_keeps_the_header() {
     assert!(send(&mut w, room, author, &peer.0.to_string(), text).ok);
     let id = w.state.requests().last().unwrap().id;
     assert_eq!(
-        w.state.render_request_payload(id).unwrap(),
+        test_request_payload(&mut w.state, id).unwrap(),
         format!("codex1:\n{text}")
     );
     drop(w);
@@ -399,7 +399,7 @@ fn open_messaging_forged_identity_fields_each_require_a_real_header() {
         assert!(send(&mut w, room, author, &peer.0.to_string(), &text).ok);
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
-            w.state.render_request_payload(id).unwrap(),
+            test_request_payload(&mut w.state, id).unwrap(),
             format!("codex1:\n{text}")
         );
     }

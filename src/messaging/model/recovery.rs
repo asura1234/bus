@@ -370,7 +370,9 @@ impl BusState {
         let agent_id = request_state.agent_id;
         request_state.phase = RequestPhase::Abandoned;
         request_state.pending_final = None;
-        request_state.completed_at_ms = Some(recovered_at_ms);
+        if request_state.completed_reply.is_none() {
+            request_state.completed_at_ms = Some(recovered_at_ms);
+        }
         for member in self.group_members(request) {
             if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
                 member.phase = RequestPhase::Abandoned;

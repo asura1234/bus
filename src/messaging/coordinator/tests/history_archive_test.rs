@@ -125,7 +125,7 @@ fn replacing_an_archived_request_moves_its_message_lookup() {
     let mut history = History::default();
     history.insert(Archived::Request(Box::new(request.clone())));
     request.prompt.id = PromptId(original.0 + 1_000_000);
-    request.pending_final.as_mut().unwrap().text = "replacement".into();
+    request.completed_reply.as_mut().unwrap().content.text = "replacement".into();
     let replacement = request.prompt.id;
     history.insert(Archived::Request(Box::new(request)));
     worker.state = worker.state.clone().with_history(Arc::new(history));
@@ -447,8 +447,7 @@ fn audit_delete_keeps_active_and_archived_messages_after_restart() {
                 .state
                 .request(finished)
                 .unwrap()
-                .pending_final
-                .as_ref()
+                .reply()
                 .map(|r| r.text.as_str()),
             Some(reply(0).as_str())
         );
@@ -702,7 +701,7 @@ fn audit_retired_digest_metadata_keeps_the_full_source_reply() {
     let source = saved.request(request).unwrap();
     assert_eq!(source.prompt.text, "legacy source task");
     assert_eq!(source.phase, RequestPhase::Completed);
-    assert_eq!(source.pending_final.as_ref().unwrap().text, text);
+    assert_eq!(source.reply().unwrap().text, text);
     assert!(saved.agent(agent).is_none());
     std::fs::remove_dir_all(dir).unwrap();
 }

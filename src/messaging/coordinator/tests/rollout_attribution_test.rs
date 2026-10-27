@@ -58,7 +58,8 @@ fn at(ms: u64) -> String {
         .unwrap()
 }
 
-fn turn(id: &str, ms: u64, prompt: &str, answer: &str) -> String {
+fn turn(f: &Fixture, id: &str, ms: u64, prompt: &str, answer: &str) -> String {
+    let prompt = delivered_test_prompt(&f.worker.state, prompt);
     let timestamp = at(ms);
     [
         json!({"timestamp":timestamp,"type":"event_msg","payload":{"type":"task_started","turn_id":id}}),
@@ -96,7 +97,7 @@ fn send_boundary_is_inclusive_and_a_one_ms_older_turn_is_rejected() {
         f.deliver();
         let since = f.request(id).prompt.submitted_at_ms;
         let stamp = (since as i64 + offset) as u64;
-        std::fs::write(&path, turn("candidate", stamp, "boundary", "RIGHT")).unwrap();
+        std::fs::write(&path, turn(&f, "candidate", stamp, "boundary", "RIGHT")).unwrap();
         idle_then_settle(&mut f, id);
         if offset < 0 {
             no_answer(&f, id);
@@ -114,7 +115,7 @@ fn two_matching_turns_in_the_send_millisecond_remain_ambiguous() {
     let since = f.request(id).prompt.submitted_at_ms;
     std::fs::write(
         &path,
-        turn("one", since, "same-ms", "ONE") + &turn("two", since, "same-ms", "TWO"),
+        turn(&f, "one", since, "same-ms", "ONE") + &turn(&f, "two", since, "same-ms", "TWO"),
     )
     .unwrap();
     idle_then_settle(&mut f, id);
@@ -127,7 +128,7 @@ fn a_partially_written_final_never_delivers_its_partial_text() {
     let id = f.send("partial", false);
     f.deliver();
     let since = f.request(id).prompt.submitted_at_ms;
-    let recorded = turn("candidate", since + 1, "partial", "NOT COMPLETE");
+    let recorded = turn(&f, "candidate", since + 1, "partial", "NOT COMPLETE");
     let lines: Vec<_> = recorded.lines().collect();
     let prefix = format!("{}\n{}\n", lines[0], lines[1]);
     let partial = lines[2].split("NOT COMPLETE").next().unwrap();
@@ -144,7 +145,7 @@ fn complete_final_json_without_a_trailing_newline_delivers_only_its_exact_text()
     let since = f.request(id).prompt.submitted_at_ms;
     std::fs::write(
         &path,
-        turn("candidate", since + 1, "no-newline", "EXACT").trim_end_matches('\n'),
+        turn(&f, "candidate", since + 1, "no-newline", "EXACT").trim_end_matches('\n'),
     )
     .unwrap();
     idle_then_settle(&mut f, id);
@@ -163,7 +164,11 @@ fn a_renamed_rollout_and_an_unregistered_new_file_deliver_no_foreign_answer() {
             id
         };
         let since = f.request(id).prompt.submitted_at_ms;
-        std::fs::write(&path, turn("original", since + 1, "rotation", "ORIGINAL")).unwrap();
+        std::fs::write(
+            &path,
+            turn(&f, "original", since + 1, "rotation", "ORIGINAL"),
+        )
+        .unwrap();
         std::fs::rename(&path, f.dir.join("archived-rollout.jsonl")).unwrap();
         // A new Codex session's file is not the rollout registered by the
         // old session hook. No hook reports it to Bus in this missing-hook case.
@@ -172,7 +177,7 @@ fn a_renamed_rollout_and_an_unregistered_new_file_deliver_no_foreign_answer() {
             json!({"timestamp":at(since + 2),"type":"session_meta","payload":{"id":"new-session"}});
         std::fs::write(
             new_path,
-            format!("{header}\n") + &turn("new-turn", since + 2, "rotation", "FOREIGN"),
+            format!("{header}\n") + &turn(&f, "new-turn", since + 2, "rotation", "FOREIGN"),
         )
         .unwrap();
         idle_then_settle(&mut f, id);
@@ -185,9 +190,9 @@ fn a_bound_completion_outside_the_tail_never_uses_a_later_turn_answer() {
     let (mut f, path) = with_rollout();
     let id = bound(&mut f, &path, "bound-turn", "bound");
     let since = f.request(id).prompt.submitted_at_ms;
-    let bytes = turn("bound-turn", since + 1, "bound", "BOUND")
+    let bytes = turn(&f, "bound-turn", since + 1, "bound", "BOUND")
         + &json!({"timestamp":at(since + 2),"type":"event_msg","payload":{"type":"token_count","padding":"x".repeat(300*1024)}}).to_string()
-        + "\n" + &turn("later", since + 3, "bound", "WRONG");
+        + "\n" + &turn(&f, "later", since + 3, "bound", "WRONG");
     std::fs::write(&path, bytes).unwrap();
     assert_eq!(read_codex_turn_end(&path, "bound-turn").unwrap(), None);
     assert_eq!(
@@ -204,7 +209,7 @@ fn a_window_over_64_mib_refuses_attribution_instead_of_using_the_later_match() {
     let id = f.send("cap", false);
     f.deliver();
     let since = f.request(id).prompt.submitted_at_ms;
-    let initial = turn("first", since + 1, "cap", "FIRST");
+    let initial = turn(&f, "first", since + 1, "cap", "FIRST");
     let parts: Vec<_> = initial.lines().collect();
     let mut file = std::fs::File::create(&path).unwrap();
     writeln!(file, "{}\n{}", parts[0], parts[1]).unwrap();
@@ -215,12 +220,14 @@ fn a_window_over_64_mib_refuses_attribution_instead_of_using_the_later_match() {
     }
     writeln!(file, "\"}}}}").unwrap();
     writeln!(file, "{}", parts[2]).unwrap();
-    file.write_all(turn("later", since + 3, "cap", "LATER").as_bytes())
+    file.write_all(turn(&f, "later", since + 3, "cap", "LATER").as_bytes())
         .unwrap();
     drop(file);
     assert!(std::fs::metadata(&path).unwrap().len() > 64 * 1024 * 1024);
     assert_eq!(
-        find_codex_prompt_turn(&path, since, |text| text == "cap").unwrap(),
+        find_codex_prompt_turn(&path, since, |text| text
+            == delivered_test_prompt(&f.worker.state, "cap"))
+        .unwrap(),
         None
     );
     idle_then_settle(&mut f, id);
@@ -233,7 +240,7 @@ fn an_unbound_long_turn_with_one_matching_prompt_still_delivers_its_own_final() 
     let id = f.send("long", false);
     f.deliver();
     let since = f.request(id).prompt.submitted_at_ms;
-    let initial = turn("candidate", since + 1, "long", "EXACT LONG FINAL");
+    let initial = turn(&f, "candidate", since + 1, "long", "EXACT LONG FINAL");
     let parts: Vec<_> = initial.lines().collect();
     let filler = json!({"timestamp":at(since + 2),"type":"response_item","payload":{"type":"reasoning","encrypted_content":"x".repeat(1024*1024)}});
     std::fs::write(
@@ -252,7 +259,7 @@ fn clock_rollback_near_send_must_not_hide_an_earlier_matching_turn() {
         let id = f.send("clock", false);
         f.deliver();
         let since = f.request(id).prompt.submitted_at_ms;
-        let initial = turn("first", since + 1, "clock", "FIRST");
+        let initial = turn(&f, "first", since + 1, "clock", "FIRST");
         let parts: Vec<_> = initial.lines().collect();
         let filler = json!({"timestamp":at(since + 2),"type":"response_item","payload":{"type":"reasoning","encrypted_content":"x".repeat(300*1024)}});
         // First run a monotonic control; then change only this completion's
@@ -262,9 +269,12 @@ fn clock_rollback_near_send_must_not_hide_an_earlier_matching_turn() {
         let mut complete: Value = serde_json::from_str(parts[2]).unwrap();
         complete["timestamp"] = json!(at(if rollback { since - 1 } else { since + 2 }));
         let recorded = format!("{}\n{}\n{filler}\n{complete}\n", parts[0], parts[1])
-            + &turn("later", since + 1_000, "clock", "LATER");
+            + &turn(&f, "later", since + 1_000, "clock", "LATER");
         std::fs::write(&path, recorded).unwrap();
-        let selected = find_codex_prompt_turn(&path, since, |text| text == "clock").unwrap();
+        let selected = find_codex_prompt_turn(&path, since, |text| {
+            text == delivered_test_prompt(&f.worker.state, "clock")
+        })
+        .unwrap();
         f.now = since + 1_001;
         idle_then_settle(&mut f, id);
         println!(
@@ -285,7 +295,7 @@ fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answe
         let id = f.send("clock-start", false);
         f.deliver();
         let since = f.request(id).prompt.submitted_at_ms;
-        assert_eq!(f.typed().last().unwrap().0, "clock-start");
+        assert_eq!(f.typed_content().last().unwrap().0, "clock-start");
         assert!(f.request(id).provider_turn_id.is_none());
         // Both inputs are appended after Bus typed the request. The clock
         // steps back 1 s between that send and the original task_started;
@@ -297,14 +307,17 @@ fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answe
         std::fs::write(
             &path,
             format!("{before_step}\n")
-                + &turn("original", original_at, "clock-start", "ORIGINAL")
-                + &turn("retry", since + 1_000, "clock-start", "WRONG RETRY"),
+                + &turn(&f, "original", original_at, "clock-start", "ORIGINAL")
+                + &turn(&f, "retry", since + 1_000, "clock-start", "WRONG RETRY"),
         )
         .unwrap();
         // The file is tiny: the entire original turn is in the reader's
         // window. This does not exercise an early backward-read stop.
         assert!(std::fs::metadata(&path).unwrap().len() < 256 * 1024);
-        let selected = find_codex_prompt_turn(&path, since, |p| p == "clock-start").unwrap();
+        let selected = find_codex_prompt_turn(&path, since, |p| {
+            p == delivered_test_prompt(&f.worker.state, "clock-start")
+        })
+        .unwrap();
         let worker_cwd = f.worker.state.agent(f.agent).unwrap().cwd.clone();
         std::fs::remove_dir(worker_cwd).unwrap();
         f.now = since + 1_001;
@@ -325,7 +338,7 @@ fn the_backward_window_keeps_both_matching_turns_for_rollbacks_up_to_sixty_secon
         let id = f.send("margin", false);
         f.deliver();
         let since = f.request(id).prompt.submitted_at_ms;
-        let first = turn("first", since + 1, "margin", "FIRST");
+        let first = turn(&f, "first", since + 1, "margin", "FIRST");
         let parts: Vec<_> = first.lines().collect();
         let filler = json!({"timestamp":at(since + 2),"type":"response_item",
             "payload":{"type":"reasoning","encrypted_content":"x".repeat(300 * 1024)}});
@@ -334,10 +347,13 @@ fn the_backward_window_keeps_both_matching_turns_for_rollbacks_up_to_sixty_secon
         std::fs::write(
             &path,
             format!("{}\n{}\n{filler}\n{complete}\n", parts[0], parts[1])
-                + &turn("later", since + 1_000, "margin", "LATER"),
+                + &turn(&f, "later", since + 1_000, "margin", "LATER"),
         )
         .unwrap();
-        let selected = find_codex_prompt_turn(&path, since, |p| p == "margin").unwrap();
+        let selected = find_codex_prompt_turn(&path, since, |p| {
+            p == delivered_test_prompt(&f.worker.state, "margin")
+        })
+        .unwrap();
         f.now = since + 1_001;
         idle_then_settle(&mut f, id);
         println!(

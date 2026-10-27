@@ -60,8 +60,22 @@ pub(super) fn cli() -> Command {
         .subcommand(agent_cli())
         .subcommand(
             subcommand("send")
-                .arg(option("room"))
-                .arg(option("to"))
+                .arg(
+                    value_arg("room")
+                        .long("room")
+                        .required_unless_present("reply-to"),
+                )
+                .arg(
+                    value_arg("to")
+                        .long("to")
+                        .required_unless_present("reply-to"),
+                )
+                .arg(
+                    value_arg("reply-to")
+                        .long("reply-to")
+                        .requires("as")
+                        .conflicts_with_all(["room", "to", "queue", "async", "file"]),
+                )
                 .arg(option("text"))
                 .arg(value_arg("file").long("file").action(ArgAction::Append))
                 .arg(value_arg("as").long("as"))
@@ -539,6 +553,14 @@ fn parse_agent_read(args: &ArgMatches) -> Result<(&'static str, Value), String> 
 }
 
 fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
+    if let Some(message) = args.get_one::<String>("reply-to") {
+        return Ok((
+            json!({
+                "reply_to":message, "as":required(args,"as")?, "text":required(args,"text")?,
+            }),
+            false,
+        ));
+    }
     let recipients: Vec<_> = required(args, "to")?.split(',').collect();
     if recipients
         .iter()

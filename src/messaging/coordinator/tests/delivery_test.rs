@@ -214,24 +214,32 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
         let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
         let request = queue(&mut worker, room, agent, "round trip payload ");
         worker.submit_ready().unwrap();
+        let prompt = worker
+            .state
+            .request(request)
+            .unwrap()
+            .submitted_payload
+            .as_ref()
+            .unwrap()
+            .trim_end();
         let callback = match provider {
             Provider::ClaudeCode => json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "session",
                 "prompt_id": "turn",
-                "prompt": "round trip payload"
+                "prompt": prompt
             }),
             Provider::Codex => json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "session",
                 "turn_id": "turn",
-                "prompt": "round trip payload"
+                "prompt": prompt
             }),
             Provider::Cursor => json!({
                 "hook_event_name": "beforeSubmitPrompt",
                 "conversation_id": "session",
                 "generation_id": "turn",
-                "prompt": "round trip payload"
+                "prompt": prompt
             }),
         };
         record(&dir, provider, callback);
@@ -857,7 +865,7 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
         let original = worker.state.request(id).unwrap();
         assert_eq!(original.phase, RequestPhase::Completed);
         assert_eq!(original.provider_turn_id.as_deref(), Some(turn));
-        assert_eq!(original.pending_final.as_ref().unwrap().text, "real final");
+        assert_eq!(original.reply().unwrap().text, "real final");
     }
     assert_eq!(worker.state.room(room).unwrap().unread_count, 2);
     assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
@@ -1289,7 +1297,7 @@ fn text_typed_into_a_turn_the_agent_began_itself_binds_to_that_turn() {
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert_eq!(settled.pending_final.as_ref().unwrap().text, "Answered");
+    assert_eq!(settled.reply().unwrap().text, "Answered");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

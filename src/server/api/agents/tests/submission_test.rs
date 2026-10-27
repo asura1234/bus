@@ -366,6 +366,44 @@ pub(super) async fn accept_paste(
 }
 
 #[tokio::test]
+async fn correlated_codex_images_use_dedicated_pastes_and_one_enter() {
+    for bound in [false, true] {
+        let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Codex, bound, "");
+        let text = "worker:\n[Bus message 17; answer with bus send --reply-to 17 --as 3 --text 'YOUR ANSWER']\nreview\n\nall pixels";
+        let images = ["\"/tmp/a.png\"", "\"/tmp/b.PNG\""];
+        let payload = format!("{text}\n{}", images.join("\n"));
+        match &mut method {
+            Method::AgentPromptIfIdle(params) => params.text = payload,
+            Method::AgentPromptIfUnbound(params) => params.text = payload,
+            _ => unreachable!(),
+        }
+        let response = start(&mut app, method);
+        let expected = format!(
+            "\x1b[200~{}\x1b[201~\x1b[200~{}\x1b[201~\x1b[200~{text}\x1b[201~",
+            images[0], images[1]
+        );
+        assert_eq!(next_write(&mut writes).await, Bytes::from(expected));
+        assert!(
+            writes.try_recv().is_err(),
+            "Enter must await our complete image-and-text composer"
+        );
+        redraw(
+            &app,
+            AgentKind::Codex,
+            &format!("[Image #1] [Image #2]{text}"),
+        );
+        assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+        redraw(&app, AgentKind::Codex, "");
+        let response = response.recv_timeout(WAIT).unwrap();
+        assert!(response.contains("agent_prompted"), "{response}");
+        assert!(
+            writes.try_recv().is_err(),
+            "one observed submission must not paste or Enter twice"
+        );
+    }
+}
+
+#[tokio::test]
 async fn delayed_paste_render_waits_before_the_first_enter() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, false, "");
     let response = start(&mut app, method);

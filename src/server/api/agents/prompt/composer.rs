@@ -125,15 +125,31 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
             || collapsed_paste(AgentKind::Claude, rest, &remaining))
 }
 
-/// Codex (0.163.0) attaches a paste that is only one quoted image path and
-/// shows one `[Image #N]` chip; anything with text or a second path stays text.
+/// Codex either attaches or inserts each dedicated image paste as literal text.
+/// Own the draft only when every image and the remaining text are accounted for.
 fn codex_image_attachment(body: &str, expected: &str) -> bool {
-    use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_lifted_images,
+    let (expected_images, remaining) =
+        crate::agents::providers::codex::hooks::image_paste_parts(expected);
+    let normalize = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
     };
-    !expected.contains(['\n', '\r'])
-        && claude_image_placeholders(body) == (body.len(), 1)
-        && claude_lifted_images(expected) == (1, String::new())
+    let expected_images: Vec<_> = expected_images
+        .iter()
+        .map(|image| normalize(image))
+        .collect();
+    let body = normalize(body);
+    !expected_images.is_empty()
+        && crate::agents::providers::codex::hooks::text_after_image_pastes(
+            &body,
+            &expected_images,
+            "[Image#",
+        )
+        .is_some_and(|text| {
+            text == normalize(&remaining)
+                || text == format!("[PastedContent{}chars]", remaining.chars().count())
+        })
 }
 
 /// The leading `[Image #N]` chips of a Claude composer and the text after them.
@@ -330,3 +346,7 @@ fn plain_rule(line: &str) -> bool {
 #[cfg(test)]
 #[path = "../tests/composer_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/codex_image_test.rs"]
+mod codex_image_tests;

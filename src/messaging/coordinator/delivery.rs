@@ -22,6 +22,14 @@ pub(super) struct ReplyDeliveryRetry {
 }
 
 impl Worker {
+    pub(super) fn reply_waiter_now(&self) -> std::time::Instant {
+        #[cfg(test)]
+        if let Some(now) = self.test_reply_waiter_now {
+            return now;
+        }
+        std::time::Instant::now()
+    }
+
     /// Retaining a wake must not keep pasting into a broken composer forever.
     /// Status, identity or queue changes permit a fresh attempt; repeated
     /// idle polls alone do not.
@@ -57,8 +65,9 @@ impl Worker {
         &mut self,
         mut can_deliver: impl FnMut() -> bool,
     ) -> Result<(), String> {
+        let now = self.reply_waiter_now();
         self.reply_waiters
-            .retain(|_, at| at.elapsed() < std::time::Duration::from_secs(3));
+            .retain(|_, at| now.saturating_duration_since(*at) < std::time::Duration::from_secs(3));
         let waited = self.reply_waiters.keys().copied().collect();
         let mut state = self.state.clone();
         let now_ms = super::io::now_ms();

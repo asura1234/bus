@@ -179,7 +179,7 @@ fn rejected_new_turn_interim_must_not_make_answered_joined_messages_stall() {
     for id in std::iter::once(lead).chain(joined) {
         let request = state.request(id).unwrap();
         assert_eq!(request.phase, RequestPhase::Completed);
-        assert_eq!(request.pending_final.as_ref().unwrap().text, "first answer");
+        assert_eq!(request.reply().unwrap().text, "first answer");
         assert_eq!(
             request.failure_reason.as_deref(),
             Some("background_shells_timeout")

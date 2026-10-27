@@ -216,6 +216,11 @@ impl super::BusState {
             .values()
             .filter(|request| !request.settled())
             .map(|request| request.group.unwrap_or(request.id))
+            .chain(
+                self.agents
+                    .values()
+                    .filter_map(|agent| agent.current_request),
+            )
             .collect();
         let requests: Vec<RequestId> = self
             .requests

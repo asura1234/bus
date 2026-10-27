@@ -335,6 +335,33 @@ fn reply_routing_keeps_undelivered_notices_across_expiry_and_restart() {
 }
 
 #[test]
+fn reply_waiter_lease_keeps_the_reply_until_exactly_three_seconds() {
+    let mut f = Fixture::new();
+    let now = std::time::Instant::now();
+    f.worker.test_reply_waiter_now = Some(now);
+    let source = f.send(Author::Agent(f.orch), "build this");
+    let message = f.worker.state.request(source).unwrap().prompt.id;
+    assert!(
+        f.call(
+            "message.status",
+            json!({"message":message.0.to_string(),"as":f.orch.0.to_string()})
+        )
+        .ok
+    );
+    f.finish(source, "One reply after the waiter expires");
+    f.worker.test_reply_waiter_now = Some(now + Duration::from_millis(2_999));
+    f.worker.submit_ready().unwrap();
+    assert!(f.notices().is_empty(), "the waiter still owns the reply");
+    f.worker.test_reply_waiter_now = Some(now + Duration::from_secs(3));
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.notices().len(), 1);
+    assert!(f.notices()[0]
+        .prompt
+        .text
+        .contains("One reply after the waiter expires"));
+}
+
+#[test]
 fn reply_routing_an_expired_waiter_lease_releases_the_reply() {
     let mut f = Fixture::new();
     let source = f.send(Author::Agent(f.orch), "build this");
@@ -1077,7 +1104,7 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
         state
             .see_worker_reply(member, f.orch, io::now_ms())
             .unwrap();
-        let original = state.request(member).unwrap().pending_final.clone();
+        let original = state.request(member).unwrap().reply().cloned();
         for (index, mut invalid) in [
             callback(
                 0,
@@ -1126,8 +1153,8 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
             },
             None,
         ));
-        assert_eq!(state.request(member).unwrap().pending_final, original);
-        assert_eq!(state.request(lead).unwrap().pending_final, original);
+        assert_eq!(state.request(member).unwrap().reply().cloned(), original);
+        assert_eq!(state.request(lead).unwrap().reply().cloned(), original);
         state
             .route_worker_replies(io::now_ms() + 10_000, &BTreeSet::new())
             .unwrap();
@@ -1205,8 +1232,7 @@ fn reply_routing_format_2_upgrade_keeps_old_history_without_waking_old_replies()
             .state
             .request(source)
             .unwrap()
-            .pending_final
-            .as_ref()
+            .reply()
             .map(|r| r.text.as_str()),
         Some("Old verdict")
     );
@@ -1357,5 +1383,45 @@ fn identity_batched_worker_notification_has_exactly_one_sender_line() {
     assert!(
         payload.contains(&format!("rev-claude8 (room {}):", f.room.0)),
         "{payload}"
+    );
+}
+
+#[test]
+fn reply_to_each_request_routes_once_and_reading_one_does_not_spend_the_other() {
+    let mut f = Fixture::new();
+    let first = f.send(Author::Agent(f.orch), "first watcher task");
+    let second = f.send(Author::Agent(f.orch), "second watcher task");
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["requests"][first.0.to_string()]["phase"] = "active".into();
+    document["requests"][second.0.to_string()]["phase"] = "active".into();
+    document["requests"][second.0.to_string()]["group"] = first.0.into();
+    let mut state: BusState = serde_json::from_value(document).unwrap();
+    let first_message = state.request(first).unwrap().prompt.id;
+    let second_message = state.request(second).unwrap().prompt.id;
+    let now = io::now_ms() - 4000;
+    state
+        .answer_message(first_message, f.agent, "first answer".into(), now)
+        .unwrap();
+    state
+        .answer_message(second_message, f.agent, "second answer".into(), now)
+        .unwrap();
+    state.see_worker_reply(first, f.orch, now).unwrap();
+    state
+        .route_worker_replies(io::now_ms(), &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let notices = f.notices();
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].prompt.text.contains("second answer"));
+    assert!(!notices[0].prompt.text.contains("first answer"));
+    let mut state = f.worker.state.clone();
+    state
+        .route_worker_replies(io::now_ms() + 4000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    assert_eq!(
+        f.notices().len(),
+        1,
+        "a repeated routing pass must not duplicate the answer"
     );
 }

@@ -148,7 +148,7 @@ fn selector_label_unused_historical_name_includes_the_senders_id() {
         .unwrap()[0];
     w.state.rename_agent(sender, "current-name").unwrap();
     assert_eq!(
-        w.state.render_request_payload(request).unwrap(),
+        test_request_payload(&mut w.state, request).unwrap(),
         format!("codex1 (agent {}):\nbefore rename", sender.0)
     );
     drop(w);
@@ -254,7 +254,7 @@ fn selector_label_deleted_author_uses_retired_identity_without_a_snapshot() {
         "history display keeps its own deleted marker"
     );
     assert_eq!(
-        w.state.render_request_payload(request).unwrap(),
+        test_request_payload(&mut w.state, request).unwrap(),
         format!(
             "codex1 (agent {}) (room {}):\nlegacy question",
             sender.0, home.0
@@ -275,7 +275,9 @@ fn selector_label_legacy_ambiguous_name_keeps_the_real_sender_id() {
     legacy["agents"][peer.0.to_string()]["name"] = json!("codex1");
     w.state = serde_json::from_value(legacy).unwrap();
     assert_eq!(
-        payload_from(&mut w, room, sender, peer),
+        crate::messaging::coordinator::tests::support::test_prompt_content(&payload_from(
+            &mut w, room, sender, peer
+        )),
         format!("codex1 (agent {}):\nhello", sender.0)
     );
     drop(w);

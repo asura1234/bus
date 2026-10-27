@@ -15,6 +15,46 @@ fn command_help(args: &[&str]) -> String {
 }
 
 #[test]
+fn reply_to_infers_the_conversation_and_requires_an_explicit_recipient_identity() {
+    let parsed = command(&[
+        "send",
+        "--reply-to",
+        "123",
+        "--as",
+        "worker",
+        "--text",
+        "done",
+    ])
+    .unwrap();
+    assert_eq!(parsed.method, "message.send");
+    assert_eq!(
+        parsed.params,
+        json!({"reply_to":"123","as":"worker","text":"done"})
+    );
+    assert!(!parsed.follow);
+    for extra in [
+        vec!["--room", "other"],
+        vec!["--to", "someone"],
+        vec!["--queue"],
+        vec!["--async"],
+        vec!["--file", "/tmp/file"],
+    ] {
+        let mut args = vec![
+            "send",
+            "--reply-to",
+            "123",
+            "--as",
+            "worker",
+            "--text",
+            "done",
+        ];
+        args.extend(extra);
+        assert!(command(&args).is_err(), "{args:?}");
+    }
+    assert!(command(&["send", "--reply-to", "123", "--text", "done"]).is_err());
+}
+
+#[test]
 fn history_pagination_flags_are_explicit_positive_message_bounds() {
     let parsed = command(&["history", "--room", "7", "--limit", "100", "--before", "42"]).unwrap();
     assert_eq!(parsed.params, json!({"room":"7","limit":100,"before":42}));

@@ -323,8 +323,7 @@ fn background_timeout_or_codex_stop_late_same_turn_final_wakes_sender_after_rest
                 .state
                 .request(source)
                 .unwrap()
-                .pending_final
-                .as_ref()
+                .reply()
                 .unwrap()
                 .text,
             "Waiting for CI and background reviewers."

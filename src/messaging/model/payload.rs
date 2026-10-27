@@ -57,6 +57,10 @@ impl BusState {
             return Some(text.clone());
         }
         let mut text = request.prompt.rendered_payload();
+        let answer = format!(
+            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']",
+            request.prompt.id.0, request.prompt.id.0, request.agent_id.0,
+        );
         if let Author::Agent(sender) = request.prompt.author {
             let identity = request
                 .sender_identity
@@ -94,10 +98,12 @@ impl BusState {
                     .map_or(String::new(), |(_, body)| body.to_owned());
             }
             text = if text.is_empty() {
-                header
+                format!("{header}\n{answer}")
             } else {
-                format!("{header}\n{text}")
+                format!("{header}\n{answer}\n{text}")
             };
+        } else {
+            text = format!("{answer}\n{text}");
         }
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)
@@ -130,4 +136,41 @@ fn identity_only_line(first: &str, name: &str, id: u64) -> bool {
                     .iter()
                     .any(|ending| first.eq_ignore_ascii_case(&format!("{identity}{ending}")))
             })
+}
+
+/// Whether a provider's submit hook reports the prompt Bus typed as `typed`:
+/// the typed text itself, or image chips with the remaining text. Claude drops
+/// blank lines while lifting images; Codex's separate text paste preserves them.
+pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
+    use crate::agents::providers::claude_code::hooks::{
+        claude_image_placeholders, claude_lifted_images,
+    };
+    let payload = normalized_payload(payload);
+    let typed = normalized_payload(typed);
+    if payload == typed {
+        return true;
+    }
+    let (length, images) = claude_image_placeholders(&payload);
+    let (lifted, remaining) = claude_lifted_images(&typed);
+    let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
+    if images > 0 && images == lifted && &payload[length..] == remaining {
+        return true;
+    }
+    let (expected_images, expected_text) =
+        crate::agents::providers::codex::hooks::image_paste_parts(&typed);
+    !expected_images.is_empty()
+        && crate::agents::providers::codex::hooks::text_after_image_pastes(
+            &payload,
+            &expected_images,
+            "[Image #",
+        )
+        .is_some_and(|text| text == normalized_payload(&expected_text))
+}
+
+fn normalized_payload(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches(|character: char| character.is_ascii_whitespace())
+        .to_owned()
 }

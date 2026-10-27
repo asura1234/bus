@@ -405,7 +405,48 @@ fn codex_shows_a_lone_pasted_image_path_as_an_image_chip_that_is_still_our_draft
 }
 
 #[test]
-fn codex_and_cursor_keep_a_pasted_image_path_as_text() {
+fn codex_image_chips_and_reply_instruction_are_owned_only_together() {
+    let text = "worker:\n[Bus message 17; answer with bus send --reply-to 17 --as 3 --text 'YOUR ANSWER']\nreview\n\nall pixels";
+    for (chips, images) in [
+        ("[Image #1]", "\"/tmp/a.png\""),
+        ("[Image #1] [Image #2]", "\"/tmp/a.png\"\n\"/tmp/b.png\""),
+    ] {
+        let expected = format!("{text}\n{images}");
+        assert_eq!(
+            observe(
+                AgentKind::Codex,
+                &format!("› {expected}\n\n GPT-6 · /repo"),
+                &expected
+            ),
+            InputObservation::Pending,
+            "a literal draft can be Codex's image-decode fallback"
+        );
+        for body in [
+            format!("{chips}{text}"),
+            format!("{chips}[Pasted Content {} chars]", text.chars().count()),
+        ] {
+            let screen = format!("› {body}\n\n GPT-6 · /repo\n ? for shortcuts");
+            assert_eq!(
+                observe(AgentKind::Codex, &screen, &expected),
+                InputObservation::Pending
+            );
+            for wrong in [
+                text.to_owned(),
+                format!("{expected}\n\"/tmp/extra.png\""),
+                expected.replace("reply-to 17", "reply-to 1700"),
+            ] {
+                assert_eq!(
+                    observe(AgentKind::Codex, &screen, &wrong),
+                    InputObservation::Other,
+                    "{wrong}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn combined_image_path_paste_is_owned_literal_text_in_codex_and_cursor() {
     let expected = |dir| captured_payload("please review this screenshot", dir, 1);
     assert_eq!(
         observe(

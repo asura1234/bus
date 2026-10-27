@@ -1,4 +1,5 @@
 //! Backward compatibility must not revive the retired watcher.
+use super::tests::support::test_prompt_content;
 use crate::agents::AgentState;
 use crate::messaging::coordinator::reply_delivery_support::Delivery;
 use crate::messaging::model::{Author, Draft, Provider, RequestPhase};
@@ -45,7 +46,7 @@ async fn retired_github_watch_queued_notice_is_closed_but_user_text_is_delivered
     assert!(f
         .typed(orch)
         .iter()
-        .any(|text| text == "GitHub: ordinary user text"));
+        .any(|text| test_prompt_content(text) == "GitHub: ordinary user text"));
     assert_ne!(
         f.state().request(ordinary).unwrap().phase,
         RequestPhase::Abandoned

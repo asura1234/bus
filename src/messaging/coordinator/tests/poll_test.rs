@@ -18,7 +18,7 @@ use std::{
 };
 
 #[path = "support_test.rs"]
-mod support;
+pub(super) mod support;
 use support::*;
 
 #[path = "poll_recovery_test.rs"]

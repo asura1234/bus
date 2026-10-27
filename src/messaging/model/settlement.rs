@@ -82,7 +82,10 @@ impl BusState {
         let request = self.requests.get(&id)?;
         let hold = request.shell_hold.as_ref()?;
         if !request.has_held_background_reply()
-            || request.settled()
+            || matches!(
+                request.phase,
+                RequestPhase::Completed | RequestPhase::Abandoned
+            )
             || now_ms < hold.since_ms.saturating_add(cap_ms)
         {
             return None;
@@ -142,7 +145,9 @@ impl BusState {
     ) -> Option<RequestId> {
         let mut closed = self.group_members(id);
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        closed.push(id);
+        if self.request(id).is_some_and(|request| !request.settled()) {
+            closed.push(id);
+        }
         let request = self.requests.get_mut(&id)?;
         request.awaiting_background = false;
         request.turn_ended_at_ms = None;
@@ -191,8 +196,10 @@ impl BusState {
         let boundary = previous.submission_boundary;
         for id in self.group_members(lead) {
             if let Some(member) = self.requests.get_mut(&id).filter(|member| {
-                !member.settled()
-                    && (member.id == next || (member.steered && !member.trusted_start_bound))
+                matches!(
+                    member.phase,
+                    RequestPhase::Submitting | RequestPhase::Active
+                ) && (member.id == next || (member.steered && !member.trusted_start_bound))
             }) {
                 member.group = (id != next).then_some(next);
                 member.submission_boundary = boundary;
@@ -356,9 +363,9 @@ impl BusState {
                 "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.".to_owned(),
             ),
         };
-        self.close_turn_with_reason(id, now_ms, reason).ok()?;
+        let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
         if let Some(agent) = self.agents.get_mut(&agent) {
-            agent.actionable_error = Some(error);
+            agent.actionable_error = closed.then_some(error);
         }
         Some(id)
     }
@@ -453,13 +460,14 @@ impl BusState {
 
     /// Abandon `id`'s turn with `reason`. Messages typed or coalesced into
     /// this turn close with it and share its reason; members that already
-    /// settled keep their own outcome.
+    /// settled keep their own outcome. Returns whether outstanding work closed,
+    /// so caller feedback describes the requests actually affected.
     pub(super) fn close_turn_with_reason(
         &mut self,
         id: RequestId,
         now_ms: u64,
         reason: String,
-    ) -> Result<(), ModelError> {
+    ) -> Result<bool, ModelError> {
         let detail = (reason == "submission_unconfirmed")
             .then(|| {
                 self.requests
@@ -469,7 +477,10 @@ impl BusState {
             .flatten();
         let mut closed = self.group_members(id);
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        closed.push(id);
+        if self.request(id).is_some_and(|r| !r.settled()) {
+            closed.push(id);
+        }
+        let affected = !closed.is_empty();
         for request in closed {
             if let Some(request) = self.requests.get_mut(&request) {
                 request.failure_reason = Some(reason.clone());
@@ -480,7 +491,7 @@ impl BusState {
         }
         // Retain the provider outcome before abandoning the group.
         self.abandon_current_request(id, now_ms)?;
-        Ok(())
+        Ok(affected)
     }
 }
 

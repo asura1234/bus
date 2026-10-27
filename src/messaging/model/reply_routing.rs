@@ -1,5 +1,5 @@
 //! Durable routing of a worker's captured reply back to its room orchestrator.
-use super::{AgentId, Author, BusState, ModelError, Request, RequestId, RequestPhase};
+use super::{AgentId, Author, BusState, ModelError, Request, RequestId};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -49,11 +49,9 @@ impl BusState {
     }
 
     pub(crate) fn reply_needs_ack(&self, request: &Request) -> bool {
-        request.phase == RequestPhase::Completed
-            && request
-                .pending_final
-                .as_ref()
-                .is_some_and(|reply| !reply.text.trim().is_empty())
+        request
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty())
             && self.reply_orchestrator(request).is_some()
             && self.reply_routes.get(&reply_key(request)) != Some(&ReplyRoute::Seen)
             && (self.routing_source(request) || self.reply_routes.contains_key(&reply_key(request)))
@@ -90,10 +88,7 @@ impl BusState {
         let source = self
             .request(request)
             .ok_or(ModelError::UnknownRequest(request))?;
-        if self.reply_orchestrator(source) != Some(author)
-            || source.phase != RequestPhase::Completed
-            || source.pending_final.is_none()
-        {
+        if self.reply_orchestrator(source) != Some(author) || source.reply().is_none() {
             return Err(ModelError::InvalidTransition);
         }
         let key = reply_key(source);
@@ -110,5 +105,5 @@ impl BusState {
 }
 
 pub(super) fn reply_key(request: &Request) -> RequestId {
-    request.group.unwrap_or(request.id)
+    request.reply_key()
 }
