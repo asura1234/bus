@@ -224,7 +224,7 @@ FOR EACH rewritten assertion it lists:
 ========== B6. GATES & LAND ==========
 
 Same as A5: take the delta per unit; STOP on self-reported out-of-scope changes; when no component changed anything, record "duplicate track: no
-consolidatable duplicates" and skip landing; otherwise run the rustfmt / clippy / narrow tests the combined delta needs.
+consolidatable duplicates" and skip landing; otherwise run the target-derived focused checks from A5 for the combined delta.
 Invoke `commit-and-push` once for the duplication delta (separate from the dead-code commit), with the A6 rules.
 
 ========== OUTPUT ==========
