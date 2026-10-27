@@ -14,6 +14,7 @@ See [agent launch arguments](docs/launch-args.md) for provider flags and details
 Bus offers its default workflow skills on the first interactive launch (`./run dev`
 or `./run prod`). It lists the skills and saves yes or no in Bus settings;
 a changed bundle is offered again. Noninteractive launches do not prompt.
+Isolated automation can set `BUS_SKIP_SKILLS_OFFER=1` without saving an answer.
 Use `bus skills install --yes` (or `./run dev skills install --yes`) to install
 without a prompt, and `bus skills status` to inspect copies without a running session.
 
@@ -28,7 +29,9 @@ bundle, so it does not need the source checkout at runtime.
 
 The canonical sources remain in `skills/`. This repo has no `.claude/skills` or
 `.agents/skills` registry. Bus warns in room history when a repo skill with the
-same name shadows a user skill as an agent launches or reconnects.
+same name duplicates a user skill as an agent launches or reconnects.
+[Claude Code gives personal skills precedence](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name);
+[Codex lists both same-name copies](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
 
 Feishu notifications are on by default. Install `lark-cli` on PATH and configure
 its bot identity. In **Settings → Feishu notifications**, choose the recipient
