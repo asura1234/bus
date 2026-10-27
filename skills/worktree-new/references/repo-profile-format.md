@@ -2,7 +2,7 @@
 
 The UTF-8 JSON object at `<main worktree>/temp/.bus/repo-profile.json` is the
 shared repository profile. `repo_profile.py scan --repo PATH` is its producer.
-Consumers call the scanner before reading it: linked worktrees can have different
+Consumers call the scanner and consume its returned JSON (or verify the hash before reading the file): linked worktrees can have different
 manifests, and the cache holds the last scanned checkout. This is a cache, never
 proof of provisioning or readiness. There is no legacy format.
 
@@ -19,7 +19,7 @@ An empty collection is `[]`; an unavailable scalar is `null`.
 | `schema_version` | integer `1` |
 | `main_worktree` | absolute main checkout path |
 | `manifest_hash` | SHA-256 of canonical JSON `manifests` plus submodule identities |
-| `manifests` | sorted `{path, sha256}` objects; includes locks, toolchain pins, build entry points, override file and gitlinks |
+| `manifests` | sorted `{path, sha256}` objects; includes locks, toolchain pins, build entry points and override file; gitlinks are hashed through submodules |
 | `package_managers` | sorted `{path, manager, version, lockfile, workspaces}`; manager is `npm`, `pnpm`, `yarn`, or `bun`; version/lockfile nullable; workspaces is a string list |
 | `submodules` | sorted `{path, url, commit, initialized}`; commit nullable; initialized boolean |
 | `toolchains` | sorted `{kind, path, pin}`; kind `rust`, `node`, `cmake`, `xcode`, `gradle`, or `android-ndk`; pin nullable |

@@ -580,6 +580,127 @@ def atomic_json(path: Path, value: dict) -> None:
             os.unlink(temporary)
 
 
+def reusable(
+    cached: object, main: Path, digest: str, manifests: list, subs: list
+) -> bool:
+    """Reject malformed cache entries; cached policy is never an inferred default."""
+    try:
+        expected = set(
+            "schema_version main_worktree manifest_hash manifests package_managers submodules toolchains entry_points policy recipe hazards".split()
+        )
+        if not isinstance(cached, dict) or set(cached) != expected:
+            return False
+        keys(
+            cached,
+            {
+                "schema_version",
+                "main_worktree",
+                "manifest_hash",
+                "manifests",
+                "package_managers",
+                "submodules",
+                "toolchains",
+                "entry_points",
+                "policy",
+                "recipe",
+                "hazards",
+            },
+        )
+        if (
+            cached["schema_version"] != 1
+            or cached["main_worktree"] != str(main)
+            or cached["manifest_hash"] != digest
+            or cached["manifests"] != manifests
+            or cached["submodules"] != subs
+        ):
+            return False
+        recipe = cached["recipe"]
+        keys(
+            recipe,
+            {
+                "prepare",
+                "smoke",
+                "unresolved",
+                "shared_dependencies",
+                "target_paths",
+                "disk_estimate_gib",
+                "disk_estimate_basis",
+            },
+        )
+        commands(recipe["prepare"])
+        commands(recipe["smoke"])
+        for name in ("unresolved", "shared_dependencies", "target_paths"):
+            if not isinstance(recipe[name], list) or any(
+                not isinstance(p, str) for p in recipe[name]
+            ):
+                return False
+        if not recipe["smoke"] and not recipe["unresolved"]:
+            return False
+        for name in ("shared_dependencies", "target_paths"):
+            for path in recipe[name]:
+                relative(path)
+        if (
+            type(recipe["disk_estimate_gib"]) not in (int, float)
+            or not 0 < recipe["disk_estimate_gib"] < 100000
+        ):
+            return False
+        if not isinstance(recipe["disk_estimate_basis"], str):
+            return False
+        for name in ("package_managers", "toolchains", "entry_points", "hazards"):
+            if not isinstance(cached[name], list):
+                return False
+        for package in cached["package_managers"]:
+            if (
+                set(package) != {"path", "manager", "version", "lockfile", "workspaces"}
+                or package["manager"] not in LOCKS
+            ):
+                return False
+            relative(package["path"])
+            if package["version"] is not None and not isinstance(
+                package["version"], str
+            ):
+                return False
+            if package["lockfile"] is not None:
+                relative(package["lockfile"])
+            if not isinstance(package["workspaces"], list) or any(
+                not isinstance(p, str) for p in package["workspaces"]
+            ):
+                return False
+        for entry in cached["entry_points"]:
+            if set(entry) != {"kind", "path", "commands"} or entry["kind"] not in {
+                "cargo",
+                "package",
+                "cmake",
+                "make",
+                "just",
+                "run",
+                "xcode",
+                "gradle",
+            }:
+                return False
+            relative(entry["path"])
+            if not isinstance(entry["commands"], list) or any(
+                not isinstance(c, str) for c in entry["commands"]
+            ):
+                return False
+        for tool in cached["toolchains"]:
+            if set(tool) != {"kind", "path", "pin"} or tool["kind"] not in {
+                "rust",
+                "node",
+                "cmake",
+                "xcode",
+                "gradle",
+                "android-ndk",
+            }:
+                return False
+            relative(tool["path"])
+            if tool["pin"] is not None and not isinstance(tool["pin"], str):
+                return False
+        return True
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def scan(repo: Path) -> dict:
     repo = Path(git(Path(repo).resolve(), "rev-parse", "--show-toplevel"))
     main = main_worktree(repo)
@@ -594,6 +715,23 @@ def scan(repo: Path) -> dict:
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     config = overrides(repo)
+    policy = {
+        "gate_command": config.get("gate_command"),
+        "commit_style": config.get("commit_style"),
+        "require_exact_head_gate": config.get("require_exact_head_gate", False),
+        "submodule_update": config.get("submodules", {}).get("update", "recursive"),
+    }
+    cache = main / "temp/.bus/repo-profile.json"
+    try:
+        cached = json.loads(cache.read_text())
+    except (OSError, ValueError):
+        cached = None
+    if reusable(cached, main, digest, manifests, subs) and cached["policy"] == policy:
+        current_hazards = hazards(repo, paths, subs, cached["toolchains"])
+        if current_hazards != cached["hazards"]:
+            cached["hazards"] = current_hazards
+            atomic_json(cache, cached)
+        return cached
     packages = package_info(repo, paths)
     tools, entries = inventory(repo, paths)
     result = {
@@ -605,23 +743,11 @@ def scan(repo: Path) -> dict:
         "submodules": subs,
         "toolchains": tools,
         "entry_points": entries,
-        "policy": {
-            "gate_command": config.get("gate_command"),
-            "commit_style": config.get("commit_style"),
-            "require_exact_head_gate": config.get("require_exact_head_gate", False),
-            "submodule_update": config.get("submodules", {}).get("update", "recursive"),
-        },
+        "policy": policy,
         "recipe": infer_recipe(repo, paths, packages, config),
         "hazards": hazards(repo, paths, subs, tools),
     }
-    cache = main / "temp/.bus/repo-profile.json"
-    try:
-        cached = json.loads(cache.read_text())
-    except (OSError, ValueError):
-        cached = None
-    # Compare all fields: non-manifest local hazards (symlinks/Git config) can also change.
-    if cached != result:
-        atomic_json(cache, result)
+    atomic_json(cache, result)
     return result
 
 
