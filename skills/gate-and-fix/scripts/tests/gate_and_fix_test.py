@@ -63,7 +63,7 @@ class GateAndFixTest(unittest.TestCase):
             command = tuple(
                 shlex.split(recipe.strip().replace("{{python}}", sys.executable))
             )
-            self.assertEqual(fallback.argv, command)
+            self.assertEqual(fallback.argv, (command[0], str(repo / command[1]), *command[2:]))
             self.assertEqual(
                 wrapper.argv[:4], ("just", "--set", "python", sys.executable)
             )
@@ -321,7 +321,7 @@ class GateAndFixTest(unittest.TestCase):
             stdout, stderr = io.StringIO(), io.StringIO()
             with patch("gate_and_fix.run_gates", side_effect=concurrent_edit), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 code = main(["--repo", str(repo), "--base", base, "--round", "3",
-                             "--artifact-root", str(artifact_root)])
+                             "--artifact-root", str(artifact_root), "--command", "true"])
             self.assertEqual(code, 2)
             self.assertEqual(stdout.getvalue(), "")
             self.assertIn("changed while gates ran", stderr.getvalue())
@@ -360,6 +360,7 @@ class GateAndFixTest(unittest.TestCase):
                         "1",
                         "--artifact-root",
                         str(artifact_root),
+                        "--command", "true",
                     ]
                 )
 
@@ -584,6 +585,7 @@ class GateAndFixTest(unittest.TestCase):
                         "1",
                         "--artifact-root",
                         str(artifact_root),
+                        "--command", "true",
                     ]
                 ),
                 0,

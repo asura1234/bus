@@ -1,6 +1,6 @@
 ---
 name: gate-and-fix
-description: Use on a feature branch that is getting ready to commit, when lint, unit, integration, coverage, and diff gates must pass and failures must be remediated from complete failure evidence (the main agent decides whether to fix them itself or dispatch subagents), committing and pushing round by round until the branch converges.
+description: Use on a feature branch that is getting ready to commit, when the repository gate command and diff check must pass and failures must be remediated from complete failure evidence (the main agent decides whether to fix them itself or dispatch subagents), committing and pushing round by round until the branch converges.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Gate and Fix
@@ -8,11 +8,15 @@ Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the w
 Read [guide.md](guide.md) and [gate-round-format.md](references/gate-round-format.md) completely.
 
 ```text
-INPUT = [--base <immutable commit>]
+INPUT = [--base <immutable commit>] [--command "<repo gate command>"]
 
 repo   = git rev-parse --show-toplevel
 branch = git branch --show-current
-base   = caller-provided immutable commit, otherwise origin/master
+base   = caller-provided immutable commit, otherwise resolve origin's default branch with:
+  python3 "<SKILL_DIR>/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>"
+STOP if base resolution fails; never assume master/main.
+command = caller-provided --command, otherwise policy.gate_command from the fresh repo scan.
+The runner owns scanning; missing configuration is STOP "no gate configured", never PASS.
 
 IF branch is empty OR branch IN {main, master}
   STOP "gate-and-fix runs only on a feature branch."
@@ -28,7 +32,7 @@ LOOP:
   Run:
     python3 "$SKILL_DIR/../gate-and-fix/scripts/gate_and_fix.py" \
       --repo "<repo>" --base "<base>" --round "<round>" \
-      --artifact-root "<artifact_root>"
+      --artifact-root "<artifact_root>" [--command "<caller command>"]
 
   Capture the runner exit code and its sole stdout line as artifact.
   IF exit code NOT IN {0, 1}
@@ -86,8 +90,9 @@ LOOP:
     STOP with the artifact and blocker; do not retry an identical tree.
 
   Invoke `commit-and-push` once. It owns the only Git mutation of this round. Increment round and
-  repeat all four mandatory checks plus the diff gate on the clean committed tree. Never run the live
-  end-to-end check or only a selected subset in a later round.
+  repeat the complete profile-selected gate set plus the diff gate on the clean committed tree. For the Bus adapter, never run the live
+  end-to-end check here. Never run only a selected subset in a later round.
 
-RETURN the final PASS artifact, its base/head, and all round commits.
+RETURN the final PASS artifact, its base/head, selected gate command, and all round commits.
+A missing gate is a reported configuration blocker, never successful verification.
 ```

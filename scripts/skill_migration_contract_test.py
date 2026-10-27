@@ -41,6 +41,17 @@ def _review_types_module():
 
 
 class SkillMigrationContractTest(unittest.TestCase):
+    def test_generic_gate_and_rebase_mechanics_are_shipped(self) -> None:
+        # The executable acceptance suites prove these entry points on temporary repos.
+        for relative in (
+            "gate-and-fix/scripts/repo_gate.py",
+            "gate-and-fix/scripts/tests/generic_gate_test.py",
+            "rebase-origin-main/scripts/rebase_base.py",
+            "rebase-origin-main/scripts/tests/rebase_base_test.py",
+        ):
+            with self.subTest(path=relative):
+                self.assertTrue((SKILLS / relative).is_file())
+
     def test_canonical_workflow_inventory_and_entrypoints(self) -> None:
         actual = {
             entry.name

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,10 +18,11 @@ from typing import Sequence
 from gate_artifact import GateResult, _parse_round, render_round, validate_round
 from coverage_run import Run
 from gate_process import Children, Interrupted, interrupt_signals
+from repo_gate import command_argv, gate_policy
 
 
 CI_TOOLS = frozenset({"just", "cargo-nextest"})
-QUALITY_SCRIPT = "skills/gate-and-fix/scripts/bus_quality.py"
+QUALITY_SCRIPT = str(Path(__file__).resolve().with_name("bus_quality.py"))
 QUALITY_RECIPES = {
     "lint": "lint",
     "unit": "unit-test",
@@ -260,6 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--repo", default=".")
     parser.add_argument("--base", required=True, help="immutable baseline commit after rebase")
+    parser.add_argument("--command", help="gate command supplied by the caller's repository policy")
     parser.add_argument("--round", required=True, type=int)
     parser.add_argument("--artifact-root", required=True, help="artifact root dedicated to this invocation")
     args = parser.parse_args(arguments)
@@ -267,7 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.round < 1:
             raise ValueError("round must be greater than 0")
-        repo = Path(args.repo).resolve()
+        repo = Path(_git_output(Path(args.repo).resolve(), "rev-parse", "--show-toplevel"))
         if _git_output(repo, "status", "--porcelain", "--untracked-files=all"):
             raise ValueError(
                 "worktree is not clean: commit or remove every tracked and untracked change before running gate-and-fix"
@@ -275,13 +278,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         base = _git_output(repo, "rev-parse", "--verify", f"{args.base}^{{commit}}")
         head = _git_output(repo, "rev-parse", "HEAD")
         changed_files = _git_output(repo, "diff", "--name-only", f"{base}...HEAD").splitlines()
-        gates = select_gates(
-            changed_files,
-            base=base,
-            python=str(repo / "temp/gate-tools/python/bin/python")
-            if (repo / "temp/gate-tools/python/bin/python").is_file() else sys.executable,
-        )
-        with interrupt_signals(), Run(repo, repo / "temp/gate-and-fix/coverage", "gate"):
+        _validate_paths(changed_files)
+        command, is_bus = gate_policy(repo, args.command)
+        if is_bus:
+            gates = select_gates(
+                changed_files,
+                base=base,
+                python=str(repo / "temp/gate-tools/python/bin/python")
+                if (repo / "temp/gate-tools/python/bin/python").is_file() else sys.executable,
+            )
+        else:
+            gates = [
+                Gate("repository-gate", command_argv(command), requires_exclusive_execution=True),
+                Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD")),
+            ]
+        coverage = Run(repo, repo / "temp/gate-and-fix/coverage", "gate") if is_bus else nullcontext()
+        with interrupt_signals(), coverage:
             results = run_gates(gates, cwd=repo)
         if (
             _git_output(repo, "rev-parse", "HEAD") != head

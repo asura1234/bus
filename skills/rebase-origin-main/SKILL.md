@@ -1,31 +1,35 @@
 ---
 name: rebase-origin-main
-description: Rebase the current feature branch onto the latest origin/master, triage conflicts by severity, then force-with-lease push with an explicit refspec. Use when the user asks to "rebase", "sync master", "update to the latest master", "rebase onto origin/master", or "resolve conflicts and push". Agent-agnostic (claude / cursor / codex); pure git plus cargo for Cargo.lock.
+description: Rebase the current feature branch onto origin's default branch or a caller-provided base, triage conflicts by severity, then force-with-lease push with an explicit refspec. Use when the user asks to "rebase", "sync the default branch", "update to the latest default branch", "rebase onto a base", or "resolve conflicts and push". Agent-agnostic (claude / cursor / codex); pure git plus cargo for Cargo.lock.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
-# Rebase onto origin/master
+# Rebase onto the integration base
 
-Rebase the current branch onto the latest `origin/master`, resolve conflicts, then force push.
+Rebase the current branch onto the latest origin default branch (or the caller's `--base <ref-or-commit>`), resolve conflicts, then force push.
 Pure git; runnable by any AI agent.
 
 ```
--- Guard: refuse detached HEAD and protected branches (main / master)
---   Same guard as `commit-and-push`: these are the protected branches in Bus.
--- Remote: always `origin` (the Bus fork). Never fetch from, rebase onto, or push to `upstream`.
+-- Guard: refuse detached HEAD, main/master, and the origin default branch.
+-- Remote: always `origin` (the target repository). Never fetch from, rebase onto, or push to `upstream`.
 
 -- Rules
 - Auto-resolve minor conflicts (imports, formatting, non-overlapping regions, docs/comments)
 - Ask developer for major conflicts (same function modified both sides, signature changes,
   logic conflicts, delete-vs-modify)
-- Shared infra always takes the origin/master version on conflict; never merge it by hand:
+- Shared infra always takes the <base> version on conflict; never merge it by hand:
     `Cargo.lock`
   The only regeneration allowed is cargo re-adding the entries this branch's own Cargo.toml
-  still needs on top of origin/master's lockfile (see RESOLVE CONFLICTS); no `cargo update`.
+  still needs on top of <base>'s lockfile (see RESOLVE CONFLICTS); no `cargo update`.
   The cost is explicit: this drops this branch's own lockfile-only bumps. So every hit must be
   recorded in `dropped_shared_infra` and listed one by one in the final output, so the developer
   knows whether to redo it -- dropping is fine, dropping silently is not.
 
 ========== VALIDATE ==========
+
+INPUT = [--base <ref-or-commit>]
+repo = `git rev-parse --show-toplevel`; run Git commands in repo.
+default_ref = `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` if available.
+protected = main, master, and default_ref with its `origin/` prefix removed.
 
 rebase_root = the single existing path from
   `git rev-parse --git-path rebase-merge` / `git rev-parse --git-path rebase-apply`
@@ -50,27 +54,33 @@ ELSE:
 -- The protected-branch guard applies equally to both entry paths. The resume path also ends in the
 --   final force push; checking only inside ELSE would let "a rebase paused on master" bypass the guard
 --   and rewrite a protected branch directly.
-IF branch IN {main, master}
-  ERROR "Rebasing or rewriting history is not allowed on main/master."
+IF branch IN protected
+  ERROR "Rebasing or rewriting history is not allowed on protected branches."
 
 IF rebase_root exists:
+  base = contents of `<rebase_root>/onto`, verified as a commit.
+  IF --base was supplied:
+    Resolve it with the command below and STOP if it differs from onto; never change a paused rebase's base.
   Continue at `RESOLVE CONFLICTS` using the existing paused index/worktree.
 
 ========== FETCH & REBASE ==========
 
 `git fetch origin`
-Assert `origin/master` resolves.
+Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
+`--base "<caller base>"` only when supplied. Capture its sole stdout line as base.
+IF resolution fails: STOP with stderr. Never substitute master/main for a missing origin HEAD.
+The resolver uses origin's symbolic HEAD by default and pins the chosen base to a commit.
 
-IF `git rev-list --count origin/master..HEAD` == 0
-  Print "The current branch has no commits of its own relative to origin/master."
-  -- Still continue: the branch may just be behind master, and the rebase is a fast-forward.
+IF `git rev-list --count <base>..HEAD` == 0
+  Print "The current branch has no commits of its own relative to <base>."
+  -- Still continue: the branch may just be behind the base, and the rebase is a fast-forward.
 
 -- Must be recorded before the rebase; PUSH's divergence check uses it to exclude "my own commits before rewriting".
 --   Do not switch PUSH to reading ORIG_HEAD: it is a global single slot, and any merge/reset/pull
 --   in between overwrites it.
 pre_rebase_head = `git rev-parse HEAD`
 
-`git rebase origin/master`
+`git rebase <base>`
 
 IF no conflicts → skip to PUSH
 
@@ -82,11 +92,11 @@ FOR EACH conflicted file (`git diff --name-only --diff-filter=U`)
   Read the file to understand both sides
 
   IF file is `Cargo.lock`
-    -- During a rebase ours/theirs are reversed: --ours = origin/master (the base being replayed onto),
-    --   --theirs = your own commit being replayed. So "take the origin/master version" is --ours.
+    -- During a rebase ours/theirs are reversed: --ours = <base> (the base being replayed onto),
+    --   --theirs = your own commit being replayed. So "take the <base> version" is --ours.
     --   Do not hand-edit it.
     `git checkout --ours -- Cargo.lock`
-    -- If this branch's Cargo.toml adds or changes dependencies, origin/master's lockfile lacks them.
+    -- If this branch's Cargo.toml adds or changes dependencies, <base>'s lockfile lacks them.
     --   `cargo metadata` resolves only what is missing and writes it back, without upgrading
     --   anything already locked. Never run `cargo update` here.
     `cargo metadata --format-version 1 > /dev/null`
@@ -107,8 +117,8 @@ FOR EACH conflicted file (`git diff --name-only --diff-filter=U`)
 `git rebase --continue`
 REPEAT until rebase completes
 
--- After taking origin/master's shared infra, this branch's commit may become entirely empty. git drops it
---   by default (a commit that only bumped Cargo.lock, once taken as origin/master, no longer appears in log
+-- After taking <base>'s shared infra, this branch's commit may become entirely empty. git drops it
+--   by default (a commit that only bumped Cargo.lock, once taken as <base>, no longer appears in log
 --   after the rebase completes).
 --   If git instead stops and asks for confirmation, use `git rebase --skip`; do not create an empty commit.
 
@@ -136,7 +146,7 @@ IF foreign > 0
   them. Hand it to the developer (merge them in first and rerun, or explicitly authorize dropping them).
 
 -- The explicit refspec pins both source and destination; even if the tracking branch is mistakenly set to
---   origin/master, nothing is pushed to master.
+--   <base>, only the same-name feature branch is pushed.
 -- The lease carries the sha seen during the check above instead of letting it read the remote-tracking ref:
 --   the `git fetch origin` at the start of this flow already moved the remote-tracking ref to the remote's
 --   latest, so the default lease would use "what someone else pushed" as its expected value and never fail.
@@ -152,9 +162,10 @@ IF foreign > 0
 ========== OUTPUT ==========
 
 Print:
+  - Resolved base commit and caller base or origin default branch used
   - Rebase result: number of commits replayed, the new HEAD, whether any skip happened
   - Conflict handling: files resolved automatically, files asked about
-  - dropped_shared_infra: list each shared infra file taken as the origin/master version,
+  - dropped_shared_infra: list each shared infra file taken as the <base> version,
     and state explicitly that this branch's changes to it were dropped
   - Divergence check: the value of `foreign`, and the number of commits judged to be "my own pre-rewrite
     versions" and dropped normally (i.e. `git rev-list --count HEAD..<remote_tip>` minus `foreign`) --

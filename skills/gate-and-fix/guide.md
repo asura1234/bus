@@ -4,7 +4,28 @@ The goal is to converge every applicable gate failure of one committed diff into
 partitionable remediation, then prove the complete diff again with a new commit. It does not
 replace `rebase-origin-main` or PR creation.
 
-## Evidence and boundaries
+## Repository policy and installed paths
+
+The target is the Git top level of the caller's cwd (or `--repo`); installed support paths
+never identify the target. Commands in SKILL.md resolve from the loaded skill directory.
+Shared support, when needed, is `Path(__file__).resolve().parents[2] / '_bus'`.
+The runner executes the sibling `worktree-new/scripts/repo_profile.py scan --repo PATH`
+and consumes its stdout, rather than trusting the main-worktree cache across checkouts.
+The schema is owned by worktree-new's `references/repo-profile-format.md`.
+
+`--command` is the caller's selected gate command; when omitted, use `policy.gate_command`.
+A missing scanner without an explicit command, or a null/empty command, reports
+"no gate configured" with runner exit 2 and no PASS artifact. A failed or malformed
+scan is a runner error even if a command was supplied. Never infer Bus by directory name.
+Only a profile with `policy.gate_command` equal to `just ci` and the same effective
+command enables the Bus adapter below. Other commands run once in the target Git root
+through `sh -c` (Windows: `cmd /d /s /c`), plus the diff check, with complete captured logs.
+They do not acquire a Bus coverage lifecycle or invoke bus_quality. The configured command
+is trusted repository policy; report its actual result without inventing additional gates.
+The runner always binds evidence to the clean base/head and rejects concurrent changes,
+including for `policy.require_exact_head_gate=true`; false never authorizes stale claims.
+
+## Bus adapter: evidence and boundaries
 
 - The sole source of the diff is the immutable `base...HEAD` resolved when the invocation starts.
   Before starting any gate the runner checks the worktree with
@@ -113,8 +134,8 @@ replace `rebase-origin-main` or PR creation.
   obtains the failed gate names through the runner's `list` subcommand after base validation, then
   uses `show` to fetch one complete log stream of a gate, which is the only way to restore empty
   output, a final newline, and trailing whitespace verbatim.
-- Every gate argv is owned solely by the runner's `select_gates()`; it launches each entry directly,
-  never through a shell.
+- Bus gate argv is owned by `select_gates()` and launches directly; the generic adapter executes
+  the repository policy shell command as described above.
 
 ## Developer tools
 

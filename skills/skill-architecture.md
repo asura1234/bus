@@ -171,3 +171,12 @@ When modifying or adding a workflow skill:
 - Letting the agent hand-summarize or rewrite output that could be generated deterministically.
 - Declaring completion merely because the artifact file exists, without running the mechanical gate.
 - Adding a new state machine, metric, or second source of truth for a single low-impact preference feedback.
+
+## Repository handoff for gate and rebase
+
+`pr` / `merge-pr` pass `rebase-origin-main --base <origin/default-or-explicit-base>`
+and `gate-and-fix --base <immutable-baseline> --command "<policy.gate_command>"`.
+Omit `--command` for a null policy; gate-and-fix rescans with worktree-new and reports
+"no gate configured" rather than PASS. Omit `--base` for rebase-origin-main to resolve
+origin's symbolic HEAD. Both use the caller's Git top level and source-relative skill
+commands; only a profile gate of `just ci` enables the Bus gate adapter.
