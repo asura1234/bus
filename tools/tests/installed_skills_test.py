@@ -19,7 +19,7 @@ def test_review_scripts_find_bundled_support_and_target_the_callers_repo(tmp_pat
     if binary:
         subprocess.run([binary, "skills", "install", "--yes"], env=env, cwd=tmp_path, capture_output=True, check=True)
     else:
-        for name in ("review-pr", "pr"):
+        for name in ("review-pr", "pr", "rebase-origin-main", "gate-and-fix"):
             shutil.copytree(ROOT / "skills" / name, skills / name)
         shutil.copytree(ROOT / "skills" / "_bus", skills / "_bus")
     repo = tmp_path / "other-repo"

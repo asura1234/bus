@@ -34,6 +34,7 @@ from review_round_common import (  # noqa: E402
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("plan", nargs="?", default=None)
+    parser.add_argument("--base", default=None)
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
     # --check: run only the structure/status gate; read-only, creates no round, writes no .last-plan.
@@ -80,7 +81,11 @@ def main(argv: list[str]) -> int:
             return 2
         notes.append(f"未指定计划，沿用本分支上次审查的计划 {rel(plan_path)}")
     else:
-        candidates = detect_branch_plan_docs()
+        try:
+            candidates = detect_branch_plan_docs(args.base)
+        except ValueError as error:
+            print(f"FAIL\n- {error}")
+            return 1
         if len(candidates) == 1:
             plan_path = candidates[0]
             notes.append(f"未指定计划，自动选中本分支改动的唯一计划文档 {rel(plan_path)}")

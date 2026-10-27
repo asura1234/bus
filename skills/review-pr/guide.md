@@ -113,6 +113,9 @@ Review added tests under [code-review-guide "Never pad coverage with a tautology
 
 When the claim is about what a user sees or does in the TUI (layout, keys, clicks, focus, styling, opens, sounds),
 prefer proving it by driving the PR's HEAD through the real terminal over reasoning about it, or writing a unit test that mirrors the code.
+Use the target repository's documented isolated acceptance harness. Its actual state, screenshots and
+scoped logs must prove the suspicion; a launch alone proves nothing. Never operate a developer's live session.
+The following adapter applies only when the target profile's gate_command is `just ci` (Bus).
 It complements probes, never replaces one where a probe can show the failure. Two ways, both on a scratch Bus the driver starts:
 
 - drive it directly with the author's already-built dev binary (`bus --dev tui <verb> --name <session> …`) per `docs/tui-driver.md`, saving the session's run folder

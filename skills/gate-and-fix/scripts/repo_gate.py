@@ -10,26 +10,32 @@ import sys
 SCANNER = Path(__file__).resolve().parents[2] / "worktree-new/scripts/repo_profile.py"
 
 
+def read_policy(repo: Path) -> dict:
+    """Consume the producer's fresh policy without creating target artifacts."""
+    if not SCANNER.is_file():
+        raise ValueError("repository profile scanner is not installed")
+    result = subprocess.run(
+        [sys.executable, str(SCANNER), "scan", "--repo", str(repo), "--no-cache"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if result.returncode:
+        raise ValueError(f"repo profile scan failed: {result.stderr.strip()}")
+    try:
+        policy = json.loads(result.stdout)["policy"]
+        configured = policy["gate_command"]
+        exact_head = policy["require_exact_head_gate"]
+        if configured is not None and (not isinstance(configured, str) or not configured.strip()):
+            raise ValueError("gate_command must be a nonempty string or null")
+        if not isinstance(exact_head, bool):
+            raise ValueError("require_exact_head_gate must be boolean")
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"invalid repo profile: {error}") from error
+    return policy
+
+
 def gate_policy(repo: Path, command: str | None) -> tuple[str, bool]:
     """Return the effective command and whether the profile opts into Bus gates."""
-    configured = None
-    if SCANNER.is_file():
-        result = subprocess.run(
-            [sys.executable, str(SCANNER), "scan", "--repo", str(repo), "--no-cache"],
-            cwd=repo, capture_output=True, text=True,
-        )
-        if result.returncode:
-            raise ValueError(f"repo profile scan failed: {result.stderr.strip()}")
-        try:
-            policy = json.loads(result.stdout)["policy"]
-            configured = policy["gate_command"]
-            exact_head = policy["require_exact_head_gate"]
-            if configured is not None and (not isinstance(configured, str) or not configured.strip()):
-                raise ValueError("gate_command must be a nonempty string or null")
-            if not isinstance(exact_head, bool):
-                raise ValueError("require_exact_head_gate must be boolean")
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(f"invalid repo profile: {error}") from error
+    configured = read_policy(repo)["gate_command"] if SCANNER.is_file() else None
     effective = command if command is not None else configured
     if not isinstance(effective, str) or not effective.strip():
         raise ValueError("no gate configured: set gate_command in .bus/repo.toml or pass --command")

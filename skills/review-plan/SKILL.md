@@ -16,7 +16,7 @@ historical file itself.
 
 ```text
 INPUT $ARGUMENTS =
-  [<plan-file>] [--reviewer <lane>] [--devils-advocate]
+  [<plan-file>] [--base <ref>] [--reviewer <lane>] [--devils-advocate]
 
 DEFAULT reviewer = default (only when the prologue can select a lane unambiguously)
 
@@ -35,7 +35,7 @@ MAY:
 
 Run:
   python3 "$SKILL_DIR/../review-plan/scripts/review_round.py" \
-    [<plan-file>] [--reviewer <lane>] [--devils-advocate]
+    [<plan-file>] [--base <ref>] [--reviewer <lane>] [--devils-advocate]
 
 IF exit != 0 AND output says multiple / named lanes make a bare invocation ambiguous:
   IF the developer already gave a lane, or said "use the previous lane" and this conversation has the REVIEWER of the last successful prologue:

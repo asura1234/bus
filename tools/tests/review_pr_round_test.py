@@ -35,6 +35,10 @@ class ReviewPrRoundTests(unittest.TestCase):
         script = repo / "skills/review-pr/scripts/review_round.py"
         script.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_SCRIPT, script)
+        for name in ("repository_context.py", "rebase_base.py"):
+            helper = repo / "skills/rebase-origin-main/scripts" / name
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / "skills/rebase-origin-main/scripts" / name, helper)
         shared = repo / "skills/_bus/cli_extensions/review_round_common.py"
         shared.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_COMMON, shared)

@@ -9,6 +9,7 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 CONTEXT = SCRIPTS / 'repository_context.py'
+sys.path.insert(0, str(SCRIPTS))
 
 
 class RepositoryContextTest(unittest.TestCase):

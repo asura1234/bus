@@ -76,20 +76,11 @@ train. Offer it in the plan when it fits.
 
 ## PR integration
 
-The `pr` skill rebases onto `origin/master` and asserts base `master`, so it is
-correct only for parts with no open parent on an `origin/master` base. A stacked
-part, or any part of a split from another base, is published by `split-pr`
-itself as a Draft PR whose base is its parent branch (or the base branch), with
-a body that passes `pr_format_check.py --phase draft`. Once its parents land and
-it is restacked onto an `origin/master` base, it is an ordinary branch and `pr`
-refreshes its body.
-
-Independent PRs never wait for each other. The publish phase runs in waves of
-parts whose parents already have PRs, one subagent per part, so parallel parts
-run `pr` concurrently and a train advances one part per wave. The waves are
-plain agent instructions, not a script: `split_plan.py` stays a deterministic
-helper, and only the main agent writes the plan, after each wave, so
-subagents never race on it.
+Publication must consume the forge lane's platform-neutral interfaces with each part's explicit
+base and intent locks. It must preserve Draft state, published-head read-back, and deterministic
+waves: independent parts publish concurrently, while a train follows its parents. Only the main
+agent records plan updates. Publication remains an explicit follow-up until that adapter lands;
+local split, dependency proof and restack do not require a forge command.
 
 ## Restack
 
@@ -98,3 +89,10 @@ tip; after a parent squash-merges, children must drop the parent's original
 commits with `git rebase --onto <base> <old parent tip>`. The recorded `onto`
 makes both mechanical. Restack never chases the base branch for its own sake;
 that is `rebase-origin-main` on the root.
+
+## Publication integration checkpoint
+
+The current port preserves deterministic split/restack mechanics but holds host publication pending
+forge B. It must consume that lane's pr_host and pr/rebase interfaces, including each part's explicit
+base, rather than copying GitHub commands or assuming master/main. The hold is an explicit follow-up,
+not evidence that a remote PR was created or updated.

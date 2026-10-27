@@ -16,13 +16,8 @@ Pure git; runnable by any AI agent.
 - Auto-resolve minor conflicts (imports, formatting, non-overlapping regions, docs/comments)
 - Ask developer for major conflicts (same function modified both sides, signature changes,
   logic conflicts, delete-vs-modify)
-- Shared infra always takes the <base> version on conflict; never merge it by hand:
-    `Cargo.lock`
-  The only regeneration allowed is cargo re-adding the entries this branch's own Cargo.toml
-  still needs on top of <base>'s lockfile (see RESOLVE CONFLICTS); no `cargo update`.
-  The cost is explicit: this drops this branch's own lockfile-only bumps. So every hit must be
-  recorded in `dropped_shared_infra` and listed one by one in the final output, so the developer
-  knows whether to redo it -- dropping is fine, dropping silently is not.
+- Conflict policy comes from target repository instructions. Do not copy lockfile/gitlink names from another repo.
+- Report every shared-infra change intentionally dropped as dropped_shared_infra.
 
 ========== VALIDATE ==========
 
@@ -65,6 +60,8 @@ IF rebase_root exists:
 
 ========== FETCH & REBASE ==========
 
+Run `python3 "$SKILL_DIR/scripts/submodule_state.py" check --repo "<repo>"`.
+IF it fails: STOP before rebasing; preserve dirty or unrecorded initialized-submodule work.
 `git fetch origin`
 Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
 `--base "<caller base>"` only when supplied, and always add `--refresh-default --check-branch "<branch>"`.
@@ -86,7 +83,7 @@ pre_rebase_head = `git rev-parse HEAD`
 
 `git rebase <base>`
 
-IF no conflicts → skip to PUSH
+IF no conflicts → skip to SYNC INITIALIZED SUBMODULES
 
 ========== RESOLVE CONFLICTS ==========
 
@@ -95,17 +92,13 @@ dropped_shared_infra = []
 FOR EACH conflicted file (`git diff --name-only --diff-filter=U`)
   Read the file to understand both sides
 
-  IF file is `Cargo.lock`
-    -- During a rebase ours/theirs are reversed: --ours = <base> (the base being replayed onto),
-    --   --theirs = your own commit being replayed. So "take the <base> version" is --ours.
-    --   Do not hand-edit it.
-    `git checkout --ours -- Cargo.lock`
-    -- If this branch's Cargo.toml adds or changes dependencies, <base>'s lockfile lacks them.
-    --   `cargo metadata` resolves only what is missing and writes it back, without upgrading
-    --   anything already locked. Never run `cargo update` here.
-    `cargo metadata --format-version 1 > /dev/null`
-    `git add Cargo.lock`
-    append Cargo.lock to dropped_shared_infra
+  IF the target policy explicitly requires taking this conflict from the integration base:
+    IF file is a submodule gitlink:
+      Run `python3 "$SKILL_DIR/scripts/submodule_state.py" take-base-gitlink --repo "<repo>" --path "<file>"`.
+      -- This records stage 2 directly; checkout-ours + add can incorrectly record the child's old HEAD.
+    ELSE:
+      `git checkout --ours -- <file>`; follow target-prescribed regeneration, if any, then `git add <file>`.
+    Record the path and the dropped branch change in dropped_shared_infra.
 
   ELSE IF minor conflict (import order, whitespace, formatting, non-overlapping edits, docs/comments)
     Resolve automatically
@@ -125,6 +118,13 @@ REPEAT until rebase completes
 --   by default (a commit that only bumped Cargo.lock, once taken as <base>, no longer appears in log
 --   after the rebase completes).
 --   If git instead stops and asks for confirmation, use `git rebase --skip`; do not create an empty commit.
+
+========== SYNC INITIALIZED SUBMODULES ==========
+
+Run `python3 "$SKILL_DIR/scripts/submodule_state.py" sync --repo "<repo>"`.
+It consumes policy.submodule_update: recursive checks out recorded pins for initialized paths only;
+none performs no update and fails if a path still differs. It never initializes paths, forces checkout,
+chases a branch tip or overwrites dirty child work. Report any error and STOP before push.
 
 ========== PUSH ==========
 

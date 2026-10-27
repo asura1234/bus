@@ -16,32 +16,14 @@ this skill share the same priors and cannot produce the same disagreement.
 
 ## Where the proposals come from: Bus (cross-model fan-out)
 
-Bus can send the same question to claude / codex / cursor agents at the same time, and is currently
-the only cross-model fan-out channel. Bus is this repository: `./run dev` builds and starts the
-interactive instance, and control commands go through `./run dev-control COMMAND`. Control
-commands only connect to an **already running** instance and will not start one for you —
-the interactive UI must be started by the developer in a terminal they keep open.
+Use the installed Bus executable (or the absolute executable supplied by the active Bus session).
+Resolve it once as BUS_CLI. If unavailable, report the missing tool or consume caller-provided proposals;
+never build or start Bus from the target repository as an implicit prerequisite. Read the active session's
+communication/CLI guide before creating agents. Reuse existing agents, isolate their target worktree,
+and preserve the selected BUS_DATA_DIR for control calls.
 
-```sh
-# Key: control commands must use the same BUS_DATA_DIR as the running instance, otherwise they cannot connect.
-#   Without BUS_DATA_DIR, control commands attach to the last opened session under ~/.local/share/bus;
-#   an instance started with BUS_DATA_DIR (e.g. ~/.bus-rv) is only reachable with the same value, and
-#   `./run dev-control state` otherwise returns control_unavailable.
-#   Read the instance's real value with `ps eww -p <pid> | tr ' ' '\n' | grep BUS_DATA_DIR`.
-export BUS_DATA_DIR=/absolute/path/matching/the/running/instance
-cd "<bus repository root>"         # control commands go through ./run dev-control COMMAND; do not call bus directly
-
-./run dev-control state            # first see which rooms and agents exist; reuse existing ones, do not create duplicates
-room=$(./run dev-control room create "<topic>" | jq -r '.result.room_id')
-a1=$(./run dev-control agent add --room "$room" --name claude-x --provider claude --pwd "<worktree>" | jq -r '.result.agent_id')
-a2=$(./run dev-control agent add --room "$room" --name codex-x  --provider codex  --pwd "<worktree>" | jq -r '.result.agent_id')
-a3=$(./run dev-control agent add --room "$room" --name cursor-x --provider cursor --pwd "<worktree>" | jq -r '.result.agent_id')
-
-# One message to all recipients yields one shared message_id; --file can be repeated to attach evidence
-msg=$(./run dev-control send --room "$room" --to "$a1,$a2,$a3" --text "<brief>" | jq -r '.result.message_id')
-./run dev-control wait --message "$msg" --timeout 600
-./run dev-control history --room "$room"   # raw Markdown replies, i.e. this skill's --input
-```
+Send the locked question through `"$BUS_CLI" send`, retain its message id, then use
+`"$BUS_CLI" wait` / `"$BUS_CLI" message status` and `"$BUS_CLI" history` to collect proposals.
 
 - `send` only proves the message was persisted and queued; it **does not mean the agent started or
   replied**. The settlement signal is `complete: true` from `wait` or `message status`. A terminal

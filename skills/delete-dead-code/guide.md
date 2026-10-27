@@ -510,16 +510,14 @@ tests point at: in practice all three pointed at the wrong copy.
 
 ## Version numbers and compatibility branches
 
-**Premise**: Bus is a released binary (a Herdr fork) whose peers come in three kinds, each with different compatibility
-responsibility.
+**Premise**: classify the target repository's peers by deployment lifetime before deleting a compatibility path. The categories below are semantic boundaries, not a fixed product or language list.
 
-- **Peers inside the same binary are delivered atomically**: Rust modules of the crate, the embedded integration assets
-  it writes out, and the client and server halves of one install upgrade together; there is no "new module paired with an
+- **Peers delivered in one artifact upgrade atomically**: internal modules and co-packaged consumers upgrade together; there is no "new module paired with an
   old module". Schema changes between them are made on both ends at once and fail fast, with no version number, dual read,
   migration, or compatibility branch; endpoints between repository-owned tools (`scripts/`) and the binary work the same
   way.
 - **Peers that are not delivered atomically**: the stable endpoint contract that client-owned shells and remote endpoints
-  negotiate (`src/protocol/endpoint.rs`), the socket API used by external tools and agents, and integration assets already
+  negotiate through a separately versioned public contract, the socket API used by external tools and agents, and integration assets already
   installed into users' agent configurations may run against other released versions; branches guarded by that
   negotiation can still have producers. Judging them dead first requires proving that no supported peer version below the
   negotiated floor still needs them; if that cannot be proven, record `LIKELY` + `KEPT` with the reason "needs developer
@@ -590,21 +588,14 @@ lands it, so the handoff surface leaks nothing.
 
 ## How far each unit verifies itself
 
-Wrong deletions first show up in **the module's own tests**, so running unit / integration tests is SOP, not optional.
-But this is deliberately lighter than `gate-and-fix`:
+Wrong deletions first show up in the owner's tests. Derive the smallest meaningful unit or
+integration selection from the target repository's actual tooling; prove its filters execute the
+intended cases. For changed files, use only that target's read-only formatting checks. Do not
+invent a fixed language/tool list or run whole-tree formatting against another owner's work.
 
-- Run: the module's own tests, narrowed (Rust `just test-one <filter>`, Python `python3 -m unittest scripts.<name>_test` /
-  `python3 -m pytest skills/<skill> -q`, Bun `bun test <file>`).
-- Run: `rustfmt --check --edition 2021 <files you changed>`. **Never whole-tree `cargo fmt --check`**: it pulls in
-  in-flight files of other agents in the same round; an agent reporting errors for another agent's half-finished work has
-  already been observed.
-- Do not run: coverage, E2E, whole-tree clippy / build, or any convergence rerun loop.
-
-Component agents of the duplicate track do the same, with "the module" replaced by **every** module in their owner set:
-a consolidation changes all users, and any user's tests may show the breakage first.
-
-The division of labor is clear: this only proves "what I touched did not break the module I own"; overall gates belong
-to `gate-and-fix`, which runs after this skill and measures the real surface after the cleanup.
+Component agents in the duplicate track verify every module in their owner set. Coverage,
+live end-to-end acceptance, whole-repository lint/build and remediation loops belong to the
+caller or gate-and-fix after the combined cleanup has landed.
 
 ## Stop conditions
 

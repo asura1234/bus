@@ -9,12 +9,17 @@ read-write touch of the Claude memory directory; runnable by any AI agent.
 Removing a worktree is NOT the same as retiring a branch. A worktree is just an isolated checkout —
 it may be long-lived, may have been used for many branches, and may be on a detached HEAD. So this
 skill removes the worktree, and decides the branch separately: a branch whose content is already in
-origin/master is swept up automatically, anything else is kept and handed back to the user.
+<base> is swept up automatically, anything else is kept and handed back to the user.
 
 Target: $ARGUMENTS (uses the worktree containing the current directory if not provided; that
 default is refused below when it is the session's own working directory)
 
 ```
+INPUT = [target] [--base <ref-or-commit>]
+repo = `git rev-parse --show-toplevel`
+Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/repository_context.py" --repo "<repo>" [--base "<caller base>"]`.
+Use context.base for content checks; STOP on an unavailable default/base rather than guessing main/master.
+
 ========== RESOLVE TARGET ==========
 
 TRY: `git worktree list`
@@ -54,11 +59,9 @@ IF <session_cwd> is <worktree_path> or below it
 
 ========== CHECK FOR UNSAVED WORK ==========
 
--- Bus has no submodules, so a plain `git worktree remove` refuses a worktree with modified or
---   untracked files. That refusal covers only the working tree, though: it says nothing about
---   COMMITS that exist only here, and an in-progress merge/rebase/cherry-pick can look clean.
---   These explicit checks are the guard against losing work. Never skip them and never jump
---   straight to --force.
+Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/submodule_state.py" inspect --repo "<worktree_path>"`.
+STOP if it fails. Capture initialized paths, each dirty status, and drift from the recorded gitlink.
+Submodules require force removal even when clean; this is not permission to discard work.
 
 dirty_super = `git -C <worktree_path> status --short`
 in_progress = any of MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase-merge / rebase-apply
@@ -69,19 +72,21 @@ in_progress = any of MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase-merge 
 --   from NO remote-tracking ref. Do NOT use `@{upstream}..HEAD`: a worktree-new branch has no
 --   upstream on purpose (--no-track), and that command then FAILS, which reads as "nothing
 --   unpushed" and would green-light discarding every commit on a brand-new branch. Do NOT use
---   `origin/master..HEAD` either: it false-alarms on a detached worktree or a side branch whose
+--   `<base>..HEAD` either: it false-alarms on a detached worktree or a side branch whose
 --   commits are pushed but simply not merged to master (verified — it reported 6 safe commits).
 -- CAVEAT: after a PR is squash-merged the remote branch is usually deleted, and once any
 --   `fetch --prune` has run there is no remote-tracking ref left holding those commits, so this
 --   prints the branch's ENTIRE history as "unpushed" for work that is fully landed. Before reporting
 --   it, run merged_by_content(<branch>) from the BRANCH section; when it says MERGED, say
---   "already squash-landed on origin/master; these commits will not be lost" instead of raising the alarm.
+--   "already squash-landed on <base>; these commits will not be lost" instead of raising the alarm.
 unpushed_super = `git -C <worktree_path> log --oneline HEAD --not --remotes`
 
-needs_force = false
-IF any of the three is non-empty
+dirty_subs = every initialized submodule whose dirty status is nonempty
+moved_subs = every initialized submodule whose HEAD differs from the parent index gitlink
+needs_force = initialized submodule set is nonempty
+IF any of dirty_super, in_progress, unpushed_super, dirty_subs, moved_subs is nonempty
   Print "⚠️ <worktree_path> has work that would be discarded:"
-  Print the non-empty results, labelled (uncommitted / operation in progress / unpushed)
+  Print the non-empty results, labelled (uncommitted / operation in progress / unpushed / child uncommitted / child gitlink drift)
   Print "Force removal permanently loses the above. Confirm to continue?"
   -- STOP and wait for explicit user confirmation. Do NOT proceed on your own judgement.
   needs_force = true after the user confirms
@@ -108,6 +113,7 @@ IF <wt_mem> exists AND is a real directory (NOT a symlink) AND holds any *.md
 IMPORTANT: Do NOT `cd`. Use `git -C <main_worktree>` for every git command from here on.
 
 IF needs_force
+  Re-run all unsaved-work checks immediately before removal; STOP if their result changed.
   `git -C <main_worktree> worktree remove --force <worktree_path>`
   -- One --force is enough; a second invocation errors with "is not a working tree".
 ELSE
@@ -122,7 +128,7 @@ ELSE
 -- Deleting the worktree does NOT retire <branch>; it stays a normal branch in the main repo.
 --   Split by whether its work already landed:
 --     LANDED     → delete it here, no question asked. Its commits are all reproducible from
---                  origin/master, so there is nothing to lose, and asking about a branch that
+--                  <base>, so there is nothing to lose, and asking about a branch that
 --                  provably costs nothing to delete is noise the user has to answer every time.
 --                  `git reflog` still holds the old tip for a while if anyone wants it back.
 --     NOT LANDED → keep it and hand it back. This is the case the safety gate exists for.
@@ -130,8 +136,8 @@ ELSE
 --   The REMOTE branch is never in scope here regardless — see below.
 
 IF <branch> is non-empty
-  -- Do NOT use `git branch --merged origin/master`, and do NOT use plain `git branch -d`: both answer
-  --   "is <branch> an ANCESTOR of origin/master", and a squash-merged PR discards ancestry. So a
+  -- Do NOT use `git branch --merged <base>`, and do NOT use plain `git branch -d`: both answer
+  --   "is <branch> an ANCESTOR of <base>", and a squash-merged PR discards ancestry. So a
   --   fully landed branch reports "not fully merged" and -d refuses. Following that signal produces
   --   exactly the wrong two messages: it scares the user off deleting dead branches, and when they
   --   insist it claims -D "loses its unique commits" about work that is already in master. Ask by
@@ -143,12 +149,12 @@ IF <branch> is non-empty
     -- -D, not -d: -d asks the ancestry question, so under squash merge it refuses every landed
     --   branch. Do NOT report this as a forced/risky delete; nothing unique is being discarded.
     `git -C <main_worktree> branch -D <branch>`
-    Print "Deleted local branch <branch> (content already landed on origin/master; evidence: T<n>)"
+    Print "Deleted local branch <branch> (content already landed on <base>; evidence: T<n>)"
 
   ELSE
     -- Keep it. Do not delete, and do not ask again later in the run.
     IF merged is NOT_MERGED
-      Print "Kept branch <branch>: the following commits are not found in origin/master and could only be recovered via reflog after deletion:"
+      Print "Kept branch <branch>: the following commits are not found in <base> and could only be recovered via reflog after deletion:"
       Print the commits that tier 2 marked `+`
     ELSE
       Print "Kept branch <branch>: cannot mechanically confirm whether it landed (T1/T2/T3 all inconclusive); your call."
@@ -164,20 +170,20 @@ IF <branch> is non-empty
 
 -- merged_by_content(<branch>) → MERGED | NOT_MERGED | UNKNOWN
 --   Run the tiers in order and stop at the first CONCLUSIVE answer:
---   T1  `git -C <main_worktree> diff --quiet origin/master <branch>`
+--   T1  `git -C <main_worktree> diff --quiet <base> <branch>`
 --         exit 0 → MERGED. Trees are identical, so the branch adds nothing master lacks. Conclusive
 --         on its own; a non-zero exit is NOT a "no" — it also fires when the branch is merely
 --         BEHIND master (verified: a landed branch 15 PRs behind showed a 400-file diff that was
 --         entirely master's later work). Never report that number as the branch's own changes.
---   T2  `git -C <main_worktree> cherry origin/master <branch>`
+--   T2  `git -C <main_worktree> cherry <base> <branch>`
 --         compares patch-ids, so it sees through squash for a branch whose landed changeset is one
 --         commit. All lines `-` → MERGED. Any `+` → keep those lines, they are the candidate
 --         unique commits, and continue to T3 (a multi-commit branch squashed into one shows `+`
 --         for every commit even though it landed).
---   T3  MB = `git -C <main_worktree> merge-base origin/master <branch>`
---         Compare `git diff --stat <MB> <branch>` against the squash commit on origin/master that
+--   T3  MB = `git -C <main_worktree> merge-base <base> <branch>`
+--         Compare `git diff --stat <MB> <branch>` against the squash commit on <base> that
 --         claims this work (find it by PR subject). Identical file list and identical +/- totals →
---         MERGED. Then spot-check per file: `git diff --quiet <branch> origin/master -- <file>`;
+--         MERGED. Then spot-check per file: `git diff --quiet <branch> <base> -- <file>`;
 --         files that differ are expected where later PRs touched them (CHANGELOG.md, docs/next/),
 --         so a differing file is not by itself evidence the branch did not land.
 --   No tier conclusive → UNKNOWN. Say so and keep the branch; never default to either answer,
@@ -190,7 +196,7 @@ IF <branch> is non-empty
 Print:
   "Removed worktree: <worktree_path>"
   IF <branch> non-empty AND not deleted:  "  Kept branch <branch> (<NOT_MERGED ? "has unlanded commits" : "landing status unconfirmed">)"
-  IF local branch deleted:                "  Deleted local branch: <branch> (content landed on origin/master)"
+  IF local branch deleted:                "  Deleted local branch: <branch> (content landed on <base>)"
   IF remote branch deleted:               "  Deleted remote branch: origin/<branch>"
   "  Disk reclaimed: <df difference before/after removal, if measured>"
   ""

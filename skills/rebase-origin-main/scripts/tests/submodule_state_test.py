@@ -77,11 +77,39 @@ class SubmoduleStateTest(unittest.TestCase):
         result = self.run_tool('sync')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.git(self.child, 'rev-parse', 'HEAD'), self.one)
+        self.git(self.repo, 'update-index', '--cacheinfo', f'160000,{self.one},dependency with spaces')
         self.git(self.repo, 'submodule', 'deinit', '-q', 'dependency with spaces')
+        self.policy.write_text('[submodules]\nupdate="recursive"\n')
         result = self.run_tool('sync')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), [])
         self.assertFalse((self.child / '.git').exists())
+
+    def test_non_conflict_gitlink_is_not_rewritten(self):
+        before = self.git(self.repo, 'ls-files', '--stage', 'dependency with spaces')
+        result = self.run_tool('take-base-gitlink', '--path', 'dependency with spaces')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('no unique stage-2 gitlink', result.stderr)
+        self.assertEqual(self.git(self.repo, 'ls-files', '--stage', 'dependency with spaces'), before)
+
+    def test_nested_child_work_is_visible_even_when_parent_ignores_submodule_status(self):
+        inner = self.root / 'nested source'
+        inner.mkdir()
+        self.git(inner, 'init', '-q', '-b', 'trunk')
+        (inner / 'file').write_text('nested base\n')
+        self.git(inner, 'add', 'file')
+        self.git(inner, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'nested')
+        self.git(self.child, 'submodule', 'add', '-q', str(inner), 'nested dependency')
+        self.git(self.child, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'nested dependency')
+        self.git(self.repo, 'add', 'dependency with spaces')
+        self.git(self.repo, 'commit', '-qm', 'record nested dependency')
+        (self.child / 'nested dependency/file').write_text('retain nested work\n')
+        result = self.run_tool('check')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        states = json.loads(result.stdout)
+        self.assertEqual(states[0]['dirty'], '')
+        self.assertIn('file', states[1]['dirty'])
+        self.assertEqual(states[1]['path'], 'dependency with spaces/nested dependency')
 
     def test_take_base_gitlink_records_stage_two_not_checked_out_child(self):
         self.git(self.repo, 'update-index', '--force-remove', 'dependency with spaces')

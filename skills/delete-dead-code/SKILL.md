@@ -22,7 +22,9 @@ INPUT = [--base <immutable commit>] [--directories <dir>…] [--max-parallel <N,
 
 repo   = git rev-parse --show-toplevel
 branch = git branch --show-current
-base   = caller-provided immutable commit, otherwise origin/master
+base = caller-provided immutable commit; otherwise run:
+  python3 "$SKILL_DIR/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>"
+STOP on error; never guess the default branch.
 branch_slug   = branch with every character outside [A-Za-z0-9_-] replaced by `-`
 artifact_root = temp/delete-dead-code/<branch_slug>
 
@@ -74,11 +76,10 @@ FOR round IN rounds:
             when only one copy has a production caller, the other is dead code: delete it and repoint tests to the live one; liveness is judged by
             production wiring only
           * when a baseline / allowlist blocks a deletion, record `HANDOFF` with the exact change to the list; never roll back a verified deletion ("Baselines and allowlists…")
-      - hard constraints: no Git write of any kind; never start Bus (`./run dev`, live sessions, `just e2e`); leave no background build/test process;
-        never change shared config (`Cargo.toml`, `Cargo.lock`, `justfile`, `clippy.toml`, `rust-toolchain.toml`, `.github/workflows/*`); report it instead
-      - verification (only if something changed; otherwise say nothing changed): this module's tests, narrowly (Rust `just test-one <module path filter>`,
-        Python `python3 -m unittest scripts.<name>_test` or `python3 -m pytest skills/<skill> -q`, Bun `bun test <test file>`); `rustfmt --check --edition 2021
-        <own changed .rs files…>` (never whole-tree `cargo fmt --check`); no coverage, E2E, or whole-tree clippy/build (guide.md "How far each unit verifies itself")
+      - hard constraints: no Git write of any kind; never launch target applications or live sessions; leave no background build/test process;
+        never change target-declared shared config, dependency manifests/locks or CI policy; report it instead
+      - verification (only if something changed; otherwise say nothing changed): derive this owner's focused tests and read-only formatting checks from the target's actual tooling; prove that filters select tests. No coverage, live acceptance, whole-repo lint/build, or shared-config edits in a component agent.
+
 
   Wait for every subagent in this round. No short-interval polling.
 
@@ -126,7 +127,7 @@ IF every module is CLEAN and the units of this invocation have no change
 Feed only this track's delta files:
   `rustfmt --check --edition 2021 <delta .rs files…>`
   `cargo clippy --all-targets --locked -- -D warnings` when the delta touches Rust (crate-wide by nature; a failure outside the delta belongs to its owner)
-  affected tests narrowed as in A3 (never `just test` / `just ci`, E2E, or coverage; full gates belong to gate-and-fix)
+  affected tests narrowed as in A3; full repository gates belong to gate-and-fix
 
 ========== A6. LAND ==========
 
@@ -171,7 +172,7 @@ FOR EACH candidate group (at most max_parallel concurrently; further rounds beyo
     - coexisting versions not selected by an A/B feature flag converge to the newest version; when unsure, judge INTENTIONAL with "needs developer
       ruling: version/compat"
     - for IDENTICAL: the survivor (the copy production is wired to), its home, and a dependency-direction check (Rust module visibility,
-      `just ui-hot-path-architecture-test` boundaries, `Cargo.toml` / `package.json` dependencies); if there is no legal home, change the verdict to INTENTIONAL
+      target architecture contracts and dependency manifests); if there is no legal home, change the verdict to INTENTIONAL
     - the owner set: every module the consolidation would change (by stage-1 unit ownership)
 
 Summary: drop NOT-DUPLICATE; DRIFTED / INTENTIONAL go to the reported artifact; IDENTICAL with an owner outside the scope → `HANDOFF` in the reported

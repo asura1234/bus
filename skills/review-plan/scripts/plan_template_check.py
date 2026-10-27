@@ -115,7 +115,9 @@ def main(argv: list[str]) -> int:
         return 2
 
     plan_text = plan_path.read_text()
-    template_path = TEMPLATE_PATH
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main/scripts"))
+    from repository_context import plan_template, repository_root
+    template_path = plan_template(repository_root(), TEMPLATE_PATH)
     if not template_path.is_file():
         print(f"error: template {template_path} not found", file=sys.stderr)
         return 2

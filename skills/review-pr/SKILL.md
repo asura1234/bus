@@ -11,7 +11,7 @@ INPUT $ARGUMENTS =
   [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan-file>]
   [--scope <FILE_LIST|chunk.json>]
 
-DEFAULT base = origin/master
+DEFAULT base = origin symbolic HEAD (read-only); an explicit --base is authoritative
 DEFAULT reviewer = default (only when the prologue can select a lane unambiguously)
 DEFAULT target = branch (unchanged committed diff against base)
 
@@ -44,9 +44,9 @@ MAY:
     In scope mode, write only the exact SCOPE_TEST_FILES paths; no inline production-file edits,
     no new test path outside the manifest, and no dependency/config wiring edits.
   - run read-only queries: git, grep, reading files
-  - run tests narrowly: Rust with `just test-one <filter>`, a skill's Python tests with
-    `python3 -m pytest <test file>::<test name>`
-  - drive the PR's HEAD on a scratch Bus (owner's dev binary, or /e2e-test on an ad-hoc QA doc under <round dir>/tui/)
+  - run only target-derived focused tests or isolated acceptance that proves a specific suspicion; verify the test filter selects the intended cases. For Bus TUI work, apply guide.md's Bus-only adapter.
+
+  - for a Bus target, drive the PR's HEAD on a scratch Bus (owner's dev binary, or /e2e-test on an ad-hoc QA doc under <round dir>/tui/)
     per guide.md "Prove user-visible behavior by driving the real TUI", whose env, cleanup, and no-touch rules are mandatory
 
 MUST NOT:
@@ -55,9 +55,9 @@ MUST NOT:
   - delete or weaken someone else's probe or existing assertions
   - git add / commit / checkout / stash / rebase
   - run formatters, lint fixers, or other write commands
-  - run quality gates: `just lint`, `cargo fmt --check`, `just check`, `just ci`, `just build`,
+  - run repository-wide quality gates or builds,
     **including** filtered forms. Those belong to CI and gate-and-fix
-  - run unfiltered full suites (`just test`, unfiltered `cargo nextest run`) or `just e2e`
+  - run unfiltered full suites or live end-to-end checks
   - create a review worktree/clone/target or build main; use the owner's tree/target and room slot;
     coordinate probe access, save test patches and remove your additions per guide.md
 ========== 2. DETERMINISTIC PROLOGUE ==========

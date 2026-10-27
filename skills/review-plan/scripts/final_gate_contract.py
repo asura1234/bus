@@ -6,6 +6,11 @@ from __future__ import annotations
 import datetime
 import re
 import shlex
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main/scripts"))
+from repository_context import read_policy, repository_root  # noqa: E402
 from dataclasses import dataclass
 
 from task_graph_parser import (
@@ -210,7 +215,27 @@ def validate_declared_execution(
 
 def check_final_gate_contract(plan_text: str) -> list[str]:
     try:
+        policy = read_policy(repository_root())
+        command = policy["gate_command"]
+        if command != "just ci":
+            if not _requires_contract(plan_text):
+                return []
+            if not command:
+                return ["no gate configured: target policy must define final acceptance"]
+            lines, found, errors = _scan_section(plan_text, "测试计划")
+            if errors:
+                return errors
+            body = "\n".join(line.text for line in lines if not line.fenced)
+            exit_block = re.search(r"(?m)^### 全局 EXIT CHECK\s*$", body)
+            if not found or exit_block is None:
+                return ["新计划缺少『测试计划 → 全局 EXIT CHECK』"]
+            body = body[exit_block.end():]
+            body = re.split(r"(?m)^###\s+", body, maxsplit=1)[0]
+            spans = re.finditer(r"(?m)(?:^|\n)\s*(?:\d+[.)]|[-*+])\s+(`+)(.*?)\1(?!`)", body, re.DOTALL)
+            if not any(match.group(2).strip() == command.strip() for match in spans):
+                return ["全局 EXIT CHECK 必须声明 target policy.gate_command: " + command]
+            return []
         declared_final_gates(plan_text)
-    except FinalGateContractError as error:
+    except (FinalGateContractError, OSError, ValueError) as error:
         return [str(error)]
     return []

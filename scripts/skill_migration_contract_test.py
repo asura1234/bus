@@ -52,6 +52,16 @@ class SkillMigrationContractTest(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertTrue((SKILLS / relative).is_file())
 
+    def test_portable_skills_ship_policy_and_submodule_mechanics(self) -> None:
+        for relative in (
+            "rebase-origin-main/scripts/repository_context.py",
+            "rebase-origin-main/scripts/submodule_state.py",
+            "rebase-origin-main/scripts/tests/submodule_state_test.py",
+            "review-pr/scripts/tests/generic_review_test.py",
+        ):
+            with self.subTest(path=relative):
+                self.assertTrue((SKILLS / relative).is_file())
+
     def test_canonical_workflow_inventory_and_entrypoints(self) -> None:
         actual = {
             entry.name
