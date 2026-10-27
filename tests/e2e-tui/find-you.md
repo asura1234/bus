@@ -10,7 +10,7 @@ agent-authored messages; search, navigation and help use real TUI keys. No skips
 or failed-step retries. Capture snapshots for each step and cells for highlights;
 open a cell screenshot to judge the bar's layout.
 
-### FIND-YOU-01 — Find one developer message buried in peer traffic
+### FIND-01 — Find one developer message buried in peer traffic
 
 Setup: CLI fixtures create `find-busy` and two fake Claude agents `find-sender`
 and `find-peer`, both using the driver's scratch work directory. Wait for idle.
