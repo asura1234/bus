@@ -144,6 +144,7 @@ def test_scripted_acceptance_is_saved_even_when_a_corrupt_manifest_stops_install
     env.update(HOME=str(home), USERPROFILE=str(home))
     result = subprocess.run([binary, "skills", "install", "--yes"], env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode != 0
+    assert str(state / "skills-manifest.json") in result.stderr
     path = state / "settings.json"
     assert path.is_file(), "an explicit answer must persist even when installation fails"
     saved = json.loads(path.read_text())

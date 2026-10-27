@@ -1,3 +1,5 @@
+#[path = "src/messaging/skills/files.rs"]
+mod skill_files;
 include!("build_identity.rs");
 use std::fs;
 
@@ -154,12 +156,7 @@ fn embed_skills() {
         entries.sort();
         for entry in entries {
             let name = entry.file_name().expect("skill filename").to_string_lossy();
-            if name.starts_with('.')
-                || name == "tests"
-                || name == "__pycache__"
-                || name.ends_with("_test.py")
-                || name.ends_with(".pyc")
-            {
+            if skill_files::ignored(&name) || name == "tests" || name.ends_with("_test.py") {
                 continue;
             }
             if entry.is_dir() {

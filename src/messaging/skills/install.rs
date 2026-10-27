@@ -23,7 +23,12 @@ pub(super) fn load_manifest(home: &Path) -> io::Result<Manifest> {
     let path = data_dir(home).join("skills-manifest.json");
     match fs::read(&path) {
         Ok(bytes) => {
-            let manifest: Manifest = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|error| {
+                io::Error::other(format!(
+                    "Invalid Bus skills manifest at {}: {error}",
+                    path.display()
+                ))
+            })?;
             if manifest.schema != 1 {
                 return Err(io::Error::other("Unsupported Bus skills manifest schema"));
             }
@@ -46,10 +51,10 @@ pub(super) fn save_manifest(home: &Path, manifest: &Manifest) -> io::Result<()> 
 
 /// Refuse symlink ancestors as well as symlink skills. A provider registry can
 /// itself be a user's link into a repo; Bus must never write through that link.
-fn safe_ancestors(path: &Path) -> io::Result<bool> {
+pub(super) fn linked_ancestor(path: &Path) -> io::Result<Option<std::path::PathBuf>> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
-            Ok(meta) if meta.file_type().is_symlink() => return Ok(false),
+            Ok(meta) if meta.file_type().is_symlink() => return Ok(Some(ancestor.to_path_buf())),
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -61,7 +66,7 @@ fn safe_ancestors(path: &Path) -> io::Result<bool> {
             break;
         }
     }
-    Ok(true)
+    Ok(None)
 }
 
 fn tree_files(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>) -> io::Result<()> {
@@ -69,7 +74,7 @@ fn tree_files(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>) ->
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
-        if name == "__pycache__" || path.extension().is_some_and(|ext| ext == "pyc") {
+        if super::files::ignored(&name.to_string_lossy()) {
             continue;
         }
         let kind = entry.file_type()?;
@@ -103,8 +108,8 @@ pub(super) fn tree_hash(root: &Path) -> io::Result<String> {
 }
 
 pub(super) fn state(path: &Path, owned: Option<&Owned>, desired: &str) -> io::Result<&'static str> {
-    if !safe_ancestors(path)? {
-        return Ok("conflict");
+    if linked_ancestor(path)?.is_some() {
+        return Ok("blocked-link");
     }
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
@@ -114,15 +119,9 @@ pub(super) fn state(path: &Path, owned: Option<&Owned>, desired: &str) -> io::Re
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return Ok("conflict");
     }
-    let Some(owned) = owned else {
-        return Ok("conflict");
-    };
     match tree_hash(path) {
-        Ok(hash) if hash == owned.hash => Ok(if hash == desired {
-            "installed"
-        } else {
-            "outdated"
-        }),
+        Ok(hash) if hash == desired => Ok("installed"),
+        Ok(hash) if owned.is_some_and(|owned| hash == owned.hash) => Ok("outdated"),
         Ok(_) => Ok("conflict"),
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Err(error),
         Err(_) => Ok("conflict"),
@@ -162,7 +161,22 @@ pub(super) fn install_one(
     let path = root.join(&skill.name);
     let key = format!("{provider}/{}", skill.name);
     let state = state(&path, manifest.installed.get(&key), &skill.hash)?;
-    if matches!(state, "conflict" | "installed") {
+    if state == "installed"
+        && manifest
+            .installed
+            .get(&key)
+            .is_none_or(|owned| owned.hash != skill.hash)
+    {
+        manifest.installed.insert(
+            key.clone(),
+            Owned {
+                hash: skill.hash.clone(),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+        );
+        save_manifest(home, manifest)?;
+    }
+    if matches!(state, "conflict" | "installed" | "blocked-link") {
         return Ok(());
     }
     bus_io::private_dir(root)?;

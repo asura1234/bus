@@ -1,5 +1,6 @@
 //! User-scope skill copies and ownership. All paths derive from the caller's HOME.
 mod bundle;
+mod files;
 mod install;
 mod shadow;
 
@@ -92,6 +93,9 @@ pub(crate) fn status(home: &Path) -> io::Result<Status> {
             let path = home.join(directory).join("skills").join(&skill.name);
             let key = format!("{provider}/{}", skill.name);
             let state = install::state(&path, manifest.installed.get(&key), &skill.hash)?;
+            if state == "blocked-link" {
+                report.warnings.push(format!("Bus skipped {}: provider home or skills registry is symlinked; it will not write through that link", install::linked_ancestor(&path)?.unwrap_or_else(|| path.clone()).display()));
+            }
             if state == "conflict" {
                 report.warnings.push(format!(
                     "Bus will not overwrite user skill at {} (unmanaged or modified)",
