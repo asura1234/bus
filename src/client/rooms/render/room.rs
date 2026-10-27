@@ -1,6 +1,6 @@
 //! Room history, composer, notes, search and recipient views.
 use super::super::{
-    chat_search::ChatSearch,
+    chat_search::{find_matches, ChatSearch},
     history::{Line, Tone},
     links::{visible_links, Candidate},
     recipients::Layout as RecipientLayout,
@@ -96,9 +96,7 @@ impl BusUi {
             .saturating_sub(usize::from(view.history.height));
         view.search_matches = chat_search
             .as_ref()
-            .map(|search| {
-                super::super::chat_search::find_matches(content, &search.query, search.you_only)
-            })
+            .map(|search| find_matches(content, &search.query, search.you_only))
             .unwrap_or_default();
         update_chat_search(
             &mut self.chat_search,
