@@ -1,5 +1,69 @@
 use super::*;
 
+fn incident_cohort(history: &str, cutoff: u64) -> Vec<Request> {
+    history
+        .lines()
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap()
+                .get("request")
+                .cloned()
+        })
+        .map(|v| serde_json::from_value::<Request>(v).unwrap())
+        .filter(|r| {
+            r.phase == RequestPhase::Completed
+                && matches!(r.prompt.author, Author::Agent(_))
+                // This fixed incident archive predates canonical completed_reply.
+                && r.pending_final.is_some()
+                && r.completed_at_ms.is_some_and(|at| at < cutoff)
+        })
+        .collect()
+}
+
+#[test]
+fn incident_cohort_selects_the_old_archives_saved_result_field() {
+    let f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let mut archive = String::new();
+    let mut expected = None;
+    for (author, completed_at) in [
+        (Author::Agent(f.orch), 10),
+        (Author::Developer, 10),
+        (Author::Agent(f.orch), 30),
+    ] {
+        let id = state
+            .submit_message_from(
+                f.room,
+                Draft {
+                    text: "incident work".into(),
+                    files: vec![],
+                    recipient_ids: [f.agent].into(),
+                },
+                author.clone(),
+                1,
+            )
+            .unwrap()[0];
+        state.finish_for_test(id, "archived answer", completed_at);
+        let mut saved = serde_json::to_value(state.request(id).unwrap()).unwrap();
+        saved["pending_final"] = saved["completed_reply"]["content"].take();
+        saved.as_object_mut().unwrap().remove("completed_reply");
+        archive.push_str(&json!({"request":saved}).to_string());
+        archive.push('\n');
+        if author == Author::Agent(f.orch) && completed_at == 10 {
+            expected = Some(id);
+        }
+    }
+    let cohort = incident_cohort(&archive, 20);
+    assert_eq!(
+        cohort.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [expected.unwrap()]
+    );
+    assert_eq!(
+        cohort[0].pending_final.as_ref().unwrap().text,
+        "archived answer"
+    );
+}
+
 #[test]
 fn routing_floor_blocks_inline_event_backfill_but_keeps_recent_and_open_work() {
     let f = Fixture::new();
@@ -98,23 +162,7 @@ fn real_format_2_snapshot_first_start_preserves_archive_without_old_wakes() {
     // growing as newer rows age. The loaded routing floor below still uses now.
     // Captured at 2026-10-23T17:29:16+08:00.
     let incident_cutoff = 1_792_747_756_000_u64 - 7 * 24 * 60 * 60_000;
-    let old: Vec<Request> = std::str::from_utf8(&history)
-        .unwrap()
-        .lines()
-        .filter_map(|line| {
-            serde_json::from_str::<serde_json::Value>(line)
-                .unwrap()
-                .get("request")
-                .cloned()
-        })
-        .map(|v| serde_json::from_value::<Request>(v).unwrap())
-        .filter(|r| {
-            r.phase == RequestPhase::Completed
-                && matches!(r.prompt.author, Author::Agent(_))
-                && r.reply().is_some()
-                && r.completed_at_ms.is_some_and(|at| at < incident_cutoff)
-        })
-        .collect();
+    let old = incident_cohort(std::str::from_utf8(&history).unwrap(), incident_cutoff);
     assert_eq!(old.len(), 22, "verify the actual incident fixture");
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut worker = Worker::open(dir.clone(), Box::new(Accepting(calls.clone()))).unwrap();
