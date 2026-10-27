@@ -499,9 +499,9 @@ impl BusState {
             }
         }
         // A provider that went away cannot extend its turn, so a reply it
-        // already gave completes the turn as an idle screen would. Unconfirmed
-        // steering also settles on time while the provider remains busy.
-        if gone || matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked) {
+        // already gave completes the turn as an idle screen would. Status
+        // cannot prove which turn accepted unconfirmed steering.
+        if gone {
             self.complete_pending_final(agent, now_ms)?;
         }
         Ok(())

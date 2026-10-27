@@ -14,6 +14,7 @@ use super::{
     AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection,
     ProviderCallback, RoomId,
 };
+use crate::messaging::model::RequestPhase;
 
 /// An orchestrator's final text, taken before `accept_callback` settles it.
 pub(super) struct PendingReport {
@@ -26,6 +27,16 @@ pub(super) struct PendingReport {
     /// The provider session and turn the final ends.
     session: Option<String>,
     turn: Option<String>,
+    launch: String,
+    key: String,
+    completed_owner: bool,
+    already_answered: bool,
+}
+
+impl PendingReport {
+    pub(super) fn answers_completed_turn(&self) -> bool {
+        self.completed_owner
+    }
 }
 
 /// The report a final callback would make, if its agent is in MASTER. Workers
@@ -46,16 +57,35 @@ pub(super) fn pending_report(
     // `reply_not_captured`) still answers that request's message, so it
     // belongs in the message's room; only a turn no message started goes to
     // the work room.
-    let room = callback
-        .provider_turn_id
-        .as_deref()
-        .and_then(|turn| {
-            state.requests().find(|request| {
-                request.agent_id == agent.id
-                    && request.provider_turn_id.as_deref() == Some(turn)
-                    && request.provider_session_id == callback.provider_session_id
-            })
+    let owner = callback.provider_turn_id.as_deref().and_then(|turn| {
+        state.requests().find(|request| {
+            request.agent_id == agent.id
+                && request.expected_launch_id.as_deref() == Some(&callback.launch_id)
+                && request.trusted_start_bound
+                && request
+                    .submission_boundary
+                    .is_some_and(|b| callback.sequence > b)
+                && request.provider_turn_id.as_deref() == Some(turn)
+                && request.provider_session_id == callback.provider_session_id
+                && request.provider_prompt_id.as_ref().is_none_or(|prompt| {
+                    callback
+                        .provider_prompt_id
+                        .as_ref()
+                        .is_none_or(|actual| actual == prompt)
+                })
         })
+    });
+    let completed_owner = owner.is_some_and(|request| {
+        request.phase == RequestPhase::Completed && request.pending_final.is_some()
+    });
+    let already_answered = completed_owner
+        && owner.is_some_and(|request| {
+            request
+                .pending_final
+                .as_ref()
+                .is_some_and(|answer| answer.text.trim() == text.trim())
+        });
+    let room = owner
         .map(|request| request.room_id)
         .or(agent.orchestrates)
         .unwrap_or(master);
@@ -66,14 +96,24 @@ pub(super) fn pending_report(
         text: text.trim().to_owned(),
         session: callback.provider_session_id.clone(),
         turn: callback.provider_turn_id.clone(),
+        launch: callback.launch_id.clone(),
+        key: format!(
+            "report-final:{}\0{}\0{}\0{}\0{}",
+            agent.id.0,
+            callback.launch_id,
+            callback.provider_session_id.as_deref()?,
+            callback.provider_turn_id.as_deref()?,
+            crate::utils::time::digest(text.trim().as_bytes()),
+        ),
+        completed_owner,
+        already_answered,
     })
 }
 
 /// Posts the report once its callback is applied. Only a final ending a turn
 /// Bus did not start is a report; a final accepted for a request is that
-/// request's reply and already shows in its room, and a duplicate or rejected
-/// final is not a report. Each final callback is applied once, so a turn
-/// reports at most once.
+/// request's reply and already shows in its room. Changed finals of a completed,
+/// attested turn are separate follow-ups, each published once by text identity.
 pub(super) fn post_report(
     state: &mut BusState,
     report: PendingReport,
@@ -87,8 +127,22 @@ pub(super) fn post_report(
         CallbackDisposition::Rejected(
             CallbackRejection::UnrelatedTurn | CallbackRejection::NoActiveRequest,
         ) => true,
+        CallbackDisposition::Rejected(
+            CallbackRejection::DuplicateFinal
+            | CallbackRejection::WrongTurn
+            | CallbackRejection::WrongPrompt
+            | CallbackRejection::UnboundFinal
+            | CallbackRejection::BeforeSubmissionBoundary,
+        ) if report.completed_owner => true,
         _ => return,
     };
+    if state.has_reported_final(&report.key) {
+        return;
+    }
+    if report.already_answered {
+        state.record_reported_final(report.key, report.launch);
+        return;
+    }
     // The orchestrator already posted this text to the developer itself with
     // `send --to human` during this turn, so MASTER has it and the work room
     // needs no copy; an earlier turn's same words are a separate report.
@@ -112,11 +166,15 @@ pub(super) fn post_report(
                 message_id = message.0,
                 "Orchestrator report shown"
             ),
-            Err(error) => tracing::warn!(event = "bus.report.failed",
-                agent_id = report.agent.0, room_id = report.room.0, %error,
-                "Orchestrator report not shown"),
+            Err(error) => {
+                tracing::warn!(event = "bus.report.failed",
+                    agent_id = report.agent.0, room_id = report.room.0, %error,
+                    "Orchestrator report not shown");
+                return;
+            }
         }
     }
+    state.record_reported_final(report.key, report.launch);
     if let Some(turn) = report.turn {
         state.end_report_turn(report.master, report.agent, report.session, turn);
     }

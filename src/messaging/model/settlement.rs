@@ -23,6 +23,129 @@ pub(crate) enum RecordedTurnEnd {
 const AGENT_UNAVAILABLE: &str = "agent_unavailable";
 
 impl BusState {
+    /// Reconcile unclaimed steering after this tick's hooks. Native Idle is
+    /// an end boundary, never evidence that input shared the previous answer.
+    pub(crate) fn settle_unclaimed_steering(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+        mut recorded_end: impl FnMut(&Request) -> Option<RecordedTurnEnd>,
+    ) -> bool {
+        let Some(owner) = self.agents.get(&agent).filter(|a| {
+            matches!(a.status, RuntimeStatus::Idle | RuntimeStatus::Unavailable)
+                && !a.dialog
+                && !a.deletion_pending
+                && !a.session_binding_invalidated
+        }) else {
+            return false;
+        };
+        let Some(lead) = owner
+            .current_request
+            .and_then(|id| self.requests.get(&id))
+            .filter(|r| r.phase == RequestPhase::Completed && r.pending_final.is_some())
+            .cloned()
+        else {
+            return false;
+        };
+        let members = self.group_members(lead.id);
+        if let Some(RecordedTurnEnd::Final {
+            turn_id, prompts, ..
+        }) = recorded_end(&lead)
+        {
+            if lead.provider_turn_id.as_deref() == Some(&turn_id) {
+                for id in &members {
+                    if self.requests.get(id).is_some_and(|member| {
+                        member.steered
+                            && !member.trusted_start_bound
+                            && !member.settled()
+                            && self.recorded_for(member, lead.id, &members, &prompts)
+                    }) {
+                        self.bind_recorded_member(*id, lead.provider_session_id.clone(), &turn_id);
+                    }
+                }
+            }
+        }
+        let _ = self.complete_pending_final(agent, now_ms);
+        let mut uncertain = None;
+        for id in members {
+            let Some(member) = self.requests.get(&id).filter(|m| !m.settled()).cloned() else {
+                continue;
+            };
+            if self.recover_steered_answer(&lead, &member, recorded_end(&member), now_ms) {
+                continue;
+            }
+            if let Some(member) = self.requests.get_mut(&id) {
+                member.group = None;
+                member.phase = RequestPhase::Abandoned;
+                member.completed_at_ms = Some(now_ms);
+                member.failure_reason = Some("submission_unconfirmed".into());
+                member.uncertain_outcome = true;
+                uncertain.get_or_insert(member.prompt.id);
+            }
+        }
+        if let Some(owner) = self.agents.get_mut(&agent) {
+            owner.current_request = None;
+            owner.actionable_error = uncertain.map(Self::unconfirmed_submission_message);
+        }
+        true
+    }
+
+    fn bind_recorded_member(&mut self, id: RequestId, session: Option<String>, turn: &str) {
+        if let Some(member) = self.requests.get_mut(&id) {
+            member.phase = RequestPhase::Active;
+            member.trusted_start_bound = true;
+            member.uncertain_outcome = false;
+            member.submission_error = None;
+            member.provider_session_id = session;
+            member.provider_turn_id = Some(turn.to_owned());
+        }
+    }
+
+    /// A transcript can claim the input in a distinct turn even without its
+    /// submit hook. Recover that turn's answer independently of the old lead.
+    fn recover_steered_answer(
+        &mut self,
+        lead: &Request,
+        member: &Request,
+        recorded: Option<RecordedTurnEnd>,
+        now_ms: u64,
+    ) -> bool {
+        let Some(RecordedTurnEnd::Final {
+            turn_id,
+            text,
+            prompts,
+        }) = recorded
+        else {
+            return false;
+        };
+        if lead.provider_turn_id.as_deref() == Some(&turn_id)
+            || !self.recorded_for(member, member.id, &self.group_members(lead.id), &prompts)
+        {
+            return false;
+        }
+        self.bind_recorded_member(member.id, lead.provider_session_id.clone(), &turn_id);
+        if let Some(member) = self.requests.get_mut(&member.id) {
+            member.group = None;
+        }
+        if let Some(owner) = self.agents.get_mut(&lead.agent_id) {
+            owner.current_request = Some(member.id);
+        }
+        let answer = PendingFinal {
+            callback_id: format!("rollout:{turn_id}"),
+            text,
+            received_at_ms: now_ms,
+            provider_session_id: lead.provider_session_id.clone(),
+            provider_turn_id: Some(turn_id),
+        };
+        let recovered = self
+            .deliver_recorded_final(lead.agent_id, member.id, answer, &prompts, now_ms)
+            .is_some();
+        if let Some(owner) = self.agents.get_mut(&lead.agent_id) {
+            owner.current_request = Some(lead.id);
+        }
+        recovered
+    }
+
     pub(super) fn note_turn_end(&mut self, agent: AgentId, now_ms: u64) {
         let Some(agent_state) = self.agents.get(&agent).filter(|agent| !agent.dialog) else {
             return;
@@ -269,11 +392,19 @@ impl BusState {
             member.completed_at_ms = Some(now_ms);
             member.failure_reason = Some("reply_not_captured".to_owned());
         }
+        let session = self.requests.get(&id)?.provider_session_id.clone();
+        if let Some(turn) = answer.provider_turn_id.as_deref() {
+            for member in members {
+                if self.requests.get(&member).is_some_and(|m| !m.settled()) {
+                    self.bind_recorded_member(member, session.clone(), turn);
+                }
+            }
+        }
         let request = self.requests.get_mut(&id)?;
         request.turn_ended_at_ms = None;
         answer.provider_session_id = request.provider_session_id.clone();
         request.pending_final = Some(answer);
-        // Unseen steering keeps the final pending for its settle window.
+        // Only hook- or transcript-proven members share the captured answer.
         self.complete_pending_final(agent, now_ms).ok()?;
         tracing::info!(
             event = "bus.message.recovered",

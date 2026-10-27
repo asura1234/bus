@@ -71,12 +71,11 @@ fn an_unconfirmed_notice_still_falls_back_after_its_lead_finishes_without_bindin
     f.stopped("original-turn", "original task completed");
     f.consume();
     f.status(RuntimeStatus::Idle);
-    f.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS + 1;
+    f.now = crate::messaging::storage::io::now_ms() + 5_000 + 1;
     f.status(RuntimeStatus::Idle);
     f.consume();
     assert_eq!(f.request(lead).phase, RequestPhase::Completed);
-    assert_eq!(f.request(notice).phase, RequestPhase::Completed);
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
     assert!(f.request(notice).uncertain_outcome);
     assert!(!f.request(notice).trusted_start_bound);
     let deadline =
@@ -189,11 +188,10 @@ fn native_confirmation_survives_group_completion_and_reload_without_a_start_hook
     f.stopped("original-turn", "original task completed");
     f.consume();
     f.status(RuntimeStatus::Idle);
-    f.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS + 1;
+    f.now = crate::messaging::storage::io::now_ms() + 5_000 + 1;
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.request(notice).phase, RequestPhase::Completed);
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
     let state = f.worker.store.load().unwrap().unwrap();
     f.worker.save(state).unwrap();
     f.expire_after_reconciliation(
@@ -258,18 +256,17 @@ fn a_settled_notice_remains_eligible_after_archival_and_reload() {
     f.stopped("original-turn", "done");
     f.consume();
     f.status(RuntimeStatus::Idle);
-    f.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS + 1;
+    f.now = crate::messaging::storage::io::now_ms() + 5_000 + 1;
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.request(notice).phase, RequestPhase::Completed);
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
     let now = f.now + crate::messaging::model::ARCHIVE_AFTER_MS + 1;
     let mut state = f.worker.state.clone();
     state.archive(now);
     f.worker.save(state).unwrap();
     let state = f.worker.store.load().unwrap().unwrap();
     f.worker.save(state).unwrap();
-    assert_eq!(f.request(notice).phase, RequestPhase::Completed);
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
     f.expire_after_reconciliation(now);
     assert_eq!(
         f.worker.state.agent(worker).unwrap().dialog_notice_to,

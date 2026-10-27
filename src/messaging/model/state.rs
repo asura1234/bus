@@ -31,7 +31,8 @@ pub(crate) struct BusState {
     pub(super) reply_routes: BTreeMap<RequestId, super::reply_routing::ReplyRoute>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) worker_events: BTreeMap<String, super::worker_events::WorkerEvent>,
-    /// Applied provider callbacks by id, with the launch whose spool they
+    /// Applied provider callbacks and published report finals by identity,
+    /// with the launch whose spool they
     /// came from; a re-spooled duplicate is refused while its id is kept.
     /// `None` marks ids carried over from a version 1 file, launch unknown.
     /// Snapshots share retained keys; consuming or pruning a key copies them.

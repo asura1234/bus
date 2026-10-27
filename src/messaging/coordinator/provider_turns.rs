@@ -35,7 +35,7 @@ impl Worker {
                 tracing::debug!(
                     event = "bus.callback.deferred",
                     reason = "claude_prompt_origin_pending",
-                    "Awaiting Claude prompt origin before continuing a background hold"
+                    "Awaiting Claude prompt origin before continuing a textless background pause"
                 );
                 return false;
             }
@@ -50,7 +50,7 @@ impl Worker {
         &mut self,
         id: AgentId,
         record: &callbacks::Record,
-        parsed: &Parsed,
+        parsed: &mut Parsed,
     ) {
         if record.manifest.provider == Provider::ClaudeCode {
             if matches!(parsed, Parsed::Session { source: Some(source), .. } if source == "startup")
@@ -66,6 +66,28 @@ impl Worker {
                 let running = crate::agents::providers::claude_code::hooks::claude_running_shells(
                     &record.value,
                 );
+                // No answer has arrived. Only work this request started can
+                // keep its textless turn open; inherited shells cannot own it.
+                if let Parsed::Final {
+                    session,
+                    turn,
+                    text,
+                } = parsed
+                {
+                    if text.trim().is_empty()
+                        && running.iter().any(|shell| {
+                            !self
+                                .claude_settled_shells
+                                .get(&id)
+                                .is_some_and(|inherited| inherited.contains(shell))
+                        })
+                    {
+                        *parsed = Parsed::BackgroundPending {
+                            session: session.clone(),
+                            turn: turn.clone(),
+                        };
+                    }
+                }
                 if let Some((_, observed)) = self.claude_shell_observations.get_mut(&id) {
                     *observed = running;
                 }

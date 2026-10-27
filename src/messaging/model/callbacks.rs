@@ -1,10 +1,20 @@
 //! Callbacks operations for the messaging state.
 use super::{
     AgentId, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, ModelError,
-    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase, STEERING_SETTLE_MS,
+    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase,
 };
 
 impl BusState {
+    /// Report identity ignores incidental changes to the hook envelope. Keep
+    /// these guards with callback keys so they persist and retire by launch.
+    pub(crate) fn has_reported_final(&self, key: &str) -> bool {
+        self.consumed_callbacks.contains_key(key)
+    }
+
+    pub(crate) fn record_reported_final(&mut self, key: String, launch: String) {
+        std::sync::Arc::make_mut(&mut self.consumed_callbacks).insert(key, Some(launch));
+    }
+
     pub(crate) fn accept_callback(
         &mut self,
         mut callback: ProviderCallback,
@@ -338,6 +348,13 @@ impl BusState {
                 if request.pending_final.is_some() {
                     return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
                 }
+                if text.trim().is_empty() {
+                    if let Some(request) = self.requests.get_mut(&request_id) {
+                        request.turn_ended_at_ms = Some(callback.occurred_at_ms);
+                        request.awaiting_background = false;
+                    }
+                    return CallbackDisposition::AcceptedProgress;
+                }
                 if turn_key
                     .as_ref()
                     .is_some_and(|key| self.consumed_provider_turns.contains(key))
@@ -455,8 +472,10 @@ impl BusState {
                     return true;
                 }
                 if let Some(member) = self.requests.get_mut(&member) {
+                    member.phase = RequestPhase::Active;
                     member.trusted_start_bound = true;
                     member.uncertain_outcome = false;
+                    member.submission_error = None;
                     member.provider_session_id = callback.provider_session_id.clone();
                     member.provider_turn_id = callback.provider_turn_id.clone();
                 }
@@ -521,8 +540,8 @@ impl BusState {
 
     /// Settles the agent's current request, and every request in its group,
     /// with its captured final reply. Confirmed members publish immediately.
-    /// Unconfirmed steering keeps only its own correlation window, with the
-    /// completed lead retained as an anchor until those members are resolved.
+    /// Unconfirmed steering needs turn proof, with the completed lead retained
+    /// as an anchor while the provider can still claim those inputs.
     pub(super) fn complete_pending_final(
         &mut self,
         agent_id: AgentId,
@@ -545,6 +564,7 @@ impl BusState {
         };
         let members = self.group_members(request_id);
 
+
         // Already answered requests own their reply keys. The shared final gets
         // an outstanding representative, so it cannot overwrite or spend those replies.
         let reply_group = std::iter::once(request_id)
@@ -552,18 +572,26 @@ impl BusState {
             .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
             .unwrap_or(request_id);
 
-        let awaiting_steering =
-            completed_at_ms < pending.received_at_ms.saturating_add(STEERING_SETTLE_MS);
         let (members, unresolved): (Vec<_>, Vec<_>) = members.into_iter().partition(|member| {
-            self.requests.get(member).is_none_or(|m| {
-                !awaiting_steering || !m.steered || m.trusted_start_bound || m.settled()
-            })
+            self.requests
+                .get(member)
+                .is_none_or(|m| !m.steered || m.trusted_start_bound || m.settled())
         });
         let turn_key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
             pending.provider_session_id.as_deref(),
             pending.provider_turn_id.as_deref(),
         );
+        for member in &unresolved {
+            if let Some(member) = self.requests.get_mut(member) {
+                member.phase = RequestPhase::Submitting;
+                member.uncertain_outcome = true;
+                member.submission_error = Some(
+                    "Provider turn ended without claiming this input; awaiting turn ownership proof."
+                        .into(),
+                );
+            }
+        }
         self.publish_group_reply(request_id, &members, &pending)?;
         for member in members {
             if let Some(member) = self.requests.get_mut(&member) {

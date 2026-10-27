@@ -1642,7 +1642,7 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
 }
 
 #[tokio::test]
-async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() {
+async fn orchestrator_inbox_unclaimed_steering_is_uncertain_without_blocking_the_next_room() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
     let lead = f.send(orch, f.master, "first", false, None);
@@ -1660,12 +1660,8 @@ async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() 
         json!([]),
     );
     let next = f.send(orch, f.work, "new room", true, None);
-    // The production grace allows a separate submit hook to arrive. Once it
-    // expires, a genuinely folded member shares the captured old answer.
-    tokio::time::sleep(std::time::Duration::from_millis(
-        crate::messaging::model::STEERING_SETTLE_MS + 100,
-    ))
-    .await;
+    // No matching hook or transcript claimed this input. At the idle boundary
+    // it must surface uncertainty immediately, without borrowing the answer.
     f.tick();
     assert_eq!(
         f.typed_content(orch).last().unwrap(),
@@ -1673,7 +1669,16 @@ async fn orchestrator_inbox_folded_steering_members_do_not_hold_the_next_room() 
         "folded steering blocked the inbox"
     );
     f.assert_reply(lead, "combined answer");
-    f.assert_reply(folded, "combined answer");
+    assert_eq!(
+        f.state().request(folded).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(
+        f.state().request(folded).unwrap().failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(f.state().request(folded).unwrap().pending_final.is_none());
+    assert!(f.state().request(folded).unwrap().uncertain_outcome);
     assert_eq!(f.state().request(next).unwrap().group, None);
     f.start(orch, "new", "new room");
     f.stop(orch, "new", "new answer", json!([]), json!([]));

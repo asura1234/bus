@@ -168,7 +168,7 @@ fn unconfirmed_steering_never_holds_the_captured_leads_answer() {
 }
 
 #[test]
-fn unconfirmed_steering_settles_under_working_status_without_duplicate_publication() {
+fn unconfirmed_steering_stays_uncertain_while_working_without_a_borrowed_answer() {
     let mut f = orchestrator();
     let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
     let first_unread = f.worker.state.room(f.room).unwrap().unread_count;
@@ -178,17 +178,22 @@ fn unconfirmed_steering_settles_under_working_status_without_duplicate_publicati
         .as_ref()
         .unwrap()
         .received_at_ms
-        + crate::messaging::model::STEERING_SETTLE_MS
+        + 5_000
         + 1;
     f.status(RuntimeStatus::Working);
     f.consume();
-    assert_eq!(f.reply(unknown).as_deref(), Some("Workers started."));
+    assert!(f.reply(unknown).is_none());
+    assert!(f.request(unknown).uncertain_outcome);
+    assert!(f.request(unknown).submission_notice().is_some());
     assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
     assert_eq!(
         f.worker.state.room(f.room).unwrap().unread_count,
         first_unread
     );
-    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(lead)
+    );
 }
 
 #[test]
@@ -291,4 +296,372 @@ fn recovering_a_correlation_anchor_preserves_its_completed_answer() {
     f.worker.save(state).unwrap();
     assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
     assert_eq!(f.request(unknown).phase, RequestPhase::Abandoned);
+}
+
+fn reopen(f: &mut Fixture) {
+    // Drop the previous worker's exclusive state lease before reopening it.
+    let swap = crate::utils::test_temp::unique_temp_path("bus-lostreply-reopen");
+    let old = std::mem::replace(
+        &mut f.worker,
+        Worker::open(swap.clone(), Box::new(Native(f.native.clone()))).unwrap(),
+    );
+    drop(old);
+    f.worker = Worker::open(f.dir.clone(), Box::new(Native(f.native.clone()))).unwrap();
+    std::fs::remove_dir_all(swap).unwrap();
+}
+
+#[test]
+fn identical_same_turn_stop_with_changed_shells_has_one_master_publication() {
+    // Adopt the reviewer's scratch callback sequence, including a coordinator
+    // reopen: changing the shell inventory changes the callback envelope.
+    for restart in [false, true] {
+        let mut f = orchestrator();
+        let lead = running(&mut f, "report the dispatch", "turn-1");
+        let answer = "Identical captured answer must appear once.";
+        stop(&f, "turn-1", answer, &[("work", "opaque-wrapper --async")]);
+        f.consume();
+        assert_eq!(f.reply(lead).as_deref(), Some(answer));
+        let unread = f.worker.state.room(f.room).unwrap().unread_count;
+        if restart {
+            reopen(&mut f);
+        }
+        stop(&f, "turn-1", answer, &[]);
+        f.consume();
+        assert_eq!(f.reply(lead).as_deref(), Some(answer));
+        assert_eq!(
+            f.worker
+                .state
+                .notices(f.room)
+                .filter(|n| n.text == answer)
+                .count(),
+            0,
+            "the completed request already published this answer; restart={restart}"
+        );
+        assert_eq!(f.worker.state.room(f.room).unwrap().unread_count, unread);
+    }
+}
+
+#[test]
+fn changed_same_turn_stop_during_steering_correlation_remains_a_visible_followup() {
+    // Adopt the reviewer's steering-followup probe, then pin immutability and
+    // replay behavior across another turn and coordinator reopen.
+    let mut f = orchestrator();
+    let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(lead)
+    );
+    assert!(!f.request(unknown).trusted_start_bound);
+    let unread = f.worker.state.room(f.room).unwrap().unread_count;
+    stop(&f, "turn-1", "Workers started.", &[]);
+    f.consume();
+    assert_eq!(f.worker.state.room(f.room).unwrap().unread_count, unread);
+    assert_eq!(f.worker.state.notices(f.room).count(), 0);
+    let followup = "All background tests passed.";
+    stop(&f, "turn-1", followup, &[]);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+    assert_eq!(
+        f.worker
+            .state
+            .notices(f.room)
+            .filter(|n| n.text == followup)
+            .count(),
+        1,
+        "changed captured Stop must remain visible while the completed lead anchors steering"
+    );
+    stop(&f, "turn-1", followup, &[("other", "opaque-wrapper")]);
+    f.consume();
+    f.started("turn-1", "also run checks");
+    f.consume();
+    assert_eq!(f.reply(unknown).as_deref(), Some("Workers started."));
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+    f.started("unrelated", "another question typed directly");
+    f.stopped("unrelated", "An unrelated answer.");
+    f.consume();
+    reopen(&mut f);
+    stop(&f, "turn-1", followup, &[("replay", "opaque-wrapper")]);
+    f.consume();
+    assert_eq!(
+        f.worker
+            .state
+            .notices(f.room)
+            .filter(|n| n.text == followup)
+            .count(),
+        1
+    );
+    assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+    assert_eq!(f.reply(unknown).as_deref(), Some("Workers started."));
+}
+
+#[test]
+fn identical_text_in_a_new_owned_turn_still_gets_its_own_reply() {
+    let mut f = orchestrator();
+    let lead = running(&mut f, "first question", "turn-1");
+    stop(&f, "turn-1", "Done.", &[("work", "opaque-wrapper")]);
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    let next = running(&mut f, "second question", "turn-2");
+    stop(&f, "turn-2", "Done.", &[]);
+    f.consume();
+    for id in [lead, next] {
+        assert_eq!(f.reply(id).as_deref(), Some("Done."));
+    }
+    assert_eq!(f.worker.state.room(f.room).unwrap().unread_count, 2);
+    assert_eq!(f.worker.state.notices(f.room).count(), 0);
+}
+
+#[test]
+fn a_foreign_turn_stop_during_correlation_cannot_publish_a_master_followup() {
+    let mut f = orchestrator();
+    let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
+    stop(
+        &f,
+        "foreign-turn",
+        "This does not answer the MASTER request.",
+        &[],
+    );
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+    assert!(f.reply(unknown).is_none());
+    assert_eq!(f.worker.state.notices(f.room).count(), 0);
+    assert_eq!(f.worker.state.room(f.room).unwrap().unread_count, 1);
+}
+
+#[test]
+fn a_textless_stop_with_a_request_started_shell_takes_the_wake_turns_answer() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
+    f.consume();
+    let lead = running(&mut f, "run the tests", "turn-1");
+    stop(&f, "turn-1", "", &[("tests", "cargo test")]);
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    f.started("turn-2", &notification("tests"));
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    f.stopped("turn-2", "All tests passed.");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("All tests passed."));
+}
+
+#[test]
+fn a_steering_member_that_starts_its_own_turn_after_the_lead_published_gets_that_turns_answer() {
+    let mut f = orchestrator();
+    let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
+    let first_unread = f.worker.state.room(f.room).unwrap().unread_count;
+    f.started("turn-2", "also run checks");
+    f.consume();
+    f.stopped("turn-2", "Checks ran.");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+    assert_eq!(f.reply(unknown).as_deref(), Some("Checks ran."));
+    assert_eq!(
+        f.worker.state.room(f.room).unwrap().unread_count,
+        first_unread + 1
+    );
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+}
+
+#[test]
+fn an_ended_unclaimed_steering_request_surfaces_uncertainty_after_reopening() {
+    let mut f = orchestrator();
+    let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
+    let first_unread = f.worker.state.room(f.room).unwrap().unread_count;
+    let dir = f.dir.clone();
+    let native = f.native.clone();
+    let worker = std::mem::replace(
+        &mut f.worker,
+        Worker::open(
+            crate::utils::test_temp::unique_temp_path("bus-anchor-swap"),
+            Box::new(Native(native.clone())),
+        )
+        .unwrap(),
+    );
+    let swap = f.worker.data_dir.clone();
+    drop(worker);
+    f.worker = Worker::open(dir, Box::new(Native(native))).unwrap();
+    let _ = std::fs::remove_dir_all(swap);
+    assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+    f.now = f
+        .request(lead)
+        .pending_final
+        .as_ref()
+        .unwrap()
+        .received_at_ms
+        + 5_000
+        + 1;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert!(f.reply(unknown).is_none());
+    assert_eq!(f.request(unknown).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(unknown).failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(f.request(unknown).uncertain_outcome);
+    assert!(f.request(unknown).submission_notice().is_some());
+    assert_eq!(
+        f.worker.state.room(f.room).unwrap().unread_count,
+        first_unread
+    );
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+}
+
+#[test]
+fn a_steered_turn_whose_submit_hook_trails_the_window_keeps_its_own_answer_while_working() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "write the parser", "turn-1");
+    let correction = f.send("also add tests", false);
+    f.deliver();
+    assert_eq!(f.request(correction).group, Some(lead));
+    f.stopped("turn-1", "parser written");
+    f.consume();
+    f.now = f
+        .request(lead)
+        .pending_final
+        .as_ref()
+        .unwrap()
+        .received_at_ms
+        + 5_000
+        + 1;
+    f.status(RuntimeStatus::Working);
+    f.consume();
+    f.started("turn-2", "also add tests");
+    f.stopped("turn-2", "parser and tests written");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("parser written"));
+    assert_eq!(
+        f.reply(correction).as_deref(),
+        Some("parser and tests written")
+    );
+}
+
+#[test]
+fn an_idle_poll_never_lends_the_previous_answer_to_unclaimed_steering() {
+    let mut f = orchestrator();
+    let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    let status = f
+        .worker
+        .control_message_at(f.request(unknown).prompt.id, f.now)
+        .unwrap();
+    assert_eq!(status["complete"], true, "{status}");
+    assert_eq!(status["requests"][0]["stage"], "abandoned", "{status}");
+    assert_eq!(status["requests"][0]["reason"], "submission_unconfirmed");
+    assert_eq!(status["requests"][0]["uncertain_outcome"], true);
+    assert!(status["requests"][0]["reply"].is_null());
+    assert!(f.request(unknown).submission_notice().is_some());
+    assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+    assert_eq!(f.worker.state.notices(f.room).count(), 0);
+}
+
+#[test]
+fn a_recorded_turn_claims_steering_without_borrowing_another_turns_answer() {
+    use crate::messaging::model::RecordedTurnEnd;
+    for same_turn in [false, true] {
+        let mut f = orchestrator();
+        let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
+        f.status(RuntimeStatus::Idle);
+        let mut state = f.worker.state.clone();
+        assert!(state.settle_unclaimed_steering(f.agent, f.now, |request| {
+            let proves = if same_turn {
+                request.id == lead
+            } else {
+                request.id == unknown
+            };
+            proves.then(|| RecordedTurnEnd::Final {
+                turn_id: if same_turn { "turn-1" } else { "turn-2" }.into(),
+                text: if same_turn {
+                    "Workers started."
+                } else {
+                    "Checks ran."
+                }
+                .into(),
+                prompts: vec!["start the workers".into(), "also run checks".into()],
+            })
+        }));
+        f.worker.save(state).unwrap();
+        assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+        assert_eq!(
+            f.reply(unknown).as_deref(),
+            Some(if same_turn {
+                "Workers started."
+            } else {
+                "Checks ran."
+            })
+        );
+        assert!(!f.request(unknown).uncertain_outcome);
+        assert!(f.request(unknown).trusted_start_bound);
+        assert_eq!(
+            f.worker.state.room(f.room).unwrap().unread_count,
+            if same_turn { 1 } else { 2 }
+        );
+        assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+    }
+}
+
+#[test]
+fn a_textless_stop_without_owned_work_does_not_invent_an_empty_answer() {
+    let mut f = orchestrator();
+    let lead = running(&mut f, "answer the question", "turn-1");
+    stop(&f, "turn-1", "", &[]);
+    f.consume();
+    assert!(f.reply(lead).is_none());
+    f.status(RuntimeStatus::Idle);
+    f.now = f.request(lead).turn_ended_at_ms.unwrap() + crate::messaging::model::TURN_SETTLE_MS + 1;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+}
+
+#[test]
+fn a_changed_late_master_final_is_visible_while_new_work_awaits_its_answer() {
+    for next_is_bound in [true, false] {
+        let mut f = orchestrator();
+        let lead = running(&mut f, "start work", "turn-1");
+        stop(
+            &f,
+            "turn-1",
+            "Workers started.",
+            &[("work", "opaque-wrapper")],
+        );
+        f.consume();
+        f.status(RuntimeStatus::Idle);
+        let next = f.send("new question", false);
+        f.deliver();
+        if next_is_bound {
+            f.started("turn-2", "new question");
+            f.consume();
+        }
+        stop(&f, "turn-1", "The background tests passed.", &[]);
+        f.consume();
+        assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+        assert!(f.reply(next).is_none());
+        assert_eq!(
+            f.worker.state.notices(f.room).filter(|n| n.text == "The background tests passed.").count(),
+            1,
+            "new work must not hide the completed turn's changed result; next_is_bound={next_is_bound}"
+        );
+        if !next_is_bound {
+            f.started("turn-2", "new question");
+        }
+        stop(&f, "turn-2", "New answer.", &[]);
+        f.consume();
+        assert_eq!(f.reply(next).as_deref(), Some("New answer."));
+        assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
+    }
 }

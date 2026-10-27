@@ -163,11 +163,7 @@ fn failed_provider_turn_closes_its_group_and_releases_the_queue() {
 #[test]
 fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
     for provider in [Provider::Cursor, Provider::ClaudeCode] {
-        let expected = if provider == Provider::ClaudeCode {
-            RequestPhase::Completed
-        } else {
-            RequestPhase::Abandoned
-        };
+        let expected = RequestPhase::Abandoned;
         let mut fixture = Fixture::new(provider);
         let lead = running(&mut fixture, "review this change", "turn-1");
         let next = fixture.send("review the next change", true);
@@ -180,25 +176,19 @@ fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
             fixture.record(json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn-1","text":"Checking.Ready","transcript_path":transcript}));
             fixture.record(json!({"hook_event_name":"stop","conversation_id":"session","generation_id":"turn-1","status":"completed"}));
         } else {
-            // A completed Claude hook with no assistant text is an empty final.
+            // A textless Stop ends the turn without inventing an answer.
             fixture.record(
                 json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1"}),
             );
         }
         fixture.consume();
         fixture.status(RuntimeStatus::Idle);
-        assert_eq!(
-            fixture.request(lead).phase,
-            if provider == Provider::ClaudeCode {
-                expected
-            } else {
-                RequestPhase::Active
-            }
-        );
-        fixture.now += CALLBACK_GRACE_MS;
+        assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+        fixture.now = fixture.request(lead).turn_ended_at_ms.unwrap() + CALLBACK_GRACE_MS + 1;
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
         assert_eq!(fixture.request(lead).phase, expected, "{provider:?}");
+
         if provider == Provider::ClaudeCode {
             assert_eq!(fixture.request(lead).reply().unwrap().text, "");
             assert!(fixture.request(lead).failure_reason.is_none());
@@ -649,29 +639,25 @@ fn an_ended_turn_whose_agent_reattaches_within_the_window_settles_as_idle() {
     );
 }
 
-/// A reply held for the steering settle window still completes its group
-/// when the agent goes unavailable instead of Idle.
+/// Going unavailable cannot prove which turn accepted unclaimed steering.
 #[test]
-fn a_held_group_reply_completes_when_the_agent_goes_unavailable() {
+fn unavailable_unclaimed_steering_surfaces_uncertainty_without_borrowing_a_reply() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "write the parser", "turn-1");
     let correction = fixture.send("also add tests", false);
     fixture.deliver();
-    fixture.stopped("turn-1", "parser and tests written");
+    fixture.stopped("turn-1", "parser written");
     fixture.consume();
     fixture.status(RuntimeStatus::Unavailable);
-    assert_eq!(fixture.request(correction).phase, RequestPhase::Active);
-    fixture.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
-    fixture.status(RuntimeStatus::Unavailable);
     fixture.consume();
-    for id in [lead, correction] {
-        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
-        assert_eq!(
-            fixture.reply(id).as_deref(),
-            Some("parser and tests written")
-        );
-    }
+    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
+    assert!(fixture.reply(correction).is_none());
+    assert_eq!(fixture.request(correction).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture.request(correction).failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(fixture.request(correction).submission_notice().is_some());
 }
 
 fn answered_with_a_running_shell(fixture: &mut Fixture) -> RequestId {
@@ -816,11 +802,10 @@ fn a_message_answered_in_its_own_turn_keeps_its_reply_when_an_earlier_shell_wake
     );
 }
 
-/// Two messages typed into a shell-held turn, where Claude starts a turn for
-/// the first and folds the second into it without a prompt of its own: the
-/// new turn answers both, and the held request keeps its own interim.
+/// A second input without turn proof cannot borrow the new turn's answer;
+/// the original shell-starting request keeps its already captured answer.
 #[test]
-fn messages_folded_into_a_new_turn_after_a_held_reply_share_that_turns_reply() {
+fn an_unclaimed_input_after_an_answered_turn_cannot_borrow_the_next_answer() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = answered_with_a_running_shell(&mut fixture);
     let first = fixture.send("check the docs pr", false);
@@ -838,21 +823,23 @@ fn messages_folded_into_a_new_turn_after_a_held_reply_share_that_turns_reply() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    fixture.now =
-        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
+    fixture.now = crate::messaging::storage::io::now_ms() + 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(
         fixture.reply(lead).as_deref(),
         Some("Waiting on the build.")
     );
-    for id in [first, folded] {
-        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
-        assert_eq!(
-            fixture.reply(id).as_deref(),
-            Some("Docs pr and changelog are fine.")
-        );
-    }
+    assert_eq!(
+        fixture.reply(first).as_deref(),
+        Some("Docs pr and changelog are fine.")
+    );
+    assert!(fixture.reply(folded).is_none());
+    assert_eq!(fixture.request(folded).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture.request(folded).failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
 }
 
 /// An older request's shell can wake while the new request still owns a

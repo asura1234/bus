@@ -616,10 +616,6 @@ impl Request {
     }
 }
 
-/// How long a steered group waits after its final reply for the submit hook
-/// of typed input that the provider may still run as a turn of its own.
-pub(crate) const STEERING_SETTLE_MS: u64 = 5_000;
-
 /// How long an agent stays idle after finishing a turn of its own before Bus
 /// gives up on a request it typed but never saw start. A queued prompt starts
 /// within milliseconds of the turn before it ending.

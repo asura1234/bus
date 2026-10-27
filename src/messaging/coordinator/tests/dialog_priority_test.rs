@@ -108,7 +108,7 @@ fn blocked_dialog_notice_bypasses_cross_room_head_during_active_or_background_tu
         f.stopped("turn-1", "notice handled");
         f.consume();
         f.status(RuntimeStatus::Idle);
-        f.now += crate::messaging::model::STEERING_SETTLE_MS + 1;
+        f.now += 5_000 + 1;
         f.consume();
         assert_eq!(f.reply(notice).as_deref(), Some("notice handled"));
         assert_eq!(f.reply(lead).as_deref(), Some("notice handled"));

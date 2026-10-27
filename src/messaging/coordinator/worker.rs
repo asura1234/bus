@@ -616,6 +616,7 @@ impl Worker {
             let rollout = self.codex_rollouts.get(&agent);
             let recorded_end =
                 |request: &crate::messaging::model::Request| recorded_codex_end(rollout?, request);
+            changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
             if let Some(lead) = state.settle_ended_request(agent, observed_at_ms, recorded_end) {
                 changed = true;
                 // Use the previous group: transcript recovery can detach an
