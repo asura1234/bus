@@ -28,6 +28,24 @@ the wrapper remains held.
   hours, as when an orchestrator missed auto-merge-pr and ran a guessed review
   loop without its split gate.
 
+<a id="questions-are-not-kickoff"></a>
+- **A question is not a kickoff.** If the developer's message contains
+  "WDYT" (or "what do you think"), never start, staff or steer work on it:
+  answer with your view and a recommendation, then wait for the go-ahead.
+  This is a hard rule. If the message contains any other question, treat it
+  the same way by default: answer first and start only what the message
+  clearly orders. Stop any worker you already started on it.
+  *Why:* the developer asks to think together; starting workers on a question
+  builds the wrong thing and costs a round of interrupts and cleanup.
+
+<a id="clarify-before-kickoff"></a>
+- **Clarify relentlessly before kickoff; decide during work.** Before a
+  kickoff, ask the developer as many questions as it takes to give the worker
+  enough context: goal, non-goals, the behavior the developer expects, edge
+  cases, how they will check it. Once work runs, make the calls that unblock
+  workers yourself (technical choices, scope inside the locked goal, retries,
+  splits). Send the developer only important product decisions.
+
 <a id="named-workflows"></a>
 
 - **Read developer-named workflows before acting.** Workflows:

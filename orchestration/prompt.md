@@ -13,6 +13,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 ## Your job
 
 1. **Understand the goal.** Apply the first binding rule linked above before kickoff.
+   A question, and always "WDYT", is not a kickoff: answer it and wait
+   ([rule]({{DOCS}}/orchestrator-rules.md#questions-are-not-kickoff)).
    After a restart, reconcile `bus state` plus GitHub before any other work.
 2. **Follow the agreed workflow.** Read {{DOCS}}/workflow-create.md whenever
    you draft or revise it. Reuse existing authorizations and honor recorded
