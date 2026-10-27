@@ -348,6 +348,23 @@ class StackTest(ScenarioTest):
         # The restacked child carries only its own commit on the squashed base.
         self.assertEqual(r.git("rev-list", "--count", "origin/master..split/c"), "1")
 
+    def test_restack_ignores_a_local_branch_named_like_the_origin_base(self) -> None:
+        r = self.repo
+        path = self.build_train()
+        r.run("record", path, "--part", "a", "--pr", "11")
+        r.git("switch", "-q", "--detach", r.base)
+        r.git("merge", "-q", "--squash", "split/a")
+        r.git("commit", "-q", "-m", "feat: part a (#11)")
+        landed = r.git("rev-parse", "HEAD")
+        r.git("update-ref", "refs/remotes/origin/master", landed)
+        r.git("branch", "origin/master", r.base)
+        r.run("record", path, "--part", "a", "--landed")
+        steps = json.loads(r.run("restack", path))["steps"]
+        self.assertEqual(len(steps), 1)
+        r.git(*steps[0]["commands"][0].split()[1:])
+        self.assertEqual(r.git("rev-parse", "split/c^"), landed)
+        self.assertIn("--onto refs/remotes/origin/master ", steps[0]["commands"][0])
+
     def test_multi_parent_part_sits_on_a_merge_of_its_parents(self) -> None:
         r = self.repo
         path = self.write_plan(self.mixed())
@@ -430,7 +447,7 @@ class StackTest(ScenarioTest):
         step = steps["d"]
         # b still sits on the old base, so d must integrate the base that holds a.
         self.assertEqual(step["onto_ref"], "merge(origin/master, split/b)")
-        self.assertEqual(step["commands"][0], "git switch --detach origin/master")
+        self.assertEqual(step["commands"][0], "git switch --detach refs/remotes/origin/master")
         self.assertEqual(
             step["commands"][1], 'git merge --no-ff -m "chore: integrate master, b for d" refs/heads/split/b'
         )

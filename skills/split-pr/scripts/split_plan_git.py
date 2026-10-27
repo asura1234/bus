@@ -25,8 +25,12 @@ def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     return result.stdout.strip()
 
 
+def origin_ref(name: str) -> str:
+    return "refs/remotes/" + name if name.startswith("origin/") else name
+
+
 def rev(repo: Path, name: str) -> str:
-    return git(repo, "rev-parse", "--verify", "--quiet", f"{name}^{{commit}}")
+    return git(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{origin_ref(name)}^{{commit}}")
 
 
 def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
