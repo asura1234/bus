@@ -1,0 +1,2 @@
+gate_command = "just ci"
+require_exact_head_gate = true

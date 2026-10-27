@@ -130,6 +130,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
             "skills/split-pr/references/split-plan-format.md",
+            "skills/worktree-new/references/repo-profile-format.md",
         }
         actual = {
             path.relative_to(REPO).as_posix()
