@@ -2,6 +2,26 @@
 use super::super::spool::{field, optional_text, Parsed};
 use serde_json::Value;
 
+/// Codex attaches an image only when its quoted path is pasted on its own.
+/// Keep every other line verbatim for a separate text paste and hook matching.
+pub(crate) fn image_paste_parts(text: &str) -> (Vec<&str>, String) {
+    let mut images = Vec::new();
+    let remaining = text
+        .split('\n')
+        .filter(|line| {
+            let path = line.strip_suffix('\r').unwrap_or(line);
+            if super::super::claude_code::hooks::claude_lifted_images(path).0 == 1 {
+                images.push(path);
+                false
+            } else {
+                true
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (images, remaining)
+}
+
 pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
     let event = field(value, "hook_event_name")?;
     // Title/memory sessions inherit hooks but have no interactive transcript.

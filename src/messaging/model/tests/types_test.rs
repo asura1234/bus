@@ -449,6 +449,25 @@ fn claude_image_placeholder_matching_preserves_internal_and_non_ascii_whitespace
 }
 
 #[test]
+fn codex_image_placeholder_matching_preserves_correlation_and_body_blank_lines() {
+    let command = "[Bus message 3; answer with bus send --reply-to 3 --as 2 --text 'YOUR ANSWER']";
+    let typed = format!("{command}\nFirst \t\n\n  Last\n\"/tmp/a.png\"");
+    assert!(payload_matches(
+        &format!("[Image #1]{command}\nFirst \t\n\n  Last"),
+        &typed
+    ));
+    assert!(!payload_matches(
+        &format!("[Image #1]{command}\nFirst\n\n  Last"),
+        &typed
+    ));
+    assert!(!payload_matches(
+        &format!("[Image #1][Image #2]{command}\nFirst \t\n\n  Last"),
+        &typed
+    ));
+    assert!(!payload_matches("[Image #1]First \t\n\n  Last", &typed));
+}
+
+#[test]
 fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whitespace() {
     let (mut state, room, _, agent) = state_with_room_and_agents();
     state.attach_file(room, "/tmp/a.png".into()).unwrap();

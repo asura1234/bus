@@ -463,8 +463,25 @@ fn queue_prompt_input(
     draft_directory: Option<std::path::PathBuf>,
 ) -> std::io::Result<InputCompletion> {
     use crate::agents::AgentKind;
-    let (encoded, enter) =
+    let (mut encoded, enter) =
         crate::server::api::input_encoding::encode_api_submission_parts(runtime, &text);
+    if kind == AgentKind::Codex && runtime.bracketed_paste_enabled() {
+        let (images, remaining) = crate::agents::providers::codex::hooks::image_paste_parts(&text);
+        if !images.is_empty() {
+            // Each image must arrive as a standalone paste event. Keep all
+            // parts inside this submission's ownership/cancellation boundary;
+            // the inspector still owns the complete logical prompt and Enter.
+            encoded.clear();
+            for part in images
+                .into_iter()
+                .chain((!remaining.is_empty()).then_some(remaining.as_str()))
+            {
+                encoded.extend(crate::server::api::input_encoding::encode_api_text(
+                    runtime, part,
+                ));
+            }
+        }
+    }
     if !observe
         || !matches!(
             kind,

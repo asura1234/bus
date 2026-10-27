@@ -859,10 +859,10 @@ async fn claude_image_chip_beside_a_collapsed_paste_is_submitted_and_binds_its_r
     f.assert_reply(request, "templates reviewed");
 }
 
-/// Correlation text makes this a text-and-image-path paste. Codex's native
-/// image-only chip path remains covered by the native submission tests.
+/// An image needs its own native paste even when the Bus message also carries
+/// correlation text. Both must reach the same submitted provider message.
 #[tokio::test]
-async fn codex_image_message_with_correlation_text_is_submitted_and_binds_its_reply() {
+async fn codex_image_and_correlation_text_are_submitted_together_and_bind_the_reply() {
     let mut f = Delivery::new(&[Provider::Codex], true);
     let agent = f.agents[0];
     let image = f.dir.join("attachment.png");
@@ -872,13 +872,23 @@ async fn codex_image_message_with_correlation_text_is_submitted_and_binds_its_re
         json!({"room":"master","to":[agent.0.to_string()],"text":"","files":[image]}),
     );
     let request = f.request_for_message(sent["message_id"].as_u64().unwrap());
+    let text = f.correlated_text(request);
+    let expected = format!("[Image #1]{}", text.trim_end_matches('\n'));
+    f.captured_composer(
+        agent,
+        &include_str!("../api/agents/tests/fixtures/codex_image_only_paste.txt")
+            .replace("[Image #1]", &expected),
+    );
     f.tick();
     assert_eq!(
         f.typed(agent).len(),
         1,
-        "the correlated image-path draft must receive Enter"
+        "the correlated image attachment draft must receive Enter"
     );
-    let expected = format!("{}\"{}\"", f.correlated_text(request), image.display());
+    assert_eq!(
+        f.attached_images(agent),
+        [vec![image.to_string_lossy().into_owned()]]
+    );
     assert_eq!(f.typed(agent), [expected.as_str()]);
     f.start(agent, "image", &expected);
     assert!(f.state().request(request).unwrap().trusted_start_bound);

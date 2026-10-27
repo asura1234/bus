@@ -31,7 +31,9 @@ struct Terminal {
     provider: Provider,
     input: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     draft: String,
+    images: Vec<String>,
     submitted: Vec<String>,
+    submitted_images: Vec<Vec<String>>,
     captured_screen: Option<String>,
     clock: crate::terminal::runtime::SubmissionClock,
 }
@@ -112,7 +114,9 @@ impl NativeServer {
                 provider,
                 input,
                 draft: String::new(),
+                images: Vec::new(),
                 submitted: Vec::new(),
+                submitted_images: Vec::new(),
                 captured_screen: None,
                 clock,
             },
@@ -129,15 +133,36 @@ impl NativeServer {
         for terminal in self.terminals.values_mut() {
             while let Ok(bytes) = terminal.input.try_recv() {
                 let text = std::str::from_utf8(&bytes).unwrap();
-                if let Some(paste) = text
-                    .strip_prefix("\x1b[200~")
-                    .and_then(|s| s.strip_suffix("\x1b[201~"))
-                {
-                    terminal.draft = paste.into();
+                if text.starts_with("\x1b[200~") {
+                    let mut remaining = text;
+                    while let Some(paste) = remaining.strip_prefix("\x1b[200~") {
+                        let (paste, rest) = paste.split_once("\x1b[201~").unwrap();
+                        // Codex attaches only an image pasted on its own. This
+                        // oracle reads the image, independently of our matcher.
+                        let image = paste.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
+                        if let Some(image) = image.filter(|path| {
+                            terminal.provider == Provider::Codex
+                                && image::image_dimensions(path).is_ok()
+                        }) {
+                            terminal.images.push(image.to_owned());
+                        } else {
+                            terminal.draft.push_str(paste);
+                        }
+                        remaining = rest;
+                    }
+                    assert!(remaining.is_empty(), "unexpected paste suffix");
                 } else if text == "\r" {
-                    terminal.submitted.push(std::mem::take(&mut terminal.draft));
+                    let images = std::mem::take(&mut terminal.images);
+                    let chips = (1..=images.len())
+                        .map(|n| format!("[Image #{n}]"))
+                        .collect::<String>();
+                    terminal
+                        .submitted
+                        .push(format!("{chips}{}", std::mem::take(&mut terminal.draft)));
+                    terminal.submitted_images.push(images);
                 } else if text == "\x0b" {
                     terminal.draft.clear();
+                    terminal.images.clear();
                 } else {
                     assert_eq!(text, "\x01", "unexpected terminal input");
                 }
@@ -146,11 +171,14 @@ impl NativeServer {
                 let display = if let Some(captured) = terminal
                     .captured_screen
                     .as_ref()
-                    .filter(|_| !terminal.draft.is_empty())
+                    .filter(|_| !terminal.draft.is_empty() || !terminal.images.is_empty())
                 {
                     format!("\x1b[2J\x1b[H{captured}")
                 } else {
-                    screen(terminal.provider, &terminal.draft)
+                    let chips = (1..=terminal.images.len())
+                        .map(|n| format!("[Image #{n}] "))
+                        .collect::<String>();
+                    screen(terminal.provider, &format!("{chips}{}", terminal.draft))
                 };
                 self.app
                     .state
@@ -611,6 +639,11 @@ impl Delivery {
             .iter()
             .map(|text| super::tests::support::test_prompt_content(text))
             .collect()
+    }
+    pub(crate) fn attached_images(&self, agent: AgentId) -> Vec<Vec<String>> {
+        self.native.lock().unwrap().terminals[&agent]
+            .submitted_images
+            .clone()
     }
     pub(crate) fn correlated_text(&self, request: RequestId) -> String {
         let request = self.state().request(request).unwrap();

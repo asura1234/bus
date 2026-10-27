@@ -36,10 +36,10 @@ pub(crate) use history::{ARCHIVE_AFTER_MS, HISTORY_RETENTION_MS};
 #[cfg(test)]
 pub(crate) use idle_agents::MIN_IDLE_FOR_ALERT_MS;
 pub(crate) use interrupts::INTERRUPTED;
+#[cfg(test)]
+use payload::payload_matches;
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::{fingerprint_digest, BusState};
-#[cfg(test)]
-use types::payload_matches;
 pub(crate) use {
     crate::messaging::model::types::RoomAgent,
     types::{

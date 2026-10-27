@@ -1,4 +1,5 @@
 //! Persisted DTOs, identities and payload representation.
+use super::payload::payload_matches;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -648,32 +649,6 @@ pub(super) fn clock(at_ms: u64) -> String {
         .and_then(crate::platform::local_datetime_at)
         .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
         .unwrap_or_else(|| "--:--".into())
-}
-
-/// Whether a provider's submit hook reports the prompt Bus typed as `typed`:
-/// the typed text itself, or Claude Code's shape after it lifts quoted image
-/// paths into attachments (see `claude_lifted_images`). Nothing else matches.
-pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
-    use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_lifted_images,
-    };
-    let payload = normalized_payload(payload);
-    let typed = normalized_payload(typed);
-    if payload == typed {
-        return true;
-    }
-    let (length, images) = claude_image_placeholders(&payload);
-    let (lifted, remaining) = claude_lifted_images(&typed);
-    let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
-    images > 0 && images == lifted && &payload[length..] == remaining
-}
-
-fn normalized_payload(value: &str) -> String {
-    value
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .trim_end_matches(|character: char| character.is_ascii_whitespace())
-        .to_owned()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

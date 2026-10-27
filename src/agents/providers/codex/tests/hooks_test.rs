@@ -7,6 +7,37 @@ use crate::agents::providers::{
 use serde_json::{json, Value};
 use std::path::Path;
 
+#[test]
+fn image_paste_parts_preserve_text_and_only_extract_exact_image_lines() {
+    use super::hooks::image_paste_parts;
+    let text =
+        "worker:\nreply with bus send --reply-to 17\n\nbody \t\n\"/tmp/a.PNG\"\n\"/tmp/b.webp\"";
+    assert_eq!(
+        image_paste_parts(text),
+        (
+            vec!["\"/tmp/a.PNG\"", "\"/tmp/b.webp\""],
+            "worker:\nreply with bus send --reply-to 17\n\nbody \t".to_owned()
+        )
+    );
+    for text in [
+        "",
+        "body\n\n",
+        "\"/tmp/a.diff\"",
+        "\"/tmp/a.png\" \"/tmp/b.png\"",
+        "body \"/tmp/a.png\"",
+    ] {
+        assert_eq!(image_paste_parts(text), (Vec::new(), text.to_owned()));
+    }
+    assert_eq!(
+        image_paste_parts("\"/tmp/a.png\""),
+        (vec!["\"/tmp/a.png\""], String::new())
+    );
+    assert_eq!(
+        image_paste_parts("body\r\n\r\n\"/tmp/a.png\"\r\nlast\r\n"),
+        (vec!["\"/tmp/a.png\""], "body\r\n\r\nlast\r\n".to_owned())
+    );
+}
+
 fn hook(event: &str) -> Value {
     json!({"hook_event_name":event,"session_id":"s","turn_id":"t","transcript_path":"/tmp/interactive.jsonl","prompt":"prompt","last_assistant_message":"reply"})
 }

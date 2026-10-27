@@ -69,8 +69,12 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
     };
-    if normalize(&body) == normalize(expected)
-        || collapsed_paste(kind, &body, expected)
+    let codex_images = kind == AgentKind::Codex
+        && !crate::agents::providers::codex::hooks::image_paste_parts(expected)
+            .0
+            .is_empty();
+    if !codex_images
+        && (normalize(&body) == normalize(expected) || collapsed_paste(kind, &body, expected))
         || kind == AgentKind::Claude && lifted_images(&body, expected, normalize)
         || kind == AgentKind::Codex && codex_image_attachment(&body, expected)
     {
@@ -125,15 +129,21 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
             || collapsed_paste(AgentKind::Claude, rest, &remaining))
 }
 
-/// Codex (0.163.0) attaches a paste that is only one quoted image path and
-/// shows one `[Image #N]` chip; anything with text or a second path stays text.
+/// Codex attaches each dedicated image paste before the text paste. Own the
+/// composed draft only with the exact image count and all remaining text.
 fn codex_image_attachment(body: &str, expected: &str) -> bool {
-    use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_lifted_images,
+    let (images, rest) = image_chips(body);
+    let (expected_images, remaining) =
+        crate::agents::providers::codex::hooks::image_paste_parts(expected);
+    let normalize = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
     };
-    !expected.contains(['\n', '\r'])
-        && claude_image_placeholders(body) == (body.len(), 1)
-        && claude_lifted_images(expected) == (1, String::new())
+    images > 0
+        && images == expected_images.len()
+        && (normalize(rest) == normalize(&remaining)
+            || collapsed_paste(AgentKind::Codex, rest.trim_start(), &remaining))
 }
 
 /// The leading `[Image #N]` chips of a Claude composer and the text after them.

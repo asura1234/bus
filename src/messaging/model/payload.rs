@@ -137,3 +137,35 @@ fn identity_only_line(first: &str, name: &str, id: u64) -> bool {
                     .any(|ending| first.eq_ignore_ascii_case(&format!("{identity}{ending}")))
             })
 }
+
+/// Whether a provider's submit hook reports the prompt Bus typed as `typed`:
+/// the typed text itself, or image chips with the remaining text. Claude drops
+/// blank lines while lifting images; Codex's separate text paste preserves them.
+pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
+    use crate::agents::providers::claude_code::hooks::{
+        claude_image_placeholders, claude_lifted_images,
+    };
+    let payload = normalized_payload(payload);
+    let typed = normalized_payload(typed);
+    if payload == typed {
+        return true;
+    }
+    let (length, images) = claude_image_placeholders(&payload);
+    let (lifted, remaining) = claude_lifted_images(&typed);
+    let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
+    let (codex_images, codex_text) =
+        crate::agents::providers::codex::hooks::image_paste_parts(&typed);
+    let codex_text = normalized_payload(&codex_text);
+    let actual = &payload[length..];
+    images > 0
+        && (actual == remaining && images == lifted
+            || images == codex_images.len() && actual == codex_text.as_str())
+}
+
+fn normalized_payload(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches(|character: char| character.is_ascii_whitespace())
+        .to_owned()
+}
