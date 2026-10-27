@@ -7,6 +7,9 @@ const CONFIRMATION_GRACE: Duration = Duration::from_secs(2);
 /// Minimum withdrawal allowance and maximum interval without observed progress.
 pub(crate) const WITHDRAW_GRACE: Duration = Duration::from_secs(1);
 pub(crate) const CLEAR_KEY_DELAY: Duration = Duration::from_millis(25);
+/// Three bounded external-editor handoffs (capture, restore, verification).
+/// Waiting for developer typing/composer availability never uses this budget.
+pub(crate) const DRAFT_TRANSFER_BUDGET: Duration = Duration::from_secs(6);
 /// Allow response delivery and scheduling beyond the native writer bound.
 /// Dispatch consumes the native budget, measured from socket receipt.
 pub(crate) const RPC_MARGIN: Duration = Duration::from_secs(1);
@@ -66,5 +69,5 @@ pub(crate) fn method_budget(method: &Method) -> Option<Duration> {
         ),
         _ => return None,
     };
-    Some(maximum_budget(delay, text))
+    Some(maximum_budget(delay, text) + DRAFT_TRANSFER_BUDGET)
 }

@@ -13,6 +13,7 @@
 mod background;
 mod dialogs;
 mod directives;
+mod draft;
 mod input;
 mod question;
 mod resume;
@@ -140,6 +141,10 @@ struct FakeAgent {
     /// Bytes of an unfinished input sequence.
     pending: Vec<u8>,
     draft: String,
+    /// Native paste chips keep the full payload even though it is collapsed.
+    collapsed_paste: bool,
+    /// Claude's Ctrl+S saves one complete draft, including opaque paste data.
+    stashed: Option<(String, bool)>,
     /// While a live turn runs: when it started and its spinner frame.
     working: Option<(Instant, usize)>,
     /// Background shells `fake:shell` started, listed on every Claude `Stop`.
@@ -170,6 +175,8 @@ impl FakeAgent {
             input: None,
             pending: Vec::new(),
             draft: String::new(),
+            collapsed_paste: false,
+            stashed: None,
             working: None,
             shells: Vec::new(),
             wake: None,
@@ -267,15 +274,18 @@ impl FakeAgent {
 
     /// Redraws the prompt in place, under the working line while a turn runs.
     fn redraw(&self) {
-        let (shown, _) = self.lift(&self.draft);
+        let shown = self.shown_draft();
         let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
-        let frame = match self.working {
+        let mut frame = match self.working {
             Some((started, frame)) => {
                 let line = working_line(&self.provider, frame, started.elapsed().as_secs());
                 working_block(&line, &shown, &self.provider, true, cols)
             }
             None => prompt_box(&shown, &self.provider, cols),
         };
+        if self.stashed.is_some() && !self.live_turn() {
+            frame = frame.replace(" · fake claude", " · fake claude · › stashed");
+        }
         let mut out = std::io::stdout();
         let _ = write!(out, "{frame}");
         let _ = out.flush();
@@ -285,15 +295,33 @@ impl FakeAgent {
     fn apply(&mut self, input: Input) -> Option<Typed> {
         match input {
             Input::Text(text) => self.draft.push_str(&text),
+            Input::Paste(text) => {
+                self.draft.push_str(&text);
+                self.collapsed_paste = true;
+            }
             // Nothing to erase: nothing to redraw.
             Input::Backspace => {
                 self.draft.pop()?;
             }
-            Input::KillLine => kill_line(&mut self.draft),
+            Input::KillLine => {
+                if self.collapsed_paste {
+                    self.draft.clear();
+                } else {
+                    kill_line(&mut self.draft);
+                }
+            }
+            Input::Stash if !self.live_turn() => self.stash(),
+            Input::Editor if self.live_turn() => self.edit_draft(),
+            Input::Stash | Input::Editor => return None,
             Input::Enter if !self.draft.trim().is_empty() => {
                 let draft = std::mem::take(&mut self.draft);
+                self.collapsed_paste = false;
                 let (prompt, images) = self.lift(&draft);
                 self.images += images;
+                if let Some((draft, collapsed)) = self.stashed.take() {
+                    self.draft = draft;
+                    self.collapsed_paste = collapsed;
+                }
                 return Some(Typed::Submit(prompt));
             }
             Input::Enter => return None,
@@ -303,6 +331,9 @@ impl FakeAgent {
                 return Some(Typed::Stop)
             }
             Input::Interrupt => return Some(Typed::Exit),
+        }
+        if self.draft.is_empty() {
+            self.collapsed_paste = false;
         }
         self.redraw();
         None
@@ -378,7 +409,11 @@ impl FakeAgent {
             self.draw_prompt();
             return None;
         }
-        let reply = directives::reply(&prompts.join("\n"));
+        let reply = if prompts.len() == 1 && prompt.contains("fake:draft-bytes") {
+            format!("fake draft bytes: {}", json!(prompt))
+        } else {
+            directives::reply(&prompts.join("\n"))
+        };
         let bullet = if self.codex() { '•' } else { '⏺' };
         let _ = write!(out, "{bullet} {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();

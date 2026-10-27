@@ -1,5 +1,7 @@
 //! Observe the composer between writes; retry only Enter for the owned draft.
 mod diagnostics;
+mod preservation;
+pub(crate) use preservation::DraftPreservation;
 
 use super::submission_clock::SubmissionClock;
 use super::{io::PaneRuntimeIo, TerminalRuntime};
@@ -34,10 +36,15 @@ mod tests;
 pub(crate) enum PromptNotShown {
     NotSubmitted,
     InputOccupied,
+    ComposerBusy,
 }
 
 impl std::fmt::Display for PromptNotShown {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if matches!(self, Self::ComposerBusy) {
+            return formatter
+                .write_str("Waiting for the agent's composer; existing input is preserved");
+        }
         formatter.write_str(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE)?;
         if matches!(self, Self::InputOccupied) {
             formatter.write_str(". Existing input was preserved; inspect the agent's composer and resolve its draft before retrying")?;
@@ -49,6 +56,12 @@ impl std::fmt::Display for PromptNotShown {
 impl std::error::Error for PromptNotShown {}
 
 impl PromptNotShown {
+    pub(crate) fn composer_busy(error: &io::Error) -> bool {
+        error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<Self>())
+            .is_some_and(|error| matches!(error, Self::ComposerBusy))
+    }
     pub(crate) fn is(error: &io::Error) -> bool {
         error
             .get_ref()
@@ -65,6 +78,28 @@ pub(crate) trait SubmissionInspector: Send {
     /// Advances only when a new owned remainder is actually observed.
     fn cleanup_progress(&self) -> u64 {
         0
+    }
+    fn draft_preservation(&self, _screen: &str) -> Option<DraftPreservation> {
+        None
+    }
+    fn draft_preservation_with_cursor(
+        &self,
+        screen: &str,
+        _cursor: Option<(u16, u16)>,
+    ) -> Option<DraftPreservation> {
+        self.draft_preservation(screen)
+    }
+    fn native_stash_visible(&self, _screen: &str) -> bool {
+        true
+    }
+    fn native_draft_restored(&self, _screen: &str) -> bool {
+        false
+    }
+    fn restoration_marker_visible(&self, _screen: &str, _marker: &str) -> bool {
+        false
+    }
+    fn preservation_budget(&self) -> Duration {
+        Duration::ZERO
     }
 }
 
@@ -136,9 +171,8 @@ impl TerminalRuntime {
         let clock = self.io.submission_clock();
         let now = clock.now();
         let withdraw_grace = withdrawal_budget(&text);
-        let hard_deadline = deadline
-            .unwrap_or(now + maximum_budget(delay, &text))
-            .min(now + maximum_budget(delay, &text));
+        let maximum = maximum_budget(delay, &text) + inspect.preservation_budget();
+        let hard_deadline = deadline.unwrap_or(now + maximum).min(now + maximum);
         let scope = self.io.input_scope();
         let submission = ObservedSubmission {
             terminal: self.terminal.clone(),
@@ -160,6 +194,7 @@ impl TerminalRuntime {
         let (tx, rx) = std::sync::mpsc::channel();
         let span = tracing::Span::current();
         let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        let draft_input = self.draft_input.clone();
         std::thread::spawn(move || {
             tracing::dispatcher::with_default(&dispatch, || {
                 let _entered = span.enter();
@@ -168,7 +203,8 @@ impl TerminalRuntime {
                     submission.deadline.get(),
                     submission.hard_deadline,
                 );
-                let result = submission.run(text, delay);
+                let result = super::draft_input::DraftInput::acquire(&draft_input, &submission.io)
+                    .and_then(|lease| submission.run_preserving_draft(text, delay, &lease));
                 submission
                     .diagnostics
                     .finish(&result, submission.clock.now());
@@ -430,6 +466,15 @@ impl ObservedSubmission {
                 .content_lock
                 .lock()
                 .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+            // Claude restores its native stash synchronously at submit. That
+            // is acceptance evidence even though the composer is nonempty.
+            if last_enter.is_some()
+                && self
+                    .inspect
+                    .native_draft_restored(&self.terminal.visible_ansi())
+            {
+                return Ok(());
+            }
             let observation = self.observe("confirm");
             if last_enter.is_some()
                 && matches!(

@@ -92,8 +92,10 @@ impl BusState {
         if request_state.phase != RequestPhase::Submitting {
             return Err(ModelError::InvalidTransition);
         }
-        if matches!(&outcome, SubmissionOutcome::DefinitelyRejected { .. })
-            && request_state.trusted_start_bound
+        if matches!(
+            &outcome,
+            SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy
+        ) && request_state.trusted_start_bound
         {
             return Err(ModelError::InvalidTransition);
         }
@@ -102,8 +104,12 @@ impl BusState {
             .requests
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
+        let rejection = match &outcome {
+            SubmissionOutcome::DefinitelyRejected { message } => Some(message.clone()),
+            _ => None,
+        };
         match outcome {
-            SubmissionOutcome::DefinitelyRejected { message } => {
+            SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy => {
                 request_state.phase = RequestPhase::Queued;
                 request_state.expected_launch_id = None;
                 request_state.submission_boundary = None;
@@ -123,8 +129,13 @@ impl BusState {
                     .get_mut(&agent_id)
                     .ok_or(ModelError::UnknownAgent(agent_id))?;
                 agent.current_request = None;
-                agent.delivery_rejection = Some(rejection_reason(&message).into());
-                agent.actionable_error = Some(message);
+                agent.delivery_rejection = Some(
+                    rejection
+                        .as_deref()
+                        .map_or("composer_busy", rejection_reason)
+                        .into(),
+                );
+                agent.actionable_error = rejection;
             }
             SubmissionOutcome::Confirmed {
                 provider_session_id,
@@ -145,10 +156,14 @@ impl BusState {
             SubmissionOutcome::Uncertain { message } => {
                 request_state.uncertain_outcome = true;
                 request_state.submission_error = Some(message.clone());
-                self.agents
+                let agent = self
+                    .agents
                     .get_mut(&agent_id)
-                    .ok_or(ModelError::UnknownAgent(agent_id))?
-                    .actionable_error = Some(message);
+                    .ok_or(ModelError::UnknownAgent(agent_id))?;
+                if agent.delivery_rejection.as_deref() == Some("composer_busy") {
+                    agent.delivery_rejection = None;
+                }
+                agent.actionable_error = Some(message);
             }
         }
         Ok(())
@@ -198,6 +213,13 @@ impl BusState {
         }
         match lead.phase {
             RequestPhase::Completed | RequestPhase::Abandoned => None,
+            // This is a deliberate wait on developer-owned input, not a failed
+            // delivery. Persisting the reason also protects the queue on restart.
+            RequestPhase::Queued
+                if agent.delivery_rejection.as_deref() == Some("composer_busy") =>
+            {
+                None
+            }
             // A reported startup failure retains its queue until recovery;
             // it has no submission opportunity and must not expire as a stall.
             RequestPhase::Queued
@@ -514,7 +536,14 @@ impl BusState {
         if request_state.phase != RequestPhase::Submitting || !request_state.steered {
             return Err(ModelError::InvalidTransition);
         }
+        let agent_id = request_state.agent_id;
         self.record_dialog_notice_write(request, &outcome);
+        let composer_busy = outcome == SubmissionOutcome::ComposerBusy;
+        if let Some(agent) = self.agents.get_mut(&agent_id).filter(|agent| {
+            !composer_busy && agent.delivery_rejection.as_deref() == Some("composer_busy")
+        }) {
+            agent.delivery_rejection = None;
+        }
         let request_state = self
             .requests
             .get_mut(&request)
@@ -525,7 +554,7 @@ impl BusState {
                 request_state.phase = RequestPhase::Active;
                 request_state.uncertain_outcome = true;
             }
-            SubmissionOutcome::DefinitelyRejected { .. } => {
+            SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy => {
                 // Nothing was typed, so the lead's turn keeps the work it
                 // was already seen doing.
                 let lead = request_state.group;
@@ -538,6 +567,10 @@ impl BusState {
                 self.queues.entry(agent_id).or_default().insert(0, request);
                 if let Some(lead) = lead.and_then(|lead| self.requests.get_mut(&lead)) {
                     lead.submission_status_revision = previous;
+                }
+                if let Some(agent) = self.agents.get_mut(&agent_id).filter(|_| composer_busy) {
+                    agent.delivery_rejection = Some("composer_busy".into());
+                    agent.actionable_error = None;
                 }
             }
         }

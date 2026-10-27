@@ -3,13 +3,16 @@ mod compression;
 mod detection_process;
 mod detection_task;
 mod dialog;
+mod draft_input;
 mod io;
 mod read;
 mod shell_integration;
 mod shutdown;
 mod submission;
 mod submission_clock;
-pub(crate) use submission::{InputObservation, PromptNotShown, SubmissionInspector};
+pub(crate) use submission::{
+    DraftPreservation, InputObservation, PromptNotShown, SubmissionInspector,
+};
 #[cfg(test)]
 pub(crate) use submission_clock::{SubmissionClock, NATIVE_TEST_TIMEOUT};
 pub(crate) mod spawn;
@@ -155,6 +158,7 @@ pub struct TerminalRuntime {
     kitty_keyboard_flags: Arc<AtomicU16>,
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
+    draft_input: draft_input::SharedDraftInput,
     #[cfg(test)]
     dialog_wait_test: Mutex<tests::DialogWaitTest>,
     detection_content_seq: Arc<AtomicU64>,

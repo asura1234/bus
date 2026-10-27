@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "draft_preservation_test.rs"]
+mod draft_preservation;
+
 #[tokio::test]
 async fn a_delayed_start_reserves_withdrawal_time_before_typing() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);

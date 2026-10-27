@@ -446,6 +446,7 @@ impl App {
             observe,
             submit_delay,
             submit_deadline,
+            Some(crate::utils::draft_editor::directory(&agent.pane_id)),
         )
         .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
         Ok((id, agent, completion))
@@ -459,6 +460,7 @@ fn queue_prompt_input(
     observe: bool,
     delay: Duration,
     deadline: Option<std::time::Instant>,
+    draft_directory: Option<std::path::PathBuf>,
 ) -> std::io::Result<InputCompletion> {
     use crate::agents::AgentKind;
     let (encoded, enter) =
@@ -481,13 +483,29 @@ fn queue_prompt_input(
         &["ctrl+a".into(), "ctrl+k".into(), "ctrl+u".into()],
     )
     .map_err(|key| std::io::Error::other(format!("Invalid clear key: {key}")))?;
+    let inspector: Box<dyn crate::terminal::runtime::SubmissionInspector> =
+        if let Some(directory) = draft_directory {
+            let keys = crate::server::api::input_encoding::encode_api_keys(
+                runtime,
+                &["ctrl+s".into(), "ctrl+g".into(), "backspace".into()],
+            )
+            .map_err(|key| std::io::Error::other(format!("Invalid draft key: {key}")))?;
+            Box::new(composer::preserving_observer(
+                kind,
+                text,
+                directory,
+                keys.into_iter().map(Bytes::from).collect(),
+            ))
+        } else {
+            Box::new(composer::observer(kind, text))
+        };
     runtime.queue_observed_input_with_inspector(
         Bytes::from(encoded),
         Bytes::from(enter),
         clear.into_iter().map(Bytes::from).collect(),
         delay,
         deadline,
-        Box::new(composer::observer(kind, text)),
+        inspector,
     )
 }
 
@@ -534,6 +552,13 @@ pub(super) fn complete_agent_prompt(
         "Native prompt and Enter submission completed; this is not model acceptance");
     match completed {
         Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
+        Ok(Err(err)) if crate::terminal::runtime::PromptNotShown::composer_busy(&err) => {
+            encode_error(
+                id,
+                crate::protocol::api::AGENT_COMPOSER_BUSY,
+                err.to_string(),
+            )
+        }
         Ok(Err(err)) if not_shown(&err) => encode_error(
             id,
             crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
