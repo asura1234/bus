@@ -159,8 +159,8 @@ pub(crate) fn agent_onboarding(
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
          For verification, send VERIFIED with the PR/task and exact head or defects with file:line straight to the owner. \
          If you own a PR, re-send the head to verifier and reviewers on every push and use auto-merge-pr's owner-run path: \
-         carry the inherited fix-round count; use the fix-round cap in your brief, otherwise the room's workflow (default 2; 'none' means iterate until every reviewer is Ready); \
-         for a numeric cap, allow at most that many fix rounds, then stop and send a final to the orchestrator if another repair is needed; \
+         keep fixing until every reviewer is Ready; \
+         hold and escalate sharp reviewer disagreements, goal changes, and destructive or outward-facing actions without existing authorization to the orchestrator; \
          never fix a finding outside the locked goal in this PR; report it in the final as a follow-up for the orchestrator; \
          after pushes and before merging, re-measure added plus removed lines against the PR base, excluding plans/; \
          at the 3000-line split threshold stop and send a final to the orchestrator; \

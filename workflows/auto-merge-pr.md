@@ -1,8 +1,8 @@
 # Workflow: auto-merge-pr
 
 This workflow steers one PR to "PR merged". The orchestrator supplies the locked
-goal/non-goals, PR base, named peers, inherited fix-round count and cap, merge
-authority and holds. The **owner-run variant is the default**: the owner (PR author)
+goal/non-goals, PR base, named peers, merge authority and holds. The **owner-run
+variant is the default**: the owner (PR author)
 drives the review/repair loop and runs `merge-pr` when all gates pass. An
 orchestrator-run variant uses the same gates and has the author execute the
 repairs and merge. "Loop driver" below means the owner in the owner-run variant
@@ -15,14 +15,11 @@ The binding orchestrator rules also apply.
 ```mermaid
 flowchart TD
     begin(["Get PR merge-ready"]):::start --> setup
-    setup["Orchestrator: supply locked goal/base, peers, authority, holds, inherited fix_round and fix_round_cap (brief overrides workflow; default 2; none = uncapped)"] --> mode{"Loop driver?"}
+    setup["Orchestrator: supply locked goal/base, peers, authority and holds"] --> mode{"Loop driver?"}
     mode -- "owner-run (default)" --> owner["Owner: drive peer review and guarded merge"]
     mode -- orchestrator-run --> orch["Orchestrator: drive the same gates; author executes"]
-    owner --> init["Loop driver: record/resume PR repair log; new PR fix_round = 0"]
-    orch --> init
-    init --> inherited{"fix_round_cap is none or inherited fix_round <= fix_round_cap?"}
-    inherited -- no --> cap
-    inherited -- yes --> initialmeasure["Loop driver: measure diff against PR base, excluding plans/"]
+    owner --> initialmeasure["Loop driver: measure diff against PR base, excluding plans/"]
+    orch --> initialmeasure
     initialmeasure --> initialbig{"Total changed lines >= 3000?"}
     initialbig -- yes --> split
     initialbig -- no --> review
@@ -31,7 +28,7 @@ flowchart TD
         review["Peers: review, verify and bot checks concurrently on exact head"] --> scope{"Any finding outside locked goal?"}
         scope -- yes --> defer["Owner: exclude from PR; record for the final report as a follow-up"]
         defer --> flag
-        scope -- no --> flag{"Anything FLAGGED or needing a developer decision?"}
+        scope -- no --> flag{"Sharp reviewer disagreement, FLAG or developer decision?"}
         flag -- yes --> handback["Owner: stop this PR's merge path; final to orchestrator"]
         flag -- no --> ready{"Exact-head VERIFIED, all reviews Ready, gates and requested acceptance pass?"}
         ready -- no --> abandon{"Any Abandon?"}
@@ -39,11 +36,7 @@ flowchart TD
         abandon -- no --> pending{"Checks still running?"}
         pending -- yes --> wait["Owner: retain live peer waits and head"]
         wait --> review
-        pending -- no --> budget["Loop driver: next_fix_round = fix_round + 1"]
-        budget --> over{"Numeric fix_round_cap and next_fix_round > fix_round_cap?"}
-        over -- yes --> cap["Owner: stop; final with count, cause and plan to orchestrator"]
-        over -- no --> count["Loop driver: record fix_round = next_fix_round in PR repair log"]
-        count --> address["Author: address-review-comments or feedback within goal; push head directly to peers"]
+        pending -- no --> address["Author: address-review-comments or feedback within goal; push head directly to peers"]
         address --> measurefix["Loop driver: re-measure added + removed lines against PR base, excluding plans/"]
         measurefix --> bigfix{"Total changed lines >= 3000?"}
         bigfix -- no --> review
@@ -56,7 +49,7 @@ flowchart TD
     big -- no --> hold{"Unresolved FLAG, other developer decision or non-manual hold?"}
     hold -- yes --> handback
     hold -- no --> manualhold{"Explicit manual-test hold?"}
-    manualhold -- yes --> holdmerge["Owner: merge-pr --hold-before-merge within the inherited fix budget"]
+    manualhold -- yes --> holdmerge["Owner: merge-pr --hold-before-merge"]
     holdmerge --> holdready{"Ready and holding at the pinned head?"}
     holdready -- no --> holdrepairs{"Repairs required?"}
     holdrepairs -- yes --> feedback["Owner: queue preparation or manual-test feedback"]
@@ -64,14 +57,14 @@ flowchart TD
     holdready -- yes --> manualtest["Developer: manual test and merge approval"]:::developer
     manualtest --> approved{"Approved?"}
     approved -- no --> feedback
-    feedback --> feedbackok{"Feedback within locked goal and no FLAG/developer decision?"}
+    feedback --> feedbackok{"Feedback within locked goal and no sharp disagreement/FLAG/developer decision?"}
     feedbackok -- no --> handback
-    feedbackok -- yes --> budget
+    feedbackok -- yes --> address
     approved -- yes --> approvalhead{"Approval matches the current head?"}
     approvalhead -- no --> review
     approvalhead -- yes --> release["Owner: record tested head and approval; release only its manual-test hold"]
     release --> measure
-    manualhold -- no --> merge["Owner: merge-pr under recorded authority; enforce scope, FLAG, budget and size gates throughout"]
+    manualhold -- no --> merge["Owner: merge-pr under recorded authority; enforce scope, FLAG, decision and size gates throughout"]
     merge --> mergedok{"PR merged?"}
     mergedok -- no --> more{"More repairs required?"}
     more -- yes --> scope
@@ -83,12 +76,11 @@ flowchart TD
     mainco -- yes --> followups
     followups --> done(["PR merged"]):::success
 
-    handback --> triage["Orchestrator: decide scope/FLAG/hold; take developer decisions to MASTER"]
+    handback --> triage["Orchestrator: resolve reviewer disagreement, scope/FLAG/hold; take developer decisions to MASTER"]
     triage --> resolved{"Resolved and owner can resume under recorded authority?"}
     resolved -- yes --> review
     resolved -- no --> held(["PR held; independent work continues"]):::failure
     split --> held
-    cap --> held
 
     classDef start fill:#dbeafe,stroke:#1d4ed8
     classDef success fill:#dcfce7,stroke:#15803d
@@ -103,39 +95,26 @@ start answer; do not ask for per-PR merge OK. A draft-only, manual-test or other
 developer hold remains binding. Clarify missing intent or authority only for the
 affected part; keep independent work moving.
 
-For an explicit **manual-test hold**, the owner runs `merge-pr --hold-before-merge`
-within the inherited fix-round budget. Once it is ready and holding, the
-developer tests that exact head and approves or rejects the merge. Approval
-releases only that head's manual-test hold: recheck size, current-head gates,
+For an explicit **manual-test hold**, the owner runs `merge-pr --hold-before-merge`.
+Once it is ready and holding, the developer tests that exact head and approves
+or rejects the merge. Approval releases only that head's manual-test hold: recheck size, current-head gates,
 FLAGs and other holds before merging. If the head changes, its approval does
 not carry over; review and obtain manual acceptance for the new head. Rejected
 manual-test feedback and repairs found during preparation enter the same
-fix-round budget gate after the scope/FLAG checks. No repair beyond a numeric
-cap starts.
+repair loop after the scope/FLAG/decision checks.
 Other hold types still hand back to the orchestrator; a manual-test approval
 does not clear them or authorize a goal change.
 
-The loop driver records `fix_round = 0` once per new PR in its repair log and
-reuses the counter on resumes and when entering from another workflow. Resolve
-`fix_round_cap` from the worker's brief first, otherwise the room's workflow,
-otherwise `2`. The orchestrator may supply a nonnegative integer or `none`;
-`none` means iterate until every reviewer is Ready, with every other merge gate
-still required. Record the effective cap with the counter and carry both across
-handoffs; do not reset the count when the cap changes or the loop driver changes.
-The owner reports both in finals; the orchestrator mirrors them in the workflow
-log without requiring a relay for every batch. The initial review uses no
-fix round. Before each repair batch, calculate `next_fix_round = fix_round + 1`;
-if the cap is numeric and the next count exceeds it, stop this PR and send a
-final with the count, cap, cause and plan to the orchestrator while independent
-work continues. Otherwise record the new counter, apply the batch and review
-the repaired head. The last permitted repaired head still gets its final review
-and verification and may merge when every exact-head condition above passes.
+Keep fixing until every reviewer is Ready. Review, verification, gates,
+bot/GitHub comments and developer feedback all enter the same repair loop.
+After each consolidated repair batch, push the new head to the named peers
+and collect fresh exact-head evidence. There is no repair counter or cap to
+configure, inherit or reset. These rules apply during `merge-pr` too.
 
-The same counter covers review, verification, gates, bot/GitHub comments and
-developer feedback. Tell the author, including while running `merge-pr`, to
-return to the budget gate **before** starting another repair batch; a skill
-must not silently exceed a numeric cap. Several commits for one queued batch use
-one round; a newly required repair after checking that head uses the next.
+Hold and escalate only real decisions: sharp reviewer disagreements, a goal
+change, or a destructive or outward-facing action without existing authorization.
+Keep independent work moving while the orchestrator resolves the decision.
+Explicit holds and every other merge gate remain binding.
 
 `deferred.md` is `<main checkout>/temp/<branch-slug>/deferred.md`, where every
 character of the branch name outside `A-Za-z0-9_-` becomes `-`. It holds only
@@ -143,9 +122,9 @@ findings outside the PR goal, each with what it is and why it is out of scope.
 worktree-close never removes the main checkout's `temp/`, so the link survives.
 
 For in-goal technical disagreements without a FLAG, the owner collects peer
-recommendations directly and runs best-of-n. Whatever its verdict (universal,
-clear or toss-up), the author applies the top-ranked option. best-of-n keeps
-the ranking in its own ledger
+recommendations directly and runs best-of-n. The author applies the top-ranked
+option unless reviewers disagree sharply; then the owner holds the affected PR
+and sends the alternatives and evidence to the orchestrator for a decision. best-of-n keeps the ranking in its own ledger
 (`temp/best-of-n/<branch-slug>/ledger.json`, rendered as `decisions.md`).
 Anything FLAGGED or needing a developer decision stops the owner-run merge
 path and is sent to the orchestrator in a final. The orchestrator decides the
@@ -161,9 +140,6 @@ while `merge-pr` runs; no skill may bypass them.
 
 ## Failure recovery
 
-- **PR held: fix-round cap:** report the unresolved acceptance items, cause and
-  plan in MASTER, retain the counter and name the next owner or dependency.
-  Hold only this PR and its dependent operations; keep independent work moving.
 - **PR merge blocked (developer recovers):** the developer starts from the
   reason you posted in MASTER, `deferred.md`, and the PR state (branch, open
   PR, latest review round, the merge-pr report if it ran).
@@ -200,9 +176,9 @@ You handle these yourself:
 
 | Role | Model | Does |
 |---|---|---|
-| Orchestrator | any | Supplies goal/base, named peers, counter, fix-round cap (brief overrides workflow; default 2; `none` is uncapped), authority and holds; owns staffing, dialogs, recovery and replacement announcements. Maintains room notes/roster and mirrors repair state from finals. Decides out-of-goal follow-ups and every FLAG, asking the developer for product decisions. In orchestrator-run mode drives the same gates; in owner-run mode receives handbacks and finals without relaying routine peer findings. Approves splits and dispatches cleanup outside the PR worktree. |
-| Developer | - | Approves the workflow goal and authority or declares a hold; supplies the PR goal and non-goals when none is locked. Under a manual-test hold, tests the pinned head while merge-pr holds and approves its merge or supplies feedback that enters the inherited fix-round budget. Recovers from "PR merge blocked". |
-| Owner / author | any | Drives the owner-run variant, receives peer findings directly, excludes out-of-goal repairs, hands FLAG/developer decisions back, records fix rounds under the effective cap and re-measures against the 3000-line threshold. Runs address-review-comments, best-of-n for admitted technical issues, and merge-pr under every exact-head gate and hold. Prepares manual-test holds with merge-pr --hold-before-merge, records exact-head approval and routes rejected feedback through the budget gate; other holds go to the orchestrator. Sends milestone finals, adjudicates saved reviewer probe patches and leaves no temporary test additions before split/merge, and reports flaky tests without fixing unrelated code in this PR; continues only when a permitted rerun passes. |
+| Orchestrator | any | Supplies goal/base, named peers, authority and holds; owns staffing, dialogs, recovery and replacement announcements. Maintains room notes/roster and mirrors repair state from finals. Decides out-of-goal follow-ups and every FLAG, asking the developer for product decisions. In orchestrator-run mode drives the same gates; in owner-run mode receives handbacks and finals without relaying routine peer findings. Approves splits and dispatches cleanup outside the PR worktree. |
+| Developer | - | Approves the workflow goal and authority or declares a hold; supplies the PR goal and non-goals when none is locked. Under a manual-test hold, tests the pinned head while merge-pr holds and approves its merge or supplies feedback that enters the repair loop. Recovers from "PR merge blocked". |
+| Owner / author | any | Drives the owner-run variant, receives peer findings directly, excludes out-of-goal repairs, hands FLAG/developer decisions back, keeps fixing until every reviewer is Ready and re-measures against the 3000-line threshold. Runs address-review-comments, best-of-n for admitted technical issues, and merge-pr under every exact-head gate and hold. Prepares manual-test holds with merge-pr --hold-before-merge, records exact-head approval and routes rejected feedback through the repair loop; other holds go to the orchestrator. Sends milestone finals, adjudicates saved reviewer probe patches and leaves no temporary test additions before split/merge, and reports flaky tests without fixing unrelated code in this PR; continues only when a permitted rerun passes. |
 | Verifier | any | Checks the named PR/task on each pushed head; sends VERIFIED or defects with file:line directly to the owner and a final to the orchestrator. |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |
 
@@ -223,9 +199,7 @@ Use these peers from your brief. If one is missing or replaced, message the
 orchestrator; it owns staffing, room notes, the roster and verifier allocation.
 Workers do not edit room notes or the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
-inherited `fix_round`, `fix_round_cap` (a nonnegative integer or `none`),
-recorded merge authority and explicit holds. The brief's cap overrides the
-room's workflow cap; if neither supplies one, the cap is `2`.
+recorded merge authority and explicit holds.
 
 Message peers directly. The verifier sends `VERIFIED <PR/task> @<full SHA>`
 with evidence, or defects with `file:line` and reproduction, straight to the
@@ -236,13 +210,10 @@ head to verifier and reviewers on every push and gets current-head evidence.
 If you own a PR, use the owner-run path in `auto-merge-pr` and enforce these
 checks before every repair batch and merge, including inside `merge-pr`:
 
-- Carry the inherited fix-round counter and record each batch in the PR repair
-  log. Use the `fix_round_cap` in your brief, otherwise the room's workflow;
-  default to **2** if neither supplies one. A numeric cap limits the total fix
-  rounds across review, verification, gates, bots and developer feedback;
-  **`none`** means iterate until every reviewer is Ready, with all other merge
-  gates still required. If another repair would exceed a numeric cap, stop and
-  send a final with the count, cap, cause and plan to the orchestrator.
+- Keep fixing until every reviewer is Ready, with all other merge gates still
+  required. Apply this to review, verification, gates, bots and developer feedback.
+  Hold and escalate sharp reviewer disagreements, goal changes, and destructive
+  or outward-facing actions without existing authorization to the orchestrator.
 - Never fix a finding outside the PR's locked goal in this PR. Exclude it and
   report it in the final as a follow-up for the orchestrator to decide and record.
 - Re-measure added plus removed lines against the pinned PR base, excluding

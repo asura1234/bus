@@ -124,9 +124,7 @@ Use these peers from your brief. If one is missing or replaced, message the
 orchestrator; it owns staffing, room notes, the roster and verifier allocation.
 Workers do not edit room notes or the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
-inherited `fix_round`, `fix_round_cap` (a nonnegative integer or `none`),
-recorded merge authority and explicit holds. The brief's cap overrides the
-room's workflow cap; if neither supplies one, the cap is `2`.
+recorded merge authority and explicit holds.
 
 Message peers directly. The verifier sends `VERIFIED <PR/task> @<full SHA>`
 with evidence, or defects with `file:line` and reproduction, straight to the
@@ -137,13 +135,10 @@ head to verifier and reviewers on every push and gets current-head evidence.
 If you own a PR, use the owner-run path in `auto-merge-pr` and enforce these
 checks before every repair batch and merge, including inside `merge-pr`:
 
-- Carry the inherited fix-round counter and record each batch in the PR repair
-  log. Use the `fix_round_cap` in your brief, otherwise the room's workflow;
-  default to **2** if neither supplies one. A numeric cap limits the total fix
-  rounds across review, verification, gates, bots and developer feedback;
-  **`none`** means iterate until every reviewer is Ready, with all other merge
-  gates still required. If another repair would exceed a numeric cap, stop and
-  send a final with the count, cap, cause and plan to the orchestrator.
+- Keep fixing until every reviewer is Ready, with all other merge gates still
+  required. Apply this to review, verification, gates, bots and developer feedback.
+  Hold and escalate sharp reviewer disagreements, goal changes, and destructive
+  or outward-facing actions without existing authorization to the orchestrator.
 - Never fix a finding outside the PR's locked goal in this PR. Exclude it and
   report it in the final as a follow-up for the orchestrator to decide and record.
 - Re-measure added plus removed lines against the pinned PR base, excluding
