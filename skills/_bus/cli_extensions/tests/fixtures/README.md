@@ -1,0 +1,1 @@
+Read-only CLI responses recorded 2026-10-27 from Bus GitHub PR 202 and libtv-app Codeup MR 1. Repository paths, identities, prose, commit IDs and patch IDs are scrubbed. Shapes and platform status values are retained. Replay tests make no network calls.
