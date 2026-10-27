@@ -2,8 +2,8 @@
 
 This guide holds the workflow principles of `/review-plan`. The architecture judgment, task-graph safety, admissibility,
 stop rule, and verdict of plan review are all defined by the
-[Plan Review Guide](../../docs/guides/plan-review-guide.md); report fields and order are all defined by the
-[Review Format](../../docs/guides/review-format.md).
+[Plan Review Guide](../_bus/docs/guides/plan-review-guide.md); report fields and order are all defined by the
+[Review Format](../_bus/docs/guides/review-format.md).
 
 ## Keep formal review separate from free discussion
 

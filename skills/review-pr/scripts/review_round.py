@@ -85,13 +85,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+REPO_ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip() or Path.cwd()).resolve()
 
 # Lane ownership, round claiming, and ledger discovery share one implementation with the other
 # review skill in the repo-root cli_extensions/. This code
 # once existed as byte-identical copies in both skills, and its drift fails silently: a wrong lane
 # only makes the reviewer read someone else's PREV_REVIEWS, with no red light anywhere.
-sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus" / "cli_extensions"))
 from review_round_common import (  # noqa: E402
     bare_call_ambiguous_lanes,
     claim_bare_round,
@@ -110,7 +110,7 @@ from review_scope import (  # noqa: E402
     snapshot_scope,
 )
 
-PR_SCRIPTS = REPO_ROOT / "skills" / "pr" / "scripts"
+PR_SCRIPTS = Path(__file__).resolve().parents[2] / "pr" / "scripts"
 if str(PR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(PR_SCRIPTS))
 

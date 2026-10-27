@@ -154,6 +154,21 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                 .help("Print data and log paths without starting Bus"),
         )
         .subcommand(
+            Command::new("skills")
+                .about("Install or inspect default workflow skills at user scope")
+                .subcommand(Command::new("status").about("Inspect skill copies without a session"))
+                .subcommand(
+                    Command::new("install")
+                        .about("Copy default skills; preserve user skills")
+                        .arg(
+                            Arg::new("yes")
+                                .long("yes")
+                                .action(clap::ArgAction::SetTrue)
+                                .help("Record consent without prompting"),
+                        ),
+                ),
+        )
+        .subcommand(
             Command::new("sessions")
                 .about("List saved sessions")
                 .args(run_flags())

@@ -10,6 +10,7 @@ pub(crate) mod orchestration;
 pub(crate) mod perf;
 pub(crate) mod prefs;
 
+pub(crate) mod skills;
 pub(crate) mod storage;
 
 pub(crate) mod identity;

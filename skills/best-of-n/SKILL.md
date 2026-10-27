@@ -2,7 +2,7 @@
 name: best-of-n
 description: Converge conflicting proposals that N agents gave for the same technical question into one ranked conclusion — universal (every source independently recommended the same option and it holds up under verification), clear (the first place beats the rest on a named mechanism), or toss-up (the gap is small, but there is still a total order and still a next step) — with a written reason for every eliminated option. The ranking is retained: when the first place fails, the remaining options plus the failure evidence become the seeds of the second round instead of being reinvented. Adjudicates only disputes over technical approaches — triage and deciding what to do next belong to the orchestrator (an orchestrating agent or the developer). Use when several agents have already been fanned out and returned multiple proposals and you are asked to "converge", "pick one", "best of n", "which of these approaches", "they are arguing", or when the first place did not work and you are asked to decide the next step.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Best-of-N
 
 Read the adjudication principles in [guide.md](./guide.md) completely: the scope test, the ranking
@@ -68,7 +68,7 @@ rendered    = temp/best-of-n/<branch_slug>/decisions.md
 
 IF $ARGUMENTS starts with `next`:
   Run:
-    python3 skills/best-of-n/scripts/best_of_n.py next \
+    python3 "$SKILL_DIR/../best-of-n/scripts/best_of_n.py" next \
       --ledger <ledger> --dispute <id> --failed <option-id>
 
   It prints **all** surviving options not yet attempted (each with TLDR and cost), the failure
@@ -77,7 +77,7 @@ IF $ARGUMENTS starts with `next`:
   the first failure is itself new evidence and may reorder them.
   Per the guide's "When switching to the next place", judge whether that reason has been overturned by this failure:
     - Overturned → execute the next place, and append this failure to the record:
-      `python3 skills/best-of-n/scripts/best_of_n.py attempt --ledger <ledger> \
+      `python3 "$SKILL_DIR/../best-of-n/scripts/best_of_n.py" attempt --ledger <ledger> \
          --dispute <id> --option <failed option-id> --outcome "<what happened>"`
       The record is written by `attempt`, not `record` — `record` only validates and renders and does not change the ledger.
       Skip this step and the next `next` will recommend an option that already failed as a seed again.
@@ -175,7 +175,7 @@ Adjudication belongs only to main. Delegated evidence gathering answers local fa
 
 Write the adjudication as `<ledger>` (schema in the `--help` of scripts/best_of_n.py), then:
 
-  python3 skills/best-of-n/scripts/best_of_n.py record \
+  python3 "$SKILL_DIR/../best-of-n/scripts/best_of_n.py" record \
     --ledger <ledger> --output <rendered>
 
 Everything it blocks has the same shape — **looks done, but no decision was actually made**: tied or
@@ -199,8 +199,8 @@ Read(<rendered>) and present it verbatim; do not rewrite, reorder, or add conclu
   - "Decision premise challenge" (if any): when new evidence overturns the factual premise of an
     archived decision, one sentence to the developer;
   - the ledger path, and the switch commands:
-    `python3 skills/best-of-n/scripts/best_of_n.py attempt --ledger <ledger> --dispute <id> --option <id> --outcome "<what happened>"`
-    `python3 skills/best-of-n/scripts/best_of_n.py next --ledger <ledger> --dispute <id> --failed <option-id>`
+    `python3 "$SKILL_DIR/../best-of-n/scripts/best_of_n.py" attempt --ledger <ledger> --dispute <id> --option <id> --outcome "<what happened>"`
+    `python3 "$SKILL_DIR/../best-of-n/scripts/best_of_n.py" next --ledger <ledger> --dispute <id> --failed <option-id>`
 
 STOP. Whether to execute the first place is the developer's decision; this skill changes no production files and performs no Git operations.
 ```

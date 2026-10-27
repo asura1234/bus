@@ -2,9 +2,9 @@
 name: review-pr
 description: Iterative code review in which the reviewer proves suspicions in the correctness / security / bug dimensions by writing tests that run red or, preferably for user-visible behavior, by a failing real TUI run on a scratch Bus; what stays unproven is marked `未证明` (write access is limited to test files; all other dimensions are read-only). Round 1 fully reviews the current branch's committed diff against base, excluding plans/, or a fixed chunk's whole committed files with --scope; Round 2+ only reconciles the prior round and reviews this round's delta and its direct consequences. Supports stable reviewer lanes, an optional associated plan, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review a PR, production chunk, review code, or re-review the current branch.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Review principles are in [guide.md](./guide.md); the SOT for the 9 review dimensions, severity, and guardrails is
-[code-review-guide.md](../../docs/guides/code-review-guide.md). This file defines only the executable flow.
+[code-review-guide.md](../_bus/docs/guides/code-review-guide.md). This file defines only the executable flow.
 
 ```text
 INPUT $ARGUMENTS =
@@ -63,7 +63,7 @@ MUST NOT:
 ========== 2. DETERMINISTIC PROLOGUE ==========
 
 Run:
-  python3 skills/review-pr/scripts/review_round.py \
+  python3 "$SKILL_DIR/../review-pr/scripts/review_round.py" \
     [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan-file>] \
     [--scope <FILE_LIST|chunk.json>]
 
@@ -114,9 +114,9 @@ branch + chunk; branch reviews, other chunks, and other reviewer histories never
 
 ========== 3. LOAD LOCKED CONTEXT ==========
 
-Read(skills/review-pr/guide.md) completely
-Read(docs/guides/code-review-guide.md) completely
-Read(docs/guides/architecture-principles.md) completely
+Read($SKILL_DIR/../review-pr/guide.md) completely
+Read($SKILL_DIR/../_bus/docs/guides/code-review-guide.md) completely
+Read($SKILL_DIR/../_bus/docs/guides/architecture-principles.md) completely
 IF TARGET_KIND == scope:
   Read(SCOPE_FILE).
   IF MODE == full: Read(SCOPE_SNAPSHOT) completely.
@@ -168,7 +168,7 @@ ELSE:
 ========== 5. MODE = full ==========
 
 IF MODE == full:
-  Read(skills/review-pr/scripts/full_review.md) completely and execute its procedure.
+  Read($SKILL_DIR/../review-pr/scripts/full_review.md) completely and execute its procedure.
   Its GOTO REPORT continues at section 7 below.
 
 ========== 6. MODE = incremental ==========
@@ -227,7 +227,7 @@ REPORT:
     Abandon:
       fundamental architecture error or not locally salvageable; when both reasons hold, write this plain Abandon
 
-  Before completion, Read(docs/guides/review-format.md) completely.
+  Before completion, Read($SKILL_DIR/../_bus/docs/guides/review-format.md) completely.
   Write <round-NN/review.md> strictly per the PR template.
   In scope mode add **范围哈希**：<SCOPE_HASH> and **范围文件**：<SCOPE_FILE> to the header;
   the existing sections, reconciliation table, finding format, and verdicts stay the same.
@@ -235,7 +235,7 @@ REPORT:
 ========== 8. DETERMINISTIC RESPONSE GATE ==========
 
 Run:
-  python3 cli_extensions/review_artifact.py render-response \
+  python3 "$SKILL_DIR/../_bus/cli_extensions/review_artifact.py" render-response \
     --review-file <round-NN/review.md> \
     --output <round-NN/chat-response.md>
 

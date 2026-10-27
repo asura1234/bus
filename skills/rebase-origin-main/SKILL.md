@@ -2,7 +2,7 @@
 name: rebase-origin-main
 description: Rebase the current feature branch onto the latest origin/master, triage conflicts by severity, then force-with-lease push with an explicit refspec. Use when the user asks to "rebase", "sync master", "update to the latest master", "rebase onto origin/master", or "resolve conflicts and push". Agent-agnostic (claude / cursor / codex); pure git plus cargo for Cargo.lock.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Rebase onto origin/master
 
 Rebase the current branch onto the latest `origin/master`, resolve conflicts, then force push.

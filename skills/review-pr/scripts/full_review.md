@@ -25,7 +25,7 @@ IF MODE == full:
       hygiene = 4, 5, 9
     At most one subagent per group; small diffs may merge groups or be done serially by the main agent.
     Every **dimension-group** subagent must (except the fresh-eyes subagent, see below):
-      - Read(docs/guides/code-review-guide.md) and docs/guides/architecture-principles.md
+      - Read($SKILL_DIR/../_bus/docs/guides/code-review-guide.md) and $SKILL_DIR/../_bus/docs/guides/architecture-principles.md
       - review only its assigned dimensions
       - Read(DIFF_SNAPSHOT); read the full current state of in-goal touched files; for dimension 6's out-of-goal slices only judge purpose / size
       - obey §1 VERIFICATION BOUNDARY: only the correctness group proves a suspicion — a narrowly run probe, or a scratch

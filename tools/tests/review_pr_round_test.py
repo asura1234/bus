@@ -35,7 +35,7 @@ class ReviewPrRoundTests(unittest.TestCase):
         script = repo / "skills/review-pr/scripts/review_round.py"
         script.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_SCRIPT, script)
-        shared = repo / "cli_extensions/review_round_common.py"
+        shared = repo / "skills/_bus/cli_extensions/review_round_common.py"
         shared.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_COMMON, shared)
         shutil.copy2(REPO_ROOT / "cli_extensions/review_scope.py", shared.parent / "review_scope.py")

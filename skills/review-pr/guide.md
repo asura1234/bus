@@ -1,8 +1,8 @@
 # Review PR Guide
 
 This guide holds only the workflow principles of `/review-pr`. Code-review dimensions, severity, architecture judgment, and nitpicking
-boundaries are defined in one place by the [Code Review Guide](../../docs/guides/code-review-guide.md); report fields and order are defined in one place by
-the [Review Format](../../docs/guides/review-format.md).
+boundaries are defined in one place by the [Code Review Guide](../_bus/docs/guides/code-review-guide.md); report fields and order are defined in one place by
+the [Review Format](../_bus/docs/guides/review-format.md).
 
 ## Use the feature author's worktree
 
@@ -90,7 +90,7 @@ declared new dedicated test files; a missing harness connection does not authori
 Do not write tests to pad numbers either — a probe must have a meaningful failure mode and turn red when the implementation is wrong; asserting the harness's own output
 or a just-configured mock is not proof.
 
-Review added tests under [code-review-guide "Never pad coverage with a tautology"](../../docs/guides/code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates); dimension 9 owns the finding and severity mapping.
+Review added tests under [code-review-guide "Never pad coverage with a tautology"](../_bus/docs/guides/code-review-guide.md#verification-boundary-prove-behavior-suspicions-with-tests-do-not-run-quality-gates); dimension 9 owns the finding and severity mapping.
 
 **Probe lifecycle**:
 

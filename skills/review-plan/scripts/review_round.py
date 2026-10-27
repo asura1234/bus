@@ -22,7 +22,7 @@ from review_round_support import (
 # Lane ownership and round claiming share one implementation with /review-pr, living in the repo-root
 # cli_extensions/. Take them from the real owner instead of relaying through
 # review_round_support — a pass-through re-export would make "who owns these symbols" unclear again.
-sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus" / "cli_extensions"))
 from review_round_common import (  # noqa: E402
     bare_call_ambiguous_lanes,
     claim_bare_round,
