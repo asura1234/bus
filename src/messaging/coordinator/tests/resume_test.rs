@@ -358,7 +358,21 @@ fn missing_pane_after_restart_is_cleared_but_transport_failure_is_not_evidence()
         ("pane_not_found", true, true),
         ("timeout", false, false),
     ] {
-        let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let request = worker
+            .state
+            .submit_message_with(
+                room,
+                Draft {
+                    text: "retained after pane loss".into(),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                io::now_ms(),
+                true,
+            )
+            .unwrap()[0];
         worker.transport = Box::new(MissingPane { code, rejected });
         worker.poll().unwrap();
         let observed = worker.state.agent(agent).unwrap();
@@ -378,6 +392,13 @@ fn missing_pane_after_restart_is_cleared_but_transport_failure_is_not_evidence()
         if cleared {
             assert!(observed.actionable_error.is_some());
         }
+        let message = worker.state.request(request).unwrap().prompt.id;
+        let status = worker.control_message_at(message, io::now_ms()).unwrap();
+        assert_eq!(status["requests"][0]["delivery_error"].is_string(), cleared);
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }

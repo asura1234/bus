@@ -38,6 +38,19 @@ impl RoomAgent {
         }
     }
 
+    /// Positive launch/terminal failure evidence, excluding temporary native
+    /// unavailability and ordinary hook/dialog readiness waits.
+    pub(crate) fn delivery_error(&self) -> Option<&str> {
+        let failed = self
+            .startup
+            .as_ref()
+            .is_some_and(|startup| startup.reported)
+            || self.missing_binary.is_some()
+            || self.runtime_identity.pane_id.is_none()
+                && self.runtime_identity.terminal_id.is_some();
+        failed.then_some(self.actionable_error.as_deref()).flatten()
+    }
+
     /// The status Bus shows for this agent: a visible choice dialog blocks it
     /// whatever its provider reports (Codex reports Idle while it waits on an
     /// approval). Agent rows and room status both use it, so they agree.

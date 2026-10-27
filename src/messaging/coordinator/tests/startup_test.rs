@@ -300,6 +300,12 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
     let failed = worker.state.agent(agent).unwrap();
     assert!(failed.startup.as_ref().unwrap().reported);
     let error = failed.actionable_error.clone().unwrap();
+    let message = worker.state.request(request).unwrap().prompt.id;
+    let status = worker.control_message_at(message, io::now_ms()).unwrap();
+    assert_eq!(
+        status["requests"][0]["delivery_error"], error,
+        "a retained launch failure must stop its queued/async waiters"
+    );
     assert!(error.contains("Command:") && error.contains("Last screen lines:"));
     assert_eq!(
         worker.state.request(request).unwrap().phase,

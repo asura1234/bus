@@ -3541,3 +3541,60 @@ fn room_resume_is_a_control_command() {
     assert!(command(&["agent", "resume"]).is_err());
     assert!(command(&["agent", "resume", "--room", "8259", "--as", "owner"]).is_err());
 }
+
+#[test]
+fn delivery_failure_async_stops_immediately_with_retained_queue_and_repair_guidance() {
+    for detail in [
+        "Startup failed: command not found: odex; delete and recreate the agent",
+        "Agent terminal is no longer available; bus agent resume --room 7",
+    ] {
+        let mut request = recipient(1, "queued", false);
+        request["delivery_error"] = json!(detail);
+        // A second, successful status only bounds the pre-fix regression.
+        let (outcome, lines, _, pauses) = run_async(
+            &[],
+            [
+                status(vec![request]),
+                status(vec![recipient(1, "replied", true)]),
+            ],
+        );
+        assert!(outcome.is_err(), "wait hid an actionable delivery failure");
+        assert!(pauses.is_empty());
+        assert_eq!(lines[0]["error"]["code"], "agent_unavailable");
+        assert!(lines[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(detail));
+        assert_eq!(lines[0]["result"]["requests"][0]["stage"], "queued");
+        assert_eq!(lines[0]["result"]["complete"], false);
+    }
+}
+
+#[test]
+fn delivery_failure_bounded_wait_stops_before_its_deadline_without_losing_status() {
+    let mut request = recipient(1, "queued", false);
+    request["delivery_error"] = json!("Agent terminal vanished; bus agent resume --room 7");
+    let mut output = Vec::new();
+    let mut polls = 0;
+    let outcome = run_with_pause(
+        &["wait", "--message", "19", "--timeout", "60"].map(String::from),
+        &mut output,
+        &mut |r: &Request, _| {
+            polls += 1;
+            Ok(Response::success(
+                &r.id,
+                if polls == 1 {
+                    status(vec![request.clone()])
+                } else {
+                    status(vec![recipient(1, "replied", true)])
+                },
+            ))
+        },
+        |_| panic!("known failed delivery should not consume the wait deadline"),
+    );
+    assert!(outcome.is_err());
+    assert_eq!(polls, 1);
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["error"]["code"], "agent_unavailable");
+    assert_eq!(response["result"]["requests"][0]["stage"], "queued");
+}
