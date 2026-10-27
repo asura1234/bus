@@ -124,6 +124,8 @@ class SkillMigrationContractTest(unittest.TestCase):
             "skills/e2e-test/references/e2e-run-report-format.md",
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
+            "skills/_bus/docs/pr-template.md",
+            "skills/_bus/docs/pull-request-template.md",
             "skills/split-pr/references/split-plan-format.md",
         }
         actual = {
