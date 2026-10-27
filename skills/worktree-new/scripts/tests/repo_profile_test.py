@@ -67,6 +67,36 @@ class ProfileTests(Fixture):
         super().setUp()
         self.profile = load("repo_profile")
 
+    def test_no_cache_cli_keeps_repo_without_temp_ignore_clean(self):
+        self.rust()
+        self.write(".gitignore", "")
+        self.commit()
+        argv = [
+            sys.executable,
+            str(SCRIPTS / "repo_profile.py"),
+            "scan",
+            "--no-cache",
+            "--repo",
+            str(self.repo),
+        ]
+        result = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fresh = json.loads(result.stdout)
+        self.assertFalse((self.repo / "temp").exists())
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        cached = self.profile.scan(self.repo)
+        self.assertEqual(fresh, cached)
+        cache = self.repo / "temp/.bus/repo-profile.json"
+        cache.write_text("corrupt cache; do not read or replace")
+        before = cache.stat().st_mtime_ns
+        status = self.git("status", "--porcelain")
+        result = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), fresh)
+        self.assertEqual(cache.read_text(), "corrupt cache; do not read or replace")
+        self.assertEqual(cache.stat().st_mtime_ns, before)
+        self.assertEqual(self.git("status", "--porcelain"), status)
+
     def test_unchanged_manifest_cache_skips_inference_but_refreshes_local_hazards(self):
         self.rust()
         first = self.profile.scan(self.repo)
