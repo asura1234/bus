@@ -138,9 +138,9 @@ pub(super) fn follow_message(
 /// `reply_not_captured`) or an unsettled one stalled, `None` while any
 /// recipient's request is still open.
 ///
-/// An ended turn is not enough: a message typed into a running turn reads
-/// `turn_ended` while its group reply waits out `STEERING_SETTLE_MS`, and an
-/// interrupt can still close it (live, #121's 100-follower e2e: 5 joined
+/// An ended turn is not enough: unclaimed steering must surface its uncertain
+/// outcome rather than borrow the group's answer, and an interrupt can still
+/// close it (live, #121's 100-follower e2e: 5 joined
 /// followers exited 0 with `complete` false). Settlement closes every ended
 /// turn, as replied or with a reason, so waiting for it cannot hang.
 fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {

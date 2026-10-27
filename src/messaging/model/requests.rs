@@ -421,8 +421,8 @@ impl BusState {
     }
 
     /// The request a message may steer into: the agent's current request while
-    /// its turn visibly runs, or while the idle agent holds its reply for
-    /// background work that turn started (shells, agents, session crons),
+    /// its turn visibly runs, or while the idle agent has no answer yet and
+    /// waits for background work that turn started (shells, agents, crons),
     /// bound by its submit hook, with no final reply yet. Only the lead's own
     /// room can steer ordinary work; blocked-dialog notices may interrupt any
     /// room's turn, including when older cross-room work heads the queue.
@@ -457,8 +457,8 @@ impl BusState {
     }
 
     /// Moves `request` from the queue into `lead`'s group before Bus types it
-    /// into the running turn. The lead then settles only on an idle status
-    /// observed after this, so the turn the typing extends is not cut short.
+    /// into the running turn. A captured answer settles the members that its
+    /// hook or transcript claims; an unclaimed input retains its uncertainty.
     pub(crate) fn begin_steering(
         &mut self,
         request: RequestId,

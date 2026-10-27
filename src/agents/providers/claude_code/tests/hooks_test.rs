@@ -290,9 +290,6 @@ fn claude_stop_failure_with_blank_or_non_text_error_fields_falls_back_to_the_cat
     );
 }
 
-/// Live (2026-10-16): an orchestrator's every reply was held behind its own
-/// `bus send --async` waits on workers, which run for minutes or hours. Bus's
-/// waits are not work the reply depends on; other shells still hold it.
 #[test]
 fn prompt_origin_requires_matching_provider_metadata_in_a_bounded_tail() {
     let root = crate::utils::test_temp::unique_temp_path("claude-scheduled");

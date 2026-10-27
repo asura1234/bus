@@ -125,10 +125,10 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 | `captured_reply_reaches_its_source_room_once_for_both_providers_and_authors` | Claude, Codex and Cursor; MASTER/work; identical developer/agent messages; completion, publication counters and no mirrored notice after restart. |
 | `cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final` | Injected user rows, omitted commentary suffixes and a newer transcript turn cannot replace the owned Cursor final (0dcc4bd2/44e94f38). |
 | `independently_answered_turns_keep_five_distinct_replies_while_shells_live` | Five answered turns with shells persisting across turns must keep five distinct answers (#96). |
-| `queued_worker_notice_after_held_master_turn_reaches_work_room_and_master_once` | An automatically routed work-room blocked-worker notice takes its own turn at the held MASTER Stop, without waiting for shells; the captured interim and new answer each publish once in their source room. Held orchestrator replies now hand off queued input as independent turns before shell exit. |
-| `held_interim_survives_no_stop_wake_restart_and_releases_queued_request` | Captured text survives wake without Stop and coordinator restart; queue-only work then gets its own answer (#82). |
+| `queued_worker_notice_after_held_master_turn_reaches_work_room_and_master_once` | An automatically routed blocked-worker notice takes its own turn after the captured MASTER Stop answer; each answer publishes once in its source room while shells remain running. |
+| `captured_stop_survives_a_no_stop_wake_and_restart_before_the_next_request` | The immediate captured answer survives a no-Stop wake and restart; queue-only work then gets its own answer (#82). |
 | `coalesced_sends_share_one_answer_and_one_history_publication` | Three queued messages become one native paste and one shared reply; atomic Claude paste, Codex and unread dedupe. |
-| `direct_bus_control_shells_publish_equally_for_developer_and_agent` | Direct control verbs and quoted executable paths do not hold either sender's final (#103). |
+| `direct_bus_control_shells_publish_equally_for_developer_and_agent` | Captured answers publish for both senders while background control shells remain running (#103). |
 | `captured_reply_survives_unrelated_later_turn_and_duplicate_stop` | An autonomous later turn cannot replace a captured answer; replay cannot double-post. |
 | `flagged_nested_provider_callbacks_do_not_steal_active_request_identity` | Coordinator-only: records already flagged nested cannot replace the outer interactive session. Hook ancestry classification is covered by retained hook-side tests, not this fixture (#28). |
 | `claude_image_chip_and_long_paste_bind_to_the_delivered_request` | A captured real Claude screen independently drives the guarded writer image chip submission, then the atomic pasted submit hook binds (#16 and early matching fixes). |
@@ -141,7 +141,7 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 | `socket_eagain_during_active_reply_preserves_ownership_and_recovers_once` | A real three-second kernel/API receive timeout leaves the active request and captured callback owned; recovery delivers once and native `typed` count stays one (#106). |
 | `background_pending_cannot_discard_captured_reply_or_block_queue` | Captured Stop with cron or non-shell tasks, with/without a live shell, must deliver and drain queue in MASTER and work room. Enabled after merged stall-cx #107. |
 | `transcript_unmatched_diagnostic_is_not_rearmed_by_status_flapping_or_restart` | One unmatched request must generate one alert despite Working/Idle flapping and reload. Enabled after merged stall-cx #107. |
-| `batched_reply_cycles_hold_fresh_shells_after_reopen` | Two shared load cycles batch hooks, require real shell holds after reopen, compare distinct replies/publications and trigger one stalled-request alert per cycle. Runs in ordinary gates. |
+| `batched_reply_cycles_hold_fresh_shells_after_reopen` | Two shared load cycles batch hooks, require immediate Stop completion with live shells after reopen, compare distinct replies/publications and trigger one stalled-request alert per cycle. Runs in ordinary gates. |
 | `reply_contract_rejects_second_visible_publication` | Negative control: a real additional MASTER publication must be rejected even when the request history map still has one row. RED with the old assertion helper; not a claim of a new product defect. |
 | `soak_many_agents_concurrent_messages_and_background_shells` | Every admitted request completes with the right reply under 12-agent sustained load; each cycle also ages a stalled request, flaps/restarts and requires one alert before late delivery. Separate ignored timed target. |
 | `reply_delivery_survives_actual_server_restart_mid_request` (dev-tools `tui-driver`) | Actual OS server/coordinator restart with a durable unconsumed final, in both provider/source-room configurations. |
@@ -168,15 +168,15 @@ input and already-bound folded turns retain ownership.
 The enabled `orchestrator_inbox_*` regressions prove early cross-room admission,
 source-room attribution and replay/restart safety, real dialog priority while a
 live turn stays uninterrupted, direct human input followed by a no-Stop interrupt,
-and a textless background Stop. The original four reproduced RED on `4e30f80e` before the fix. A further red-first folded-steering guard proves that members with no separate submit hook share their captured answer after the ordinary steering grace, allowing the next room to proceed.
+and a textless background Stop. The original four reproduced RED on `4e30f80e` before the fix. A folded-steering guard requires a matching hook or transcript before sharing an answer. Unclaimed input surfaces its uncertain outcome at the idle boundary, allowing the next room to proceed.
 
 Both the ordinary two-cycle guard and the official timed soak now run an additional
 orchestrator burst per cycle: 28 queued messages alternate MASTER and the work room,
 a real worker dialog must take priority, and each answered turn starts another
-long background shell. The burst drains without aging those holds to their caps,
+long background shell. The burst drains while every captured Stop answer publishes immediately,
 checks distinct replies and visible publication counts, and reopens the coordinator
 four times with explicit provider startup hooks. Each burst proves 30 additional
-requests (held input, blocked notice, and 28 queued inputs). The original twelve-agent
+requests (initial answer, blocked notice, and 28 queued inputs). The original twelve-agent
 load and stall-alert phases retain their independent counts and assertions.
 
 The timed soak also asserts one ordinary Bus-authored idle-worker notice per aged
