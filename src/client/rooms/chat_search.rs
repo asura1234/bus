@@ -9,6 +9,7 @@ use std::ops::Range;
 #[derive(Clone, Debug)]
 pub(super) struct ChatSearch {
     pub query: String,
+    pub you_only: bool,
     /// The selected match, an index into `View::search_matches`.
     pub current: usize,
     /// Set when the query changes: the next render selects the newest match
@@ -23,13 +24,28 @@ pub(super) struct ChatSearch {
 pub(super) fn find_matches(
     lines: &[super::history::Line],
     query: &str,
+    you_only: bool,
 ) -> Vec<(usize, Range<usize>)> {
     let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
     if needle.is_empty() {
-        return Vec::new();
+        return if you_only {
+            lines
+                .iter()
+                .enumerate()
+                .filter_map(|(row, line)| {
+                    (line.to_developer && line.starts_message())
+                        .then_some((row, 0..line.text.len()))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
     }
     let mut matches = Vec::new();
     for (row, line) in lines.iter().enumerate() {
+        if you_only && !line.to_developer {
+            continue;
+        }
         // Lowercase per character, keeping each character's byte offset, so a
         // match maps back to the original text even where lowercasing changes
         // a character's length.
@@ -65,6 +81,7 @@ impl BusUi {
         }
         self.chat_search = Some(ChatSearch {
             query: String::new(),
+            you_only: false,
             current: 0,
             jump_to_newest: false,
             notes_focus: self.notes_focus,
@@ -87,6 +104,12 @@ impl BusUi {
     pub(super) fn chat_search_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match (code, modifiers) {
             (KeyCode::Esc, _) => self.close_chat_search(),
+            (KeyCode::Tab, _) => {
+                if let Some(search) = &mut self.chat_search {
+                    search.you_only = !search.you_only;
+                    search.jump_to_newest = true;
+                }
+            }
             (KeyCode::Enter, KeyModifiers::SHIFT) | (KeyCode::Down, _) => {
                 self.step_chat_search(true)
             }

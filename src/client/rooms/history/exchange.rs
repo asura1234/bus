@@ -104,8 +104,8 @@ impl History {
                 prompt,
                 width,
                 now,
+                thumbnails,
             );
-            push_prompt_files(&mut lines, prompt, width, thumbnails);
 
             self.push_reply_lines(
                 &mut lines,
@@ -165,7 +165,9 @@ impl History {
         prompt: &Prompt,
         width: u16,
         now: u64,
+        thumbnails: &mut Thumbnails,
     ) {
+        let start = lines.len();
         let header_timer = super::phases::HEADER.start();
         let mut header = vec![
             (
@@ -221,6 +223,13 @@ impl History {
         );
         self.rendered += usize::from(cold);
         self.projected += usize::from(projected);
+        push_prompt_files(lines, prompt, width, thumbnails);
+        let to_developer = prompt.author != Author::Developer
+            && (prompt.recipient_ids.is_empty()
+                || matches!(prompt.author, Author::Agent(_)) && explicitly_to_you(&prompt.text));
+        for line in &mut lines[start..] {
+            line.to_developer = to_developer;
+        }
     }
 
     fn push_reply_lines(
@@ -268,6 +277,7 @@ impl History {
                 )));
             }
             replied = true;
+            let start = lines.len();
             let header_timer = super::phases::HEADER.start();
             let attention = state
                 .is_developer_attention_author(room.id, &Author::Agent(*agent_id))
@@ -313,6 +323,7 @@ impl History {
                     links: None,
                     thumbnail: None,
                     raw_markdown: None,
+                    to_developer: false,
                     continued: false,
                     rejoin_space: false,
                     copy_from: 0,
@@ -321,8 +332,18 @@ impl History {
             } else {
                 push_body(lines, text, width, "    ", reply_anchor);
             }
+            let to_developer =
+                quote.is_some() && (prompt.author == Author::Developer || explicitly_to_you(text));
+            for line in &mut lines[start..] {
+                line.to_developer = to_developer;
+            }
         }
     }
+}
+
+fn explicitly_to_you(text: &str) -> bool {
+    crate::messaging::attention::has_you_mention(text)
+        || crate::messaging::attention::waiting_tag_action(text).is_some()
 }
 
 fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor: RowAnchor) {
@@ -336,6 +357,7 @@ fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor
         links: None,
         thumbnail: None,
         raw_markdown: None,
+        to_developer: false,
         continued: index > 0 && rows[index - 1].end == row.start,
         rejoin_space: false,
         copy_from: indent.len(),
@@ -386,6 +408,7 @@ fn wrap_header(
                 links: None,
                 thumbnail: None,
                 raw_markdown: None,
+                to_developer: false,
                 continued: index > 0,
                 rejoin_space: false,
                 copy_from: indent.len(),
@@ -451,6 +474,7 @@ fn blank_row(anchor: RowAnchor) -> Line {
         links: None,
         thumbnail: None,
         raw_markdown: None,
+        to_developer: false,
         continued: false,
         rejoin_space: false,
         copy_from: 0,
@@ -681,6 +705,7 @@ fn push_prompt_files(
                     row,
                 }),
                 raw_markdown: None,
+                to_developer: false,
                 continued: false,
                 rejoin_space: false,
                 copy_from: 0,
@@ -702,6 +727,7 @@ fn push_prompt_files(
             links: None,
             thumbnail: None,
             raw_markdown: None,
+            to_developer: false,
             continued: false,
             rejoin_space: false,
             copy_from: 0,
@@ -718,6 +744,7 @@ fn push_prompt_files(
             links: None,
             thumbnail: None,
             raw_markdown: None,
+            to_developer: false,
             continued: false,
             rejoin_space: false,
             copy_from: 0,

@@ -283,7 +283,10 @@ fn the_panel_sits_directly_above_the_history_and_gives_its_rows_back() {
             .iter()
             .collect();
         assert!(
-            hint.contains("Enter/↑ older · Shift+Enter/↓ newer · Esc close"),
+            hint.contains("Tab → You only: off")
+                && hint.contains("↑ older")
+                && hint.contains("↓ newer")
+                && hint.contains("Esc"),
             "{hint}"
         );
         key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
@@ -350,4 +353,199 @@ fn cancelling_recall_after_switching_rooms_preserves_the_destination_draft() {
         &pending.command,
         BusCommand::SetDraftText(room, text) if *room == second && text == "first unsent draft"
     )));
+}
+
+/// Deliberately identical text in mixed routes: rendered header text must not
+/// determine whether a message is addressed to the developer.
+fn mixed_find_history(ui: &mut BusUi, room: RoomId, agent: AgentId) {
+    use crate::messaging::model::{Author, Draft};
+    let mut snapshot = (*ui.snapshot).clone();
+    let peer = snapshot
+        .state
+        .create_agent(
+            room,
+            "peer → You",
+            Provider::ClaudeCode,
+            "/peer".into(),
+            None,
+        )
+        .unwrap();
+    let mut replies = Vec::new();
+    for (i, (author, text, reply)) in [
+        (
+            Author::Agent(agent),
+            "Needle ordinary peer traffic",
+            "ordinary peer answer",
+        ),
+        (
+            Author::Agent(agent),
+            "Needle @you choose a branch",
+            "ordinary peer answer",
+        ),
+        (
+            Author::Agent(agent),
+            "[waiting-on-you] Needle approve access",
+            "ordinary peer answer",
+        ),
+        (
+            Author::Developer,
+            "Needle @you outgoing prompt",
+            "Needle developer answer",
+        ),
+        (
+            Author::Agent(agent),
+            "Needle peer question",
+            "Needle @you reply mention",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let requests = snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: text.into(),
+                    files: Vec::new(),
+                    recipient_ids: [peer].into(),
+                },
+                author,
+                1000 + i as u64 * 1000,
+            )
+            .unwrap();
+        replies.push((requests[0], reply, 1500 + i as u64 * 1000));
+    }
+    snapshot
+        .state
+        .post_to_developer(
+            room,
+            agent,
+            "Needle direct ask\nsecond line".into(),
+            Vec::new(),
+            6000,
+        )
+        .unwrap();
+    snapshot
+        .state
+        .post_bus_notice(room, None, "Needle Bus notice".into(), 7000)
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    complete_requests(ui, replies);
+}
+
+#[test]
+fn you_only_selects_model_addressed_messages_and_intersects_text_matches() {
+    let (mut ui, room, agent) = fixture();
+    mixed_find_history(&mut ui, room, agent);
+    ui.open_room(room);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    room_screen(&mut ui, 100, 60);
+    assert!(
+        ui.view.search_matches.is_empty(),
+        "ordinary empty find is unchanged"
+    );
+    type_text(&mut ui, "needle");
+    room_screen(&mut ui, 100, 60);
+    assert_eq!(
+        ui.view.search_matches.len(),
+        9,
+        "unfiltered matches include all routes"
+    );
+    let history = ui.history.cached().to_vec();
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    let screen = room_screen(&mut ui, 100, 60);
+    assert!(screen.contains("Tab → You only: on"), "{screen}");
+    assert_eq!(ui.view.search_matches.len(), 6);
+    let texts: Vec<_> = ui
+        .view
+        .search_matches
+        .iter()
+        .map(|(row, _)| ui.history.cached()[*row].text.trim())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Needle @you choose a branch",
+            "[waiting-on-you] Needle approve access",
+            "Needle developer answer",
+            "Needle @you reply mention",
+            "Needle direct ask",
+            "Needle Bus notice"
+        ]
+    );
+    assert_eq!(
+        ui.history.cached(),
+        history,
+        "filtering leaves every row intact"
+    );
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    room_screen(&mut ui, 100, 60);
+    assert_eq!(ui.view.search_matches.len(), 9);
+}
+
+#[test]
+fn empty_you_only_steps_once_per_message_newest_first_and_resets_on_close() {
+    let (mut ui, room, agent) = fixture();
+    mixed_find_history(&mut ui, room, agent);
+    ui.open_room(room);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    room_screen(&mut ui, 100, 30);
+    assert_eq!(
+        ui.view.search_matches.len(),
+        6,
+        "one match per addressed message"
+    );
+    let rows: Vec<_> = ui.view.search_matches.iter().map(|(row, _)| *row).collect();
+    assert_eq!(selected_row(&ui), rows[5]);
+    for index in (0..5).rev() {
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        room_screen(&mut ui, 100, 30);
+        assert_eq!(selected_row(&ui), rows[index]);
+        assert!(on_screen(&ui, rows[index]));
+    }
+    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+    room_screen(&mut ui, 100, 30);
+    assert_eq!(selected_row(&ui), rows[5]);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    room_screen(&mut ui, 100, 30);
+    assert_eq!(selected_row(&ui), rows[0]);
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.chat_search.is_none());
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    assert!(!ui.chat_search.as_ref().unwrap().you_only);
+    assert_eq!(panel_row(&mut ui), "Find");
+    assert!(ui.view.search_matches.is_empty());
+}
+
+#[test]
+fn empty_you_only_highlights_the_selected_header_and_handles_no_matches() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .post_to_developer(room, agent, "Please decide".into(), Vec::new(), 1)
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    ui.compute_view(100, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let row = selected_row(&ui);
+    let y = ui.view.history_text.y + (row - ui.main_scroll) as u16;
+    assert_eq!(
+        buffer[(ui.view.history_text.x, y)].bg,
+        ratatui::style::Color::Rgb(240, 190, 70)
+    );
+    type_text(&mut ui, "absent");
+    assert!(panel_row(&mut ui).ends_with("no matches"));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert!(ui.view.search_matches.is_empty());
+    assert!(help::TEXT.contains("Tab in Find    Toggle → You only"));
 }
