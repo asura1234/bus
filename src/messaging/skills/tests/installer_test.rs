@@ -65,7 +65,7 @@ fn symlink_skills_and_symlink_registries_are_never_written_through() {
 }
 
 #[test]
-fn shadows_warn_for_the_selected_provider_including_nested_repo_scopes() {
+fn collisions_report_provider_precedence_without_warning_about_user_scope_itself() {
     use crate::agents::providers::ProviderKind;
     let home = crate::utils::test_temp::unique_temp_path("bus-skill-shadow");
     let repo = home.join("repo");
@@ -84,11 +84,27 @@ fn shadows_warn_for_the_selected_provider_including_nested_repo_scopes() {
         .arg(&repo)
         .output()
         .unwrap();
+    assert!(warnings_for_launch(ProviderKind::ClaudeCode, &home, &home)
+        .unwrap()
+        .is_empty());
+    assert!(warnings_for_launch(ProviderKind::Codex, &home, &home)
+        .unwrap()
+        .is_empty());
+    std::process::Command::new("git")
+        .arg("init")
+        .arg(&home)
+        .output()
+        .unwrap();
+    assert!(warnings_for_launch(ProviderKind::ClaudeCode, &home, &home)
+        .unwrap()
+        .is_empty());
     let claude = warnings_for_launch(ProviderKind::ClaudeCode, &nested, &home).unwrap();
     assert_eq!(claude.len(), 1);
+    assert!(claude[0].contains("user copy precedence"));
     assert!(claude[0].contains("repo/.claude/skills/pr"));
     let codex = warnings_for_launch(ProviderKind::Codex, &nested, &home).unwrap();
     assert_eq!(codex.len(), 1);
+    assert!(codex[0].contains("lists both copies"));
     assert!(codex[0].contains("child/.agents/skills/pr"));
     assert!(warnings_for_launch(ProviderKind::Cursor, &nested, &home)
         .unwrap()
