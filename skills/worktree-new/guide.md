@@ -1,38 +1,87 @@
-# Worktree-New Guide
+# Worktree provisioning principles
 
-`SKILL.md` keeps only the executable steps; this file explains why those steps have their current
-shape, and which parts must not be taken for granted.
+A worktree is an isolated checkout with its own branch and outputs. Keep it as
+long as useful. Reuse an authorized lane for a replacement direction rather than
+multiplying checkouts without a disk budget. Existing branches are preserved,
+never reset to an integration base. Origin's symbolic HEAD determines that base;
+an explicit base handles origins without one. New feature branches must not
+track the integration branch, because a bare push could target it.
 
-## Build-prep step in provisioning
+## Discovery and uncertainty
 
-Step 1 only runs the build-prep step (`cargo fetch --locked`: download the dependencies pinned in
-`Cargo.lock`) and does not compile. What a new worktree needs is "can build / test / commit", and
-all three depend only on the dependencies being in place; a full compile is left to the developer
-to run on demand (`just test-one <filter>` for focused iteration, `just ci` for the full gate).
+The scanner is repo-agnostic and uses only Git and Python 3.11+. It reads tracked
+and visible untracked manifests, including initialized submodules, without
+walking dependency caches or symlinks. Its canonical output and override contract
+are defined in [repo-profile-format.md](references/repo-profile-format.md).
+There is one shared cache in the main checkout. A caller refreshes it for the
+checkout it is about to use; it must not assume another checkout's last scan
+matches its own locks. Source contents and gitlink identities invalidate the
+cache, including toolchain pins inside initialized submodules. Local hazards
+such as rerere or a dependency symlink also refresh the output.
 
-`--locked` makes the fetch fail instead of silently rewriting `Cargo.lock`, so provisioning never
-leaves an unrelated lockfile change in the new worktree. Do not copy `target/` from another
-worktree: build products are per-checkout and a copied `target/` carries stale artifacts that point
-at the other checkout's paths. `vendor/` is tracked and arrives with the checkout itself.
+An uninitialized submodule has unknown pins. Initialization checks out the
+superproject's gitlinks, never an upstream branch tip, and triggers another scan.
+A disabled submodule update is a repository policy decision; it does not make
+missing native dependencies available. Never seed a new checkout with ignored
+files from an older one. Those files can hide a real broken gitlink.
 
-The fetch can be slow the first time (it fills the shared Cargo registry cache); that is normal.
-Later worktrees reuse the same cache and finish quickly.
+Detection is evidence, not a claim that every project has a safe universal build
+command. Cargo uses locked fetch, build and tests. Node uses its lockfile's
+manager and a build plus a non-GUI test script. Root CMake uses configure, build,
+and ctest with empty test collections treated as an error. Run wrappers, Make,
+just, Xcode, Gradle, workspaces and native pins are inventoried. Complex native or
+mobile builds need an explicit headless recipe; launching an app or simulator
+cannot substitute for it. Inspect any explicit recipe semantically: it must
+build and execute a non-GUI test or run, with no interactive login dependency.
+The script can prove command exit status, not that a user-supplied `true` is a
+meaningful test. Configure finite test commands; CI=true avoids common watch defaults.
 
-## Why symlink the Claude memory directory
+## Dependency ownership
 
-Claude Code buckets auto-memory by **absolute path**: `~/.claude/projects/<slug>/memory/`, where
-`<slug>` is the absolute path with every `/` replaced by `-`. So every worktree gets **its own**
-memory directory, and whatever is written there becomes an orphan the moment the worktree is
-removed.
+Default installs are locked and per checkout: npm ci, pnpm/bun frozen installs,
+and the appropriate Yarn lock mode. An ambiguous manager or missing lock blocks
+provisioning rather than silently changing dependencies. For Bus, the same
+inferred Cargo path keeps cargo fetch --locked and runs the headless Rust tests;
+there is no repository-name special case.
 
-So point the worktree's memory directory at the main repo's, letting the single canonical store
-survive worktree removal. Fold in existing content with no-clobber (`cp -n`): for same-named files
-the main repo's copy wins, so a worktree's temporary memory never overwrites the canonical version.
+Sharing node_modules is an explicit optimization, only when main and feature
+Node manifests/locks match. The runner creates the requested link and skips only
+the dependency install, still building and testing the feature checkout. It
+never replaces an existing directory or an unexpected symlink. Inspect project
+scripts before sharing if they mutate dependency contents. Other caches stay
+private. In particular build/deps can contain writable media-runtime activation
+receipts: a lock change in one checkout can invalidate every other checkout.
+Do not run a recipe against a shared build/deps symlink; privatize the runtime
+child before a lock edit. build/media-runtime is a separate per-checkout stage.
 
-Codex does not need this step: `~/.codex/memories` is a single global store, not bucketed by path.
+## Toolchains, disk and evidence
 
-## Failure handling
+The pinned Node must precede Homebrew's Node for every command, or native-module
+ABI errors can masquerade as source regressions. `--tool-bin` selects an existing
+installation and its reported version is checked against each discovered pin.
+Rust's own per-directory toolchain selection respects nested rust-toolchain
+files. Never remove Rust or another SDK just because a root-only search found
+no pin; initialized submodule pins are part of the inventory.
 
-A provisioning failure is **not rolled back** — the worktree has already been created by then.
-Report which step failed and let the developer enter the directory and retry; never report success
-for a step that did not actually run.
+The recipe carries a planning estimate, including nested Rust targets. Compare
+it with free space and existing worktree count before creating more lanes.
+The runner refuses provisioning below 25 GiB and rechecks before every command;
+it holds a caller-authorized mkdir slot and releases only its own slot. All
+children drop live BUS_/HERDR_ variables. Cargo gets a single target per checkout
+(or the caller's authorized target), no incremental compilation and fewer than
+half the host cores. Commands run at nice 19 on Unix. These precautions do not
+reserve filesystem space: concurrent workers still need a shared disk budget.
+No cleanup is performed. Pass nested target paths to worktree-close and verify
+that no session owns them before reclaiming anything.
+
+Ready means every prepare and smoke command passed and the original HEAD,
+manifest hash and tracked source contents remained unchanged. A new attempt
+invalidates prior readiness before doing work. A failure leaves the checkout in
+place, writes failure evidence and names the failed command. Logs belong under
+the worktree's temp directory. Full gates, GUI acceptance and provider sessions
+are separate evidence. No provider memory or real user configuration is touched.
+
+The profile warns when shared rerere is enabled. Rebase belongs to the rebase
+workflow: disable rerere for the entire operation, audit original versus rebased
+commit file lists, and investigate unexpected content drops. Provisioning does
+not alter common Git configuration or repair rebases.
