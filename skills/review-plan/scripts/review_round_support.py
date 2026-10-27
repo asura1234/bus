@@ -150,7 +150,7 @@ def detect_branch_plan_docs(base: str | None = None) -> list[Path]:
     if diff.returncode != 0:
         raise ValueError(f"cannot discover branch plans: {diff.stderr.strip()}")
     names.update(path for path in diff.stdout.split("\0") if path)
-    records = iter(git("status", "--porcelain", "-z").stdout.split("\0"))
+    records = iter(git("status", "--porcelain", "-z", "--untracked-files=all").stdout.split("\0"))
     for record in records:
         if not record:
             continue

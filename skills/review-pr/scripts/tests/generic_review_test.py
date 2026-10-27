@@ -63,6 +63,15 @@ class GenericReviewTest(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(run.stdout), [str(self.repo / 'docs/plans/dirty plan.md'), str(self.repo / 'docs/plans/space plan.md')])
 
+    def test_review_plan_discovers_untracked_plan_in_new_nested_directory(self):
+        nested = self.repo / 'docs/plans/new area/new plan.md'
+        nested.parent.mkdir()
+        nested.write_text('# New nested plan\n')
+        script = "import sys,json;sys.path.insert(0,sys.argv[1]);import review_round_support as r;print(json.dumps([str(p) for p in r.detect_branch_plan_docs()]))"
+        run = subprocess.run([sys.executable, '-c', script, str(SKILLS / 'review-plan/scripts')], cwd=self.repo, text=True, capture_output=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), sorted([str(nested), str(self.repo / 'docs/plans/work.md')]))
+
     def test_review_plan_discovers_target_plan_without_origin_master(self):
         script = "import sys,json;sys.path.insert(0,sys.argv[1]);import review_round_support as r;print(json.dumps([str(p) for p in r.detect_branch_plan_docs()]))"
         run = subprocess.run([sys.executable, '-c', script, str(SKILLS / 'review-plan/scripts')], cwd=self.repo, text=True, capture_output=True)
