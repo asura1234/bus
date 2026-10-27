@@ -94,8 +94,7 @@ mod client_mode {
         cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
         cmd.env("XDG_CONFIG_HOME", config_home);
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-        cmd.env("HOME", runtime_dir.join("home"));
-        cmd.env("USERPROFILE", runtime_dir.join("home"));
+        support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
         cmd.env("HERDR_SOCKET_PATH", api_socket_path);
         cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
         cmd.env("SHELL", "/bin/sh");
@@ -151,8 +150,7 @@ mod client_mode {
         cmd.arg("server");
         cmd.env("XDG_CONFIG_HOME", config_home);
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-        cmd.env("HOME", runtime_dir.join("home"));
-        cmd.env("USERPROFILE", runtime_dir.join("home"));
+        support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
         cmd.env("HERDR_SOCKET_PATH", api_socket_path);
         cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
         cmd.env("SHELL", "/bin/sh");
@@ -324,8 +322,7 @@ mod cross_area {
         cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
         cmd.env("XDG_CONFIG_HOME", config_home);
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-        cmd.env("HOME", runtime_dir.join("home"));
-        cmd.env("USERPROFILE", runtime_dir.join("home"));
+        support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
         cmd.env("HERDR_SOCKET_PATH", api_socket_path);
         cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
         cmd.env("SHELL", "/bin/sh");
@@ -368,8 +365,7 @@ mod cross_area {
         cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
         cmd.env("XDG_CONFIG_HOME", config_home);
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-        cmd.env("HOME", runtime_dir.join("home"));
-        cmd.env("USERPROFILE", runtime_dir.join("home"));
+        support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
         cmd.env("HERDR_SOCKET_PATH", api_socket_path);
         cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
         cmd.env("SHELL", "/bin/sh");

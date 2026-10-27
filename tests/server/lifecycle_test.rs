@@ -82,8 +82,7 @@ fn spawn_server(config_home: &Path, runtime_dir: &Path, api_socket_path: &Path) 
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HOME", runtime_dir.join("home"));
-    cmd.env("USERPROFILE", runtime_dir.join("home"));
+    support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", api_socket_path);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
@@ -316,8 +315,7 @@ fn duplicate_server_start_fails_gracefully() {
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
-    cmd.env("HOME", runtime_dir.join("home"));
-    cmd.env("USERPROFILE", runtime_dir.join("home"));
+    support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", &api_socket);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
