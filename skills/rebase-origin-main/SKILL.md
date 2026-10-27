@@ -1,6 +1,6 @@
 ---
 name: rebase-origin-main
-description: Rebase the current feature branch onto origin's default branch or a caller-provided base, triage conflicts by severity, then force-with-lease push with an explicit refspec. Use when the user asks to "rebase", "sync the default branch", "update to the latest default branch", "rebase onto a base", or "resolve conflicts and push". Agent-agnostic (claude / cursor / codex); pure git plus cargo for Cargo.lock.
+description: Rebase the current feature branch onto origin's default branch or a caller-provided base, triage conflicts by severity, then force-with-lease push with an explicit refspec. Use when the user asks to "rebase", "sync the default branch", "update to the latest default branch", "rebase onto a base", or "resolve conflicts and push". Agent-agnostic (claude / cursor / codex); Git plus target-prescribed dependency resync.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Rebase onto the integration base
@@ -23,6 +23,8 @@ Pure git; runnable by any AI agent.
 
 INPUT = [--base <ref-or-commit>]
 repo = `git rev-parse --show-toplevel`; run Git commands in repo.
+Run `python3 "$SKILL_DIR/scripts/repository_context.py" --repo "<repo>" --base HEAD`.
+Read context.policy; STOP on failure. bus_adapter = policy.gate_command == "just ci".
 default_ref = `git symbolic-ref --quiet refs/remotes/origin/HEAD` if available.
 Use only the full `refs/remotes/origin/` prefix to derive a protected branch; never --short.
 
@@ -92,7 +94,15 @@ dropped_shared_infra = []
 FOR EACH conflicted file (`git diff --name-only --diff-filter=U`)
   Read the file to understand both sides
 
-  IF the target policy explicitly requires taking this conflict from the integration base:
+  IF bus_adapter AND file is `Cargo.lock`:
+    -- Preserve Bus's existing lockfile rule only inside its profile-selected adapter.
+    `git checkout --ours -- Cargo.lock`
+    `cargo metadata --format-version 1 > /dev/null`
+    -- Re-add only manifest-required entries; never cargo update or hand-merge the lockfile.
+    `git add Cargo.lock`
+    append Cargo.lock to dropped_shared_infra
+
+  ELSE IF the target policy explicitly requires taking this conflict from the integration base:
     IF file is a submodule gitlink:
       Run `python3 "$SKILL_DIR/scripts/submodule_state.py" take-base-gitlink --repo "<repo>" --path "<file>"`.
       -- This records stage 2 directly; checkout-ours + add can incorrectly record the child's old HEAD.

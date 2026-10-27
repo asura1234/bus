@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Iterative code review in which the reviewer proves suspicions in the correctness / security / bug dimensions by writing tests that run red or, preferably for user-visible behavior, by a failing real TUI run on a scratch Bus; what stays unproven is marked `未证明` (write access is limited to test files; all other dimensions are read-only). Round 1 fully reviews the current branch's committed diff against base, excluding plans/, or a fixed chunk's whole committed files with --scope; Round 2+ only reconciles the prior round and reviews this round's delta and its direct consequences. Supports stable reviewer lanes, an optional associated plan, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review a PR, production chunk, review code, or re-review the current branch.
+description: Iterative code review in which the reviewer proves suspicions in the correctness / security / bug dimensions by writing tests that run red or, preferably for user-visible behavior, by a failing isolated acceptance run with the target repository's harness; what stays unproven is marked `未证明` (write access is limited to test files; all other dimensions are read-only). Round 1 fully reviews the current branch's committed diff against base, excluding plans/ and docs/plans/, or a fixed chunk's whole committed files with --scope; Round 2+ only reconciles the prior round and reviews this round's delta and its direct consequences. Supports stable reviewer lanes, an optional associated plan, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review a PR, production chunk, review code, or re-review the current branch.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Review principles are in [guide.md](./guide.md); the SOT for the 9 review dimensions, severity, and guardrails is
@@ -100,7 +100,7 @@ Capture:
   For --scope also capture TARGET_KIND=scope, SCOPE_HASH, SCOPE_FILE, SCOPE_SNAPSHOT, SCOPE_TEST_FILES;
   without --scope, TARGET_KIND is branch and these extra fields are absent.
 
-`DIFF_SNAPSHOT` / `DIFF_DELTA` already mechanically exclude `plans/**` in the prologue. Even when a plan file
+`DIFF_SNAPSHOT` / `DIFF_DELTA` already mechanically exclude `plans/**` and `docs/plans/**` in the prologue. Even when a plan file
 changes in the committed branch diff, it does not enter touched-file scope, findings, the sync list, or the PR single-purpose judgment.
 
 In scope mode STATE_DIR is temp/review-pr/<branch_slug>/scopes/<SCOPE_HASH>/<reviewer>/.

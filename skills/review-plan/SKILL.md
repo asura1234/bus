@@ -1,6 +1,6 @@
 ---
 name: review-plan
-description: Iteratively and read-only review a plan file that follows the project plan template. Round 1 verifies architecture, completeness, testing, and task-graph safety in full; Round 2+ only reconciles the prior round and reviews the current delta and its direct consequences. Supports stable reviewer lanes, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review or re-review a plan under plans/.
+description: Iteratively and read-only review a plan file that follows the project plan template. Round 1 verifies architecture, completeness, testing, and task-graph safety in full; Round 2+ only reconciles the prior round and reviews the current delta and its direct consequences. Supports stable reviewer lanes, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review or re-review a plan under plans/ or docs/plans/.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Review principles are in [guide.md](./guide.md); the SOT for macro judgment, task-graph safety, admissibility, and verdicts is

@@ -125,9 +125,8 @@ IF every module is CLEAN and the units of this invocation have no change
   Record "dead-code track: no confirmable dead code in this scope"; skip A6.
 
 Feed only this track's delta files:
-  `rustfmt --check --edition 2021 <delta .rs files…>`
-  `cargo clippy --all-targets --locked -- -D warnings` when the delta touches Rust (crate-wide by nature; a failure outside the delta belongs to its owner)
-  affected tests narrowed as in A3; full repository gates belong to gate-and-fix
+  target-derived read-only formatting and focused tests narrowed as in A3.
+  Do not invent a language-specific command or run a whole-repository gate here; full gates belong to gate-and-fix.
 
 ========== A6. LAND ==========
 
