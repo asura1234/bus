@@ -3,7 +3,7 @@
 当目标仓库的 `origin` 为 Codeup 时，`pr` / `merge-pr` 的流程两端相同，平台操作统一经
 `<skills dir>/_bus/cli_extensions/pr_host.py`：它按 `git remote get-url origin` 选择 `gh` 或 `aliyun devops codeup-*`，
 未知主机直接失败。本文只记录 Codeup 与 GitHub 不同、需要 agent 理解的地方；命令翻译与 fail-closed 校验
-以脚本及其测试（`cli_extensions/tests/test_pr_host.py`）为准，不要手工拼 `aliyun` 命令替代它。
+以脚本及其测试（`<skills dir>/_bus/cli_extensions/tests/pr_host_test.py`）为准，不要手工拼 `aliyun` 命令替代它。
 
 ## 环境
 
