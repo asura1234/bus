@@ -31,25 +31,54 @@ pub(crate) fn validate_project_trust(cwd: &Path) -> Result<(), String> {
             config.display()
         )
     })?;
+    let Some(projects) = document.get("projects").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
     let root = super::super::launch::project_root(cwd);
     let root = root.canonicalize().unwrap_or(root);
-    let untrusted = document
-        .get("projects")
-        .and_then(toml::Value::as_table)
-        .is_some_and(|projects| {
-            projects.iter().any(|(path, project)| {
-                let path = Path::new(path);
-                project.get("trust_level").and_then(toml::Value::as_str) == Some("untrusted")
-                    && (path == root || path.canonicalize().is_ok_and(|path| path == root))
-            })
-        });
-    if untrusted {
+    // Codex prefers the worktree's own trust level, then inherits the main
+    // repository's. An entry with no trust level still uses that inheritance.
+    let trust_root = if project_trust_level(projects, &root).is_some() {
+        root.clone()
+    } else {
+        main_repository_root(&root).unwrap_or_else(|| root.clone())
+    };
+    if project_trust_level(projects, &trust_root) == Some("untrusted") {
         return Err(format!(
             "Codex project {} is marked untrusted in {}; project hooks at {} cannot load. If you trust this directory, set its project trust_level to \"trusted\" in that file, review /hooks in Codex, then re-add the agent; or choose a trusted --pwd.",
-            root.display(), config.display(), root.join(".codex/hooks.json").display()
+            trust_root.display(), config.display(), root.join(".codex/hooks.json").display()
         ));
     }
     Ok(())
+}
+
+fn project_trust_level<'a>(projects: &'a toml::Table, root: &Path) -> Option<&'a str> {
+    projects
+        .get(root.to_string_lossy().as_ref())
+        .or_else(|| {
+            projects.iter().find_map(|(path, project)| {
+                Path::new(path)
+                    .canonicalize()
+                    .is_ok_and(|path| path == root)
+                    .then_some(project)
+            })
+        })
+        .and_then(|project| project.get("trust_level"))
+        .and_then(toml::Value::as_str)
+}
+
+fn main_repository_root(root: &Path) -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common = std::path::PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    common.parent().map(Path::to_path_buf)
 }
 
 /// Each launch hosts its own runtime so hooks inherit that launch's environment.
