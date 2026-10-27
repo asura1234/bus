@@ -69,12 +69,8 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
     };
-    let codex_images = kind == AgentKind::Codex
-        && !crate::agents::providers::codex::hooks::image_paste_parts(expected)
-            .0
-            .is_empty();
-    if !codex_images
-        && (normalize(&body) == normalize(expected) || collapsed_paste(kind, &body, expected))
+    if normalize(&body) == normalize(expected)
+        || collapsed_paste(kind, &body, expected)
         || kind == AgentKind::Claude && lifted_images(&body, expected, normalize)
         || kind == AgentKind::Codex && codex_image_attachment(&body, expected)
     {
@@ -129,8 +125,8 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
             || collapsed_paste(AgentKind::Claude, rest, &remaining))
 }
 
-/// Codex attaches each dedicated image paste before the text paste. Own the
-/// composed draft only with the exact image count and all remaining text.
+/// Codex either attaches or inserts each dedicated image paste as literal text.
+/// Own the draft only when every image and the remaining text are accounted for.
 fn codex_image_attachment(body: &str, expected: &str) -> bool {
     let (images, rest) = image_chips(body);
     let (expected_images, remaining) =
@@ -140,10 +136,21 @@ fn codex_image_attachment(body: &str, expected: &str) -> bool {
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
     };
-    images > 0
-        && images == expected_images.len()
-        && (normalize(rest) == normalize(&remaining)
-            || collapsed_paste(AgentKind::Codex, rest.trim_start(), &remaining))
+    let expected_images: Vec<_> = expected_images
+        .iter()
+        .map(|image| normalize(image))
+        .collect();
+    let rest = normalize(rest);
+    !expected_images.is_empty()
+        && crate::agents::providers::codex::hooks::text_after_image_pastes(
+            &rest,
+            &expected_images,
+            images,
+        )
+        .is_some_and(|text| {
+            text == normalize(&remaining)
+                || text == format!("[PastedContent{}chars]", remaining.chars().count())
+        })
 }
 
 /// The leading `[Image #N]` chips of a Claude composer and the text after them.
@@ -340,3 +347,7 @@ fn plain_rule(line: &str) -> bool {
 #[cfg(test)]
 #[path = "../tests/composer_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/codex_image_test.rs"]
+mod codex_image_tests;

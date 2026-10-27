@@ -418,8 +418,8 @@ fn codex_image_chips_and_reply_instruction_are_owned_only_together() {
                 &format!("› {expected}\n\n GPT-6 · /repo"),
                 &expected
             ),
-            InputObservation::Other,
-            "a visible path is not an attached image"
+            InputObservation::Pending,
+            "a literal draft can be Codex's image-decode fallback"
         );
         for body in [
             format!("{chips}{text}"),
@@ -446,7 +446,7 @@ fn codex_image_chips_and_reply_instruction_are_owned_only_together() {
 }
 
 #[test]
-fn combined_image_path_paste_is_not_a_codex_attachment_but_is_cursor_text() {
+fn combined_image_path_paste_is_owned_literal_text_in_codex_and_cursor() {
     let expected = |dir| captured_payload("please review this screenshot", dir, 1);
     assert_eq!(
         observe(
@@ -454,7 +454,7 @@ fn combined_image_path_paste_is_not_a_codex_attachment_but_is_cursor_text() {
             include_str!("fixtures/codex_image_paste.txt"),
             &expected("work-codex")
         ),
-        InputObservation::Other
+        InputObservation::Pending
     );
     assert_eq!(
         observe(

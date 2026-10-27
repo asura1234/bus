@@ -35,12 +35,12 @@ def until(predicate, timeout=40):
     raise AssertionError("native capture predicate did not arrive")
 
 
-def send_image(bus, image):
+def send_images(bus, images):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(15)
         stream.connect(str(bus.data / "control.sock"))
         request = {"id": "native-image", "method": "message.send", "params": {
-            "room": "bus", "to": ["image-worker"], "text": "", "files": [str(image)]}}
+            "room": "bus", "to": ["image-worker"], "text": "", "files": [str(image) for image in images]}}
         stream.sendall(json.dumps(request).encode() + b"\n")
         receipt = json.loads(stream.makefile().readline())
     assert receipt["ok"], receipt
@@ -98,7 +98,7 @@ enabled=false
     return env
 
 
-def scenario(binary, codex, root):
+def scenario(binary, codex, root, kinds):
     captures = []
     lock = threading.Lock()
 
@@ -150,9 +150,11 @@ def scenario(binary, codex, root):
             return None
 
         agent = until(ready)
-        image = root / "image.png"
-        image.write_bytes(image_png())
-        receipt = send_image(bus, image)
+        images = [root / f"image-{index}.png" for index in range(len(kinds))]
+        for image, kind in zip(images, kinds):
+            image.write_bytes(image_png() if kind == "valid" else b"not a decodable image\n")
+        evidence["image_kinds"] = kinds
+        receipt = send_images(bus, images)
         evidence["receipt"] = receipt
         command = f"bus send --reply-to {receipt['message_id']} --as {agent['id']} --text 'YOUR ANSWER'"
         evidence["expected_command"] = command
@@ -166,8 +168,13 @@ def scenario(binary, codex, root):
         evidence["captures"] = until(captured)
         matching = [message for message in user_messages(evidence["captures"])
                     if contains_command(message, command)]
-        assert any(any(part.get("type") == "input_image" for part in message.get("content", []))
-                   for message in matching), "correlated user message lost its native input_image"
+        def intact(message):
+            content = message.get("content", [])
+            text = "".join(part.get("text", "") for part in content if part.get("type") == "input_text")
+            return (sum(part.get("type") == "input_image" for part in content) == kinds.count("valid")
+                    and all(f'"{image}"' in text for image, kind in zip(images, kinds) if kind == "invalid"))
+
+        assert any(intact(message) for message in matching), "correlated user message lost an image or literal fallback"
         evidence["matched_user_messages"] = matching
         evidence["screen"] = bus.cli("agent", "read", "image-worker", "--source", "visible")
         def bound():
@@ -219,6 +226,8 @@ def main():
     parser.add_argument("--codex", required=True, type=Path, help="Native Codex executable, not an account wrapper")
     parser.add_argument("--run-dir", type=Path, help="New short direct child of /private/tmp (or /tmp)")
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--images", choices=("valid", "invalid", "valid,invalid", "invalid,valid"),
+                        default="valid", help="Per-paste native decode outcomes to verify")
     args = parser.parse_args()
     binary, codex = args.binary.resolve(strict=True), args.codex.resolve(strict=True)
     for path in (binary, codex):
@@ -237,7 +246,7 @@ def main():
         root = Path(tempfile.mkdtemp(prefix="bni-", dir=temporary))
     report = (args.report or ROOT / "temp/acceptance" / f"native-image-{root.name}.json").resolve()
     assert not report.is_relative_to(root), "report must survive scratch cleanup"
-    evidence = scenario(binary, codex, root)
+    evidence = scenario(binary, codex, root, args.images.split(","))
     evidence["source_head"] = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], env=git_env, text=True).strip()
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps(evidence, indent=2))

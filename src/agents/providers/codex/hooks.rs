@@ -40,6 +40,26 @@ pub(crate) fn image_prompt_parts(mut prompt: &str) -> (usize, &str) {
     }
 }
 
+/// Each dedicated image paste becomes either one chip or its literal quoted
+/// path. Literal paths precede the text paste, in the original image order.
+/// Return that text only when every image is accounted for exactly once.
+pub(crate) fn text_after_image_pastes<'a>(
+    mut text: &'a str,
+    images: &[impl AsRef<str>],
+    chips: usize,
+) -> Option<&'a str> {
+    let mut literals = images.len().checked_sub(chips)?;
+    for image in images {
+        if literals > 0 {
+            if let Some(rest) = text.strip_prefix(image.as_ref()) {
+                text = rest;
+                literals -= 1;
+            }
+        }
+    }
+    (literals == 0).then_some(text)
+}
+
 pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
     let event = field(value, "hook_event_name")?;
     // Title/memory sessions inherit hooks but have no interactive transcript.

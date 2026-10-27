@@ -564,3 +564,43 @@ fn retired_github_watch_legacy_state_load_preserves_rooms_and_drops_watch_fields
         );
     }
 }
+
+#[test]
+fn codex_image_paste_fallback_callbacks_keep_every_path_and_exact_reply_body() {
+    let text = "[Bus message 3; answer with bus send --reply-to 3 --as 2 --text 'YOUR ANSWER']\nFirst \t\n\n  Last";
+    let first = "\"/tmp/image.png\"";
+    let second = "\"/tmp/another image.png\"";
+    // Images may have been interleaved with text; the native writer pastes
+    // images first, then preserves the remaining text (including blank lines).
+    let typed = format!("{first}\n{text}\n{second}");
+    for prefix in [
+        format!("{first}{second}"),
+        format!("[Image #1] {second}"),
+        format!("[Image #1] {first}"),
+        "[Image #1] [Image #2] ".into(),
+    ] {
+        let payload = format!("{prefix}{text}");
+        assert!(payload_matches(&payload, &typed), "{payload}");
+        for changed in [
+            payload.replace("reply-to 3", "reply-to 30"),
+            payload.replace("--as 2", "--as 20"),
+            payload.replace("First \t", "First"),
+            payload.replace("\n\n", "\n"),
+        ] {
+            assert!(!payload_matches(&changed, &typed), "{changed}");
+        }
+    }
+    for prefix in [
+        first.to_owned(),
+        format!("{second}{first}"),
+        format!("[Image #1] {first}{second}"),
+        "[Image #1] [Image #2] [Image #3] ".into(),
+        "\"/tmp/unrelated.png\"".into(),
+    ] {
+        assert!(!payload_matches(&format!("{prefix}{text}"), &typed));
+    }
+    assert!(payload_matches(
+        &format!("{first}{text}"),
+        &format!("{text}\n{first}")
+    ));
+}

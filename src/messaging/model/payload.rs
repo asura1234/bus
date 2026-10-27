@@ -159,7 +159,13 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
     let (images, remaining) = crate::agents::providers::codex::hooks::image_prompt_parts(&payload);
     let (expected_images, expected_text) =
         crate::agents::providers::codex::hooks::image_paste_parts(&typed);
-    images > 0 && images == expected_images.len() && remaining == normalized_payload(&expected_text)
+    !expected_images.is_empty()
+        && crate::agents::providers::codex::hooks::text_after_image_pastes(
+            remaining,
+            &expected_images,
+            images,
+        )
+        .is_some_and(|text| text == normalized_payload(&expected_text))
 }
 
 fn normalized_payload(value: &str) -> String {
