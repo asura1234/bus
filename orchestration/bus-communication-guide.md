@@ -19,6 +19,13 @@ Silence is the default. Nobody needs a message to stay busy, and nobody is kept
 "awake" by messages. An idle agent waiting on a peer is fine. If your message
 would leave the receiver doing exactly what it was already doing, don't send it.
 
+## Where to send
+
+**MASTER belongs to the developer and the orchestrators.** Workers never send
+in MASTER, not even to their own orchestrator: send from your own work room
+(`bus send --room <your room> --to orchestrator ...`). Peers in other rooms are
+reached from your own room too; names resolve across rooms.
+
 ## Peer to peer first
 
 Most coordination happens between the workers who share a task, not through the
@@ -60,7 +67,8 @@ peer traffic.
 
 ## To you (the developer)
 
-Any agent may message the developer directly. It had better be important.
+Any agent may message the developer directly, workers from their own room. It
+had better be important.
 
 **`[waiting-on-you]` means a hard blocker** and pages the developer on Feishu,
 wherever they are. Use it only when work is stopped and only the developer can
