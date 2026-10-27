@@ -29,8 +29,18 @@ pub(super) fn digest<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -
 
 pub(super) fn shipped() -> &'static [Skill] {
     static SKILLS: OnceLock<Vec<Skill>> = OnceLock::new();
+    static DATA: OnceLock<Vec<u8>> = OnceLock::new();
     SKILLS.get_or_init(|| {
-        let data: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skills.bin"));
+        let data = DATA.get_or_init(|| {
+            use std::io::Read;
+            let mut data = Vec::new();
+            flate2::read::ZlibDecoder::new(
+                include_bytes!(concat!(env!("OUT_DIR"), "/skills.bin")).as_slice(),
+            )
+            .read_to_end(&mut data)
+            .expect("decode embedded skills");
+            data
+        });
         let mut skills: BTreeMap<String, Vec<File>> = BTreeMap::new();
         for line in include_str!(concat!(env!("OUT_DIR"), "/skills.index")).lines() {
             let fields: Vec<_> = line.split('\t').collect();

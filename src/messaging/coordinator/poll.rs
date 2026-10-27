@@ -45,18 +45,7 @@ impl Worker {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
                     || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
                 {
-                    let mut identity = agent.runtime_identity.clone();
-                    identity.terminal_id = Some(info.terminal_id.clone());
-                    identity.pane_id = Some(info.pane_id.clone());
-                    state
-                        .set_agent_runtime_identity(agent.id, identity)
-                        .map_err(|e| e.to_string())?;
-                    crate::messaging::skills::post_warnings(&mut state, agent)?;
-                    rebound.push((
-                        agent.id,
-                        agent.runtime_identity.terminal_id.clone(),
-                        info.terminal_id.clone(),
-                    ));
+                    rebound.push(rebind_agent(&mut state, agent, info)?);
                 }
             }
             if let Some(info) = info {
@@ -130,6 +119,25 @@ impl Worker {
         }
         self.apply_poll(state)
     }
+}
+
+fn rebind_agent(
+    state: &mut BusState,
+    agent: &RoomAgent,
+    info: &schema::AgentInfo,
+) -> Result<(AgentId, Option<String>, String), String> {
+    let mut identity = agent.runtime_identity.clone();
+    identity.terminal_id = Some(info.terminal_id.clone());
+    identity.pane_id = Some(info.pane_id.clone());
+    state
+        .set_agent_runtime_identity(agent.id, identity)
+        .map_err(|error| error.to_string())?;
+    crate::messaging::skills::post_warnings(state, agent)?;
+    Ok((
+        agent.id,
+        agent.runtime_identity.terminal_id.clone(),
+        info.terminal_id.clone(),
+    ))
 }
 
 /// A pending owned launch has no detected provider yet. It still carries the

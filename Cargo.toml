@@ -27,6 +27,7 @@ include = [
     "!vendor/libghostty-vt/zig-pkg/**/*",
     "vendor/libghostty-vt.vendor.json",
     "build.rs",
+    "build_identity.rs",
     ".cargo/config.toml",
     "rust-toolchain.toml",
     "clippy.toml",
@@ -101,6 +102,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
 schemars = { version = "1.2.1", features = ["derive"] }
+
+[build-dependencies]
+flate2 = "1"
 
 [dev-dependencies]
 # Drops a live Bus's variables before any test runs (src/utils/tests/live_bus_env_test.rs).

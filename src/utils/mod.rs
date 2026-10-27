@@ -14,6 +14,7 @@ pub(crate) mod theme;
 pub(crate) mod url;
 pub(crate) mod version;
 
+pub(crate) mod launch_guard;
 #[cfg(test)]
 #[path = "config/tests/env_test.rs"]
 pub(crate) mod test_env;
