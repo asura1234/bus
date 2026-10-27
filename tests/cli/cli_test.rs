@@ -8,5 +8,7 @@ mod help;
 mod live_bus_env;
 #[path = "paths_test.rs"]
 mod paths;
+#[path = "skills_test.rs"]
+mod skills;
 #[path = "variant_test.rs"]
 mod variant;

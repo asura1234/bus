@@ -6,6 +6,7 @@ pub(crate) mod help;
 pub(crate) mod launch;
 mod perf;
 mod session_pick;
+mod skills;
 pub(crate) mod stop;
 use help::print_help;
 use session_pick::{parse_invocation, Action};
@@ -135,6 +136,12 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         return run_tui(dev, args);
     }
 
+    if let Action::Skills(args) = &invocation.action {
+        return skills::run(args);
+    }
+    if matches!(invocation.action, Action::Run | Action::Resume(_)) {
+        skills::on_launch();
+    }
     let explicit_root = bus_data_dir();
     let base = sessions::default_base_dir().map_err(io::Error::other)?;
     let registry = LocalSessionRegistry::new(base.clone());
@@ -183,7 +190,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             }
         },
         Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
-        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
     };
     if !root.is_absolute() {
         return Err(io::Error::other(
@@ -228,7 +235,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         }
         Action::Run | Action::Resume(_) => run_session(&registry, local_session_id, dev),
         Action::Paths => print_paths(&root, &base, dev),
-        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
     }
 }
 

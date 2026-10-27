@@ -18,7 +18,7 @@ from coverage_run import EXTERNAL_RUN, PROFILE_DIR, Run
 from gate_process import Children, Interrupted, interrupt_signals
 from profile_report import merged_profile
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip() or Path.cwd()).resolve()
 OUTPUT = ROOT / "temp/gate-and-fix/coverage"
 POLICY = ROOT / "skills/gate-and-fix/references/coverage-policy.json"
 LINT_POLICY = ROOT / "skills/gate-and-fix/references/lint-policy.toml"

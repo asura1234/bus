@@ -18,7 +18,8 @@ class WorkflowModulesTests(unittest.TestCase):
             with self.subTest(skill=skill):
                 entrypoint = (SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
                 self.assertLessEqual(len(entrypoint.splitlines()), 250)
-                self.assertIn(f"Read(skills/{skill}/scripts/{helper}) completely", entrypoint)
+                command = f"Read($SKILL_DIR/../{skill}/scripts/{helper}) completely" if skill == "review-pr" else f"Read(skills/{skill}/scripts/{helper}) completely"
+                self.assertIn(command, entrypoint)
 
     def test_helpers_load_only_in_their_original_modes(self) -> None:
         author = (SKILLS / "address-review-comments/SKILL.md").read_text(encoding="utf-8")
@@ -30,9 +31,9 @@ class WorkflowModulesTests(unittest.TestCase):
         )
         self.assertRegex(
             reviewer,
-            r"IF MODE == full:\n  Read\(skills/review-pr/scripts/full_review.md\) completely",
+            r"IF MODE == full:\n  Read\(\$SKILL_DIR/../review-pr/scripts/full_review.md\) completely",
         )
-        self.assertLess(reviewer.index("1. VERIFICATION BOUNDARY"), reviewer.index("Read(skills/review-pr/scripts/full_review.md)"))
+        self.assertLess(reviewer.index("1. VERIFICATION BOUNDARY"), reviewer.index("Read($SKILL_DIR/../review-pr/scripts/full_review.md)"))
         self.assertIn("6. MODE = incremental", reviewer)
         self.assertIn("CLOSED WORLD:", reviewer)
         self.assertIn("8. DETERMINISTIC RESPONSE GATE", reviewer)

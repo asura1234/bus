@@ -51,6 +51,7 @@ impl Worker {
                     state
                         .set_agent_runtime_identity(agent.id, identity)
                         .map_err(|e| e.to_string())?;
+                    crate::messaging::skills::post_warnings(&mut state, agent)?;
                     rebound.push((
                         agent.id,
                         agent.runtime_identity.terminal_id.clone(),

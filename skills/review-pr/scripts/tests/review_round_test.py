@@ -129,7 +129,7 @@ class ScopeRoundTests(unittest.TestCase):
             "cli_extensions/review_round_common.py",
             "cli_extensions/review_scope.py",
         ):
-            target = self.root / name
+            target = self.root / ("skills/_bus/" + name if name.startswith("cli_extensions/") else name)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO_ROOT / name, target)
         self.run_command("git", "init", "-b", "main")

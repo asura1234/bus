@@ -40,7 +40,7 @@ An option is **disqualified**, rather than ranked last, when it:
 
 - fails to achieve the locked goal;
 - hits a locked non-goal;
-- violates any hard rule in the [architecture principles](../../docs/guides/architecture-principles.md)
+- violates any hard rule in the [architecture principles](../_bus/docs/guides/architecture-principles.md)
   (wrong layer, reversed dependency, fallback for an impossible state, a pointless deprecation transition period...);
 - requires overturning an archived decision.
 

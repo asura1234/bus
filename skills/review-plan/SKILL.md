@@ -2,9 +2,9 @@
 name: review-plan
 description: Iteratively and read-only review a plan file that follows the project plan template. Round 1 verifies architecture, completeness, testing, and task-graph safety in full; Round 2+ only reconciles the prior round and reviews the current delta and its direct consequences. Supports stable reviewer lanes, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review or re-review a plan under plans/.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Review principles are in [guide.md](./guide.md); the SOT for macro judgment, task-graph safety, admissibility, and verdicts is
-[plan-review-guide.md](../../docs/guides/plan-review-guide.md). This file defines only the executable flow.
+[plan-review-guide.md](../_bus/docs/guides/plan-review-guide.md). This file defines only the executable flow.
 Input only needs to follow `docs/templates/plan-template.md`; it does not require the session that wrote the plan or any other private state.
 
 Plans written before this migration remain historical inputs but are not
@@ -34,7 +34,7 @@ MAY:
 ========== 2. DETERMINISTIC PROLOGUE ==========
 
 Run:
-  python3 skills/review-plan/scripts/review_round.py \
+  python3 "$SKILL_DIR/../review-plan/scripts/review_round.py" \
     [<plan-file>] [--reviewer <lane>] [--devils-advocate]
 
 IF exit != 0 AND output says multiple / named lanes make a bare invocation ambiguous:
@@ -56,10 +56,10 @@ Capture:
 
 ========== 3. LOAD LOCKED CONTEXT ==========
 
-Read(skills/review-plan/guide.md) completely
-Read(docs/guides/plan-review-guide.md) completely
-Read(docs/guides/architecture-principles.md) completely
-Read(docs/guides/consumer-fallout-format.md) completely
+Read($SKILL_DIR/../review-plan/guide.md) completely
+Read($SKILL_DIR/../_bus/docs/guides/plan-review-guide.md) completely
+Read($SKILL_DIR/../_bus/docs/guides/architecture-principles.md) completely
+Read($SKILL_DIR/../_bus/docs/guides/consumer-fallout-format.md) completely
 plan = Read(PLAN) completely
 
 The goal, non-goals, archived decisions, and one-shot workflow are locked inputs; do not rewrite, expand, or overturn them.
@@ -86,7 +86,7 @@ IF MODE == full:
   first read the material the plan references and the relevant source,
   independently establish the current state, then verify the plan's claims; the plan's paraphrase itself is never evidence.
   fallout = `<dirname(SNAPSHOT)>/consumer-fallout.json`
-  Run `python3 skills/review-plan/scripts/consumer_fallout.py --plan <PLAN> --output <fallout>`.
+  Run `python3 "$SKILL_DIR/../review-plan/scripts/consumer_fallout.py" --plan <PLAN> --output <fallout>`.
   Consume only stdout's per-task, high-confidence unresolved summary; do not load the complete artifact into context wholesale.
   When `omitted_unresolved_count > 0`, gather evidence only in the relevant task bucket; a candidate must be verified as closed on file contract, owner,
   and gate, or explicitly excluded.
@@ -101,7 +101,7 @@ IF MODE == full:
       evidence = ambiguity, test scenarios, whether validation commands truly cover the goal, other macro problems admitted under the strict bar
 
     Every **dimension-group** subagent must (except the fresh-eyes subagent, see below):
-      - Read(docs/guides/plan-review-guide.md) and docs/guides/architecture-principles.md
+      - Read($SKILL_DIR/../_bus/docs/guides/plan-review-guide.md) and docs/guides/architecture-principles.md
       - Read(PLAN) completely plus the first-party source/SOT its group needs
       - review only its assigned dimensions, read-only, never modifying the repo
       - honor the locked goals, non-goals, archived decisions, and one-shot workflow
@@ -171,14 +171,14 @@ REPORT:
     废弃（Abandon）:
       multiple purposes, a fundamentally wrong architecture, or cannot be salvaged locally
 
-  Before completion, Read(docs/guides/review-format.md) completely.
+  Before completion, Read($SKILL_DIR/../_bus/docs/guides/review-format.md) completely.
   Write <round-NN/review.md> strictly using the plan-review template.
   Recommend state only; the reviewer does not write plan state.
 
 ========== 8. DETERMINISTIC RESPONSE GATE ==========
 
 Run:
-  python3 cli_extensions/review_artifact.py render-response \
+  python3 "$SKILL_DIR/../_bus/cli_extensions/review_artifact.py" render-response \
     --review-file <round-NN/review.md> \
     --output <round-NN/chat-response.md>
 
