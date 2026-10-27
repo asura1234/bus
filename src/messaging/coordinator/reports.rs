@@ -76,13 +76,12 @@ pub(super) fn pending_report(
         })
     });
     let completed_owner = owner.is_some_and(|request| {
-        request.phase == RequestPhase::Completed && request.pending_final.is_some()
+        request.phase == RequestPhase::Completed && request.reply().is_some()
     });
     let already_answered = completed_owner
         && owner.is_some_and(|request| {
             request
-                .pending_final
-                .as_ref()
+                .reply()
                 .is_some_and(|answer| answer.text.trim() == text.trim())
         });
     let room = owner

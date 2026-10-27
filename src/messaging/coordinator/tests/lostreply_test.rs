@@ -572,6 +572,9 @@ fn a_recorded_turn_claims_steering_without_borrowing_another_turns_answer() {
         let mut f = orchestrator();
         let (lead, unknown) = stop_with_unconfirmed_steering(&mut f);
         f.status(RuntimeStatus::Idle);
+        let prompts = [lead, unknown]
+            .map(|id| f.request(id).submitted_payload.clone().unwrap())
+            .to_vec();
         let mut state = f.worker.state.clone();
         assert!(state.settle_unclaimed_steering(f.agent, f.now, |request| {
             let proves = if same_turn {
@@ -587,7 +590,7 @@ fn a_recorded_turn_claims_steering_without_borrowing_another_turns_answer() {
                     "Checks ran."
                 }
                 .into(),
-                prompts: vec!["start the workers".into(), "also run checks".into()],
+                prompts: prompts.clone(),
             })
         }));
         f.worker.save(state).unwrap();
@@ -646,4 +649,120 @@ fn a_changed_late_master_final_is_visible_while_new_work_awaits_its_answer() {
         assert_eq!(f.reply(next).as_deref(), Some("New answer."));
         assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
     }
+}
+
+#[test]
+fn a_later_recorded_turn_answers_every_steering_member_it_claims() {
+    use crate::messaging::model::RecordedTurnEnd;
+    for visible_to_all in [true, false] {
+        let mut f = Fixture::new(Provider::Codex);
+        let lead = running(&mut f, "write the parser", "turn-1");
+        let checks = f.send("also run checks", false);
+        f.deliver();
+        let docs = f.send("also update docs", false);
+        f.deliver();
+        f.stopped("turn-1", "Parser written.");
+        f.consume();
+        assert_eq!(f.reply(lead).as_deref(), Some("Parser written."));
+        for id in [checks, docs] {
+            assert_eq!(f.request(id).group, Some(lead));
+            assert!(!f.request(id).trusted_start_bound);
+        }
+        f.status(RuntimeStatus::Idle);
+        let prompts = [checks, docs]
+            .map(|id| f.request(id).submitted_payload.clone().unwrap())
+            .to_vec();
+        let mut state = f.worker.state.clone();
+        assert!(state.settle_unclaimed_steering(f.agent, f.now, |request| {
+            (request.id == docs || (visible_to_all && request.id == checks)).then(|| {
+                RecordedTurnEnd::Final {
+                    turn_id: "turn-2".into(),
+                    text: "Checks and docs finished.".into(),
+                    prompts: prompts.clone(),
+                }
+            })
+        }));
+        f.worker.save(state).unwrap();
+        for id in [checks, docs] {
+            assert_eq!(f.reply(id).as_deref(), Some("Checks and docs finished."),
+            "every member proved by the same later recorded turn must receive its answer; member {id:?}");
+            assert_eq!(f.request(id).phase, RequestPhase::Completed);
+            assert!(!f.request(id).uncertain_outcome);
+        }
+        assert_eq!(f.reply(lead).as_deref(), Some("Parser written."));
+        assert_eq!(
+            f.worker.state.room(f.room).unwrap().unread_count,
+            2,
+            "the later shared answer publishes once in the room"
+        );
+    }
+}
+
+#[test]
+fn a_new_silent_request_never_owns_a_previous_requests_shell_after_reopen() {
+    for (restart, retry_startup) in [(false, false), (true, false), (true, true)] {
+        let mut f = orchestrator();
+        let old = running(&mut f, "start a background service", "old-turn");
+        let service = ("persistent-old-service", "old-background-service");
+        stop(&f, "old-turn", "The old service is running.", &[service]);
+        f.consume();
+        assert_eq!(f.reply(old).as_deref(), Some("The old service is running."));
+        if restart {
+            reopen(&mut f);
+        }
+        if retry_startup {
+            f.record(json!({"hook_event_name":"SessionStart", "session_id":"session", "source":"startup", "retry":true}));
+            f.consume();
+        }
+        f.status(RuntimeStatus::Idle);
+        let silent = running(
+            &mut f,
+            "do not reply; start no background work",
+            "silent-turn",
+        );
+        stop(&f, "silent-turn", "", &[service]);
+        f.consume();
+        let status = f
+            .worker
+            .control_message_at(f.request(silent).prompt.id, f.now)
+            .unwrap();
+        assert_eq!(status["complete"], true, "restart={restart}: {status}");
+        assert_eq!(f.reply(silent).as_deref(), Some(""));
+        assert!(!f.request(silent).awaiting_background);
+        assert_eq!(f.reply(old).as_deref(), Some("The old service is running."));
+        assert_eq!(f.worker.state.notices(f.room).count(), 0);
+    }
+}
+
+#[test]
+fn a_request_owned_textless_wait_keeps_its_shell_ownership_after_reopen() {
+    let mut f = orchestrator();
+    let lead = running(&mut f, "run tests and report their result", "turn-1");
+    stop(&f, "turn-1", "", &[("tests", "cargo test")]);
+    f.consume();
+    assert!(f.request(lead).awaiting_background);
+    assert!(f.reply(lead).is_none());
+    reopen(&mut f);
+    f.status(RuntimeStatus::Idle);
+    // A different envelope reports the same running task after restart.
+    stop(&f, "turn-1", "", &[("tests", "cargo test (still running)")]);
+    f.consume();
+    assert!(f.request(lead).awaiting_background);
+    assert!(f.reply(lead).is_none());
+    f.started("wake", &notification("tests"));
+    f.stopped("wake", "All tests passed.");
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some("All tests passed."));
+}
+
+#[test]
+fn an_unknown_shell_census_is_not_proof_of_request_ownership() {
+    // The session was attested before this process, but no startup inventory
+    // or earlier Stop was saved. Existing shells have unknown ownership.
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "do not reply", "turn-1");
+    stop(&f, "turn-1", "", &[("unknown-service", "daemon")]);
+    f.consume();
+    assert_eq!(f.reply(lead).as_deref(), Some(""));
+    assert!(!f.request(lead).awaiting_background);
 }

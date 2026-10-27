@@ -63,12 +63,6 @@ pub(super) struct Worker {
     /// Each Codex agent's rollout, from its hooks. A turn that a provider
     /// error ended fires no Stop hook; only the rollout records why.
     pub(super) codex_rollouts: BTreeMap<AgentId, PathBuf>,
-    /// Shells inherited from the preceding request. Their wakes must not
-    /// steal the current request's turn or delay a captured final.
-    pub(super) claude_settled_shells: BTreeMap<AgentId, BTreeSet<String>>,
-    /// Last observed shells and the request that observed them. A different
-    /// request inherits these shells instead of waiting for their replies.
-    pub(super) claude_shell_observations: BTreeMap<AgentId, (Option<RequestId>, BTreeSet<String>)>,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
@@ -171,8 +165,6 @@ impl Worker {
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
             codex_rollouts: BTreeMap::new(),
-            claude_settled_shells: BTreeMap::new(),
-            claude_shell_observations: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
             batch: None,

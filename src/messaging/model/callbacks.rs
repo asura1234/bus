@@ -514,9 +514,10 @@ impl BusState {
                 .chain(self.group_members(lead))
                 .any(|id| {
                     self.requests.get(&id).is_some_and(|request| {
-
-                        (matches!(request.phase, RequestPhase::Submitting | RequestPhase::Active)
-                            && request.matches_callback_payload(payload))
+                        (matches!(
+                            request.phase,
+                            RequestPhase::Submitting | RequestPhase::Active
+                        ) && request.matches_callback_payload(payload))
                             || (id == lead && bound_callback_turn(request, callback))
                     })
                 });
@@ -556,20 +557,24 @@ impl BusState {
             return Ok(false);
         };
         let members = self.group_members(request_id);
-
-
-        // Already answered requests own their reply keys. The shared final gets
-        // an outstanding representative, so it cannot overwrite or spend those replies.
-        let reply_group = std::iter::once(request_id)
-            .chain(members.iter().copied())
-            .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
-            .unwrap_or(request_id);
-
         let (members, unresolved): (Vec<_>, Vec<_>) = members.into_iter().partition(|member| {
             self.requests
                 .get(member)
                 .is_none_or(|m| !m.steered || m.trusted_start_bound || m.settled())
         });
+        // Already answered requests own their reply keys. The shared final gets
+        // an outstanding representative, so it cannot overwrite or spend those replies.
+        let reply_group = request
+            .completed_reply
+            .as_ref()
+            .filter(|reply| reply.content == pending)
+            .and_then(|reply| reply.group)
+            .or_else(|| {
+                std::iter::once(request_id)
+                    .chain(members.iter().copied())
+                    .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
+            })
+            .unwrap_or(request_id);
         let turn_key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
             pending.provider_session_id.as_deref(),
@@ -613,8 +618,10 @@ impl BusState {
             });
         }
         request.phase = RequestPhase::Completed;
-
         request.completed_at_ms.get_or_insert(completed_at_ms);
+        if unresolved.is_empty() {
+            request.pending_final = None;
+        }
         if let Some(key) = turn_key {
             self.consumed_provider_turns.insert(key);
         }
@@ -645,8 +652,7 @@ impl BusState {
             .chain(members)
             .filter_map(|id| self.requests.get(id))
             .filter(|request| {
-                request.phase == RequestPhase::Completed
-                    && request.pending_final.as_ref() == Some(pending)
+                request.phase == RequestPhase::Completed && request.reply() == Some(pending)
             })
             .map(|request| request.room_id)
             .collect();
@@ -681,9 +687,11 @@ impl BusState {
 }
 
 fn bound_callback_turn(request: &Request, callback: &ProviderCallback) -> bool {
-
-    (matches!(request.phase, RequestPhase::Submitting | RequestPhase::Active)
-        || request.pending_final.is_some()) && request.trusted_start_bound
+    (matches!(
+        request.phase,
+        RequestPhase::Submitting | RequestPhase::Active
+    ) || request.pending_final.is_some())
+        && request.trusted_start_bound
         && request.provider_session_id.is_some()
         && request.provider_turn_id.is_some()
         && request.provider_turn_id == callback.provider_turn_id

@@ -175,7 +175,7 @@ impl Fixture {
             .requests()
             .filter(|r| r.agent_id == self.orchestrator)
             .max_by_key(|r| r.id)?;
-        let reply = request.pending_final.as_ref()?;
+        let reply = request.reply()?;
         Some((request.room_id, reply.text.clone()))
     }
 

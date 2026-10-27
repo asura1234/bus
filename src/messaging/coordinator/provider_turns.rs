@@ -1,6 +1,6 @@
 //! Provider turn facts read beyond the hook's own verdict: background shells
 //! for wake ownership, and Codex usage from its rollout.
-use super::{callbacks, AgentId, BTreeSet, Parsed, Path, Provider, ProviderCallback, Worker};
+use super::{callbacks, AgentId, Parsed, Path, Provider, ProviderCallback, Worker};
 
 impl Worker {
     pub(super) fn mark_scheduled_turn(
@@ -47,71 +47,49 @@ impl Worker {
     /// Observe shell ownership for rejecting inherited wake notifications.
     /// A captured Stop answer is final regardless of these shells.
     pub(super) fn observe_background_shells(
-        &mut self,
+        state: &mut super::BusState,
         id: AgentId,
         record: &callbacks::Record,
         parsed: &mut Parsed,
-    ) {
-        if record.manifest.provider == Provider::ClaudeCode {
-            if matches!(parsed, Parsed::Session { source: Some(source), .. } if source == "startup")
-            {
-                self.claude_settled_shells.insert(id, BTreeSet::new());
-                self.claude_shell_observations.remove(&id);
-            }
-            self.inherit_shells_for_current_request(id);
-            if matches!(
-                parsed,
-                Parsed::Final { .. } | Parsed::BackgroundPending { .. }
-            ) {
-                let running = crate::agents::providers::claude_code::hooks::claude_running_shells(
-                    &record.value,
-                );
-                // No answer has arrived. Only work this request started can
-                // keep its textless turn open; inherited shells cannot own it.
-                if let Parsed::Final {
-                    session,
-                    turn,
-                    text,
-                } = parsed
-                {
-                    if text.trim().is_empty()
-                        && running.iter().any(|shell| {
-                            !self
-                                .claude_settled_shells
-                                .get(&id)
-                                .is_some_and(|inherited| inherited.contains(shell))
-                        })
-                    {
-                        *parsed = Parsed::BackgroundPending {
-                            session: session.clone(),
-                            turn: turn.clone(),
-                        };
-                    }
-                }
-                if let Some((_, observed)) = self.claude_shell_observations.get_mut(&id) {
-                    *observed = running;
-                }
+    ) -> Result<(), String> {
+        if record.manifest.provider != Provider::ClaudeCode {
+            return Ok(());
+        }
+        let running = matches!(
+            parsed,
+            Parsed::Final { .. } | Parsed::BackgroundPending { .. }
+        )
+        .then(|| {
+            crate::agents::providers::claude_code::hooks::claude_running_shells(&record.value)
+        });
+        let owned = state
+            .observe_claude_shells(id, running)
+            .map_err(|e| e.to_string())?;
+        if let Parsed::Final {
+            session,
+            turn,
+            text,
+        } = parsed
+        {
+            if text.trim().is_empty() && owned {
+                *parsed = Parsed::BackgroundPending {
+                    session: session.clone(),
+                    turn: turn.clone(),
+                };
             }
         }
+        Ok(())
     }
 
-    fn inherit_shells_for_current_request(&mut self, id: AgentId) {
-        let request = self.state.agent(id).and_then(|agent| agent.current_request);
-        match self.claude_shell_observations.get_mut(&id) {
-            Some((owner, running)) if *owner != request => {
-                self.claude_settled_shells.insert(id, running.clone());
-                *owner = request;
-            }
-            Some(_) => {}
-            None => {
-                self.claude_shell_observations
-                    .insert(id, (request, BTreeSet::new()));
-            }
-        }
-    }
-
-    pub(super) fn is_inherited_shell_wake(&self, id: AgentId, callback: &ProviderCallback) -> bool {
-        let Some(inherited) = self.claude_settled_shells.get(&id) else {
+    pub(super) fn is_inherited_shell_wake(
+        state: &super::BusState,
+        id: AgentId,
+        callback: &ProviderCallback,
+    ) -> bool {
+        let Some(inventory) = state
+            .agent(id)
+            .and_then(|agent| agent.claude_shells.as_ref())
+        else {
             return false;
         };
         let Some(body) = callback
@@ -125,7 +103,7 @@ impl Worker {
             .trim()
             .strip_prefix("<task-id>")
             .and_then(|tagged| tagged.split_once("</task-id>").map(|(task, _)| task.trim()));
-        task.is_some_and(|task| inherited.contains(task))
+        task.is_some_and(|task| inventory.inherited.contains(task))
     }
 
     /// Codex writes rate limits into its rollout after each turn. Usage is

@@ -255,7 +255,7 @@ fn verify_master_stop_answer_is_not_replaced_by_a_background_result() {
     );
 }
 
-/// A wrapper that hides real work in backticks after the dispatch still holds.
+/// A folded task notification cannot change a final already delivered.
 #[test]
 fn a_folded_task_notification_preserves_an_already_captured_final() {
     let mut f = master();
@@ -264,15 +264,12 @@ fn a_folded_task_notification_preserves_an_already_captured_final() {
     stop(&f, "turn-1", "The build passed.", &[]);
     f.consume();
     assert_eq!(f.request(lead).phase, RequestPhase::Completed);
-    assert!(f.request(lead).pending_final.is_some());
+    assert!(f.request(lead).reply().is_some());
 
     f.started("turn-1", &notification("older-dispatch"));
     f.consume();
     assert_eq!(
-        f.request(lead)
-            .pending_final
-            .as_ref()
-            .map(|reply| reply.text.as_str()),
+        f.request(lead).reply().map(|reply| reply.text.as_str()),
         Some("The build passed.")
     );
     assert_eq!(f.error(), None);

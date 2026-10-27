@@ -602,3 +602,35 @@ fn codex_image_paste_fallback_callbacks_keep_every_path_and_exact_reply_body() {
         &format!("{text}\n{first}")
     ));
 }
+
+#[test]
+fn shell_ownership_is_scoped_to_the_provider_launch_and_session() {
+    use std::collections::BTreeSet;
+    for change_launch in [false, true] {
+        let mut state = BusState::new();
+        let agent = master_agent(&mut state, "orch");
+        let identity = AgentRuntimeIdentity {
+            launch_id: Some("launch".into()),
+            session_id: Some("session".into()),
+            ..Default::default()
+        };
+        state
+            .set_agent_runtime_identity(agent, identity.clone())
+            .unwrap();
+        state.initialize_claude_shells(agent).unwrap();
+        let census = || Some(BTreeSet::from(["service".into()]));
+        assert!(state.observe_claude_shells(agent, census()).unwrap());
+        state
+            .set_agent_runtime_identity(agent, identity.clone())
+            .unwrap();
+        assert!(state.observe_claude_shells(agent, census()).unwrap());
+        let mut next = identity;
+        if change_launch {
+            next.launch_id = Some("new-launch".into());
+        } else {
+            next.session_id = Some("new-session".into());
+        }
+        state.set_agent_runtime_identity(agent, next).unwrap();
+        assert!(!state.observe_claude_shells(agent, census()).unwrap());
+    }
+}

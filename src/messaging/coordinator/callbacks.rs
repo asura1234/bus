@@ -158,7 +158,7 @@ impl Worker {
             return Ok(false);
         }
         let started = matches!(callback.kind, CallbackEventKind::PromptStarted);
-        if started && self.is_inherited_shell_wake(id, &callback) {
+        if started && Self::is_inherited_shell_wake(state, id, &callback) {
             state.mark_unowned_background_turn(&callback);
         }
         let disposition = state.accept_callback(callback);
@@ -320,6 +320,12 @@ impl Worker {
             // A reset agent that had no session yet binds its first one here.
             state
                 .rebind_reset_session(id, session)
+                .map_err(|e| e.to_string())?;
+        }
+        if record.manifest.provider == Provider::ClaudeCode && source.as_deref() == Some("startup")
+        {
+            state
+                .initialize_claude_shells(id)
                 .map_err(|e| e.to_string())?;
         }
         // Identical hooks share one spool file, so a hook retry counts once.
@@ -669,12 +675,12 @@ impl Worker {
             ControlFlow::Continue(parsed) => parsed,
             ControlFlow::Break(flow) => return Ok(flow),
         };
-        self.observe_background_shells(id, record, &mut parsed);
         let state = self.state.clone();
-        let state = match self.check_callback_session(id, dir, path, record, &parsed, state)? {
+        let mut state = match self.check_callback_session(id, dir, path, record, &parsed, state)? {
             ControlFlow::Continue(state) => state,
             ControlFlow::Break(flow) => return Ok(flow),
         };
+        Self::observe_background_shells(&mut state, id, record, &mut parsed)?;
         if record.manifest.provider == Provider::Codex {
             if let Some(path) =
                 crate::agents::providers::codex::usage::codex_rollout_path(&record.value)

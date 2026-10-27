@@ -67,14 +67,16 @@ impl BusState {
         }
         let _ = self.complete_pending_final(agent, now_ms);
         let mut uncertain = None;
-        for id in members {
-            let Some(member) = self.requests.get(&id).filter(|m| !m.settled()).cloned() else {
+        for id in &members {
+            let Some(member) = self.requests.get(id).filter(|m| !m.settled()).cloned() else {
                 continue;
             };
-            if self.recover_steered_answer(&lead, &member, recorded_end(&member), now_ms) {
-                continue;
-            }
-            if let Some(member) = self.requests.get_mut(&id) {
+            self.recover_steered_answer(&lead, &member, &members, recorded_end(&member), now_ms);
+        }
+        // A later member's transcript lookup can prove earlier inputs too.
+        // Resolve all available evidence before declaring any member uncertain.
+        for id in &members {
+            if let Some(member) = self.requests.get_mut(id).filter(|m| !m.settled()) {
                 member.group = None;
                 member.phase = RequestPhase::Abandoned;
                 member.completed_at_ms = Some(now_ms);
@@ -82,6 +84,9 @@ impl BusState {
                 member.uncertain_outcome = true;
                 uncertain.get_or_insert(member.prompt.id);
             }
+        }
+        if let Some(request) = self.requests.get_mut(&lead.id) {
+            request.pending_final = None;
         }
         if let Some(owner) = self.agents.get_mut(&agent) {
             owner.current_request = None;
@@ -107,6 +112,7 @@ impl BusState {
         &mut self,
         lead: &Request,
         member: &Request,
+        members: &[RequestId],
         recorded: Option<RecordedTurnEnd>,
         now_ms: u64,
     ) -> bool {
@@ -118,14 +124,29 @@ impl BusState {
         else {
             return false;
         };
-        if lead.provider_turn_id.as_deref() == Some(&turn_id)
-            || !self.recorded_for(member, member.id, &self.group_members(lead.id), &prompts)
-        {
+        if lead.provider_turn_id.as_deref() == Some(&turn_id) {
             return false;
         }
-        self.bind_recorded_member(member.id, lead.provider_session_id.clone(), &turn_id);
-        if let Some(member) = self.requests.get_mut(&member.id) {
-            member.group = None;
+        // Evaluate the whole claim against the original group before changing
+        // it. Spending the recorded turn for one member would hide its answer
+        // from the other inputs that this very same evidence proves.
+        let proved: Vec<_> = members
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.requests.get(id).is_some_and(|candidate| {
+                    !candidate.settled() && self.recorded_for(candidate, lead.id, members, &prompts)
+                })
+            })
+            .collect();
+        if !proved.contains(&member.id) {
+            return false;
+        }
+        for id in proved {
+            self.bind_recorded_member(id, lead.provider_session_id.clone(), &turn_id);
+            if let Some(candidate) = self.requests.get_mut(&id) {
+                candidate.group = (id != member.id).then_some(member.id);
+            }
         }
         if let Some(owner) = self.agents.get_mut(&lead.agent_id) {
             owner.current_request = Some(member.id);

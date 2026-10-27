@@ -344,6 +344,9 @@ pub(crate) struct RoomAgent {
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,
+    /// Observed shell boundary for this launch/session, saved with callbacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) claude_shells: Option<ClaudeShells>,
     /// Only a new launch is watched; successful providers are never cleaned
     /// up merely because they later become unavailable. Survives restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -435,6 +438,15 @@ pub(crate) struct RoomAgent {
     /// What the agent's terminal showed when its provider last exited on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) exit_snapshot: Option<ExitSnapshot>,
+}
+
+/// Inventory at the current request's boundary. Shells already present there
+/// cannot become that request's work merely because Bus restarted.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ClaudeShells {
+    pub(crate) owner: Option<RequestId>,
+    pub(crate) inherited: BTreeSet<String>,
+    pub(crate) running: BTreeSet<String>,
 }
 
 /// The screen Bus saved when an agent's provider exited without Bus asking,

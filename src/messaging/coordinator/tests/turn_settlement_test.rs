@@ -200,7 +200,6 @@ fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
         fixture.consume();
         assert_eq!(fixture.request(lead).phase, expected, "{provider:?}");
 
-
         if provider == Provider::ClaudeCode {
             assert_eq!(fixture.request(lead).reply().unwrap().text, "");
             assert!(fixture.request(lead).failure_reason.is_none());

@@ -864,9 +864,9 @@ fn async_waiters_exit_zero(status: &Value) -> bool {
 
 /// The goal of the async-wait fix: an interrupted message never exits 0. A
 /// message typed into a turn whose reply arrived, then run by the agent and
-/// interrupted inside the steering settle window, must not read replied.
+/// interrupted before its ownership hook arrives, must not read replied.
 #[test]
-fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_replied() {
+fn an_unclaimed_steered_message_interrupted_before_turn_proof_does_not_read_replied() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     running(&mut fixture, "write the parser", "turn-1");
     let correction = fixture.send("also add tests", false);
@@ -878,7 +878,7 @@ fn a_typed_message_interrupted_inside_the_steering_settle_window_does_not_read_r
     fixture.status(RuntimeStatus::Working);
     let response = fixture.worker.control_response_with_events(
         &crate::messaging::control::Request {
-            id: "probe-interrupt-window".into(),
+            id: "probe-interrupt-unclaimed-input".into(),
             method: "agent.interrupt".into(),
             params: json!({"agent": "builder"}),
         },
