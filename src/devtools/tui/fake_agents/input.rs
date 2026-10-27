@@ -3,6 +3,8 @@
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Input {
     Text(String),
+    /// A large bracketed paste, rendered as an opaque provider chip.
+    Paste(String),
     Backspace,
     /// Ctrl+K or Ctrl+U.
     KillLine,
@@ -10,6 +12,8 @@ pub(super) enum Input {
     /// A lone Esc, as Bus sends the key in one write.
     Escape,
     Interrupt,
+    Stash,
+    Editor,
 }
 
 /// Splits raw terminal input into text, Enter, Backspace and Ctrl+C/D,
@@ -31,7 +35,13 @@ pub(super) fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
             let Some(end) = find(rest, b"\x1b[201~") else {
                 break;
             };
-            text.extend_from_slice(&rest[6..end]);
+            let pasted = &rest[6..end];
+            if pasted.iter().filter(|&&byte| byte == b'\n').count() >= 10 {
+                flush(&mut text, &mut events);
+                events.push(Input::Paste(String::from_utf8_lossy(pasted).into_owned()));
+            } else {
+                text.extend_from_slice(pasted);
+            }
             i += end + 6;
             continue;
         }
@@ -54,6 +64,15 @@ pub(super) fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
             0x03 | 0x04 => {
                 flush(&mut text, &mut events);
                 events.push(Input::Interrupt);
+                i += 1;
+            }
+            0x13 | 0x07 => {
+                flush(&mut text, &mut events);
+                events.push(if rest[0] == 0x13 {
+                    Input::Stash
+                } else {
+                    Input::Editor
+                });
                 i += 1;
             }
             // Ctrl+K and Ctrl+U: Bus withdraws a draft with them.
