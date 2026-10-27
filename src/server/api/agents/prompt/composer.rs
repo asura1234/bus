@@ -128,7 +128,6 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
 /// Codex either attaches or inserts each dedicated image paste as literal text.
 /// Own the draft only when every image and the remaining text are accounted for.
 fn codex_image_attachment(body: &str, expected: &str) -> bool {
-    let (images, rest) = image_chips(body);
     let (expected_images, remaining) =
         crate::agents::providers::codex::hooks::image_paste_parts(expected);
     let normalize = |text: &str| {
@@ -140,12 +139,12 @@ fn codex_image_attachment(body: &str, expected: &str) -> bool {
         .iter()
         .map(|image| normalize(image))
         .collect();
-    let rest = normalize(rest);
+    let body = normalize(body);
     !expected_images.is_empty()
         && crate::agents::providers::codex::hooks::text_after_image_pastes(
-            &rest,
+            &body,
             &expected_images,
-            images,
+            "[Image#",
         )
         .is_some_and(|text| {
             text == normalize(&remaining)

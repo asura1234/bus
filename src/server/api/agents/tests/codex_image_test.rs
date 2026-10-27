@@ -15,7 +15,7 @@ fn codex_image_pastes_accept_each_chip_or_literal_path_before_the_reply_text() {
             vec![
                 format!("{first}{second}"),
                 format!("[Image #1] {second}"),
-                format!("[Image #1] {first}"),
+                format!("{first}[Image #1] "),
                 "[Image #1] [Image #2] ".into(),
             ],
         ),
@@ -50,6 +50,7 @@ fn codex_image_pastes_accept_each_chip_or_literal_path_before_the_reply_text() {
         "".to_owned(),
         first.to_owned(),
         format!("{second}{first}"),
+        format!("[Image #1] {first}"),
         format!("{first}{second}{second}"),
         format!("[Image #1] {first}{second}"),
         "[Image #1] [Image #2] [Image #3] ".into(),
@@ -68,7 +69,17 @@ fn codex_image_pastes_accept_each_chip_or_literal_path_before_the_reply_text() {
 async fn codex_image_fallback_drafts_receive_exactly_one_enter() {
     let text = "[Bus message 3; answer with bus send --reply-to 3 --as 2 --text 'YOUR ANSWER']";
     let path = "\"/tmp/not-decodable.png\"";
-    for prefix in [path.to_owned(), format!("[Image #1] {path}")] {
+    for (prefix, images) in [
+        (path.to_owned(), path.to_owned()),
+        (
+            format!("[Image #1] {path}"),
+            format!("\"/tmp/valid.png\"\n{path}"),
+        ),
+        (
+            format!("{path}[Image #1] "),
+            format!("{path}\n\"/tmp/valid.png\""),
+        ),
+    ] {
         let (runtime, mut writes) =
             crate::terminal::TerminalRuntime::test_with_channel_capacity(160, 24, 32);
         let show = |body: &str| {
@@ -79,11 +90,6 @@ async fn codex_image_fallback_drafts_receive_exactly_one_enter() {
         runtime.test_process_pty_bytes(b"\x1b[?2004h");
         runtime.test_submission_clock().unwrap().pause();
         show("");
-        let images = if prefix.starts_with("[Image") {
-            format!("\"/tmp/valid.png\"\n{path}")
-        } else {
-            path.to_owned()
-        };
         let completion = super::super::queue_prompt_input(
             &runtime,
             AgentKind::Codex,

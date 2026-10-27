@@ -10,17 +10,24 @@ use std::path::Path;
 #[test]
 fn image_prompt_parts_remove_only_the_providers_chip_separators() {
     use super::hooks::image_prompt_parts;
-    assert_eq!(image_prompt_parts("[Image #1]"), (1, ""));
+    assert_eq!(image_prompt_parts("[Image #1]", "[Image #"), (1, ""));
     assert_eq!(
-        image_prompt_parts("[Image #1] [Image #2] reply\n\nbody"),
+        image_prompt_parts("[Image #1] [Image #2] reply\n\nbody", "[Image #"),
         (2, "reply\n\nbody")
     );
-    assert_eq!(image_prompt_parts("[Image #1]  indented"), (1, " indented"));
     assert_eq!(
-        image_prompt_parts("[Image #x] body"),
+        image_prompt_parts("[Image #1]  indented", "[Image #"),
+        (1, " indented")
+    );
+    assert_eq!(
+        image_prompt_parts("[Image #x] body", "[Image #"),
         (0, "[Image #x] body")
     );
-    assert_eq!(image_prompt_parts("body"), (0, "body"));
+    assert_eq!(image_prompt_parts("body", "[Image #"), (0, "body"));
+    assert_eq!(
+        image_prompt_parts("[Image#1][Image#2]reply", "[Image#"),
+        (2, "reply")
+    );
 }
 
 #[test]

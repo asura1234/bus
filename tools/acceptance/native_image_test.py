@@ -39,8 +39,12 @@ def send_images(bus, images):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(15)
         stream.connect(str(bus.data / "control.sock"))
+        # Multiple file attachments render on one space-separated line; use
+        # separate quoted text lines to exercise independent image pastes.
         request = {"id": "native-image", "method": "message.send", "params": {
-            "room": "bus", "to": ["image-worker"], "text": "", "files": [str(image) for image in images]}}
+            "room": "bus", "to": ["image-worker"],
+            "text": "\n".join(f'"{image}"' for image in images) if len(images) > 1 else "",
+            "files": [str(image) for image in images] if len(images) == 1 else []}}
         stream.sendall(json.dumps(request).encode() + b"\n")
         receipt = json.loads(stream.makefile().readline())
     assert receipt["ok"], receipt

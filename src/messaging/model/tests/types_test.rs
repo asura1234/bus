@@ -576,7 +576,7 @@ fn codex_image_paste_fallback_callbacks_keep_every_path_and_exact_reply_body() {
     for prefix in [
         format!("{first}{second}"),
         format!("[Image #1] {second}"),
-        format!("[Image #1] {first}"),
+        format!("{first}[Image #1] "),
         "[Image #1] [Image #2] ".into(),
     ] {
         let payload = format!("{prefix}{text}");
@@ -593,6 +593,7 @@ fn codex_image_paste_fallback_callbacks_keep_every_path_and_exact_reply_body() {
     for prefix in [
         first.to_owned(),
         format!("{second}{first}"),
+        format!("[Image #1] {first}"),
         format!("[Image #1] {first}{second}"),
         "[Image #1] [Image #2] [Image #3] ".into(),
         "\"/tmp/unrelated.png\"".into(),
