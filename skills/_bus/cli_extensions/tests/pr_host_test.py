@@ -707,3 +707,15 @@ def test_recorded_codeup_view_replay(codeup_env):
     result = host.view("5")
     assert result["state"] == "MERGED" and result["mergeCommit"] == OTHER
     assert result["headRefOid"] == HEAD
+    recorded = json.loads((fixtures / "codeup-view.json").read_text())
+    assert result["mergedAt"] == recorded["updateTime"]
+    assert result["mergedAt"] == "2026-10-26T11:17:00+08:00"
+
+
+def test_recorded_codeup_view_selects_latest_source_patch_set(codeup_env):
+    fixtures = Path(__file__).parent / "fixtures"
+    patches = json.loads((fixtures / "codeup-patches.json").read_text())
+    stale = [p["commitId"] for p in patches if (p["relatedMergeItemType"], p["versionNo"]) != ("MERGE_SOURCE", 2)]
+    latest = next(p["commitId"] for p in patches if (p["relatedMergeItemType"], p["versionNo"]) == ("MERGE_SOURCE", 2))
+    assert latest == HEAD
+    assert latest not in stale, "fixture cannot distinguish older or target patch sets"
