@@ -134,6 +134,13 @@ class SkillMigrationContractTest(unittest.TestCase):
                 text = (SKILLS / name / "SKILL.md").read_text()
                 self.assertNotRegex(text, r"python3 (?:skills/|cli_extensions/)")
 
+    def test_pr_host_delegations_receive_repository_policy(self) -> None:
+        pr = (SKILLS / "pr/SKILL.md").read_text()
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        for text in (pr, merge):
+            self.assertIn("rebase-origin-main --base origin/<base_branch>", text)
+        self.assertIn('gate-and-fix --base <merge-base> --command "<policy.gate_command>"', merge)
+
     def test_review_verdicts_are_the_canonical_closed_sets(self) -> None:
         verdicts = _review_types_module().LEGAL_VERDICTS
         self.assertEqual(

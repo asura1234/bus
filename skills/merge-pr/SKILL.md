@@ -7,6 +7,8 @@ description: Watch an open PR's two signals until it can merge — CI conclusion
 
 Read [guide.md](guide.md) completely: the three acceptable kinds of attribution evidence, why log
 tails must not be read, and why only the latest comment round is handled all live there. Without it this skill will release red checks it caused itself.
+Resolve `skill_dir` to this skill directory. All host operations use `python3 "<skill_dir>/../_bus/cli_extensions/pr_host.py"` (`pr_host`).
+Run `pr_host host`; stop on an unknown host. For Codeup, read `../_bus/docs/codeup-pr-workflow.md`.
 
 ```text
 INPUT = [<pr-number>] [--no-merge] [--poll-seconds N (default 30)] [--max-wait N (default 1800)]
@@ -14,7 +16,8 @@ INPUT = [<pr-number>] [--no-merge] [--poll-seconds N (default 30)] [--max-wait N
 
 repo   = git rev-parse --show-toplevel
 branch = git branch --show-current
-pr     = the number the caller gave; when omitted, take the current branch's PR via `gh pr view --json number`
+pr     = the number the caller gave; when omitted, take the unique result of `pr_host find --branch <branch>`
+base_branch = the PR's base branch; profile = `pr_host profile` and its `policy` object.
 
 IF not in a Git repository OR branch is empty OR branch IN {main, master}
   STOP "merge-pr runs only on a feature branch."
@@ -22,8 +25,8 @@ IF not in a Git repository OR branch is empty OR branch IN {main, master}
 ========== 1. Take the signals ==========
 
 Run:
-  python3 skills/merge-pr/scripts/pr_signals.py checks --pr <pr>
-  python3 skills/merge-pr/scripts/pr_signals.py scope  --pr <pr>
+  python3 "<skill_dir>/scripts/pr_signals.py" checks --pr <pr>
+  python3 "<skill_dir>/scripts/pr_signals.py" scope  --pr <pr>
 
 Capture: HEAD, branch, base, isDraft, mergeable, mergeStateStatus, checkCount,
 pending / passed / failed / **other**, plus this PR's `topLevel` and `files`.
@@ -35,8 +38,8 @@ The source of truth for `checks` is `statusCheckRollup`, at **per-check** granul
 (reasons in guide.md "Per check, not per workflow").
 
 IF checks reports `isDraft == true`
-  Run: `gh pr ready <pr>`, then return to this section and retake the signals; continue only after confirming `isDraft == false`.
-  `gh pr ready` fails (insufficient permission, PR already closed) → STOP and report verbatim; do not skip past it.
+  Run: `pr_host ready --pr <pr>`, then return to this section and retake the signals; continue only after confirming `isDraft == false`.
+  If it fails, STOP and report verbatim; do not skip past it.
 -- Reasons in guide.md "Draft becomes ready first, no stop".
 -- `checkCount == 0` does not STOP here: the 0 in the tens of seconds right after a push is temporary; the later wait handles it.
 
@@ -54,11 +57,11 @@ IF NOT divergent
 The worktree must be clean (`git status --porcelain --untracked-files=all` is empty); otherwise first hand it to
 `commit-and-push` to land it, or let the developer deal with it.
 
-ahead = `git rev-list --count origin/master..HEAD`
+ahead = `git rev-list --count origin/<base_branch>..HEAD`
 
-IF mergeStateStatus == "BEHIND":        Invoke `rebase-origin-main` (pure replay, no conflicts)
-ELSE IF ahead <= rebase_max_commits:    Invoke `rebase-origin-main` (necessarily CONFLICTING here)
-ELSE:                                   `git fetch origin master` + `git merge origin/master`
+IF mergeStateStatus == "BEHIND":        Invoke `rebase-origin-main --base origin/<base_branch>` (pure replay, no conflicts)
+ELSE IF ahead <= rebase_max_commits:    Invoke `rebase-origin-main --base origin/<base_branch>` (necessarily CONFLICTING here)
+ELSE:                                   `git fetch origin` + `git merge origin/<base_branch>`
   Conflicts follow the same tiered handling as `rebase-origin-main`: shared infra (`Cargo.lock`)
   follows its shared-infra rule, and any branch change it discards is recorded in `dropped_shared_infra`; minor conflicts are resolved automatically;
   **major conflicts go to the developer**. After resolving, Invoke `commit-and-push` (route rationale in guide.md "Merge method").
@@ -84,8 +87,17 @@ IF mergeable != "MERGEABLE"
 
 **Review before CI**: fixes from review advance HEAD and invalidate the running CI, not the other way around (see guide.md).
 
+IF host == codeup:
+  Use `pr_host comments --pr <pr> --output <run-dir>/codeup-comments.md`; wait for `aiReviewPending` to clear.
+  If `openCount` is nonzero, invoke `address-review-comments pr --free-form-file <file>`, reply to each comment
+  with `pr_host reply`, post the full ledger with `pr_host comment`, and retake comments. FLAG stops the flow;
+  landed fixes request review and return to section 1. Continue only with no unhandled comments.
+  Skip the GitHub-only review lane below and its final retake; retake Codeup comments and view before merge.
+
+IF host == github:
+
 Run:
-  python3 skills/address-review-comments/scripts/github_review_lane.py reviews --pr <pr>
+  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" reviews --pr <pr>
 
 WHILE `everReviewed` AND NOT `coveredAtHead` AND waited < max_wait:
   Sleep poll_seconds and rerun.
@@ -111,7 +123,7 @@ Handle its return in four ways:
 Finishing one round **does not mean** the reviewer agreed. `triaged` is a marker in the local ledger meaning the author did the homework; whether the reviewer
 agrees depends on its own verdict. Run:
 
-  python3 skills/address-review-comments/scripts/github_review_lane.py verdict --pr <pr>
+  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" verdict --pr <pr>
 
 The `verdict` output is **informational only**, not a release condition: author and reviewer are peers, and a rejection with first-hand counter-evidence is an equally valid
 final outcome. The convergence criterion is "the author has adjudicated every point the reviewer made on the current HEAD", judged by `fetch` — true when no new
@@ -149,7 +161,7 @@ list" (cancelled / skipped / neutral / stale…): not green, just not shaped lik
 
 FOR EACH job IN failed + other:
   a. Take that check's history (`--job` takes the **per-check name** from `checks`, not the workflow name):
-       python3 skills/merge-pr/scripts/pr_signals.py history --pr <pr> --job "<name>"
+       python3 "<skill_dir>/scripts/pr_signals.py" history --pr <pr> --job "<name>"
      Green earlier, red now → **strong hint this PR caused it**; go straight to (c), do not look for environmental excuses first.
   b. Take the failure evidence: use `failed[].logCommand`. **The log may be truncated before the real failure** (see guide).
   c. Decide per guide "Three acceptable kinds of evidence"; each red check lands in exactly one class: IN-SCOPE (caused by this PR, must fix) /
@@ -162,7 +174,7 @@ IF any IN-SCOPE red check exists:
   The worktree must be clean (`git status --porcelain --untracked-files=all` is empty); otherwise first hand it to
   `commit-and-push` to land it, or let the developer deal with it.
 
-  Invoke `gate-and-fix --base <merge-base>`. **This is the only thing entitled to claim "the gates are green"** —
+  Invoke `gate-and-fix --base <merge-base> --command "<policy.gate_command>"` (omit `--command` when null). **This is the only thing entitled to claim "the gates are green"** —
   hand-running a few scoped commands does not count (reasons in guide.md "Why attribution must gather evidence mechanically").
 
   IF gate-and-fix STOPs or cannot converge
@@ -180,11 +192,11 @@ IF --no-merge   -- stops before the retake and assertions; --hold-before-merge s
 First **retake** the review lane; do not assert from section 2's conclusion (reasons in guide.md "Review must be retaken before merging"):
 
 Run:
-  python3 skills/address-review-comments/scripts/github_review_lane.py fetch   --pr <pr>
-  python3 skills/address-review-comments/scripts/github_review_lane.py reviews --pr <pr>
+  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" fetch   --pr <pr>
+  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" reviews --pr <pr>
 
 Run the verdict once more too (for the report, not as a release condition):
-  python3 skills/address-review-comments/scripts/github_review_lane.py verdict --pr <pr>
+  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" verdict --pr <pr>
 
 **Branch first, then assert**:
 
@@ -209,26 +221,29 @@ IF `verdict.approved == false`
 --   and must be attributed exactly like a red check, otherwise STOP.
 
 merge_head = the HEAD last taken in section 1
+Retake `pr_host view --pr <pr>` and require its HEAD and the local HEAD to equal merge_head.
+If `policy.require_exact_head_gate` is true, require a valid gate-and-fix PASS artifact for merge_head;
+verify it with `python3 "<skill_dir>/../gate-and-fix/scripts/gate_and_fix.py" verify --artifact <artifact> --base <artifact-base>`.
 -- Read the **full 40-character sha** with `git rev-parse`; never hand-complete it (guide.md "merge_head must be read, not hand-written").
 IF --hold-before-merge
   Report "ready to merge at <merge_head>, holding for developer verification" and the state summary (guide.md "Holding before merge"), STOP. Do not merge.
 
 IF failed and other are both empty:
-  gh pr merge <pr> --squash --delete-branch=false --match-head-commit <merge_head>
+  `pr_host merge --pr <pr> --head <merge_head>` (Codeup also requires `--note-file <file>`).
 ELSE:
   -- Only PRE-EXISTING / FLAKY / ENVIRONMENT remain; state the release basis for each one,
   --   no unnamed summaries like "the rest are environment issues".
-  gh pr merge <pr> --squash --admin --delete-branch=false --match-head-commit <merge_head>
+  `pr_host merge --pr <pr> --head <merge_head> --admin` (Codeup also requires `--note-file <file>`).
 
 -- `--match-head-commit` is not optional: without it a push after the signals were taken merges a tree that was never verified.
 
-Read back: `gh pr view <pr> --json state,mergedAt,mergeCommit`
+Read back: `pr_host view --pr <pr>` and inspect `state`, `mergedAt`, `mergeCommit`.
 IF state != "MERGED"
   STOP and report the actual fields. Never announce a merge from a command's exit code.
 
 After a successful merge, append one line of review metrics:
 
-  python3 skills/merge-pr/scripts/review_metrics.py --pr <pr> \
+  python3 "<skill_dir>/scripts/review_metrics.py" --pr <pr> \
     --applied <N> --rejected <N> [--flagged <N>] --verdict "<verdict text at merge time>"
 
 Review rounds, finding count, replied count and diff size are taken by the script itself; adjudication counts have no machine source of truth, fill them in
