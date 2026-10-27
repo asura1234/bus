@@ -156,7 +156,12 @@ fn embed_skills() {
         entries.sort();
         for entry in entries {
             let name = entry.file_name().expect("skill filename").to_string_lossy();
-            if skill_files::ignored(&name) || name == "tests" || name.ends_with("_test.py") {
+            if name.starts_with('.')
+                || name.ends_with(".pyc")
+                || skill_files::ignored(&name)
+                || name == "tests"
+                || name.ends_with("_test.py")
+            {
                 continue;
             }
             if entry.is_dir() {

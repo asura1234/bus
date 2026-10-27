@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 
-def _bus(home, *args, check=True):
-    binary = os.environ.get("BUS_TEST_BINARY")
+def _bus(home, *args, check=True, binary=None):
+    binary = binary or os.environ.get("BUS_TEST_BINARY")
     if not binary:
         pytest.skip("requires the gate's exact built Bus binary")
     env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_", "XDG_"))}
@@ -55,11 +55,12 @@ def test_installed_markdown_links_resolve_inside_the_installed_bundle(tmp_path):
     assert broken == []
 
 
-def test_finder_metadata_in_an_installed_copy_keeps_bus_ownership(tmp_path):
+@pytest.mark.parametrize("metadata", [".DS_Store", "Thumbs.db"])
+def test_disposable_os_metadata_keeps_bus_ownership(tmp_path, metadata):
     home = tmp_path / "home"
     home.mkdir()
     _bus(home, "install", "--yes")
-    (home / ".claude/skills/review-pr/.DS_Store").write_bytes(b"finder")
+    (home / ".claude/skills/review-pr" / metadata).write_bytes(b"metadata")
     report = json.loads(_bus(home, "status").stdout)
     review = next(s for s in report["skills"] if s["provider"] == "claude" and s["name"] == "review-pr")
     assert review["state"] == "installed"
@@ -78,3 +79,23 @@ def test_recording_skills_consent_preserves_existing_bus_settings(tmp_path):
     assert (data / "settings.json").read_bytes() == before
     saved = json.loads((data / "settings.json").read_text())
     assert (saved.get("feishu_recipient"), saved.get("sidebar_width")) == ("ou_mine", 40)
+
+
+@pytest.mark.parametrize("name", [".env", ".config/review.toml", "notes.pyc"])
+def test_upgrades_preserve_user_authored_files(tmp_path, name):
+    home = tmp_path / "home"
+    home.mkdir()
+    # A preserved binary exercises authentic cross-bundle upgrades when supplied.
+    _bus(home, "install", "--yes", binary=os.environ.get("BUS_PREVIOUS_BINARY"))
+    path = home / ".agents/skills/review-pr" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = b"USER_REVIEW_ENDPOINT=http://localhost:43210\n"
+    path.write_bytes(content)
+    before = json.loads(_bus(home, "status").stdout)
+    after = json.loads(_bus(home, "install", "--yes").stdout)
+    assert path.is_file(), f"upgrade deleted user file {name}"
+    assert path.read_bytes() == content
+    for report in (before, after):
+        state = next(item["state"] for item in report["skills"]
+                     if item["provider"] == "codex" and item["name"] == "review-pr")
+        assert state == "conflict", "authored files are modifications, not disposable metadata"
