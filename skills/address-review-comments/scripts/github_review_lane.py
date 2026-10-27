@@ -70,7 +70,6 @@ __all__ = [
 ]
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def fetch(pr: str, repo: Path, lane: str) -> dict:
@@ -279,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
 
     f = sub.add_parser("fetch", help="fetch the latest round of raw GitHub comments to disk")
     f.add_argument("--pr", required=True)
-    f.add_argument("--repo", default=str(REPO_ROOT))
+    f.add_argument("--repo", default=None)
     f.add_argument("--lane", default="github")
 
     sub.add_parser("reviews", help="each reviewer's last reviewed commit and current HEAD coverage").add_argument(
@@ -312,7 +311,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "fetch":
-            payload = fetch(args.pr, Path(args.repo), args.lane)
+            repo = Path(args.repo) if args.repo else Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+            with __import__("contextlib").chdir(repo):
+                payload = fetch(args.pr, repo.resolve(), args.lane)
         elif args.command == "reviews":
             payload = review_coverage(args.pr)
         elif args.command == "verdict":

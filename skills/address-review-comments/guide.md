@@ -2,7 +2,7 @@
 
 This file holds only the judgment specific to the **GitHub lane (PASS 0a)**. Cross-lane general
 principles such as disposition classification, disposition mapping, and evidence boundaries remain
-in the [Review Response Guide](../../docs/guides/review-response-guide.md) and are not repeated
+in the [Review Response Guide](../_bus/docs/guides/review-response-guide.md) and are not repeated
 here.
 
 The GitHub machine reviewer is one reviewer lane of the PR; its output just lives remotely instead

@@ -2,7 +2,7 @@
 
 The strict structure for writing `<roundDir>/source.md` (a verbatim dump of the GitHub comment
 source) into `<roundDir>/review.md`. The overall template follows the PR template in
-[review-format](../../../docs/guides/review-format.md); this file only specifies the GitHub lane's
+[review-format](../../_bus/docs/guides/review-format.md); this file only specifies the GitHub lane's
 **values and constraints** relative to that template.
 
 **This is the agent's job, not the script's job**: you have to understand what each comment says,

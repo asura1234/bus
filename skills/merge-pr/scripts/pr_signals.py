@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""The two pre-merge signals of a PR: CI conclusions and review comments.
+"""PR 合并前的 CI 状态与变更范围快照。
 
-This script does only the mechanical part — fetching, grouping, slicing by round, and computing "does the failure fall
-inside this PR's change scope" **as fact first** before handing it to the agent to judge. The attribution judgment itself stays with
-the agent (see guide.md), but it must be made with the evidence computed here, not guessed from job names or log tails.
+本脚本只拉取并分组平台事实；CI 状态仅供记录，不作为合并要求。
 
-Subcommands:
-  checks   --pr N                every check conclusion for this HEAD; failures carry evidence pointers
-  scope    --pr N [--base REF]   the top-level directories and file set this PR touches
-  history  --pr N --job NAME     that job's conclusion across this branch's HEADs (judges flaky / pre-existing failures)
+子命令：
+  checks   --pr N                本次 HEAD 的全部 check 结论；失败项附带证据指针
+  scope    --pr N [--base REF]   本 PR 触及的顶层目录与文件集
+  history  --pr N --job NAME     该 job 在本分支历次 HEAD 上的结论（按需查询）
 
-Review comments are **not here**: they belong to `address-review-comments --github`, which turns comments into a structured
-review lane (round identity = the commit the comments pin to); this skill only handles the CI-side signals.
+平台由 `cli_extensions/pr_host.py` 按 `origin` 判定：GitHub 走下面的 `gh` 实现；Codeup 的
+`checks` 由 pr_host 取最新补丁版本的 CI 检查列表、输出同一形状，`scope` 同样适用，`history`
+没有平台事实源，报告不可用，不影响合并。
+
+评审评论归 `address-review-comments` 处置，不在此脚本中处理。
 """
 
 from __future__ import annotations
@@ -21,31 +22,37 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus" / "cli_extensions"))
+
+import pr_host  # noqa: E402
 
 
 class SignalError(RuntimeError):
-    """Signals unavailable (gh unavailable, PR does not exist, fields missing)."""
+    """拿不到信号（gh 不可用、PR 不存在、字段缺失）。"""
 
 
 def _gh(*args: str) -> str:
     result = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise SignalError(f"gh {' '.join(args)} failed: {result.stderr.strip()}")
+        raise SignalError(f"gh {' '.join(args)} 失败：{result.stderr.strip()}")
     return result.stdout
 
 
 def _git(*args: str) -> str:
     result = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise SignalError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        raise SignalError(f"git {' '.join(args)} 失败：{result.stderr.strip()}")
     return result.stdout
 
 
 DETAILS_URL_RE = re.compile(r"/actions/runs/(\d+)(?:/job/(\d+))?")
 
-# The rollup's conclusion takes more values than success/failure, and **everything except SUCCESS is not green**.
-# List the failure classes explicitly; every other non-SUCCESS (CANCELLED / SKIPPED / NEUTRAL / STALE…) goes into `other`
-# for the agent to name and handle — never treat it as passing just because it is "not on the failure list".
+# rollup 的 conclusion 取值不止成功/失败两种，而**除 SUCCESS 外都不是绿**。
+# 明确列出失败类，其余非 SUCCESS 的（CANCELLED / SKIPPED / NEUTRAL / STALE…）一律进 `other`
+# 保留原始结论供报告，不把「不在失败名单里」写成通过。
 FAILURE_CONCLUSIONS = frozenset({"FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "ERROR"})
 
 
@@ -60,15 +67,15 @@ def pr_view(pr: str) -> dict:
         )
     )
     if not data.get("headRefOid"):
-        raise SignalError(f"PR {pr} has no headRefOid")
+        raise SignalError(f"PR {pr} 没有 headRefOid")
     return data
 
 
 def _normalize_check(entry: dict) -> dict:
-    """Unify the rollup's two kinds of entries into one shape.
+    """把 rollup 的两种条目统一成一个形状。
 
-    Actions entries are `CheckRun` (with name / workflowName / status / conclusion);
-    external statuses are `StatusContext` (only context / state, no status dimension).
+    Actions 的是 `CheckRun`（有 name / workflowName / status / conclusion），
+    外部状态是 `StatusContext`（只有 context / state，没有 status 维度）。
     """
 
     if entry.get("__typename") == "StatusContext":
@@ -104,13 +111,13 @@ def _log_command(check: dict) -> str | None:
 
 
 def checks(pr: str) -> dict:
-    """Every check conclusion for this HEAD, per **check** (not per workflow).
+    """本次 HEAD 的全部 check 结论，逐**条**（不是逐 workflow）。
 
-    The source of truth is `statusCheckRollup`, the one GitHub itself uses to decide whether a PR can merge. Do not switch back to
-    `gh run list`: it is workflow-granular, and in this repo the `CI` workflow carries `conventional-commits` /
-    `check (ubuntu-latest)` / `check (macos-latest)` / `check (windows-latest)` / `Windows ConPTY package` as independent
-    checks; collapsed into one name, the "which platform's which job went red" that attribution rests on is gone; it also lists
-    workflows such as `Copilot` that take no part in gating. Both directions are wrong, one under-reports and one over-reports.
+    事实源是 `statusCheckRollup`，也就是 GitHub 自己用来判定能否合并的那份。不要改回
+    `gh run list`：后者是 workflow 粒度，本仓一个 `Lint Check` workflow 下挂着 `Glossary Lint`
+    / `RN Unit Test` / `TS Lint` 三条独立的 check（`Build Check` 下同理），塌缩成一个名字
+    之后，归因赖以成立的「哪个平台的哪个 job 红了」就没了；它同时还会列出 `Copilot` 这种
+    根本不参与 gating 的 workflow。两个方向都错，一个报少一个报多。
     """
 
     info = pr_view(pr)
@@ -149,10 +156,10 @@ def checks(pr: str) -> dict:
     }
 
 
-def scope(pr: str, base: str | None) -> dict:
-    """What this PR actually touches. The first-hand basis for attribution."""
+def scope(pr: str, base: str | None, info: dict | None = None) -> dict:
+    """本 PR 实际触及的目录与文件。"""
 
-    info = pr_view(pr)
+    info = info or pr_view(pr)
     base_ref = base or f"origin/{info['baseRefName']}"
     merge_base = _git("merge-base", base_ref, info["headRefOid"]).strip()
     files = [f for f in _git("diff", "--name-only", f"{merge_base}...{info['headRefOid']}").splitlines() if f]
@@ -178,11 +185,11 @@ def _run_jobs(run_id: int) -> list[dict]:
 
 
 def history(pr: str, job: str, limit: int = 12) -> dict:
-    """The same check's conclusion across this branch's HEADs.
+    """同一条 check 在本分支历次 HEAD 上的结论。
 
-    `job` is the **per-check name** from `checks` (such as `check (windows-latest)`), not the workflow name.
-    History must be taken per check too: workflow-granular history mixes the outcomes of several checks under one workflow into one
-    conclusion, so "this one was red before" and "I turned this one red" can no longer be told apart — and that is this command's only purpose.
+    `job` 是 `checks` 给出的**逐条 check 名**（如 `Android Debug Build`），不是 workflow 名。
+    历史必须同样按条取：workflow 粒度的历史会把同一个 workflow 下几条 check 的成败混成一个
+    结论，于是「这条以前就红」和「这条是我搞红的」再也分不开——而那正是本命令唯一的用途。
     """
 
     info = pr_view(pr)
@@ -233,25 +240,36 @@ def history(pr: str, job: str, limit: int = 12) -> dict:
     }
 
 
+def codeup_signals(host, args: argparse.Namespace) -> dict:
+    if args.command == "checks":
+        return host.checks(args.pr)
+    if args.command == "scope":
+        return scope(args.pr, args.base, host.view(args.pr))
+    raise SignalError("Codeup 不提供逐条 check 的历史结论；CI 仅作记录，不影响合并")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    c = sub.add_parser("checks", help="every check conclusion for this HEAD")
+    c = sub.add_parser("checks", help="本次 HEAD 的全部 check 结论")
     c.add_argument("--pr", required=True)
 
-    s = sub.add_parser("scope", help="the files and top-level directories this PR touches")
+    s = sub.add_parser("scope", help="本 PR 触及的文件与顶层目录")
     s.add_argument("--pr", required=True)
     s.add_argument("--base", default=None)
 
-    h = sub.add_parser("history", help="one check's conclusion across this branch's HEADs")
+    h = sub.add_parser("history", help="某条 check 在本分支历次 HEAD 上的结论")
     h.add_argument("--pr", required=True)
-    h.add_argument("--job", required=True, help="the per-check name from checks, not the workflow name")
-    h.add_argument("--limit", type=int, default=12, help="how many workflow runs to look back at most (default 12)")
+    h.add_argument("--job", required=True, help="checks 给出的逐条 check 名，不是 workflow 名")
+    h.add_argument("--limit", type=int, default=12, help="最多回溯多少次 workflow run（默认 12）")
 
     args = parser.parse_args(argv)
     try:
-        if args.command == "checks":
+        host = pr_host.detect()
+        if host.name == "codeup":
+            payload = codeup_signals(host, args)
+        elif args.command == "checks":
             payload = checks(args.pr)
         elif args.command == "scope":
             payload = scope(args.pr, args.base)
@@ -259,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = history(args.pr, args.job, args.limit)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
-    except SignalError as error:
+    except (SignalError, pr_host.HostError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 

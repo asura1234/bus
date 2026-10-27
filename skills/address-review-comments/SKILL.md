@@ -5,9 +5,11 @@ description: Author-side adjudication and handling of plan/PR review comments, i
 
 Respond to `/review-plan`, `/review-pr`, or any free-form review. Reviewer and author are peer decision-makers in a convergence process: the reviewer raises a problem and may suggest a repair, the author independently judges the problem and the correct repair, and a later reviewer verifies the result; this skill is author-side adjudication + remediation and does not treat review as a command.
 
+Resolve `skill_dir` as the absolute directory containing this loaded SKILL.md.
+
 Before execution, read completely:
 
-- [Review Response Guide](../../docs/guides/review-response-guide.md): the SOT for verification and disposition judgment;
+- [Review Response Guide](../_bus/docs/guides/review-response-guide.md): the SOT for verification and disposition judgment;
 - [guide.md](guide.md): judgment **specific to the GitHub lane** (round identity, location basis, clean re-review, completion marker,
   ledger leak scan). Needed only when taking PASS 0a; other modes need not read it;
 - the **specific sections** that guide's disposition classification table names for this run's mode: read only those sections, not the whole review guide.
@@ -53,10 +55,10 @@ No work outside that chunk is admitted merely because it is a direct dependency.
 ========== PASS 0a: GITHUB LANE (mode == pr, no --scope, and no explicit --review-file / --free-form-file) ==========
 
 IF mode == pr AND no --scope AND no explicit --review-file / --free-form-file:
-  Read(skills/address-review-comments/scripts/github_lane.md) completely and execute its procedure.
+  Read(<skill_dir>/scripts/github_lane.md) completely and execute its procedure.
   Continue below for sanitization unless the procedure returns normally or STOPs.
 
-RUN `python3 skills/address-review-comments/scripts/prepare_review_input.py \
+RUN `python3 "<skill_dir>/scripts/prepare_review_input.py" \
   [--review-file <path>...] [--free-form-file <path>...] [--mode plan|pr] \
   [--label <name>...] [--scope <FILE_LIST|chunk.json>] --output <run-root>/sanitized.md`
 -- With `--github` this is verbatim `--review-file <roundDir>/review.md --mode pr`.
@@ -197,7 +199,7 @@ costs several extra minutes, and does not bring the branch closer to mergeable: 
 
 IF mode == pr AND the github lane was used in this run:
   **First reply on each finding's own thread**, then post the ledger. For every finding in this round that has an inline thread:
-    python3 skills/address-review-comments/scripts/github_review_lane.py reply \
+    python3 "<skill_dir>/scripts/github_review_lane.py" reply \
       --pr <pr> --comment-id <that finding's comment id> --body-file <that item's ruling body> \
       --round-dir <roundDir>
   The body states that item's disposition and first-party basis: APPLY states what was fixed and in which commit; REJECT states the first-party contradiction;
@@ -206,7 +208,7 @@ IF mode == pr AND the github lane was used in this run:
   --   "Replying to its thread lets it receive the decision".
 
   Then post the adjudication ledger verbatim back to the PR (for humans, leaving an audit trail):
-    python3 skills/address-review-comments/scripts/github_review_lane.py post-triage \
+    python3 "<skill_dir>/scripts/github_review_lane.py" post-triage \
       --pr <pr> --triage <run-root>/triage.md --round-dir <roundDir>
   -- The machine reviewer can re-raise a rejected comment at any time: it has no memory and only sees that the code did not change. With the ledger
   --   on the PR, "why this is not changed" lives in the same place as the code, so the next round (human or machine) can see that reason.

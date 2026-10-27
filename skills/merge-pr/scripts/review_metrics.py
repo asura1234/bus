@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 # Lands under `temp/`: it is an ignored local artifact. This is not for convenience — the merge happens after the PR has landed,
 # when no branch can carry a new commit (this repo forbids committing to master directly), and writing an **untracked** in-repo
 # file would immediately fail the next merge-pr / gate-and-fix precondition "the worktree must be clean".
@@ -97,7 +96,7 @@ def append(record: dict, ledger: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", required=True)
-    parser.add_argument("--repo", default=str(REPO_ROOT))
+    parser.add_argument("--repo", default=None)
     parser.add_argument("--ledger", default=None)
     # Adjudication counts have no machine source of truth and must be passed in truthfully by the main agent.
     parser.add_argument("--applied", type=int, required=True)
@@ -106,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verdict", default=None, help="the verdict text at merge time, e.g. \"🔵 Needs a closer look\"")
     args = parser.parse_args(argv)
 
-    repo = Path(args.repo)
+    repo = Path(args.repo) if args.repo else Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
     ledger = Path(args.ledger) if args.ledger else repo / DEFAULT_LEDGER
     try:
         record = collect(args.pr, repo)

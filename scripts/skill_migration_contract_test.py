@@ -97,6 +97,43 @@ class SkillMigrationContractTest(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertTrue((REPO / relative).is_file())
 
+    def test_pr_host_and_installed_pr_paths_are_portable(self) -> None:
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home, repo, installed = root / "home", root / "project", root / "skills"
+            home.mkdir()
+            repo.mkdir()
+            env = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+            subprocess.run(["git", "init", "-q", str(repo)], env=env, check=True)
+            shutil.copytree(SKILLS / "pr", installed / "pr")
+            shutil.copytree(SKILLS / "_bus", installed / "_bus")
+            plan = repo / "plan.md"
+            plan.write_text("## 目标\n\nPortable goal\n\n## 非目标\n\nNone\n")
+            script = installed / "pr/scripts/pr_goal_context.py"
+            done = subprocess.run(
+                [sys.executable, str(script), "--branch", "feat/portable", "--plan", str(plan),
+                 "--output", str(repo / "context.md")],
+                cwd=repo, env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            lock = repo / "temp/review-pr/feat-portable/.locked-goal"
+            self.assertTrue(lock.is_file(), done.stdout)
+            self.assertEqual(lock.read_text(), "Portable goal\n")
+            self.assertFalse((installed / "temp").exists())
+            host = subprocess.run(
+                [sys.executable, "-I", str(installed / "_bus/cli_extensions/pr_host.py"), "--help"],
+                cwd=repo, env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(host.returncode, 0, host.stderr)
+            for name in ("pr", "merge-pr", "address-review-comments"):
+                text = (SKILLS / name / "SKILL.md").read_text()
+                self.assertNotRegex(text, r"python3 (?:skills/|cli_extensions/)")
+
     def test_review_verdicts_are_the_canonical_closed_sets(self) -> None:
         verdicts = _review_types_module().LEGAL_VERDICTS
         self.assertEqual(
