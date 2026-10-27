@@ -1,7 +1,5 @@
-use std::env;
+include!("build_identity.rs");
 use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
 
 fn zig_target(target: &str) -> &str {
     match target {
@@ -16,15 +14,6 @@ fn zig_target(target: &str) -> &str {
         other => panic!("unsupported target for libghostty-vt build: {other}"),
     }
 }
-
-const VENDORED_INPUTS: &[&str] = &[
-    "build.zig",
-    "build.zig.zon",
-    "include",
-    "pkg",
-    "src",
-    "VERSION",
-];
 
 fn newest_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
     let metadata = fs::metadata(path).ok()?;
@@ -76,6 +65,7 @@ fn main() {
     record_build_identity();
     embed_skills();
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build_identity.rs");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     println!("cargo:rerun-if-changed=vendor/libghostty-vt.vendor.json");
     println!("cargo:rerun-if-changed=vendor/libghostty-vt/build.zig");
@@ -154,107 +144,6 @@ fn build_vendored_lib(mut command: Command, zig: &str) {
     );
 }
 
-fn record_build_identity() {
-    let manifest = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from);
-    let git = |args: &[&str]| {
-        // A source archive inside another project must not claim its HEAD.
-        // Both ordinary checkouts and worktrees have their own .git entry.
-        let manifest = manifest
-            .as_ref()
-            .filter(|root| root.join(".git").exists())?;
-        Command::new("git")
-            .current_dir(manifest)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR")
-            // Build metadata collection must not refresh or rewrite the index.
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .args(args)
-            .output()
-            .ok()
-            .filter(|out| out.status.success())
-            .and_then(|out| String::from_utf8(out.stdout).ok())
-            .map(|s| s.trim().to_string())
-    };
-    let sha = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
-    println!("cargo:rustc-env=BUS_BUILD_SHA={sha}");
-    println!(
-        "cargo:rustc-env=BUS_BUILD_PROFILE={}",
-        env::var("PROFILE").unwrap_or_else(|_| "unknown".into())
-    );
-    if env::var_os("CARGO_FEATURE_DEV_TOOLS").is_some() {
-        record_dev_build_identity(manifest.as_deref(), &git);
-    }
-    if let Some(path) = git(&["rev-parse", "--git-path", "HEAD"]) {
-        println!("cargo:rerun-if-changed={path}");
-    }
-    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
-        if let Some(path) = git(&["rev-parse", "--git-path", &branch]) {
-            // Packed refs have no loose file. Watch its existing parent so the
-            // next commit creating that file still invalidates the build.
-            let mut watched = PathBuf::from(path);
-            while !watched.exists() && watched.pop() {}
-            if watched.exists() {
-                println!("cargo:rerun-if-changed={}", watched.display());
-            }
-        }
-        if let Some(path) = git(&["rev-parse", "--git-path", "packed-refs"]) {
-            if PathBuf::from(&path).exists() {
-                println!("cargo:rerun-if-changed={path}");
-            }
-        }
-    }
-}
-
-fn record_dev_build_identity(
-    manifest: Option<&std::path::Path>,
-    git: &impl Fn(&[&str]) -> Option<String>,
-) {
-    // Match dirty detection to the inputs compiled into Bus, not docs/plans/tools.
-    // Ghostty's generated zig-out/.zig-cache directories are deliberately excluded.
-    let inputs: Vec<String> = [
-        "src",
-        "build.rs",
-        "Cargo.toml",
-        "Cargo.lock",
-        "assets",
-        "orchestration",
-        "workflows",
-        "skills",
-        "cli_extensions",
-        "scripts",
-        "docs/guides",
-        "docs/templates",
-        "docs/dev-tools.md",
-        "docs/tui-driver.md",
-        "vendor/portable-pty",
-        "vendor/libghostty-vt.vendor.json",
-    ]
-    .into_iter()
-    .map(String::from)
-    .chain(
-        VENDORED_INPUTS
-            .iter()
-            .map(|path| format!("vendor/libghostty-vt/{path}")),
-    )
-    .collect();
-    let mut status_args = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
-    status_args.extend(inputs.iter().map(String::as_str));
-    let short = match (git(&["rev-parse", "--short", "HEAD"]), git(&status_args)) {
-        (Some(short), Some(status)) if !status.is_empty() => format!("{short}-dirty"),
-        (Some(short), Some(_)) => short,
-        _ => "unknown".into(),
-    };
-    println!("cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}");
-    for path in inputs {
-        // Directory watches detect additions/deletions without watching missing files
-        // forever. Archives and minimal build-identity test crates may omit inputs.
-        if manifest.is_some_and(|root| root.join(&path).exists()) {
-            println!("cargo:rerun-if-changed={path}");
-        }
-    }
-}
-
 /// Embed all runtime resources so a copied executable needs no source checkout.
 fn embed_skills() {
     fn collect(root: &std::path::Path, path: &std::path::Path, files: &mut Vec<PathBuf>) {
@@ -326,6 +215,14 @@ fn embed_skills() {
         ));
     }
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    fs::write(out.join("skills.bin"), data).expect("write embedded skill bytes");
+    use std::io::Write;
+    let mut compressed =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    compressed.write_all(&data).expect("compress skill bytes");
+    fs::write(
+        out.join("skills.bin"),
+        compressed.finish().expect("finish skill compression"),
+    )
+    .expect("write embedded skill bytes");
     fs::write(out.join("skills.index"), index).expect("write embedded skill index");
 }

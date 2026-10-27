@@ -67,6 +67,8 @@ fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedBus {
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config);
     cmd.env("XDG_RUNTIME_DIR", runtime);
+    cmd.env("HOME", runtime.join("home"));
+    cmd.env("USERPROFILE", runtime.join("home"));
     cmd.env("HERDR_SOCKET_PATH", api);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
@@ -98,6 +100,8 @@ fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedBus {
     cmd.env("BUS_DISABLE_SOUND", "1");
     cmd.env("XDG_CONFIG_HOME", config);
     cmd.env("XDG_RUNTIME_DIR", runtime);
+    cmd.env("HOME", runtime.join("home"));
+    cmd.env("USERPROFILE", runtime.join("home"));
     cmd.env("HERDR_SOCKET_PATH", api);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");

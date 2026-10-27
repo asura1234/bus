@@ -97,6 +97,15 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         return Ok(());
     }
     let invocation = parse_invocation(args).map_err(io::Error::other)?;
+    if matches!(
+        invocation.action,
+        Action::Run | Action::Resume(_) | Action::Skills(_)
+    ) {
+        crate::utils::launch_guard::guard_launch()?;
+    }
+    if let Action::Skills(args) = &invocation.action {
+        return skills::run(args);
+    }
     let control_args = match &invocation.action {
         Action::Control(args) => Some(args.clone()),
         _ => None,
@@ -136,9 +145,6 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         return run_tui(dev, args);
     }
 
-    if let Action::Skills(args) = &invocation.action {
-        return skills::run(args);
-    }
     if matches!(invocation.action, Action::Run | Action::Resume(_)) {
         skills::on_launch();
     }

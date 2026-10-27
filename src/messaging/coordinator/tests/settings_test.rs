@@ -282,6 +282,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
         shown.result["settings"],
         json!({
             "color_blind_mode": false,
+            "skills_answer": null,
             "developer_sound": {"enabled": true, "name": null},
             "feishu_waiting_notifications": true,
             "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",

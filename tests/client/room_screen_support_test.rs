@@ -45,6 +45,8 @@ fn control_stream(root: &Path) -> std::io::Result<Stream> {
 
 fn scoped_command(base: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
+    command.env("HOME", base.join("home"));
+    command.env("USERPROFILE", base.join("home"));
     command.env("BUS_DATA_DIR", base.join("runtime"));
     command.env("XDG_CONFIG_HOME", base.join("config"));
     command.env("XDG_RUNTIME_DIR", base.join("runtime"));
@@ -83,6 +85,19 @@ impl RoomClient {
     fn spawn_session(base: PathBuf, dev: bool) -> Self {
         let runtime = base.join("runtime");
         let config = base.join("config");
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let status = Command::new(env!("CARGO_BIN_EXE_bus"))
+            .args(["skills", "status"])
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{:?}", status);
+        let report: Value = serde_json::from_slice(&status.stdout).unwrap();
+        let state = home.join(".local/share/bus");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("settings.json"), serde_json::to_vec(&serde_json::json!({"skills_answer":{"accepted":false,"bundle_hash":report["bundle_hash"]}})).unwrap()).unwrap();
         // Let Bus create its private root; do not precreate a shared control directory.
         fs::create_dir_all(&base).unwrap();
         fs::create_dir_all(config.join("bus")).unwrap();
@@ -99,6 +114,8 @@ impl RoomClient {
         if dev {
             command.arg("--dev");
         }
+        command.env("HOME", &home);
+        command.env("USERPROFILE", &home);
         command.env("BUS_DATA_DIR", &runtime);
         command.env("XDG_RUNTIME_DIR", &runtime);
         command.env("XDG_CONFIG_HOME", &config);

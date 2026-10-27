@@ -108,3 +108,23 @@ def test_binary_first_launch_saves_decline_reoffers_changed_set_and_skips_pipes(
     result = subprocess.run([binary], env=env, cwd=fresh, input="yes\n", capture_output=True, text=True)
     assert "Install the following" not in result.stderr
     assert not (fresh / ".local/share/bus/settings.json").exists()
+
+
+def test_bus_refuses_a_test_launch_with_protected_home_before_any_state_write(tmp_path):
+    import pytest
+    binary = os.environ.get("BUS_TEST_BINARY")
+    if not binary:
+        pytest.skip("requires the gate's exact built Bus binary")
+    protected = tmp_path / "protected-home"
+    protected.mkdir()
+    scratch = tmp_path / "scratch-home"
+    scratch.mkdir()
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_", "XDG_"))}
+    env["TEST_BUS_PROTECTED_HOME"] = str(protected)
+    # The relative root keeps the pre-guard binary from starting anything in RED.
+    for args, home, data in [([], protected, "relative-refused-root"), (["resume", "--last"], scratch, str(protected / ".local/share/bus"))]:
+        env.update(HOME=str(home), USERPROFILE=str(home), BUS_DATA_DIR=data)
+        result = subprocess.run([binary, *args], env=env, cwd=tmp_path, input="", capture_output=True, text=True)
+        assert result.returncode != 0
+        assert "test isolation refused" in result.stderr, result.stdout + result.stderr
+        assert not list(protected.iterdir()), "the guard must run before state or offer locks"
