@@ -294,9 +294,21 @@ impl BusState {
         text: &str,
         at_ms: u64,
     ) {
-        let detail = (request.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED))
-            .then_some(request.submission_error.as_deref())
-            .flatten();
+        // One outcome is retained per group. Include each steered sender's own
+        // message so the lead's failure cannot masquerade as their own turn.
+        let steered = self
+            .requests()
+            .filter(|member| reply_key(member) == reply_key(request))
+            .filter_map(|member| self.steered_turn_failure(member))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = if steered.is_empty() {
+            (request.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED))
+                .then_some(request.submission_error.as_deref())
+                .flatten()
+        } else {
+            Some(steered.as_str())
+        };
         self.record_request_event_with(request, kind, class, text, at_ms, detail);
     }
 

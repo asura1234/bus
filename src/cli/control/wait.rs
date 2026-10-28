@@ -187,10 +187,15 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
     {
         return Some((
             "message_provider_error",
-            format!(
-                "The provider ended agent {agent}'s turn on message {} with an error: {error}",
-                status["message_id"],
-            ),
+            abandoned["detail"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    format!(
+                        "The provider ended agent {agent}'s turn on message {} with an error: {error}",
+                        status["message_id"],
+                    )
+                }),
         ));
     }
     if abandoned["reason"] == crate::messaging::model::AGENT_STARTUP_FAILED {

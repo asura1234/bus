@@ -464,6 +464,51 @@ impl BusState {
         recorded > others
     }
 
+    /// Describe the sender's own message separately from the older turn it
+    /// joined. These persisted fields also cover status after restart/archive.
+    pub(crate) fn steered_turn_failure(&self, request: &Request) -> Option<String> {
+        if !request.steered || request.phase != RequestPhase::Abandoned || request.reply().is_some()
+        {
+            return None;
+        }
+        let error = request
+            .failure_reason
+            .as_deref()?
+            .strip_prefix("provider_error: ")?;
+        let lead = self.request(request.group?)?;
+        let agent = self.agent_label(request.agent_id);
+        let (delivery, receipt) = if request.trusted_start_bound {
+            (
+                "Delivered",
+                "The recipient saw your text but may not have acted on it; resend if needed.",
+            )
+        } else {
+            (
+                "Submitted",
+                "Bus could not confirm whether the recipient saw your text; resend if needed.",
+            )
+        };
+        Some(format!(
+            "Message {}: {delivery} into {agent}'s running turn (started by message {}); that turn ended on a provider error: {}. {receipt}",
+            request.prompt.id.0, lead.prompt.id.0, error.trim_end_matches('.')
+        ))
+    }
+
+    /// Generic provider failure hooks (notably Cursor's) give only a display
+    /// message. Preserve it for steered senders without changing the lead's
+    /// established failure reason or actionable error.
+    pub(super) fn note_steered_provider_error(&mut self, lead: RequestId, error: &str) {
+        for member in self.group_members(lead) {
+            if let Some(request) = self
+                .requests
+                .get_mut(&member)
+                .filter(|r| r.steered && !r.settled())
+            {
+                request.failure_reason = Some(format!("provider_error: {error}"));
+            }
+        }
+    }
+
     /// Abandon `id`'s turn with `reason`. Messages typed or coalesced into
     /// this turn close with it and share its reason; members that already
     /// settled keep their own outcome. Returns whether outstanding work closed,

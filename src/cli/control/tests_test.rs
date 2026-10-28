@@ -1150,6 +1150,38 @@ fn send_async_reports_a_provider_error_with_its_own_code_so_callers_can_retry() 
     assert_eq!(lines[0]["error"]["code"], "message_provider_error");
 }
 
+#[test]
+fn steer_failure_async_and_wait_use_the_senders_message_as_subject() {
+    let mut failed = recipient(2, "abandoned", false);
+    failed["reason"] = json!("provider_error: Model at capacity (server_overloaded)");
+    failed["group"] = json!(71435);
+    let detail = "Message 19: Delivered into a2's running turn (started by message 71434); that turn ended on a provider error: Model at capacity (server_overloaded). The recipient saw your text but may not have acted on it; resend if needed.";
+    failed["detail"] = json!(detail);
+    let (outcome, lines, _, _) = run_async(&[], [status(vec![failed.clone()])]);
+    assert!(outcome.is_err());
+    assert_eq!(lines[0]["error"]["code"], "message_provider_error");
+    assert_eq!(lines[0]["error"]["message"], detail);
+    for args in [
+        vec!["wait", "--message", "19", "--async"],
+        vec!["wait", "--message", "19"],
+    ] {
+        let (outcome, response) = run_captured(&args, |request, _| {
+            Ok(Response::success(&request.id, status(vec![failed.clone()])))
+        });
+        assert!(outcome.is_err());
+        assert_eq!(response["error"]["code"], "message_provider_error");
+        assert_eq!(response["error"]["message"], detail);
+    }
+}
+
+#[test]
+fn steer_failure_leads_async_error_text_stays_unchanged() {
+    let mut failed = recipient(2, "abandoned", false);
+    failed["reason"] = json!("provider_error: Model at capacity (server_overloaded)");
+    let (_, lines, _, _) = run_async(&[], [status(vec![failed])]);
+    assert_eq!(lines[0]["error"]["message"], "The provider ended agent a2's turn on message 19 with an error: Model at capacity (server_overloaded)");
+}
+
 /// Live e2e: a follower saw the turn end with no reply and exited 0, 5 s
 /// before Bus attached the provider error. A settling turn is not done yet.
 #[test]

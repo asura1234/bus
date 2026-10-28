@@ -408,6 +408,7 @@ impl BusState {
                 }
             }
             (true, None) => {
+                self.note_steered_provider_error(request_id, &message);
                 if self
                     .abandon_current_request(request_id, callback.occurred_at_ms)
                     .is_err()
