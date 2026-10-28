@@ -235,3 +235,16 @@ async fn a_working_to_idle_boundary_releases_a_never_rendered_paste() {
     show(runtime, AgentKind::Claude, "");
     assert!(result.await.unwrap().is_ok());
 }
+
+#[tokio::test]
+async fn a_visible_owned_paste_is_recovered_even_after_the_absence_age_bound() {
+    let (runtime, mut writes, _) = watched().await;
+    // The incidents' next requests arrived minutes later. The age limit must
+    // release absent input, not discard proof of a fully visible own draft.
+    runtime
+        .test_submission_clock()
+        .unwrap()
+        .advance(Duration::from_secs(180));
+    show(&runtime, AgentKind::Claude, OLD);
+    recover_and_deliver(&runtime, &mut writes, AgentKind::Claude, OLD, false).await;
+}
