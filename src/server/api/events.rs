@@ -5,6 +5,32 @@ use crate::server::app::{App, Mode, OverlayPaneState};
 use crate::server::terminals::respawn::RuntimeExitAction;
 use crate::terminal::events::TerminalEvent;
 impl App {
+    fn observe_native_submission_state(&self, event: &TerminalEvent) {
+        let pane_id = match event {
+            TerminalEvent::StateChanged { pane_id, .. }
+            | TerminalEvent::AgentProcessDetected {
+                pane_id,
+                replaced: Some(_),
+                ..
+            } => *pane_id,
+            _ => return,
+        };
+        let Some((ws_idx, _)) = self.find_pane(pane_id) else {
+            return;
+        };
+        let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
+            return;
+        };
+        match event {
+            TerminalEvent::StateChanged {
+                state, observed_at, ..
+            } => {
+                runtime.observe_submission_agent_state(*state, *observed_at);
+            }
+            _ => runtime.invalidate_submission_ownership(),
+        }
+    }
+
     pub(in crate::server) fn handle_internal_event_with_render_impact(
         &mut self,
         ev: TerminalEvent,
@@ -29,6 +55,7 @@ impl App {
         &mut self,
         ev: TerminalEvent,
     ) -> Vec<crate::server::terminals::events::PaneStateUpdate> {
+        self.observe_native_submission_state(&ev);
         if matches!(
             &ev,
             TerminalEvent::TerminalBell { .. } | TerminalEvent::ClipboardWrite { .. }

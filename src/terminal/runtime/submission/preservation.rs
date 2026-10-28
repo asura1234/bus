@@ -133,7 +133,7 @@ impl ObservedSubmission {
         }
     }
 
-    fn reset_confirmation(&self, delay: Duration) {
+    pub(super) fn reset_confirmation(&self, delay: Duration) {
         self.deadline.set(
             (self.clock.now() + confirmation_budget(delay))
                 .min(self.hard_deadline - self.withdraw_grace),

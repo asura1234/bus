@@ -229,6 +229,7 @@ impl TerminalRuntime {
     }
 
     pub(crate) fn mark_agent_launch(&self) {
+        self.invalidate_submission_ownership();
         self.launch_prompt_generation
             .set(self.shell_prompt_generation());
     }

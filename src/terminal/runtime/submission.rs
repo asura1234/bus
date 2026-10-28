@@ -1,6 +1,7 @@
 //! Observe the composer between writes; retry only Enter for the owned draft.
 mod diagnostics;
 mod preservation;
+mod recovery;
 pub(crate) use preservation::DraftPreservation;
 
 use super::submission_clock::SubmissionClock;
@@ -176,7 +177,7 @@ impl TerminalRuntime {
         let maximum = maximum_budget(delay, &text) + inspect.preservation_budget();
         let hard_deadline = deadline.unwrap_or(now + maximum).min(now + maximum);
         let scope = self.io.input_scope();
-        let submission = ObservedSubmission {
+        let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             io: self.io.clone(),
             scope: scope.clone(),
@@ -207,10 +208,26 @@ impl TerminalRuntime {
                 );
                 let result = super::draft_input::DraftInput::acquire(&draft_input, &submission.io)
                     .and_then(|lease| {
-                        let result = submission.run_preserving_draft(text, delay, &lease);
+                        let result = submission
+                            .recover_pending_paste(delay, &lease)
+                            .and_then(|()| submission.run_preserving_draft(text, delay, &lease));
                         // Inspect before releasing/replaying queued developer input.
                         if result.is_err() {
                             submission.diagnose_refusal("result_error");
+                        }
+                        if let Some((since, entered)) =
+                            submission.diagnostics.pending_paste(&result)
+                        {
+                            lease.retain_pending(super::draft_input::PendingPaste {
+                                inspect: std::mem::replace(
+                                    &mut submission.inspect,
+                                    Box::new(|_: &str| InputObservation::Unavailable),
+                                ),
+                                clear: submission.clear.clone(),
+                                since,
+                                entered,
+                                withdraw_grace: submission.withdraw_grace,
+                            });
                         }
                         result
                     });
@@ -229,7 +246,11 @@ impl TerminalRuntime {
 
 impl ObservedSubmission {
     fn observe(&self, phase: &'static str) -> InputObservation {
-        let screen = self.terminal.visible_ansi();
+        let Some(screen) = self.terminal.visible_ansi_if_complete() else {
+            self.diagnostics
+                .observe(phase, InputObservation::Unavailable, 0, self.clock.now());
+            return InputObservation::Unavailable;
+        };
         let observation = self.inspect.observe(&screen);
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
