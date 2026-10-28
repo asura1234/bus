@@ -77,3 +77,79 @@ fn a_session_without_dev_answers_agent_commands_and_refuses_dev_tools() {
         );
     }
 }
+
+/// Run the no-provider help examples against a real, private control server.
+#[test]
+fn help_examples_manage_a_scratch_room_without_provider_processes() {
+    let client =
+        room_screen_client::RoomClient::spawn_without_dev(room_screen_client::unique_test_dir());
+    let run = |args: &[&str]| -> serde_json::Value {
+        let output = client.cli(args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["ok"], true, "{args:?}: {response}");
+        response["result"].clone()
+    };
+
+    let created = run(&["room", "create", "feature-work"]);
+    let id = created["room_id"].as_u64().unwrap();
+    let replay = run(&[
+        "room",
+        "create",
+        "release-check",
+        "--request-id",
+        "release-check-room-v1",
+    ]);
+    assert_eq!(
+        replay,
+        run(&[
+            "room",
+            "create",
+            "release-check",
+            "--request-id",
+            "release-check-room-v1"
+        ])
+    );
+    run(&["room", "notes", "feature-work", "--text", "Review pending"]);
+    let state = run(&["state"]);
+    let room = state["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|room| room["id"] == id)
+        .unwrap();
+    assert_eq!(room["notes"], "Review pending");
+    assert!(state["build"]["binary"].is_string());
+    assert!(run(&["agent", "list", "--room", "feature-work"])["agents"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(run(&["history", "--room", "feature-work"])["messages"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let page = run(&["history", "--room", "feature-work", "--limit", "100"]);
+    assert_eq!(page["has_more"], false);
+    assert!(page["next_before"].is_null());
+    assert!(run(&["settings"])["settings"]["developer_sound"]["enabled"].is_boolean());
+    run(&["room", "rename", "feature-work", "implementation"]);
+
+    // Missing confirmation and protected MASTER are errors, not successful mutations.
+    for args in [
+        &["room", "delete", "implementation"][..],
+        &["room", "notes", "master", "--text", "Review pending"],
+    ] {
+        let output = client.cli(args);
+        assert!(!output.status.success());
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["ok"], false);
+        assert!(response["error"]["code"].is_string());
+    }
+    run(&["room", "delete", "implementation", "--confirm"]);
+    assert!(run(&["state"])["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|room| room["id"] != id));
+}

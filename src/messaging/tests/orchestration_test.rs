@@ -50,10 +50,15 @@ fn flat(text: &str) -> String {
 }
 
 #[test]
-fn written_cli_guide_keeps_its_prompt_placeholder_examples_literal() {
+fn cli_help_keeps_its_prompt_placeholder_examples_literal() {
     let data = temp_root("placeholder-examples");
     let docs = write_docs(&data).unwrap();
-    let guide = std::fs::read_to_string(docs.join("how-to-bus-cli.md")).unwrap();
+    let guide = crate::cli::control::help_for(
+        crate::cli::control::command_tree(false),
+        &["agent".into(), "add".into(), "--help".into()],
+    )
+    .unwrap();
+    assert!(docs.join("how-to-bus-cli.md").exists());
     for token in [
         "{{ROOM_NAME}}",
         "{{ROOM_ID}}",

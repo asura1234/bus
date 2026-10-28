@@ -1,10 +1,20 @@
 use super::parse;
 
 fn walk(command: &clap::Command, path: &[String]) {
+    let long = command
+        .get_long_about()
+        .expect("every command needs long help");
+    assert!(!long.to_string().trim().is_empty(), "{path:?}");
+    assert!(
+        !long.to_string().contains("Missing command documentation"),
+        "{path:?}"
+    );
     for flag in ["--help", "-h"] {
         let mut args = path.to_vec();
         args.push(flag.into());
-        let error = parse::cli().try_get_matches_from(&args).unwrap_err();
+        let error = super::command_tree(true)
+            .try_get_matches_from(&args)
+            .unwrap_err();
         assert_eq!(
             error.kind(),
             clap::error::ErrorKind::DisplayHelp,
@@ -22,6 +32,38 @@ fn walk(command: &clap::Command, path: &[String]) {
 #[test]
 fn every_control_command_accepts_help() {
     walk(&parse::cli(), &[]);
+    walk(&super::command_tree(true), &[]);
+}
+
+#[test]
+fn control_long_help_documents_results_errors_examples_and_defaults() {
+    fn check(command: &clap::Command, path: &str) {
+        let long = command.get_long_about().unwrap().to_string();
+        assert!(long.contains("JSON and common errors:"), "{path}");
+        if command.get_subcommands().next().is_none() {
+            assert!(long.contains("Result:"), "{path}: missing result schema");
+            assert!(long.contains("Errors:"), "{path}: missing error recovery");
+        }
+        assert!(
+            command
+                .get_after_help()
+                .unwrap()
+                .to_string()
+                .contains("Example:"),
+            "{path}"
+        );
+        for arg in command.get_arguments() {
+            assert!(
+                arg.get_help().unwrap().to_string().contains('['),
+                "{path}: {}",
+                arg.get_id()
+            );
+        }
+        for child in command.get_subcommands() {
+            check(child, &format!("{path} {}", child.get_name()));
+        }
+    }
+    check(&parse::cli(), "bus");
 }
 
 #[test]
@@ -37,7 +79,7 @@ fn command_help_matches_process_flag_positions() {
     let args = ["agent", "add", "--help"].map(String::from);
     let text = super::help_for(super::command_tree(false), &args).unwrap();
     assert!(
-        !text.contains("--dev") && !text.contains("--yolo"),
+        !text.contains("      --dev") && !text.contains("      --yolo"),
         "{text}"
     );
     let misplaced = ["agent", "add", "--dev", "--help"].map(String::from);

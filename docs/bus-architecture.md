@@ -13,7 +13,7 @@ selected rules. Python retains Ruff E9,F and has no complexity lint policy.
 - `orchestration/`: Markdown only; how a MASTER orchestrator agent works
   - `README.md`: the contract between Bus and these files (placeholders, compiled-in defaults, control CLI)
   - `prompt.md`: the MASTER system prompt
-  - `rules.md`, `guide.md`, `how-to-bus-cli.md`: binding rules, working guide, control CLI reference
+  - `rules.md`, `guide.md`, `how-to-bus-cli.md`: binding rules, working guide, short CLI guide (command contracts live in clap help)
 - `workflows/`: Markdown only; the standard workflow library
   - `create.md`: how to draft and revise a workflow (the `workflow-create` skill points here)
   - `template.md`, `auto-merge-pr.md`, `bug-fix.md`, `cross-repo-feature.md`
