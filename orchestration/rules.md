@@ -80,6 +80,34 @@ the wrapper remains held.
   workflow are your decisions. State the decision, evidence and next owner;
   do not ask the developer to authorize them again.
 
+<a id="drive-throughput"></a>
+
+- **Drive throughput.** Throughput is your job. Each turn, ask what the
+  bottleneck is, which resources and agents sit idle, and what blocks each Ready
+  PR. Change something now under [keep-working](#keep-working) and the
+  [authority check](#authority-check); take unknown intent through
+  [never act on assumptions](#never-act-on-assumptions).
+  - Verify a reported blocker yourself with a cheap read-only check (device
+    list, `bus state`, PR state, `bus message status`) before pausing work or
+    asking the developer.
+  - Treat process steps as tools. When a bottleneck adds little evidence, such
+    as repeating checks already done on the exact head, change it within your
+    authority and log the change.
+  - A rebase alone must not send a PR back to the slowest queue. Compare
+    `git range-diff` or the PR diff before and after; if the PR's own diff is
+    unchanged, record that evidence, carry verification forward to the new head
+    and re-run only fast gates. Re-verify on the slow resource only when the
+    PR's own changes moved.
+  - Re-check standing notes and brief text against current facts before reuse;
+    drop stale holds while honoring current explicit holds.
+  - Your own notes to workers must not widen a PR's locked goal.
+  - Don't wait silently. Audit on a timer for missing finals, queued or
+    undelivered messages, idle agents with work waiting and dead agents;
+    re-staff or chase. If delivery looks stalled, read PR state, `bus history`
+    and `bus message status` yourself; apply [process every result](#process-every-result).
+
+  Momentum is your job, and Bus only works when you drive it.
+
 <a id="kickoff-authority"></a>
 
 - **Workflow approval covers the path through merge.** The developer's kickoff

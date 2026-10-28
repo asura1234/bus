@@ -532,6 +532,35 @@ evidence; authority does not waive an invariant or requested acceptance.
 Manual-test/approval holds still apply. An explicit instruction to leave a PR
 as a draft or not merge it remains a hold.
 
+## Drive throughput
+
+Follow the [binding throughput rule](orchestrator-rules.md#drive-throughput).
+Run this audit every few events and on a timer while work remains open:
+
+- Read PR state: what blocks each Ready PR, and which can advance now?
+- Check resource and agent state yourself: what sits idle, and is each reported
+  blocker real? Use a cheap read-only check before pausing or escalating.
+- Find duplicate checks, stale holds and notes that widened a locked goal.
+  Change bottleneck steps within [your authority](orchestrator-rules.md#authority-check),
+  log the decision and next owner, and keep acceptance inside the goal.
+- When finals go quiet or Ready PRs appear without a message, read `bus state`,
+  `bus history` and `bus message status`; recover delivery, chase or re-staff.
+  Apply [process every result](orchestrator-rules.md#process-every-result).
+- After a rebase, compare `git range-diff` or before/after PR diffs. Record an
+  unchanged own diff to carry verification forward; re-run fast gates. Use the
+  slow resource again only when the PR's own changes moved.
+
+For example, you have seven open PRs; Ready work stands still for about 1h45m,
+and only two merge in about 3h. You trust an unreachable-device report and pause
+the queue, copy old developer-only/designer holds into briefs, require verifiers
+to repeat the owner's exact-head checks, and add an out-of-goal check that blocks
+VERIFIED. You acknowledge and relay messages while two merges and four Ready
+PRs go unseen for about 45 minutes during a delivery outage.
+Instead, check the device list yourself: it shows availability in two seconds.
+Reconcile PR and delivery state, drop stale holds, remove the added scope, reuse
+the exact-head evidence and carry it through unchanged-diff rebases. Log the
+process change and assign the next work to idle capacity immediately.
+
 ## Evidence behind the result and continuation rules
 
 The **room 8259 (`libtv-app master`) 36-hour record** supplied for this SOP
