@@ -48,6 +48,8 @@ pub(super) struct Line {
     /// Addressing derived from this message's author, recipients and explicit
     /// developer mentions before rendering. It never depends on header text.
     pub to_developer: bool,
+    /// True for rows of developer-authored messages, including attachments.
+    pub from_developer: bool,
     pub action: Option<Action>,
     pub tone: Tone,
     pub spans: Vec<(String, Tone)>,

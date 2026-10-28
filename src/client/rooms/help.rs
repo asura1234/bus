@@ -21,7 +21,9 @@ Esc Esc        Clear the draft and save it so Up brings it back
 Ctrl+R         Search prompt history
 Ctrl+F         Find in the chat history, from the newest match: Enter or Up goes
                older, Shift+Enter or Down newer, Esc closes
-Tab in Find    Toggle → You only; an empty query finds addressed messages
+Tab in Find    Tab/Shift+Tab focus text, → You, You →; Space toggles a filter
+               → You finds addressed messages; You → finds your sent messages
+               Both filters include either direction; empty text steps messages
 Ctrl+S         Stash the current prompt; empty composer restores it
 Ctrl+G         Open the prompt in $EDITOR
 Ctrl+V         Attach a clipboard image

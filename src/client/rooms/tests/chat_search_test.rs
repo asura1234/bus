@@ -62,6 +62,10 @@ fn panel_row(ui: &mut BusUi) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+        .replace(" [ ] → You [ ] You →", "")
+        .replace(" [x] → You [ ] You →", "")
+        .replace(" [ ] → You [x] You →", "")
+        .replace(" [x] → You [x] You →", "")
 }
 
 fn on_screen(ui: &BusUi, row: usize) -> bool {
@@ -83,7 +87,7 @@ fn ctrl_f_searches_the_whole_history_and_wraps_both_ways() {
     let rows: Vec<usize> = ui.view.search_matches.iter().map(|(row, _)| *row).collect();
     assert!(rows.windows(2).all(|pair| pair[0] < pair[1]), "{rows:?}");
     // A new query starts at the newest match, in view.
-    assert!(panel_row(&mut ui).starts_with("Find nEEDLE"), "{screen}");
+    assert!(panel_row(&mut ui).starts_with("Find: nEEDLE"), "{screen}");
     assert!(
         panel_row(&mut ui).ends_with("3/3"),
         "{}",
@@ -171,7 +175,7 @@ fn esc_closes_the_search_and_returns_focus_where_it_was() {
         assert!(ui.chat_search.is_none());
         assert_eq!(ui.notes_focus, notes, "focus is back where it was");
         let screen = room_screen(&mut ui, 100, 30);
-        assert!(!screen.contains("Find "), "{screen}");
+        assert!(!screen.contains("Find: "), "{screen}");
         // Keys reach the composer or notes again.
         type_text(&mut ui, "x");
         let local = &ui.locals[&room];
@@ -224,7 +228,7 @@ fn author_names_match_and_master_is_searchable() {
     type_text(&mut ui, "gate passed");
     let row = panel_row(&mut ui);
     assert!(
-        row.starts_with("Find gate passed") && row.ends_with("1/1"),
+        row.starts_with("Find: gate passed") && row.ends_with("1/1"),
         "{row}"
     );
 }
@@ -238,11 +242,11 @@ fn ctrl_o_opens_the_file_picker_and_empty_or_missing_queries_say_so() {
     assert!(matches!(ui.form, Some(forms::Form::Files(_))));
     ui.form = None;
     key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
-    assert_eq!(panel_row(&mut ui), "Find");
+    assert_eq!(panel_row(&mut ui), "Find:");
     type_text(&mut ui, "zzz");
     let row = panel_row(&mut ui);
     assert!(
-        row.starts_with("Find zzz") && row.ends_with("no matches"),
+        row.starts_with("Find: zzz") && row.ends_with("no matches"),
         "{row}"
     );
     // Next and previous do nothing without matches.
@@ -283,7 +287,8 @@ fn the_panel_sits_directly_above_the_history_and_gives_its_rows_back() {
             .iter()
             .collect();
         assert!(
-            hint.contains("Tab → You only: off")
+            hint.contains("Tab")
+                && hint.contains("Space toggle")
                 && hint.contains("↑ older")
                 && hint.contains("↓ newer")
                 && hint.contains("Esc"),
@@ -317,7 +322,7 @@ fn the_query_has_its_own_field_after_a_dim_label() {
     let label: String = (panel.x + 1..field.x)
         .map(|x| buffer[(x, field.y + 1)].symbol())
         .collect();
-    assert_eq!(label.trim(), "Find");
+    assert_eq!(label.trim(), "Find:");
     let hint_grey = buffer[(panel.x + 1, panel.y + 4)].fg;
     assert_eq!(buffer[(panel.x + 1, field.y + 1)].fg, hint_grey);
     let query = buffer[(field.x + 1, field.y + 1)].clone();
@@ -455,8 +460,9 @@ fn you_only_selects_model_addressed_messages_and_intersects_text_matches() {
     );
     let history = ui.history.cached().to_vec();
     key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
     let screen = room_screen(&mut ui, 100, 60);
-    assert!(screen.contains("Tab → You only: on"), "{screen}");
+    assert!(screen.contains("[x] → You"), "{screen}");
     assert_eq!(ui.view.search_matches.len(), 6);
     let texts: Vec<_> = ui
         .view
@@ -480,7 +486,7 @@ fn you_only_selects_model_addressed_messages_and_intersects_text_matches() {
         history,
         "filtering leaves every row intact"
     );
-    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
     room_screen(&mut ui, 100, 60);
     assert_eq!(ui.view.search_matches.len(), 9);
 }
@@ -492,6 +498,7 @@ fn empty_you_only_steps_once_per_message_newest_first_and_resets_on_close() {
     ui.open_room(room);
     key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
     key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
     room_screen(&mut ui, 100, 30);
     assert_eq!(
         ui.view.search_matches.len(),
@@ -516,7 +523,7 @@ fn empty_you_only_steps_once_per_message_newest_first_and_resets_on_close() {
     assert!(ui.chat_search.is_none());
     key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
     assert!(!ui.chat_search.as_ref().unwrap().you_only);
-    assert_eq!(panel_row(&mut ui), "Find");
+    assert_eq!(panel_row(&mut ui), "Find:");
     assert!(ui.view.search_matches.is_empty());
 }
 
@@ -533,6 +540,7 @@ fn empty_you_only_highlights_the_selected_header_and_handles_no_matches() {
     ui.open_room(room);
     key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
     key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
     ui.compute_view(100, 30);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
     ui.render(&mut buffer);
@@ -542,10 +550,159 @@ fn empty_you_only_highlights_the_selected_header_and_handles_no_matches() {
         buffer[(ui.view.history_text.x, y)].bg,
         ratatui::style::Color::Rgb(240, 190, 70)
     );
+    key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
     type_text(&mut ui, "absent");
     assert!(panel_row(&mut ui).ends_with("no matches"));
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     assert!(ui.view.search_matches.is_empty());
-    assert!(help::TEXT.contains("Tab in Find    Toggle → You only"));
+    assert!(help::TEXT.contains("Tab/Shift+Tab focus text, → You, You →"));
+}
+
+#[test]
+fn find_focus_cycles_both_ways_and_space_edits_only_the_focused_control() {
+    use super::super::chat_search::SearchFocus::{FromYou, Query, ToYou};
+    let (mut ui, room, agent) = fixture();
+    mixed_find_history(&mut ui, room, agent);
+    ui.open_room(room);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    for expected in [ToYou, FromYou, Query] {
+        key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+        let search = ui.chat_search.as_ref().unwrap();
+        assert_eq!(search.focus, expected);
+        assert!(!search.you_only && !search.from_you, "focus never toggles");
+    }
+    type_text(&mut ui, "needle ");
+    assert_eq!(ui.chat_search.as_ref().unwrap().query, "needle ");
+    for (code, modifiers, expected) in [
+        (KeyCode::BackTab, KeyModifiers::SHIFT, FromYou),
+        (KeyCode::Tab, KeyModifiers::SHIFT, ToYou),
+        (KeyCode::BackTab, KeyModifiers::NONE, Query),
+    ] {
+        key(&mut ui, code, modifiers);
+        assert_eq!(ui.chat_search.as_ref().unwrap().focus, expected);
+    }
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+    type_text(&mut ui, "ignored");
+    key(&mut ui, KeyCode::Backspace, KeyModifiers::NONE);
+    assert_eq!(ui.chat_search.as_ref().unwrap().query, "needle ");
+    assert!(ui.chat_search.as_ref().unwrap().you_only);
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+    assert!(ui.chat_search.as_ref().unwrap().from_you);
+    assert_eq!(ui.locals[&room].text.text, "");
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    let search = ui.chat_search.as_ref().unwrap();
+    assert_eq!(search.focus, Query);
+    assert!(search.query.is_empty() && !search.you_only && !search.from_you);
+}
+
+#[test]
+fn outgoing_and_union_filters_use_authorship_in_work_rooms_and_master() {
+    for master in [false, true] {
+        let (mut ui, room, agent) = fixture();
+        let (room, agent) = if master {
+            let mut snapshot = (*ui.snapshot).clone();
+            let master = snapshot.state.ensure_master_room();
+            let orch = snapshot
+                .state
+                .create_agent(master, "orch", Provider::ClaudeCode, "/p".into(), None)
+                .unwrap();
+            snapshot.revision += 1;
+            ui.receive_snapshot(Arc::new(snapshot));
+            (master, orch)
+        } else {
+            (room, agent)
+        };
+        mixed_find_history(&mut ui, room, agent);
+        ui.open_room(room);
+        key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+        key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
+        key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+        room_screen(&mut ui, 100, 60);
+        assert_eq!(ui.view.search_matches.len(), 1, "one developer prompt");
+        assert!(ui.history.cached()[selected_row(&ui)]
+            .text
+            .contains("You →"));
+        key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
+        key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+        room_screen(&mut ui, 100, 60);
+        assert_eq!(ui.view.search_matches.len(), 7, "union, not intersection");
+        key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
+        type_text(&mut ui, "needle");
+        room_screen(&mut ui, 100, 60);
+        assert_eq!(ui.view.search_matches.len(), 7);
+        key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+        room_screen(&mut ui, 100, 60);
+        let texts: Vec<_> = ui
+            .view
+            .search_matches
+            .iter()
+            .map(|(row, _)| ui.history.cached()[*row].text.trim())
+            .collect();
+        assert_eq!(texts, ["Needle @you outgoing prompt"], "master: {master}");
+    }
+}
+
+#[test]
+fn filtered_navigation_works_from_every_control_with_empty_or_typed_text() {
+    for query in ["", "needle"] {
+        let (mut ui, room, agent) = fixture();
+        history_with(&mut ui, room, agent, 5, &[0, 2, 4]);
+        ui.open_room(room);
+        key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+        type_text(&mut ui, query);
+        key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
+        key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+        room_screen(&mut ui, 100, 60);
+        let count = if query.is_empty() { 5 } else { 3 };
+        assert_eq!(ui.view.search_matches.len(), count);
+        for _ in 0..3 {
+            for (code, modifiers, expected) in [
+                (KeyCode::Enter, KeyModifiers::NONE, count - 2),
+                (KeyCode::Up, KeyModifiers::NONE, count - 3),
+                (KeyCode::Down, KeyModifiers::NONE, count - 2),
+                (KeyCode::Enter, KeyModifiers::SHIFT, count - 1),
+            ] {
+                key(&mut ui, code, modifiers);
+                room_screen(&mut ui, 100, 60);
+                assert_eq!(ui.chat_search.as_ref().unwrap().current, expected);
+                assert!(on_screen(&ui, selected_row(&ui)));
+            }
+            key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+        }
+    }
+}
+
+#[test]
+fn focused_find_control_is_highlighted_and_cursor_follows_text_focus() {
+    use super::super::chat_search::SearchFocus::{FromYou, Query, ToYou};
+    let (mut ui, room, _) = fixture();
+    ui.open_room(room);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    for focus in [Query, ToYou, FromYou, Query] {
+        ui.compute_view(100, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        let field = ui.view.search_field;
+        for (expected, x) in [
+            (Query, field.x + 1),
+            (ToYou, field.right() + 1),
+            (FromYou, field.right() + 11),
+        ] {
+            assert_eq!(
+                buffer[(x, field.y + 1)].bg,
+                if focus == expected {
+                    ratatui::style::Color::Rgb(46, 48, 58)
+                } else {
+                    ratatui::style::Color::Rgb(24, 24, 28)
+                }
+            );
+        }
+        assert_eq!(ui.view.cursor.is_some(), focus == Query);
+        key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    }
 }

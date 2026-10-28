@@ -229,6 +229,7 @@ impl History {
                 || matches!(prompt.author, Author::Agent(_)) && explicitly_to_you(&prompt.text));
         for line in &mut lines[start..] {
             line.to_developer = to_developer;
+            line.from_developer = prompt.author == Author::Developer;
         }
     }
 
@@ -329,6 +330,7 @@ impl History {
                     thumbnail: None,
                     raw_markdown: None,
                     to_developer: false,
+                    from_developer: false,
                     continued: false,
                     rejoin_space: false,
                     copy_from: 0,
@@ -363,6 +365,7 @@ fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor
         thumbnail: None,
         raw_markdown: None,
         to_developer: false,
+        from_developer: false,
         continued: index > 0 && rows[index - 1].end == row.start,
         rejoin_space: false,
         copy_from: indent.len(),
@@ -414,6 +417,7 @@ fn wrap_header(
                 thumbnail: None,
                 raw_markdown: None,
                 to_developer: false,
+                from_developer: false,
                 continued: index > 0,
                 rejoin_space: false,
                 copy_from: indent.len(),
@@ -480,6 +484,7 @@ fn blank_row(anchor: RowAnchor) -> Line {
         thumbnail: None,
         raw_markdown: None,
         to_developer: false,
+        from_developer: false,
         continued: false,
         rejoin_space: false,
         copy_from: 0,
@@ -700,6 +705,7 @@ fn push_prompt_files(
                 }),
                 raw_markdown: None,
                 to_developer: false,
+                from_developer: false,
                 continued: false,
                 rejoin_space: false,
                 copy_from: 0,
@@ -722,6 +728,7 @@ fn push_prompt_files(
             thumbnail: None,
             raw_markdown: None,
             to_developer: false,
+            from_developer: false,
             continued: false,
             rejoin_space: false,
             copy_from: 0,
@@ -739,6 +746,7 @@ fn push_prompt_files(
             thumbnail: None,
             raw_markdown: None,
             to_developer: false,
+            from_developer: false,
             continued: false,
             rejoin_space: false,
             copy_from: 0,
