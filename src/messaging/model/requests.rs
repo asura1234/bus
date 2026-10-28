@@ -223,8 +223,8 @@ impl BusState {
             {
                 None
             }
-            // A reported startup failure retains its queue until recovery;
-            // it has no submission opportunity and must not expire as a stall.
+            // A recoverable startup wait has no submission opportunity.
+            // Conclusive failures close their queue when recorded or enqueued.
             RequestPhase::Queued
                 if agent
                     .startup
@@ -720,6 +720,9 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
 impl Request {
     /// Durable send outcome, never the agent's mutable latest error or a reply.
     pub(crate) fn submission_notice(&self) -> Option<String> {
+        if self.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED) {
+            return self.submission_error.clone();
+        }
         let unconfirmed = self.failure_reason.as_deref() == Some("submission_unconfirmed")
             || self.phase == RequestPhase::Submitting
                 && self.uncertain_outcome

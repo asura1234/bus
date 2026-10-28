@@ -629,7 +629,7 @@ impl Worker {
             None => {
                 let master = input.room;
                 state
-                    .submit_message_with(
+                    .submit_bus_message_with(
                         master,
                         Draft {
                             text: match input.provider {

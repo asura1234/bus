@@ -463,6 +463,11 @@ settlement abandons it with reason `reply_not_captured`, which `--async` counts
 as done and succeeds on. If the agent went unavailable after its turn ended (its
 provider exited, say), settlement abandons it with reason `agent_unavailable` and
 the command exits 1 with `message_abandoned`.
+If startup conclusively fails before delivery, Bus closes never-submitted queued
+requests as `agent_startup_failed`, including new sends to that failed startup.
+The command exits 1 with `message_abandoned` and the saved startup reason and
+recovery action. Repair startup, then explicitly resend the closed work.
+Recoverable startup dialogs and transient unavailability keep waiting normally.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
 command keeps waiting until someone answers it. Both async waits retry live-server
 overload, including accepted connections closed without a response. Four consecutive

@@ -113,6 +113,10 @@ fn failed_startup_reports_evidence_and_retains_identity() {
         .find(|agent| agent.name == "broken")
         .unwrap();
     let error = broken.actionable_error.as_deref().unwrap();
+    assert!(
+        !error.contains("missing or unknown conversation"),
+        "{error}"
+    );
     for text in ["codex", "bus-provider-does-not-exist", "command not found"] {
         assert!(error.contains(text), "missing {text}: {error}");
     }
@@ -227,7 +231,7 @@ fn startup_hook_consumed_before_cleanup_wins_over_an_expired_poll_snapshot() {
 }
 
 #[test]
-fn startup_failure_error_survives_restart_without_duplication_or_losing_queued_work() {
+fn startup_failure_abandonment_and_diagnostics_survive_restart() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
     let mut state = worker.state.clone();
     let request = state
@@ -255,7 +259,27 @@ fn startup_failure_error_survives_restart_without_duplication_or_losing_queued_w
     assert!(error.contains("Command:") && error.contains("Last screen lines:"));
     assert_eq!(
         worker.state.request(request).unwrap().phase,
-        RequestPhase::Queued
+        RequestPhase::Abandoned
+    );
+    let detail = worker
+        .state
+        .request(request)
+        .unwrap()
+        .submission_error
+        .clone()
+        .unwrap();
+    assert!(
+        detail.contains("30 seconds") && detail.contains("Resend"),
+        "{detail}"
+    );
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_startup_failed")
     );
     drop(worker);
     let mut worker = Worker::open(
@@ -276,7 +300,16 @@ fn startup_failure_error_survives_restart_without_duplication_or_losing_queued_w
     assert_eq!(failed.actionable_error.as_deref(), Some(error.as_str()));
     assert_eq!(
         worker.state.request(request).unwrap().phase,
-        RequestPhase::Queued
+        RequestPhase::Abandoned
+    );
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .submission_error
+            .as_deref(),
+        Some(detail.as_str())
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -481,7 +514,7 @@ fn a_stuck_failed_startup_deletion_does_not_relog_pending_on_each_retry() {
 }
 
 #[test]
-fn staffing_readiness_timeout_retains_agent_identity_and_queue() {
+fn staffing_readiness_timeout_retains_agent_identity() {
     let (mut worker, agent, _, dir) = pending(Provider::Codex);
     let info = pending_info(&worker, agent);
     let start = worker
@@ -504,17 +537,21 @@ fn staffing_readiness_timeout_retains_agent_identity_and_queue() {
         .unwrap();
     assert!(
         worker.state.agent(agent).is_some(),
-        "timeout must preserve agent identity and queued work"
+        "timeout must preserve agent identity"
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn startup_failure_keeps_queued_work_past_the_queued_stall_window() {
+fn startup_failure_closes_queued_work_and_notifies_its_sender() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
     let mut state = worker.state.clone();
-    let submitted = io::now_ms();
+    let master = state.master_room().unwrap().id;
+    let sender = state
+        .create_agent(master, "sender", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(sender, room).unwrap();
     let request = state
         .submit_message_with(
             room,
@@ -523,60 +560,266 @@ fn startup_failure_keeps_queued_work_past_the_queued_stall_window() {
                 files: vec![],
                 recipient_ids: [agent].into(),
             },
-            Author::Developer,
-            submitted,
+            Author::Agent(sender),
+            io::now_ms(),
             true,
         )
         .unwrap()[0];
+    let second = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "second queued task".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(sender),
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0];
+    let message = state.request(request).unwrap().prompt.id;
     worker.save(state).unwrap();
     worker
-        .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+        .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
         .unwrap();
     assert_eq!(
         worker.state.request(request).unwrap().phase,
-        RequestPhase::Queued
+        RequestPhase::Abandoned
     );
-    worker
-        .expire_queued_requests(submitted + 10 * 60 * 1000)
-        .unwrap();
-    let after = worker.state.request(request).unwrap();
     assert_eq!(
-        after.phase,
-        RequestPhase::Queued,
-        "work the startup blocker says is retained was closed: {:?}",
-        after.failure_reason
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_startup_failed")
     );
-    assert!(worker
+    assert!(worker.state.queued_requests(agent).is_empty());
+    assert_eq!(
+        worker.state.request(second).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    let status = worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "failed-startup-status".into(),
+            method: "message.status".into(),
+            params: json!({"message":message.0.to_string()}),
+        },
+        None,
+    );
+    assert!(status.ok, "{status:?}");
+    assert_eq!(status.result["complete"], true);
+    let detail = status.result["requests"][0]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("launch ended") && detail.contains("Resend"),
+        "{detail}"
+    );
+    worker.state.retain_worker_outcomes(io::now_ms());
+    let events = worker
         .state
-        .agent(agent)
-        .unwrap()
-        .actionable_error
-        .as_deref()
-        .unwrap()
-        .starts_with("Startup failed"));
-    // Confirmation releases the hold with a fresh opportunity to dispatch,
-    // even when Idle did not change during the failed launch.
-    let recovered = submitted + 11 * 60_000;
-    worker
-        .state
-        .observe_status(agent, RuntimeStatus::Idle, recovered)
-        .unwrap();
-    worker.state.set_agent_startup(agent, None).unwrap();
-    worker.expire_queued_requests(recovered).unwrap();
+        .worker_events_for(worker.state.request(request).unwrap());
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(
+        events[0].1.contains("agent_startup_failed") && events[0].1.contains("Resend"),
+        "{events:?}"
+    );
+    worker.state.retain_worker_outcomes(io::now_ms());
     assert_eq!(
-        worker.state.request(request).unwrap().phase,
-        RequestPhase::Queued
+        worker
+            .state
+            .worker_events_for(worker.state.request(request).unwrap())
+            .len(),
+        1
     );
     worker
-        .expire_queued_requests(recovered + crate::messaging::model::QUEUED_STALL_MS + 1)
+        .state
+        .route_worker_replies(io::now_ms() + 2_100, &BTreeSet::new())
         .unwrap();
-    assert_eq!(
-        worker.state.request(request).unwrap().phase,
-        RequestPhase::Abandoned,
-        "confirmed startup must release the hold on normal queue expiry"
+    let notices: Vec<_> = worker
+        .state
+        .requests()
+        .filter(|r| r.agent_id == sender)
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0].prompt.text.contains("agent_startup_failed")
+            && notices[0].prompt.text.contains("Resend"),
+        "{}",
+        notices[0].prompt.text
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn startup_failure_abandons_new_sends_with_persistent_recovery_detail() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    let mut state = worker.state.clone();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "sent after failure".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            io::now_ms(),
+            false,
+        )
+        .unwrap()[0];
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(
+        state.request(request).unwrap().failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    let detail = state
+        .request(request)
+        .unwrap()
+        .submission_error
+        .clone()
+        .unwrap();
+    assert!(
+        detail.contains("launch ended") && detail.contains("Resend"),
+        "{detail}"
+    );
+    assert!(state.queued_requests(agent).is_empty());
+    state.delete_agent(agent, io::now_ms()).unwrap();
+    assert_eq!(
+        state.request(request).unwrap().failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    assert_eq!(
+        state.request(request).unwrap().submission_error.as_deref(),
+        Some(detail.as_str())
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn startup_failure_does_not_abandon_submitted_or_uncertain_work() {
+    for outcome in [
+        None,
+        Some(SubmissionOutcome::Confirmed {
+            provider_session_id: None,
+            provider_turn_id: None,
+        }),
+        Some(SubmissionOutcome::Uncertain {
+            message: "receipt lost".into(),
+        }),
+    ] {
+        let (mut worker, agent, room, dir) = pending(Provider::Codex);
+        let mut state = worker.state.clone();
+        let first = state
+            .submit_message_with(
+                room,
+                Draft {
+                    text: "already submitted".into(),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                io::now_ms(),
+                true,
+            )
+            .unwrap()[0];
+        let launch = state
+            .agent(agent)
+            .unwrap()
+            .runtime_identity
+            .launch_id
+            .clone()
+            .unwrap();
+        state.begin_submission(first, &launch, 0).unwrap();
+        if let Some(outcome) = outcome {
+            state.record_submission(first, outcome).unwrap();
+        }
+        let before = state.request(first).unwrap().clone();
+        let waiting = state
+            .submit_message_with(
+                room,
+                Draft {
+                    text: "never submitted".into(),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                io::now_ms(),
+                true,
+            )
+            .unwrap()[0];
+        worker.save(state).unwrap();
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        assert_eq!(worker.state.request(first).unwrap(), &before);
+        assert_eq!(
+            worker.state.request(waiting).unwrap().phase,
+            RequestPhase::Abandoned
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn startup_failure_excludes_transient_unavailability_and_startup_dialogs() {
+    for dialog in [false, true] {
+        let (mut worker, agent, room, dir) = pending(Provider::Codex);
+        let mut state = worker.state.clone();
+        let request = state
+            .submit_message_with(
+                room,
+                Draft {
+                    text: "wait for readiness".into(),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                io::now_ms(),
+                true,
+            )
+            .unwrap()[0];
+        if dialog {
+            let mut info = pending_info(&worker, agent);
+            info.agent_status = schema::AgentStatus::Blocked;
+            worker.save(state).unwrap();
+            worker
+                .cleanup_failed_startups(&[info], &mpsc::channel().0, u64::MAX)
+                .unwrap();
+            assert!(worker.state.agent(agent).unwrap().startup.is_none());
+        } else {
+            state.set_agent_startup(agent, None).unwrap();
+            state
+                .observe_status(agent, RuntimeStatus::Unavailable, io::now_ms())
+                .unwrap();
+            worker.save(state).unwrap();
+            worker
+                .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
+                .unwrap();
+        }
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert!(worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .is_none());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 const SHELL_PROMPT_WAIT_ERROR: &str = "Shell waiting for input or prompt confirmation after 30 seconds. Last visible line: STARTUP QUESTION [Y/n]. Answer any shell startup question, then resume this agent.";
@@ -1007,3 +1250,221 @@ fn shell_recovery_does_not_invent_retry_authority_from_legacy_command_text() {
 
 #[path = "native_restore_test.rs"]
 mod native_restore;
+
+struct ResumedSessionShellWaitNative {
+    fallback: FailedLaunchNative,
+}
+
+impl Transport for ResumedSessionShellWaitNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::PaneCloseIfIdentity(_) | Method::PaneReportAgentSession(_) => {
+                Ok(ResponseResult::Ok {})
+            }
+            other => self.fallback.request(other),
+        }
+    }
+}
+
+#[test]
+fn resumed_session_shell_wait_preserves_queued_work() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    for code in ["agent_shell_waiting", "agent_shell_starting"] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let request = queue(
+            &mut worker,
+            room,
+            agent,
+            "work waiting for resumed conversation",
+        );
+        let hooks = dir.join(".codex/hooks.json");
+        let document = merge_hooks(
+            json!({}),
+            HookContract::for_provider(Provider::Codex),
+            &std::env::current_exe().unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+        std::fs::write(&hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+        let sent_args = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(ResumedSessionShellWaitNative {
+            fallback: FailedLaunchNative {
+                state_path: dir.join("state.json"),
+                shell_wait_code: Some(code),
+                launch_args: Some(Arc::clone(&sent_args)),
+                ..Default::default()
+            },
+        });
+        let result = worker.resume_room(room).unwrap();
+        assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+        assert!(
+            result["agents"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("STARTUP QUESTION"),
+            "{result}"
+        );
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        worker.expire_queued_requests(u64::MAX).unwrap();
+        drop(worker);
+        let worker = reopen_saved(&dir);
+        let actual = worker.state.request(request).unwrap().clone();
+        let startup = worker.state.agent(agent).unwrap().startup.clone().unwrap();
+        assert!(startup.reported);
+        assert!(startup.failure.is_none());
+        assert_eq!(
+            startup.recovery,
+            Some(crate::messaging::model::StartupRecovery::Unsubmitted {
+                args: sent_args.lock().unwrap().clone(),
+            })
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(actual.phase, RequestPhase::Queued,
+            "{code}: recoverable shell wait must not close queued work; startup={startup:?}; detail={:?}", actual.submission_error);
+    }
+}
+
+#[test]
+fn startup_failure_notification_is_deduplicated_after_restart() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let mut state = worker.state.clone();
+    let master = state.master_room().unwrap().id;
+    let sender = state
+        .create_agent(master, "sender", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(sender, room).unwrap();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "queued work before failure".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(sender),
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    let failed_at = worker
+        .state
+        .request(request)
+        .unwrap()
+        .completed_at_ms
+        .unwrap();
+    let mut state = worker.state.clone();
+    state
+        .route_worker_replies(failed_at + 2_100, &BTreeSet::new())
+        .unwrap();
+    worker.save(state).unwrap();
+    let notices: Vec<_> = worker
+        .state
+        .requests()
+        .filter(|r| r.agent_id == sender)
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(notices.len(), 1);
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    for _ in 0..3 {
+        let mut state = worker.state.clone();
+        state
+            .route_worker_replies(failed_at + 2_200, &BTreeSet::new())
+            .unwrap();
+        worker.save(state).unwrap();
+    }
+    assert_eq!(
+        worker
+            .state
+            .requests()
+            .filter(|r| r.agent_id == sender)
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
+        notices
+    );
+    assert_eq!(
+        worker
+            .state
+            .worker_events_for(worker.state.request(request).unwrap())
+            .len(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn startup_failure_preserves_generated_system_prompt_across_restart() {
+    for (provider, args) in [
+        (Provider::Cursor, ""),
+        (
+            Provider::Codex,
+            "resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4",
+        ),
+    ] {
+        let (mut worker, _, room, dir, _) = fixture(provider, vec![]);
+        worker.transport = Box::new(ResumedSessionShellWaitNative {
+            fallback: FailedLaunchNative {
+                state_path: dir.join("state.json"),
+                ..Default::default()
+            },
+        });
+        worker
+            .add_agent(
+                AddAgent {
+                    room,
+                    name: "bootstrap".into(),
+                    provider,
+                    cwd: dir.to_string_lossy().into_owned(),
+                    extra_args: args.into(),
+                    consent_project_hooks: true,
+                },
+                None,
+                &mpsc::channel().0,
+            )
+            .unwrap();
+        let agent = worker
+            .state
+            .agents()
+            .find(|a| a.name == "bootstrap")
+            .unwrap()
+            .id;
+        let prompt = worker.state.queued_requests(agent)[0];
+        assert_eq!(
+            worker.state.request(prompt).unwrap().prompt.author,
+            Author::Developer
+        );
+        let send = queue(&mut worker, room, agent, "sender-authored work");
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        let late = queue(&mut worker, room, agent, "new send after startup failure");
+        drop(worker);
+        let worker = reopen_saved(&dir);
+        let generated = worker.state.request(prompt).unwrap().clone();
+        let queued = worker.state.queued_requests(agent).to_vec();
+        let sends: Vec<_> = [send, late]
+            .into_iter()
+            .map(|id| worker.state.request(id).unwrap().clone())
+            .collect();
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            generated.phase,
+            RequestPhase::Queued,
+            "{provider:?}: generated first turn must survive startup failure"
+        );
+        assert_eq!(queued, vec![prompt]);
+        for send in sends {
+            assert_eq!(send.phase, RequestPhase::Abandoned);
+            assert_eq!(send.failure_reason.as_deref(), Some("agent_startup_failed"));
+        }
+    }
+}

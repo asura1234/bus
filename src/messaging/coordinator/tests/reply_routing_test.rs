@@ -1398,3 +1398,63 @@ fn reply_to_each_request_routes_once_and_reading_one_does_not_spend_the_other() 
         "a repeated routing pass must not duplicate the answer"
     );
 }
+
+#[test]
+fn reply_routing_keeps_worker_reply_through_orchestrator_startup_failure() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "build this");
+    f.finish(source, "Reply while orchestrator startup failed.");
+    let mut state = f.worker.state.clone();
+    state
+        .set_agent_startup(
+            f.orch,
+            Some(crate::messaging::model::AgentStartup {
+                command: "claude".into(),
+                started_at_ms: 0,
+                reported: true,
+                native_terminal_id: None,
+                recovery: None,
+                failure: Some(crate::messaging::model::StartupFailure {
+                    reason: "the native provider launch ended before startup was confirmed".into(),
+                    recovery: "Inspect the agent's terminal.".into(),
+                }),
+            }),
+        )
+        .unwrap();
+    state
+        .observe_status(f.orch, RuntimeStatus::Unavailable, io::now_ms())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    let notice = f.notices()[0].id;
+    assert_eq!(
+        f.worker.state.request(notice).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert!(f.calls.lock().unwrap().is_empty());
+    f.worker.expire_queued_requests(u64::MAX).unwrap();
+    f.reopen();
+    assert_eq!(
+        f.worker.state.request(notice).unwrap().phase,
+        RequestPhase::Queued
+    );
+    // The orchestrator is repaired and its startup confirmed.
+    let mut state = f.worker.state.clone();
+    state.set_agent_startup(f.orch, None).unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    f.worker.submit_ready().unwrap();
+    assert_eq!(f.notices().len(), 1);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "deliver the retained reply exactly once");
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.contains("Reply while orchestrator startup failed.")),
+        "worker reply never reached the recovered orchestrator; notices: {:?}",
+        f.notices()
+            .iter()
+            .map(|r| (r.phase, r.failure_reason.clone()))
+            .collect::<Vec<_>>()
+    );
+}

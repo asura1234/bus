@@ -2,12 +2,27 @@
 use super::{io, launch, mpsc, schema, AgentId, BusEvent, Method, ResponseResult, Worker};
 use crate::messaging::{
     identity,
-    model::{AgentStartup, StartupRecovery},
+    model::{AgentStartup, StartupFailure, StartupRecovery},
 };
 
 pub(super) const STARTUP_TIMEOUT_MS: u64 =
     crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
 const SCREEN_LINES: u32 = 6;
+
+fn startup_failure(reason: &str, evidence: &str) -> StartupFailure {
+    let recovery = if evidence
+        .lines()
+        .any(|line| line.starts_with("> No conversation found with session ID:"))
+    {
+        "The provider reported a missing conversation; delete this agent, recreate it with its launch settings and system prompt, and rebrief it. Resend this message to the replacement agent."
+    } else {
+        "Inspect the agent's terminal and repair shell/provider setup before resuming. Resend this message after startup is confirmed."
+    };
+    StartupFailure {
+        reason: reason.into(),
+        recovery: recovery.into(),
+    }
+}
 
 /// Only native restore evidence establishes a new attempt; opening a client does not.
 pub(super) fn watch_native_resume(
@@ -50,6 +65,7 @@ pub(super) fn watch_native_resume(
                 reported: false,
                 native_terminal_id: Some(info.terminal_id.clone()),
                 recovery: None,
+                failure: None,
             }),
         )
         .map_err(|e| e.to_string())
@@ -76,6 +92,7 @@ impl Worker {
                     reported: false,
                     native_terminal_id: None,
                     recovery: None,
+                    failure: None,
                 }),
             )
             .map_err(|e| e.to_string())?;
@@ -184,10 +201,12 @@ impl Worker {
                 } else {
                     "the native provider launch ended before startup was confirmed"
                 };
+                let failure = startup_failure(reason, &evidence);
                 let text = format!(
-                    "Startup failed: {reason}. Agent identity and queued work retained. Repair shell/provider setup before resuming. A missing or unknown conversation requires delete-and-recreate: delete this agent, recreate it with its launch settings and system prompt, and rebrief the retained work. Resume reuses the saved conversation; it cannot recreate missing history.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
-                    launch::provider_kind(agent.provider), startup.command
+                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
+                    failure.notice(), launch::provider_kind(agent.provider), startup.command
                 );
+                startup.failure = Some(failure);
                 let mut state = self.state.clone();
                 state
                     .set_agent_error(agent.id, Some(text))
@@ -197,12 +216,13 @@ impl Worker {
                     agent_id = agent.id.0,
                     provider = launch::provider_kind(agent.provider),
                     reason,
-                    "Agent startup failed; identity and queued work retained"
+                    "Agent startup failed; identity retained and never-submitted queued requests closed"
                 );
                 startup.reported = true;
                 state
                     .set_agent_startup(agent.id, Some(startup))
                     .map_err(|e| e.to_string())?;
+                state.abandon_failed_startup_queue(agent.id, now_ms);
                 // The persisted marker deduplicates this blocker across restarts.
                 self.save(state)?;
             }

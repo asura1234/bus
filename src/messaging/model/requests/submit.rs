@@ -24,6 +24,31 @@ impl BusState {
         now_ms: u64,
         queue_only: bool,
     ) -> Result<Vec<RequestId>, ModelError> {
+        let bus_generated = author == Author::Bus;
+        self.enqueue_message(room, draft, author, now_ms, queue_only, bus_generated)
+    }
+
+    /// Bus-created inputs keep their visible author, but outlive a failed startup.
+    pub(crate) fn submit_bus_message_with(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        author: Author,
+        now_ms: u64,
+        queue_only: bool,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        self.enqueue_message(room, draft, author, now_ms, queue_only, true)
+    }
+
+    fn enqueue_message(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        author: Author,
+        now_ms: u64,
+        queue_only: bool,
+        bus_generated: bool,
+    ) -> Result<Vec<RequestId>, ModelError> {
         let original = self
             .rooms
             .get(&room)
@@ -34,7 +59,7 @@ impl BusState {
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
             .draft = draft;
-        let result = self.submit_draft_from(room, author, now_ms, queue_only);
+        let result = self.submit_draft_from(room, author, now_ms, queue_only, bus_generated);
         self.rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
@@ -47,7 +72,7 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Developer, now_ms, false)
+        self.submit_draft_from(room, Author::Developer, now_ms, false, false)
     }
 
     /// Sends the developer's draft to wait for each idle agent and its own turn.
@@ -56,7 +81,7 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Developer, now_ms, true)
+        self.submit_draft_from(room, Author::Developer, now_ms, true, false)
     }
 
     fn submit_draft_from(
@@ -65,6 +90,7 @@ impl BusState {
         author: Author,
         now_ms: u64,
         queue_only: bool,
+        bus_generated: bool,
     ) -> Result<Vec<RequestId>, ModelError> {
         let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
         if room_state.deletion_pending {
@@ -125,6 +151,7 @@ impl BusState {
                     completed_reply: None,
                     completed_at_ms: None,
                     queue_only,
+                    bus_generated,
                     group: None,
                     steered: false,
                     submitted_payload: None,
@@ -136,6 +163,7 @@ impl BusState {
             );
             self.queues.entry(agent_id).or_default().push(request_id);
             request_ids.push(request_id);
+            self.abandon_failed_startup_queue(agent_id, now_ms);
         }
         let room_state = self
             .rooms
