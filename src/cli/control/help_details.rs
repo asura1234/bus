@@ -31,8 +31,9 @@ pub(super) const CONTROL: &str = r#"JSON and common errors:
   server_busy / coordinator_busy: back off; server_busy is retried automatically
     up to five times for a one-shot command. Waits retry overload until their deadline.
   coordinator_unavailable: restore the intended running Bus before retrying.
-  request_timeout: the request frame was not received in time; retry the same ID.
-  request_too_large: reduce the command payload (256 KiB maximum).
+  transport_error also wraps client-side request_too_large/request_timeout reasons
+    in error.message: reduce payloads above 256 KiB or retry the same request ID
+    after a send deadline. These prefixes are not separate CLI error codes.
   response_too_large: reduce history --limit (16 MiB response maximum); otherwise
     narrow the requested data. Inspect mutations before retrying.
   storage_unavailable: repair the reported storage problem before mutating again.
@@ -41,23 +42,20 @@ pub(super) const CONTROL: &str = r#"JSON and common errors:
   dev_tools_disabled: this tool needs a session launched with bus --dev.
   unknown_method: align the CLI and running server versions, restarting when safe."#;
 
-pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> String {
-    if !matches!(arg.get_action(), ArgAction::SetTrue) && !arg.get_default_values().is_empty() {
-        return format!(
-            "default: {}",
-            arg.get_default_values()
-                .iter()
-                .map(|value| value.to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static str> {
+    if arg.is_required_set() {
+        return Some("required; no default");
     }
-    match (path, id) {
+    // Clap renders declared value defaults; only document implicit behavior here.
+    if !matches!(arg.get_action(), ArgAction::SetTrue) && !arg.get_default_values().is_empty() {
+        return None;
+    }
+    Some(match (path, id) {
         (_, "request-id") => "default: generated unique ID",
         ("agent list", "room") => "default: all rooms",
         ("agent interrupt", "room") => "default with AGENT: target's home room",
         (p, "room") if p.starts_with("agent ") && p != "agent add" && p != "agent resume" => {
-            "default: target's home room"
+            "default: none; optional conversation context"
         }
         ("send", "as") | ("agent interrupt", "as") => "default: developer",
         (_, "as") => "default: no author context or waiter lease",
@@ -76,14 +74,12 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> String {
         ("agent interrupt", "text") => "default: no follow-up message",
         (_, "sound") => "default: keep current sound",
         _ if matches!(arg.get_action(), ArgAction::SetTrue) => "default: false",
-        _ if arg.is_required_set() => "required; no default",
         _ => "no default; see command requirements",
-    }
-    .into()
+    })
 }
 
-pub(super) fn command(path: &str) -> &'static str {
-    match path {
+pub(super) fn command(path: &str) -> String {
+    let text = match path {
         "" => "A plain bus launch starts a new interactive session. Control commands target an\nexisting session and return JSON. Use bus <command> --help for its contract.\n--paths returns a JSON object of data/log/config/state paths without starting Bus.\nUse bus sessions and bus resume --help before selecting a saved session.",
         "room" | "agent" | "message" | "request" | "ui" => {
             "Choose a subcommand below, then run bus <command> <subcommand> --help.\nA bare group prints help without contacting Bus; it has no JSON result."
@@ -92,7 +88,8 @@ pub(super) fn command(path: &str) -> &'static str {
         "room create" => ROOM_CREATE,
         "room rename" => ROOM_RENAME,
         "room notes" => ROOM_NOTES,
-        "room delete" | "agent delete" => ROOM_DELETE,
+        "room delete" => ROOM_DELETE,
+        "agent delete" => AGENT_DELETE,
         "agent add" => AGENT_ADD,
         "agent list" => AGENT_LIST,
         "agent rename" => AGENT_RENAME,
@@ -123,6 +120,11 @@ pub(super) fn command(path: &str) -> &'static str {
         "diagnostics" => "Read internal session diagnostics. Result: {version,dev,storage_failed,\nstorage_repair_required,coordinator_error,data_dir,logs,callback_logs,\nagents:[{agent_id,name,status,reason,detail,identity,current_request}]}.\nErrors: common errors below; inspect storage/coordinator errors before mutations.",
         "ui hits" => "Read named TUI click targets for the dev driver.\nResult: {size:[COLS,ROWS],hits:[{name,row,col,width,height},...]}; coordinates are\nterminal cells. See bus --dev tui --help for the driver contract.\nErrors: command_failed when the UI snapshot is unavailable; common errors below.",
         _ => "Missing command documentation",
+    };
+    if matches!(path, "room delete" | "agent delete") {
+        format!("{text}\n\n{DELETION}")
+    } else {
+        text.into()
     }
 }
 
@@ -165,11 +167,17 @@ Result: {updated:true}; state returns rooms[].notes for readback.
 Errors: command_failed for unknown room or "The MASTER room has no notes";
 select a work room. No merge/append operation is implied."#;
 
-const ROOM_DELETE: &str = r#"Durably delete the selected resource and close terminals still attributed to it.
-Deleting a work room also deletes its MASTER orchestrator. MASTER cannot be deleted.
+const ROOM_DELETE: &str =
+    "Delete a work room and its MASTER orchestrator. MASTER cannot be deleted.
+See the shared deletion contract below.";
+const AGENT_DELETE: &str = "Delete an agent and close its still-owned terminal.
+See the shared deletion contract below.";
+const DELETION: &str = r#"Durably remove the selected resource and close terminals still attributed to it.
 Messages/requests remain queryable with history and message status, without a
 seven-day expiry. Resolve the target with state and prefer its numeric ID.
-Result: {updated:true,terminals_left_open?:[TERMINAL_ID,...]}.
+Result: {updated:true,terminals_left_open?:[{agent_id,agent_name,pane_id,
+  terminal_id,reason:provider_exited|session_moved,message},...]}. message explains
+  why it stayed open and the action to take.
   A terminal shared/reassigned or refused by the native server is left open and
   listed; inspect it before closing manually. A provider's leftover shell can
   be closed too, even if it is running a command. Removal is saved and published
@@ -188,14 +196,20 @@ Errors: command_failed carries setup/provider/validation diagnostics. Inspect th
 reported project hook path before using --consent-hooks, or setup-confirm for an
 existing pending agent. Missing provider binaries retain saved agents/tasks; fix
 the installation and use agent resume --room ROOM. Never blindly duplicate add.
+A missing provider command produces one BLOCKED notice per room/provider outage,
+naming the binary; affected agents and tasks stay saved.
 
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. New Codex
 orchestrators are refused: background command completion cannot wake Codex.
 Saved Codex orchestrators still resume. Claude/Cursor can orchestrate.
-Default prompt is built in; --system-prompt TEXT or --system-prompt-file PATH
-replaces it (mutually exclusive). Bus fills {{ROOM_NAME}}, {{ROOM_ID}},
-{{AGENT_NAME}}, {{DOCS}}, {{WORKFLOWS_DIR}} and saves callback/system-prompt.md.
+Default prompt is built in (orchestration/prompt.md); --system-prompt TEXT or
+--system-prompt-file PATH replaces it (mutually exclusive). Bus fills {{ROOM_NAME}},
+{{ROOM_ID}}, {{AGENT_NAME}}, {{DOCS}} (the session's <BUS_DATA_DIR>/docs/) and
+{{WORKFLOWS_DIR}} (the resolved workflow directory). The docs contain the guides,
+workflow-create.md, templates and shipped workflows; see the named-workflows rule.
+Bus saves system-prompt.md in the launch's callback folder and passes the prompt
+again on resume. --args combines with Bus-owned prompt arguments.
 Claude gets --append-system-prompt-file; saved Codex gets a developer_instructions
 pointer via -c; Cursor receives a first message. New PWD trust prompts require
 an explicit answer; Bus does not pre-trust folders.
@@ -217,11 +231,13 @@ Result: {updated:true}.
 Errors: command_failed for a name already held by a current agent (diagnostic
 names its ID/room), blank/reserved name or unknown selector; inspect agent list."#;
 
-const AGENT_SETUP_CONFIRM: &str = r#"Approve the reported pending project hook setup for an existing agent. Inspect
-the hook path and notice first; this explicitly allows installation/update.
-Result: {updated:true} (setup/launch errors remain visible in state).
-Errors: command_failed for no pending setup, invalid target or hook write failure;
-inspect state and repair the reported path. --confirm is required."#;
+const AGENT_SETUP_CONFIRM: &str = r#"Record hook consent for an existing agent after inspecting its hook path/notice.
+This does not install hooks or require pending setup. Result: {updated:true}.
+If no matching session-start hook is bound, state.agents[].actionable_error can remain
+"Awaiting matching provider session-start hook...": trust the hooks, then restart/
+resume normally. Errors: command_failed for unknown agent or an invalidated
+provider session (create a new Bus agent; requests stay preserved). --confirm is
+required. Use agent add --consent-hooks for project hook installation approval."#;
 
 const AGENT_RESUME: &str = r#"Relaunch unavailable agents in a room using saved provider sessions/options/hooks.
 Skip running/launching providers, preserve queued work and never replay typed work.
@@ -274,7 +290,8 @@ Errors: command_failed for expired/spent/mismatched fingerprint or invalid optio
 observe again. Native refusal reasons (in error.message) include dialog_redrawing
 and free_text_holds_draft. An empty single-select custom row must use answer
 --text (Enter would decline); choose can submit an existing draft or toggle a
-custom checkbox. Never overwrite a draft; inspect/edit it in the agent pane."#;
+custom checkbox. Never overwrite a draft; inspect/edit it in the agent pane.
+Cursor checkbox forms have no navigation adapter; use the native agent pane."#;
 
 const AGENT_ANSWER: &str = r#"Paste literal text into a focused question or a choice's custom free-text row,
 then Enter after confirmation; --skip instead uses Codex Ctrl+] or Cursor Esc.
@@ -340,8 +357,9 @@ Result: {room_id,room_name,deleted,messages:[{prompt,author_name,recipient_names
   delivery}],has_more?,next_before?}. prompt holds id,author,text,files,
   recipient_ids,submitted_at_ms; delivery is message status or null for notices.
   Pagination adds has_more/next_before; pass next_before for the older page.
-  Text is raw Markdown; file/image paths are absolute. Deleted labels end in
-  [deleted]. Numeric deleted-room IDs work; live names win, deleted names are
+  Text is raw Markdown; file/image paths are absolute. Deleted agent labels end
+  in [deleted]; room_name stays plain and deleted:true marks a deleted room.
+  Numeric deleted-room IDs work; live names win, deleted names are
   an unambiguous fallback. No seven-day expiry; see docs/message-history.md.
 Errors: invalid_arguments for nonpositive limit/before or before without limit;
 command_failed for unknown/ambiguous room (use ID); response_too_large: lower N."#;
@@ -353,8 +371,9 @@ Result: {settings:{color_blind_mode,master_sound,room_sound,developer_sound:
   Registry settings.json is beside the session registry. An isolated BUS_DATA_DIR
   without a registry session uses its own settings.json, never the shared file.
   MASTER takes master_sound on launch/resume; already-running instances keep it
-  until restart. New work rooms take room_sound. master_sound null is seeded
-  from the first launched session; old settings/sessions load unchanged.
+  until restart. New work rooms take room_sound. master_sound is a non-null
+  {enabled:true,name:null} by default (null name means Default); old settings load
+  through the current defaults. There is no first-launch seeding step.
 Errors: common errors; settings.error reports a settings-file read failure."#;
 
 const SETTINGS_FEISHU_NOTIFICATIONS: &str = r#"Inspect mandatory Feishu delivery by requesting --on; --off is rejected because
@@ -387,6 +406,10 @@ Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
 
 --to accepts comma-separated global names/IDs. all means conversation-room
 members excluding --as; it is never implicit. --as defaults to the developer.
+An exact own current/legacy sender header or short identity-only line normalizes
+into one genuine header. Ordinary sentences and forged ID/room headers retain
+their content and receive the real header. Stored text stays authored; delivered
+payloads and callback matching use the same frozen text.
 orchestrator (case-insensitive) resolves the sender's home-room binding; a real
 member of the conversation room, then home room, with that name takes precedence.
 Only recipient selectors forward removed IDs/names: with no live match, use a

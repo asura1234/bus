@@ -52,13 +52,6 @@ fn control_long_help_documents_results_errors_examples_and_defaults() {
                 .contains("Example:"),
             "{path}"
         );
-        for arg in command.get_arguments() {
-            assert!(
-                arg.get_help().unwrap().to_string().contains('['),
-                "{path}: {}",
-                arg.get_id()
-            );
-        }
         for child in command.get_subcommands() {
             check(child, &format!("{path} {}", child.get_name()));
         }
@@ -167,5 +160,74 @@ fn bare_and_help_group_listings_hide_dev_subcommands() {
                 "{args:?} advertises dev tool {dev:?}:\n{text}"
             );
         }
+    }
+}
+
+#[test]
+fn required_flags_and_optional_context_have_truthful_defaults() {
+    fn check(command: &clap::Command, path: &str) {
+        for arg in command.get_arguments().filter(|arg| arg.is_required_set()) {
+            let help = arg.get_help().unwrap().to_string();
+            assert!(
+                !help.contains("[default:"),
+                "{path} {}: {help}",
+                arg.get_id()
+            );
+        }
+        for child in command.get_subcommands() {
+            check(child, &format!("{path} {}", child.get_name()));
+        }
+    }
+    check(&super::command_tree(true), "bus");
+    let args = ["agent", "read", "--help"].map(String::from);
+    let help = super::help_for(super::command_tree(false), &args).unwrap();
+    assert!(
+        help.contains("default: none; optional conversation context"),
+        "{help}"
+    );
+    assert!(help.contains("default: recent; requires --lines"), "{help}");
+    let missing_author = ["message", "seen", "456"].map(String::from);
+    assert_eq!(
+        parse::cli()
+            .try_get_matches_from(missing_author)
+            .unwrap_err()
+            .kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+}
+
+#[test]
+fn declared_defaults_render_once_and_local_defaults_remain_documented() {
+    let args = ["wait", "--help"].map(String::from);
+    let help = super::help_for(super::command_tree(false), &args).unwrap();
+    assert_eq!(help.matches("[default: 60]").count(), 1, "{help}");
+    for (path, expected) in [
+        (vec!["perf"], "default 30m"),
+        (vec!["resume"], "default: false"),
+        (vec!["sessions"], "default: false"),
+        (vec!["stop"], "default: false"),
+    ] {
+        let args: Vec<String> = path
+            .into_iter()
+            .chain(["--help"])
+            .map(String::from)
+            .collect();
+        let help = super::help_for(super::command_tree(false), &args).unwrap();
+        assert!(help.contains(expected), "{args:?}: {help}");
+    }
+}
+
+#[test]
+fn agent_add_help_keeps_prompt_template_tokens_literal() {
+    let args = ["agent", "add", "--help"].map(String::from);
+    let help = super::help_for(super::command_tree(false), &args).unwrap();
+    for token in [
+        "{{ROOM_NAME}}",
+        "{{ROOM_ID}}",
+        "{{AGENT_NAME}}",
+        "{{DOCS}}",
+        "{{WORKFLOWS_DIR}}",
+    ] {
+        assert!(help.contains(token), "missing literal prompt token {token}");
     }
 }

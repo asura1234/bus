@@ -2,7 +2,7 @@
 
 This guide is for a coding agent (Claude Code, Codex, Cursor) acting as the
 orchestrator of a Bus room. It builds on [How to use the Bus CLI](how-to-bus-cli.md);
-read that first for the commands themselves. The binding rules are in
+read that first for the mental model; use `bus <cmd> --help` for command contracts. The binding rules are in
 [Orchestrator rules](orchestrator-rules.md).
 
 Start with [Never act on assumptions; ask the developer](orchestrator-rules.md#never-act-on-assumptions),

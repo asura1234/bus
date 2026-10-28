@@ -436,7 +436,7 @@ prompt and request ids (`messaging/model`).
 
 **orchestration/ and workflows/** (Markdown, outside `src/`). How MASTER agents work, and the workflows they run. Bus gives each agent the
 context its job needs: MASTER agents know they are in Bus and command the agents in the room they are attached to, so they get the prompt,
-rules, guide, control CLI reference and workflow library. Work-room agents do ordinary software work and get only the messages sent to them.
+rules, short CLI guide and workflow library; command contracts live in `bus <cmd> --help`. Work-room agents do ordinary software work and get only the messages sent to them.
 Both folders are compiled into the binary with `include_str!`; debug, release and Nix builds use the same defaults. Bus writes the
 embedded docs under `<BUS_DATA_DIR>/docs/` for agents to read, and the filled prompt into each launch's callback folder. There is no
 installed `share/bus` default directory, runtime source-file lookup or user-file override layer. Explicit per-launch custom prompts

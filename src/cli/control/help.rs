@@ -24,9 +24,9 @@ pub(super) fn decorate(command: Command, path: &str, dev: bool) -> Command {
         .map(|arg| arg.get_id().as_str().to_owned())
         .collect();
     let command = args.into_iter().fold(command, |cmd, id| {
-        cmd.mut_arg(&id, |arg| {
-            let default = details::default_value(path, &id, &arg);
-            arg.help(format!("{} [{default}]", argument_help(&id)))
+        cmd.mut_arg(&id, |arg| match details::default_value(path, &id, &arg) {
+            Some(default) => arg.help(format!("{} [{default}]", argument_help(&id))),
+            None => arg.help(argument_help(&id)),
         })
     });
     command.mut_subcommands(|child| {
@@ -113,14 +113,14 @@ fn description(path: &str) -> (&'static str, &'static str) {
         "agent interrupt" => ("Stop a running turn and optionally send a follow-up", "Example: bus agent interrupt worker --as coordinator"),
         "agent details" => ("Set agent terminal details visibility", "Example: bus --dev agent details worker --on"),
         "agent rename" => ("Rename an agent", "Example: bus agent rename worker implementer"),
-        "agent setup-confirm" => ("Approve pending project hook setup", "Example: bus agent setup-confirm worker --confirm"),
+        "agent setup-confirm" => ("Record project hook consent for an agent", "Example: bus agent setup-confirm worker --confirm"),
         "agent delete" => ("Delete an agent and close its terminal", "Example: bus agent delete worker --confirm"),
         "send" => ("Send a message or complete a request with a correlated reply", "Example: bus send --room feature-work --to worker --text 'Inspect the change'\n         bus send --reply-to 123 --as worker --text 'Inspection complete'"),
         "message" => ("Inspect delivery or acknowledge a reply", "Example: bus message status 123"),
         "message status" => ("Read message delivery status and replies", "Example: bus message status 123"),
         "message seen" => ("Acknowledge a reply after reading its output", "Example: bus message seen 456 --as coordinator"),
-        "request" => ("Recover a stalled request", "Example: bus request recover 456 --confirm"),
-        "request recover" => ("Explicitly retry a recoverable request", "Example: bus request recover 456 --confirm"),
+        "request" => ("Close a stuck request without replaying it", "Example: bus request recover 456 --confirm"),
+        "request recover" => ("Close a stuck request without replaying it", "Example: bus request recover 456 --confirm"),
         "wait" => ("Wait for a message to finish or require attention", "Example: bus wait --message 123 --timeout 60\n         bus wait --message 123 --async"),
         "history" => ("Read room messages and delivery history", "Example: bus history --room feature-work\n         bus history --room feature-work --limit 100"),
         _ => ("Bus command", "Example: bus --help"),

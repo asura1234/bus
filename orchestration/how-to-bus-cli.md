@@ -38,8 +38,7 @@ The override is an exact isolated root; relative paths are rejected. Missing
 roots are created owner-only (0700) for the private control socket. An isolated
 root without a registry session keeps its own settings.json, too.
 Never use a live session as a test fixture. Scrub inherited Bus/Herdr environment
-and use a scratch root. `--dev` enables developer tools/logs without content dumps;
-it does not restart an existing server or change that server's original log level.
+and use a scratch root. Session launch/log flags are documented by `bus --help`.
 `--yolo` bypasses provider permission prompts for new/resumed workers and MASTER
 orchestrators for this run only; it defaults off and is never saved.
 
@@ -127,7 +126,7 @@ See `bus send --help` for first-answer conflicts and uncertain retry handling.
 
 `send --async` sends and follows without a deadline, waiting through dialogs.
 `wait --async` follows an existing ID but stops for a dialog. Bounded waits
-need replies; async waits also accept settlement without a captured final.
+need replies; async waits also accept abandonment specifically as reply_not_captured.
 Read `bus wait --help` and `bus message status --help` for polling, stages,
 stall windows, provider failures, retained last status and exit codes.
 A timeout does not cancel work or authorize a duplicate send. For an uncertain
@@ -173,6 +172,8 @@ terminal may already be closed. Exit snapshots preserve viewport/200 recent line
 notices preview 20 nonblank lines (160 characters each, 1600 total). Work-room
 terminals close after a saved snapshot; MASTER terminals stay open. A failed
 snapshot leaves the terminal open. Quoted blocker markers cannot page the developer.
+For every unrequested post-startup exit, MASTER gets Agent process exited: NAME
+(agent ID), even without an open request. A later send gets the same exit notice.
 Update shared provider installations separately while their agents are stopped.
 
 Blocked agents generate one room notice after about a second, addressed to its
@@ -195,14 +196,13 @@ Sending provider reset slash commands as messages leaves requests unanswered.
 
 ## UI, settings and cleanup
 
-The UI renders prompt/reply Markdown; copied/quoted text keeps its raw source.
-Pasted images live in the session attachments/ directory as absolute paths.
+The UI renders Markdown; copying/quoting keeps raw source. Pasted images live in
+session attachments/ as absolute paths.
 History shows PNG/JPEG/GIF-first-frame/WebP images up to eight rows tall when
 fully visible without a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2
 3.7+, inline images in older iTerm2 (TERM_PROGRAM or LC_TERMINAL and version).
-Kitty moves images with scrolling; older iTerm2 redraws them. tmux or disabled
-terminal.kitty_graphics uses clickable file rows, as do missing/unreadable images
-and unsupported hosts. Clicking an image opens file detail.
+Kitty moves images with scrolling; older iTerm2 redraws them. tmux, disabled terminal.kitty_graphics,
+missing/unreadable images and unsupported hosts use clickable file rows. Clicking an image opens file detail.
 
 Enter steers; Option/Alt+Enter queues. Ctrl+J or supported Shift+Enter adds a
 newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
@@ -212,9 +212,8 @@ on, work rooms off; startup/resume has a two-second grace and bursts ring once.
 YOU alerts have a separate enabled-by-default sound selector and bypass ordinary
 grace/cooldown/room switches; turning its checkbox off silences only that audio.
 System default prefers Glass then another installed sound; missing selections fall back.
-Settings Left/Right or ‹/› previews sounds. All rooms changes every work room and
-future defaults, preserving each switch/name's other half; differing rooms show
-[-]/Mixed, and toggling turns all on. Sounds come from system/user sound folders
+Settings Left/Right or ‹/› previews sounds. All rooms changes every work room and future defaults,
+preserving each switch/name's other half; differing rooms show [-]/Mixed, and toggling turns all on. Sounds come from system/user sound folders
 (macOS /System/Library/Sounds, /Library/Sounds, ~/Library/Sounds; Windows
 %SystemRoot%\Media; Linux /usr/share/sounds, freedesktop first). Missing/failed
 sounds fall back to Bus's ding honoring ui.sound path/done_path. BUS_DISABLE_SOUND
@@ -223,20 +222,20 @@ silences audio. See state/settings help for effective versus saved values.
 Resolve deletion targets with state, prefer IDs, then use --confirm. Read each
 delete command's help for pending deletion and terminals left open. Quit the UI
 with Ctrl+Q to save drafts before stopping; `bus stop` disconnects without saving.
-A failed or five-second save shows an unsaved warning: Ctrl+Q again within five
-seconds forces quit, potentially losing edits. Wait out that window to retry
-saving; presses before a warning keep waiting.
+A failed or five-second save shows an unsaved warning: Ctrl+Q again within five seconds forces quit,
+potentially losing edits. Wait out that window to retry saving; presses before a warning keep waiting.
 
-Old pre-control builds require --dev until restarted. Older orchestrator-build
-sessions gain MASTER (a conflicting old room becomes Master (old)); brief goal/
+Sessions from pre-control builds answer control only if launched in developer mode;
+after restart every session does. Older orchestrator-build sessions gain MASTER (a conflicting old room becomes Master (old)); brief goal/
 non-goals append once to notes. Obsolete orchestrator transcripts/workflow drafts/
 capability grants are dropped. private/orchestrator-credentials.json is no longer
 read; delete it yourself if its old API key is no longer needed.
 
 ## Repository status and acceptance
 Repository status reporting belongs to the agent/harness; Bus never polls hosts
-or decides release steps. Follow the communication guide and parallel-writes
-rules for meaningful transitions, owners, evidence, and routing.
+or decides release steps. Follow the communication guide for meaningful transitions.
+Workers report routine status to their orchestrator, never the developer; a missing
+orchestrator or failed send is not permission to send routine status to the developer.
 For real-provider round trips use `just e2e` (explicit live-model usage), or
 `just e2e --providers claude,codex --cases single,resume`. The harness
 (tools/acceptance/e2e_test.py --help) documents providers/cases/artifacts/cleanup.
