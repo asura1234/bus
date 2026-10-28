@@ -482,9 +482,9 @@ impl BusState {
             .join(", ");
         if requests.len() > 20 {
             subject.push_str(&format!(
-                ", and {} more (inspect bus message status {})",
+                ", and {} more (inspect bus history --room {})",
                 requests.len() - 20,
-                first.prompt.id.0
+                first.room_id.0
             ));
         }
         let label = if requests.len() == 1 {

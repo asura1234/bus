@@ -284,11 +284,23 @@ fn routed_failure_notice(count: usize, error: &str) {
     assert!(text.contains("running turn (started by message"), "{text}");
     assert!(text.contains("may not have acted"), "{text}");
     assert!(text.chars().count() <= 3_500);
-    for id in joined {
+    if count > 20 {
         assert!(
-            text.contains(&f.request(id).prompt.id.0.to_string()),
+            text.contains(&format!(
+                "and {} more (inspect bus history --room {})",
+                count - 20,
+                f.room.0
+            )),
             "{text}"
         );
+    }
+    for (index, id) in joined.into_iter().enumerate() {
+        if index < 20 {
+            assert!(
+                text.contains(&f.request(id).prompt.id.0.to_string()),
+                "{text}"
+            );
+        }
         assert!(message_status(&f, id)["requests"][0]["detail"]
             .as_str()
             .unwrap()
@@ -326,4 +338,9 @@ fn steer_failure_unconfirmed_input_does_not_claim_the_recipient_saw_it() {
     )));
     assert!(detail.contains("could not confirm whether the recipient saw your text"));
     assert!(!detail.contains("The recipient saw your text"));
+}
+
+#[test]
+fn steer_failure_truncated_message_list_points_at_room_history() {
+    routed_failure_notice(24, "API Error: Overloaded");
 }
