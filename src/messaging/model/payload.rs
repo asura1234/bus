@@ -58,8 +58,8 @@ impl BusState {
         }
         let mut text = request.prompt.rendered_payload();
         let answer = format!(
-            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']",
-            request.prompt.id.0, request.prompt.id.0, request.agent_id.0,
+            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status {} before resending]",
+            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.id.0,
         );
         if let Author::Agent(sender) = request.prompt.author {
             let identity = request

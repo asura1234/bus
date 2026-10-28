@@ -652,8 +652,8 @@ impl Delivery {
     pub(crate) fn correlated_text(&self, request: RequestId) -> String {
         let request = self.state().request(request).unwrap();
         format!(
-            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER']\n{}",
-            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.text,
+            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status {} before resending]\n{}",
+            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.id.0, request.prompt.text,
         )
     }
     pub(crate) fn record(&self, agent: AgentId, mut value: Value) {

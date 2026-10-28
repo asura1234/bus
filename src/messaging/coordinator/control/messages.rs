@@ -1,7 +1,8 @@
 //! Messages development commands on the single coordinator.
 use super::{
-    mpsc, optional_text, required, AgentId, AgentRecipients, Author, BusEvent, Draft, ModelError,
-    PathBuf, PromptId, Request, RequestId, RequestPhase, RoomId, Worker,
+    mpsc, optional_text, required, AgentId, AgentRecipients, Author, BusEvent, ControlRequest,
+    Draft, ModelError, PathBuf, PromptId, Request, RequestId, RequestPhase, Response, RoomId,
+    Worker,
 };
 use serde_json::{json, Value};
 
@@ -204,6 +205,21 @@ impl Worker {
     }
 
     fn control_reply(&mut self, p: &Value) -> Result<Value, String> {
+        let (message, author) = self.reply_context(p)?;
+        let mut state = self.state.clone();
+        let request = state.answer_message(
+            message,
+            author,
+            required(p, "text")?.into(),
+            crate::messaging::storage::io::now_ms(),
+        )?;
+        self.save(state)?;
+        Ok(json!({"message_id":message,"request_ids":[request],"stage":"replied"}))
+    }
+
+    /// Resolve the same validated identity for both the mutation and its error
+    /// diagnostic, so invalid selectors/flags cannot disclose another answer.
+    fn reply_context(&self, p: &Value) -> Result<(PromptId, AgentId), String> {
         if ["room", "to", "queue", "files"]
             .iter()
             .any(|key| p.get(key).is_some())
@@ -229,15 +245,53 @@ impl Worker {
         {
             return Err("The replying agent is being deleted".into());
         }
-        let mut state = self.state.clone();
-        let request = state.answer_message(
-            message,
-            author,
-            required(p, "text")?.into(),
-            crate::messaging::storage::io::now_ms(),
-        )?;
-        self.save(state)?;
-        Ok(json!({"message_id":message,"request_ids":[request],"stage":"replied"}))
+        Ok((message, author))
+    }
+
+    /// Classify a failed correlated send from durable domain state, without
+    /// parsing error strings or changing the model's first-answer rules.
+    pub(super) fn reply_conflict_response(&self, command: &ControlRequest) -> Option<Response> {
+        if command.method != "message.send" || command.params.get("reply_to").is_none() {
+            return None;
+        }
+        let (message, author) = self.reply_context(&command.params).ok()?;
+        let text = required(&command.params, "text").ok()?;
+        let request = self
+            .state
+            .requests_for_message(message)
+            .find(|r| r.agent_id == author)?;
+        let reply = request.completed_reply.as_ref()?;
+        if reply.content.text == text {
+            return None;
+        }
+        let (source, label) = if reply.group.is_some() {
+            ("captured_turn_final", "captured turn final")
+        } else {
+            ("recipient_reply", "recipient reply")
+        };
+        let mut chars = reply.content.text.chars();
+        let mut preview: String = chars.by_ref().take(160).collect();
+        if chars.next().is_some() {
+            preview.push('…');
+        }
+        let inspect = format!("bus message status {}", message.0);
+        let mut response = Response::failure(
+            &command.id,
+            "request_already_replied",
+            format!(
+                "This recipient request is already complete with a {label} recorded at {} ms since the Unix epoch; the new text was not sent. Check the existing answer with {inspect} before resending.",
+                reply.content.received_at_ms,
+            ),
+        );
+        response.result = json!({
+            "message_id":message, "request_ids":[request.id],
+            "request_complete":true, "new_text_sent":false,
+            "existing_reply":{
+                "source":source, "received_at_ms":reply.content.received_at_ms, "preview":preview,
+            },
+            "inspect_command":inspect,
+        });
+        Some(response)
     }
 
     pub(in crate::messaging::coordinator) fn control_author(

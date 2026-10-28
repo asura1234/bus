@@ -674,9 +674,32 @@ bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text "The requested work is 
 This completes only your recipient request and posts your answer once in the
 original sender's conversation. It infers the room and sender: do not pass
 `--room`, `--to`, `--queue`, `--async` or attachments. You must be a recipient
-of that message. An identical repeated reply is a no-op; a different answer to
-an already answered request is rejected. A separate ordinary `bus send`, even
-one whose text mentions the message ID, does not complete the original request.
+of that message. Run the reply command in the foreground and check `ok: true`
+and `stage: "replied"` before claiming delivery. An identical repeated reply is
+a no-op. A separate ordinary `bus send`, even one whose text mentions the
+message ID, does not complete the original request.
+
+If your reply fails, inspect the existing answer with `bus message status N`
+before resending: a captured turn final may already have completed your request.
+A different answer to an already answered request returns `ok: false` with
+error code `request_already_replied`. The new text was not sent; the first
+answer remains unchanged. Its `result` contains:
+
+| Field | Meaning |
+| --- | --- |
+| `message_id`, `request_ids` | The original message and your recipient request ID |
+| `request_complete` | `true` for your recipient request; other recipients may still be outstanding |
+| `new_text_sent` | `false`: this attempt did not submit a new answer |
+| `existing_reply.source` | `recipient_reply` for an explicit answer, or `captured_turn_final` for a provider final |
+| `existing_reply.received_at_ms` | The existing answer's recorded time, in Unix milliseconds |
+| `existing_reply.preview` | Up to 160 Unicode characters of the existing answer, followed by an ellipsis if truncated |
+| `inspect_command` | `bus message status N`, to read the full answer and request status |
+
+These fields report the recorded answer, not whether the sender has read it.
+Conflicting reply flags instead return `invalid_arguments`, say nothing was
+sent, and show the exclusive reply form. The suggested command uses an attached
+`--as=VALUE` so names beginning with `-` remain values; shell quoting is retained
+for names that need it.
 
 The answer is durable across restart and remains successful if the agent is
 later deleted. `message status` can report `complete: true` and `stage: replied`
