@@ -77,6 +77,20 @@ fn opaque(body: &str) -> bool {
 mod tests;
 
 impl SubmissionInspector for PreservingComposer {
+    fn diagnose_refusal(&self, screen: &str, phase: &'static str, cursor: Option<(u16, u16)>) {
+        self.owned.diagnose_with_policy(
+            screen,
+            phase,
+            cursor,
+            Some(super::diagnostics::Policy {
+                keys_available: self.keys.len() == 3,
+                native_stash: native_stash_present(screen),
+                invisible_content: invisible_content(self.kind, screen, cursor),
+                opaque_draft: input(self.kind, screen).as_deref().is_some_and(opaque),
+            }),
+        );
+    }
+
     fn observe(&self, screen: &str) -> InputObservation {
         self.owned.observe(screen)
     }
@@ -99,12 +113,6 @@ impl SubmissionInspector for PreservingComposer {
         cursor: Option<(u16, u16)>,
     ) -> Option<DraftPreservation> {
         let invisible = invisible_content(self.kind, screen, cursor);
-        tracing::debug!(target: "bus::terminal::submission", event = "bus.composer.preservation_inputs",
-            provider = crate::agents::agent_label(self.kind), cursor = ?cursor,
-            invisible_content = invisible, native_stash_present = native_stash_present(screen),
-            preservation_keys_available = self.keys.len() == 3,
-            body_present = input(self.kind, screen).is_some(),
-            opaque_draft = input(self.kind, screen).as_deref().is_some_and(opaque));
         if self.kind == AgentKind::Claude
             && !invisible
             && native_stash_present(screen)

@@ -4,6 +4,7 @@ use std::{cell::Cell, io, time::Instant};
 
 #[derive(Default)]
 pub(super) struct Diagnostics {
+    refusal_recorded: Cell<bool>,
     started: Cell<Option<Instant>>,
     confirmation_ms: Cell<u64>,
     hard_ms: Cell<u64>,
@@ -18,6 +19,10 @@ pub(super) struct Diagnostics {
 }
 
 impl Diagnostics {
+    pub(super) fn claim_refusal(&self) -> bool {
+        !self.refusal_recorded.replace(true)
+    }
+
     pub(super) fn begin(&self, now: Instant, confirmation: Instant, hard: Instant) {
         self.started.set(Some(now));
         self.confirmation_ms

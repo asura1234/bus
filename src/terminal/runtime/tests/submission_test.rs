@@ -4,6 +4,70 @@ use super::*;
 mod draft_preservation;
 
 #[tokio::test]
+async fn repeated_unowned_polls_emit_one_refusal_diagnostic_outside_the_render_lock() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Inspect {
+        diagnosed: Arc<AtomicUsize>,
+        content_lock: Arc<Mutex<()>>,
+    }
+    impl SubmissionInspector for Inspect {
+        fn observe(&self, _: &str) -> InputObservation {
+            InputObservation::Other
+        }
+        fn diagnose_refusal(&self, screen: &str, _: &'static str, _: Option<(u16, u16)>) {
+            assert!(
+                self.content_lock.try_lock().is_ok(),
+                "diagnostic held the render lock"
+            );
+            assert!(screen.contains("unowned draft"));
+            self.diagnosed.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_process_pty_bytes(b"unowned draft\r\n");
+    let diagnosed = Arc::new(AtomicUsize::new(0));
+    let expired = Instant::now() - Duration::from_secs(1);
+    let submission = ObservedSubmission {
+        scope: Default::default(),
+        terminal: runtime.terminal.clone(),
+        io: runtime.io.clone(),
+        content_lock: runtime.content_write_lock.clone(),
+        inspect: Box::new(Inspect {
+            diagnosed: diagnosed.clone(),
+            content_lock: runtime.content_write_lock.clone(),
+        }),
+        enter: Bytes::from_static(b"\r"),
+        clear: vec![Bytes::from_static(b"\x01")],
+        deadline: std::cell::Cell::new(expired),
+        hard_deadline: expired,
+        withdraw_grace: WITHDRAW_GRACE,
+        clock: SubmissionClock::default(),
+        diagnostics: Default::default(),
+    };
+    for _ in 0..5 {
+        assert_eq!(submission.observe("await_paste"), InputObservation::Other);
+    }
+    assert_eq!(
+        diagnosed.load(Ordering::SeqCst),
+        0,
+        "polling emitted a refusal"
+    );
+    let error =
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
+    assert!(error.is_err());
+    submission.diagnose_refusal("result_error");
+    assert_eq!(
+        diagnosed.load(Ordering::SeqCst),
+        1,
+        "one refused attempt emitted duplicate diagnostics"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "unowned draft received editing keys or Enter"
+    );
+}
+
+#[tokio::test]
 async fn a_delayed_start_reserves_withdrawal_time_before_typing() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     // Dispatch has used the confirmation allowance; there is only withdrawal

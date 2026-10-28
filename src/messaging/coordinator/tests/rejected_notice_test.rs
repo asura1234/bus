@@ -31,6 +31,12 @@ fn rejected_reply_notice_does_not_block_master_after_unrelated_turns_and_restart
                 io::now_ms(),
             )
             .unwrap()[0];
+        f.worker.save(state).unwrap();
+        if restart {
+            f.reopen();
+        }
+        let mut state = f.worker.state.clone();
+        // Advance the simulated clock after resume, which uses real time.
         // The captured trace alternates unrelated Working/Idle turns, each
         // shorter than the ordinary queued stall window.
         for n in 1..=4 {
@@ -42,10 +48,11 @@ fn rejected_reply_notice_does_not_block_master_after_unrelated_turns_and_restart
                 .unwrap();
         }
         f.worker.save(state).unwrap();
-        if restart {
-            f.reopen();
-        }
         f.worker.expire_queued_requests(sent_at + 180_000).unwrap();
+        assert_eq!(
+            f.worker.state.request(developer).unwrap().phase,
+            RequestPhase::Queued
+        );
         assert_eq!(
             f.worker.state.queued_requests(f.orch).first(),
             Some(&developer),

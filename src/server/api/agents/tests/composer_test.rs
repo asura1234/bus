@@ -26,6 +26,26 @@ fn captured_claude_subagent_footer_is_an_empty_composer() {
 
 #[test]
 fn ownership_refusal_diagnostics_explain_checks_without_content() {
+    const CHILD: &str = "COMPOSER_OWNERSHIP_LOG_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "server::api::agents::prompt::composer::tests::ownership_refusal_diagnostics_explain_checks_without_content", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")),
+            "{stdout}"
+        );
+        return;
+    }
+    use crate::terminal::runtime::SubmissionInspector;
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run_filtered(crate::utils::logging::DEV_FILTER, || {
         let screen = include_str!("fixtures/claude_subagent_footer.txt").replacen(
@@ -33,13 +53,17 @@ fn ownership_refusal_diagnostics_explain_checks_without_content() {
             "\n❯ private-unowned-draft\n",
             1,
         );
-        assert_eq!(
-            observe(AgentKind::Claude, &screen, "private-payload"),
-            InputObservation::Other
-        );
+        let inspector = observer(AgentKind::Claude, "private-payload".into());
+        assert_eq!(inspector.observe(&screen), InputObservation::Other);
+        inspector.diagnose_refusal(&screen, "initial_refusal", Some((2, 1)));
     });
     let logs = capture.text();
     assert!(logs.contains("bus.composer.ownership"), "{logs}");
+    assert_eq!(
+        logs.matches("event=\"bus.composer.ownership\"").count(),
+        1,
+        "{logs}"
+    );
     for field in [
         "composer_frame=true",
         "body_present=true",

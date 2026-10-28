@@ -53,29 +53,9 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
         && (detection.visible_blocker || crate::agents::dialog::parse(screen).is_some())
         || kind == AgentKind::Codex && crate::agents::dialog::codex_question_pending(screen)
     {
-        diagnostics::refusal(
-            kind,
-            screen,
-            expected,
-            None,
-            detection,
-            [false; 3],
-            "visible_controls",
-        );
         return InputObservation::Unavailable;
     }
     let Some(body) = input(kind, screen) else {
-        if !detection.visible_working {
-            diagnostics::refusal(
-                kind,
-                screen,
-                expected,
-                None,
-                detection,
-                [false; 3],
-                "composer_missing",
-            );
-        }
         return if detection.visible_working {
             InputObservation::Accepted
         } else {
@@ -90,24 +70,13 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
     };
-    let normalized_match = normalize(&body) == normalize(expected);
-    let collapsed_match = !normalized_match && collapsed_paste(kind, &body, expected);
-    let image_match = !normalized_match
-        && !collapsed_match
-        && (kind == AgentKind::Claude && lifted_images(&body, expected, normalize)
-            || kind == AgentKind::Codex && codex_image_attachment(&body, expected));
-    if normalized_match || collapsed_match || image_match {
+    if normalize(&body) == normalize(expected)
+        || collapsed_paste(kind, &body, expected)
+        || kind == AgentKind::Claude && lifted_images(&body, expected, normalize)
+        || kind == AgentKind::Codex && codex_image_attachment(&body, expected)
+    {
         InputObservation::Pending
     } else {
-        diagnostics::refusal(
-            kind,
-            screen,
-            expected,
-            Some(&body),
-            detection,
-            [normalized_match, collapsed_match, image_match],
-            "draft_mismatch",
-        );
         InputObservation::Other
     }
 }

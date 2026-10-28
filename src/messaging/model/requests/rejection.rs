@@ -9,6 +9,11 @@ impl BusState {
         let SubmissionOutcome::DefinitelyRejected { message } = outcome else {
             return;
         };
+        // A turn/dialog/startup race is a legitimate wait. Only the observed
+        // composer failure needs a deadline independent of unrelated work.
+        if rejection_reason(message) != "prompt_not_shown" {
+            return;
+        }
         let Some(request) = self.requests.get(&id) else {
             return;
         };
