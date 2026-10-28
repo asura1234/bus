@@ -54,20 +54,32 @@ fn failed_start_removes_host_and_scratch_state_when_driver_cannot_listen() {
         std::thread::yield_now();
     }
     let _bound = bound_socket(&session_dir(&name).join("d.sock"));
+    // Capture both processes while startup still owns its metadata: cleanup
+    // removes this file before returning, so reading it afterwards proves nothing.
+    let info: Value = loop {
+        if let Some(info) = std::fs::read_to_string(session_dir(&name).join("session.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        {
+            break info;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "host did not publish its process IDs"
+        );
+        std::thread::yield_now();
+    };
+    let host_pid = info["host_pid"].as_u64().expect("spawned host PID");
+    let bus_pid = info["bus_pid"].as_u64().expect("spawned scratch Bus PID");
     let (code, response) = parse(child.wait_with_output().unwrap());
-    // Save the PID before asserting, so even red-on-base evidence cannot leak
-    // the host or its Bus. A failed bind makes the host tear itself down.
-    let info = std::fs::read_to_string(session_dir(&name).join("session.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    if let Some(pid) = info.as_ref().and_then(|value| value["host_pid"].as_u64()) {
+    for (kind, pid) in [("host", host_pid), ("Bus", bus_pid)] {
         while unsafe { libc::kill(pid as _, 0) } == 0 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_ne!(
             unsafe { libc::kill(pid as _, 0) },
             0,
-            "failed-start host {pid} survived"
+            "failed-start {kind} {pid} survived"
         );
     }
     let removed = !session_dir(&name).exists();
