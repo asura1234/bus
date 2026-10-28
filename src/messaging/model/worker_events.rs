@@ -294,9 +294,40 @@ impl BusState {
         text: &str,
         at_ms: u64,
     ) {
-        let detail = (request.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED))
-            .then_some(request.submission_error.as_deref())
-            .flatten();
+        // One outcome per group: name its steered messages once per distinct
+        // reason/receipt, rather than letting repeated explanations hide it
+        // behind the notification payload limit.
+        let mut groups = std::collections::BTreeMap::<_, Vec<&Request>>::new();
+        for member in self
+            .requests()
+            .filter(|r| reply_key(r) == reply_key(request))
+        {
+            if member.steered && member.phase == RequestPhase::Abandoned && member.reply().is_none()
+            {
+                if let Some(error) = member
+                    .failure_reason
+                    .as_deref()
+                    .filter(|r| r.starts_with("provider_error: "))
+                {
+                    groups
+                        .entry((error, member.trusted_start_bound))
+                        .or_default()
+                        .push(member);
+                }
+            }
+        }
+        let steered = groups
+            .values()
+            .filter_map(|members| self.steered_failure_notice(members))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = if steered.is_empty() {
+            (request.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED))
+                .then_some(request.submission_error.as_deref())
+                .flatten()
+        } else {
+            Some(steered.as_str())
+        };
         self.record_request_event_with(request, kind, class, text, at_ms, detail);
     }
 

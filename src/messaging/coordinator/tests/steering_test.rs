@@ -16,6 +16,9 @@ mod dialog_priority_tests;
 #[path = "dialog_reconciliation_test.rs"]
 mod dialog_reconciliation_tests;
 
+#[path = "steer_failure_test.rs"]
+mod steer_failure_tests;
+
 #[path = "turn_settlement_test.rs"]
 mod turn_settlement_tests;
 
