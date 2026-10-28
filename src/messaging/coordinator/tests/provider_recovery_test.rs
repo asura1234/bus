@@ -345,7 +345,7 @@ fn room_blocker_from_a_failed_add_clears_once_room_resume_runs_with_no_held_agen
 }
 
 #[test]
-fn resumed_agent_after_binary_outage_retains_failed_startup_in_state_without_chat() {
+fn binary_outage_recovery_abandons_queued_work_when_startup_fails() {
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "retained failed-resume task");
@@ -374,7 +374,7 @@ fn resumed_agent_after_binary_outage_retains_failed_startup_in_state_without_cha
     let saved = worker.state.agent(agent).unwrap();
     assert!(
         saved.startup.as_ref().is_some_and(|s| s.reported),
-        "master's reported watch settles the failed resume and holds its queue"
+        "the reported watch persists the conclusive failed resume"
     );
     assert_eq!(
         saved.runtime_identity.session_id.as_deref(),
@@ -394,8 +394,20 @@ fn resumed_agent_after_binary_outage_retains_failed_startup_in_state_without_cha
         .unwrap();
     assert_eq!(
         worker.state.request(request).unwrap().phase,
-        RequestPhase::Queued
+        RequestPhase::Abandoned
     );
+    let closed = worker.state.request(request).unwrap();
+    assert_eq!(
+        closed.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    assert!(closed
+        .submission_error
+        .as_deref()
+        .unwrap()
+        .contains("Resend"));
+    assert_eq!(closed.prompt.text, "retained failed-resume task");
+    assert!(closed.submission_boundary.is_none());
     assert_eq!(
         worker
             .state

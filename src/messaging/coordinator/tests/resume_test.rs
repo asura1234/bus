@@ -264,7 +264,7 @@ impl Transport for RejectedResume {
 }
 
 #[test]
-fn restart_resume_rejection_surfaces_actionable_error_and_preserves_work() {
+fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let request = queue(&mut worker, room, agent, "retained task");
     let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
@@ -288,8 +288,20 @@ fn restart_resume_rejection_surfaces_actionable_error_and_preserves_work() {
     assert_eq!(failed.runtime_identity, identity);
     assert_eq!(
         worker.state.request(request).unwrap().phase,
-        RequestPhase::Queued
+        RequestPhase::Abandoned
     );
+    let closed = worker.state.request(request).unwrap();
+    assert_eq!(
+        closed.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    let detail = closed.submission_error.clone().unwrap();
+    assert!(
+        detail.contains("recreate") && detail.contains("Resend"),
+        "{detail}"
+    );
+    assert_eq!(closed.prompt.text, "retained task");
+    assert!(closed.submission_boundary.is_none());
     assert!(failed.startup.as_ref().unwrap().reported);
     drop(worker);
     let worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
@@ -309,6 +321,13 @@ fn restart_resume_rejection_surfaces_actionable_error_and_preserves_work() {
         .unwrap()
         .actionable_error
         .is_some());
+    let closed = worker.state.request(request).unwrap();
+    assert_eq!(closed.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        closed.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    assert_eq!(closed.submission_error.as_deref(), Some(detail.as_str()));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
