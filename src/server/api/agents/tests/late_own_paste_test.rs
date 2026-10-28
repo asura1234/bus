@@ -90,7 +90,18 @@ async fn recover_and_deliver(
     collapsed: bool,
 ) {
     let completion = send(runtime, kind, NEXT, None);
-    let mut result = tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap());
+    let result = tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap());
+    finish_recovery(runtime, writes, kind, text, collapsed, result).await;
+}
+
+async fn finish_recovery(
+    runtime: &TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    kind: AgentKind,
+    text: &str,
+    collapsed: bool,
+    mut result: tokio::task::JoinHandle<std::io::Result<()>>,
+) {
     let mut remaining = text.to_owned();
     let mut cursor = remaining.len();
     loop {
@@ -310,6 +321,8 @@ async fn a_render_that_completes_before_the_deadline_submits_normally() {
 
 #[tokio::test]
 async fn codex_late_paste_is_owned_across_coordinator_reconnect() {
+    // A coordinator reconnect changes no server runtime or PTY: a fresh
+    // submission/inspector below must use the record retained by that runtime.
     late_case(
         AgentKind::Codex,
         "old room message",
@@ -323,6 +336,8 @@ async fn codex_late_paste_is_owned_across_coordinator_reconnect() {
 
 #[tokio::test]
 async fn cursor_late_paste_is_owned_across_coordinator_resume() {
+    // Coordinator resume reconnects to this same server-side runtime; it
+    // neither reconstructs the inspector nor serializes ownership on disk.
     late_case(
         AgentKind::Cursor,
         "old room message",
@@ -395,3 +410,6 @@ async fn agent_relaunch_invalidates_ownership_even_when_the_terminal_runtime_is_
         );
     }
 }
+
+#[path = "late_wait_test.rs"]
+mod wait_tests;
