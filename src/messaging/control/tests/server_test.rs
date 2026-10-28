@@ -221,8 +221,11 @@ fn oversized_worker_response_is_replaced_with_bounded_error() {
     let _server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
         for _ in 0..2 {
-            let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
-            else {
+            // The next request follows encoding and reading the previous
+            // 16 MiB response. That work has no five-second contract. The
+            // client's finite request deadline still bounds a broken server;
+            // unwinding drops its sender and releases this receive.
+            let (_, BusCommand::Control(dev)) = rx.recv().unwrap() else {
                 panic!()
             };
             dev.reply

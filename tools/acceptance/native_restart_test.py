@@ -10,11 +10,24 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools.acceptance.harness_test import Bus  # noqa: E402
+
+
+def wait_initial_room(bus):
+    """Control can answer before the TUI queues its first work room."""
+    deadline = time.monotonic() + 30
+    while True:
+        state = bus.cli("state")
+        if any(room["name"] == "bus" for room in state["rooms"]):
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"initial work room was not seeded: {state['rooms']}")
+        time.sleep(0.05)
 
 
 def scenario(binary, root):
@@ -33,6 +46,7 @@ def scenario(binary, root):
     evidence = {}
     try:
         bus.start()
+        wait_initial_room(bus)
         bus.cli("agent", "add", "--room", "bus", "--name", "restart-agent",
                 "--provider", "claude", "--pwd", str(work), "--consent-hooks")
         first = bus.cli("send", "--room", "bus", "--to", "restart-agent", "--text", "bootstrap")

@@ -43,8 +43,20 @@ async fn submission_diagnostics_record_attempts_without_prompt_or_screen_content
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
     let captured = Arc::new(Mutex::new(Vec::new()));
+    // tracing-core's single-dispatch fast path registers a new callsite
+    // against the registering thread's default. A sibling without a subscriber
+    // can therefore cache Interest::never for our summary. A second live
+    // dispatch makes registration consider every subscriber instead.
+    let _registration = tracing::Dispatch::new(tracing_subscriber::registry());
     let dispatch = tracing::Dispatch::new(LogCapture(captured.clone()));
     let _capture_guard = tracing::dispatcher::set_default(&dispatch);
+    // A sibling submission can register this shared callsite without a
+    // subscriber before the captured submission reaches its summary.
+    std::thread::spawn(|| {
+        diagnostics::Diagnostics::default().finish(&Ok(()), Instant::now());
+    })
+    .join()
+    .unwrap();
     let completion = tracing::dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!(
             "native_submission",

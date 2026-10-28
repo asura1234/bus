@@ -147,6 +147,15 @@ fn large_room_compose_does_not_rebuild_exchanges() {
         &mut thumbnails,
     );
     assert!(ui.history.cached().len() >= 35_000);
+    assert_eq!(
+        ui.history
+            .background
+            .as_ref()
+            .unwrap()
+            .test_progress()
+            .cancelled,
+        0
+    );
 }
 
 fn snapshot(state: BusState, revision: u64) -> Arc<crate::messaging::coordinator::BusSnapshot> {
@@ -166,7 +175,10 @@ fn await_layout(
     now: u64,
     thumbnails: &mut Thumbnails,
 ) {
-    let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    let began = Instant::now();
+    let mut last_progress = (0, 0, 0, 0);
+    let mut progressed_at = began;
+    let mut generation = None;
     loop {
         history.request_lines(Arc::clone(&snapshot), room, width, now, thumbnails);
         if history.background.as_ref().unwrap().is_current(
@@ -176,11 +188,90 @@ fn await_layout(
             now,
             thumbnails.layout_key(),
         ) {
+            eprintln!(
+                "history layout elapsed_ms={} progress={:?}",
+                began.elapsed().as_millis(),
+                history.background.as_ref().unwrap().test_progress()
+            );
             return;
         }
-        assert!(Instant::now() < deadline, "history worker did not finish");
+        let current = history
+            .background
+            .as_ref()
+            .unwrap()
+            .test_progress()
+            .generation;
+        if let Some(expected) = generation {
+            assert_eq!(
+                current, expected,
+                "unchanged layout request restarted the worker"
+            );
+        } else {
+            generation = Some(current);
+        }
+        assert_worker_progress(history, &mut last_progress, &mut progressed_at);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+}
+
+fn assert_worker_progress(
+    history: &History,
+    previous: &mut (u64, u64, u64, u64),
+    progressed_at: &mut Instant,
+) {
+    let progress = history.background.as_ref().unwrap().test_progress();
+    let current = (
+        progress.exchanges,
+        progress.started,
+        progress.finished,
+        progress.cancelled,
+    );
+    let advanced = current.0 > previous.0 || current.1 > previous.1 || current.2 > previous.2;
+    if advanced && current.3 == previous.3 {
+        *progressed_at = Instant::now();
+    }
+    *previous = current;
+    assert!(
+        !progress.worker_stopped,
+        "history worker stopped: {progress:?}"
+    );
+    // This is a liveness guard, not a host-speed benchmark. The same 2500
+    // exchanges take 2s unloaded and over 30s with competing CPU work. A slow
+    // but advancing renderer must not be mistaken for cancellation starvation.
+    assert!(
+        progressed_at.elapsed() < std::time::Duration::from_secs(30),
+        "history worker made no progress for 30s: {progress:?}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "history worker made no progress for 30s")]
+fn cancelled_history_work_does_not_restart_the_liveness_clock() {
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    // Run the actual stale-generation cancellation check, without depending
+    // on scheduling a resize between two exchanges of a live renderer.
+    history
+        .background
+        .as_ref()
+        .unwrap()
+        .test_check_stale_generation();
+    let progress = history.background.as_ref().unwrap().test_progress();
+    assert_eq!(progress.exchanges, 1);
+    assert_eq!(progress.cancelled, 1);
+    let mut previous = (0, 0, 0, 0);
+    let mut progressed_at = Instant::now() - std::time::Duration::from_secs(31);
+    assert_worker_progress(&history, &mut previous, &mut progressed_at);
+}
+
+#[test]
+#[should_panic(expected = "history worker made no progress for 30s")]
+fn a_stalled_history_worker_still_fails_the_liveness_guard() {
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut previous = (0, 0, 0, 0);
+    let mut progressed_at = Instant::now() - std::time::Duration::from_secs(31);
+    assert_worker_progress(&history, &mut previous, &mut progressed_at);
 }
 
 #[test]
@@ -416,9 +507,12 @@ fn snapshot_revisions_do_not_starve_a_cold_history_layout() {
     let mut history = History::default();
     history.enable_background().unwrap();
     let mut thumbnails = Thumbnails::default();
-    let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    let began = Instant::now();
+    let mut last_progress = (0, 0, 0, 0);
+    let mut progressed_at = began;
+    let mut generation = None;
     let mut revision = 0;
-    while history.cached().is_empty() {
+    loop {
         revision += 1;
         history.request_lines(
             snapshot(state.clone(), revision),
@@ -428,13 +522,33 @@ fn snapshot_revisions_do_not_starve_a_cold_history_layout() {
             &mut thumbnails,
         );
         assert_eq!(history.rebuilt, 0);
-        assert!(
-            Instant::now() < deadline,
-            "poll revisions starved the initial layout"
+        let progress = history.background.as_ref().unwrap().test_progress();
+        if let Some(first) = generation {
+            assert_eq!(
+                progress.generation, first,
+                "revision cancelled a cold layout"
+            );
+        } else {
+            generation = Some(progress.generation);
+        }
+        assert_eq!(
+            progress.cancelled, 0,
+            "a cold layout was cancelled: {progress:?}"
         );
+        // Exercise a revision change even if the first layout finished before
+        // the test thread was scheduled again.
+        if revision >= 2 && !history.cached().is_empty() {
+            break;
+        }
+        assert_worker_progress(&history, &mut last_progress, &mut progressed_at);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(history.cached().len() >= 35_000);
+    eprintln!(
+        "cold revisions={revision} elapsed_ms={} progress={:?}",
+        began.elapsed().as_millis(),
+        history.background.as_ref().unwrap().test_progress()
+    );
 }
 
 #[test]
