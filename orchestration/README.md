@@ -79,7 +79,7 @@ compiled-in documentation library.
 Every session runs the control socket and answers the agent-tier commands;
 dev tools answer only in a session started with `--dev` (`docs/dev-tools.md`).
 Orchestrators drive Bus
-through the control CLI documented in `how-to-bus-cli.md`; they do not edit
+through the control CLI (`bus <cmd> --help`), following `how-to-bus-cli.md` for workflows; they do not edit
 room state files or use the server API directly. Send work as the orchestrator
 with `bus send --room ROOM --as AGENT --to WORKER --async --text TEXT`, and
 maintain the workflow path and progress in the room notes. The binding rules

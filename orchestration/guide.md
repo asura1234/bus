@@ -2,7 +2,7 @@
 
 This guide is for a coding agent (Claude Code, Codex, Cursor) acting as the
 orchestrator of a Bus room. It builds on [How to use the Bus CLI](how-to-bus-cli.md);
-read that first for the commands themselves. The binding rules are in
+read that first for the mental model; use `bus <cmd> --help` for command contracts. The binding rules are in
 [Orchestrator rules](orchestrator-rules.md).
 
 Start with [Never act on assumptions; ask the developer](orchestrator-rules.md#never-act-on-assumptions),
@@ -74,12 +74,8 @@ Include this rule in worker briefs. Any agent can message agents in any room;
 
 ### Move an existing session into MASTER
 
-A conversation that already runs as Claude Code, Codex or Cursor can become an
-orchestrator without losing its context. The developer quits it, then adds it to
-MASTER with its session ID in the launch args (`--resume SESSION_ID`, or
-`resume SESSION_ID` for Codex) and its original PWD. Bus resumes that session,
-binds it to the new agent and still delivers the orchestrator prompt; see
-"Move an existing session into MASTER" in [How to use the Bus CLI](how-to-bus-cli.md).
+Use `bus agent add --help` for supported orchestrator providers, session adoption
+flags, original working-directory requirements and prompt delivery.
 
 ## The workflow file
 

@@ -151,7 +151,7 @@ pub(crate) fn agent_onboarding(
     format!(
         "Bus messaging: you are {name} (agent {}, room {}). Before your first message, read {}/bus-communication-guide.md: \
          it decides who you message and when; send only what changes the receiver's next step. \
-         Read {}/how-to-bus-cli.md for the commands. \
+         Read {}/how-to-bus-cli.md for the mental model and workflows; run bus <cmd> --help for command details. \
          Use --as {} when sending messages. Every CLI agent selector accepts a name or ID; bus agent list maps names to IDs. Any agent can message any agent by name or ID; \
          current names are unique across all rooms and resolve globally, like IDs. \
          --to orchestrator names your home room's bound orchestrator. \
@@ -271,7 +271,7 @@ pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
             let rules = text.replace("{{WORKFLOWS_DIR}}", &workflows.to_string_lossy());
             write_doc(&root, name, &rules)?;
         } else {
-            // Placeholder examples in the CLI guide are documentation, not inputs.
+            // Only the binding rules above substitute the workflows directory; other docs stay literal.
             write_doc(&root, name, text)?;
         }
     }

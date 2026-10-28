@@ -50,19 +50,12 @@ fn flat(text: &str) -> String {
 }
 
 #[test]
-fn written_cli_guide_keeps_its_prompt_placeholder_examples_literal() {
-    let data = temp_root("placeholder-examples");
+fn written_cli_guide_points_to_command_help() {
+    let data = temp_root("short-cli-guide");
     let docs = write_docs(&data).unwrap();
     let guide = std::fs::read_to_string(docs.join("how-to-bus-cli.md")).unwrap();
-    for token in [
-        "{{ROOM_NAME}}",
-        "{{ROOM_ID}}",
-        "{{AGENT_NAME}}",
-        "{{DOCS}}",
-        "{{WORKFLOWS_DIR}}",
-    ] {
-        assert!(guide.contains(token), "missing literal example {token}");
-    }
+    assert!(guide.contains("bus <cmd> --help"));
+    assert!(guide.lines().count() <= 250);
     std::fs::remove_dir_all(data).unwrap();
 }
 

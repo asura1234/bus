@@ -85,12 +85,16 @@ class AcceptanceProfileTests(unittest.TestCase):
 class AcceptanceObservationTests(unittest.TestCase):
     def test_public_guide_documents_explicit_reads_and_safe_room_recovery_surfaces(self):
         # 测试在 tools/tests/ 下，仓库根是上两级。
-        guide = (Path(__file__).resolve().parents[2] / "orchestration/how-to-bus-cli.md").read_text()
+        root = Path(__file__).resolve().parents[2]
+        guide = (root / "orchestration/how-to-bus-cli.md").read_text()
+        self.assertLessEqual(len(guide.splitlines()), 250)
+        self.assertIn("bus <cmd> --help", guide)
         self.assertIn("agent read AGENT --source visible", guide)
         self.assertIn("agent read AGENT --source recent --lines N", guide)
         self.assertNotIn("returns up to 400 recent lines", guide)
         self.assertIn("agent dialog AGENT", guide)
-        self.assertIn("agent choose AGENT --option N --fingerprint FINGERPRINT", guide)
+        self.assertIn("agent choose AGENT --option N", guide)
+        self.assertIn("--fingerprint FINGERPRINT", guide)
         self.assertNotIn("approve-once", guide)
         self.assertIn("request recover REQUEST_ID --confirm", guide)
         self.assertNotIn("agent orchestrate", guide)

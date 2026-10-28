@@ -300,7 +300,7 @@ fn control_without_a_recorded_session_still_emits_one_json_error() {
 fn notify_you_help_explains_developer_recipient_and_mandatory_notifications() {
     let home = isolated_home("notify-you-help");
     let output = Command::new(env!("CARGO_BIN_EXE_bus"))
-        .arg("--help")
+        .args(["send", "--help"])
         .env("BUS_DATA_DIR", &home)
         .output()
         .unwrap();

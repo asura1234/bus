@@ -1,6 +1,8 @@
 //! Help metadata for the control grammar. Command and flag inventories come from Clap.
 use crate::messaging::coordinator::{Tier, METHODS};
 use clap::{Arg, Command};
+#[path = "help_details.rs"]
+mod details;
 
 pub(super) fn decorate(command: Command, path: &str, dev: bool) -> Command {
     let hidden = path == "ui"
@@ -11,13 +13,21 @@ pub(super) fn decorate(command: Command, path: &str, dev: bool) -> Command {
     let command = command
         .hide(hidden && !dev)
         .about(about)
+        .long_about(format!(
+            "{about}\n\n{}\n\n{}",
+            details::command(path),
+            details::CONTROL
+        ))
         .after_help(example);
     let args: Vec<_> = command
         .get_arguments()
         .map(|arg| arg.get_id().as_str().to_owned())
         .collect();
     let command = args.into_iter().fold(command, |cmd, id| {
-        cmd.mut_arg(&id, |arg| arg.help(argument_help(&id)))
+        cmd.mut_arg(&id, |arg| match details::default_value(path, &id, &arg) {
+            Some(default) => arg.help(format!("{} [{default}]", argument_help(&id))),
+            None => arg.help(argument_help(&id)),
+        })
     });
     command.mut_subcommands(|child| {
         let child_path = if path.is_empty() {
@@ -83,7 +93,7 @@ fn description(path: &str) -> (&'static str, &'static str) {
         "ui" => ("Inspect the developer UI", "Example: bus --dev ui hits"),
         "ui hits" => ("Read TUI hit regions", "Example: bus --dev ui hits"),
         "room" => ("Create and manage rooms", "Example: bus room create feature-work"),
-        "room create" => ("Create a work room", "Example: bus room create feature-work"),
+        "room create" => ("Create a work room", "Example: bus room create feature-work\n         bus room create release-check --request-id release-check-room-v1"),
         "room focus" => ("Focus a room in the UI", "Example: bus --dev room focus feature-work"),
         "room seen" => ("Mark a room as seen", "Example: bus --dev room seen feature-work"),
         "room sound" => ("Set a room notification sound", "Example: bus --dev room sound feature-work --on --sound Glass"),
@@ -93,7 +103,7 @@ fn description(path: &str) -> (&'static str, &'static str) {
         "agent" => ("Launch, inspect, and manage agents", "Example: bus agent list"),
         "agent add" => ("Launch a named agent in a room", "Example: bus agent add --room feature-work --name worker --provider codex --pwd /path/to/project"),
         "agent list" => ("List current agent names, IDs, and rooms", "Example: bus agent list --room feature-work"),
-        "agent read" => ("Read an agent's terminal", "Example: bus agent read worker --source recent --lines 80"),
+        "agent read" => ("Read an agent's terminal", "Example: bus agent read worker --source recent --lines 80\n         bus agent read worker --source visible"),
         "agent dialog" => ("Observe an agent's active dialog and fingerprint", "Example: bus agent dialog worker"),
         "agent choose" => ("Select an option in the observed dialog", "Example: bus agent choose worker --option 1 --fingerprint FINGERPRINT"),
         "agent answer" => ("Answer or skip the observed question", "Example: bus agent answer worker --text 'Proceed' --fingerprint FINGERPRINT"),
@@ -103,16 +113,16 @@ fn description(path: &str) -> (&'static str, &'static str) {
         "agent interrupt" => ("Stop a running turn and optionally send a follow-up", "Example: bus agent interrupt worker --as coordinator"),
         "agent details" => ("Set agent terminal details visibility", "Example: bus --dev agent details worker --on"),
         "agent rename" => ("Rename an agent", "Example: bus agent rename worker implementer"),
-        "agent setup-confirm" => ("Approve pending project hook setup", "Example: bus agent setup-confirm worker --confirm"),
+        "agent setup-confirm" => ("Record project hook consent for an agent", "Example: bus agent setup-confirm worker --confirm"),
         "agent delete" => ("Delete an agent and close its terminal", "Example: bus agent delete worker --confirm"),
         "send" => ("Send a message or complete a request with a correlated reply", "Example: bus send --room feature-work --to worker --text 'Inspect the change'\n         bus send --reply-to 123 --as worker --text 'Inspection complete'"),
         "message" => ("Inspect delivery or acknowledge a reply", "Example: bus message status 123"),
         "message status" => ("Read message delivery status and replies", "Example: bus message status 123"),
         "message seen" => ("Acknowledge a reply after reading its output", "Example: bus message seen 456 --as coordinator"),
-        "request" => ("Recover a stalled request", "Example: bus request recover 456 --confirm"),
-        "request recover" => ("Explicitly retry a recoverable request", "Example: bus request recover 456 --confirm"),
-        "wait" => ("Wait for a message to finish or require attention", "Example: bus wait --message 123 --timeout 60"),
-        "history" => ("Read room messages and delivery history", "Example: bus history --room feature-work"),
+        "request" => ("Close a stuck request without replaying it", "Example: bus request recover 456 --confirm"),
+        "request recover" => ("Close a stuck request without replaying it", "Example: bus request recover 456 --confirm"),
+        "wait" => ("Wait for a message to finish or require attention", "Example: bus wait --message 123 --timeout 60\n         bus wait --message 123 --async"),
+        "history" => ("Read room messages and delivery history", "Example: bus history --room feature-work\n         bus history --room feature-work --limit 100"),
         _ => ("Bus command", "Example: bus --help"),
     }
 }
@@ -122,11 +132,11 @@ fn run_flags() -> [Arg; 2] {
         Arg::new("dev")
             .long("dev")
             .action(clap::ArgAction::SetTrue)
-            .help("Enable developer tools and developer logs"),
+            .help("Enable developer tools and developer logs [default: false]"),
         Arg::new("yolo")
             .long("yolo")
             .action(clap::ArgAction::SetTrue)
-            .help("Bypass provider permission prompts for this run"),
+            .help("Bypass provider permission prompts for this run [default: false]"),
     ]
 }
 
@@ -154,41 +164,45 @@ pub(crate) fn command_tree(dev: bool) -> Command {
             Arg::new("paths")
                 .long("paths")
                 .action(clap::ArgAction::SetTrue)
-                .help("Print data and log paths without starting Bus"),
+                .help("Print data and log paths without starting Bus [default: false]"),
         )
         .subcommand(
             Command::new("sessions")
                 .about("List saved sessions")
+                .long_about(details::SESSIONS)
                 .args(run_flags())
                 .after_help("Example: bus sessions"),
         )
         .subcommand(
             Command::new("resume")
                 .about("Resume a saved session")
+                .long_about(details::RESUME)
                 .args(run_flags())
                 .group(
                     clap::ArgGroup::new("target")
                         .args(["session-id", "last"])
                         .required(true),
                 )
-                .arg(Arg::new("session-id").help("Saved session ID"))
+                .arg(Arg::new("session-id").help("Saved session ID [required unless --last]"))
                 .arg(
                     Arg::new("last")
                         .long("last")
                         .action(clap::ArgAction::SetTrue)
-                        .help("Resume the last opened session"),
+                        .help("Resume the last opened session [default: false]"),
                 )
                 .after_help("Example: bus resume --last"),
         )
         .subcommand(
             Command::new("stop")
                 .about("Stop the session server and close its panes")
+                .long_about(details::STOP)
                 .args(run_flags())
                 .after_help("Example: bus stop"),
         )
         .subcommand(
             Command::new("perf")
                 .about("Summarize recorded performance; reads files only")
+                .long_about(details::PERF)
                 .arg(
                     Arg::new("since")
                         .long("since")
@@ -199,7 +213,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                         .long("all")
                         .conflicts_with("since")
                         .action(clap::ArgAction::SetTrue)
-                        .help("Read all recorded performance history"),
+                        .help("Read all recorded performance history [default: false]"),
                 )
                 .after_help("Example: bus perf --since 2h"),
         )
