@@ -588,6 +588,10 @@ pub(crate) struct Request {
     /// Sent with `--queue`: waits for an idle agent and gets its own turn.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) queue_only: bool,
+    /// Bus-created input (such as a reply notice or first-turn system prompt),
+    /// retained through startup failure rather than closed as a sender's send.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) bus_generated: bool,
     /// The lead request of the group this one joined, by being typed into the
     /// lead's running turn or coalesced into its prompt. Outstanding requests
     /// share the eventual final; completed replies remain independent.

@@ -281,7 +281,7 @@ impl BusState {
         Ok(())
     }
 
-    /// Close only work that never reached provider input, preserving its diagnosis.
+    /// Close sender-authored work that never reached provider input, preserving its diagnosis.
     pub(crate) fn abandon_failed_startup_queue(&mut self, id: AgentId, now_ms: u64) {
         let Some(failure) = self
             .agents
@@ -293,16 +293,20 @@ impl BusState {
         };
         let detail = failure.notice();
         if let Some(queue) = self.queues.get_mut(&id) {
-            for request_id in queue.drain(..) {
+            queue.retain(|request_id| {
                 let request = self
                     .requests
-                    .get_mut(&request_id)
+                    .get_mut(request_id)
                     .expect("queued request exists");
+                if request.bus_generated {
+                    return true;
+                }
                 request.phase = RequestPhase::Abandoned;
                 request.failure_reason = Some(super::AGENT_STARTUP_FAILED.into());
                 request.submission_error = Some(detail.clone());
                 request.completed_at_ms = Some(now_ms);
-            }
+                false
+            });
         }
     }
 

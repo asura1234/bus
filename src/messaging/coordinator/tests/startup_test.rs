@@ -1326,3 +1326,145 @@ fn resumed_session_shell_wait_preserves_queued_work() {
             "{code}: recoverable shell wait must not close queued work; startup={startup:?}; detail={:?}", actual.submission_error);
     }
 }
+
+#[test]
+fn startup_failure_notification_is_deduplicated_after_restart() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let mut state = worker.state.clone();
+    let master = state.master_room().unwrap().id;
+    let sender = state
+        .create_agent(master, "sender", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(sender, room).unwrap();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "queued work before failure".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(sender),
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    let failed_at = worker
+        .state
+        .request(request)
+        .unwrap()
+        .completed_at_ms
+        .unwrap();
+    let mut state = worker.state.clone();
+    state
+        .route_worker_replies(failed_at + 2_100, &BTreeSet::new())
+        .unwrap();
+    worker.save(state).unwrap();
+    let notices: Vec<_> = worker
+        .state
+        .requests()
+        .filter(|r| r.agent_id == sender)
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(notices.len(), 1);
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    for _ in 0..3 {
+        let mut state = worker.state.clone();
+        state
+            .route_worker_replies(failed_at + 2_200, &BTreeSet::new())
+            .unwrap();
+        worker.save(state).unwrap();
+    }
+    assert_eq!(
+        worker
+            .state
+            .requests()
+            .filter(|r| r.agent_id == sender)
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
+        notices
+    );
+    assert_eq!(
+        worker
+            .state
+            .worker_events_for(worker.state.request(request).unwrap())
+            .len(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn startup_failure_preserves_generated_system_prompt_across_restart() {
+    for (provider, args) in [
+        (Provider::Cursor, ""),
+        (
+            Provider::Codex,
+            "resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4",
+        ),
+    ] {
+        let (mut worker, _, room, dir, _) = fixture(provider, vec![]);
+        worker.transport = Box::new(ResumedSessionShellWaitNative {
+            fallback: FailedLaunchNative {
+                state_path: dir.join("state.json"),
+                ..Default::default()
+            },
+        });
+        worker
+            .add_agent(
+                AddAgent {
+                    room,
+                    name: "bootstrap".into(),
+                    provider,
+                    cwd: dir.to_string_lossy().into_owned(),
+                    extra_args: args.into(),
+                    consent_project_hooks: true,
+                },
+                None,
+                &mpsc::channel().0,
+            )
+            .unwrap();
+        let agent = worker
+            .state
+            .agents()
+            .find(|a| a.name == "bootstrap")
+            .unwrap()
+            .id;
+        let prompt = worker.state.queued_requests(agent)[0];
+        assert_eq!(
+            worker.state.request(prompt).unwrap().prompt.author,
+            Author::Developer
+        );
+        let send = queue(&mut worker, room, agent, "sender-authored work");
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        let late = queue(&mut worker, room, agent, "new send after startup failure");
+        drop(worker);
+        let worker = reopen_saved(&dir);
+        let generated = worker.state.request(prompt).unwrap().clone();
+        let queued = worker.state.queued_requests(agent).to_vec();
+        let sends: Vec<_> = [send, late]
+            .into_iter()
+            .map(|id| worker.state.request(id).unwrap().clone())
+            .collect();
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            generated.phase,
+            RequestPhase::Queued,
+            "{provider:?}: generated first turn must survive startup failure"
+        );
+        assert_eq!(queued, vec![prompt]);
+        for send in sends {
+            assert_eq!(send.phase, RequestPhase::Abandoned);
+            assert_eq!(send.failure_reason.as_deref(), Some("agent_startup_failed"));
+        }
+    }
+}

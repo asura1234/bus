@@ -58,7 +58,7 @@ impl BusState {
                 id
             } else {
                 let text = Self::notification_text(&parts);
-                self.submit_message_from(
+                self.submit_bus_message_with(
                     room,
                     Draft {
                         text,
@@ -67,6 +67,7 @@ impl BusState {
                     },
                     Author::Agent(worker),
                     now_ms,
+                    false,
                 )?[0]
             };
             for part in parts {

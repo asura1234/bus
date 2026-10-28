@@ -1002,3 +1002,82 @@ fn upgraded_agents_keep_saved_instructions_and_pending_work_without_new_turns() 
         }
     }
 }
+
+#[test]
+fn cold_resume_after_failed_startup_reopens_without_replaying_closed_work() {
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    state.set_agent_runtime_identity(agent, identity).unwrap();
+    worker.save(state).unwrap();
+    let closed = queue(&mut worker, room, agent, "closed work must not replay");
+    worker
+        .watch_agent_startup(agent, vec!["codex".into()])
+        .unwrap();
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    let closed_before = worker.state.request(closed).unwrap().clone();
+    assert_eq!(closed_before.phase, RequestPhase::Abandoned);
+    drop(worker);
+    let mut info = resumed_info(Provider::Codex);
+    info.agent_session = None;
+    let mut worker = Worker::open(
+        dir.clone(),
+        Box::new(FakeTransport {
+            replies: vec![
+                Ok(ResponseResult::AgentList {
+                    agents: vec![info.clone()],
+                }),
+                Ok(ResponseResult::AgentInfo {
+                    agent: info.clone(),
+                }),
+                Ok(ResponseResult::Ok {}),
+            ]
+            .into(),
+            calls: Arc::clone(&calls),
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap();
+    let infos = worker.poll().unwrap().unwrap();
+    worker
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    assert_eq!(
+        worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .runtime_identity
+            .terminal_id
+            .as_deref(),
+        Some("restored-terminal")
+    );
+    assert!(worker.state.agent(agent).unwrap().startup.is_none());
+    let resent = queue(
+        &mut worker,
+        room,
+        agent,
+        "explicit resend after cold startup recovery",
+    );
+    worker.submit_ready().unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(worker.state.request(closed).unwrap(), &closed_before);
+    assert_eq!(
+        worker.state.request(resent).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| **method == "agent.prompt_if_unbound")
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
