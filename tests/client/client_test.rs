@@ -510,32 +510,102 @@ mod cross_area {
         false
     }
 
-    fn pane_agent_status(socket_path: &Path, pane_id: &str) -> Option<String> {
-        let response = send_json_request(
-            socket_path,
-            "pane_get",
-            "pane.get",
-            json!({ "pane_id": pane_id }),
-        );
-        response["result"]["pane"]["agent_status"]
-            .as_str()
-            .map(|status| status.to_string())
-    }
-
-    fn wait_for_agent_status(
+    // Preserve the detach test's polling cadence and budgets while retaining the
+    // observations that distinguish process acquisition from screen detection.
+    fn wait_for_detach_pane_value(
         socket_path: &Path,
         pane_id: &str,
+        phase: &str,
+        field: &str,
         expected: &str,
         timeout: Duration,
+        poll_interval: Duration,
+        launched_at: Instant,
     ) -> bool {
-        let deadline = Instant::now() + timeout;
+        let started = Instant::now();
+        let deadline = started + timeout;
+        let mut samples = 0;
+        let mut max_api_time = Duration::ZERO;
+        let mut last_response = Value::Null;
+        let mut previous_state = Value::Null;
+        let mut transitions = Vec::new();
+        let mut matched = false;
         while Instant::now() < deadline {
-            if pane_agent_status(socket_path, pane_id).as_deref() == Some(expected) {
-                return true;
+            let request_started = Instant::now();
+            last_response = send_json_request(
+                socket_path,
+                "detach_probe",
+                "pane.get",
+                json!({ "pane_id": pane_id }),
+            );
+            max_api_time = max_api_time.max(request_started.elapsed());
+            samples += 1;
+            let pane = &last_response["result"]["pane"];
+            let state = json!({
+                "agent": pane["agent"],
+                "status": pane["agent_status"],
+                "process_exited": pane["agent_process_exited"],
+                "error": last_response["error"],
+            });
+            if state != previous_state {
+                transitions.push(json!({
+                    "elapsed_ms": started.elapsed().as_millis(),
+                    "state": state,
+                }));
+                previous_state = state;
             }
-            thread::sleep(Duration::from_millis(50));
+            if pane[field].as_str() == Some(expected) {
+                matched = true;
+                break;
+            }
+            thread::sleep(poll_interval);
         }
-        false
+        eprintln!(
+            "detach_probe {}",
+            json!({
+                "phase": phase,
+                "matched": matched,
+                "elapsed_ms": started.elapsed().as_millis(),
+                "since_launch_ms": launched_at.elapsed().as_millis(),
+                "budget_ms": timeout.as_millis(),
+                "samples": samples,
+                "max_api_ms": max_api_time.as_millis(),
+                "transitions": transitions,
+                "last_response": last_response,
+                "api_socket": socket_path,
+            })
+        );
+        matched
+    }
+
+    fn detach_failure_snapshot(socket_path: &Path, pane_id: &str) -> Value {
+        // A failing server must not turn diagnostic reads into an unbounded wait.
+        let read = |source: &str| -> Result<Value, String> {
+            let mut stream = UnixStream::connect(socket_path).map_err(|e| e.to_string())?;
+            let timeout = Some(Duration::from_millis(500));
+            stream
+                .set_read_timeout(timeout)
+                .map_err(|e| e.to_string())?;
+            stream
+                .set_write_timeout(timeout)
+                .map_err(|e| e.to_string())?;
+            writeln!(
+                stream,
+                "{}",
+                json!({
+                    "id": "detach_failure_snapshot",
+                    "method": "pane.read",
+                    "params": { "pane_id": pane_id, "source": source, "lines": 200 },
+                })
+            )
+            .map_err(|e| e.to_string())?;
+            let mut response = String::new();
+            BufReader::new(stream)
+                .read_line(&mut response)
+                .map_err(|e| e.to_string())?;
+            serde_json::from_str(&response).map_err(|e| e.to_string())
+        };
+        json!({ "recent": read("recent"), "visible": read("visible") })
     }
 
     // ---------------------------------------------------------------------------

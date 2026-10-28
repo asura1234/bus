@@ -115,36 +115,39 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
         .to_string();
 
     // Ensure detected agent surface is populated by running fake `pi`.
+    let launched_at = Instant::now();
     pane_send_text(&api_socket, &pane_id, "pi");
     pane_send_input(&api_socket, &pane_id, "");
-    let detected_before_detach = {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut detected = false;
-        while Instant::now() < deadline {
-            let response = send_json_request(
-                &api_socket,
-                "pane_get",
-                "pane.get",
-                json!({ "pane_id": &pane_id }),
-            );
-            if response["result"]["pane"]["agent"].as_str() == Some("pi") {
-                detected = true;
-                break;
-            }
-            thread::sleep(Duration::from_millis(60));
-        }
-        detected
-    };
     assert!(
-        detected_before_detach,
-        "expected fake pi process to be detected before detach"
+        wait_for_detach_pane_value(
+            &api_socket,
+            &pane_id,
+            "process-before-detach",
+            "agent",
+            "pi",
+            Duration::from_secs(5),
+            Duration::from_millis(60),
+            launched_at,
+        ),
+        "expected fake pi process to be detected before detach; snapshot: {}",
+        detach_failure_snapshot(&api_socket, &pane_id),
     );
 
     // The fake process prints Pi's working marker, so screen detection drives the status;
     // confirming it takes a few seconds.
     assert!(
-        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(10)),
-        "pane agent status should become working before detach"
+        wait_for_detach_pane_value(
+            &api_socket,
+            &pane_id,
+            "working-before-detach",
+            "agent_status",
+            "working",
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            launched_at,
+        ),
+        "pane agent status should become working before detach; snapshot: {}",
+        detach_failure_snapshot(&api_socket, &pane_id),
     );
 
     // Detach and ensure status persists through API while detached.
@@ -152,8 +155,18 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     drop(client_a);
 
     assert!(
-        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(3)),
-        "agent status should remain working while detached"
+        wait_for_detach_pane_value(
+            &api_socket,
+            &pane_id,
+            "working-detached",
+            "agent_status",
+            "working",
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+            launched_at,
+        ),
+        "agent status should remain working while detached; snapshot: {}",
+        detach_failure_snapshot(&api_socket, &pane_id),
     );
 
     // Reattach and verify the persisted projection through the API.
@@ -169,8 +182,18 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     );
     assert_eq!(pane["result"]["pane"]["agent"], "pi", "{pane}");
     assert!(
-        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(3)),
-        "agent status should remain working after reattach"
+        wait_for_detach_pane_value(
+            &api_socket,
+            &pane_id,
+            "working-reattached",
+            "agent_status",
+            "working",
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+            launched_at,
+        ),
+        "agent status should remain working after reattach; snapshot: {}",
+        detach_failure_snapshot(&api_socket, &pane_id),
     );
 
     cleanup_spawned_bus(server, base);
