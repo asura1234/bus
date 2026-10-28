@@ -99,6 +99,12 @@ impl SubmissionInspector for PreservingComposer {
         cursor: Option<(u16, u16)>,
     ) -> Option<DraftPreservation> {
         let invisible = invisible_content(self.kind, screen, cursor);
+        tracing::debug!(target: "bus::terminal::submission", event = "bus.composer.preservation_inputs",
+            provider = crate::agents::agent_label(self.kind), cursor = ?cursor,
+            invisible_content = invisible, native_stash_present = native_stash_present(screen),
+            preservation_keys_available = self.keys.len() == 3,
+            body_present = input(self.kind, screen).is_some(),
+            opaque_draft = input(self.kind, screen).as_deref().is_some_and(opaque));
         if self.kind == AgentKind::Claude
             && !invisible
             && native_stash_present(screen)

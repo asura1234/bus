@@ -219,6 +219,14 @@ impl ObservedSubmission {
     fn observe(&self, phase: &'static str) -> InputObservation {
         let screen = self.terminal.visible_ansi();
         let observation = self.inspect.observe(&screen);
+        if matches!(
+            observation,
+            InputObservation::Other | InputObservation::Unavailable
+        ) {
+            let cursor = self.terminal.cursor_state();
+            tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.refusal_state", phase, observation = ?observation,
+                cursor_x = ?cursor.as_ref().map(|cursor| cursor.x), cursor_y = ?cursor.as_ref().map(|cursor| cursor.y), screen_rows = screen.lines().count());
+        }
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
         observation

@@ -57,6 +57,7 @@ impl SubmissionInspector for OwnedComposer {
             }
             InputObservation::Pending | InputObservation::Other => {
                 if owned.lost {
+                    tracing::debug!(target: "bus::terminal::submission", event = "bus.composer.ownership_history", reason = "ownership_already_lost", tracked_body = owned.body.is_some(), remainder_count = owned.remainders.len());
                     return InputObservation::Other;
                 }
                 let body = input(self.kind, screen);
@@ -81,6 +82,7 @@ impl SubmissionInspector for OwnedComposer {
                     return InputObservation::Pending;
                 }
                 owned.lost = true;
+                tracing::debug!(target: "bus::terminal::submission", event = "bus.composer.ownership_history", reason = "changed_outside_owned_keys", previous_body_bytes = owned.body.as_ref().map_or(0, String::len), current_body_bytes = body.as_ref().map_or(0, String::len), modeled_text_bytes = owned.text.len(), modeled_cursor = owned.cursor, remainder_count = owned.remainders.len(), prior_body_match = false, remainder_match = false);
                 InputObservation::Other
             }
             other => other,

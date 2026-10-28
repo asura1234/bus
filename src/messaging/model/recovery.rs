@@ -168,6 +168,23 @@ impl BusState {
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
         self.record_stalled_errors(now_ms)?;
+        // Retained replies must stay available, but a refused wake must not
+        // monopolize the recipient across conversation rooms. Keep FIFO within
+        // each class and give unattempted work the next submission opportunity.
+        let deferred: std::collections::BTreeSet<_> = self
+            .requests
+            .values()
+            .filter(|request| {
+                self.expired_queue_rejection(request, now_ms).is_some()
+                    && self.is_reply_notification(request.id)
+            })
+            .map(|request| request.id)
+            .collect();
+        if !deferred.is_empty() {
+            for queue in self.queues.values_mut() {
+                queue.sort_by_key(|id| deferred.contains(id));
+            }
+        }
         let stalled: Vec<_> = self
             .requests
             .values()
