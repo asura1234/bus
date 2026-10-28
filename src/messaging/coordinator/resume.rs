@@ -55,7 +55,11 @@ fn is_unstarted_codex(state: &BusState, agent: &RoomAgent) -> bool {
         && agent.runtime_identity.session_id.is_none()
         && agent.current_request.is_none()
         && !state.requests().any(|request| {
-            request.agent_id == agent.id && request.phase != super::RequestPhase::Queued
+            // A closed startup-failed send never reached provider input either.
+            request.agent_id == agent.id
+                && request.phase != super::RequestPhase::Queued
+                && request.failure_reason.as_deref()
+                    != Some(crate::messaging::model::AGENT_STARTUP_FAILED)
         })
 }
 

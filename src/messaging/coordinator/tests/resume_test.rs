@@ -452,6 +452,95 @@ fn cold_resume_rebinds_unstarted_codex_and_delivers_its_first_prompt_once() {
 }
 
 #[test]
+fn cold_resume_after_startup_failure_accepts_explicitly_resent_work() {
+    let mut info = resumed_info(Provider::Codex);
+    info.agent_session = None;
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Codex,
+        vec![
+            Ok(ResponseResult::AgentList {
+                agents: vec![info.clone()],
+            }),
+            Ok(ResponseResult::AgentInfo {
+                agent: info.clone(),
+            }),
+            Ok(ResponseResult::Ok {}),
+        ],
+    );
+    let mut state = worker.state.clone();
+    let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    state.set_agent_runtime_identity(agent, identity).unwrap();
+    worker.save(state).unwrap();
+    let closed = queue(&mut worker, room, agent, "never submitted before failure");
+    let mut state = worker.state.clone();
+    state
+        .set_agent_startup(
+            agent,
+            Some(crate::messaging::model::AgentStartup {
+                command: "codex".into(),
+                started_at_ms: io::now_ms(),
+                reported: true,
+                native_terminal_id: None,
+                recovery: None,
+                failure: Some(crate::messaging::model::StartupFailure {
+                    reason: "provider launch ended before startup was confirmed".into(),
+                    recovery: "Repair startup. Resend the closed work.".into(),
+                }),
+            }),
+        )
+        .unwrap();
+    state.abandon_failed_startup_queue(agent, io::now_ms());
+    worker.save(state).unwrap();
+    assert_eq!(
+        worker.state.request(closed).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    worker.poll().unwrap();
+    let restored = worker.state.agent(agent).unwrap();
+    assert_eq!(restored.status, RuntimeStatus::Idle);
+    assert_eq!(
+        restored.runtime_identity.terminal_id.as_deref(),
+        Some("restored-terminal")
+    );
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    assert!(worker.state.agent(agent).unwrap().startup.is_none());
+    let resent = queue(&mut worker, room, agent, "explicit resend after recovery");
+    worker.submit_ready().unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(resent).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        worker.state.request(closed).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(
+        worker
+            .state
+            .request(closed)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_startup_failed")
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| **method == "agent.prompt_if_unbound")
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn cold_resume_rejects_foreign_missing_and_ambiguous_ownership() {
     for case in [
         "name",
