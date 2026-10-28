@@ -61,6 +61,28 @@ struct Shared {
     wake: Condvar,
     generation: AtomicU64,
     ready: AtomicBool,
+    #[cfg(test)]
+    progress: TestCounters,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestCounters {
+    exchanges: AtomicU64,
+    cancelled: AtomicU64,
+    started: AtomicU64,
+    finished: AtomicU64,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct TestProgress {
+    pub(super) generation: u64,
+    pub(super) exchanges: u64,
+    pub(super) cancelled: u64,
+    pub(super) started: u64,
+    pub(super) finished: u64,
+    pub(super) worker_stopped: bool,
 }
 
 pub(super) struct Cancellation {
@@ -70,7 +92,21 @@ pub(super) struct Cancellation {
 
 impl Cancellation {
     pub(super) fn cancelled(&self) -> bool {
-        self.shared.generation.load(Ordering::Relaxed) != self.generation
+        let cancelled = self.shared.generation.load(Ordering::Relaxed) != self.generation;
+        #[cfg(test)]
+        {
+            self.shared
+                .progress
+                .exchanges
+                .fetch_add(1, Ordering::Relaxed);
+            if cancelled {
+                self.shared
+                    .progress
+                    .cancelled
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        cancelled
     }
 }
 
@@ -83,6 +119,18 @@ pub(super) struct Background {
 }
 
 impl Background {
+    #[cfg(test)]
+    pub(super) fn test_progress(&self) -> TestProgress {
+        TestProgress {
+            generation: self.shared.generation.load(Ordering::Relaxed),
+            exchanges: self.shared.progress.exchanges.load(Ordering::Relaxed),
+            cancelled: self.shared.progress.cancelled.load(Ordering::Relaxed),
+            started: self.shared.progress.started.load(Ordering::Relaxed),
+            finished: self.shared.progress.finished.load(Ordering::Relaxed),
+            worker_stopped: self._thread.is_finished(),
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn is_current(
         &self,
@@ -278,6 +326,8 @@ fn run(shared: Arc<Shared>) {
             }
             mailbox.next.take().expect("pending history job after wait")
         };
+        #[cfg(test)]
+        shared.progress.started.fetch_add(1, Ordering::Relaxed);
         rooms.retain(|id, _| job.snapshot.state.room(*id).is_some());
         let Some(room) = job.snapshot.state.room(job.key.room) else {
             continue;
@@ -299,6 +349,8 @@ fn run(shared: Arc<Shared>) {
             job.now,
             &mut thumbnails,
         );
+        #[cfg(test)]
+        shared.progress.finished.fetch_add(1, Ordering::Relaxed);
         let layout = Layout {
             key: job.key,
             lines: Arc::clone(&history.lines),
