@@ -155,3 +155,102 @@ fn reply_diagnostics_each_delivered_hint_explains_receipt_and_recovery() {
     assert!(payload.contains("before resending"), "{payload}");
     assert_eq!(test_prompt_content(&payload), "verify");
 }
+
+#[test]
+fn reply_diagnostics_joined_request_answered_by_group_final_reports_captured_source() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = start(&mut f, "standing watcher");
+    let next = start(&mut f, "one task");
+    assert_eq!(f.request(next).group, Some(lead));
+    let message = f.request(next).prompt.id;
+    let agent = f.agent;
+    f.stopped("infinite-turn", "group final");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.worker.settle_requests().unwrap();
+    let before = f.worker.state.clone();
+    let response = reply(&mut f, message, agent, "late corrected answer");
+    assert_eq!(response.error.unwrap().code, "request_already_replied");
+    assert_eq!(response.result["request_ids"], json!([next.0]));
+    assert_eq!(
+        response.result["existing_reply"]["source"],
+        "captured_turn_final"
+    );
+    assert_eq!(response.result["existing_reply"]["preview"], "group final");
+    assert_eq!(f.worker.state, before);
+    assert!(reply(&mut f, message, agent, "group final").ok);
+    assert_eq!(f.worker.state, before);
+}
+
+#[test]
+fn reply_diagnostics_preview_secrets_stay_out_of_error_text_and_logs() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = start(&mut f, "verify");
+    let message = f.request(lead).prompt.id;
+    let agent = f.agent;
+    let secret = "token=synthetic-secret-\"\\\n\u{1b}[31m验🙂";
+    assert!(reply(&mut f, message, agent, secret).ok);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let mut captured = None;
+    capture.run_filtered("trace", || {
+        captured = Some(reply(&mut f, message, agent, "correction"))
+    });
+    let response = captured.unwrap();
+    assert!(!response.ok);
+    assert_eq!(response.result["existing_reply"]["preview"], secret);
+    assert!(!response
+        .error
+        .as_ref()
+        .unwrap()
+        .message
+        .contains("synthetic-secret"));
+    assert!(
+        !capture.text().contains("synthetic-secret"),
+        "{}",
+        capture.text()
+    );
+    let wire = serde_json::to_string(&response).unwrap();
+    assert!(!wire.contains('\u{1b}'));
+    assert_eq!(wire.lines().count(), 1);
+    let decoded: Response = serde_json::from_str(&wire).unwrap();
+    assert_eq!(decoded.result["existing_reply"]["preview"], secret);
+}
+
+#[test]
+fn reply_diagnostics_guidance_and_first_answer_work_for_each_provider() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        let mut f = Fixture::new(provider);
+        let lead = start(&mut f, "verify");
+        let message = f.request(lead).prompt.id;
+        let agent = f.agent;
+        let payload = f.typed().last().unwrap().0.clone();
+        assert!(
+            payload.contains("foreground")
+                && payload.contains("ok:true")
+                && payload.contains("stage:\"replied\""),
+            "{provider:?}: {payload}"
+        );
+        assert!(payload.contains(&format!(
+            "bus message status {} before resending",
+            message.0
+        )));
+        assert!(reply(&mut f, message, agent, "first answer").ok);
+        f.stopped("infinite-turn", "later final");
+        f.consume();
+        let before = f.worker.state.clone();
+        let response = reply(&mut f, message, agent, "correction");
+        assert_eq!(
+            response.error.unwrap().code,
+            "request_already_replied",
+            "{provider:?}"
+        );
+        assert_eq!(
+            response.result["existing_reply"]["source"],
+            "recipient_reply"
+        );
+        assert_eq!(response.result["existing_reply"]["preview"], "first answer");
+        assert_eq!(response.result["new_text_sent"], false);
+        assert!(reply(&mut f, message, agent, "first answer").ok);
+        assert_eq!(f.worker.state, before, "{provider:?}");
+    }
+}

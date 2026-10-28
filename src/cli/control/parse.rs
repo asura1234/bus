@@ -71,7 +71,11 @@ pub(super) fn cli() -> Command {
                         .required_unless_present("reply-to"),
                 )
                 .arg(value_arg("reply-to").long("reply-to").requires("as"))
-                .arg(option("text"))
+                .arg(
+                    value_arg("text")
+                        .long("text")
+                        .required_unless_present("reply-to"),
+                )
                 .arg(value_arg("file").long("file").action(ArgAction::Append))
                 .arg(value_arg("as").long("as"))
                 .arg(flag("queue"))
@@ -568,7 +572,7 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
                 }
             };
             return Err(format!(
-                "Nothing was sent. --reply-to infers the room and recipient; omit --room, --to, --queue, --async and --file. Use: bus send --reply-to {} --as {} --text '...'",
+                "Nothing was sent. --reply-to infers the room and recipient; omit --room, --to, --queue, --async and --file. Use: bus send --reply-to {} --as={} --text '...'",
                 quote(message), quote(required(args, "as")?)
             ));
         }
