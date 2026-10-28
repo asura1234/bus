@@ -300,13 +300,30 @@ pub(super) const MASTER_ROOM_ID: RoomId = RoomId(0);
 pub(crate) struct AgentStartup {
     pub(crate) command: String,
     pub(crate) started_at_ms: u64,
-    /// A reported startup failure holds its queue until readiness confirms recovery.
+    /// The startup diagnostic has been reported, including recoverable shell waits.
     pub(crate) reported: bool,
     /// The native attempt's terminal, independent of a later runtime rebind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_terminal_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) recovery: Option<StartupRecovery>,
+    /// Conclusive failure, distinct from a recoverable shell wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failure: Option<StartupFailure>,
+}
+
+pub(crate) const AGENT_STARTUP_FAILED: &str = "agent_startup_failed";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct StartupFailure {
+    pub(crate) reason: String,
+    pub(crate) recovery: String,
+}
+
+impl StartupFailure {
+    pub(crate) fn notice(&self) -> String {
+        format!("Startup failed: {}. {}", self.reason, self.recovery)
+    }
 }
 
 /// Authority to retry only a provider command proven never to have reached input.
@@ -556,7 +573,7 @@ pub(crate) struct Request {
     #[serde(default)]
     pub(crate) trusted_start_bound: bool,
     pub(crate) uncertain_outcome: bool,
-    /// Native draft/recovery detail belongs to this send, beyond agent changes.
+    /// Native launch/draft/recovery detail belongs to this send, beyond agent changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) submission_error: Option<String>,
     /// A blocked-dialog episode outlives request/group settlement. Keep its

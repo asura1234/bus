@@ -1942,6 +1942,20 @@ fn parse_errors_do_not_advertise_dev_tools() {
 }
 
 #[test]
+fn startup_failure_async_exits_one_with_reason_and_recovery() {
+    let mut failed = recipient(1, "abandoned", false);
+    failed["reason"] = json!("agent_startup_failed");
+    failed["detail"] = json!("provider launch ended before startup was confirmed. Repair the provider setup and resume. Resend after startup is confirmed.");
+    let (outcome, lines, _, _) = run_async(&[], [status(vec![failed])]);
+    assert_eq!(exit_code(&outcome), Some(1));
+    assert_eq!(lines[0]["error"]["code"], "message_abandoned");
+    let message = lines[0]["error"]["message"].as_str().unwrap();
+    for expected in ["agent_startup_failed", "launch ended", "Resend"] {
+        assert!(message.contains(expected), "missing {expected}: {message}");
+    }
+}
+
+#[test]
 fn send_async_failure_keeps_the_send_receipt_and_message_id() {
     let (outcome, lines, _, _) = run_async(&[], [status(vec![recipient(1, "abandoned", false)])]);
     assert!(outcome.is_err());

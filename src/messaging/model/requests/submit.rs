@@ -136,6 +136,7 @@ impl BusState {
             );
             self.queues.entry(agent_id).or_default().push(request_id);
             request_ids.push(request_id);
+            self.abandon_failed_startup_queue(agent_id, now_ms);
         }
         let room_state = self
             .rooms

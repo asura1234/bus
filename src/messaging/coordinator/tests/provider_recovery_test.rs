@@ -540,6 +540,7 @@ fn confirmed_room_resume_clears_the_previous_startup_error() {
                     reported: true,
                     native_terminal_id: None,
                     recovery: None,
+                    failure: None,
                 }),
             )
             .unwrap();

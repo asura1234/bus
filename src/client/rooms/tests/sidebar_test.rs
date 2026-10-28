@@ -24,6 +24,7 @@ fn expanded_worker_details_show_the_complete_startup_failure_and_recovery() {
                 reported: true,
                 native_terminal_id: Some("failed-terminal".into()),
                 recovery: None,
+                failure: None,
             }),
         )
         .unwrap();

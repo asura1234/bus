@@ -294,7 +294,10 @@ impl BusState {
         text: &str,
         at_ms: u64,
     ) {
-        self.record_request_event_with(request, kind, class, text, at_ms, None);
+        let detail = (request.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED))
+            .then_some(request.submission_error.as_deref())
+            .flatten();
+        self.record_request_event_with(request, kind, class, text, at_ms, detail);
     }
 
     fn record_request_event_with(

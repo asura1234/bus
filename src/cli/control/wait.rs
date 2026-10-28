@@ -193,6 +193,18 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
             ),
         ));
     }
+    if abandoned["reason"] == crate::messaging::model::AGENT_STARTUP_FAILED {
+        return Some((
+            "message_abandoned",
+            format!(
+                "Bus abandoned message {} for agent {agent} (agent_startup_failed): {}",
+                status["message_id"],
+                abandoned["detail"]
+                    .as_str()
+                    .unwrap_or("Inspect the agent's terminal and repair startup before resending.")
+            ),
+        ));
+    }
     if abandoned["reason"] == "submission_unconfirmed" {
         return Some((
             "message_abandoned",
