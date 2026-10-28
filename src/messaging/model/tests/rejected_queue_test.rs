@@ -187,3 +187,41 @@ fn rejected_retry_that_becomes_uncertain_is_never_expired_or_replayed_as_queued(
         assert!(state.request(head).unwrap().uncertain_outcome);
     }
 }
+
+#[test]
+fn a_turn_boundary_between_begin_and_rejected_retry_does_not_renew_the_head() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        for ends_idle in [false, true] {
+            let (mut state, room, agent, head) = fixture(provider);
+            let later = send(&mut state, room, agent, "later", 120_000);
+            state.begin_submission(head, "launch", 5).unwrap();
+            // The provider starts an unrelated turn while native I/O is in
+            // flight; a short turn may also finish before the refusal arrives.
+            state
+                .observe_status(agent, RuntimeStatus::Working, 121_000)
+                .unwrap();
+            if ends_idle {
+                state
+                    .observe_status(agent, RuntimeStatus::Idle, 121_010)
+                    .unwrap();
+            }
+            state
+                .record_submission(
+                    head,
+                    SubmissionOutcome::DefinitelyRejected {
+                        message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
+                    },
+                )
+                .unwrap();
+            let status = state.agent(agent).unwrap().status;
+            assert_eq!(
+                state.expire_stalled_queued_requests(121_020).unwrap(),
+                vec![head],
+                "{provider:?}, ends_idle={ends_idle}"
+            );
+            assert_eq!(state.queued_requests(agent), &[later]);
+            assert_eq!(state.agent(agent).unwrap().current_request, None);
+            assert_eq!(state.agent(agent).unwrap().status, status);
+        }
+    }
+}
