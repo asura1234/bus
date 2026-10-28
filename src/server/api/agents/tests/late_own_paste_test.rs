@@ -147,6 +147,13 @@ async fn finish_recovery(
         }
         if remaining != before {
             show(runtime, kind, &remaining);
+        } else {
+            // Cursor-only keys do not repaint the draft. Advance the fake
+            // provider clock so the writer's inter-key delay can complete.
+            runtime
+                .test_submission_clock()
+                .unwrap()
+                .advance(Duration::from_millis(25));
         }
     }
     show(runtime, kind, NEXT);
