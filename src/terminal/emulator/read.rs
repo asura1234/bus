@@ -40,6 +40,20 @@ impl GhosttyPaneTerminal {
             .unwrap_or_default()
     }
 
+    /// Check the synchronized-output mode and read the frame under one lock.
+    /// A partially painted composer must never change draft ownership.
+    pub(crate) fn visible_ansi_if_complete(&self) -> Option<String> {
+        let core = self.core.lock().ok()?;
+        if core
+            .terminal
+            .mode_get(crate::terminal::vt::MODE_SYNCHRONIZED_OUTPUT)
+            .ok()?
+        {
+            return None;
+        }
+        ghostty_visible_ansi(&core, false).ok()
+    }
+
     pub(crate) fn visible_ansi_unwrapped(&self) -> String {
         self.core
             .lock()

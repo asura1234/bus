@@ -249,6 +249,7 @@ impl TerminalRuntime {
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         if !bytes.is_empty() {
             self.invalidate_shell_prompt();
+            self.invalidate_submission_ownership();
         }
         self.io.try_send_bytes(bytes)
     }
@@ -261,7 +262,20 @@ impl TerminalRuntime {
         deadline: Option<std::time::Instant>,
     ) -> std::io::Result<InputCompletion> {
         self.invalidate_shell_prompt();
+        self.invalidate_submission_ownership();
         self.io.queue_input_write(text, enter, delay, deadline)
+    }
+
+    pub(crate) fn invalidate_submission_ownership(&self) {
+        super::draft_input::DraftInput::invalidate(&self.draft_input);
+    }
+
+    pub(crate) fn observe_submission_agent_state(
+        &self,
+        state: crate::agents::AgentState,
+        at: std::time::Instant,
+    ) {
+        super::draft_input::DraftInput::observe_turn(&self.draft_input, state, at);
     }
 
     pub fn try_send_focus_event(&self, event: crate::terminal::vt::FocusEvent) -> bool {

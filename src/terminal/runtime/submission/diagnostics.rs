@@ -13,6 +13,7 @@ pub(super) struct Diagnostics {
     owned_seen: Cell<bool>,
     paste_bytes: Cell<usize>,
     paste_flushed: Cell<bool>,
+    paste_at: Cell<Option<Instant>>,
     enter_attempts: Cell<usize>,
     enter_flushed: Cell<usize>,
     cleanup: Cell<&'static str>,
@@ -56,11 +57,15 @@ impl Diagnostics {
 
     pub(super) fn paste(&self, bytes: usize, delay_ms: u64, now: Instant) {
         self.paste_bytes.set(bytes);
+        self.paste_at.set(Some(now));
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.paste", bytes, delay_ms, elapsed_ms = self.elapsed(now));
     }
 
     pub(super) fn pasted(&self, result: &io::Result<()>, now: Instant) {
         self.paste_flushed.set(result.is_ok());
+        if result.is_ok() {
+            self.paste_at.set(Some(now));
+        }
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.paste_flushed", flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
     }
 
@@ -103,5 +108,18 @@ impl Diagnostics {
             observations = self.observations.get(), final_observation = ?self.last.get(), cleanup = self.cleanup.get(),
             error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now),
             confirmation_ms = self.confirmation_ms.get(), hard_ms = self.hard_ms.get());
+    }
+
+    pub(super) fn pending_paste(&self, result: &io::Result<()>) -> Option<(Instant, bool)> {
+        if result
+            .as_ref()
+            .is_err_and(|error| !PromptNotShown::is(error))
+        {
+            self.paste_at
+                .get()
+                .map(|at| (at, self.enter_attempts.get() > 0))
+        } else {
+            None
+        }
     }
 }

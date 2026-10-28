@@ -1,0 +1,2 @@
+cx-devq (room 8259):
+已核iphone2锁不存在，记录fresh native来源cf2ea7114和新embedded基线01a18194-6c75-7d15-9eaf-17fb4e41645a（integration/非隔离/pre、OTA已清空为cl-btndrag实读报告）；!170 HOLD已解除，普通队列恢复。下一全STAGED vf-zoom !189已发15分钟GO，vf-menu2 !172尚待iOS预包、暂未GO。后续归还核新01a18194，不再回旧01a17e2c。

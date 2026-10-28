@@ -1057,3 +1057,9 @@ fn queued_cleanup_keys_allow_their_intermediate_rendered_remainders() {
         InputObservation::Pending
     );
 }
+
+#[path = "stale_own_paste_test.rs"]
+mod stale_own_paste;
+
+#[path = "late_own_paste_test.rs"]
+mod late_own_paste;

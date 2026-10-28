@@ -26,7 +26,15 @@ impl ObservedSubmission {
         delay: Duration,
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
     ) -> io::Result<()> {
-        let initial = self.observe("draft_preflight");
+        let initial = match self.observe_initial("draft_preflight") {
+            Ok(initial) => initial,
+            Err(error) => {
+                // No preservation or Bus input happened; queued developer
+                // keys can return to the untouched native composer.
+                lease.restored();
+                return Err(error);
+            }
+        };
         let screen = self.terminal.visible_ansi();
         let cursor = self
             .terminal
@@ -133,7 +141,7 @@ impl ObservedSubmission {
         }
     }
 
-    fn reset_confirmation(&self, delay: Duration) {
+    pub(super) fn reset_confirmation(&self, delay: Duration) {
         self.deadline.set(
             (self.clock.now() + confirmation_budget(delay))
                 .min(self.hard_deadline - self.withdraw_grace),

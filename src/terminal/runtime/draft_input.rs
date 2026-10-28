@@ -15,6 +15,19 @@ pub(crate) const DRAFT_QUIET_WINDOW: Duration = Duration::from_secs(3);
 pub(super) struct DraftInput {
     last_key: Option<Instant>,
     buffered: Option<Vec<u8>>,
+    revision: u64,
+    pending: Option<PendingPaste>,
+    working_started: Option<Instant>,
+    completed_turn: Option<(Instant, Instant)>,
+}
+
+/// Lives with the PTY, across client/coordinator reconnects, never a new PTY.
+pub(super) struct PendingPaste {
+    pub(super) inspect: Box<dyn super::submission::SubmissionInspector>,
+    pub(super) clear: Vec<Bytes>,
+    pub(super) since: Instant,
+    pub(super) entered: bool,
+    pub(super) withdraw_grace: Duration,
 }
 
 pub(super) type SharedDraftInput = Arc<Mutex<DraftInput>>;
@@ -23,6 +36,7 @@ pub(super) struct DraftInputLease {
     state: SharedDraftInput,
     io: PaneRuntimeIo,
     replay_safe: std::cell::Cell<bool>,
+    revision: u64,
 }
 
 impl DraftInput {
@@ -33,6 +47,8 @@ impl DraftInput {
     ) -> Result<(), tokio::sync::mpsc::error::TrySendError<Bytes>> {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
         state.last_key = Some(io.submission_clock().now());
+        state.revision = state.revision.wrapping_add(1);
+        state.pending = None;
         if let Some(buffered) = &mut state.buffered {
             buffered.extend_from_slice(&bytes);
             return Ok(());
@@ -61,13 +77,66 @@ impl DraftInput {
             state: state.clone(),
             io: io.clone(),
             replay_safe: std::cell::Cell::new(false),
+            revision: input.revision,
         })
+    }
+
+    pub(super) fn invalidate(state: &SharedDraftInput) {
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        state.revision = state.revision.wrapping_add(1);
+        state.pending = None;
+        state.working_started = None;
+        state.completed_turn = None;
+    }
+
+    pub(super) fn observe_turn(
+        state: &SharedDraftInput,
+        agent_state: crate::agents::AgentState,
+        at: Instant,
+    ) {
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        match agent_state {
+            crate::agents::AgentState::Working => {
+                state.working_started.get_or_insert(at);
+            }
+            crate::agents::AgentState::Idle => {
+                if let Some(start) = state.working_started.take().filter(|start| at >= *start) {
+                    state.completed_turn = Some((start, at));
+                }
+            }
+            _ => {}
+        }
     }
 }
 
 impl DraftInputLease {
     pub(super) fn restored(&self) {
         self.replay_safe.set(true);
+    }
+
+    pub(super) fn take_pending(&self) -> Option<PendingPaste> {
+        self.state.lock().ok()?.pending.take()
+    }
+
+    pub(super) fn retain_pending(&self, pending: PendingPaste) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.revision == self.revision {
+            state.pending = Some(pending);
+        }
+    }
+
+    pub(super) fn edited(&self) -> bool {
+        self.state
+            .lock()
+            .map_or(true, |state| state.revision != self.revision)
+    }
+
+    pub(super) fn turn_completed_since(&self, since: Instant) -> bool {
+        self.state.lock().is_ok_and(|state| {
+            state
+                .completed_turn
+                .is_some_and(|(start, end)| start >= since && end >= start)
+        })
     }
 }
 

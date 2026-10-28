@@ -1,6 +1,7 @@
 //! Observe the composer between writes; retry only Enter for the owned draft.
 mod diagnostics;
 mod preservation;
+mod recovery;
 pub(crate) use preservation::DraftPreservation;
 
 use super::submission_clock::SubmissionClock;
@@ -176,7 +177,7 @@ impl TerminalRuntime {
         let maximum = maximum_budget(delay, &text) + inspect.preservation_budget();
         let hard_deadline = deadline.unwrap_or(now + maximum).min(now + maximum);
         let scope = self.io.input_scope();
-        let submission = ObservedSubmission {
+        let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             io: self.io.clone(),
             scope: scope.clone(),
@@ -207,10 +208,26 @@ impl TerminalRuntime {
                 );
                 let result = super::draft_input::DraftInput::acquire(&draft_input, &submission.io)
                     .and_then(|lease| {
-                        let result = submission.run_preserving_draft(text, delay, &lease);
+                        let result = submission
+                            .recover_pending_paste(delay, &lease)
+                            .and_then(|()| submission.run_preserving_draft(text, delay, &lease));
                         // Inspect before releasing/replaying queued developer input.
                         if result.is_err() {
                             submission.diagnose_refusal("result_error");
+                        }
+                        if let Some((since, entered)) =
+                            submission.diagnostics.pending_paste(&result)
+                        {
+                            lease.retain_pending(super::draft_input::PendingPaste {
+                                inspect: std::mem::replace(
+                                    &mut submission.inspect,
+                                    Box::new(|_: &str| InputObservation::Unavailable),
+                                ),
+                                clear: submission.clear.clone(),
+                                since,
+                                entered,
+                                withdraw_grace: submission.withdraw_grace,
+                            });
                         }
                         result
                     });
@@ -229,11 +246,42 @@ impl TerminalRuntime {
 
 impl ObservedSubmission {
     fn observe(&self, phase: &'static str) -> InputObservation {
-        let screen = self.terminal.visible_ansi();
+        self.observe_frame(phase)
+            .unwrap_or(InputObservation::Unavailable)
+    }
+
+    fn observe_frame(&self, phase: &'static str) -> Option<InputObservation> {
+        let Some(screen) = self.terminal.visible_ansi_if_complete() else {
+            self.diagnostics
+                .observe(phase, InputObservation::Unavailable, 0, self.clock.now());
+            return None;
+        };
         let observation = self.inspect.observe(&screen);
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
-        observation
+        Some(observation)
+    }
+
+    fn observe_initial(&self, phase: &'static str) -> io::Result<InputObservation> {
+        let mut waited = false;
+        loop {
+            let generation = self.clock.generation();
+            if let Some(observation) = self
+                .observe_frame(phase)
+                .filter(|_| !waited || self.check_deadline().is_ok())
+            {
+                return Ok(observation);
+            }
+            if self.check_deadline().is_err() {
+                // No paste was sent. A slow/incomplete repaint is a transient
+                // wait, not prompt_not_shown's rejected-message expiry clock.
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            }
+            waited = true;
+            #[cfg(test)]
+            self.clock.waiting_for_draft();
+            self.clock.sleep(Duration::from_millis(20), generation);
+        }
     }
 
     fn diagnose_refusal(&self, phase: &'static str) {
@@ -470,7 +518,7 @@ impl ObservedSubmission {
     fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
-        match self.observe("initial") {
+        match self.observe_initial("initial")? {
             InputObservation::Empty => {}
             InputObservation::Pending | InputObservation::Other => {
                 self.diagnose_refusal("initial_refusal");
