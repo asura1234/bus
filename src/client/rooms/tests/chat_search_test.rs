@@ -706,3 +706,46 @@ fn focused_find_control_is_highlighted_and_cursor_follows_text_focus() {
         key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
     }
 }
+
+#[test]
+fn narrow_find_bar_keeps_the_typed_query_and_both_toggles_visible() {
+    for cols in [50u16, 60, 66, 72, 100] {
+        for query in ["needle", "absent"] {
+            let (mut ui, room, agent) = fixture();
+            history_with(&mut ui, room, agent, 3, &[1]);
+            ui.open_room(room);
+            key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+            type_text(&mut ui, query);
+            ui.compute_view(cols, 30);
+            let area = ratatui::layout::Rect::new(0, 0, cols, 30);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            ui.render(&mut buffer);
+            let panel = ui.view.search_box;
+            let field = ui.view.search_field;
+            let text = |y: u16, xs: std::ops::Range<u16>| -> String {
+                xs.map(|x| buffer[(x, y)].symbol().to_owned()).collect()
+            };
+            let field_row = text(field.y + 1, field.x..field.right());
+            let inside: Vec<String> = (panel.y..panel.bottom())
+                .map(|y| text(y, panel.x..panel.right().min(cols)))
+                .collect();
+            let outside: Vec<String> = (panel.y..panel.bottom())
+                .map(|y| text(y, panel.right().min(cols)..cols))
+                .collect();
+            let all = inside.join("\n");
+            assert!(
+                field_row.contains(query)
+                    && all.contains("[ ] → You")
+                    && all.contains("[ ] You →")
+                    && all.contains(if query == "needle" {
+                        "1/1"
+                    } else {
+                        "no matches"
+                    })
+                    && !all.contains("1/1You")
+                    && outside.iter().all(|row| !row.contains("You")),
+                "cols {cols}, panel {panel:?}, field {field:?}:\n{all}"
+            );
+        }
+    }
+}

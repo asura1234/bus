@@ -412,13 +412,14 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
             (false, 0) => "no matches".to_owned(),
             (false, _) => format!("{}/{count}", search.current + 1),
         };
-        let counter_width = unicode_width::UnicodeWidthStr::width(counter.as_str()) as u16;
+        let counter_width =
+            (unicode_width::UnicodeWidthStr::width(counter.as_str()) as u16).min(width);
         // The label sits outside the field, dim like the hint, so it
         // never reads as part of the query.
         let label_width = SEARCH_LABEL.len() as u16;
         let field_y = panel.y + 1;
         view.row(
-            Rect::new(x, field_y + 1, label_width, 1),
+            Rect::new(x, field_y + 1, label_width.min(width), 1),
             SEARCH_LABEL,
             None,
             false,
@@ -426,7 +427,10 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
         );
         // Room for the widest counter, so the field keeps its width
         // as the counter changes.
-        let field_width = width.saturating_sub(label_width + 20 + "no matches".len() as u16 + 1);
+        let inline = width >= 50;
+        let toggle_width = if inline { 20 } else { 0 };
+        let field_width =
+            width.saturating_sub(label_width + toggle_width + "no matches".len() as u16 + 1);
         view.search_field = Rect::new(x + label_width, field_y, field_width, 3);
         let inner = field_width.saturating_sub(2);
         view.row(
@@ -448,18 +452,7 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
             false,
             true,
         );
-        search_toggles(view, search, view.search_field.right() + 1, field_y + 1);
-        let hint = SEARCH_HINTS
-            .iter()
-            .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= usize::from(width))
-            .unwrap_or(&SEARCH_HINTS[2]);
-        view.row(
-            Rect::new(x, field_y + 3, width, 1),
-            *hint,
-            None,
-            false,
-            true,
-        );
+        search_footer(view, search, Rect::new(x, field_y + 3, width, 1), inline);
         if search.focus == SearchFocus::Query && inner > 0 {
             let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
             view.cursor = Some(crate::protocol::wire::CursorState {
@@ -474,13 +467,36 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
     }
 }
 
-fn search_toggles(view: &mut View, search: &ChatSearch, x: u16, y: u16) {
+fn search_footer(view: &mut View, search: &ChatSearch, row: Rect, inline: bool) {
+    let (x, y, width) = if inline {
+        (view.search_field.right() + 1, row.y - 2, 19)
+    } else {
+        (row.x, row.y, row.width)
+    };
+    search_toggles(view, search, x, y, width);
+    let offset = if inline { 0 } else { 22.min(row.width) };
+    let available = row.width.saturating_sub(offset);
+    let hint = SEARCH_HINTS
+        .iter()
+        .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= usize::from(available));
+    if let Some(hint) = hint {
+        view.row(
+            Rect::new(row.x + offset, row.y, available, 1),
+            *hint,
+            None,
+            false,
+            true,
+        );
+    }
+}
+
+fn search_toggles(view: &mut View, search: &ChatSearch, x: u16, y: u16, width: u16) {
     for (offset, label, enabled, focus) in [
         (0, "→ You", search.you_only, SearchFocus::ToYou),
         (10, "You →", search.from_you, SearchFocus::FromYou),
     ] {
         view.row(
-            Rect::new(x + offset, y, 9, 1),
+            Rect::new(x + offset, y, width.saturating_sub(offset).min(9), 1),
             format!("[{}] {label}", if enabled { "x" } else { " " }),
             None,
             search.focus == focus,
