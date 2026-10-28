@@ -14,6 +14,9 @@ use std::process::{Command, Output};
 #[path = "native_restart_test.rs"]
 mod native_restart;
 
+#[path = "startup_test.rs"]
+mod startup;
+
 #[test]
 fn reply_delivery_survives_actual_server_restart_mid_request() {
     let output = Command::new("python3")
