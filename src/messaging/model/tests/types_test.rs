@@ -57,6 +57,12 @@ mod global_agent_names_tests;
 #[path = "send_recovery_test.rs"]
 mod send_recovery_tests;
 
+#[path = "rejected_queue_test.rs"]
+mod rejected_queue_tests;
+
+#[path = "transient_rejection_test.rs"]
+mod transient_rejection_tests;
+
 #[path = "unconfirmed_submission_test.rs"]
 mod unconfirmed_submission_tests;
 

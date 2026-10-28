@@ -551,6 +551,13 @@ pub(crate) enum DialogNoticeDelivery {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct QueuedRejection {
+    /// The first definite refusal, not renewed by retries or unrelated turns.
+    pub(crate) at_ms: u64,
+    pub(crate) reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
     pub(crate) room_id: RoomId,
@@ -564,6 +571,8 @@ pub(crate) struct Request {
     /// A queued request closed before typing, retained for status and restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) failure_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) queued_rejection: Option<QueuedRejection>,
     pub(crate) expected_launch_id: Option<String>,
     pub(crate) submission_boundary: Option<u64>,
     pub(crate) submission_status_revision: u64,

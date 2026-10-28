@@ -3,6 +3,7 @@ use super::{styled_chars, StyledChar};
 use crate::agents::AgentKind;
 use crate::terminal::runtime::InputObservation;
 
+mod diagnostics;
 mod ownership;
 mod preservation;
 

@@ -1,6 +1,87 @@
 use super::*;
 
 #[test]
+fn captured_claude_subagent_footer_is_an_empty_composer() {
+    let captured = include_str!("fixtures/claude_subagent_footer.txt");
+    for footer in [
+        "⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent",
+        "⏵⏵ auto mode on (shift+tab to cycle)",
+        "⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents",
+        "shift+tab to cycle · ← 1 agent",
+    ] {
+        let screen = captured.replace("⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent", footer);
+        assert_eq!(
+            observe(AgentKind::Claude, &screen, "next message"),
+            InputObservation::Empty,
+            "{footer}"
+        );
+        let draft = screen.replacen("\n❯\n", "\n❯ unowned draft\n", 1);
+        assert_eq!(
+            observe(AgentKind::Claude, &draft, "next message"),
+            InputObservation::Other,
+            "{footer}"
+        );
+    }
+}
+
+#[test]
+fn ownership_refusal_diagnostics_explain_checks_without_content() {
+    const CHILD: &str = "COMPOSER_OWNERSHIP_LOG_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "server::api::agents::prompt::composer::tests::ownership_refusal_diagnostics_explain_checks_without_content", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")),
+            "{stdout}"
+        );
+        return;
+    }
+    use crate::terminal::runtime::SubmissionInspector;
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run_filtered(crate::utils::logging::DEV_FILTER, || {
+        let screen = include_str!("fixtures/claude_subagent_footer.txt").replacen(
+            "\n❯\n",
+            "\n❯ private-unowned-draft\n",
+            1,
+        );
+        let inspector = observer(AgentKind::Claude, "private-payload".into());
+        assert_eq!(inspector.observe(&screen), InputObservation::Other);
+        inspector.diagnose_refusal(&screen, "initial_refusal", Some((2, 1)));
+    });
+    let logs = capture.text();
+    assert!(logs.contains("bus.composer.ownership"), "{logs}");
+    assert_eq!(
+        logs.matches("event=\"bus.composer.ownership\"").count(),
+        1,
+        "{logs}"
+    );
+    for field in [
+        "composer_frame=true",
+        "body_present=true",
+        "body_empty=false",
+        "normalized_match=false",
+        "collapsed_match=false",
+        "image_match=false",
+        "expected_bytes=15",
+        "body_bytes=21",
+    ] {
+        assert!(logs.contains(field), "missing {field}: {logs}");
+    }
+    assert!(!logs.contains("private-unowned-draft"));
+    assert!(!logs.contains("private-payload"));
+    assert!(!logs.contains("libtv-app"));
+}
+
+#[test]
 fn codex_approval_with_model_footer_is_not_an_editable_composer() {
     let screen = "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace";
     assert_eq!(

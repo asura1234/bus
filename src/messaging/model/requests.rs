@@ -6,6 +6,7 @@ use super::{
     DELIVERED_STALL_MS, QUEUED_STALL_MS,
 };
 
+mod rejection;
 mod submit;
 
 impl BusState {
@@ -99,6 +100,7 @@ impl BusState {
         {
             return Err(ModelError::InvalidTransition);
         }
+        self.record_queue_rejection(request, &outcome);
         self.record_dialog_notice_write(request, &outcome);
         let request_state = self
             .requests
@@ -186,10 +188,11 @@ impl BusState {
     }
 
     /// Why `request` is stuck, once it has made no progress for a grace
-    /// period, or `None`. A Working or Blocked agent is never stalled: a long
-    /// turn is normal, and a blocked one waits on an answer, not on Bus (see
+    /// period, or `None`. Unattempted work waits through Working/Blocked:
+    /// a long turn is normal, and a blocked one waits on an answer (see
     /// `blocked_unanswered`). This only reports; the coordinator closes queued
     /// stalls before delivery, while typed work needs explicit recovery.
+    /// Definitely rejected queued work has its own fixed deadline.
     pub(crate) fn stall_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
         if request.settled() {
             return None;
@@ -200,6 +203,9 @@ impl BusState {
             None => request,
         };
         let agent = self.agents.get(&lead.agent_id)?;
+        if let Some(reason) = self.expired_queue_rejection(lead, now_ms) {
+            return Some(reason.into());
+        }
         let since = |grace: u64, from: u64| now_ms.saturating_sub(from) >= grace;
         if matches!(
             lead.phase,
@@ -520,6 +526,7 @@ impl BusState {
             return Err(ModelError::InvalidTransition);
         }
         let agent_id = request_state.agent_id;
+        self.record_queue_rejection(request, &outcome);
         self.record_dialog_notice_write(request, &outcome);
         let composer_busy = outcome == SubmissionOutcome::ComposerBusy;
         if let Some(agent) = self.agents.get_mut(&agent_id).filter(|agent| {

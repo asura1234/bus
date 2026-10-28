@@ -11,6 +11,9 @@ mod worker_events;
 #[path = "exit_snapshot_test.rs"]
 mod exit_snapshot;
 
+#[path = "rejected_notice_test.rs"]
+mod rejected_notice;
+
 static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct Accepting(Arc<Mutex<Vec<String>>>);

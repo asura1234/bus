@@ -72,6 +72,8 @@ impl PromptNotShown {
 /// Provider-specific ownership transitions after Bus's own editing keys.
 pub(crate) trait SubmissionInspector: Send {
     fn observe(&self, screen: &str) -> InputObservation;
+    /// Called once when this attempt is refused, outside the render lock.
+    fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
     /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
     /// Called only after its key was queued under the content/render lock.
     fn clearing(&self, _key_index: usize) {}
@@ -204,7 +206,17 @@ impl TerminalRuntime {
                     submission.hard_deadline,
                 );
                 let result = super::draft_input::DraftInput::acquire(&draft_input, &submission.io)
-                    .and_then(|lease| submission.run_preserving_draft(text, delay, &lease));
+                    .and_then(|lease| {
+                        let result = submission.run_preserving_draft(text, delay, &lease);
+                        // Inspect before releasing/replaying queued developer input.
+                        if result.is_err() {
+                            submission.diagnose_refusal("result_error");
+                        }
+                        result
+                    });
+                if result.is_err() {
+                    submission.diagnose_refusal("result_error");
+                }
                 submission
                     .diagnostics
                     .finish(&result, submission.clock.now());
@@ -222,6 +234,26 @@ impl ObservedSubmission {
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
         observation
+    }
+
+    fn diagnose_refusal(&self, phase: &'static str) {
+        let screen = self.terminal.visible_ansi();
+        let cursor = self
+            .terminal
+            .cursor_state()
+            .map(|cursor| (cursor.x, cursor.y));
+        self.diagnose_refusal_snapshot(&screen, phase, cursor);
+    }
+
+    fn diagnose_refusal_snapshot(
+        &self,
+        screen: &str,
+        phase: &'static str,
+        cursor: Option<(u16, u16)>,
+    ) {
+        if self.diagnostics.claim_refusal() {
+            self.inspect.diagnose_refusal(screen, phase, cursor);
+        }
     }
 
     fn check_deadline(&self) -> io::Result<()> {
@@ -350,6 +382,7 @@ impl ObservedSubmission {
     /// recognized draft; report definite non-delivery only once it is empty.
     fn withdraw_before_enter(&self, timeout: io::Error) -> io::Result<()> {
         let observation = self.observe("withdraw_before_enter");
+        self.diagnose_refusal("withdraw_before_enter");
         if observation != InputObservation::Pending {
             self.diagnostics.cleanup_refused(self.clock.now());
             let detail = match observation {
@@ -390,6 +423,11 @@ impl ObservedSubmission {
     /// unchanged owned draft, rechecking ownership under the render lock before
     /// every editing key. Clearing cannot prove the provider never ran it.
     fn withdraw_pending(&self, timeout: io::Error) -> io::Result<()> {
+        let screen = self.terminal.visible_ansi();
+        let cursor = self
+            .terminal
+            .cursor_state()
+            .map(|cursor| (cursor.x, cursor.y));
         self.deadline
             .set((self.clock.now() + self.withdraw_grace).min(self.hard_deadline));
         let cleared = self.clear_draft();
@@ -399,6 +437,7 @@ impl ObservedSubmission {
             Ok(ClearOutcome::Cleared) => "The remaining draft was cleared".to_owned(),
             Err(error) => format!("The draft could not be safely cleared: {error}"),
         };
+        self.diagnose_refusal_snapshot(&screen, "withdraw_pending", cursor);
         Err(io::Error::new(
             io::ErrorKind::TimedOut,
             format!("{timeout}. {detail}. The message may have run; inspect the agent's transcript and composer before resending"),
@@ -434,9 +473,13 @@ impl ObservedSubmission {
         match self.observe("initial") {
             InputObservation::Empty => {}
             InputObservation::Pending | InputObservation::Other => {
-                return Err(io::Error::other(PromptNotShown::InputOccupied))
+                self.diagnose_refusal("initial_refusal");
+                return Err(io::Error::other(PromptNotShown::InputOccupied));
             }
-            _ => return Err(io::Error::other(PromptNotShown::NotSubmitted)),
+            _ => {
+                self.diagnose_refusal("initial_refusal");
+                return Err(io::Error::other(PromptNotShown::NotSubmitted));
+            }
         }
         if let Err(error) = self.write(text, delay) {
             return if PromptNotShown::is(&error) {

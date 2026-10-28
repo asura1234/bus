@@ -23,6 +23,41 @@ fn normalize(text: &str) -> String {
 }
 
 impl OwnedComposer {
+    pub(super) fn diagnose_with_policy(
+        &self,
+        screen: &str,
+        phase: &'static str,
+        cursor: Option<(u16, u16)>,
+        policy: Option<super::diagnostics::Policy>,
+    ) {
+        let body = input(self.kind, screen);
+        let history = self
+            .state
+            .lock()
+            .ok()
+            .map(|owned| super::diagnostics::History {
+                tracked_body: owned.body.is_some(),
+                lost: owned.lost,
+                previous_body_bytes: owned.body.as_ref().map_or(0, String::len),
+                prior_body_match: owned.body.is_some() && owned.body == body,
+                remainder_match: body
+                    .as_ref()
+                    .is_some_and(|body| owned.remainders.contains(body)),
+                remainder_count: owned.remainders.len(),
+                modeled_text_bytes: owned.text.len(),
+                modeled_cursor: owned.cursor,
+            });
+        super::diagnostics::refusal(
+            self.kind,
+            screen,
+            &self.expected,
+            phase,
+            cursor,
+            history,
+            policy,
+        );
+    }
+
     pub(super) fn new(kind: AgentKind, expected: String) -> Self {
         let text = expected.replace("\r\n", "\n").replace('\r', "\n");
         Self {
@@ -41,6 +76,10 @@ impl OwnedComposer {
 }
 
 impl SubmissionInspector for OwnedComposer {
+    fn diagnose_refusal(&self, screen: &str, phase: &'static str, cursor: Option<(u16, u16)>) {
+        self.diagnose_with_policy(screen, phase, cursor, None);
+    }
+
     fn observe(&self, screen: &str) -> InputObservation {
         let observation = observe(self.kind, screen, &self.expected);
         let Ok(mut owned) = self.state.lock() else {
