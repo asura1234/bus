@@ -1250,3 +1250,79 @@ fn shell_recovery_does_not_invent_retry_authority_from_legacy_command_text() {
 
 #[path = "native_restore_test.rs"]
 mod native_restore;
+
+struct ResumedSessionShellWaitNative {
+    fallback: FailedLaunchNative,
+}
+
+impl Transport for ResumedSessionShellWaitNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::PaneCloseIfIdentity(_) | Method::PaneReportAgentSession(_) => {
+                Ok(ResponseResult::Ok {})
+            }
+            other => self.fallback.request(other),
+        }
+    }
+}
+
+#[test]
+fn resumed_session_shell_wait_preserves_queued_work() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    for code in ["agent_shell_waiting", "agent_shell_starting"] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let request = queue(
+            &mut worker,
+            room,
+            agent,
+            "work waiting for resumed conversation",
+        );
+        let hooks = dir.join(".codex/hooks.json");
+        let document = merge_hooks(
+            json!({}),
+            HookContract::for_provider(Provider::Codex),
+            &std::env::current_exe().unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+        std::fs::write(&hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+        let sent_args = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(ResumedSessionShellWaitNative {
+            fallback: FailedLaunchNative {
+                state_path: dir.join("state.json"),
+                shell_wait_code: Some(code),
+                launch_args: Some(Arc::clone(&sent_args)),
+                ..Default::default()
+            },
+        });
+        let result = worker.resume_room(room).unwrap();
+        assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+        assert!(
+            result["agents"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("STARTUP QUESTION"),
+            "{result}"
+        );
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+            .unwrap();
+        worker.expire_queued_requests(u64::MAX).unwrap();
+        drop(worker);
+        let worker = reopen_saved(&dir);
+        let actual = worker.state.request(request).unwrap().clone();
+        let startup = worker.state.agent(agent).unwrap().startup.clone().unwrap();
+        assert!(startup.reported);
+        assert!(startup.failure.is_none());
+        assert_eq!(
+            startup.recovery,
+            Some(crate::messaging::model::StartupRecovery::Unsubmitted {
+                args: sent_args.lock().unwrap().clone(),
+            })
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(actual.phase, RequestPhase::Queued,
+            "{code}: recoverable shell wait must not close queued work; startup={startup:?}; detail={:?}", actual.submission_error);
+    }
+}

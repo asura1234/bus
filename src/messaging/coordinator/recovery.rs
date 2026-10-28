@@ -191,12 +191,12 @@ impl Worker {
                 name: identity::managed_name(agent.room_id, agent.id),
                 kind: kind.into(),
                 pane_id: root_pane.pane_id.clone(),
-                args,
+                args: args.clone(),
                 timeout_ms: None,
-            }))
-            .map_err(|e| e.message)?;
-        if !matches!(started, ResponseResult::AgentStarted { .. }) {
-            return Err("Provider start outcome needs inspection; no retry".into());
+            }));
+        match started {
+            Ok(ResponseResult::AgentStarted { .. }) => {}
+            other => return self.record_failed_agent_start(agent.id, args, other),
         }
         // The new launch now owns diagnosis. Keeping the previous missing
         // marker would suppress both startup settlement and a second outage.
