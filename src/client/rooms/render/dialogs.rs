@@ -1,5 +1,10 @@
 //! Forms, the help screen, deletion confirmation and error dialogs.
-use super::super::{chat_search::ChatSearch, deletion::DeleteTarget, forms::Form, BusUi};
+use super::super::{
+    chat_search::{ChatSearch, SearchFocus},
+    deletion::DeleteTarget,
+    forms::Form,
+    BusUi,
+};
 use super::geometry::agent_form_gap;
 use super::text::{provider, wrap};
 use super::{Action, View};
@@ -10,14 +15,14 @@ use ratatui::layout::Rect;
 pub(super) const SEARCH_BOX_HEIGHT: u16 = 6;
 /// The widest a centered dialog grows on a wide screen.
 const DIALOG_WIDTH: u16 = 66;
-const SEARCH_LABEL: &str = "Find ";
+const SEARCH_LABEL: &str = "Find: ";
 /// Enter steps to older matches (up the history), as a find in a chat starts
 /// from the newest message. Down also goes newer: it works in every terminal,
 /// while Shift+Enter needs one that reports it apart from Enter.
 const SEARCH_HINTS: [&str; 3] = [
-    "Enter/↑ older · Shift+Enter/↓ newer · Esc close",
-    "Enter/↑ older · ↓ newer · Esc close",
-    "↑ older · ↓ newer · Esc",
+    "Tab/Shift+Tab focus · Space toggle · Enter/↑ older · ↓ newer · Esc close",
+    "Tab focus · Space toggle · ↑ older · ↓ newer · Esc",
+    "Tab focus · Space toggle · ↑/↓ · Esc",
 ];
 
 impl BusUi {
@@ -399,18 +404,22 @@ impl BusUi {
 pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: u16, count: usize) {
     let panel = view.search_box;
     if panel.height > 0 {
-        let counter = match (search.query.is_empty() && !search.you_only, count) {
+        let counter = match (
+            search.query.is_empty() && !search.you_only && !search.from_you,
+            count,
+        ) {
             (true, _) => String::new(),
             (false, 0) => "no matches".to_owned(),
             (false, _) => format!("{}/{count}", search.current + 1),
         };
-        let counter_width = unicode_width::UnicodeWidthStr::width(counter.as_str()) as u16;
+        let counter_width =
+            (unicode_width::UnicodeWidthStr::width(counter.as_str()) as u16).min(width);
         // The label sits outside the field, dim like the hint, so it
         // never reads as part of the query.
         let label_width = SEARCH_LABEL.len() as u16;
         let field_y = panel.y + 1;
         view.row(
-            Rect::new(x, field_y + 1, label_width, 1),
+            Rect::new(x, field_y + 1, label_width.min(width), 1),
             SEARCH_LABEL,
             None,
             false,
@@ -418,14 +427,17 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
         );
         // Room for the widest counter, so the field keeps its width
         // as the counter changes.
-        let field_width = width.saturating_sub(label_width + "no matches".len() as u16 + 1);
+        let inline = width >= 50;
+        let toggle_width = if inline { 20 } else { 0 };
+        let field_width =
+            width.saturating_sub(label_width + toggle_width + "no matches".len() as u16 + 1);
         view.search_field = Rect::new(x + label_width, field_y, field_width, 3);
         let inner = field_width.saturating_sub(2);
         view.row(
             Rect::new(x + label_width + 1, field_y + 1, inner, 1),
-            &search.query,
+            format!("{:<width$}", search.query, width = usize::from(inner)),
             None,
-            false,
+            search.focus == SearchFocus::Query,
             false,
         );
         view.row(
@@ -440,25 +452,56 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
             false,
             true,
         );
-        // Keep the filter and its state visible even in a narrow pane.
-        let toggle = format!(
-            "Tab → You only: {}",
-            if search.you_only { "on" } else { "off" }
+        search_footer(view, search, Rect::new(x, field_y + 3, width, 1), inline);
+        if search.focus == SearchFocus::Query && inner > 0 {
+            let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
+            view.cursor = Some(crate::protocol::wire::CursorState {
+                x: x + label_width + 1 + typed.min(inner.saturating_sub(1)),
+                y: field_y + 1,
+                visible: true,
+                shape: 2,
+            });
+        } else {
+            view.cursor = None;
+        }
+    }
+}
+
+fn search_footer(view: &mut View, search: &ChatSearch, row: Rect, inline: bool) {
+    let (x, y, width) = if inline {
+        (view.search_field.right() + 1, row.y - 2, 19)
+    } else {
+        (row.x, row.y, row.width)
+    };
+    search_toggles(view, search, x, y, width);
+    let offset = if inline { 0 } else { 22.min(row.width) };
+    let available = row.width.saturating_sub(offset);
+    let hint = SEARCH_HINTS
+        .iter()
+        .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= usize::from(available));
+    if let Some(hint) = hint {
+        view.row(
+            Rect::new(row.x + offset, row.y, available, 1),
+            *hint,
+            None,
+            false,
+            true,
         );
-        let available = usize::from(width)
-            .saturating_sub(unicode_width::UnicodeWidthStr::width(toggle.as_str()) + 3);
-        let hint = SEARCH_HINTS
-            .iter()
-            .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= available);
-        let hint = hint.map_or(toggle.clone(), |hint| format!("{toggle} · {hint}"));
-        view.row(Rect::new(x, field_y + 3, width, 1), hint, None, false, true);
-        let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
-        view.cursor = Some(crate::protocol::wire::CursorState {
-            x: x + label_width + 1 + typed.min(inner.saturating_sub(1)),
-            y: field_y + 1,
-            visible: true,
-            shape: 2,
-        });
+    }
+}
+
+fn search_toggles(view: &mut View, search: &ChatSearch, x: u16, y: u16, width: u16) {
+    for (offset, label, enabled, focus) in [
+        (0, "→ You", search.you_only, SearchFocus::ToYou),
+        (10, "You →", search.from_you, SearchFocus::FromYou),
+    ] {
+        view.row(
+            Rect::new(x + offset, y, width.saturating_sub(offset).min(9), 1),
+            format!("[{}] {label}", if enabled { "x" } else { " " }),
+            None,
+            search.focus == focus,
+            false,
+        );
     }
 }
 

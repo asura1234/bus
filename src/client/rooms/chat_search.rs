@@ -6,10 +6,29 @@ use super::BusUi;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::ops::Range;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SearchFocus {
+    Query,
+    ToYou,
+    FromYou,
+}
+
+impl SearchFocus {
+    fn advance(self, backwards: bool) -> Self {
+        match (self, backwards) {
+            (Self::Query, false) | (Self::FromYou, true) => Self::ToYou,
+            (Self::ToYou, false) | (Self::Query, true) => Self::FromYou,
+            (Self::FromYou, false) | (Self::ToYou, true) => Self::Query,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ChatSearch {
     pub query: String,
     pub you_only: bool,
+    pub from_you: bool,
+    pub focus: SearchFocus,
     /// The selected match, an index into `View::search_matches`.
     pub current: usize,
     /// Set when the query changes: the next render selects the newest match
@@ -23,18 +42,28 @@ pub(super) struct ChatSearch {
 /// bottom, as (row index, byte range in the row's text).
 pub(super) fn find_matches(
     lines: &[super::history::Line],
-    query: &str,
-    you_only: bool,
+    search: &ChatSearch,
 ) -> Vec<(usize, Range<usize>)> {
+    let ChatSearch {
+        query,
+        you_only,
+        from_you,
+        ..
+    } = search;
+    let (you_only, from_you) = (*you_only, *from_you);
+    let accepts = |line: &super::history::Line| {
+        (!you_only && !from_you)
+            || (you_only && line.to_developer)
+            || (from_you && line.from_developer)
+    };
     let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
     if needle.is_empty() {
-        return if you_only {
+        return if you_only || from_you {
             lines
                 .iter()
                 .enumerate()
                 .filter_map(|(row, line)| {
-                    (line.to_developer && line.starts_message())
-                        .then_some((row, 0..line.text.len()))
+                    (accepts(line) && line.starts_message()).then_some((row, 0..line.text.len()))
                 })
                 .collect()
         } else {
@@ -43,7 +72,7 @@ pub(super) fn find_matches(
     }
     let mut matches = Vec::new();
     for (row, line) in lines.iter().enumerate() {
-        if you_only && !line.to_developer {
+        if !accepts(line) {
             continue;
         }
         // Lowercase per character, keeping each character's byte offset, so a
@@ -82,6 +111,8 @@ impl BusUi {
         self.chat_search = Some(ChatSearch {
             query: String::new(),
             you_only: false,
+            from_you: false,
+            focus: SearchFocus::Query,
             current: 0,
             jump_to_newest: false,
             notes_focus: self.notes_focus,
@@ -104,9 +135,20 @@ impl BusUi {
     pub(super) fn chat_search_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match (code, modifiers) {
             (KeyCode::Esc, _) => self.close_chat_search(),
-            (KeyCode::Tab, _) => {
+            (KeyCode::Tab | KeyCode::BackTab, _) => {
                 if let Some(search) = &mut self.chat_search {
-                    search.you_only = !search.you_only;
+                    search.focus = search.focus.advance(
+                        code == KeyCode::BackTab || modifiers.contains(KeyModifiers::SHIFT),
+                    );
+                }
+            }
+            (KeyCode::Char(' '), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                if let Some(search) = &mut self.chat_search {
+                    match search.focus {
+                        SearchFocus::Query => search.query.push(' '),
+                        SearchFocus::ToYou => search.you_only = !search.you_only,
+                        SearchFocus::FromYou => search.from_you = !search.from_you,
+                    }
                     search.jump_to_newest = true;
                 }
             }
@@ -131,8 +173,10 @@ impl BusUi {
 
     fn edit_chat_query(&mut self, edit: impl FnOnce(&mut String)) {
         if let Some(search) = &mut self.chat_search {
-            edit(&mut search.query);
-            search.jump_to_newest = true;
+            if search.focus == SearchFocus::Query {
+                edit(&mut search.query);
+                search.jump_to_newest = true;
+            }
         }
     }
 
