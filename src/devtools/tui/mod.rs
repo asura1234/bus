@@ -16,6 +16,7 @@ mod predicate;
 mod protocol;
 mod screen;
 mod session;
+mod startup;
 mod trace;
 
 /// When this process is one of a driver session's stand-ins (a fake provider
@@ -275,45 +276,14 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         }
     };
 
-    let deadline = Instant::now() + HOST_START_TIMEOUT;
-    loop {
-        if paths.socket().exists() && session::session_alive(&paths) {
-            let mut status = request(name, &Command::Status);
-            status["ready_ms"] = json!(started.elapsed().as_millis() as u64);
-            return Ok(status);
-        }
-        let error = std::fs::read_to_string(paths.dir.join("host.error")).ok();
-        let exited = child.try_wait().ok().flatten().is_some();
-        let timed_out = Instant::now() > deadline;
-        if error.is_some() || exited || timed_out {
-            // A failing host tears its Bus down before it reports; give it
-            // the time to exit. Only a host that hangs is killed, and then
-            // the CLI stops what it started in its place.
-            let exit_by = Instant::now() + Duration::from_secs(20);
-            while !timed_out
-                && child.try_wait().ok().flatten().is_none()
-                && Instant::now() < exit_by
-            {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            if child.try_wait().ok().flatten().is_none() {
-                let _ = child.kill();
-                let _ = child.wait();
-                stop_leftovers(&paths, &binary, &claim.token);
-            }
-            let detail = error.unwrap_or_else(|| {
-                std::fs::read_to_string(paths.host_log())
-                    .map(|log| log.lines().rev().take(20).collect::<Vec<_>>().join("\n"))
-                    .unwrap_or_default()
-            });
-            let _ = paths.remove();
-            return Ok(failure(
-                "start_failed",
-                format!("session {name:?} did not start: {detail}"),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    Ok(startup::wait(
+        &paths,
+        &mut child,
+        &binary,
+        &claim.token,
+        started,
+        HOST_START_TIMEOUT,
+    ))
 }
 
 /// Stops the scratch server and the processes of a session whose host was
