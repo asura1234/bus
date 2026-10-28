@@ -70,12 +70,7 @@ pub(super) fn cli() -> Command {
                         .long("to")
                         .required_unless_present("reply-to"),
                 )
-                .arg(
-                    value_arg("reply-to")
-                        .long("reply-to")
-                        .requires("as")
-                        .conflicts_with_all(["room", "to", "queue", "async", "file"]),
-                )
+                .arg(value_arg("reply-to").long("reply-to").requires("as"))
                 .arg(option("text"))
                 .arg(value_arg("file").long("file").action(ArgAction::Append))
                 .arg(value_arg("as").long("as"))
@@ -554,6 +549,29 @@ fn parse_agent_read(args: &ArgMatches) -> Result<(&'static str, Value), String> 
 
 fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
     if let Some(message) = args.get_one::<String>("reply-to") {
+        if ["room", "to", "file"]
+            .iter()
+            .any(|key| args.contains_id(key))
+            || args.get_flag("queue")
+            || args.get_flag("async")
+        {
+            // The full reply form is actionable even when an agent combined
+            // several ordinary-send flags, rather than just clap's first pair.
+            let quote = |value: &str| {
+                if value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-./".contains(c))
+                {
+                    value.to_owned()
+                } else {
+                    format!("'{}'", value.replace('\'', "'\\''"))
+                }
+            };
+            return Err(format!(
+                "Nothing was sent. --reply-to infers the room and recipient; omit --room, --to, --queue, --async and --file. Use: bus send --reply-to {} --as {} --text '...'",
+                quote(message), quote(required(args, "as")?)
+            ));
+        }
         return Ok((
             json!({
                 "reply_to":message, "as":required(args,"as")?, "text":required(args,"text")?,

@@ -382,12 +382,13 @@ pub(in crate::messaging::coordinator) fn test_prompt_content(prompt: &str) -> St
             let Some((reply, recipient)) = command.split_once(" --as ") else {
                 return true;
             };
-            let Some(recipient) = recipient.strip_suffix(" --text 'YOUR ANSWER']") else {
+            let Some((recipient, suffix)) = recipient.split_once(" --text 'YOUR ANSWER'") else {
                 return true;
             };
             !(message == reply
                 && message.parse::<u64>().is_ok()
-                && recipient.parse::<u64>().is_ok())
+                && recipient.parse::<u64>().is_ok()
+                && suffix.ends_with(']'))
         })
         .collect()
 }

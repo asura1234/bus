@@ -2,6 +2,9 @@ use super::*;
 use crate::messaging::control::{Request as ControlRequest, Response};
 use crate::messaging::model::RecordedTurnEnd;
 
+#[path = "reply_diagnostics_test.rs"]
+mod reply_diagnostics_tests;
+
 fn answer(f: &mut Fixture, message: PromptId, author: AgentId, text: &str) -> Response {
     f.worker.control_response_with_events(
         &ControlRequest {

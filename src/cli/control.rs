@@ -28,6 +28,9 @@ use std::{
 #[path = "tests/control_focus_test.rs"]
 mod focus_tests;
 #[cfg(test)]
+#[path = "control/tests/reply_diagnostics_test.rs"]
+mod reply_diagnostics_tests;
+#[cfg(test)]
 #[path = "control/tests/reply_seen_test.rs"]
 mod reply_seen_tests;
 
