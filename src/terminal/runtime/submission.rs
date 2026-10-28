@@ -246,15 +246,42 @@ impl TerminalRuntime {
 
 impl ObservedSubmission {
     fn observe(&self, phase: &'static str) -> InputObservation {
+        self.observe_frame(phase)
+            .unwrap_or(InputObservation::Unavailable)
+    }
+
+    fn observe_frame(&self, phase: &'static str) -> Option<InputObservation> {
         let Some(screen) = self.terminal.visible_ansi_if_complete() else {
             self.diagnostics
                 .observe(phase, InputObservation::Unavailable, 0, self.clock.now());
-            return InputObservation::Unavailable;
+            return None;
         };
         let observation = self.inspect.observe(&screen);
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
-        observation
+        Some(observation)
+    }
+
+    fn observe_initial(&self, phase: &'static str) -> io::Result<InputObservation> {
+        let mut waited = false;
+        loop {
+            let generation = self.clock.generation();
+            if let Some(observation) = self
+                .observe_frame(phase)
+                .filter(|_| !waited || self.check_deadline().is_ok())
+            {
+                return Ok(observation);
+            }
+            if self.check_deadline().is_err() {
+                // No paste was sent. A slow/incomplete repaint is a transient
+                // wait, not prompt_not_shown's rejected-message expiry clock.
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            }
+            waited = true;
+            #[cfg(test)]
+            self.clock.waiting_for_draft();
+            self.clock.sleep(Duration::from_millis(20), generation);
+        }
     }
 
     fn diagnose_refusal(&self, phase: &'static str) {
@@ -491,7 +518,7 @@ impl ObservedSubmission {
     fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
-        match self.observe("initial") {
+        match self.observe_initial("initial")? {
             InputObservation::Empty => {}
             InputObservation::Pending | InputObservation::Other => {
                 self.diagnose_refusal("initial_refusal");

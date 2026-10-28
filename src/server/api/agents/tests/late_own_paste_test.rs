@@ -420,3 +420,60 @@ async fn agent_relaunch_invalidates_ownership_even_when_the_terminal_runtime_is_
 
 #[path = "late_wait_test.rs"]
 mod wait_tests;
+
+#[tokio::test]
+async fn initial_observation_inside_a_short_synchronized_frame_waits_then_delivers() {
+    // Provider began a synchronized frame (BSU) whose end (ESU) arrives 100 ms
+    // later, e.g. split across PTY reads under load. No old paste is pending.
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(123, 48, 32);
+    runtime.test_process_pty_bytes(b"\x1b[?2004h");
+    show(&runtime, AgentKind::Claude, "");
+    runtime.test_process_pty_bytes(b"\x1b[?2026h");
+    let completion = send(&runtime, AgentKind::Claude, NEXT, None);
+    let mut result = tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    runtime.test_process_pty_bytes(b"\x1b[?2026l");
+    let paste = input_or_result(&mut writes, &mut result).await;
+    assert!(
+        paste.starts_with(b"\x1b[200~"),
+        "message was not pasted: {paste:?}"
+    );
+    show(&runtime, AgentKind::Claude, NEXT);
+    assert_eq!(
+        input_or_result(&mut writes, &mut result).await.as_ref(),
+        b"\r"
+    );
+    show(&runtime, AgentKind::Claude, "");
+    assert!(result.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn an_initial_frame_wait_expires_as_busy_and_replays_untouched_developer_input() {
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(123, 48, 32);
+    runtime.test_process_pty_bytes(b"\x1b[?2004h");
+    show(&runtime, AgentKind::Claude, "");
+    runtime.test_process_pty_bytes(b"\x1b[?2026h");
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let completion = send(&runtime, AgentKind::Claude, NEXT, None);
+    clock.wait_for_draft_wait();
+    runtime
+        .try_send_developer_bytes(Bytes::from_static(b"user typing"))
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "no paste or input before the lease releases"
+    );
+    clock.advance(Duration::from_secs(3));
+    let error = completion.recv_timeout(WAIT).unwrap().unwrap_err();
+    assert!(
+        crate::terminal::runtime::PromptNotShown::composer_busy(&error),
+        "{error}"
+    );
+    assert_eq!(writes.recv().await.unwrap().as_ref(), b"user typing");
+    assert!(
+        writes.try_recv().is_err(),
+        "no Bus paste or Enter on an incomplete frame"
+    );
+    runtime.test_process_pty_bytes(b"\x1b[?2026l");
+}
