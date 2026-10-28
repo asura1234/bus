@@ -467,6 +467,40 @@ impl BusState {
     /// Describe the sender's own message separately from the older turn it
     /// joined. These persisted fields also cover status after restart/archive.
     pub(crate) fn steered_turn_failure(&self, request: &Request) -> Option<String> {
+        self.describe_steered_failure(request, &format!("Message {}", request.prompt.id.0), false)
+    }
+
+    /// A group notice shares one explanation among messages with the same
+    /// provider reason and receipt evidence, keeping it within the queue limit.
+    pub(super) fn steered_failure_notice(&self, requests: &[&Request]) -> Option<String> {
+        let first = requests.first()?;
+        let mut subject = requests
+            .iter()
+            .take(20)
+            .map(|r| r.prompt.id.0.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if requests.len() > 20 {
+            subject.push_str(&format!(
+                ", and {} more (inspect bus message status {})",
+                requests.len() - 20,
+                first.prompt.id.0
+            ));
+        }
+        let label = if requests.len() == 1 {
+            "Message"
+        } else {
+            "Messages"
+        };
+        self.describe_steered_failure(first, &format!("{label} {subject}"), true)
+    }
+
+    fn describe_steered_failure(
+        &self,
+        request: &Request,
+        subject: &str,
+        concise: bool,
+    ) -> Option<String> {
         if !request.steered || request.phase != RequestPhase::Abandoned || request.reply().is_some()
         {
             return None;
@@ -488,9 +522,17 @@ impl BusState {
                 "Bus could not confirm whether the recipient saw your text; resend if needed.",
             )
         };
+        let error = if concise {
+            super::worker_events::preview(
+                error,
+                &format!("bus message status {}", request.prompt.id.0),
+            )
+        } else {
+            error.to_owned()
+        };
         Some(format!(
-            "Message {}: {delivery} into {agent}'s running turn (started by message {}); that turn ended on a provider error: {}. {receipt}",
-            request.prompt.id.0, lead.prompt.id.0, error.trim_end_matches('.')
+            "{subject}: {delivery} into {agent}'s running turn (started by message {}); that turn ended on a provider error: {}. {receipt}",
+            lead.prompt.id.0, error.trim_end_matches('.')
         ))
     }
 

@@ -121,13 +121,21 @@ fn check_failure(provider: Provider, count: usize, restart: bool, notice_only: b
     f.worker.save(state).unwrap();
     let events = f.worker.state.worker_events_for(f.request(joined[0]));
     assert_eq!(events.len(), 1, "one group outcome, no duplicate notices");
-    for id in &joined {
-        assert!(
-            events[0].1.contains(&expected(&f, lead, *id, &reason)),
-            "{}",
-            events[0].1
-        );
-    }
+    let subject = joined
+        .iter()
+        .map(|id| f.request(*id).prompt.id.0.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let expected_notice = if joined.len() == 1 {
+        expected(&f, lead, joined[0], &reason)
+    } else {
+        expected(&f, lead, joined[0], &reason).replacen(
+            &format!("Message {}:", f.request(joined[0]).prompt.id.0),
+            &format!("Messages {subject}:"),
+            1,
+        )
+    };
+    assert!(events[0].1.contains(&expected_notice), "{}", events[0].1);
     let before = message_status(&f, joined[0]);
     reopen(&mut f);
     assert_eq!(
@@ -225,4 +233,97 @@ fn steer_failure_successful_steers_still_share_the_answer_without_error_guidance
             assert_eq!(message_status(&f, id)["requests"][0]["reason"], Value::Null);
         }
     }
+}
+
+fn routed_failure_notice(count: usize, error: &str) {
+    let mut f = Fixture::new(Provider::Codex);
+    let mut state = f.worker.state.clone();
+    let orch = state
+        .create_agent(
+            state.master_room().unwrap().id,
+            "orch",
+            Provider::ClaudeCode,
+            f.dir.clone(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(orch, f.room).unwrap();
+    f.worker.save(state).unwrap();
+    let lead = running(&mut f, "original work", "turn-1");
+    let joined: Vec<_> = (0..count)
+        .map(|i| join(&mut f, &format!("correction {i}")))
+        .collect();
+    let rollout = f.dir.join("rollout-notice-error.jsonl");
+    std::fs::write(
+        &rollout,
+        json!({"type":"event_msg","payload":{
+            "type":"task_complete","turn_id":"turn-1","error":{"message":error}
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    f.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"original work","transcript_path":rollout}),
+    );
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.now += crate::messaging::model::TURN_SETTLE_MS;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    let mut state = f.worker.state.clone();
+    state
+        .route_worker_replies(f.now + 10_000, &Default::default())
+        .unwrap();
+    let notices: Vec<_> = state
+        .requests()
+        .filter(|r| state.is_reply_notification(r.id))
+        .collect();
+    assert_eq!(notices.len(), 1);
+    let text = &notices[0].prompt.text;
+    assert!(text.contains("running turn (started by message"), "{text}");
+    assert!(text.contains("may not have acted"), "{text}");
+    assert!(text.chars().count() <= 3_500);
+    for id in joined {
+        assert!(
+            text.contains(&f.request(id).prompt.id.0.to_string()),
+            "{text}"
+        );
+        assert!(message_status(&f, id)["requests"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains(error.trim_end()));
+    }
+    assert!(text.contains(&format!(
+        "started by message {}",
+        f.request(lead).prompt.id.0
+    )));
+}
+
+#[test]
+fn steer_failure_routed_notice_survives_many_steers() {
+    routed_failure_notice(16, "API Error: Overloaded");
+}
+
+#[test]
+fn steer_failure_routed_notice_survives_a_long_provider_reason() {
+    routed_failure_notice(1, &format!("API Error: {}", "provider detail ".repeat(400)));
+}
+
+#[test]
+fn steer_failure_unconfirmed_input_does_not_claim_the_recipient_saw_it() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    running(&mut f, "original work", "turn-1");
+    let joined = f.send("correction without submit hook", false);
+    f.deliver();
+    assert!(!f.request(joined).trusted_start_bound);
+    fail(&mut f);
+    let status = message_status(&f, joined);
+    let detail = status["requests"][0]["detail"].as_str().unwrap();
+    assert!(detail.starts_with(&format!(
+        "Message {}: Submitted into",
+        f.request(joined).prompt.id.0
+    )));
+    assert!(detail.contains("could not confirm whether the recipient saw your text"));
+    assert!(!detail.contains("The recipient saw your text"));
 }
