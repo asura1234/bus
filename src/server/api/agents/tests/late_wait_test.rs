@@ -248,3 +248,65 @@ async fn a_visible_owned_paste_is_recovered_even_after_the_absence_age_bound() {
     show(&runtime, AgentKind::Claude, OLD);
     recover_and_deliver(&runtime, &mut writes, AgentKind::Claude, OLD, false).await;
 }
+
+#[tokio::test]
+async fn a_native_restored_user_draft_is_never_reclaimed_by_the_old_bus_inspector() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Restored {
+        inner: Box<dyn SubmissionInspector>,
+        restored: Arc<AtomicBool>,
+    }
+    impl SubmissionInspector for Restored {
+        fn observe(&self, screen: &str) -> InputObservation {
+            self.inner.observe(screen)
+        }
+        fn native_draft_restored(&self, _: &str) -> bool {
+            self.restored.load(Ordering::SeqCst)
+        }
+    }
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(123, 48, 32);
+    runtime.test_process_pty_bytes(b"\x1b[?2004h");
+    show(&runtime, AgentKind::Claude, "");
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let restored = Arc::new(AtomicBool::new(false));
+    let text = "bus line\n".repeat(10);
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from(format!("\x1b[200~{text}\x1b[201~")),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+            Duration::ZERO,
+            None,
+            Box::new(Restored {
+                inner: Box::new(observer(AgentKind::Claude, text)),
+                restored: restored.clone(),
+            }),
+        )
+        .unwrap();
+    assert!(writes.recv().await.unwrap().starts_with(b"\x1b[200~"));
+    clock.wait_for_draft_wait();
+    clock.advance(Duration::from_secs(3));
+    assert!(completion.recv_timeout(WAIT).unwrap().is_err());
+    // A native stash has restored the developer's rich draft. Its collapsed
+    // line count happens to equal Bus's late paste; screen matching alone is
+    // insufficient to revoke this positive restoration proof.
+    restored.store(true, Ordering::SeqCst);
+    show(&runtime, AgentKind::Claude, "[Pasted text #7 +10 lines]");
+    let completion = send(&runtime, AgentKind::Claude, NEXT, None);
+    let mut result = tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap());
+    let destructive = tokio::select! {
+        bytes = writes.recv() => {
+            clock.advance(Duration::from_secs(3));
+            let _ = result.await;
+            bytes
+        }
+        result = &mut result => {
+            assert!(result.unwrap().is_err()); None
+        }
+    };
+    assert!(
+        destructive.is_none(),
+        "native restored user draft received {destructive:?}"
+    );
+}

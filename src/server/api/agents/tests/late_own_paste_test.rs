@@ -267,7 +267,7 @@ async fn late_image_attachments_and_literal_paths_do_not_block_the_next_message(
         } else {
             "[Image #1] read this image"
         };
-        late_case(kind, text, body, None, true, false).await;
+        late_case(kind, text, body, None, kind != AgentKind::Cursor, false).await;
     }
 }
 

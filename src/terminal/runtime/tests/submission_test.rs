@@ -303,3 +303,38 @@ mod write_failure_tests;
 #[cfg(unix)]
 #[path = "submission_backpressure_test.rs"]
 mod backpressure_tests;
+
+#[tokio::test]
+async fn an_unfinished_synchronized_frame_is_never_given_to_an_ownership_inspector() {
+    let (runtime, _) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_process_pty_bytes(b"stable draft");
+    let now = Instant::now();
+    let submission = ObservedSubmission {
+        scope: Default::default(),
+        terminal: runtime.terminal.clone(),
+        io: runtime.io.clone(),
+        content_lock: runtime.content_write_lock.clone(),
+        inspect: Box::new(|screen: &str| {
+            assert!(
+                !screen.contains("PARTIAL"),
+                "an unfinished frame reached the ownership tracker"
+            );
+            InputObservation::Pending
+        }),
+        enter: Bytes::from_static(b"\r"),
+        clear: vec![Bytes::from_static(b"\x01")],
+        deadline: std::cell::Cell::new(now + Duration::from_secs(2)),
+        hard_deadline: now + Duration::from_secs(3),
+        withdraw_grace: WITHDRAW_GRACE,
+        clock: SubmissionClock::default(),
+        diagnostics: Default::default(),
+    };
+    assert_eq!(submission.observe("initial"), InputObservation::Pending);
+    runtime.test_process_pty_bytes(b"\x1b[?2026h\x1b[2J\x1b[HPARTIAL");
+    assert_eq!(
+        submission.observe("late_paste"),
+        InputObservation::Unavailable
+    );
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Hstable draft\x1b[?2026l");
+    assert_eq!(submission.observe("late_paste"), InputObservation::Pending);
+}
