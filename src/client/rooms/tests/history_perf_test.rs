@@ -176,8 +176,9 @@ fn await_layout(
     thumbnails: &mut Thumbnails,
 ) {
     let began = Instant::now();
-    let mut last_progress = (0, 0, 0);
+    let mut last_progress = (0, 0, 0, 0);
     let mut progressed_at = began;
+    let mut generation = None;
     loop {
         history.request_lines(Arc::clone(&snapshot), room, width, now, thumbnails);
         if history.background.as_ref().unwrap().is_current(
@@ -194,6 +195,20 @@ fn await_layout(
             );
             return;
         }
+        let current = history
+            .background
+            .as_ref()
+            .unwrap()
+            .test_progress()
+            .generation;
+        if let Some(expected) = generation {
+            assert_eq!(
+                current, expected,
+                "unchanged layout request restarted the worker"
+            );
+        } else {
+            generation = Some(current);
+        }
         assert_worker_progress(history, &mut last_progress, &mut progressed_at);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
@@ -201,15 +216,21 @@ fn await_layout(
 
 fn assert_worker_progress(
     history: &History,
-    previous: &mut (u64, u64, u64),
+    previous: &mut (u64, u64, u64, u64),
     progressed_at: &mut Instant,
 ) {
     let progress = history.background.as_ref().unwrap().test_progress();
-    let current = (progress.exchanges, progress.started, progress.finished);
-    if current != *previous {
-        *previous = current;
+    let current = (
+        progress.exchanges,
+        progress.started,
+        progress.finished,
+        progress.cancelled,
+    );
+    let advanced = current.0 > previous.0 || current.1 > previous.1 || current.2 > previous.2;
+    if advanced && current.3 == previous.3 {
         *progressed_at = Instant::now();
     }
+    *previous = current;
     assert!(
         !progress.worker_stopped,
         "history worker stopped: {progress:?}"
@@ -225,10 +246,30 @@ fn assert_worker_progress(
 
 #[test]
 #[should_panic(expected = "history worker made no progress for 30s")]
+fn cancelled_history_work_does_not_restart_the_liveness_clock() {
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    // Run the actual stale-generation cancellation check, without depending
+    // on scheduling a resize between two exchanges of a live renderer.
+    history
+        .background
+        .as_ref()
+        .unwrap()
+        .test_check_stale_generation();
+    let progress = history.background.as_ref().unwrap().test_progress();
+    assert_eq!(progress.exchanges, 1);
+    assert_eq!(progress.cancelled, 1);
+    let mut previous = (0, 0, 0, 0);
+    let mut progressed_at = Instant::now() - std::time::Duration::from_secs(31);
+    assert_worker_progress(&history, &mut previous, &mut progressed_at);
+}
+
+#[test]
+#[should_panic(expected = "history worker made no progress for 30s")]
 fn a_stalled_history_worker_still_fails_the_liveness_guard() {
     let mut history = History::default();
     history.enable_background().unwrap();
-    let mut previous = (0, 0, 0);
+    let mut previous = (0, 0, 0, 0);
     let mut progressed_at = Instant::now() - std::time::Duration::from_secs(31);
     assert_worker_progress(&history, &mut previous, &mut progressed_at);
 }
@@ -467,7 +508,7 @@ fn snapshot_revisions_do_not_starve_a_cold_history_layout() {
     history.enable_background().unwrap();
     let mut thumbnails = Thumbnails::default();
     let began = Instant::now();
-    let mut last_progress = (0, 0, 0);
+    let mut last_progress = (0, 0, 0, 0);
     let mut progressed_at = began;
     let mut generation = None;
     let mut revision = 0;

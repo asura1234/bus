@@ -120,6 +120,16 @@ pub(super) struct Background {
 
 impl Background {
     #[cfg(test)]
+    pub(super) fn test_check_stale_generation(&self) {
+        let generation = self.shared.generation.fetch_add(1, Ordering::Relaxed);
+        assert!(Cancellation {
+            shared: Arc::clone(&self.shared),
+            generation,
+        }
+        .cancelled());
+    }
+
+    #[cfg(test)]
     pub(super) fn test_progress(&self) -> TestProgress {
         TestProgress {
             generation: self.shared.generation.load(Ordering::Relaxed),
