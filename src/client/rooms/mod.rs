@@ -306,6 +306,9 @@ mod tests {
     #[path = "history_scroll_test.rs"]
     mod history_scroll_tests;
 
+    #[path = "recipient_menu_test.rs"]
+    mod recipient_menu_tests;
+
     #[path = "keys_test.rs"]
     mod keys_tests;
 

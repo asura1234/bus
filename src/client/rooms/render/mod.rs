@@ -6,6 +6,7 @@ mod history_links;
 #[cfg(feature = "dev-tools")]
 mod hits;
 mod paint;
+mod recipient_menu;
 mod room;
 mod settings;
 mod sidebar;
@@ -105,6 +106,8 @@ pub(super) struct View {
     pub history: Rect,
     pub history_max_scroll: usize,
     pub recipient_bar: Rect,
+    pub recipient_menu: Rect,
+    recipient_rows_start: usize,
     pub recipient_max_scroll: u16,
     recipient_chips: Vec<(Rect, Color)>,
     pub files: Rect,

@@ -8,8 +8,8 @@ use super::super::{
     BusUi, ComposerSize, LocalRoom,
 };
 use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
-use super::sidebar::{message_name_color, status_name};
-use super::text::{display, provider, wrap};
+use super::sidebar::message_name_color;
+use super::text::{display, wrap};
 use super::{Action, Hit, View, ACCENT, GREY};
 use crate::messaging::model::{Room, RoomId, RoomKind};
 use ratatui::{
@@ -36,6 +36,7 @@ struct RoomLayout {
 
 impl BusUi {
     pub(super) fn room_view(&mut self, view: &mut View, main: Rect) {
+        self.clamp_recipient_index();
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {
             view.lines(
                 Rect::new(main.x + 2, 2, main.width.saturating_sub(4), 3),
@@ -137,7 +138,7 @@ impl BusUi {
             self.detail_path = None;
         }
         self.file_detail_view(view, layout);
-        self.recipient_menu_view(view, room, local, layout);
+        self.recipient_menu_view(view, room, local);
     }
 
     /// The active toast, else the Ctrl+R recall search, which has no panel
@@ -599,74 +600,6 @@ impl BusUi {
             view.selection.retain(|rect| !rect.intersects(popup));
             view.thumbnails
                 .retain(|thumbnail| !thumbnail.rect().intersects(popup));
-        }
-    }
-
-    fn recipient_menu_view(
-        &self,
-        view: &mut View,
-        room: &Room,
-        local: &LocalRoom,
-        layout: RoomLayout,
-    ) {
-        let RoomLayout {
-            x,
-            width,
-            composer_y,
-            text_height,
-            ..
-        } = layout;
-        if self.recipient_menu {
-            let agents: Vec<_> = self.snapshot.state.room_recipients(room.id).collect();
-            let available_above = composer_y.saturating_sub(2);
-            // At full height the picker overlays the draft, not an empty area
-            // above it. Its later hit targets win over the editor beneath.
-            let (y, height) = if available_above >= (agents.len() + 1).min(3) as u16 {
-                let height = (agents.len() + 1).min(usize::from(available_above)) as u16;
-                (composer_y - 1 - height, height)
-            } else {
-                (
-                    view.composer.y,
-                    (agents.len() + 1).min(usize::from(text_height)) as u16,
-                )
-            };
-            let start = self
-                .recipient_index
-                .saturating_sub(height.saturating_sub(1) as usize);
-            let members: Vec<_> = agents.iter().filter(|a| a.room_id == room.id).collect();
-            let all =
-                !members.is_empty() && members.iter().all(|a| local.recipients.contains(&a.id));
-            let entries = std::iter::once((format!("[{}] All", if all { "x" } else { " " }), None))
-                .chain(agents.iter().map(|a| {
-                    (
-                        format!(
-                            "[{}] {}  {}  {}",
-                            if local.recipients.contains(&a.id) {
-                                "x"
-                            } else {
-                                " "
-                            },
-                            a.name,
-                            provider(a.provider),
-                            status_name(a.shown_status())
-                        ),
-                        Some(a.id),
-                    )
-                }));
-            for (index, (label, id)) in entries.enumerate().skip(start).take(height as usize) {
-                view.overlay_row(
-                    Rect::new(x, y + (index - start) as u16, width, 1),
-                    label,
-                    Some(Action::Recipient(id)),
-                    index == self.recipient_index,
-                );
-            }
-            view.cursor = None;
-            let menu = Rect::new(x, y, width, height);
-            view.selection.retain(|rect| !rect.intersects(menu));
-            // Kitty images draw over text, so they would hide the choices.
-            view.thumbnails
-                .retain(|thumbnail| !thumbnail.rect().intersects(menu));
         }
     }
 }

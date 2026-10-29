@@ -48,6 +48,11 @@ impl BusUi {
         self.paint_borders(buffer);
         let mut selection_painted = false;
         for (index, row) in self.view.rows.iter().enumerate() {
+            if index == self.view.recipient_rows_start && !self.view.recipient_menu.is_empty() {
+                paint_selection(&self.view.selection, buffer);
+                selection_painted = true;
+                paint_panel(self.view.recipient_menu, buffer);
+            }
             if index == self.view.dialog_rows_start && self.view.dialog.width > 0 {
                 paint_selection(&self.view.selection, buffer);
                 selection_painted = true;
@@ -116,6 +121,16 @@ impl BusUi {
             }
         }
     }
+}
+
+fn paint_panel(rect: Rect, buffer: &mut Buffer) {
+    let rect = rect.intersection(buffer.area);
+    Clear.render(rect, buffer);
+    Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Rgb(24, 24, 28)))
+        .border_style(Style::default().fg(ACCENT))
+        .render(rect, buffer);
 }
 
 // Selection tints the rows it covers but stays beneath a dialog.
