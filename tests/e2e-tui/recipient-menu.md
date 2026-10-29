@@ -30,10 +30,11 @@ menu-orch-00. Select MASTER and wait for History to appear before opening @.
    as menu-orch-00 to you while the menu stays open. Assert its frame, rows and
    checked selections remain intact. Close with Esc and assert readable history
    and both recipient chips; reopen with Ctrl+P.
-4. Resize to 42x14, then 30x8. At each size press Down to the last row and toggle
+4. Resize to 42x14, then 40x10. At each size press Down to the last row and toggle
    it off then on. Assert the highlighted row remains visible, the frame stays
    within the terminal, and text does not bleed through. Resize back to 120x30.
-5. Close the menu and switch to menu-short. Open Ctrl+P. Assert All and exactly
+5. Close the menu, scroll the sidebar until menu-short is visible, and switch
+   to menu-short. Open Ctrl+P. Assert All and exactly
    the two workers appear inside a complete short menu despite the prior long
    list's highlight. Select short-00 and close; assert only its recipient chip.
 
