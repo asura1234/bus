@@ -149,6 +149,19 @@ impl BusUi {
                 outcome.repaint = true;
             }
         }
+        if self.recipient_menu
+            && self
+                .view
+                .recipient_menu
+                .contains((mouse.column, mouse.row).into())
+            && matches!(
+                mouse.kind,
+                MouseEventKind::Down(_) | MouseEventKind::Drag(_) | MouseEventKind::Up(_)
+            )
+            && !matches!(hit, Some(Action::Recipient(_)))
+        {
+            return Some(true);
+        }
         if self.selection_mouse(mouse, hit.as_ref(), outcome) {
             outcome.repaint = true;
             return Some(true);
@@ -198,6 +211,23 @@ impl BusUi {
                 (self.settings_scroll + 3).min(self.view.settings_max_scroll)
             } else {
                 self.settings_scroll.saturating_sub(3)
+            };
+            outcome.repaint = true;
+            return true;
+        }
+        if self.recipient_menu
+            && self
+                .view
+                .recipient_menu
+                .contains((mouse.column, mouse.row).into())
+        {
+            let count = self
+                .room
+                .map_or(0, |room| self.snapshot.state.room_recipients(room).count());
+            self.recipient_index = if mouse.kind == MouseEventKind::ScrollDown {
+                self.recipient_index.saturating_add(3).min(count)
+            } else {
+                self.recipient_index.saturating_sub(3).min(count)
             };
             outcome.repaint = true;
             return true;
@@ -440,6 +470,7 @@ impl BusUi {
         self.main_scroll = 0;
         self.history_follow_tail = true;
         self.recipient_scroll = 0;
+        self.recipient_index = 0;
         self.queue(BusCommand::SelectRoom(room), Effect::None);
     }
     pub(super) fn is_master_room(&self, room: RoomId) -> bool {
