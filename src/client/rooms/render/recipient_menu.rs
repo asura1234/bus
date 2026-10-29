@@ -6,6 +6,16 @@ use crate::messaging::model::Room;
 use ratatui::layout::{Margin, Rect};
 
 impl BusUi {
+    pub(super) fn clamp_recipient_index(&mut self) {
+        // The highlight is shared by room views; a room switch or roster
+        // shrink must never leave the viewport starting beyond its entries.
+        if let Some(room) = self.room {
+            self.recipient_index = self
+                .recipient_index
+                .min(self.snapshot.state.room_recipients(room).count());
+        }
+    }
+
     pub(super) fn recipient_menu_view(&self, view: &mut View, room: &Room, local: &LocalRoom) {
         if !self.recipient_menu {
             return;

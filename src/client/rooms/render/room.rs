@@ -36,13 +36,7 @@ struct RoomLayout {
 
 impl BusUi {
     pub(super) fn room_view(&mut self, view: &mut View, main: Rect) {
-        // The highlight is shared by room views; a room switch or roster
-        // shrink must never leave the viewport starting beyond its entries.
-        if let Some(room) = self.room {
-            self.recipient_index = self
-                .recipient_index
-                .min(self.snapshot.state.room_recipients(room).count());
-        }
+        self.clamp_recipient_index();
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {
             view.lines(
                 Rect::new(main.x + 2, 2, main.width.saturating_sub(4), 3),
