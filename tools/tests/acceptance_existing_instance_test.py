@@ -87,7 +87,7 @@ class AcceptanceObservationTests(unittest.TestCase):
         # 测试在 tools/tests/ 下，仓库根是上两级。
         root = Path(__file__).resolve().parents[2]
         guide = (root / "orchestration/how-to-bus-cli.md").read_text()
-        self.assertLessEqual(len(guide.splitlines()), 264)
+        self.assertLessEqual(len(guide.splitlines()), 250)
         self.assertIn("bus <cmd> --help", guide)
         self.assertIn("agent read AGENT --source visible", guide)
         self.assertIn("agent read AGENT --source recent --lines N", guide)

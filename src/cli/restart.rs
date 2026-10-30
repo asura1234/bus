@@ -1053,6 +1053,12 @@ mod tests {
         assert!(text.contains("--confirm"), "{text}");
         assert!(text.contains("log.jsonl"), "{text}");
         assert!(text.contains("--dev"), "{text}");
+        assert!(text.contains("keep this session"), "{text}");
+        assert!(
+            text.contains("never restarts a server on its own"),
+            "{text}"
+        );
+        assert!(text.contains("not serving"), "{text}");
         assert!(crate::cli::help::DEV_HELP.contains("bus --dev restart"));
     }
 }
