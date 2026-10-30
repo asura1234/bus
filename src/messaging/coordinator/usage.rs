@@ -102,6 +102,7 @@ impl Usage {
             },
             "cursor": unknown("Cursor has no local allowance source"),
             "grok": unknown(crate::agents::providers::grok::usage::allowance_unavailable_reason()),
+            "kimi": unknown("Kimi has no local allowance source"),
         })
     }
 

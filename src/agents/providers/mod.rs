@@ -8,6 +8,7 @@ pub(crate) mod codex;
 pub(crate) mod cursor;
 pub(crate) mod grok;
 pub(crate) mod hook_json;
+pub(crate) mod kimi;
 pub(crate) mod launch;
 pub(crate) mod spool;
 pub(crate) mod suggest;
@@ -24,6 +25,7 @@ pub(crate) enum ProviderKind {
     ClaudeCode,
     Cursor,
     Grok,
+    Kimi,
 }
 
 impl ProviderKind {
@@ -35,6 +37,7 @@ impl ProviderKind {
             Self::ClaudeCode => "claude",
             Self::Cursor => "cursor",
             Self::Grok => "grok",
+            Self::Kimi => "kimi",
         }
     }
 
@@ -45,6 +48,7 @@ impl ProviderKind {
             Self::ClaudeCode => "claude",
             Self::Cursor => "cursor-agent",
             Self::Grok => "grok",
+            Self::Kimi => "kimi",
         }
     }
 }
@@ -58,6 +62,7 @@ pub(crate) fn parse(
         ProviderKind::ClaudeCode => claude_code::hooks::parse(value),
         ProviderKind::Cursor => cursor::hooks::parse(value),
         ProviderKind::Grok => grok::hooks::parse(value),
+        ProviderKind::Kimi => kimi::hooks::parse(value),
     }
 }
 
@@ -68,3 +73,7 @@ mod resume_tests;
 #[cfg(test)]
 #[path = "tests/grok_registration_test.rs"]
 mod grok_registration_tests;
+
+#[cfg(test)]
+#[path = "tests/kimi_registration_test.rs"]
+mod kimi_registration_tests;

@@ -93,6 +93,9 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
     if provider == ProviderKind::Grok {
         return super::super::grok::launch::resumable_options(args);
     }
+    if provider == ProviderKind::Kimi {
+        return super::super::kimi::launch::resumable_options(args);
+    }
     let mut options = Vec::new();
     let mut index = 0;
     let mut seen_positional = false;
@@ -126,6 +129,7 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
             ),
             ProviderKind::Cursor => matches!(name, "--resume" | "--continue"),
             ProviderKind::Grok => unreachable!("Grok filters its own resumable options"),
+            ProviderKind::Kimi => unreachable!("Kimi filters its own resumable options"),
         };
         if selector {
             index += 1;
@@ -179,6 +183,7 @@ fn arity(provider: ProviderKind, name: &str) -> Option<usize> {
         ProviderKind::ClaudeCode => claude_arity(name),
         ProviderKind::Cursor => cursor_arity(name),
         ProviderKind::Grok => super::super::grok::launch::option_arity(name),
+        ProviderKind::Kimi => super::super::kimi::launch::option_arity(name),
     }
 }
 

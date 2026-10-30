@@ -225,7 +225,8 @@ impl Fixture {
 
     fn started(&self, turn: &str, prompt: &str) {
         let value = match self.provider {
-            crate::agents::providers::ProviderKind::Grok => {
+            crate::agents::providers::ProviderKind::Grok
+            | crate::agents::providers::ProviderKind::Kimi => {
                 panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
@@ -245,7 +246,7 @@ impl Fixture {
 
     fn stopped(&self, turn: &str, text: &str) {
         match self.provider {
-            crate::agents::providers::ProviderKind::Grok => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
+            crate::agents::providers::ProviderKind::Grok | crate::agents::providers::ProviderKind::Kimi => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
             Provider::ClaudeCode => self.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":[],"session_crons":[]})),
             Provider::Codex => self.record(json!({"hook_event_name":"Stop","session_id":"session","turn_id":turn,"last_assistant_message":text,"transcript_path":"/tmp/rollout.jsonl"})),
             Provider::Cursor => {

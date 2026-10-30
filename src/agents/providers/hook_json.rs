@@ -55,6 +55,19 @@ impl HookContract {
     pub(crate) const fn for_provider(provider: ProviderKind) -> Self {
         match provider {
             ProviderKind::Grok => super::grok::HOOK_CONTRACT,
+            ProviderKind::Kimi => Self {
+                adapter: "kimi-hook",
+                events: &[
+                    "SessionStart",
+                    "UserPromptSubmit",
+                    "TurnStarted",
+                    "Stop",
+                    "StopFailure",
+                    "Interrupt",
+                ],
+                entry_shape: HookEntryShape::Command,
+                default_version: None,
+            },
             ProviderKind::Codex => Self {
                 adapter: "codex-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop"],

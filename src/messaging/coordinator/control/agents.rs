@@ -43,7 +43,8 @@ impl Worker {
                     "codex" => Provider::Codex,
                     "cursor" => Provider::Cursor,
                     "grok" => Provider::Grok,
-                    _ => return Err("Provider must be claude, codex, cursor, or grok".into()),
+                    "kimi" => Provider::Kimi,
+                    _ => return Err("Provider must be claude, codex, cursor, grok, or kimi".into()),
                 };
                 let room = self.control_room(required(p, "room")?)?;
                 let master = self.state.master_room().is_some_and(|m| m.id == room);
@@ -387,7 +388,7 @@ impl Worker {
 /// Claude Code and Codex show `esc to interrupt`, Cursor `ctrl+c to stop`.
 fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
-        Provider::ClaudeCode | Provider::Codex | Provider::Grok => "esc",
+        Provider::ClaudeCode | Provider::Codex | Provider::Grok | Provider::Kimi => "esc",
         Provider::Cursor => "ctrl+c",
     }
 }
@@ -399,5 +400,6 @@ fn clear_command(provider: Provider) -> &'static str {
         Provider::ClaudeCode | Provider::Codex => "/clear",
         Provider::Cursor => "/new-chat",
         Provider::Grok => "/new",
+        Provider::Kimi => "/new",
     }
 }

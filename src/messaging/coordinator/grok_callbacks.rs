@@ -115,12 +115,15 @@ impl Worker {
             | callbacks::Parsed::Response { session, .. } => session,
             callbacks::Parsed::Ignore => return Ok(false),
         };
-        if record.manifest.provider != crate::agents::providers::ProviderKind::Grok
-            || self
-                .state
-                .agent(id)
-                .and_then(|a| a.superseded_session_id.as_deref())
-                != Some(session.as_str())
+        if !matches!(
+            record.manifest.provider,
+            crate::agents::providers::ProviderKind::Grok
+                | crate::agents::providers::ProviderKind::Kimi
+        ) || self
+            .state
+            .agent(id)
+            .and_then(|a| a.superseded_session_id.as_deref())
+            != Some(session.as_str())
         {
             return Ok(false);
         }
@@ -241,6 +244,46 @@ impl Worker {
     ) -> Result<CompletionResolution, String> {
         if session.is_empty() || turn.is_empty() {
             return Err("Grok reconciliation requires an owned session and turn".into());
+        }
+        if record.manifest.provider == crate::agents::providers::ProviderKind::Kimi {
+            let agent = state.agent(id).ok_or("Unknown Kimi callback agent")?;
+            let request = agent
+                .current_request
+                .and_then(|id| state.request(id))
+                .filter(|r| {
+                    r.trusted_start_bound
+                        && r.provider_session_id.as_deref() == Some(session)
+                        && r.provider_turn_id.as_deref() == Some(turn)
+                        && r.expected_launch_id.as_deref()
+                            == Some(record.manifest.launch_id.as_str())
+                });
+            let Some(request) = request else {
+                return Ok(CompletionResolution::Pending);
+            };
+            let prompt = state
+                .clone()
+                .render_request_payload(request.id)
+                .ok_or("Kimi request has no submitted prompt")?;
+            let hooks = crate::agents::providers::hook_json::HookContext {
+                binary: std::env::current_exe().map_err(|e| e.to_string())?,
+                spool: self
+                    .data_dir
+                    .join("callbacks")
+                    .join(&record.manifest.launch_id),
+                launch_id: record.manifest.launch_id.clone(),
+            };
+            let home = crate::agents::providers::kimi::launch::saved_home(&hooks)?;
+            let text = crate::agents::providers::kimi::wire::resolve(
+                &home, &agent.cwd, session, turn, &prompt,
+            )?;
+            return Ok(match text {
+                Some(text) => CompletionResolution::Final {
+                    session: session.into(),
+                    turn: turn.into(),
+                    text,
+                },
+                None => CompletionResolution::Pending,
+            });
         }
         let idle = state
             .agent(id)

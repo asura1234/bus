@@ -85,6 +85,7 @@ impl BusUi {
             Action::Provider(Provider::Codex) => "provider:codex".into(),
             Action::Provider(Provider::Cursor) => "provider:cursor".into(),
             Action::Provider(Provider::Grok) => "provider:grok".into(),
+            Action::Provider(Provider::Kimi) => "provider:kimi".into(),
             Action::Orchestrates => "orchestrates".into(),
             Action::Suggestion(index) => format!("suggestion:{index}"),
             Action::Settings => "settings".into(),

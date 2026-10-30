@@ -140,7 +140,18 @@ pub(crate) fn load(
             path = %path.display(), "Bus hooks moved back to this executable for resume");
     }
     // Prompt policy stays with messaging; provider-specific argv stays below it.
-    let prompt = crate::messaging::orchestration::resume_prompt_args(agent.provider, &hooks.spool)?;
+    let prompt = if agent.provider == ProviderKind::Kimi && facts.session.is_none() {
+        crate::messaging::orchestration::prompt_args(
+            agent.provider,
+            &hooks
+                .spool
+                .join(crate::messaging::orchestration::PROMPT_FILE),
+            false,
+        )?
+        .unwrap_or_default()
+    } else {
+        crate::messaging::orchestration::resume_prompt_args(agent.provider, &hooks.spool)?
+    };
     crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),
         &mut args,
@@ -150,6 +161,15 @@ pub(crate) fn load(
     if agent.provider == ProviderKind::Grok {
         return Ok(LaunchExtras {
             env: crate::agents::providers::grok::launch::environment(&hooks)?
+                .into_iter()
+                .collect(),
+            args,
+            session: corrected,
+        });
+    }
+    if agent.provider == ProviderKind::Kimi {
+        return Ok(LaunchExtras {
+            env: crate::agents::providers::kimi::launch::environment(&hooks)?
                 .into_iter()
                 .collect(),
             args,
@@ -203,11 +223,12 @@ fn capture_args(
     hooks: &HookContext,
     project: &Path,
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
-    use crate::agents::providers::{claude_code, codex, cursor, grok};
+    use crate::agents::providers::{claude_code, codex, cursor, grok, kimi};
     match identity::provider_kind(provider) {
         ProviderKind::ClaudeCode => claude_code::resume::capture_args(hooks, project),
         ProviderKind::Codex => codex::resume::capture_args(hooks, project),
         ProviderKind::Cursor => cursor::resume::capture_args(hooks, project),
         ProviderKind::Grok => grok::resume::capture_args(hooks, project),
+        ProviderKind::Kimi => kimi::resume::capture_args(hooks, project),
     }
 }
