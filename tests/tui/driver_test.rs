@@ -1446,7 +1446,7 @@ fn scriptable_fake_replies_to_a_room_message_without_provider_configuration() {
 
 #[test]
 fn scriptable_fake_waits_for_dialog_choice_before_replying() {
-    let session = Session::start("script-dialog");
+    let session = Session::start("f-dialog");
     let work = session_dir(&session.0).join("work");
     let script = work.join("dialog.json");
     std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_DIALOG_7","actions":[{"type":"sleep","ms":1500},{"type":"dialog","title":"Choose a path","options":["A","B"]},{"type":"reply","text":"selected {{choice}}"}]}]}"#).unwrap();
@@ -1524,7 +1524,7 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
 
 #[test]
 fn scriptable_fake_sends_before_its_final_reply() {
-    let session = Session::start("script-send");
+    let session = Session::start("f-send");
     let work = session_dir(&session.0).join("work");
     let script = work.join("send.json");
     std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_SEND_7","actions":[{"type":"send","room":"bus","to":"you","text":"SCRIPTED_NOTICE_7"},{"type":"reply","text":"SENT_7"}]}]}"#).unwrap();
@@ -1576,7 +1576,7 @@ fn scriptable_fake_sends_before_its_final_reply() {
 
 #[test]
 fn scriptable_fake_crash_leaves_no_final_reply_and_records_exit() {
-    let session = Session::start("script-crash");
+    let session = Session::start("f-crash");
     let work = session_dir(&session.0).join("work");
     let script = work.join("crash.json");
     std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_CRASH_7","actions":[{"type":"crash","code":42}]}]}"#).unwrap();
