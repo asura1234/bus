@@ -367,30 +367,38 @@ fn spool_record(
     .unwrap();
 }
 
-/// Remove only Bus's generated correlation instruction for semantic body assertions.
+/// Remove only Bus's generated message header for semantic body assertions.
 pub(in crate::messaging::coordinator) fn test_prompt_content(prompt: &str) -> String {
     prompt
         .split_inclusive('\n')
-        .filter(|line| {
-            let Some((message, command)) = line
-                .trim_end_matches('\n')
-                .strip_prefix("[Bus message ")
-                .and_then(|line| line.split_once("; answer with bus send --reply-to "))
-            else {
-                return true;
-            };
-            let Some((reply, recipient)) = command.split_once(" --as ") else {
-                return true;
-            };
-            let Some((recipient, suffix)) = recipient.split_once(" --text 'YOUR ANSWER'") else {
-                return true;
-            };
-            !(message == reply
-                && message.parse::<u64>().is_ok()
-                && recipient.parse::<u64>().is_ok()
-                && suffix.ends_with(']'))
-        })
+        .filter(|line| !generated_bus_header(line.trim_end_matches('\n')))
         .collect()
+}
+
+/// The short deliverable header, or the legacy reply hint frozen into older payloads.
+fn generated_bus_header(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("[Bus message ") else {
+        return false;
+    };
+    if let Some((message, command)) = rest.split_once("; answer with bus send --reply-to ") {
+        let Some((reply, recipient)) = command.split_once(" --as ") else {
+            return false;
+        };
+        let Some((recipient, suffix)) = recipient.split_once(" --text 'YOUR ANSWER'") else {
+            return false;
+        };
+        return message == reply
+            && message.parse::<u64>().is_ok()
+            && recipient.parse::<u64>().is_ok()
+            && suffix.ends_with(']');
+    }
+    let Some(rest) = rest.strip_suffix(']') else {
+        return false;
+    };
+    let Some((id, name)) = rest.split_once(" from ") else {
+        return false;
+    };
+    id.parse::<u64>().is_ok() && !name.is_empty() && !name.contains('[') && !name.contains(']')
 }
 
 pub(in crate::messaging::coordinator) fn test_request_payload(

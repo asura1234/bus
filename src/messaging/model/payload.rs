@@ -57,53 +57,65 @@ impl BusState {
             return Some(text.clone());
         }
         let mut text = request.prompt.rendered_payload();
-        let answer = format!(
-            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status {} before resending]",
-            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.id.0,
-        );
-        if let Author::Agent(sender) = request.prompt.author {
-            let identity = request
-                .sender_identity
-                .clone()
-                .or_else(|| self.message_sender(&request.prompt.author));
-            let (header, replace_identity) = if let Some((name, room)) = identity {
-                let label = self.named_agent_label(sender, &name);
-                let crosses_rooms = request.room_id != room
-                    || self
-                        .agent(request.agent_id)
-                        .is_some_and(|a| a.room_id != room)
-                    || self.room(room).is_some_and(|r| r.kind == RoomKind::Master)
-                    || self
-                        .room(request.room_id)
-                        .is_some_and(|r| r.kind == RoomKind::Master);
-                let header = if crosses_rooms {
-                    format!("{label} (room {}):", room.0)
+        let message_id = request.prompt.id.0;
+        // Bus notices need no reply. Deliverable messages keep only a short header;
+        // the reply form lives in the agent system prompt and `bus send --help`.
+        if request.prompt.author != Author::Bus {
+            if let Author::Agent(sender) = request.prompt.author {
+                let identity = request
+                    .sender_identity
+                    .clone()
+                    .or_else(|| self.message_sender(&request.prompt.author));
+                let (header, from, replace_identity) = if let Some((name, room)) = identity {
+                    let label = self.named_agent_label(sender, &name);
+                    let crosses_rooms = request.room_id != room
+                        || self
+                            .agent(request.agent_id)
+                            .is_some_and(|a| a.room_id != room)
+                        || self.room(room).is_some_and(|r| r.kind == RoomKind::Master)
+                        || self
+                            .room(request.room_id)
+                            .is_some_and(|r| r.kind == RoomKind::Master);
+                    let header = if crosses_rooms {
+                        format!("{label} (room {}):", room.0)
+                    } else {
+                        format!("{label}:")
+                    };
+                    (
+                        header,
+                        label,
+                        starts_with_sender(&text, &name, sender.0, room.0),
+                    )
                 } else {
-                    format!("{label}:")
+                    // Older saves can omit the snapshot after an author is gone.
+                    // Its stable ID is known; do not invent a name or home room.
+                    let label = self.agent_message_label(sender);
+                    let header = format!("{label}:");
+                    let first = text.lines().next().unwrap_or_default().trim();
+                    let name = format!("agent {}", sender.0);
+                    let replace = first.eq_ignore_ascii_case(&header)
+                        || identity_only_line(first, &name, sender.0);
+                    (header, label, replace)
                 };
-                (header, starts_with_sender(&text, &name, sender.0, room.0))
+                if replace_identity {
+                    text = text
+                        .split_once('\n')
+                        .map_or(String::new(), |(_, body)| body.to_owned());
+                }
+                let marker = format!("[Bus message {message_id} from {from}]");
+                text = if text.is_empty() {
+                    format!("{header}\n{marker}")
+                } else {
+                    format!("{header}\n{marker}\n{text}")
+                };
             } else {
-                // Older saves can omit the snapshot after an author is gone.
-                // Its stable ID is known; do not invent a name or home room.
-                let header = format!("{}:", self.agent_message_label(sender));
-                let first = text.lines().next().unwrap_or_default().trim();
-                let name = format!("agent {}", sender.0);
-                let replace = first.eq_ignore_ascii_case(&header)
-                    || identity_only_line(first, &name, sender.0);
-                (header, replace)
-            };
-            if replace_identity {
-                text = text
-                    .split_once('\n')
-                    .map_or(String::new(), |(_, body)| body.to_owned());
+                let marker = format!("[Bus message {message_id} from you]");
+                text = if text.is_empty() {
+                    marker
+                } else {
+                    format!("{marker}\n{text}")
+                };
             }
-            text = if text.is_empty() {
-                format!("{header}\n{answer}")
-            } else {
-                format!("{header}\n{answer}\n{text}")
-            };
-        } else {
-            text = format!("{answer}\n{text}");
         }
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)

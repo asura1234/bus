@@ -732,6 +732,15 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("destructive or outward-facing actions without existing authorization"));
     assert!(text.contains("Send only the body"));
     assert!(text.contains("use it only for a hard blocker only the developer can clear"));
+    assert!(text.contains("[Bus message N from NAME]"));
+    assert!(text.contains(&format!(
+        "bus send --reply-to N --as {} --text 'YOUR ANSWER'",
+        agent.0
+    )));
+    assert!(text.contains("run it in the foreground"));
+    assert!(text.contains("ok:true and stage:\"replied\" before claiming delivery"));
+    assert!(text.contains("check the existing answer with bus message status N before resending"));
+    assert!(text.contains("Blocked/needs help, No reply/abandoned, idle-agent notices"));
     assert!(text
         .contains("bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\""));
     assert_eq!(state.requests().count(), 0);

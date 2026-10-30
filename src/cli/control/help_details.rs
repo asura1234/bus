@@ -80,7 +80,9 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static 
 
 pub(super) fn command(path: &str) -> String {
     let text = match path {
-        "" => "A plain bus launch starts a new interactive session. Control commands target an\nexisting session and return JSON. Use bus <command> --help for its contract.\n--paths returns a JSON object of data/log/config/state paths without starting Bus.\nUse bus sessions and bus resume --help before selecting a saved session.",
+        "" => {
+            "A plain bus launch starts a new interactive session. Control commands target an\nexisting session and return JSON. Use bus <command> --help for its contract.\n--paths returns a JSON object of data/log/config/state paths without starting Bus.\nUse bus sessions and bus resume --help before selecting a saved session."
+        }
         "room" | "agent" | "message" | "request" | "ui" => {
             "Choose a subcommand below, then run bus <command> <subcommand> --help.\nA bare group prints help without contacting Bus; it has no JSON result."
         }
@@ -109,16 +111,36 @@ pub(super) fn command(path: &str) -> String {
         "history" => HISTORY,
         "settings" => SETTINGS,
         "settings feishu-notifications" => SETTINGS_FEISHU_NOTIFICATIONS,
-        "settings color-blind" => "Set the shared palette; exactly one of --on/--off is required.\nResult: {updated:true,color_blind_mode:BOOL}. Errors: common errors below.",
-        "settings room-sound" => "Set every work room's sound switch and optionally sound name, plus defaults\nfor new rooms. MASTER is separate. Exactly one of --on/--off is required.\nResult: {updated:true,room_sound:{...}}. Errors: command_failed for unknown sound;\nrun bus --dev sounds. Omitted --sound preserves the name.",
-        "room sound" => "Set one room's sound switch and optionally name; exactly one of --on/--off\nis required. Result: {updated:true}. Errors: command_failed for invalid room or\nunknown sound; inspect state and bus --dev sounds. Omitted --sound keeps its name.",
-        "room seen" => "Clear a room's unread markers. Result: {updated:true}.\nErrors: command_failed for invalid/ambiguous room; inspect state and use its ID.",
-        "room focus" | "agent focus" => "Enqueue navigation in the attached UI (not task completion).\nResult: {stage:queued,room_id,agent_id?}. Errors: command_failed for an unavailable\nUI event channel or agent terminal; inspect state and the attached UI.",
-        "agent details" => "Set sidebar details visibility; one of --on/--off is required.\nResult: {updated:true}. Errors: command_failed for invalid agent; use agent list.",
-        "quit" => "Enqueue quitting the attached UI. Result: {stage:queued}; this is not confirmation\nthat shutdown finished. Errors: command_failed if the UI channel is unavailable.",
-        "sounds" => "List Default and installed OS notification sounds.\nResult: {sounds:[{name:STRING,path:STRING|null},...]}; Default has null path.\nErrors: common errors below. Use names with room sound/settings room-sound.",
-        "diagnostics" => "Read internal session diagnostics. Result: {version,dev,storage_failed,\nstorage_repair_required,coordinator_error,data_dir,logs,callback_logs,\nagents:[{agent_id,name,status,reason,detail,identity,current_request}]}.\nErrors: common errors below; inspect storage/coordinator errors before mutations.",
-        "ui hits" => "Read named TUI click targets for the dev driver.\nResult: {size:[COLS,ROWS],hits:[{name,row,col,width,height},...]}; coordinates are\nterminal cells. See bus --dev tui --help for the driver contract.\nErrors: command_failed when the UI snapshot is unavailable; common errors below.",
+        "settings color-blind" => {
+            "Set the shared palette; exactly one of --on/--off is required.\nResult: {updated:true,color_blind_mode:BOOL}. Errors: common errors below."
+        }
+        "settings room-sound" => {
+            "Set every work room's sound switch and optionally sound name, plus defaults\nfor new rooms. MASTER is separate. Exactly one of --on/--off is required.\nResult: {updated:true,room_sound:{...}}. Errors: command_failed for unknown sound;\nrun bus --dev sounds. Omitted --sound preserves the name."
+        }
+        "room sound" => {
+            "Set one room's sound switch and optionally name; exactly one of --on/--off\nis required. Result: {updated:true}. Errors: command_failed for invalid room or\nunknown sound; inspect state and bus --dev sounds. Omitted --sound keeps its name."
+        }
+        "room seen" => {
+            "Clear a room's unread markers. Result: {updated:true}.\nErrors: command_failed for invalid/ambiguous room; inspect state and use its ID."
+        }
+        "room focus" | "agent focus" => {
+            "Enqueue navigation in the attached UI (not task completion).\nResult: {stage:queued,room_id,agent_id?}. Errors: command_failed for an unavailable\nUI event channel or agent terminal; inspect state and the attached UI."
+        }
+        "agent details" => {
+            "Set sidebar details visibility; one of --on/--off is required.\nResult: {updated:true}. Errors: command_failed for invalid agent; use agent list."
+        }
+        "quit" => {
+            "Enqueue quitting the attached UI. Result: {stage:queued}; this is not confirmation\nthat shutdown finished. Errors: command_failed if the UI channel is unavailable."
+        }
+        "sounds" => {
+            "List Default and installed OS notification sounds.\nResult: {sounds:[{name:STRING,path:STRING|null},...]}; Default has null path.\nErrors: common errors below. Use names with room sound/settings room-sound."
+        }
+        "diagnostics" => {
+            "Read internal session diagnostics. Result: {version,dev,storage_failed,\nstorage_repair_required,coordinator_error,data_dir,logs,callback_logs,\nagents:[{agent_id,name,status,reason,detail,identity,current_request}]}.\nErrors: common errors below; inspect storage/coordinator errors before mutations."
+        }
+        "ui hits" => {
+            "Read named TUI click targets for the dev driver.\nResult: {size:[COLS,ROWS],hits:[{name,row,col,width,height},...]}; coordinates are\nterminal cells. See bus --dev tui --help for the driver contract.\nErrors: command_failed when the UI snapshot is unavailable; common errors below."
+        }
         _ => "Missing command documentation",
     };
     if matches!(path, "room delete" | "agent delete") {
@@ -388,8 +410,10 @@ See docs/developer-notifications.md for recipient and CLI configuration."#;
 const SEND: &str = r#"Persist a message and one request per recipient; a receipt is not completion.
 Use --reply-to MESSAGE --as AGENT --text ANSWER to complete only your recipient
 request mid-turn. It infers room/sender; excludes room,to,queue,async,file.
-Run replies in the foreground; require ok:true and stage:replied. Identical text
-is a no-op; an uncorrelated send never completes the original request.
+Run replies in the foreground; require ok:true and stage:"replied" before claiming
+delivery. If the reply fails, check the existing answer with bus message status
+MESSAGE before resending. Identical text is a no-op; an uncorrelated send never
+completes the original request.
 Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
   --async instead returns final message status (see message status --help), plus
   message_id and send_receipt (the original receipt). Status has complete, prompt,

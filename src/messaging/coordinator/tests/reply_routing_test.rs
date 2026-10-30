@@ -1352,14 +1352,41 @@ fn identity_batched_worker_notification_has_exactly_one_sender_line() {
         .route_worker_replies(io::now_ms(), &BTreeSet::new())
         .unwrap();
     let payload = f.worker.state.coalesce_queue(lead).unwrap();
-    assert_eq!(payload.matches("builder").count(), 1, "{payload}");
-    assert_eq!(payload.matches("rev-claude8").count(), 1, "{payload}");
-    assert!(!payload.contains(" from "), "{payload}");
-    assert!(!payload.contains("(agent "), "{payload}");
-    assert!(
-        payload.contains(&format!("rev-claude8 (room {}):", f.room.0)),
+    let builder_header = format!("builder (room {}):", f.room.0);
+    let peer_header = format!("rev-claude8 (room {}):", f.room.0);
+    assert_eq!(
+        payload
+            .lines()
+            .filter(|line| *line == builder_header)
+            .count(),
+        1,
         "{payload}"
     );
+    assert_eq!(
+        payload.lines().filter(|line| *line == peer_header).count(),
+        1,
+        "{payload}"
+    );
+    assert_eq!(
+        payload
+            .lines()
+            .filter(|line| line.starts_with("[Bus message ") && line.ends_with("from builder]"))
+            .count(),
+        1,
+        "{payload}"
+    );
+    assert_eq!(
+        payload
+            .lines()
+            .filter(|line| {
+                line.starts_with("[Bus message ") && line.ends_with("from rev-claude8]")
+            })
+            .count(),
+        1,
+        "{payload}"
+    );
+    assert!(!payload.contains("(agent "), "{payload}");
+    assert!(!payload.contains("answer with bus send"), "{payload}");
 }
 
 #[test]
