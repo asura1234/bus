@@ -1,6 +1,6 @@
 ---
 name: split-pr
-description: Split a multi-purpose Bus branch into single-purpose branches from an explicit base, as parallel PRs, a stacked PR train, or a mix of both, with dependencies proven by git and builds. Restack the branches after a parent changes or lands. Use when asked to split a PR, divide a branch into multiple PRs, stack PRs, or restack a PR train.
+description: Split a multi-purpose repository branch into single-purpose branches from an explicit base, as parallel PRs, a stacked PR train, or a mix of both, with dependencies proven by git and builds. Restack the branches after a parent changes or lands. Use when asked to split a PR, divide a branch into multiple PRs, stack PRs, or restack a PR train.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Split PR
@@ -37,10 +37,15 @@ repo = git rev-parse --show-toplevel
 source = git branch --show-current
 ERROR if source empty (detached HEAD).
 git fetch origin
-base_ref = --base or origin/master; ERROR unless it resolves. Never infer it
-  from a remote's symbolic HEAD.
-ERROR if source equals base_ref without `origin/` (splitting the base branch).
-base_sha = git merge-base <base_ref> HEAD
+IF --base is absent:
+  `git remote set-head origin --auto`
+  Run repository_context.py from the sibling rebase-origin-main/scripts directory.
+  base_ref = context.base with the exact `refs/remotes/` prefix removed.
+ELSE: base_ref = caller --base.
+Require origin/<branch> per the split-plan format and a resolvable commit; never substitute main/master.
+Resolve origin/<branch> as refs/remotes/origin/<branch> for every Git lookup/operation; the plan label stays origin/<branch>.
+Run the shared rebase_base.py --base "<full base ref>" --check-branch "<source>" guard; STOP if it fails.
+base_sha = git merge-base <full base ref> HEAD
 source_sha = git rev-parse HEAD
 ERROR if tracked changes are uncommitted: everything to split must be committed.
 ERROR if git rev-list --merges <base_sha>..HEAD is nonempty (linearize first).
@@ -86,14 +91,14 @@ FOR part in order:
   ERROR if <branch> already exists locally or on origin.
   git branch --no-track <branch> <start>
   Invoke `worktree-new <branch>`: it checks out the existing branch in a new
-  worktree and provisions its cargo dependencies (plain `git worktree add`
+  worktree and provisions its target-declared dependencies (plain `git worktree add`
   alone skips that provisioning).
   Reconstruct the part: git cherry-pick <commits>; for hunk-split commits apply
   only this part's hunks and commit them with the original subject. Never drop
   or duplicate a hunk.
   Verify in that worktree:
     git diff --check <start>...HEAD
-    cargo check, plus focused tests for the touched modules (unset BUS_* and
+    target-derived compile checks and focused tests for the touched modules (unset BUS_* and
     HERDR_* for test runs, including retained pane/session compatibility keys);
     for skill or script parts, their python suites.
   IF verification fails because the part needs another part's code:
@@ -113,64 +118,13 @@ that part's purpose.
 IF --publish absent: go to RETURN.
 ```
 
-## Publish
+## Publish — explicit follow-up pending forge B
 
-```text
-Publish in waves. The main agent runs the waves; no script orchestrates them.
-WHILE some part is unpublished and not waiting:
-  wave = every unpublished part whose parents all have a recorded PR or landed
-         (in parallel: all parts in the first wave; in a train: one part per
-         wave, bottom first; in a mixed graph: every part whose parents are done)
-  Skip parts whose base is a merge (render's Base column) under
-  multi_parent == wait: they stay local and verified until it is one branch.
-  Before a wave that holds a stacked part, H restack PLAN must report `current`
-  (a previous wave's `pr` may have rebased a root); otherwise run Restack mode.
-  The parts in a wave are independent PRs: spawn one subagent per part, all in
-  the same turn, each in that part's worktree, and wait for all of them.
-  Subagents never run `H record` or edit PLAN; each returns its branch tip and
-  PR number. After the wave the main agent runs, per part:
-    H record PLAN --part <id> --pr <number>   (record moved tips first)
-  A failed subagent stops further waves; report its part and blocker.
-
-Subagent task for a root part (no open parent) when base_ref is origin/master:
-  invoke `pr` in the part worktree. It rebases onto origin/master and opens the
-  Draft PR against master. Return the PR number and whether the rebase moved
-  the branch.
-
-Subagent task for a stacked part (one open parent, or a merge base under `merge`),
-or a root part when base_ref is not origin/master (`pr` only targets master):
-    base_branch = the open parent's branch, <branch>--base under `merge`, or
-                  base_ref without `origin/` for a root part
-    IF base_branch == <branch>--base:
-      ERROR if it exists on origin with a different SHA than recorded onto;
-      git push origin <onto>:refs/heads/<branch>--base
-    IF git ls-remote --exit-code origin refs/heads/<branch> succeeds:
-      ERROR unless that SHA equals the local branch tip (a resumed publish);
-    ELSE: git push origin refs/heads/<branch>:refs/heads/<branch>
-    Write goal and non-goal files from this part's purpose, then:
-      python3 "$SKILL_DIR/../_bus/cli_extensions/pr_goal_context.py" --branch <branch> \
-        --output <ctx> --goal-file <goal> --non-goal-file <non-goals> \
-        --origin-file <origin>
-    (origin = the source branch's temp/review-pr/<source-slug>/.locked-origin, else the
-    confirmed split plan's entry for this part)
-    Read "$SKILL_DIR/../_bus/docs/pr-template.md" and "$SKILL_DIR/../_bus/docs/pull-request-template.md".
-    Write a Draft body (its self-test boxes `- [ ] <name> — pending`) from
-    git diff <onto>...<branch> only, with `H stack PLAN --part <id>` output as
-    a bullet in 摘要, then:
-      python3 "$SKILL_DIR/../_bus/cli_extensions/pr_format_check.py" --phase draft \
-        --template "$SKILL_DIR/../_bus/docs/pr-template.md" --title "<title>" \
-        --body-file <body> --goal-context-file <ctx> --locked-goal-file <locked goal>
-    existing = gh pr list --head <branch> --base <base_branch> --state open --json number
-    IF existing: gh pr edit <number> --title "<title>" --body-file <body>
-    ELSE: gh pr create --draft --base <base_branch> --head <branch> --title "<title>" --body-file <body>
-    Return the PR number.
-
-After every part is published, set each PR's `- **Stack**:` bullet in 摘要 to
-`H stack PLAN --part <id>` (children numbers now exist): read the body with
-gh pr view --json body, insert or replace only that line, rerun pr_format_check with the
-phase the PR is in, and gh pr edit --body-file.
-Run H restack PLAN; when it is not `current`, run Restack mode.
-```
+Publication is held until the porter adapts this skill to forge B's pr_host interface after it lands.
+IF --publish: STOP before any host write; return the verified local split plan and branches, with
+"publication pending forge B adapter". Do not use gh directly or implement a second platform adapter.
+The follow-up must preserve per-part intent locks, explicit parent/base, Draft state, head read-back,
+and dependency-aware publish waves by delegating through forge's documented interfaces.
 
 ## Restack mode
 
@@ -179,9 +133,11 @@ PLAN = argument, else the plan for the current branch's source; ERROR if missing
   or if no argument was given and its source.branch is not the current branch.
 git fetch origin
 FOR each part in `H check PLAN` order (parents first) with a PR and landed false:
-  IF gh pr view <pr> --json state reports MERGED:
+  IF caller-provided exact-head evidence proves the parent landed:
     H record PLAN --part <id> --landed
+  ELSE: retain its recorded state. Automatic host refresh is part of the forge B follow-up.
 result = H restack PLAN
+IF --publish: STOP "publication pending forge B adapter" before any publish/push/retarget step.
 IF result.status == current: report and stop.
 Show the steps to the user. They rewrite branch history; continue only with
 confirmation unless the user asked for the restack explicitly.
@@ -190,7 +146,7 @@ FOR step in result.steps (already in dependency order):
   none, run step.commands in order. On conflict: resolve by intent (the part's own
   commits win over nothing; never drop a parent change); if unsure, run
   git rebase --abort and STOP with the conflicting files.
-  Verify as in BUILD (diff check, cargo check, focused tests).
+  Verify as in BUILD (diff check and target-derived focused checks).
   H record PLAN --part <id> [--onto <merge sha> when step.onto_ref is merge(...)]
   IF --publish AND step.push_base present: run step.push_base.
   IF --publish AND step.push present: run step.push.
@@ -198,10 +154,8 @@ FOR step in result.steps (already in dependency order):
   IF --publish AND the part has no PR yet and is now publishable: publish it
     as in Publish.
 Rerun H restack PLAN; it must report `current`.
-A part whose parents have all landed is an ordinary branch on the base: when
---publish is given and base_ref is origin/master, invoke `pr` for it to refresh
-its master-based body; on any other base `pr` would rebase it onto master,
-so leave it on its retargeted base.
+A part whose parents have all landed remains on its recorded integration base. Do not retarget
+or rebase it onto a different default branch to accommodate a host tool.
 ```
 
 ## RETURN
