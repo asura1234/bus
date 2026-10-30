@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, Once, OnceLock};
@@ -61,6 +62,12 @@ pub fn register_runtime_dir(path: &Path) {
     ensure_cleanup_hooks();
 
     let _ = fs::create_dir_all(path);
+    // portable-pty uses HOME as the child cwd before Bus starts. Every PTY
+    // fixture points HOME at this scratch directory, so it must exist first.
+    let home = path.join("home");
+    fs::create_dir_all(&home).expect("create scratch HOME for test fixture");
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700))
+        .expect("make scratch HOME private for test fixture");
     let _ = fs::write(
         path.join(RUNTIME_OWNER_MARKER),
         std::process::id().to_string(),
