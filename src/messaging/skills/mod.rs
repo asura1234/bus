@@ -4,30 +4,26 @@ mod files;
 mod install;
 mod shadow;
 
-use crate::messaging::{prefs::settings, storage::io as bus_io};
+use crate::messaging::storage::io as bus_io;
 pub(crate) use bundle::hash as bundle_hash;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 pub(crate) use shadow::post_warnings;
 #[cfg(test)]
 use shadow::warnings_for_launch;
 use std::{
+    collections::BTreeMap,
     io,
     path::{Path, PathBuf},
 };
 
 const PROVIDERS: [(&str, &str); 2] = [("claude", ".claude"), ("codex", ".agents")];
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct Answer {
-    pub(crate) bundle_hash: String,
-    pub(crate) accepted: bool,
-}
-
 #[derive(Debug, Serialize)]
 pub(crate) struct Status {
     pub(crate) bundle_hash: String,
     version: &'static str,
-    answer: Option<Answer>,
+    build_sha: &'static str,
+    source_root: String,
     skills: Vec<SkillStatus>,
     pub(crate) warnings: Vec<String>,
 }
@@ -38,6 +34,9 @@ struct SkillStatus {
     name: String,
     path: PathBuf,
     state: &'static str,
+    /// What this install invocation did. Status omits it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<&'static str>,
 }
 
 pub(crate) fn home() -> io::Result<PathBuf> {
@@ -47,43 +46,12 @@ pub(crate) fn home() -> io::Result<PathBuf> {
 fn data_dir(home: &Path) -> PathBuf {
     home.join(".local/share/bus")
 }
-fn settings_path(home: &Path) -> PathBuf {
-    data_dir(home).join("settings.json")
-}
-
-pub(crate) fn answer(home: &Path) -> io::Result<Option<Answer>> {
-    settings::load(&settings_path(home))
-        .map(|settings| settings.skills_answer)
-        .map_err(io::Error::other)
-}
-
-/// Serialize first-launch offers across simultaneous Bus launches.
-pub(crate) fn offer_lease(home: &Path) -> io::Result<std::fs::File> {
-    bus_io::private_dir(&data_dir(home))?;
-    bus_io::lock(&data_dir(home).join("skills-offer.lock"))
-}
-
-pub(crate) fn needs_offer(home: &Path) -> io::Result<bool> {
-    Ok(answer(home)?.is_none_or(|answer| answer.bundle_hash != bundle_hash()))
-}
-
-pub(crate) fn record_answer(home: &Path, accepted: bool) -> io::Result<()> {
-    let answer = Answer {
-        bundle_hash: bundle_hash(),
-        accepted,
-    };
-    let path = settings_path(home);
-    bus_io::private_dir(&data_dir(home))?;
-    let _lease = bus_io::append_lock(&path.with_extension("json.lock"))?;
-    let mut settings = settings::load(&path).map_err(|error| {
-        io::Error::other(format!(
-            "Skills consent left settings at {} unchanged: {error}",
-            path.display()
-        ))
-    })?;
-    settings.skills_answer = Some(answer);
-    settings::save(&path, &settings).map_err(io::Error::other)?;
-    Ok(())
+fn source_root() -> String {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    std::fs::canonicalize(&manifest)
+        .unwrap_or(manifest)
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(crate) fn status(home: &Path) -> io::Result<Status> {
@@ -91,7 +59,8 @@ pub(crate) fn status(home: &Path) -> io::Result<Status> {
     let mut report = Status {
         bundle_hash: bundle_hash(),
         version: env!("CARGO_PKG_VERSION"),
-        answer: answer(home)?,
+        build_sha: env!("BUS_BUILD_SHA"),
+        source_root: source_root(),
         skills: Vec::new(),
         warnings: Vec::new(),
     };
@@ -114,6 +83,7 @@ pub(crate) fn status(home: &Path) -> io::Result<Status> {
                 name: skill.name.clone(),
                 path,
                 state,
+                action: None,
             });
         }
     }
@@ -123,18 +93,23 @@ pub(crate) fn status(home: &Path) -> io::Result<Status> {
 pub(crate) fn install(home: &Path) -> io::Result<Status> {
     bus_io::private_dir(&data_dir(home))?;
     let _lease = bus_io::append_lock(&data_dir(home).join("skills-install.lock"))?;
-    // Keep explicit consent when installation fails.
-    record_answer(home, true)?;
     let mut manifest = install::load_manifest(home)?;
+    let mut actions = BTreeMap::new();
     for (provider, directory) in PROVIDERS {
         let root = home.join(directory).join("skills");
         for skill in bundle::shipped() {
-            install::install_one(home, &root, provider, skill, &mut manifest)?;
+            let action = install::install_one(home, &root, provider, skill, &mut manifest)?;
+            actions.insert(format!("{provider}/{}", skill.name), action);
         }
     }
     manifest.bundle_hash = bundle_hash();
     install::save_manifest(home, &manifest)?;
-    status(home)
+    let mut report = status(home)?;
+    for skill in &mut report.skills {
+        let key = format!("{}/{}", skill.provider, skill.name);
+        skill.action = actions.get(&key).copied();
+    }
+    Ok(report)
 }
 
 pub(crate) fn skill_names() -> Vec<&'static str> {

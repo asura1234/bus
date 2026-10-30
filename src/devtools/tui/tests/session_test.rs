@@ -152,14 +152,8 @@ fn session_directories_are_created_marked_and_removed() {
     let claim = Claim::new("s1");
     paths.claim(&claim).unwrap();
     assert!(paths.is_driver_dir());
-    assert!(!crate::messaging::skills::needs_offer(&paths.home_dir()).unwrap());
-    assert!(
-        !crate::messaging::skills::answer(&paths.home_dir())
-            .unwrap()
-            .unwrap()
-            .accepted
-    );
     assert!(!paths.home_dir().join(".claude").exists());
+    assert!(!paths.home_dir().join(".agents").exists());
     assert_eq!(paths.read_claim(), Some(claim.clone()));
     // A name is claimed once; the second claim fails instead of sharing it.
     assert!(paths.claim(&Claim::new("s1")).is_err());

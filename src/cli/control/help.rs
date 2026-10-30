@@ -180,13 +180,13 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                 .subcommand(
                     Command::new("install")
                         .about("Copy default skills; preserve user skills")
-                        .long_about("Copy Bus's default workflow skills into the current user's Claude and Codex directories while preserving modified or unrelated user skills. Use --yes to record consent without a prompt.")
+                        .long_about("Copy Bus's default workflow skills into the current user's Claude and Codex directories while preserving modified or unrelated user skills. Use --yes to install without a prompt. The report's action for each skill is installed, updated, unchanged, preserved-conflict, or blocked-link.")
                         .after_help("Example: bus skills install --yes")
                         .arg(
                             Arg::new("yes")
                                 .long("yes")
                                 .action(clap::ArgAction::SetTrue)
-                                .help("Record consent without prompting"),
+                                .help("Install without prompting"),
                         ),
                 ),
         )

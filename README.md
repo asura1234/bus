@@ -11,12 +11,18 @@ normal permissions. For this run, bypass overrides Codex's conflicting approval
 options; the original `--args` remain saved for later normal runs.
 See [agent launch arguments](docs/launch-args.md) for provider flags and details.
 
-Bus offers its default workflow skills on the first interactive launch (`./run dev`
-or `./run prod`). It lists the skills and saves yes or no in Bus settings;
-a changed bundle is offered again. Noninteractive launches do not prompt.
-Isolated automation can set `BUS_SKIP_SKILLS_OFFER=1` without saving an answer.
-Use `bus skills install --yes` (or `./run dev skills install --yes`) to install
-without a prompt, and `bus skills status` to inspect copies without a running session.
+Installing skills is a separate command. `./run dev`, `./run prod`, `bus`, and
+`bus resume` never ask about or install skills. Use `./run install-skills` to
+install this checkout's default skills, or add `--yes` to install without a
+prompt. `bus skills install --yes` installs the bundle embedded in that binary;
+`bus skills status` inspects copies without a running session. The install
+report's action for each skill is installed, updated, unchanged,
+preserved-conflict, or blocked-link, with a warning when a user skill is
+preserved.
+`./run install-skills` runs only a binary built from this checkout: if a shared
+Cargo target returns another checkout's binary, it rebuilds into
+`target/install-skills` and refuses to install when that binary still does not
+match.
 
 Skills are copied into `~/.claude/skills` and `~/.agents/skills` for Claude and
 Codex. Codex's current [skill discovery documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)

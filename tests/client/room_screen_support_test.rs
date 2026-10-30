@@ -87,17 +87,6 @@ impl RoomClient {
         let config = base.join("config");
         let home = base.join("home");
         fs::create_dir_all(&home).unwrap();
-        let status = Command::new(env!("CARGO_BIN_EXE_bus"))
-            .args(["skills", "status"])
-            .env("HOME", &home)
-            .env("USERPROFILE", &home)
-            .output()
-            .unwrap();
-        assert!(status.status.success(), "{:?}", status);
-        let report: Value = serde_json::from_slice(&status.stdout).unwrap();
-        let state = home.join(".local/share/bus");
-        fs::create_dir_all(&state).unwrap();
-        fs::write(state.join("settings.json"), serde_json::to_vec(&serde_json::json!({"skills_answer":{"accepted":false,"bundle_hash":report["bundle_hash"]}})).unwrap()).unwrap();
         // Let Bus create its private root; do not precreate a shared control directory.
         fs::create_dir_all(&base).unwrap();
         fs::create_dir_all(config.join("bus")).unwrap();
