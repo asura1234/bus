@@ -10,9 +10,15 @@ coverage, not real-model acceptance. Repeat acceptance for the final head.
 
 - [ ] Use a disposable, untrusted project and a private Bus server. Never test
   against a live session. Give the scratch root mode 0700, scrub inherited
-  `BUS_*`/`HERDR_*`, and check `--paths` before any control mutation. Check
-  `bus settings` confirms Feishu is unconfigured in the isolated settings;
-  never direct test notifications to a real recipient.
+  `BUS_*`/`HERDR_*`, and check `--paths` before any control mutation. On a
+  fresh `BUS_DATA_DIR` with no `settings.json`, `sbus settings` shows defaults:
+  `feishu_waiting_notifications` true, `feishu_recipient`
+  `ou_ca1b530d792419a044e281f998ce68dc`, and `feishu_cli_path` null. Nested
+  `feishu.enabled` is true because that settings path exists. Do not call this
+  unconfigured, and do not run `sbus settings feishu-notifications --off`.
+  Isolation is the wrapper PATH `$scratch/bin:/usr/bin:/bin` not resolving
+  `lark-cli`: none of those three directories may contain an executable
+  `lark-cli`. Check those paths, not `command -v` in the tester's own shell.
 - [ ] Use real provider executables and the account's shared login and refresh
   locks, not copies of credentials. Isolate provider config, hooks, sessions
   and logs. **Stop and ask the orchestrator for a validated, authorized setup**
@@ -78,7 +84,13 @@ sbus --dev                      # UI terminal; leave it open
 
 In the other terminal, set `scratch` to the printed path and the same alias,
 then run `sbus --paths` and `sbus state`. `build.binary` must be
-`$scratch/bin/bus`. Run `sbus settings` there too.
+`$scratch/bin/bus`. Run `sbus settings` there too. With no `settings.json`,
+expect `result.settings.feishu_waiting_notifications` true,
+`result.settings.feishu_recipient` `ou_ca1b530d792419a044e281f998ce68dc`,
+`result.settings.feishu_cli_path` null, and `result.settings.feishu.enabled`
+true. A null CLI path execs `lark-cli` when that PATH resolves it, so the
+scratch PATH is the isolation. Do not run
+`sbus settings feishu-notifications --off`.
 
 A shared target's top-level binary can belong to another worktree even after
 Cargo reports `Fresh`. A copy is not verified merely because Cargo succeeded.
