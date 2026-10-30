@@ -44,6 +44,19 @@ fn kimi_multiline_paste_with_soft_wrapped_words_keeps_exact_bus_ownership() {
     );
 }
 
+#[test]
+fn kimi_clipped_frame_cannot_attest_an_unseen_prefix() {
+    // Captured from Kimi 2.4.0 in a 53-column scratch Bus pane.
+    let frame = "╭─────────────────── ↑ 14 more ───────────────────╮\n│ > turn after assignment so the worker reply     │\n│   wakes you. When its captured reply            │\n│   arrives, inspect the assignment status and    │\n│   answer this developer message once with       │\n│   R1_ORCH_CONFIRMED and the worker result.      │\n│   Do not use a waiting-on-you tag or contact    │\n│   anything outside this scratch Bus.            │\n╰─────────────────────────────────────────────────╯\nAsk When Needed";
+    let visible_suffix = "turn after assignment so the worker reply wakes you. When its captured reply arrives, inspect the assignment status and answer this developer message once with R1_ORCH_CONFIRMED and the worker result. Do not use a waiting-on-you tag or contact anything outside this scratch Bus.";
+    for prefix in ["Bus message that was pasted. ", "Unrelated edited draft. "] {
+        assert_eq!(
+            observe(AgentKind::Kimi, frame, &format!("{prefix}{visible_suffix}")),
+            InputObservation::Unavailable
+        );
+    }
+}
+
 #[tokio::test]
 async fn grok_login_heading_above_composer_padding_receives_no_input() {
     use std::time::{Duration, Instant};
