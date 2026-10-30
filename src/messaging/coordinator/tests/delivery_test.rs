@@ -1909,3 +1909,44 @@ fn grok_superseded_failure_does_not_poison_rebound_session() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn grok_resume_of_superseded_session_is_not_silently_retired() {
+    // Grok 1.0.70 `/resume <id>` reloads a session in place and reports
+    // session_start source=load. After a Bus clear (session -> fresh), resuming
+    // the old session moves the pane off the session Bus follows.
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..2 {
+        consume(&mut worker, agent, &dir);
+    }
+    assert_eq!(
+        agent_of(&worker, agent)
+            .runtime_identity
+            .session_id
+            .as_deref(),
+        Some("fresh")
+    );
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"session","source":"load"}),
+    );
+    consume(&mut worker, agent, &dir);
+    let state = agent_of(&worker, agent);
+    assert!(
+        state.status == RuntimeStatus::Unavailable
+            || state.runtime_identity.session_id.as_deref() == Some("session"),
+        "pane resumed the superseded session but Bus still follows {:?} with status {:?}",
+        state.runtime_identity.session_id,
+        state.status
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
