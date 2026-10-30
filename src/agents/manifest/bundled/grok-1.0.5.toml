@@ -5,9 +5,9 @@
 # Offline 1.0.5 evidence confirms boxed composer and Ctrl+X footer; authenticated
 # permission/trust/question cards, long-paste chips and native wakes remain pending.
 id = "grok"
-version = "2026.10.22.1"
+version = "2026.10.31.1"
 min_engine_version = 3
-updated_at = "2026-10-22T00:00:00Z"
+updated_at = "2026-10-31T00:00:00Z"
 aliases = ["grok-build"]
 
 # Evidence: Grok Build 0.2.101 source and live pane reads.
@@ -129,6 +129,23 @@ region = "top_non_empty_lines(1)"
 visible_working = true
 line_regex = ['[⋅:⸬⁙.·]\s+[1-9][0-9]*\s+│']
 
+# Grok 1.0.70 keeps an idle OSC title ("grok") and idle progress ("4;0;0")
+# during a live turn. The Tasks panel and the [stop] status line are the
+# signals that remain. They must outrank the idle OSC rules below, and stay
+# under dialog and login rules so a question card is still blocked.
+# Captured 2026-10-31: "▾ Tasks 1" plus "⸬ Run …", while a braille status
+# line ended in "[stop]". Tasks 0 is the idle panel and must not match.
+[[rules]]
+id = "background_tasks_panel_working"
+state = "working"
+priority = 1165
+region = "whole_recent"
+visible_working = true
+any = [
+  { line_regex = ['^\s*[▾▸]\s+Tasks\s+[1-9][0-9]*\s*$'] },
+  { line_regex = ['^\s*⸬\s+\S'] },
+]
+
 [[rules]]
 id = "osc_progress_working"
 state = "working"
@@ -167,10 +184,13 @@ region = "osc_progress"
 visible_idle = true
 regex = ['^4;0;0$']
 
+# Above osc_title_idle (1100). Grok 1.0.70 drops the braille spinner from
+# the OSC title while this [stop] line is still on screen, so a lower
+# priority let Bus treat a running turn as idle and type into it.
 [[rules]]
 id = "spinner_status_working"
 state = "working"
-priority = 200
+priority = 1160
 region = "whole_recent"
 visible_working = true
 line_regex = ['^\s*[\x{2801}-\x{28FF}]\s.*\[stop\]\s*$']

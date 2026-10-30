@@ -127,6 +127,8 @@ mod tests {
     mod codex;
     #[path = "engine_test.rs"]
     mod engine;
+    #[path = "grok_test.rs"]
+    mod grok;
     #[path = "others_test.rs"]
     mod others;
     #[path = "regions_test.rs"]
