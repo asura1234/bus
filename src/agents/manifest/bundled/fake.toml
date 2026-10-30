@@ -15,7 +15,7 @@ contains = ["enter to select", "esc to cancel"]
 id = "working"
 state = "working"
 priority = 970
-region = "bottom_non_empty_lines(12)"
+region = "bottom_non_empty_lines(1)"
 visible_working = true
 line_regex = ['^\s*fake agent working\s*$']
 
