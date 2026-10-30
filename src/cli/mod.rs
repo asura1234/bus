@@ -153,7 +153,8 @@ fn bind_session_env(root: &std::path::Path, session_id: Option<&str>) -> io::Res
         "--session".to_owned(),
         coordinator::DEFAULT_SESSION.to_owned(),
     ];
-    crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)
+    crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)?;
+    Ok(())
 }
 
 fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
