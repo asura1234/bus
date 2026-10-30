@@ -222,11 +222,16 @@ native records before recovery; do not blindly resend.
 
 ## Real-model messaging matrix
 
-Create a non-Codex orchestrator in MASTER and real Codex, Claude and new
-provider workers in its work room. Separately create a Claude orchestrator and
-new-provider worker in a second room. Use real models and unique markers for
-each cell. A new Codex orchestrator is refused before hook setup and is not
-saved. Expect `ok: false` and this `error.message`:
+Create two work rooms. `provider-matrix` has one non-Codex orchestrator in
+MASTER and real Codex, Claude, and new-provider workers. `provider-claude`
+has its own Claude orchestrator in MASTER and a new-provider worker. An
+orchestrator binds exactly one work room for its whole life, and a work room
+has at most one orchestrator, so `new-orch` stays on `provider-matrix` and
+`claude-orch` stays on `provider-claude`. Record each `room create` result's
+`room_id`. `--room` and `--orchestrates` accept that ID or the room's unique
+name. Use real models and unique markers for each cell. A new Codex
+orchestrator is refused before hook setup and is not saved. Expect `ok: false`
+and this `error.message`:
 
 `Codex cannot be an orchestrator yet: an orchestrator dispatches work with bus send --async in the background and must be woken when it finishes, but Codex does not start a new turn when a background command exits (openai/codex issues 32188, 50079). Use Claude Code or Cursor as the orchestrator; Codex works fine as a worker.`
 
@@ -260,8 +265,21 @@ retry that name once with `--consent-hooks`. A provider whose hook file is
 still missing uses the `Project hook setup requires --consent-hooks` error,
 then the flagged command. A name that already returned `ok: true` is finished.
 
+`claude-orch` is Claude, same as `claude-worker`: one add, and
+`--consent-hooks` does not change the result. Create `provider-claude` first.
+Expect `ok: true` and `{agent_id, stage: "launching"}`. A second orchestrator
+on `provider-matrix` fails with `Room {room_id} already has orchestrator agent
+{agent_id}; a work room has at most one orchestrator`. Pointing `new-orch` at
+`provider-claude` after it is saved fails with `Agent {agent_id} already
+orchestrates a room; an orchestrator keeps its room for life`.
+
+`second-peer` is the new provider in `provider-claude`. Use the same first-add
+rule as `new-peer`. The name is session-unique, so it is a different agent
+from `new-peer`.
+
 ```sh
 sbus room create provider-matrix
+# Expect ok:true and {room_id:NUMBER}.
 # Refused before hook setup. ok:false, agent not saved. Not an orchestrator-cell pass.
 sbus agent add --room master --name codex-orch --provider codex \
   --orchestrates provider-matrix --pwd "$scratch/project"
@@ -275,13 +293,22 @@ sbus agent add --room provider-matrix --name claude-worker --provider claude \
   --pwd "$scratch/project"
 sbus agent add --room provider-matrix --name new-peer --provider PROVIDER \
   --pwd "$scratch/project" --consent-hooks
+sbus room create provider-claude
+# Expect ok:true and {room_id:NUMBER}. This room is only for claude-orch.
+# Claude orchestrator for provider-claude. One add. Do not run it twice.
+sbus agent add --room master --name claude-orch --provider claude \
+  --orchestrates provider-claude --pwd "$scratch/project"
+# Expect ok:true and {agent_id, stage:"launching"}.
+# New-provider worker in provider-claude. Same first-add rule as new-peer.
+sbus agent add --room provider-claude --name second-peer --provider PROVIDER \
+  --pwd "$scratch/project" --consent-hooks
 ```
 
 | Route | Evidence to capture |
 | --- | --- |
 | [ ] New orchestrator → Codex worker → orchestrator wake | Worker result and a new orchestrator turn acknowledging it |
 | [ ] New orchestrator → Claude worker → orchestrator wake | Same, with a different marker |
-| [ ] Claude orchestrator → new worker → orchestrator wake | New worker repeats what it heard and Claude acknowledges the wake |
+| [ ] `claude-orch` → `second-peer` → orchestrator wake | `second-peer` repeats what it heard and Claude acknowledges the wake |
 | [ ] New worker → Codex worker → new worker | New worker initiated send and reports the returned marker |
 | [ ] Codex worker → new worker → Codex worker | New worker repeats the Codex message and Codex reports its reply |
 | [ ] New worker → Claude worker → new worker | New worker initiated send and reports the returned marker |
@@ -298,6 +325,10 @@ running `sbus send --as SOURCE` yourself. For example:
 sbus send --room master --to new-orch --text 'Send codex-worker a task asking it to reply CODEX_R1. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
 sbus message status TASK_MESSAGE_ID
 sbus history --room provider-matrix --limit 100
+sbus history --room master --limit 100
+sbus send --room master --to claude-orch --text 'Send second-peer a task asking it to reply CLAUDE_R1. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
+sbus message status TASK_MESSAGE_ID
+sbus history --room provider-claude --limit 100
 sbus history --room master --limit 100
 ```
 
