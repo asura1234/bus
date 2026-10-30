@@ -1059,6 +1059,8 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("not serving"), "{text}");
+        assert!(text.contains("refused before any stop"), "{text}");
+        assert!(text.contains("still serving"), "{text}");
         assert!(crate::cli::help::DEV_HELP.contains("bus --dev restart"));
     }
 }

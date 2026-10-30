@@ -116,6 +116,10 @@ pub(crate) fn notice_text(record: &RestartLog) -> String {
             "Bus restart rolled back to {}. {} did not become healthy: {}.",
             record.old_sha, record.new_sha, record.reason
         ),
+        "refused" => format!(
+            "Bus restart was refused before any stop. The server is still running unchanged and still serving {}. {} was not started: {}.",
+            record.old_sha, record.new_sha, record.reason
+        ),
         _ => format!(
             "Bus restart failed and the session is not serving {}. {} did not become healthy: {}.",
             record.old_sha, record.new_sha, record.reason
@@ -358,6 +362,21 @@ mod tests {
         let failed_notice = notice_text(&failed);
         assert!(!failed_notice.contains("rolled back"), "{failed_notice}");
         assert!(failed_notice.contains("not serving"));
+        let refused = RestartLog {
+            outcome: "refused".into(),
+            ..failed
+        };
+        let refused_notice = notice_text(&refused);
+        assert!(
+            refused_notice.contains("refused before any stop"),
+            "{refused_notice}"
+        );
+        assert!(
+            refused_notice.contains("still running unchanged"),
+            "{refused_notice}"
+        );
+        assert!(refused_notice.contains("still serving"), "{refused_notice}");
+        assert!(!refused_notice.contains("not serving"), "{refused_notice}");
     }
 
     #[test]
