@@ -46,7 +46,7 @@ fn native_visible_draft(screen: &str, body: &str, expected: &str) -> bool {
                 .collect::<String>()
         })
         .filter(|line| !line.trim().is_empty())
-        .last()
+        .next_back()
         .unwrap_or_default();
     if !footer.trim().starts_with("Enter:send") {
         return false;

@@ -27,12 +27,14 @@ pub(crate) enum CompletionResolution {
 
 /// Trusted Bus evidence for the isolated synthetic driver, never deserialized
 /// from native JSON. Native Build 1.0.70 uses the owned transcript reader below.
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) struct CompletionAttestation {
     pub(crate) session: String,
     pub(crate) turn: String,
     pub(crate) text: String,
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn resolve_attested_completion(
     expected_session: &str,
     expected_turn: &str,
@@ -100,6 +102,15 @@ pub(crate) fn resolve_candidate(
     let Some(transcript) = read_transcript(Path::new(path), &session)? else {
         return Ok(CompletionResolution::Pending);
     };
+    resolve_transcript(&transcript, session, turn, settled_idle)
+}
+
+fn resolve_transcript(
+    transcript: &str,
+    session: String,
+    turn: String,
+    settled_idle: bool,
+) -> Result<CompletionResolution, String> {
     let mut final_text = None;
     let mut completed = false;
     for line in transcript.lines().filter(|line| !line.trim().is_empty()) {
