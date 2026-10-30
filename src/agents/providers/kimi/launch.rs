@@ -665,6 +665,30 @@ mod tests {
     }
 
     #[test]
+    fn shared_auth_follows_a_scratch_sources_existing_directory_links() {
+        let root = crate::utils::test_temp::unique_temp_path("kimi-linked-source");
+        let source = root.join("source");
+        let shared = root.join("shared");
+        let home = root.join("private");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        for folder in ["credentials", "oauth"] {
+            std::fs::create_dir_all(shared.join(folder)).unwrap();
+            std::os::unix::fs::symlink(shared.join(folder), source.join(folder)).unwrap();
+        }
+        share_auth(&source, &home).unwrap();
+        verify_shared_auth(&home, &source).unwrap();
+        std::fs::write(home.join("credentials/token"), b"synthetic").unwrap();
+        assert_eq!(
+            std::fs::read(shared.join("credentials/token")).unwrap(),
+            b"synthetic"
+        );
+        std::fs::create_dir(home.join("oauth/refresh.lock")).unwrap();
+        assert!(shared.join("oauth/refresh.lock").is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn shared_auth_rejects_a_legacy_bus_home_as_source() {
         let root = crate::utils::test_temp::unique_temp_path("kimi-nested-auth");
         let parent = root.join("callbacks/old-launch");
