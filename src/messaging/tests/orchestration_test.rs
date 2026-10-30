@@ -656,9 +656,9 @@ fn agent_doc_tier_check_distinguishes_diagnostic_prose_from_commands() {
 /// `bus --dev restart`. Every other `--dev` mention stays forbidden.
 fn dev_restart_section_removed(name: &str, text: &str) -> String {
     const HEADING: &str = "## Developer restart for orchestrators\n";
-    if !std::path::Path::new(name)
+    if std::path::Path::new(name)
         .file_name()
-        .is_some_and(|file| file == "how-to-bus-cli.md")
+        .is_none_or(|file| file != "how-to-bus-cli.md")
     {
         return text.to_owned();
     }
