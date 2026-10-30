@@ -113,6 +113,8 @@ from review_scope import (  # noqa: E402
 # Public sibling skills may belong to the user; shared runtime code is Bus-owned.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus"))
 from cli_extensions.pr_goal_context import build_context  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main" / "scripts"))
+from repository_context import default_base  # noqa: E402
 
 
 LOCKED_GOAL_NAME = ".locked-goal"
@@ -240,15 +242,18 @@ def main(argv: list[str]) -> int:
             print(f"error: {error}", file=sys.stderr)
             return 2
 
-    if args.base is None:
-        args.base = git("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").stdout.strip() or "origin/master"
     failures: list[str] = []
+    if args.base is None:
+        try:
+            args.base = default_base(Path.cwd())
+        except ValueError as error:
+            failures.append(str(error))
     branch = git("branch", "--show-current").stdout.strip()
     if not branch:
         failures.append("HEAD 处于 detached 状态——请在具名分支上运行 /review-pr")
     elif branch in ("main", "master"):
         failures.append("当前在 main/master 上，没有可审查的分支变更")
-    if git("rev-parse", "--verify", "--quiet", args.base).returncode != 0:
+    if args.base is not None and git("rev-parse", "--verify", "--quiet", args.base).returncode != 0:
         failures.append(f"base ref '{args.base}' 无法解析（是否需要先 git fetch origin？）")
     if git("check-ignore", "-q", "temp/review-pr").returncode != 0:
         failures.append("temp/review-pr must be ignored before writing review artifacts")
@@ -261,6 +266,7 @@ def main(argv: list[str]) -> int:
             "--",
             ".",
             ":(exclude)plans/**",
+            ":(exclude)docs/plans/**",
         )
         if diff_proc.returncode != 0:
             failures.append(f"git diff {args.base}...HEAD 失败：{diff_proc.stderr.strip()}")
