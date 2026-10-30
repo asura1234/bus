@@ -101,6 +101,9 @@ impl Worker {
         parsed: &callbacks::Parsed,
     ) -> Result<bool, String> {
         let session = match parsed {
+            callbacks::Parsed::Session { session, source } if source.as_deref() == Some("new") => {
+                session
+            }
             callbacks::Parsed::Session { .. } => return Ok(false),
             callbacks::Parsed::Started { session, .. }
             | callbacks::Parsed::Final { session, .. }
