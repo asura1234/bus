@@ -1,5 +1,4 @@
 """Exercise child publication checks for local tags and SHA-fetched history."""
-import os
 import subprocess
 import sys
 import tempfile
