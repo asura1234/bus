@@ -1,5 +1,49 @@
 use super::*;
 
+#[test]
+fn kimi_only_accepts_the_current_idle_framed_composer() {
+    let frame = "╭────────────────────╮\n│ >                │\n╰────────────────────╯\nK2.8 Preview thinking: max";
+    assert_eq!(
+        observe(AgentKind::Kimi, frame, "Bus task"),
+        crate::terminal::runtime::InputObservation::Empty
+    );
+    let draft = "╭────────────────────╮\n│ > Bus task       │\n╰────────────────────╯\nK2.8 Preview thinking: max";
+    assert_eq!(
+        observe(AgentKind::Kimi, draft, "Bus task"),
+        crate::terminal::runtime::InputObservation::Pending
+    );
+    assert_eq!(
+        observe(AgentKind::Kimi, draft, "Other task"),
+        crate::terminal::runtime::InputObservation::Unavailable
+    );
+    let busy = format!("⠋ Working…\n{frame}");
+    assert_eq!(
+        observe(AgentKind::Kimi, &busy, "Bus task"),
+        crate::terminal::runtime::InputObservation::Unavailable
+    );
+}
+
+#[test]
+fn kimi_multiline_paste_with_soft_wrapped_words_keeps_exact_bus_ownership() {
+    let frame = "╭──────────────────────────────╮\n│ > Bus message 1              │\n│   Please answer with YOUR    │\n│   ANSWER.                    │\n╰──────────────────────────────╯\nAsk When Needed";
+    assert_eq!(
+        observe(
+            AgentKind::Kimi,
+            frame,
+            "Bus message 1\nPlease answer with YOUR ANSWER."
+        ),
+        InputObservation::Pending,
+    );
+    assert_eq!(
+        observe(
+            AgentKind::Kimi,
+            frame,
+            "Bus message 1\nPlease answer with DIFFERENT ANSWER."
+        ),
+        InputObservation::Unavailable,
+    );
+}
+
 #[tokio::test]
 async fn grok_login_heading_above_composer_padding_receives_no_input() {
     use std::time::{Duration, Instant};

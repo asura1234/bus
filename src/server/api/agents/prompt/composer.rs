@@ -52,6 +52,9 @@ pub(super) fn observe_since_launch(
     if kind == AgentKind::Grok {
         return super::grok::observe(screen, expected);
     }
+    if kind == AgentKind::Kimi {
+        return super::kimi::observe(screen, expected);
+    }
     let plain = screen
         .lines()
         .map(|line| {
@@ -246,6 +249,9 @@ fn input_since_launch(
 ) -> Option<String> {
     if kind == AgentKind::Grok {
         return super::grok::input(screen);
+    }
+    if kind == AgentKind::Kimi {
+        return super::kimi::input(screen);
     }
     let styled: Vec<_> = screen.lines().map(styled_chars).collect();
     let lines: Vec<String> = styled
