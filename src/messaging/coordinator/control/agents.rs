@@ -42,6 +42,12 @@ impl Worker {
                     "claude" => Provider::ClaudeCode,
                     "codex" => Provider::Codex,
                     "cursor" => Provider::Cursor,
+                    #[cfg(feature = "dev-tools")]
+                    "fake"
+                        if crate::agents::providers::launch::native_provider("fake").is_some() =>
+                    {
+                        Provider::Fake
+                    }
                     _ => return Err("Provider must be claude, codex, or cursor".into()),
                 };
                 let room = self.control_room(required(p, "room")?)?;
@@ -308,6 +314,8 @@ fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
         Provider::ClaudeCode | Provider::Codex => "esc",
         Provider::Cursor => "ctrl+c",
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => "esc",
     }
 }
 
@@ -317,5 +325,7 @@ fn clear_command(provider: Provider) -> &'static str {
     match provider {
         Provider::ClaudeCode | Provider::Codex => "/clear",
         Provider::Cursor => "/new-chat",
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => "/clear",
     }
 }

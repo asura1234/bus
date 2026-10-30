@@ -24,11 +24,13 @@ pub enum AgentKind {
     Qwen,
     Maki,
     Muse,
+    #[cfg(feature = "dev-tools")]
+    Fake,
 }
 
 impl AgentKind {
     #[cfg(test)]
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 23 + cfg!(feature = "dev-tools") as usize] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -52,9 +54,11 @@ impl AgentKind {
         Self::Qwen,
         Self::Maki,
         Self::Muse,
+        #[cfg(feature = "dev-tools")]
+        Self::Fake,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 21 + cfg!(feature = "dev-tools") as usize] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -76,6 +80,8 @@ impl AgentKind {
         Self::Qwen,
         Self::Maki,
         Self::Muse,
+        #[cfg(feature = "dev-tools")]
+        Self::Fake,
     ];
 }
 
@@ -104,6 +110,8 @@ pub fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Qwen => "qwen",
         AgentKind::Maki => "maki",
         AgentKind::Muse => "muse",
+        #[cfg(feature = "dev-tools")]
+        AgentKind::Fake => "fake",
     }
 }
 
@@ -138,6 +146,8 @@ pub fn interactive_agent_executable(agent: AgentKind) -> &'static str {
         AgentKind::Qwen => "qwen",
         AgentKind::Maki => "maki",
         AgentKind::Muse => "muse",
+        #[cfg(feature = "dev-tools")]
+        AgentKind::Fake => "bus-fake-agent",
     }
 }
 
@@ -177,6 +187,8 @@ fn lookup_agent(name: &str) -> Option<AgentKind> {
         "qwen" | "qwen-code" | "qwen code" => Some(AgentKind::Qwen),
         "maki" => Some(AgentKind::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(AgentKind::Muse),
+        #[cfg(feature = "dev-tools")]
+        "fake" | "bus-fake-agent" => Some(AgentKind::Fake),
         _ if is_muse_versioned_binary(name) => Some(AgentKind::Muse),
         _ => None,
     }

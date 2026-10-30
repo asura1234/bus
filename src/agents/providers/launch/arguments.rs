@@ -122,6 +122,8 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
                 "--resume" | "-r" | "--session-id" | "--continue" | "-c" | "--fork-session"
             ),
             ProviderKind::Cursor => matches!(name, "--resume" | "--continue"),
+            #[cfg(feature = "dev-tools")]
+            ProviderKind::Fake => matches!(name, "--resume"),
         };
         if selector {
             index += 1;
@@ -174,6 +176,11 @@ fn arity(provider: ProviderKind, name: &str) -> Option<usize> {
         ProviderKind::Codex => codex_arity(name),
         ProviderKind::ClaudeCode => claude_arity(name),
         ProviderKind::Cursor => cursor_arity(name),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => match name {
+            "--script" | "--resume" => Some(1),
+            _ => None,
+        },
     }
 }
 

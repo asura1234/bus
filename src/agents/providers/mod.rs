@@ -6,6 +6,8 @@ pub(crate) mod callback_entry;
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod cursor;
+#[cfg(feature = "dev-tools")]
+pub(crate) mod fake;
 pub(crate) mod hook_json;
 pub(crate) mod launch;
 pub(crate) mod spool;
@@ -22,6 +24,8 @@ pub(crate) enum ProviderKind {
     Codex,
     ClaudeCode,
     Cursor,
+    #[cfg(feature = "dev-tools")]
+    Fake,
 }
 
 impl ProviderKind {
@@ -32,6 +36,8 @@ impl ProviderKind {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
             Self::Cursor => "cursor",
+            #[cfg(feature = "dev-tools")]
+            Self::Fake => "fake",
         }
     }
 
@@ -41,6 +47,8 @@ impl ProviderKind {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
             Self::Cursor => "cursor-agent",
+            #[cfg(feature = "dev-tools")]
+            Self::Fake => "bus-fake-agent",
         }
     }
 }
@@ -53,6 +61,8 @@ pub(crate) fn parse(
         ProviderKind::Codex => codex::hooks::parse(value),
         ProviderKind::ClaudeCode => claude_code::hooks::parse(value),
         ProviderKind::Cursor => cursor::hooks::parse(value),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => fake::parse(value),
     }
 }
 

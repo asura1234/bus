@@ -199,5 +199,7 @@ fn capture_args(
         ProviderKind::ClaudeCode => claude_code::resume::capture_args(hooks, project),
         ProviderKind::Codex => codex::resume::capture_args(hooks, project),
         ProviderKind::Cursor => cursor::resume::capture_args(hooks, project),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Ok((hooks.spool.clone(), Vec::new(), false)),
     }
 }
