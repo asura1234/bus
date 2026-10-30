@@ -464,7 +464,7 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_invocation(&args(&["restart", "--confirm"]))
+            parse_invocation(&args(&["--dev", "restart", "--confirm"]))
                 .unwrap()
                 .action,
             Action::Restart(crate::cli::session_pick::RestartRequest {
@@ -472,6 +472,13 @@ mod tests {
                 confirm: true,
                 as_who: None,
             })
+        );
+        let refused =
+            parse_invocation(&args(&["restart", "--binary", "/tmp/bus", "--confirm"])).unwrap_err();
+        assert!(refused.contains("bus --dev restart"), "{refused}");
+        assert_eq!(
+            parse_invocation(&args(&["restart", "--help"])).unwrap_err(),
+            refused
         );
     }
 

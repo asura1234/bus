@@ -140,7 +140,7 @@ fn run_flags() -> [Arg; 2] {
     ]
 }
 
-fn lifecycle_commands() -> [Command; 4] {
+fn lifecycle_commands() -> [Command; 3] {
     [
         Command::new("sessions")
             .about("List saved sessions")
@@ -169,31 +169,34 @@ fn lifecycle_commands() -> [Command; 4] {
             .long_about(details::STOP)
             .args(run_flags())
             .after_help("Example: bus stop"),
-        Command::new("restart")
-            .about("Restart the session server onto another Bus binary")
-            .long_about(details::RESTART)
-            .args(run_flags())
-            .arg(
-                Arg::new("binary")
-                    .long("binary")
-                    .required(true)
-                    .value_name("PATH")
-                    .help("Bus binary that replaces the running server"),
-            )
-            .arg(
-                Arg::new("confirm")
-                    .long("confirm")
-                    .action(clap::ArgAction::SetTrue)
-                    .help("Confirm replacing the running server"),
-            )
-            .arg(
-                Arg::new("as")
-                    .long("as")
-                    .value_name("WHO")
-                    .help("Agent id recorded as who restarted Bus"),
-            )
-            .after_help("Example: bus restart --binary /path/to/bus --confirm --as 569"),
     ]
+}
+
+fn restart_command() -> Command {
+    Command::new("restart")
+        .about("Restart the session server onto another Bus binary")
+        .long_about(details::RESTART)
+        .args(run_flags())
+        .arg(
+            Arg::new("binary")
+                .long("binary")
+                .required(true)
+                .value_name("PATH")
+                .help("Bus binary that replaces the running server"),
+        )
+        .arg(
+            Arg::new("confirm")
+                .long("confirm")
+                .action(clap::ArgAction::SetTrue)
+                .help("Confirm replacing the running server"),
+        )
+        .arg(
+            Arg::new("as")
+                .long("as")
+                .value_name("WHO")
+                .help("Agent id recorded as who restarted Bus"),
+        )
+        .after_help("Example: bus --dev restart --binary /path/to/bus --confirm --as 569")
 }
 
 pub(crate) fn command_tree(dev: bool) -> Command {
@@ -213,7 +216,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                 .cloned()
                 .map(|child| child.arg(request_id.clone())),
         );
-    decorate(command, "", dev)
+    let command = decorate(command, "", dev)
         .subcommand_required(false)
         .args(run_flags())
         .arg(
@@ -264,7 +267,12 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                         .help("Read all recorded performance history [default: false]"),
                 )
                 .after_help("Example: bus perf --since 2h"),
-        )
+        );
+    if dev {
+        command.subcommand(restart_command())
+    } else {
+        command
+    }
 }
 
 pub(crate) fn help_for(command: Command, args: &[String]) -> Option<String> {

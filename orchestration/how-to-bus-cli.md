@@ -23,18 +23,6 @@ Use `bus sessions`, then `bus resume SESSION_ID` or `bus resume --last` to
 resume. `bus --paths` prints data/log/config/state locations without launching.
 See `bus resume --help` for hooks, provider sessions, and environment restrictions.
 
-## Restart Bus onto a new binary
-
-`bus restart --binary PATH --confirm` replaces the server and keeps this session.
-Before it, every room's orchestrator asks its working agents to pause: commit and
-push, stop builds and tests, release slot locks, then stop, and waits for each to
-confirm. Only then restart. After the outcome notice (old SHA to new SHA, or a
-rollback and why), tell them to resume. An in-flight turn that has not reported
-is interrupted; persisted messages stay and each provider resumes as it does today.
-The same package version's TUI reconnects; a different one prints the command.
-Every attempt is appended to `restarts/log.jsonl`. See `bus restart --help`.
-Restart is explicit: Bus never restarts a server on its own.
-
 ## Target the intended running session
 By default, control commands target the last opened session. For concurrent
 sessions, automation and tests, launch and control the same dedicated root:
@@ -224,6 +212,19 @@ after restart every session does. Older orchestrator-build sessions gain MASTER 
 non-goals append once to notes. Obsolete orchestrator transcripts/workflow drafts/
 capability grants are dropped. private/orchestrator-credentials.json is no longer
 read; delete it yourself if its old API key is no longer needed.
+
+## Developer restart for orchestrators
+
+`bus --dev restart --binary PATH --confirm` replaces the server and keeps this session.
+Without `--dev` the command is refused, and `bus --help` does not list it.
+Before it, every room's orchestrator asks its working agents to pause: commit and
+push, stop builds and tests, release slot locks, then stop, and waits for each to
+confirm. Only then restart. After the outcome notice (old SHA to new SHA, or a
+rollback and why), tell them to resume. An in-flight turn that has not reported
+is interrupted; persisted messages stay and each provider resumes as it does today.
+The same package version's TUI reconnects; a different one prints the command.
+Every attempt is appended to `restarts/log.jsonl`. See `bus --dev restart --help`.
+Restart is explicit: Bus never restarts a server on its own.
 
 ## Repository status and acceptance
 Repository status reporting belongs to the agent/harness; Bus never polls hosts

@@ -10,6 +10,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   quit
   diagnostics
   ui hits      (dev variant only)
+  restart --binary PATH --confirm
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
 orchestrators and workers coordinate, and every session answers it. Dev tools
@@ -39,5 +40,11 @@ bus stop does, and exits; bus resume relaunches each agent into its saved conver
 ui hits lists the room UI's clickable regions as of its last frame, each with a stable
 name (room:NAME, agent:NAME, new-room, settings, color-blind, composer, files, ...) and its
 cells; the TUI driver clicks them by name. Only the dev variant (./run dev) has it.
+restart (`bus --dev restart --binary PATH --confirm`) replaces the running server
+with another Bus binary on the same session. It is refused without `--dev` and
+omitted from `bus --help`. Before it, every room's orchestrator asks working agents
+to pause (commit and push, stop builds and tests, release slot locks, then stop)
+and waits for each to confirm. After the outcome notice, tell them to resume.
+See `bus --dev restart --help`.
 diagnostics shows Bus's internals: version, storage pause, coordinator error, data and log
 paths, and each agent's status, wait reason, detail, runtime identity and current request.

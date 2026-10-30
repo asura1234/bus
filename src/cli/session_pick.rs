@@ -1,10 +1,13 @@
 //! Process invocation grammar and local session selection.
 use crate::messaging::storage::sessions::ResumeTarget;
 
-pub(super) const USAGE: &str = "Usage: bus [--dev] [--yolo] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id> [--yolo]\n       bus [--dev] resume --last [--yolo]\n       bus stop\n       bus [--dev] [--yolo] restart --binary <path> --confirm [--as <who>]\n       bus perf [--since <minutes>m|<hours>h | --all]";
+pub(super) const USAGE: &str = "Usage: bus [--dev] [--yolo] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id> [--yolo]\n       bus [--dev] resume --last [--yolo]\n       bus stop\n       bus perf [--since <minutes>m|<hours>h | --all]";
 
 const RESTART_USAGE: &str =
-    "Usage: bus [--dev] [--yolo] restart --binary <path> --confirm [--as <who>]";
+    "Usage: bus --dev [--yolo] restart --binary <path> --confirm [--as <who>]";
+
+pub(super) const DEV_RESTART_REQUIRED: &str =
+    "dev tool: run `bus --dev restart --binary PATH --confirm`";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RestartRequest {
@@ -67,6 +70,10 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 index += 1;
             }
             "restart" if action.is_none() => {
+                let rest = &args[index + 1..];
+                if !dev && !rest.iter().any(|arg| arg == "--dev") {
+                    return Err(DEV_RESTART_REQUIRED.to_owned());
+                }
                 index += 1;
                 action = Some(Action::Restart(parse_restart(
                     args, &mut index, &mut dev, &mut yolo,

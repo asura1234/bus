@@ -1,4 +1,4 @@
-//! `bus restart`: an orchestrator replaces the running server with another binary.
+//! `bus --dev restart`: an orchestrator replaces the running server with another binary.
 //!
 //! The public command preflights and spawns a detached helper, then returns.
 //! The helper outlives the server it stops. It starts the new binary on the
@@ -49,12 +49,17 @@ pub(super) fn run(
     yolo: bool,
     request: &RestartRequest,
 ) -> io::Result<()> {
+    if !dev {
+        return Err(io::Error::other(
+            "dev tool: run `bus --dev restart --binary PATH --confirm`",
+        ));
+    }
     if !request.confirm {
         return Err(io::Error::other(CONFIRM));
     }
     let Some(binary) = request.binary.as_deref() else {
         return Err(io::Error::other(
-            "Usage: bus [--dev] [--yolo] restart --binary <path> --confirm [--as <who>]",
+            "Usage: bus --dev [--yolo] restart --binary <path> --confirm [--as <who>]",
         ));
     };
     let new_binary = PathBuf::from(binary);
@@ -827,7 +832,14 @@ mod tests {
 
     #[test]
     fn restart_help_names_the_pause_protocol() {
-        let text = crate::cli::control::command_tree(false)
+        assert!(crate::cli::control::command_tree(false)
+            .find_subcommand("restart")
+            .is_none());
+        let normal = crate::cli::help::agent_help();
+        assert!(!normal.contains("bus restart"), "{normal}");
+        assert!(!normal.contains("\n  restart"), "{normal}");
+        assert!(!crate::cli::session_pick::USAGE.contains("restart"));
+        let text = crate::cli::control::command_tree(true)
             .find_subcommand("restart")
             .unwrap()
             .get_long_about()
@@ -837,5 +849,7 @@ mod tests {
         assert!(text.contains("slot locks"), "{text}");
         assert!(text.contains("--confirm"), "{text}");
         assert!(text.contains("log.jsonl"), "{text}");
+        assert!(text.contains("--dev"), "{text}");
+        assert!(crate::cli::help::DEV_HELP.contains("bus --dev restart"));
     }
 }
