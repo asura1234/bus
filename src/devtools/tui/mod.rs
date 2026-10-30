@@ -15,6 +15,7 @@ mod picture;
 mod predicate;
 mod protocol;
 mod screen;
+mod scripted_fake;
 mod session;
 mod startup;
 mod trace;
@@ -23,6 +24,9 @@ mod trace;
 /// CLI or an effect recorder), runs it and returns its exit code.
 pub(crate) fn run_stand_in(args: &[String]) -> Option<i32> {
     let arg0 = args.first()?;
+    if fake_agents::stand_in(arg0, &["bus-fake-agent"]).is_some() {
+        return Some(scripted_fake::run(&args[1..]));
+    }
     if let Some(provider) = fake_agents::fake_provider(arg0) {
         return Some(fake_agents::run(provider, &args[1..]));
     }

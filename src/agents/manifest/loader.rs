@@ -25,6 +25,8 @@ pub(super) const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     ("cline", include_str!("bundled/cline.toml")),
     ("codex", include_str!("bundled/codex.toml")),
     ("cursor", include_str!("bundled/cursor.toml")),
+    #[cfg(feature = "dev-tools")]
+    ("fake", include_str!("bundled/fake.toml")),
     ("devin", include_str!("bundled/devin.toml")),
     ("droid", include_str!("bundled/droid.toml")),
     ("gemini", include_str!("bundled/gemini.toml")),

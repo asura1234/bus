@@ -44,7 +44,13 @@ impl Worker {
                     "cursor" => Provider::Cursor,
                     "grok" => Provider::Grok,
                     "kimi" => Provider::Kimi,
-                    _ => return Err("Provider must be claude, codex, cursor, grok, or kimi".into()),
+                    #[cfg(feature = "dev-tools")]
+                    "fake"
+                        if crate::agents::providers::launch::native_provider("fake").is_some() =>
+                    {
+                        Provider::Fake
+                    }
+                    _ => return Err("Provider must be claude, codex, cursor, grok, kimi, or fake".into()),
                 };
                 let room = self.control_room(required(p, "room")?)?;
                 let master = self.state.master_room().is_some_and(|m| m.id == room);
@@ -396,6 +402,8 @@ fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
         Provider::ClaudeCode | Provider::Codex | Provider::Kimi => "esc",
         Provider::Cursor | Provider::Grok => "ctrl+c",
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => "esc",
     }
 }
 
@@ -407,5 +415,7 @@ fn clear_command(provider: Provider) -> &'static str {
         Provider::Cursor => "/new-chat",
         Provider::Grok => "/new",
         Provider::Kimi => "/new",
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => "/clear",
     }
 }

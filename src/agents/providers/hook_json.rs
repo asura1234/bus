@@ -80,6 +80,13 @@ impl HookContract {
                 entry_shape: HookEntryShape::NestedCommands,
                 default_version: None,
             },
+            #[cfg(feature = "dev-tools")]
+            ProviderKind::Fake => Self {
+                adapter: "fake-hook",
+                events: &[],
+                entry_shape: HookEntryShape::NestedCommands,
+                default_version: None,
+            },
             ProviderKind::Cursor => Self {
                 adapter: "cursor-hook",
                 events: &[

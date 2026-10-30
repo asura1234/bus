@@ -86,6 +86,8 @@ impl BusUi {
             Action::Provider(Provider::Cursor) => "provider:cursor".into(),
             Action::Provider(Provider::Grok) => "provider:grok".into(),
             Action::Provider(Provider::Kimi) => "provider:kimi".into(),
+            #[cfg(feature = "dev-tools")]
+            Action::Provider(Provider::Fake) => "provider:fake".into(),
             Action::Orchestrates => "orchestrates".into(),
             Action::Suggestion(index) => format!("suggestion:{index}"),
             Action::Settings => "settings".into(),
