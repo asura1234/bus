@@ -32,9 +32,16 @@ pub(super) fn input(screen: &str) -> Option<String> {
         .collect();
     let end = lines.iter().rposition(|line| !line.trim().is_empty())?;
     let footer = lines[end].trim().to_lowercase();
-    if !footer.contains("shift+tab:mode")
-        || !(footer.contains("ctrl+x:shortcuts") || footer.contains("ctrl+.:shortcuts"))
-    {
+    let legacy_footer = footer.contains("shift+tab:mode")
+        && (footer.contains("ctrl+x:shortcuts") || footer.contains("ctrl+.:shortcuts"));
+    let native_build_footer = footer.strip_prefix("grok build").is_some_and(|version| {
+        let version = version.trim();
+        !version.is_empty()
+            && version.len() <= 32
+            && version.chars().any(|c| c.is_ascii_digit())
+            && version.chars().all(|c| c.is_ascii_digit() || c == '.')
+    });
+    if !legacy_footer && !native_build_footer {
         return None;
     }
     let bottom = (0..end)
@@ -121,6 +128,17 @@ mod tests {
     const EMPTY: &str = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
     const DRAFT: &str = include_str!("../../../../../tests/fixtures/grok-composer/draft.txt");
     const PASTED: &str = include_str!("../../../../../tests/fixtures/grok-composer/pasted.txt");
+    const NATIVE_1070_EMPTY: &str =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-empty.txt");
+
+    #[test]
+    fn grok_1070_native_ready_composer_accepts_bus_prompt() {
+        assert_eq!(input(NATIVE_1070_EMPTY), Some(String::new()));
+        assert_eq!(
+            observe(NATIVE_1070_EMPTY, "Bus task"),
+            InputObservation::Empty
+        );
+    }
 
     #[test]
     fn grok_visible_blank_lines_in_bootstrap_remain_exact() {

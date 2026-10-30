@@ -26,5 +26,5 @@ pub(crate) fn composer_border(line: &str) -> bool {
         && model.len() <= 80
         && model
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '(' | ')' | ' ' | '-'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '(' | ')' | ' ' | '-' | '·'))
 }
