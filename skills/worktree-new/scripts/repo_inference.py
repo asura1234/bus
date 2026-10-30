@@ -184,7 +184,7 @@ def infer_recipe(
         workspace_scope = (
             ["--workspace"]
             if "package" in manifest
-            and workspace.get("members")
+            and "workspace" in manifest
             and "default-members" not in workspace
             else []
         )
