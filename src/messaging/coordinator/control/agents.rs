@@ -1,10 +1,10 @@
 //! Agents development commands on the single coordinator.
 use super::{
-    launch, mpsc, optional_bool, optional_text, required, schema, AddAgent, AgentId, BusCommand,
-    BusEvent, Method, Provider, ResponseResult, RoomId, RuntimeStatus, Worker,
+    launch, mpsc, optional_bool, optional_text, required, schema, AddAgent, AgentId, Author,
+    BusCommand, BusEvent, Draft, Method, Provider, ResponseResult, RoomId, RuntimeStatus, Worker,
     MASTER_AGENT_NEEDS_ROOM,
 };
-use crate::messaging::orchestration::OrchestratorSpec;
+use crate::messaging::orchestration::{self as orchestrator, OrchestratorSpec};
 use serde_json::{json, Value};
 
 impl Worker {
@@ -154,6 +154,74 @@ impl Worker {
         }
         self.requeue_first_message_instructions(id)?;
         Ok(json!({"agent_id": id, "sent": text, "stage": "cleared"}))
+    }
+
+    /// Cursor and Grok take instructions as a first message. Clear starts a
+    /// fresh context, so the current reply form has to be queued again.
+    /// Launch-arg providers already keep that form in their prompt arguments.
+    fn requeue_first_message_instructions(&mut self, id: AgentId) -> Result<(), String> {
+        let agent = self.state.agent(id).ok_or("Unknown agent")?.clone();
+        if orchestrator::prompt_args(agent.provider, std::path::Path::new("."), false)?.is_some() {
+            return Ok(());
+        }
+        let docs = orchestrator::write_docs(&self.data_dir)?;
+        let saved = agent
+            .runtime_identity
+            .launch_id
+            .as_deref()
+            .and_then(|launch| {
+                std::fs::read_to_string(
+                    self.data_dir
+                        .join("callbacks")
+                        .join(launch)
+                        .join(orchestrator::PROMPT_FILE),
+                )
+                .ok()
+            });
+        let is_orchestrator = agent.orchestrates.is_some();
+        let instructions = if let Some(saved) = saved {
+            saved
+        } else if is_orchestrator {
+            let onboarding = orchestrator::agent_onboarding(&agent.name, id, agent.room_id, &docs);
+            let values = orchestrator::PromptValues {
+                room: agent.orchestrates.and_then(|room| {
+                    self.state
+                        .room(room)
+                        .map(|room| (room.name.clone(), room.id))
+                }),
+                agent: agent.name.clone(),
+                docs,
+            };
+            let body = format!(
+                "{onboarding}\n\n{}",
+                orchestrator::fill(orchestrator::DEFAULT_PROMPT, &values)
+            );
+            if agent.provider == Provider::Grok {
+                crate::agents::providers::grok::system_prompt::orchestrator_prompt(&body)?
+            } else {
+                body
+            }
+        } else {
+            orchestrator::agent_onboarding(&agent.name, id, agent.room_id, &docs)
+        };
+        self.state
+            .submit_bus_message_with(
+                agent.room_id,
+                Draft {
+                    text: super::super::agents::first_message_text(
+                        agent.provider,
+                        is_orchestrator,
+                        &instructions,
+                    ),
+                    files: Vec::new(),
+                    recipient_ids: [id].into_iter().collect(),
+                },
+                Author::Developer,
+                crate::messaging::storage::io::now_ms(),
+                true,
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 }
 
