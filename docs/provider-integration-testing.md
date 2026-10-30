@@ -275,13 +275,83 @@ not submitted. Mark every unrun cell explicitly.
   exact UTF-8 bytes; save the session/prompt/turn IDs and terminal-record proof
   alongside it. If the provider's format cannot be unambiguously extracted,
   stop and ask for a verified procedure rather than substituting a preview.
-- [ ] Start a long turn, run `sbus agent interrupt AGENT`, then inspect status
-  and native record: expect an interrupted request, not a partial successful
-  reply. Also provoke a provider failure and run focused fixture tests for torn,
-  mismatched prompt/session, stale signals and cancelled records. No committed
-  final must settle as `reply_not_captured` or `provider_error: ...`, never as
-  `stage: replied` with partial text; record any different explicit failure.
-  Do not edit a real live transcript to manufacture negative cases.
+- [ ] Start a long turn, run `sbus agent interrupt AGENT`, then
+  `sbus message status MESSAGE_ID`. The status read is `ok: true`. When no
+  final was captured before the stop, expect `complete: true`,
+  `requests[].stage` `abandoned`, `reason` `interrupted`, and `reply` null.
+  A reply captured before the stop still settles as `replied`. The interrupt
+  result's `outcome` is `stopped`, `already_idle`, or `failed`; that field is
+  not the output of `sbus stop`.
+- [ ] Run the fixture filters below with `just test-one FILTER`. Each one is a
+  cargo nextest run and follows the slot, disk, and clean-first rules above.
+  Do not edit a live transcript or session file to manufacture a negative case.
+  A torn, mismatched, or cancelled record must not become `stage: replied`
+  with a partial prefix. It stays pending in the fixture, or the request
+  closes as `reply_not_captured` or `provider_error: MESSAGE`.
+
+  Grok, in `src/agents/providers/grok/tests/`:
+
+  ```sh
+  just test-one grok_oversized_or_torn_transcripts_never_publish_prefix
+  just test-one grok_1070_torn_commit_and_wrong_session_fail_closed
+  just test-one grok_cancel_and_failure_end_matching_turn_without_answer
+  just test-one grok_1070_cancel_and_max_turns_never_publish_a_reply
+  just test-one grok_failures_and_late_cancels_are_never_successes
+  ```
+
+  Oversized or torn JSON stays pending and publishes no prefix. A torn commit
+  stays pending, and a wrong `sessionId` is an error. Cancel, failure, and
+  max-turns end or stay pending without a published answer.
+
+  Claude:
+
+  ```sh
+  just test-one claude_adapter_stop_failure_reports_turn_identity_without_requiring_reply_text
+  just test-one claude_stop_failure_names_the_api_error_that_ended_the_turn
+  just test-one a_claude_turn_ended_by_an_api_error_reports_that_error
+  ```
+
+  A StopFailure names the turn without requiring reply text. The settlement
+  fixture closes the request abandoned with reason
+  `provider_error: API Error: Connection lost mid-response. The response above may be incomplete. (server_error)`
+  and does not publish a reply.
+
+  Codex has no torn-transcript fixture under the Grok names. Run:
+
+  ```sh
+  just test-one a_codex_turn_that_ended_on_a_provider_error_reports_that_error
+  just test-one an_unbound_codex_turn_without_its_prompt_in_the_rollout_stays_reply_not_captured
+  just test-one a_codex_turn_whose_rollout_has_no_answer_for_it_stays_reply_not_captured
+  just test-one codex_empty_stop_keeps_the_turn_with_null_missing_or_empty_text
+  just test-one message_status_reports_the_interrupt_reason
+  ```
+
+  The capacity fixture closes abandoned with reason
+  `provider_error: Selected model is at capacity. Please try a different model. (server_overloaded)`.
+  A rollout that did not run this prompt, or that has no answer for this turn,
+  stays `reply_not_captured`. A Stop hook with null, missing, or empty text
+  parses as a final with empty text; non-string text is an error. The
+  interrupt fixture expects `complete: true`, stage `abandoned`, and reason
+  `interrupted`.
+
+  Cursor has no torn-commit or wrong-session fixture of the Grok name. An
+  incomplete transcript, `status: error`, or a torn trailing row returns no
+  final:
+
+  ```sh
+  just test-one cursor_final_reply_waits_for_completed_matching_turn
+  ```
+
+  Kimi is not a provider in this build and has no provider fixture directory.
+  There is no Kimi `just test-one` filter to run.
+
+  On a scratch server, do not edit the provider's transcript. Only when the
+  provider itself ends the turn with a capacity error, an API error, or a
+  StopFailure, record `sbus message status MESSAGE_ID`. That read is
+  `ok: true` and exit 0. Expect `complete: true`, `requests[].stage`
+  `abandoned`, `reply` null, and `reason` starting with `provider_error: `.
+  Record the full reason. A partial prefix with `stage: replied` fails the
+  check.
 
 ## Clear, restart and isolation
 
