@@ -300,6 +300,8 @@ impl TerminalState {
                 )
                 // Grok 1.0.70 reports /new as new and --resume as load.
                 | ("herdr:grok", "grok", Some("new" | "load"))
+                // Bus reports Kimi's verified /new reset as "new".
+                | ("herdr:kimi", "kimi", Some("new"))
                 | ("herdr:antigravity_cli", "agy", None)
         )
     }

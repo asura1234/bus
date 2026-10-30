@@ -115,3 +115,23 @@ fn grok_unknown_start_source_cannot_replace_an_existing_session() {
         )
         .is_none());
 }
+
+#[test]
+fn kimi_clear_rebinds_only_the_explicit_new_session_report() {
+    for (source, should_rebind) in [("new", true), ("startup", false)] {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+        terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
+            source: "herdr:kimi".into(),
+            agent: "kimi".into(),
+            session_ref: session_id("old"),
+        });
+        let changed = terminal.set_agent_session_ref_for_session_start(
+            "herdr:kimi".into(), "kimi".into(), Some(session_id("fresh")), Some(2),
+            Some(source.into()), &[],
+        );
+        assert_eq!(changed.is_some(), should_rebind, "source={source}");
+        assert_eq!(terminal.persisted_agent_session.unwrap().session_ref.value,
+            if should_rebind { "fresh" } else { "old" });
+    }
+}
