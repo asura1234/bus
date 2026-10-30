@@ -652,9 +652,37 @@ fn agent_doc_tier_check_distinguishes_diagnostic_prose_from_commands() {
     }
 }
 
+/// The CLI guide's orchestrator section is the one agent doc that names
+/// `bus --dev restart`. Every other `--dev` mention stays forbidden.
+fn dev_restart_section_removed(name: &str, text: &str) -> String {
+    const HEADING: &str = "## Developer restart for orchestrators\n";
+    if std::path::Path::new(name)
+        .file_name()
+        .is_none_or(|file| file != "how-to-bus-cli.md")
+    {
+        return text.to_owned();
+    }
+    let start = text
+        .find(HEADING)
+        .unwrap_or_else(|| panic!("{name} is missing the orchestrator restart section"));
+    let rest = &text[start + HEADING.len()..];
+    let end = rest
+        .find("\n## ")
+        .map(|index| start + HEADING.len() + index)
+        .unwrap_or(text.len());
+    assert!(
+        text[start..end].contains("bus --dev restart"),
+        "{name} restart section does not name the dev command"
+    );
+    let mut kept = text[..start].to_owned();
+    kept.push_str(&text[end..]);
+    kept
+}
+
 /// Agents read only these docs, so none of them may teach a dev-tier command
 /// or tell agents to start Bus with `--dev`: every session answers the agent
 /// tier, and dev tools stay in `bus --dev --help` and the repo's docs/.
+/// Orchestrators learn `bus --dev restart` only from the CLI guide section above.
 #[test]
 fn docs_written_for_agents_name_no_dev_tool_and_no_dev_flag() {
     let data = temp_root("tiers");
@@ -681,7 +709,8 @@ fn docs_written_for_agents_name_no_dev_tool_and_no_dev_flag() {
             Vec::<String>::new(),
             "{name}"
         );
-        assert!(!text.contains("--dev"), "{name} mentions --dev");
+        let checked = dev_restart_section_removed(name, text);
+        assert!(!checked.contains("--dev"), "{name} mentions --dev");
     }
     std::fs::remove_dir_all(data).unwrap();
 }

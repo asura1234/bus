@@ -5,6 +5,15 @@ Starts a throwaway Bus (fresh BUS_DATA_DIR under /tmp) in a pseudo-terminal,
 drives it only through the dev CLI, and shuts it down at the end. Agents work in
 a scratch git repository under temp/e2e/workspace. Spends real model usage, so
 --allow-live-models is required. Writes temp/e2e/<timestamp>/report.json.
+It launches Bus under /tmp/bus-e2e-* with a scratch repository, scrubs inherited
+environment, answers trust/update prompts through dialog commands, and quits/kills
+its own run at end; --keep retains data. Cases cover
+single/queued/multi/background/dialog, orchestrator/adoption/resume; unsupported
+cases SKIP with reasons. Background is Claude-only; auto-approved dialogs (e.g.
+Cursor Run Everything) may SKIP. Claude asks a question because auto mode
+approves commands and permission launch args are refused. Reports at
+temp/e2e/<timestamp>/report.json include commands, failures and timing; failures
+exit nonzero.
 """
 import argparse
 import fcntl

@@ -143,3 +143,68 @@ fn stop_without_any_recorded_local_session_succeeds() {
         "stopping when no local server has ever existed should succeed: {result:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn stop_waits_for_final_save_after_socket_close() {
+    let path = unique_test_path("stop-save");
+    let flag = path.with_extension("flag");
+    let ready = path.with_extension("ready");
+    let script = r#"
+import os, socket, sys, time
+path, flag, ready = sys.argv[1:]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.bind(path)
+sock.listen(1)
+open(ready, "w").close()
+conn, _ = sock.accept()
+conn.sendall(b'{"ok":true}\n')
+conn.close()
+sock.close()
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+time.sleep(0.25)
+open(flag, "w").close()
+"#;
+    let mut child = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .arg(&path)
+        .arg(&flag)
+        .arg(&ready)
+        .spawn()
+        .expect("python3");
+    let started = Instant::now();
+    while !ready.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "python socket did not become ready"
+        );
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("python exited before ready: {status}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Reap alongside the wait. A zombie stays visible to process_instance until
+    // this parent collects it, and the helper only returns once that pid is gone.
+    let waiter = std::thread::spawn(move || child.wait());
+    let stopped = super::stop_socket_with_timeout(
+        path.clone(),
+        vec![path.clone()],
+        Duration::from_secs(2),
+        "server",
+    );
+    let status = waiter.join().expect("reap join").expect("python wait");
+    assert!(status.success(), "python peer failed: {status}");
+    stopped.expect("stop");
+    assert!(
+        flag.exists(),
+        "stop returned before final session save"
+    );
+}

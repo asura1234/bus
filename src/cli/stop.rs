@@ -50,6 +50,8 @@ pub(crate) fn stop_socket_with_timeout(
             socket_path.display()
         )
     })?;
+    // The peer exits only after it has saved the session. Sockets close first.
+    let peer = connected_peer_pid(&stream);
     let stop_response = send_stop_request(stream, &request, deadline)?;
     if let Some(response) = stop_response {
         if let Some(error) = response.get("error") {
@@ -68,7 +70,7 @@ pub(crate) fn stop_socket_with_timeout(
                 .join(", ")
         ));
     }
-    Ok(())
+    wait_for_peer_exit(peer, deadline)
 }
 
 pub(crate) fn send_stop_request(
@@ -138,6 +140,68 @@ pub(crate) fn stop_request_error_allows_wait(err: &std::io::Error) -> bool {
             | std::io::ErrorKind::TimedOut
             | std::io::ErrorKind::WouldBlock
     )
+}
+
+/// Pid of the process that accepted this connection, when it is another process.
+/// Waiting for our own pid would deadlock a stop that runs inside the server.
+fn connected_peer_pid(stream: &LocalStream) -> Option<u32> {
+    let pid = peer_pid(stream)?;
+    if pid == 0 || pid == std::process::id() {
+        None
+    } else {
+        Some(pid)
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn peer_pid(stream: &LocalStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let interprocess::local_socket::Stream::UdSocket(inner) = stream;
+    let mut pid: libc::pid_t = -1;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: fd is the connected socket, pid and len are writable, and
+    // LOCAL_PEERPID writes a pid_t on success.
+    let rc = unsafe {
+        libc::getsockopt(
+            inner.inner().as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            &mut pid as *mut libc::pid_t as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    u32::try_from(pid).ok().filter(|_| rc == 0 && pid > 0)
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+fn peer_pid(stream: &LocalStream) -> Option<u32> {
+    use interprocess::local_socket::traits::Stream as _;
+    let pid = stream.peer_creds().ok()?.pid()?;
+    u32::try_from(pid).ok().filter(|pid| *pid > 0)
+}
+
+#[cfg(not(unix))]
+fn peer_pid(_stream: &LocalStream) -> Option<u32> {
+    None
+}
+
+fn wait_for_peer_exit(peer: Option<u32>, deadline: Instant) -> Result<(), String> {
+    let Some(pid) = peer else {
+        return Ok(());
+    };
+    while Instant::now() < deadline {
+        if crate::platform::process_instance(pid).is_none() {
+            return Ok(());
+        }
+        std::thread::sleep(STOP_WAIT_POLL.min(time_until(deadline)));
+    }
+    if crate::platform::process_instance(pid).is_none() {
+        Ok(())
+    } else {
+        Err(format!(
+            "server process {pid} did not exit after its sockets closed"
+        ))
+    }
 }
 
 fn is_running_at(socket_path: &Path) -> bool {

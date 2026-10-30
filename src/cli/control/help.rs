@@ -140,6 +140,65 @@ fn run_flags() -> [Arg; 2] {
     ]
 }
 
+fn lifecycle_commands() -> [Command; 3] {
+    [
+        Command::new("sessions")
+            .about("List saved sessions")
+            .long_about(details::SESSIONS)
+            .args(run_flags())
+            .after_help("Example: bus sessions"),
+        Command::new("resume")
+            .about("Resume a saved session")
+            .long_about(details::RESUME)
+            .args(run_flags())
+            .group(
+                clap::ArgGroup::new("target")
+                    .args(["session-id", "last"])
+                    .required(true),
+            )
+            .arg(Arg::new("session-id").help("Saved session ID [required unless --last]"))
+            .arg(
+                Arg::new("last")
+                    .long("last")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Resume the last opened session [default: false]"),
+            )
+            .after_help("Example: bus resume --last"),
+        Command::new("stop")
+            .about("Stop the session server and close its panes")
+            .long_about(details::STOP)
+            .args(run_flags())
+            .after_help("Example: bus stop"),
+    ]
+}
+
+fn restart_command() -> Command {
+    Command::new("restart")
+        .about("Restart the session server onto another Bus binary")
+        .long_about(details::RESTART)
+        .args(run_flags())
+        .arg(
+            Arg::new("binary")
+                .long("binary")
+                .required(true)
+                .value_name("PATH")
+                .help("Bus binary that replaces the running server"),
+        )
+        .arg(
+            Arg::new("confirm")
+                .long("confirm")
+                .action(clap::ArgAction::SetTrue)
+                .help("Confirm replacing the running server"),
+        )
+        .arg(
+            Arg::new("as")
+                .long("as")
+                .value_name("WHO")
+                .help("Agent id recorded as who restarted Bus"),
+        )
+        .after_help("Example: bus --dev restart --binary /path/to/bus --confirm --as 569")
+}
+
 pub(crate) fn command_tree(dev: bool) -> Command {
     let control = super::parse::cli();
     let request_id = control
@@ -157,7 +216,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                 .cloned()
                 .map(|child| child.arg(request_id.clone())),
         );
-    decorate(command, "", dev)
+    let command = decorate(command, "", dev)
         .subcommand_required(false)
         .args(run_flags())
         .arg(
@@ -190,39 +249,7 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                         ),
                 ),
         )
-        .subcommand(
-            Command::new("sessions")
-                .about("List saved sessions")
-                .long_about(details::SESSIONS)
-                .args(run_flags())
-                .after_help("Example: bus sessions"),
-        )
-        .subcommand(
-            Command::new("resume")
-                .about("Resume a saved session")
-                .long_about(details::RESUME)
-                .args(run_flags())
-                .group(
-                    clap::ArgGroup::new("target")
-                        .args(["session-id", "last"])
-                        .required(true),
-                )
-                .arg(Arg::new("session-id").help("Saved session ID [required unless --last]"))
-                .arg(
-                    Arg::new("last")
-                        .long("last")
-                        .action(clap::ArgAction::SetTrue)
-                        .help("Resume the last opened session [default: false]"),
-                )
-                .after_help("Example: bus resume --last"),
-        )
-        .subcommand(
-            Command::new("stop")
-                .about("Stop the session server and close its panes")
-                .long_about(details::STOP)
-                .args(run_flags())
-                .after_help("Example: bus stop"),
-        )
+        .subcommands(lifecycle_commands())
         .subcommand(
             Command::new("perf")
                 .about("Summarize recorded performance; reads files only")
@@ -240,7 +267,12 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                         .help("Read all recorded performance history [default: false]"),
                 )
                 .after_help("Example: bus perf --since 2h"),
-        )
+        );
+    if dev {
+        command.subcommand(restart_command())
+    } else {
+        command
+    }
 }
 
 pub(crate) fn help_for(command: Command, args: &[String]) -> Option<String> {

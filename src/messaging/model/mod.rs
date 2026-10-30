@@ -16,6 +16,7 @@ mod recovery;
 mod replies;
 mod reply_routing;
 mod requests;
+mod restart;
 mod rooms;
 mod settlement;
 mod staffing;

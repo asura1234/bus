@@ -232,6 +232,13 @@ non-goals append once to notes. Obsolete orchestrator transcripts/workflow draft
 capability grants are dropped. private/orchestrator-credentials.json is no longer
 read; delete it yourself if its old API key is no longer needed.
 
+## Developer restart for orchestrators
+
+`bus --dev restart --binary PATH --confirm` replaces the running server and keeps this session. Without `--dev` it is refused and hidden from `bus --help`.
+Before it, every room's orchestrator asks its working agents to pause: commit and push, stop builds and tests, release slot locks, then stop.
+Wait for each confirmation, then restart. After the outcome notice, tell them to resume.
+Details: `bus --dev restart --help`.
+
 ## Repository status and acceptance
 Repository status reporting belongs to the agent/harness; Bus never polls hosts
 or decides release steps. Follow the communication guide for meaningful transitions.
@@ -240,11 +247,4 @@ orchestrator or failed send is not permission to send routine status to the deve
 For real-provider round trips use `just e2e` (explicit live-model usage), or
 `just e2e --providers claude,codex --cases single,resume`. The harness
 (tools/acceptance/e2e_test.py --help) documents providers/cases/artifacts/cleanup.
-It launches Bus under /tmp/bus-e2e-* with a scratch repository, scrubs inherited environment, answers
-trust/update prompts through dialog commands, and quits/kills its own run at
-end; --keep retains data. Cases cover single/queued/multi/background/dialog,
-orchestrator/adoption/resume; unsupported cases SKIP with reasons. Background is
-Claude-only; auto-approved dialogs (e.g. Cursor Run Everything) may SKIP. Claude
-asks a question because auto mode approves commands and permission launch args are refused.
-Reports at temp/e2e/<timestamp>/report.json include commands, failures and timing; failures exit nonzero.
 Run `just e2e` before merging delivery, callback or launch changes.

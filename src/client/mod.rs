@@ -24,6 +24,7 @@ pub(crate) mod host_terminal;
 mod notifications;
 pub(crate) mod panes;
 mod perf;
+pub(crate) mod restart;
 mod rooms;
 pub(crate) mod run;
 mod server_messages;

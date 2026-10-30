@@ -12,6 +12,7 @@ use std::path::Path;
 
 mod callback_spool;
 mod control_reads;
+mod restart_notice;
 use control_reads::interrupts_delivery;
 
 /// How often a tick moves settled history out of `state.json`.
@@ -539,6 +540,9 @@ impl Worker {
     ) -> Result<(), String> {
         perf::COORDINATOR_LOOP.relabel("tick.disk_space");
         self.refresh_disk_space_at(std::time::Instant::now())?;
+        if let Err(error) = self.announce_recorded_restart() {
+            tracing::warn!(%error, "restart outcome was not announced");
+        }
         perf::COORDINATOR_LOOP.relabel("tick.expire");
         self.expire_queued_now()?;
         perf::COORDINATOR_LOOP.relabel("tick.poll");

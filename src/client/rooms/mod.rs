@@ -84,12 +84,24 @@ impl crate::client::compositor::ClientShellState {
         let Some(root) = crate::utils::env::bus_data_dir() else {
             return Ok(());
         };
-        let handle = crate::messaging::coordinator::BusHandle::start(
-            root,
-            crate::protocol::api::client::ConnectionTarget::LocalSession(Some(
-                crate::messaging::coordinator::DEFAULT_SESSION.into(),
-            )),
-        )?;
+        let target = crate::protocol::api::client::ConnectionTarget::LocalSession(Some(
+            crate::messaging::coordinator::DEFAULT_SESSION.into(),
+        ));
+        let handle =
+            match crate::messaging::coordinator::BusHandle::start(root.clone(), target.clone()) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    // A restart's headless coordinator holds the lock until a TUI
+                    // returns. Only that recorded process is asked to step aside.
+                    if error.contains("Another Bus coordinator owns this data directory")
+                        && crate::client::restart::step_aside_headless_coordinator(&root)
+                    {
+                        crate::messaging::coordinator::BusHandle::start(root, target)?
+                    } else {
+                        return Err(error);
+                    }
+                }
+            };
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
         bus.history.enable_background()?;

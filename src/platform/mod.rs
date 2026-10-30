@@ -36,6 +36,11 @@ pub fn process_instance(pid: u32) -> Option<ProcessInstance> {
         .map(|birth| ProcessInstance { pid, birth })
 }
 
+/// True when `pid` is still the process that started at `birth`.
+pub fn process_still_live(pid: u32, birth: u64) -> bool {
+    process_instance(pid).is_some_and(|live| live.birth == birth)
+}
+
 /// Resolve the executable image using a pane's own PATH and working directory.
 #[cfg(unix)]
 pub(crate) fn resolve_executable_image(
