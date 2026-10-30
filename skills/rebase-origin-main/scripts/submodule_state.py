@@ -46,27 +46,52 @@ def recorded_pin(repo: Path, path: str, before: str | None) -> str | None:
     return pins[0] if len(pins) == 1 else None
 
 
-def fetch_remote_shas(remote: str, commits: list[str], *, filtered: bool = True) -> tuple[bool, str]:
-    """Probe remote availability from an empty object store, without local refs."""
-    with tempfile.TemporaryDirectory(prefix='bus-child-remote-') as directory:
-        init = subprocess.run(['git', 'init', '-q', '--bare', directory], capture_output=True)
-        if init.returncode:
-            return False, init.stderr.decode(errors='replace')
-        # Protocol v2 can serve a dangling object by SHA after its last remote
-        # ref is deleted. Version 0 uses upload-pack's reachable-want policy.
-        args = ['git', '-c', 'protocol.version=0', '-C', directory, 'fetch',
-                '--dry-run', '--no-write-fetch-head', '--depth=1']
-        if filtered:
-            args.append('--filter=tree:0')
-        result = subprocess.run(
-            [*args, remote, *commits],
-            text=True, capture_output=True, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
-        )
-        return result.returncode == 0, result.stderr
+def remote_ref_tips(remote: str) -> list[str] | None:
+    result = subprocess.run(['git', 'ls-remote', remote], text=True, capture_output=True,
+                            env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'})
+    if result.returncode:
+        return None
+    return sorted({fields[0] for line in result.stdout.splitlines()
+                   if len(fields := line.split('\t')) == 2})
+
+
+def local_commit(repo: Path, object_name: str) -> str | None:
+    result = subprocess.run(['git', '-C', str(repo), 'rev-parse', '--verify',
+                             f'{object_name}^{{commit}}'], text=True, capture_output=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def fetch_remote_tips(repo: Path, remote: str, tips: list[str], *, filtered: bool = True) -> tuple[bool, str]:
+    args = ['git', '-C', str(repo), 'fetch', '--no-tags', '--no-write-fetch-head']
+    if filtered:
+        args.append('--filter=tree:0')
+    result = subprocess.run([*args, remote, *tips], text=True, capture_output=True,
+                            env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'})
+    return result.returncode == 0, result.stderr
+
+
+def commits_reachable_from_tips(repo: Path, commits: list[str], tips: list[str]) -> set[str]:
+    remote_commits = {commit for tip in tips if (commit := local_commit(repo, tip)) is not None}
+    confirmed = set()
+    for commit in commits:
+        for tip in remote_commits:
+            ancestor = subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor', commit, tip],
+                                      capture_output=True)
+            if ancestor.returncode == 0:
+                confirmed.add(commit)
+                break
+    return confirmed
+
+
+def fetch_tips_with_fallback(repo: Path, url: str, tips: list[str]) -> bool:
+    confirmed, error = fetch_remote_tips(repo, url, tips)
+    if not confirmed and 'filter' in error.lower() and 'not our ref' not in error.lower():
+        confirmed, error = fetch_remote_tips(repo, url, tips, filtered=False)
+    return confirmed
 
 
 def remote_confirmed_commits(repo: Path, commits: list[str]) -> set[str]:
-    """Confirm candidate tips in one small fetch; fail closed on remote errors."""
+    """Confirm ancestry from advertised remote refs; fail closed on remote errors."""
     commits = sorted(set(commits))
     if not commits:
         return set()
@@ -75,17 +100,24 @@ def remote_confirmed_commits(repo: Path, commits: list[str]) -> set[str]:
     if remote.returncode or not remote.stdout.strip():
         return set()
     url = remote.stdout.strip()
-    confirmed, error = fetch_remote_shas(url, commits)
-    if not confirmed and 'filter' in error.lower() and 'not our ref' not in error.lower():
-        confirmed, error = fetch_remote_shas(url, commits, filtered=False)
-    if confirmed:
-        return set(commits)
-    # Only the pin and HEAD are probed, so a mixed batch needs at most two
-    # individual fallbacks, regardless of the number of local branches.
-    missing_sha = ('not our ref', "couldn't find remote ref", 'unadvertised object')
-    if len(commits) == 1 or not any(message in error.lower() for message in missing_sha):
+    tips = remote_ref_tips(url)
+    if tips is None:
         return set()
-    return {commit for commit in commits if fetch_remote_shas(url, [commit])[0]}
+    if git(repo, 'rev-parse', '--is-shallow-repository') == 'true':
+        with tempfile.TemporaryDirectory(prefix='bus-child-remote-') as directory:
+            probe = Path(directory)
+            init = subprocess.run(['git', 'init', '-q', '--bare', directory], capture_output=True)
+            if init.returncode:
+                return set()
+            objects = Path(git(repo, 'rev-parse', '--absolute-git-dir')) / 'objects'
+            (probe / 'objects/info/alternates').write_text(f'{objects}\n')
+            if not fetch_tips_with_fallback(probe, url, tips):
+                return set()
+            return commits_reachable_from_tips(probe, commits, tips)
+    missing = [tip for tip in tips if local_commit(repo, tip) is None]
+    if missing and not fetch_tips_with_fallback(repo, url, missing):
+        return set()
+    return commits_reachable_from_tips(repo, commits, tips)
 
 
 def remote_has_commit(repo: Path, commit: str) -> bool:
