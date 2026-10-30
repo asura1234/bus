@@ -1397,3 +1397,41 @@ mod config_reload;
 mod startup;
 #[path = "theme_test.rs"]
 mod theme;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_start_original_providers_keep_their_command_without_grok_binding() {
+    for (kind, executable) in [("claude", "claude"), ("codex", "codex"), ("cursor", "cursor-agent")] {
+        let mut app = test_app();
+        let workspace = Workspace::test_new("original-provider-command");
+        let pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let terminal = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id.clone();
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 4);
+        app.terminal_runtimes.insert(terminal, runtime);
+        // Old callers omit the newly introduced fields. Capture PTY input only;
+        // no provider process or user configuration is opened by this fixture.
+        let params = serde_json::from_value(serde_json::json!({
+            "name": "original-worker", "kind": kind,
+            "pane_id": app.public_pane_id(0, pane).unwrap(),
+            "args": ["--resume", "saved-session"], "timeout_ms": 4000,
+        })).unwrap();
+        let response = app.handle_api_request(schema::Request {
+            id: "original-provider".into(),
+            method: schema::Method::AgentStart(params),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["result"]["type"], "agent_started", "{kind}: {response}");
+        assert_eq!(response["result"]["argv"],
+            serde_json::json!([executable, "--resume", "saved-session"]), "{kind}");
+        let command = String::from_utf8(writes.try_recv().unwrap().to_vec()).unwrap();
+        assert!(command.contains(executable), "{kind}: {command}");
+        assert!(!command.contains("GROK_HOME"), "{kind}: {command}");
+        assert!(!command.contains("/usr/bin/env"), "{kind}: {command}");
+    }
+}
