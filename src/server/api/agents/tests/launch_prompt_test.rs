@@ -65,6 +65,24 @@ async fn wait_for_prompt(runtime: &TerminalRuntime) {
     }
 }
 
+async fn wait_for_launch_input(runtime: &TerminalRuntime) {
+    let deadline =
+        std::time::Instant::now() + crate::server::terminals::agents::DEFAULT_AGENT_START_TIMEOUT;
+    while !runtime.test_launch_input_submitted() {
+        assert!(
+            runtime.launch_input_error().is_none(),
+            "launch input failed: {:?}",
+            runtime.launch_input_error()
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "verified launch input was never submitted: {}",
+            runtime.visible_text()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn fixture_shell(
     shell: &str,
     mode: crate::utils::config::ShellModeConfig,
@@ -673,6 +691,7 @@ async fn launch_prompt_real_mark_launches_without_an_elapsed_gate() {
         try_prompt_launch(&mut app, &target)
             .expect("real prompt evidence permits immediate launch");
         assert!(launch_started.elapsed() < Duration::from_secs(4));
+        wait_for_launch_input(prompt_runtime(&app)).await;
         wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
         drop(app);
         std::fs::remove_dir_all(dir).unwrap();

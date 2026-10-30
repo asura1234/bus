@@ -153,6 +153,11 @@ impl ShellWriter {
 }
 
 impl TerminalRuntime {
+    #[cfg(test)]
+    pub(crate) fn test_launch_input_submitted(&self) -> bool {
+        self.launch_input_submitted.load(Ordering::Acquire)
+    }
+
     pub(crate) fn launch_input_error(&self) -> Option<String> {
         self.launch_input_error
             .lock()
@@ -179,14 +184,18 @@ impl TerminalRuntime {
             return Err(io::Error::other("Invalid shell launch arguments"));
         }
         #[cfg(test)]
+        self.launch_input_submitted.store(false, Ordering::Release);
+        #[cfg(test)]
         if self.child_pid().is_none() {
             let command = crate::platform::interactive_shell_command(argv, "sh")
                 .ok_or_else(|| io::Error::other("Invalid shell command"))?;
             let mut bytes = self.paste_payload(command).to_vec();
             bytes.push(b'\r');
-            return self
-                .try_send_bytes(Bytes::from(bytes))
-                .map_err(io::Error::other);
+            let result = self.try_send_bytes(Bytes::from(bytes));
+            if result.is_ok() {
+                self.launch_input_submitted.store(true, Ordering::Release);
+            }
+            return result.map_err(io::Error::other);
         }
         let integration = self.shell_integration.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported,
             "This pane has no Bus shell integration; no launch input was sent. Create a new Bus pane with zsh, bash, fish or PowerShell and launch there"))?;
@@ -211,6 +220,8 @@ impl TerminalRuntime {
         let terminal = self.terminal.clone();
         let draft_input = self.draft_input.clone();
         let pane_id = self.pane_id.raw();
+        #[cfg(test)]
+        let submitted = self.launch_input_submitted.clone();
         std::thread::spawn(move || {
             let result = writer
                 .wait_ready(&probe, &terminal)
@@ -224,6 +235,10 @@ impl TerminalRuntime {
                     }
                     result
                 });
+            #[cfg(test)]
+            if result.is_ok() {
+                submitted.store(true, Ordering::Release);
+            }
             if let Err(error) = result {
                 *input_error
                     .lock()

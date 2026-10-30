@@ -226,6 +226,7 @@ impl TerminalRuntime {
                 shell_integration: None,
                 launch_prompt_generation: Arc::new(AtomicU64::new(0)),
                 launch_input_error: Arc::new(Mutex::new(None)),
+                launch_input_submitted: Arc::new(AtomicBool::new(false)),
                 compression,
                 detect_handle: Some(tokio::spawn(async {}).abort_handle()),
             },

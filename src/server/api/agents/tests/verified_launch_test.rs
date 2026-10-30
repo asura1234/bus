@@ -79,6 +79,7 @@ async fn verified_launch_preserves_bash_function_and_post_exit_shell() {
     wait_for_prompt(&runtime).await;
     let (mut app, target) = app_with_prompt_runtime(runtime);
     try_prompt_launch(&mut app, &target).unwrap();
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "PROVIDER_FATAL_AUTH_ERROR").await;
     assert_eq!(
         std::fs::read_to_string(dir.join("environment")).unwrap(),
