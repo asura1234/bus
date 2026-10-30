@@ -134,3 +134,21 @@ def test_corrupt_manifest_stops_install_without_copying_or_writing_settings(tmp_
     assert str(state / "skills-manifest.json") in result.stderr
     assert not (state / "settings.json").exists()
     assert not (home / ".agents").exists()
+
+
+def test_sitrep_is_installed_for_claude_and_codex(tmp_path):
+    import pytest
+
+    binary = os.environ.get("BUS_TEST_BINARY")
+    if not binary:
+        pytest.skip("requires the gate's exact built Bus binary")
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_", "XDG_"))}
+    env.update(HOME=str(home), USERPROFILE=str(home))
+    subprocess.run([binary, "skills", "install", "--yes"], env=env, cwd=tmp_path, capture_output=True, check=True)
+    for provider in (".claude", ".agents"):
+        skill = home / provider / "skills/sitrep"
+        assert (skill / "SKILL.md").is_file()
+        assert (skill / "scripts/render.py").is_file()
+        assert (skill / "references/sitrep-format.md").is_file()
