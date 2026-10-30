@@ -1,0 +1,23 @@
+
+  /U/d/w/b/t/grok-e2e-107… 28K / 256K │ [Dashboard]
+
+
+     ❯ [Bus message 4; answer with bus    4:44 PM
+       send --reply-to 4 --as 3 --text
+       'YOUR ANSWER'; run in the …
+
+                                                    █
+     Worked for 15s                                 █
+                                                    █
+
+  ╭───────────────────────────────────────────────╮
+  │ ❯ [Bus message 6; answer with bus send        │
+  │   --reply-to 6 --as 3 --text 'YOUR ANSWER';   │
+  │   run in the foreground and check ok:true and │
+  │   stage:"replied" before claiming delivery;   │
+  │   if it fails, check the existing answer with │
+  │   bus message status 6 before resending]      │
+  │   Reply exactly SHORT_OK.                     │
+  ╰──────────── Grok 4.7 (high) · always-approve ─╯
+
+  Enter:send  │  Shift+Enter/Opt+Enter:newline  │

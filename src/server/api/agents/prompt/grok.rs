@@ -22,13 +22,57 @@ pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
     if body.contains("[Pasted") || body.contains("[Image #") {
         return InputObservation::Unavailable;
     }
-    if body == expected {
+    if body == expected || native_visible_draft(screen, &body, &expected) {
         InputObservation::Pending
     } else {
         // Other authorizes the shared runtime to clear the draft. Preserve it.
         // Ambiguous soft wraps cannot establish ownership either.
         InputObservation::Unavailable
     }
+}
+
+/// The 1.0.70 composer soft-wraps Bus's own paste and can scroll its prefix
+/// out of the frame. The input lease first proved an empty composer, then
+/// buffered developer keys while writing one exact payload. A complete visible
+/// draft must preserve every non-whitespace character; a scrolled draft must
+/// preserve a substantial exact suffix and show the native scroll rail.
+fn native_visible_draft(screen: &str, body: &str, expected: &str) -> bool {
+    let footer = screen
+        .lines()
+        .map(|line| {
+            styled_chars(line)
+                .iter()
+                .map(|c| c.character)
+                .collect::<String>()
+        })
+        .filter(|line| !line.trim().is_empty())
+        .last()
+        .unwrap_or_default();
+    if !footer.trim().starts_with("Enter:send") {
+        return false;
+    }
+    let normalized = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let expected = normalized(expected);
+    let scrolled = body.chars().any(is_scroll_rail);
+    let visible = normalized(
+        &body
+            .chars()
+            .filter(|c| !is_scroll_rail(*c))
+            .collect::<String>(),
+    );
+    if scrolled {
+        visible.chars().count() >= 80 && expected.ends_with(&visible)
+    } else {
+        visible == expected
+    }
+}
+
+fn is_scroll_rail(character: char) -> bool {
+    ('▁'..='█').contains(&character)
 }
 
 pub(super) fn input(screen: &str) -> Option<String> {
@@ -165,6 +209,10 @@ mod tests {
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-empty.txt");
     const NATIVE_1070_PASTED: &str =
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-pasted.txt");
+    const NATIVE_1070_SCROLLED: &str =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-scrolled.txt");
+    const NATIVE_1070_WRAPPED: &str =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-wrapped.txt");
 
     #[test]
     fn grok_1070_native_ready_composer_accepts_bus_prompt() {
@@ -197,6 +245,37 @@ mod tests {
         );
         assert_eq!(
             observe(&large, &"x".repeat(20 * 1024)),
+            InputObservation::Unavailable
+        );
+    }
+
+    #[test]
+    fn grok_1070_scrolled_owned_draft_keeps_its_visible_suffix() {
+        let expected = "[Bus message 12; answer with bus send --reply-to 12 --as 3 --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status 12 before resending]\nScratch E2E path 1: assign grok-e2e-a a task to run a shell command in this scratch Git project that writes path1.txt containing PATH1_OK, then require its correlated Bus reply. When its reply reaches you, answer this request with the worker message ID, reply stage, and observed file content. Use your Bus CLI and do not ask for tool approval.";
+        assert!(input(NATIVE_1070_SCROLLED).is_some());
+        assert_eq!(
+            observe(NATIVE_1070_SCROLLED, expected),
+            InputObservation::Pending
+        );
+        assert_eq!(
+            observe(NATIVE_1070_SCROLLED, &expected.replace("PATH1_OK", "WRONG")),
+            InputObservation::Unavailable
+        );
+    }
+
+    #[test]
+    fn grok_1070_wrapped_owned_draft_preserves_all_nonwhitespace_chars() {
+        let expected = "[Bus message 6; answer with bus send --reply-to 6 --as 3 --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status 6 before resending]\nReply exactly SHORT_OK.";
+        assert!(input(NATIVE_1070_WRAPPED).is_some());
+        assert_eq!(
+            observe(NATIVE_1070_WRAPPED, expected),
+            InputObservation::Pending
+        );
+        assert_eq!(
+            observe(
+                NATIVE_1070_WRAPPED,
+                &expected.replace("SHORT_OK", "SHORT_BAD")
+            ),
             InputObservation::Unavailable
         );
     }
