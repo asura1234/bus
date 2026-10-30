@@ -128,6 +128,18 @@ fn grok_identity_falls_back_only_to_verified_build_candidates() {
         "version alone does not attest Grok Build"
     );
 }
+
+#[test]
+fn grok_1070_identity_keeps_the_project_hook_contract() {
+    let f = Fixture::new();
+    f.executable(&f.bin.join("grok"), "grok 1.0.70 (f50904eaee6c)");
+    f.prepare("");
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.project.join(".grok/hooks/bus.json")).unwrap()).unwrap();
+    for event in crate::agents::providers::grok::HOOK_CONTRACT.events {
+        assert!(value["hooks"].get(*event).is_some(), "missing {event}");
+    }
+}
 #[test]
 fn grok_prepare_persists_original_argv_and_private_environment() {
     let f = Fixture::new();

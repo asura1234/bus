@@ -174,6 +174,28 @@ fn grok_imported_callbacks_filtered_without_suppressing_native_providers() {
 }
 
 #[test]
+fn grok_1070_dual_spelling_is_native_on_grok_and_foreign_on_imported_adapters() {
+    // Grok 1.0.70 emits Claude-compatible aliases beside its native fields.
+    let value = json!({"hookEventName":"session_start", "hook_event_name":"SessionStart",
+        "sessionId":"grok-1070", "session_id":"grok-1070", "source":"new"});
+    assert!(!is_foreign_callback(ProviderKind::Grok, &value));
+    assert_eq!(
+        parse(&value).unwrap(),
+        Parsed::Session {
+            session: "grok-1070".into(),
+            source: Some("new".into())
+        }
+    );
+    for adapter in [
+        ProviderKind::ClaudeCode,
+        ProviderKind::Codex,
+        ProviderKind::Cursor,
+    ] {
+        assert!(is_foreign_callback(adapter, &value));
+    }
+}
+
+#[test]
 fn grok_synthetic_gate_sequence_keeps_candidate_and_cancel_distinct() {
     let rows: Vec<Value> = include_str!("fixtures/turn-events.jsonl")
         .lines()

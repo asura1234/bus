@@ -10,7 +10,11 @@ use serde_json::Value;
 /// actual native callbacks on those adapters keep their existing behavior.
 pub(crate) fn is_foreign_callback(adapter: ProviderKind, value: &Value) -> bool {
     match adapter {
-        ProviderKind::Grok => value.get("hook_event_name").is_some(),
+        // Grok 1.0.70 sends its native event and Claude-compatible alias in
+        // the same envelope. The native field decides ownership.
+        ProviderKind::Grok => {
+            value.get("hookEventName").is_none() && value.get("hook_event_name").is_some()
+        }
         _ => value.get("hookEventName").is_some(),
     }
 }
