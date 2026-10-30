@@ -63,8 +63,7 @@ fn run_inner(args: &[String]) -> Result<i32, String> {
             .map_err(|e| format!("Cannot save fake turn counter: {e}"))?;
         let turn_id = format!("{session}-{turn}");
         callback(json!({"event":"started", "session":session, "turn":turn_id, "prompt":prompt}))?;
-        write!(io::stdout(), "\r\n✻ Working… (0s · esc to interrupt)\r\n")
-            .map_err(|e| e.to_string())?;
+        write!(io::stdout(), "\r\nfake agent working\r\n").map_err(|e| e.to_string())?;
         io::stdout().flush().map_err(|e| e.to_string())?;
         let mut choice = String::new();
         for action in scenario.actions(&prompt)? {
@@ -74,18 +73,25 @@ fn run_inner(args: &[String]) -> Result<i32, String> {
                 Action::Send { room, to, text } => send(&agent, &room, &to, &text)?,
                 Action::Reply { text } => {
                     let text = text.replace("{{choice}}", &choice);
+                    clear_working_line()?;
                     callback(
                         json!({"event":"final", "session":session, "turn":turn_id, "text":text}),
                     )?;
                     write!(io::stdout(), "\r\n{text}\r\n").map_err(|e| e.to_string())?;
                 }
                 Action::Fail => {
+                    clear_working_line()?;
                     callback(json!({"event":"failure", "session":session, "turn":turn_id}))?
                 }
                 Action::Crash { code } => return Ok(code),
             }
         }
     }
+}
+
+fn clear_working_line() -> Result<(), String> {
+    write!(io::stdout(), "\x1b[1A\r\x1b[2K").map_err(|e| e.to_string())?;
+    io::stdout().flush().map_err(|e| e.to_string())
 }
 
 fn read_turn_counter(path: &std::path::Path) -> Result<u64, String> {
