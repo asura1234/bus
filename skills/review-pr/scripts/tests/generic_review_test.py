@@ -54,6 +54,32 @@ class GenericReviewTest(unittest.TestCase):
         self.assertFalse((self.locks / 'unignored').exists())
         self.assertEqual((self.locks / '.locked-goal').read_text(), 'Deliver the requested behavior\n')
 
+    def test_review_pr_rejects_a_docs_plans_only_commit(self):
+        self.git('reset', '--hard', 'origin/trunk')
+        self.git('checkout', '-qb', 'plan-only')
+        locks = self.repo / 'temp/review-pr/plan-only'
+        locks.mkdir(parents=True)
+        (locks / '.locked-goal').write_text('Deliver the requested behavior\n')
+        (locks / '.locked-non-goals').write_text('无\n')
+        (self.repo / 'docs/plans').mkdir(parents=True, exist_ok=True)
+        (self.repo / 'docs/plans/work.md').write_text('# Plan only\n')
+        self.git('add', 'docs/plans/work.md')
+        self.git('commit', '-qm', 'plan only')
+        run = subprocess.run([sys.executable, str(SKILLS / 'review-pr/scripts/review_round.py'), '--reviewer', 'plan-only'], cwd=self.repo, text=True, capture_output=True)
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertNotIn('docs/plans/work.md', run.stdout)
+        self.assertFalse((locks / 'plan-only/round-01/diff-snapshot.patch').exists())
+
+    def test_review_pr_refuses_stale_origin_master_when_origin_head_is_missing(self):
+        base = self.git('rev-parse', 'origin/trunk')
+        self.git('update-ref', 'refs/remotes/origin/main', base)
+        self.git('update-ref', 'refs/remotes/origin/master', self.git('rev-parse', 'HEAD~1'))
+        self.git('symbolic-ref', '-d', 'refs/remotes/origin/HEAD')
+        run = subprocess.run([sys.executable, str(SKILLS / 'review-pr/scripts/review_round.py'), '--reviewer', 'stale-default'], cwd=self.repo, text=True, capture_output=True)
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn('origin default branch unavailable', run.stdout + run.stderr)
+        self.assertNotIn('BASE=origin/master', run.stdout)
+
     def test_review_plan_discovery_preserves_spaces_and_dirty_paths(self):
         self.git('mv', 'docs/plans/work.md', 'docs/plans/space plan.md')
         self.git('commit', '-qm', 'plan name with spaces')
