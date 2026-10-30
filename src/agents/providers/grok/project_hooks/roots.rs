@@ -175,11 +175,11 @@ pub(super) fn verify_exclude(
             if target.within(&directory)? {
                 return Err("Git exclude overlaps global Grok configuration".into());
             }
-            if leaf.is_some() {
-                for entry in fs::read_dir(&source).map_err(|e| e.to_string())? {
-                    let path = entry.map_err(|e| e.to_string())?.path();
-                    reject_shared(&canonical(&path)?, leaf)?;
-                }
+            // Resolve even without an opened leaf. A dangling global alias
+            // must fail closed before creating the exclude it could target.
+            for entry in fs::read_dir(&source).map_err(|e| e.to_string())? {
+                let path = entry.map_err(|e| e.to_string())?.path();
+                reject_shared(&canonical(&path)?, leaf)?;
             }
         } else {
             reject_shared(&source, leaf)?;
