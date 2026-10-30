@@ -130,6 +130,8 @@ fn every_agent_has_a_canonical_interactive_executable() {
         (AgentKind::Qwen, "qwen"),
         (AgentKind::Maki, "maki"),
         (AgentKind::Muse, "muse"),
+        #[cfg(feature = "dev-tools")]
+        (AgentKind::Fake, "bus-fake-agent"),
     ];
     assert_eq!(expected.len(), AgentKind::ALL.len());
     for (agent, executable) in expected {
