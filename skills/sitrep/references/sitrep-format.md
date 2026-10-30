@@ -15,7 +15,7 @@ The other arrays contain objects with exactly these keys:
 
 `status` is exactly `planning`, `in-development`, `test`, `review`, or
 `blocked`. In a blocked task, context names the dependency or developer action.
-`pr` is a Markdown link `[#N title](url)` for an opened PR/MR. Escape literal
+`pr` is a Markdown link `[#N title](https://example.com/pr/N)` for an opened PR/MR. Escape literal
 backslashes and unmatched brackets in titles for Markdown. If none exists,
 use `not opened yet (branch: BRANCH)` and supply the evidenced branch; if the
 branch is unknown, use `not opened yet (branch: unknown)`.
