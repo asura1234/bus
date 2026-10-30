@@ -1,171 +1,337 @@
 # Testing a new agent provider
 
-Use this checklist before shipping a provider and append dated testing lessons as
-we learn them. Record the Bus commit, provider CLI version, platform, commands,
-agent and message IDs, observed screens, results, and evidence location. Repeat
-acceptance on the exact final head; a rebase or fix makes earlier evidence stale.
-A fake provider or a focused test is useful regression coverage, not real-model
-acceptance. Keep transcripts and screenshots private and redact secrets.
+Use this checklist before shipping a provider and append dated testing lessons.
+Record the exact Bus commit, provider CLI versions, platform, commands, session,
+agent and message IDs, screenshots, request status and evidence location. Redact
+secrets and keep raw transcripts private. A fake or focused test is regression
+coverage, not real-model acceptance. Repeat acceptance for the final head.
 
-## Scratch setup and binary identity
+## Scratch setup and build identity
 
-- [ ] Use a disposable project and an isolated Bus server, never an existing
-  live session. Use a new absolute `BUS_DATA_DIR` with mode 0700; remove inherited
-  `BUS_*` and `HERDR_*` variables. Disable real notifications or use recording
-  stand-ins. Confirm `bus --paths` and `bus state` identify the scratch root.
-- [ ] Use the provider's real signed-in account through its supported shared
-  credential and refresh-lock stores. Do not copy credentials into scratch
-  homes: independent copies can invalidate a rotating login. Provider settings,
-  hooks, sessions and logs must remain isolated. Never print credentials.
-- [ ] Follow the current disk, build-slot and target rules. After a build, the
-  top-level `target/debug/bus` in a shared Cargo target may belong to another
-  worktree even when Cargo says `Fresh`. Check the binary's embedded commit
-  with `--version` or `state.build` against `git rev-parse HEAD`, and check that
-  it contains the provider. If either differs, rebuild in an isolated target or
-  force an appropriate rebuild; copy the verified binary into this run's private
-  directory and check it again before use. Never substitute the live binary.
+- [ ] Use a disposable, untrusted project and a private Bus server. Never test
+  against a live session. Give the scratch root mode 0700, scrub inherited
+  `BUS_*`/`HERDR_*`, and check `--paths` before any control mutation. Check
+  `bus settings` confirms Feishu is unconfigured in the isolated settings;
+  never direct test notifications to a real recipient.
+- [ ] Use real provider executables and the account's shared login and refresh
+  locks, not copies of credentials. Isolate provider config, hooks, sessions
+  and logs. **Stop and ask the orchestrator for a validated, authorized setup**
+  for every provider under test if the executable PATH, credential store and
+  shared refresh-lock mapping are not known. Do not guess paths, link whole
+  global config directories, print secrets, or use the real HOME as a shortcut.
+  Include Codex and Claude as well as the new provider in this setup. The Kimi
+  test setup must share both credential and OAuth-lock directories, not copies.
+- [ ] Obey the active room's resource policy; the following is the current
+  two-slot example, not authority to use another room's slots. Before **each**
+  cargo build, test or gate, check `df -h /Users/dylanliu/work` (at least 20 GiB
+  free). If a priority queue exists, wait until your exact name is in its first
+  two lines. Atomically acquire an available slot with `mkdir`, install an EXIT
+  trap immediately, and use its matching target. Remove only your queue entry.
 
-Example setup, after building and verifying the binary under the current slot
-rules (run the UI and control commands in separate terminals):
+```sh
+# Slot 1, if admitted and free; slot 2 uses the second pair below.
+set -e
+mkdir /tmp/bus-568-build-slot-1 || exit 1
+trap 'rmdir /tmp/bus-568-build-slot-1' EXIT
+export PATH="$HOME/.cargo/bin:$PATH" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3
+export CARGO_TARGET_DIR=/Users/dylanliu/work/.cargo-targets/bus-shared
+# Slot 2: /tmp/bus-568-build-slot-2 and
+# CARGO_TARGET_DIR=/Users/dylanliu/work/.cargo-targets/bus-shared-2
+# Interim shared-target rule: run both cleans immediately after acquisition,
+# before EVERY manual acceptance build, test, or gate, including reruns.
+nice -n 19 cargo clean -p bus --target-dir "$CARGO_TARGET_DIR"
+nice -n 19 cargo clean -p bus --target-dir "$CARGO_TARGET_DIR/llvm-cov-target"
+nice -n 19 cargo build --locked --features dev-tools
+# Copy the binary to the private run directory before releasing the slot.
+cp "$CARGO_TARGET_DIR/debug/bus" "$scratch/bin/bus"
+# End this shell to release its lock, or clear the trap after rmdir.
+```
+
+A shared target's top-level binary can belong to another worktree even after
+Cargo reports `Fresh`. A copy is not verified merely because Cargo succeeded.
+Verify the **copied binary** and the scratch server's compiled identity before
+adding agents: launch it as below, get `logs` from `sbus --paths`, and read
+`<logs>/perf/client.jsonl` and `server.jsonl` for this run's `run_start` records.
+Both `build_sha` values must equal the full `git rev-parse HEAD`; correlate the
+new records using their PID/time and `sbus state`'s `build.binary` path. Check
+`sbus agent add --help`'s `possible values` includes the new provider. `--version`
+and `state.build` do **not** expose the SHA on current builds. If a record is
+missing, `unknown`, mismatched, or cannot be tied to this run, stop: obtain a
+verified unique-target build or wait for the provenance fix. Never accept a
+short SHA or a guessed binary. Keep the slot until the shared-target copy is
+made; compare its checksum to the source while the slot is held.
+
+### One wrapper for UI and control
+
+Create the scratch tree before the build, set `scratch` to the same absolute
+path in both terminals, and use `sbus` for **every** example in this guide:
 
 ```sh
 umask 077
 scratch=$(mktemp -d /private/tmp/bus-provider-test.XXXXXX)
-mkdir -m 700 "$scratch/data" "$scratch/project" "$scratch/bin"
+mkdir -m 700 "$scratch/data" "$scratch/project" "$scratch/bin" "$scratch/home"
 git -C "$scratch/project" init
-# Copy only the verified build, not credentials or a provider configuration.
-cp /absolute/path/to/verified/bus "$scratch/bin/bus"
-"$scratch/bin/bus" --version
-git rev-parse HEAD
-# Launch in a clean environment; add only the provider's necessary login access.
-env -i HOME="$scratch" PATH="$scratch/bin:/usr/bin:/bin" TERM="${TERM:-xterm-256color}" \
-  BUS_DATA_DIR="$scratch/data" "$scratch/bin/bus" --dev
+# After the approved provider login/PATH setup, put its executable directories
+# and non-secret environment in this private script. Do not copy credentials.
+cat > "$scratch/bin/sbus" <<'WRAPPER'
+#!/bin/sh
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 1
+# Add only the orchestrator-approved provider PATH and login variables here.
+exec env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin" \
+  TERM="${TERM:-xterm-256color}" BUS_DATA_DIR="$root/data" \
+  "$root/bin/bus" "$@"
+WRAPPER
+chmod 700 "$scratch/bin/sbus"
+# In EACH terminal: set scratch to the printed absolute path, then:
+alias sbus="$scratch/bin/sbus"
+sbus --paths                    # data must equal $scratch/data
+sbus --dev                      # UI terminal; leave it open
+# Other terminal, same alias and wrapper:
+sbus --paths
+sbus state                      # build.binary must be $scratch/bin/bus
+sbus settings                   # confirm isolated Feishu is unconfigured
 ```
 
-Use the same clean environment and `BUS_DATA_DIR` for every control command.
-The example PATH may need the real provider executable and its dependencies;
-configure the provider's shared login access without copying secrets. Set up
-notification isolation before starting agents. Inspect the `--help` for the
-installed build; record the session and stop only this scratch instance when done.
+The wrapper is a template: without an approved real-provider PATH and login
+mapping, **stop**, do not run a pretend acceptance. Run `sbus --paths` again
+before mutations and after relaunch; require `ok: true` on control commands.
+Use only a provider listed by `sbus agent add --help`; Kimi applies once the
+build actually supports it. Preserve the private root until evidence is saved.
 
 ## Fresh first launch and dialogs
 
-- [ ] Add a **new** agent through Bus in a new, untrusted project directory,
-  exactly as the live session does. Do not pre-trust the folder or warm up the
-  composer by typing into it. Observe the welcome/first-run screen before sending.
-- [ ] Folder trust and permission prompts must appear as actionable Bus dialogs.
-  Inspect `bus agent dialog AGENT` and `bus agent read AGENT --source visible`;
-  use `bus agent choose AGENT --option N --fingerprint F` only after observing
-  the current dialog and with authority to choose it. Re-observe stale fingerprints.
-- [ ] Send the first message through Bus while the welcome card is present. After
-  handling any surfaced dialog through Bus, it must be delivered without a
-  manual terminal keypress; confirm the model repeats a unique marker and the
-  request reaches a successful reply. Repeat when the welcome card is above the
-  composer. A queued send, an idle screen or visible text alone is not a pass.
-- [ ] Exercise normal permissions and the provider's no-prompt mode separately.
-  Do not bypass the trust-dialog test with no-prompt mode.
+- [ ] Add a brand-new agent through Bus in a never-trusted project directory;
+  do not pre-trust, warm up its composer, or type in its terminal. Inspect the
+  hook location in the add/setup response and authorize project hooks with
+  `--consent-hooks` (or inspect and use `agent setup-confirm` when pending).
+- [ ] The folder-trust prompt and ordinary permission prompts must surface as
+  actionable Bus dialogs. Observe `sbus agent dialog AGENT` and
+  `sbus agent read AGENT --source visible`; choose only an authorized option
+  using its fresh fingerprint. Re-observe after a stale fingerprint.
+- [ ] While the welcome card is still above the composer, send the first
+  message through Bus. After resolving any dialog through Bus, it must reach
+  the model and get the unique marker back without a manual terminal keypress.
+  Grok 1.0.70 showed this exact card/composer layout and Bus held every message
+  as `prompt_not_shown`; a warmed or card-free test does not cover it.
+- [ ] Run normal permission and no-prompt cases separately; no-prompt cannot
+  substitute for testing trust and permission dialogs.
 
 ```sh
-bus room create provider-test
-bus agent add --room ROOM --name new-worker --provider PROVIDER --pwd /absolute/scratch/project
-bus agent dialog new-worker
-bus agent read new-worker --source visible
-bus send --room ROOM --to new-worker --text 'Reply with FIRST_LAUNCH_MARKER.'
-bus message status MESSAGE_ID
-bus history --room ROOM --limit 100
+sbus room create provider-test
+sbus agent add --room ROOM --name new-worker --provider PROVIDER \
+  --pwd "$scratch/project" --consent-hooks
+sbus agent dialog new-worker
+sbus agent read new-worker --source visible
+# If a dialog is present and its choice is authorized:
+sbus agent choose new-worker --option N --fingerprint F
+sbus send --room ROOM --to new-worker --text 'Reply with FIRST_LAUNCH_MARKER.'
+sbus message status MESSAGE_ID
+sbus history --room ROOM --limit 100
 ```
 
-Substitute returned IDs; require `ok: true`, successful request completion and
-the marker in the actual reply. On an uncertain submission, inspect status,
-visible composer and native records before recovery; do not blindly resend.
+Use actual returned IDs. Require a successful completed reply, not just queueing,
+idle or screen text. If submission is uncertain, inspect status, composer and
+native records before recovery; do not blindly resend.
 
 ## Real-model messaging matrix
 
-Use a real new-provider orchestrator and workers, plus real Codex and Claude
-agents. Give each route a unique marker; capture message/request IDs, final text,
-`bus message status`, room history and wake evidence. Run both directions with
-Codex **and** Claude, including the new provider in worker and orchestrator roles;
-ask the new provider to state what it heard from the other provider.
+Create the new-provider orchestrator in MASTER and real Codex, Claude and new
+provider workers in its work room. Separately create a Claude orchestrator and
+new-provider worker in a second room. New Codex orchestrators are refused; do
+not claim that role was tested. Use real models and unique markers for each cell:
 
-- [ ] Orchestrator → worker: worker executes the task and its reply wakes the
-  orchestrator, which acknowledges the actual result.
-- [ ] Worker → worker: recipient answers and the sending worker reports the reply.
-- [ ] Worker → orchestrator: the orchestrator receives the wake and responds.
-- [ ] Agent → user: the post appears once in the correct room. Also check a long
-  answer to a user's request appears once, complete, with both boundary markers.
-- [ ] Exercise long prompts, including one clipped in a narrow composer. Confirm
-  the exact full submitted text, not just a visible suffix, and that an unrelated
-  or edited draft is never submitted. No manual Enter is allowed.
+```sh
+sbus room create provider-matrix
+sbus agent add --room master --name new-orch --provider PROVIDER \
+  --orchestrates provider-matrix --pwd "$scratch/project" --consent-hooks
+sbus agent add --room provider-matrix --name codex-worker --provider codex \
+  --pwd "$scratch/project" --consent-hooks
+sbus agent add --room provider-matrix --name claude-worker --provider claude \
+  --pwd "$scratch/project" --consent-hooks
+sbus agent add --room provider-matrix --name new-peer --provider PROVIDER \
+  --pwd "$scratch/project" --consent-hooks
+```
 
-Use `bus send --room ROOM --as SENDER --to RECIPIENT --text '...'` for
-agent-originated messages. Use `bus wait --message ID --timeout 600`,
-`bus message status ID` and `bus history --room ROOM --limit 100` to inspect
-settlement and routing. Follow each provider's documented wake/wait protocol;
-a waiter can affect wake delivery. Report failures and unrun matrix cells rather
-than inferring them from another route.
+| Route | Evidence to capture |
+| --- | --- |
+| [ ] New orchestrator → Codex worker → orchestrator wake | Worker result and a new orchestrator turn acknowledging it |
+| [ ] New orchestrator → Claude worker → orchestrator wake | Same, with a different marker |
+| [ ] Claude orchestrator → new worker → orchestrator wake | New worker repeats what it heard and Claude acknowledges the wake |
+| [ ] New worker → Codex worker → new worker | New worker initiated send and reports the returned marker |
+| [ ] Codex worker → new worker → Codex worker | New worker repeats the Codex message and Codex reports its reply |
+| [ ] New worker → Claude worker → new worker | New worker initiated send and reports the returned marker |
+| [ ] Claude worker → new worker → Claude worker | New worker repeats the Claude message and Claude reports its reply |
+| [ ] Codex worker → new orchestrator | New orchestrator wakes and repeats the Codex marker |
+| [ ] Claude worker → new orchestrator | New orchestrator wakes and repeats the Claude marker |
+| [ ] New worker → orchestrator | Orchestrator wakes and acknowledges the worker's marker |
+| [ ] Agent → user | Correct room contains exactly one post; long answer has both boundary markers once |
+
+Initiate each route by sending a task **to the real source agent**, not by
+running `sbus send --as SOURCE` yourself. For example:
+
+```sh
+sbus send --room master --to new-orch --text 'Send codex-worker a task asking it to reply CODEX_R1. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
+sbus message status TASK_MESSAGE_ID
+sbus history --room provider-matrix --limit 100
+sbus history --room master --limit 100
+```
+
+For worker routes, ask the source worker to run its own `bus send --room ROOM
+--as ITS_NAME --to TARGET --text 'Repeat MARKER'` and report the recipient's
+actual result. Ask the new provider to quote what it heard. Use the provider's
+wake/wait protocol: in particular, a waiter may consume a wake. Record the
+source's task, its authored send and ID in history, target `message status`,
+target reply, and the source's later turn acknowledging that reply. A receipt
+or an attributed send by the tester proves neither model initiation nor wake.
+Also send a long prompt clipped in a narrow composer: prove the complete text
+was submitted, not merely a visible suffix, and an unrelated/edited draft was
+not submitted. Mark every unrun cell explicitly.
 
 ## Reply capture and failure
 
-- [ ] Bind the exact submitted prompt to the owned provider session and turn.
-  Accept the final answer only when the provider's committed turn-end record
-  proves that same prompt completed successfully. Stop hooks, previews, visible
-  text and idle alone cannot certify completion; partial or mismatched records
-  must fail closed. A transient idle between tool calls is not a final.
-- [ ] Check ordinary, tool-preamble-then-final, continuation, Unicode and long
-  answers, including a reply whose hook preview is clipped. Compare the complete
-  native final with the one captured by Bus, including both boundary markers.
-- [ ] Interrupt/cancel and provoke a provider failure; neither may publish a
-  partial answer as success. Check incomplete, torn, stale-session and wrong-
-  prompt records and late signals cannot settle another request.
+- [ ] For each request save `sbus message status MESSAGE_ID` privately. Select
+  the correct `requests[]` entry; record `session_id`, `turn_id`, `start_bound`,
+  `turn_ended`, `stage`, `reason`, and `reply.text`. Bind its exact prompt to the
+  native owned session and turn. For automatic capture, require a committed
+  terminal record and successful `stage: replied`; an explicit CLI reply can
+  settle before `turn_ended`, so test automatic capture separately.
+- [ ] Locate the owned native transcript from the provider's callback metadata
+  and scratch session, not by picking the latest file. Grok 1.0.70's Stop hook
+  gives `transcriptPath` to the session's `updates.jsonl`: select the last text
+  `agent_message_chunk` for that prompt ID before `turn_completed/end_turn`.
+  Kimi 2.4.0 uses the private agent home's `agents/main/wire.jsonl`: match
+  `turn.prompt`, assistant final text, `agent.turn.ended` (`done`), `turn.ended`
+  and `prompt.completed` (`completed`). For another provider, identify its
+  owned transcript and commit boundary before accepting it; ask if unknown.
+- [ ] Extract the full matching native final into a private `native.txt` and the
+  status entry's exact `reply.text` into `bus-reply.txt` without adding a newline;
+  run `diff -u "$scratch/native.txt" "$scratch/bus-reply.txt"`. A difference,
+  wrong session/turn, incomplete JSON row or missing terminal record fails. Do
+  not use Stop preview, visible text or idle alone as a final; a transient idle
+  can occur between tool calls. Check ordinary, tool preamble, continuation,
+  Unicode and long replies including one clipped in the hook preview.
+  For example, after saving status as `"$scratch/status.json"`, extract the
+  exact Bus text for a single numeric agent ID (set `AGENT_ID` first):
 
-For example, in observed Grok 1.0.70 records the submit hook binds session,
-prompt ID and text; `updates.jsonl` supplies the last matching
-`agent_message_chunk` followed by `turn_completed` with the same prompt ID and
-`end_turn`. A Stop preview can be clipped or precede cancellation. In observed
-Kimi 2.4.0 records, `wire.jsonl` binds `turn.prompt` to the matching assistant
-text and completed `agent.turn.ended`, `turn.ended` and `prompt.completed`
-records. These are version-specific observations to verify again on upgrades,
-not a substitute for provider-specific tests.
+  ```sh
+  AGENT_ID=123 python3 - "$scratch/status.json" "$scratch/bus-reply.txt" <<'PYCODE'
+  import json, os, pathlib, sys
+  status = json.loads(pathlib.Path(sys.argv[1]).read_text())
+  rows = [r for r in status['result']['requests']
+          if r['agent_id'] == int(os.environ['AGENT_ID'])]
+  assert len(rows) == 1 and rows[0]['stage'] == 'replied'
+  assert isinstance(rows[0]['reply']['text'], str)
+  pathlib.Path(sys.argv[2]).write_bytes(rows[0]['reply']['text'].encode('utf-8'))
+  PYCODE
+  diff -u "$scratch/native.txt" "$scratch/bus-reply.txt"
+  ```
 
-## Clear, resume and isolation
+  Derive `native.txt` from the selected complete native turn, preserving its
+  exact UTF-8 bytes; save the session/prompt/turn IDs and terminal-record proof
+  alongside it. If the provider's format cannot be unambiguously extracted,
+  stop and ask for a verified procedure rather than substituting a preview.
+- [ ] Start a long turn, run `sbus agent interrupt AGENT`, then inspect status
+  and native record: expect an interrupted request, not a partial successful
+  reply. Also provoke a provider failure and run focused fixture tests for torn,
+  mismatched prompt/session, stale signals and cancelled records. No committed
+  final must settle as `reply_not_captured` or `provider_error: ...`, never as
+  `stage: replied` with partial text; record any different explicit failure.
+  Do not edit a real live transcript to manufacture negative cases.
 
-- [ ] Save the session identity, clear the agent with `bus agent clear AGENT`,
-  and send a new message. Verify a distinct native session is bound, the message
-  gets a reply, and stale callbacks or turn-end records from the old session are
-  retired. Attempt `/resume` to the old session and confirm it fails loudly;
-  it must not silently rebind or answer with stale context.
-- [ ] Quit the scratch Bus, cold-resume the saved Bus session, and verify the
-  same provider session and prior context. Restart during a request and inspect
-  its durable outcome; no duplicate delivery, false success or lost ownership.
-- [ ] With no-prompt mode enabled at launch, resume and perform a routine tool
-  action. Confirm the saved launch option survives and no routine approval is
-  needed; document any provider-specific exceptions.
-- [ ] Compare provider global config and hooks before and after; there must be
-  no writes. Check `git status --short` in the scratch project: generated project
-  hook files must be excluded, and no credential copies may exist. Stop the
-  scratch server and agents, then retain only authorized, redacted evidence.
+## Clear, restart and isolation
 
-## Gate, review and post-merge smoke
+- [ ] Save the old session ID; with no active or queued work, run
+  `sbus agent clear AGENT`. Record `result.sent` and `stage: cleared`, then
+  send a fresh message. Require a distinct bound session and successful reply;
+  old callbacks and turn ends must not settle the new request.
+- [ ] Deliberately type the provider's `/resume OLD_SESSION` in its native pane
+  for this negative test only, not via `sbus send`. Inspect `sbus state`, visible
+  pane and a follow-up request: an old session must fail loudly or be reported as
+  a failure if Bus silently follows the wrong identity. Record the actual error,
+  invalidation or status reason; a silent rebind to the old session is a failure.
+  Never infer success from the command receipt.
+- [ ] Ctrl+Q the scratch UI, then relaunch `sbus --dev` in the same environment
+  and data root. Confirm paths, binary, saved provider session/context and a
+  fresh reply. For a mid-request restart, run `sbus stop` during the turn, then
+  relaunch `sbus --dev` and inspect `sbus message status MESSAGE_ID`.
+  Explicit `BUS_DATA_DIR` cannot be combined with `bus resume`; this is an
+  explicit-root relaunch, not a registry-resume test. Use the separate isolated
+  registry procedure below. Machine sleep or Bus restart ends in-flight turns
+  as `reply_not_captured`; rerun acceptance from a fresh scratch instance, never
+  resume the interrupted run as a pass.
+- [ ] Test provider flags through `agent add --args`: Claude
+  `--dangerously-skip-permissions`, Codex `--yolo`, Cursor `--force`, Grok
+  `--always-approve`, Kimi `--yolo` (when supported). Check saved launch options
+  and a routine tool action after relaunch. Kimi's mode can still ask about
+  risky actions. Separately test Bus `--yolo`: it is run-scoped, not saved, and
+  must be supplied again on relaunch. Record the generated provider flag and
+  check routine work; an attach with a different Bus yolo setting is refused.
+- [ ] Verify no provider global config or hooks were written, no credential
+  copies exist, and `git -C "$scratch/project" status --short` excludes generated
+  project hooks. Stop only the scratch server with `sbus stop`; retain only
+  authorized, redacted evidence.
 
-- [ ] Run the repository gate on the exact head (`just ci`) under the current
-  build-slot and disk rules. Until shared-target provenance is fixed, immediately
-  after acquiring the slot run `cargo clean -p bus --target-dir "$CARGO_TARGET_DIR"`
-  and repeat for its `llvm-cov-target` subdirectory before **each** cargo gate.
-  Release the slot on exit. Record failures; a focused pass is not a full gate.
-- [ ] Get independent Claude and Codex reviews of the exact head; resolve their
-  findings and repeat affected tests, acceptance and review for any new head.
-- [ ] After merge and the developer's Bus restart, perform an authorized live smoke:
-  add a fresh agent and have a real Codex agent send it a unique message. Verify
-  the new provider confirms what it heard and the request completes. Declare the
-  integration working only after this smoke; report a blocked or unrun smoke.
+### Separate registry-based cold resume
+
+Use a second private scratch HOME and the same verified binary and approved
+provider login mapping. Do not set `BUS_DATA_DIR` for this test. The wrapper
+below is a template with the **same approved provider PATH and login variables**
+as `sbus`; stop and ask if they are unavailable. It creates its own registry,
+not an entry in the developer's registry:
+
+```sh
+mkdir -m 700 "$scratch/registry-home" "$scratch/registry-xdg"
+cat > "$scratch/bin/rbus" <<'WRAPPER'
+#!/bin/sh
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 1
+# Add the same approved provider PATH and login variables as sbus here.
+exec env -i HOME="$root/registry-home" XDG_DATA_HOME="$root/registry-xdg" \
+  XDG_CONFIG_HOME="$root/registry-xdg" XDG_STATE_HOME="$root/registry-xdg" \
+  PATH="$root/bin:/usr/bin:/bin" TERM="${TERM:-xterm-256color}" \
+  "$root/bin/bus" "$@"
+WRAPPER
+chmod 700 "$scratch/bin/rbus"
+alias rbus="$scratch/bin/rbus"
+rbus --paths                    # all session/registry paths must be under scratch
+rbus --dev                      # start a new registry session in the UI terminal
+# In the second terminal, same rbus wrapper:
+rbus sessions                   # record this new session's exact ID
+rbus --paths                    # confirm its root is under scratch
+rbus state                      # verify binary, agents and saved provider session
+# After Ctrl+Q, in the UI terminal:
+rbus resume SESSION_ID --dev
+# In the control terminal, recheck paths, state and the earlier message status.
+```
+
+Check the provider recalls the prior marker and replies to a new task. Both
+terminals must use `rbus`; if any path or settings escape scratch, stop. Repeat
+with `--yolo` on both launches for a run-scoped bypass. This registry test is
+separate from the explicit-root relaunch and does not rescue an interrupted run.
+
+## Gate, review and mandatory live smoke
+
+- [ ] Run `just ci` on the exact head with the current slot/disk policy and the
+  clean-first procedure above, including `llvm-cov-target`, on every rerun.
+  Record gate failures; a focused pass is not a full gate.
+- [ ] Get independent Claude and Codex reviews on that head. Resolve findings
+  and repeat affected checks, acceptance and review after any new head.
+- [ ] After merge and the developer's Bus restart, an authorized operator must
+  perform the live smoke before declaring the integration working. Verify the
+  live server's binary and merged `build_sha` using its current run_start record;
+  if identity is unavailable, stop and report the smoke blocked. Add a fresh
+  agent in a new untrusted project, surface trust as a Bus dialog, and while its
+  welcome card is visible have a real Codex agent send a unique message. Require
+  the new provider to repeat what it heard and reply successfully. Record IDs,
+  status, screen and exact merged build; delete the smoke agent when authorized.
 
 ## Testing lessons
 
-- **2026-10-30 — Grok:** four scratch messaging paths passed, but live fresh
-  agents could not receive messages: folder trust was not detected and the
-  composer below the 1.0.70 welcome card was missed. Always test the actual
-  untrusted first launch, then a post-restart live smoke.
-- **2026-10-30 — Kimi:** copying rotating credentials broke the login; sharing
-  both credentials and refresh locks preserves one source of truth. A clipped
-  composer and transient idle also exposed failures that a short prompt and idle
-  screen could not prove away. Test full prompt ownership and committed finals.
+- **2026-10-30 — Grok:** four scratch paths passed, yet live first launch could
+  not receive messages: folder trust was missed and the composer under the
+  1.0.70 welcome card was reported `prompt_not_shown`. Test that exact screen
+  and run the mandatory live smoke after restart.
+- **2026-10-30 — Kimi:** copied rotating credentials broke login; share credentials
+  and refresh locks. A clipped composer and transient idle also defeated short
+  prompt and idle-only checks. Verify full prompt ownership and committed finals.
+- **2026-10-30 — interruption:** machine sleep or Bus restart can end in-flight
+  turns as `reply_not_captured`; rerun interrupted acceptance in a fresh instance.
