@@ -2,7 +2,7 @@
 use crate::messaging::skills;
 use std::io::{self, BufRead, IsTerminal, Write};
 
-const USAGE: &str = "Usage: bus skills status\n       bus skills install [--yes]\nCopies default skills to ~/.claude/skills and ~/.agents/skills.\n--yes installs without a prompt. Existing user skills are preserved.\nEach copy's action is installed, updated, unchanged, or preserved-conflict.";
+const USAGE: &str = "Usage: bus skills status\n       bus skills install [--yes]\nCopies default skills to ~/.claude/skills and ~/.agents/skills.\n--yes installs without a prompt. Existing user skills are preserved.\nEach copy's action is installed, updated, unchanged, preserved-conflict, or blocked-link.";
 
 pub(super) fn run(args: &[String]) -> io::Result<()> {
     if args.is_empty()

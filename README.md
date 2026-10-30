@@ -16,8 +16,9 @@ Installing skills is a separate command. `./run dev`, `./run prod`, `bus`, and
 install this checkout's default skills, or add `--yes` to install without a
 prompt. `bus skills install --yes` installs the bundle embedded in that binary;
 `bus skills status` inspects copies without a running session. The install
-report's action for each skill is installed, updated, unchanged, or
-preserved-conflict, with a warning when a user skill is preserved.
+report's action for each skill is installed, updated, unchanged,
+preserved-conflict, or blocked-link, with a warning when a user skill is
+preserved.
 `./run install-skills` runs only a binary built from this checkout: if a shared
 Cargo target returns another checkout's binary, it rebuilds into
 `target/install-skills` and refuses to install when that binary still does not
