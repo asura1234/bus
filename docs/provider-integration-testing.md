@@ -548,8 +548,9 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   perform the live smoke before declaring the integration working. Verify the
   live server's binary and merged `build_sha` using its current run_start record;
   if identity is unavailable, stop and report the smoke blocked. Add the new
-  provider and one peer that is available now: Codex when it has quota,
-  otherwise Claude, Grok, or Kimi. Record the peer's provider. Use a new
+  provider and one peer that `bus agent add --help` lists on the build under
+  test and that is available now. Prefer Codex when it has quota and the
+  build lists it. Record the peer's provider. Use a new
   untrusted project, surface trust as a Bus dialog, and while the new
   provider's welcome card is visible have the peer send a unique message.
   Require the new provider to repeat what it heard and reply. Then have the
@@ -577,8 +578,8 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   is still visible.
 - **2026-10-30 — Codex quota:** Codex hitting its usage limit stopped all
   authoring. Grok and Kimi took over once their messaging worked. Live smoke
-  pairs the new provider with whichever other provider is available, in both
-  directions: Codex when it has quota, otherwise Claude, Grok, or Kimi.
+  pairs the new provider with another provider that `bus agent add --help`
+  lists on the build under test and that has quota, in both directions.
   Record which peer ran.
 - **2026-10-31 — Grok busy draft:** a Grok agent busy with a background task was
   treated as idle. Bus typed into the composer, could not confirm the submit,
