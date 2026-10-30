@@ -10,7 +10,7 @@ class SplitPrHostContractTest(unittest.TestCase):
         self.assertIn('refs/remotes/', text)
         self.assertNotIn('base_ref = --base or origin/master', text)
         self.assertNotIn('gh pr ', text)
-        self.assertIn('publish pending forge B adapter', text)
+        self.assertIn('publication pending forge B adapter', text)
         self.assertIn('remains on its recorded integration base', text)
 
 
