@@ -1688,7 +1688,9 @@ fn scriptable_fake_resumes_without_reusing_prior_turns() {
         bus_state(&session)["agents"][0]["runtime_identity"]["session_id"],
         before
     );
-    assert!(send("after restart").to_string().contains("fake reply:"));
+    assert!(send("after restart\nfake agent working")
+        .to_string()
+        .contains("fake reply:"));
     let repeated = send("CASE_RESUME_7");
     assert!(repeated.to_string().contains("fake reply:"), "{repeated}");
     assert!(!repeated.to_string().contains("ONCE_7"), "{repeated}");
