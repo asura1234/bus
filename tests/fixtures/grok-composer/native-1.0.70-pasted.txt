@@ -1,0 +1,23 @@
+
+  /U/d/w/b/t/grok-e2e-107… 1.8K / 256K │ [Dashboard]
+
+
+
+
+
+
+
+
+
+        ╭───────────────────────────────────╮
+        │[Bus message 7; answer with bus se…│
+        │Bus: this is your system prompt; B…│
+        │                                   │
+        │Bus messaging: you are grok-e2e-a …│
+        ╰─ paste again or double-click to… ─╯
+
+  ╭────────────────────────────────────────────────╮
+  │ ❯ [Pasted: 4 lines]                            │
+  ╰───────────── Grok 4.7 (high) · always-approve ─╯
+
+  Enter:send  │  Shift+Enter/Opt+Enter:newline  │

@@ -9,12 +9,19 @@ pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
     if body.is_empty() {
         return InputObservation::Empty;
     }
-    // No captured native paste-chip contract attests the hidden contents.
-    // Even a matching count can describe an unrelated developer paste.
+    let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
+    // Only the captured 1.0.70 chip shape is owned by the input lease.
+    // Older or foreign paste chips remain unreadable and unavailable.
+    if body.starts_with("[Pasted: ") {
+        return if native_paste_summary(&body, &expected) {
+            InputObservation::Pending
+        } else {
+            InputObservation::Unavailable
+        };
+    }
     if body.contains("[Pasted") || body.contains("[Image #") {
         return InputObservation::Unavailable;
     }
-    let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
     if body == expected {
         InputObservation::Pending
     } else {
@@ -41,7 +48,9 @@ pub(super) fn input(screen: &str) -> Option<String> {
             && version.chars().any(|c| c.is_ascii_digit())
             && version.chars().all(|c| c.is_ascii_digit() || c == '.')
     });
-    if !legacy_footer && !native_build_footer {
+    let native_input_footer =
+        footer.starts_with("enter:send") && footer.contains("shift+enter/opt+enter:newline");
+    if !legacy_footer && !native_build_footer && !native_input_footer {
         return None;
     }
     let bottom = (0..end)
@@ -88,6 +97,30 @@ pub(super) fn input(screen: &str) -> Option<String> {
     }
 }
 
+/// Grok 1.0.70 collapses multiline bracketed paste into a chip. The shared
+/// submission runtime rejects any pre-existing matching chip, then holds an
+/// exclusive input lease from its empty preflight through Enter. Require the
+/// native chip's entire summary to match the text Bus just pasted.
+fn native_paste_summary(body: &str, expected: &str) -> bool {
+    let Some(label) = body
+        .strip_prefix("[Pasted: ")
+        .and_then(|label| label.strip_suffix(']'))
+    else {
+        return false;
+    };
+    if let Some(lines) = label.strip_suffix(" lines") {
+        return lines
+            .parse::<usize>()
+            .is_ok_and(|lines| lines > 1 && lines == expected.split('\n').count());
+    }
+    if let Some(kib) = label.strip_suffix(" KB") {
+        return kib
+            .parse::<usize>()
+            .is_ok_and(|kib| kib > 0 && kib == expected.len() / 1024);
+    }
+    false
+}
+
 /// A login title owns only a bounded control region, starting at the viewport
 /// or a complete frame boundary. Blank padding does not extend its ownership
 /// into a preceding transcript or make a current login writable.
@@ -130,6 +163,8 @@ mod tests {
     const PASTED: &str = include_str!("../../../../../tests/fixtures/grok-composer/pasted.txt");
     const NATIVE_1070_EMPTY: &str =
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-empty.txt");
+    const NATIVE_1070_PASTED: &str =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-pasted.txt");
 
     #[test]
     fn grok_1070_native_ready_composer_accepts_bus_prompt() {
@@ -137,6 +172,67 @@ mod tests {
         assert_eq!(
             observe(NATIVE_1070_EMPTY, "Bus task"),
             InputObservation::Empty
+        );
+    }
+
+    #[test]
+    fn grok_1070_native_paste_chip_matches_only_its_summary() {
+        let four_lines = "first\nsecond\nthird\nfourth";
+        assert_eq!(
+            input(NATIVE_1070_PASTED).as_deref(),
+            Some("[Pasted: 4 lines]")
+        );
+        assert_eq!(
+            observe(NATIVE_1070_PASTED, four_lines),
+            InputObservation::Pending
+        );
+        assert_eq!(
+            observe(NATIVE_1070_PASTED, "three\nlines\nonly"),
+            InputObservation::Unavailable
+        );
+        let large = NATIVE_1070_PASTED.replace("[Pasted: 4 lines]", "[Pasted: 21 KB]");
+        assert_eq!(
+            observe(&large, &"x".repeat(21 * 1024 + 200)),
+            InputObservation::Pending
+        );
+        assert_eq!(
+            observe(&large, &"x".repeat(20 * 1024)),
+            InputObservation::Unavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn grok_1070_preexisting_matching_chip_is_never_submitted() {
+        use bytes::Bytes;
+        use std::time::{Duration, Instant};
+
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        runtime.test_process_pty_bytes(
+            format!("\x1b[2J\x1b[H{}", NATIVE_1070_PASTED.replace('\n', "\r\n")).as_bytes(),
+        );
+        let expected = "first\nsecond\nthird\nfourth";
+        let completion = runtime
+            .queue_observed_input_with_inspector(
+                Bytes::copy_from_slice(expected.as_bytes()),
+                Bytes::from_static(b"\r"),
+                vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+                Duration::ZERO,
+                Some(Instant::now() + Duration::from_secs(1)),
+                Box::new(super::super::composer::observer(
+                    crate::agents::AgentKind::Grok,
+                    expected.into(),
+                )),
+            )
+            .unwrap();
+        let error = completion
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap_err();
+        assert!(crate::terminal::runtime::PromptNotShown::is(&error));
+        assert!(
+            writes.try_recv().is_err(),
+            "pre-existing chip received Bus input"
         );
     }
 
