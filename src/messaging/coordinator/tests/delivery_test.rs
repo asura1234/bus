@@ -100,6 +100,10 @@ fn occupied_composer_retries_steering_without_changing_the_lead_turn() {
             Provider::Cursor => {
                 json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn","prompt":"lead"})
             }
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => {
+                json!({"event":"started","session":"session","turn":"turn","prompt":"lead"})
+            }
         };
         record(&dir, provider, hook);
         worker
@@ -241,6 +245,10 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
                 "generation_id": "turn",
                 "prompt": prompt
             }),
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => {
+                json!({"event":"started","session":"session","turn":"turn","prompt":prompt})
+            }
         };
         record(&dir, provider, callback);
         worker
