@@ -13,7 +13,7 @@ pub(crate) fn warnings_for_launch(
     let (repo_scope, user_scope) = match provider {
         ProviderKind::ClaudeCode => (".claude/skills", ".claude/skills"),
         ProviderKind::Codex => (".agents/skills", ".agents/skills"),
-        ProviderKind::Cursor | ProviderKind::Grok => return Ok(Vec::new()),
+        ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => return Ok(Vec::new()),
     };
     let user = home.join(user_scope);
     let canonical_user = user.canonicalize().ok();

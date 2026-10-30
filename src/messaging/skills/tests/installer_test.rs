@@ -167,7 +167,7 @@ fn collisions_report_provider_precedence_without_warning_about_user_scope_itself
     assert_eq!(codex.len(), 1);
     assert!(codex[0].contains("lists both copies"));
     assert!(codex[0].contains("child/.agents/skills/pr"));
-    for provider in [ProviderKind::Cursor, ProviderKind::Grok] {
+    for provider in [ProviderKind::Cursor, ProviderKind::Grok, ProviderKind::Kimi] {
         assert!(warnings_for_launch(provider, &nested, &home)
             .unwrap()
             .is_empty());
