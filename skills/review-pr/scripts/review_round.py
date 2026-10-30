@@ -8,7 +8,7 @@ What it does:
 
   1. Prereq (unmet prerequisite → FAIL):
      - inside a git work tree, on a named branch that is not main/master
-     - base ref (default origin/master) resolvable
+     - base ref (default refs/remotes/origin/HEAD, falling back to origin/master) resolvable
      - branch mode: committed non-plan diff is non-empty; `plans/**` is excluded
      - --scope mode: a fixed file list / JSON chunk manifest replaces that diff;
        ordinary UTF-8 committed files are reviewed in full, even without branch changes
@@ -194,7 +194,7 @@ def load_locked_review_context(lane_root: Path, plan: Path | None) -> LockedRevi
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--base", default="origin/master")
+    parser.add_argument("--base", default=None)
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
     parser.add_argument("--plan", default=None)
@@ -240,6 +240,8 @@ def main(argv: list[str]) -> int:
             print(f"error: {error}", file=sys.stderr)
             return 2
 
+    if args.base is None:
+        args.base = git("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").stdout.strip() or "origin/master"
     failures: list[str] = []
     branch = git("branch", "--show-current").stdout.strip()
     if not branch:
@@ -248,6 +250,8 @@ def main(argv: list[str]) -> int:
         failures.append("当前在 main/master 上，没有可审查的分支变更")
     if git("rev-parse", "--verify", "--quiet", args.base).returncode != 0:
         failures.append(f"base ref '{args.base}' 无法解析（是否需要先 git fetch origin？）")
+    if git("check-ignore", "-q", "temp/review-pr").returncode != 0:
+        failures.append("temp/review-pr must be ignored before writing review artifacts")
 
     diff_text = ""
     if not failures and scope is None:
