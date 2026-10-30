@@ -92,11 +92,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
 
     let argv = match (source, agent, session_ref.kind) {
         #[cfg(feature = "dev-tools")]
-        ("herdr:fake", "fake", AgentSessionRefKind::Id) => vec![
-            "bus-fake-agent".into(),
-            "--resume".into(),
-            session_ref.value.clone(),
-        ],
+        ("herdr:fake", "fake", AgentSessionRefKind::Id) => fake_resume_args(&session_ref.value),
         ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
             vec![
                 "claude".into(),
@@ -191,6 +187,11 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         argv,
         dedupe_key: dedupe_key(source, agent, session_ref),
     })
+}
+
+#[cfg(feature = "dev-tools")]
+fn fake_resume_args(session: &str) -> Vec<String> {
+    vec!["bus-fake-agent".into(), "--resume".into(), session.into()]
 }
 
 pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> String {
