@@ -1708,6 +1708,10 @@ fn grok_reset_retires_known_old_observations_after_reopen_but_rejects_foreign_se
     for value in [
         json!({"hookEventName":"stop","sessionId":"session","promptId":"old","reason":"end_turn"}),
         json!({"hookEventName":"notification","notificationType":"idle_prompt","sessionId":"session"}),
+        json!({"hookEventName":"session_start","sessionId":"session","source":"new"}),
+        json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":"old","prompt":"old"}),
+        json!({"hookEventName":"stop_cancelled","sessionId":"session","promptId":"old","reason":"cancelled"}),
+        json!({"hookEventName":"stop_failure","sessionId":"session","promptId":"old","error":"server_error"}),
     ] {
         record(&dir, Provider::Grok, value);
     }

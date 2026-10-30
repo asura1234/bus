@@ -101,9 +101,16 @@ impl Worker {
         parsed: &callbacks::Parsed,
     ) -> Result<bool, String> {
         let session = match parsed {
-            callbacks::Parsed::CompletionCandidate { session, .. }
-            | callbacks::Parsed::ReconcileSession { session } => session,
-            _ => return Ok(false),
+            callbacks::Parsed::Session { session, .. }
+            | callbacks::Parsed::Started { session, .. }
+            | callbacks::Parsed::Final { session, .. }
+            | callbacks::Parsed::CompletionCandidate { session, .. }
+            | callbacks::Parsed::ReconcileSession { session }
+            | callbacks::Parsed::BackgroundPending { session, .. }
+            | callbacks::Parsed::Failure { session, .. }
+            | callbacks::Parsed::Completed { session, .. }
+            | callbacks::Parsed::Response { session, .. } => session,
+            callbacks::Parsed::Ignore => return Ok(false),
         };
         if record.manifest.provider != crate::agents::providers::ProviderKind::Grok
             || self
