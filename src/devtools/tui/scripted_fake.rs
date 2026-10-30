@@ -52,12 +52,15 @@ fn run_inner(args: &[String]) -> Result<i32, String> {
     crossterm::terminal::enable_raw_mode().map_err(|e| e.to_string())?;
     let _raw = Raw;
     crossterm::execute!(io::stdout(), event::EnableBracketedPaste).map_err(|e| e.to_string())?;
-    let mut turn = 0u64;
+    let counter = spool.join("fake-turn-counter");
+    let mut turn = read_turn_counter(&counter)?;
     loop {
         let Some(prompt) = read_prompt()? else {
             return Ok(0);
         };
-        turn += 1;
+        turn = turn.checked_add(1).ok_or("Fake turn counter exhausted")?;
+        crate::agents::providers::hook_json::atomic_write(&counter, turn.to_string().as_bytes())
+            .map_err(|e| format!("Cannot save fake turn counter: {e}"))?;
         let turn_id = format!("{session}-{turn}");
         callback(json!({"event":"started", "session":session, "turn":turn_id, "prompt":prompt}))?;
         write!(io::stdout(), "\r\n✻ Working… (0s · esc to interrupt)\r\n")
@@ -82,6 +85,16 @@ fn run_inner(args: &[String]) -> Result<i32, String> {
                 Action::Crash { code } => return Ok(code),
             }
         }
+    }
+}
+
+fn read_turn_counter(path: &std::path::Path) -> Result<u64, String> {
+    match std::fs::read_to_string(path) {
+        Ok(value) => value
+            .parse()
+            .map_err(|e| format!("Invalid fake turn counter: {e}")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(format!("Cannot read fake turn counter: {error}")),
     }
 }
 
