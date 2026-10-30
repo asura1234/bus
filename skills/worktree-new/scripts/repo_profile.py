@@ -576,7 +576,7 @@ def scan(repo: Path, *, use_cache: bool = True) -> dict:
         return cached
     packages = package_info(repo, paths)
     tools, entries = inventory(repo, paths)
-    recipe = infer_recipe(repo, paths, packages, config, tools, subs)
+    recipe = infer_recipe(repo, paths, packages, config, tools)
     result = {
         "schema_version": 1,
         "scanner_hash": producer,

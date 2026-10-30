@@ -1,6 +1,7 @@
 """Infer build ownership, finite recipes and generic local hazards."""
 
 import fnmatch
+from functools import cache
 import json
 from pathlib import Path
 import re
@@ -10,7 +11,28 @@ import tomllib
 from repo_support import git, command
 
 
-def cargo_roots(repo, paths, submodules=()):
+def workspace_glob_matches(path, pattern):
+    segments = path.split("/")
+    globs = pattern.rstrip("/").split("/")
+
+    @cache
+    def matches(segment, glob):
+        if glob == len(globs):
+            return segment == len(segments)
+        if globs[glob] == "**":
+            return matches(segment, glob + 1) or (
+                segment < len(segments) and matches(segment + 1, glob)
+            )
+        return (
+            segment < len(segments)
+            and fnmatch.fnmatchcase(segments[segment], globs[glob])
+            and matches(segment + 1, glob + 1)
+        )
+
+    return matches(0, 0)
+
+
+def cargo_roots(repo, paths):
     manifests = {
         p: tomllib.loads((repo / p).read_text())
         for p in paths
@@ -34,8 +56,6 @@ def cargo_roots(repo, paths, submodules=()):
         references(data, Path(name).parent)
     roots = []
     for name, data in manifests.items():
-        if any(name.startswith(module["path"] + "/") for module in submodules):
-            continue
         if name != "Cargo.toml" and name in dependencies:
             continue
         parent = Path(name).parent
@@ -52,12 +72,12 @@ def cargo_roots(repo, paths, submodules=()):
                 workspace = owner["workspace"]
                 relative = parent.relative_to(base).as_posix()
                 if any(
-                    fnmatch.fnmatchcase(relative, pattern)
+                    workspace_glob_matches(relative, pattern)
                     for pattern in workspace.get("exclude", [])
                 ):
                     continue
                 if any(
-                    fnmatch.fnmatchcase(relative, pattern)
+                    workspace_glob_matches(relative, pattern)
                     for pattern in workspace.get("members", [])
                 ):
                     owned = True
@@ -77,9 +97,13 @@ def node_workspace_owner(packages, path):
         relative = target.relative_to(base).as_posix()
         patterns = package["workspaces"]
         if any(
-            fnmatch.fnmatchcase(relative, p) for p in patterns if not p.startswith("!")
+            workspace_glob_matches(relative, p)
+            for p in patterns
+            if not p.startswith("!")
         ) and not any(
-            fnmatch.fnmatchcase(relative, p[1:]) for p in patterns if p.startswith("!")
+            workspace_glob_matches(relative, p[1:])
+            for p in patterns
+            if p.startswith("!")
         ):
             owners.append(package)
     return max(owners, key=lambda p: len(Path(p["path"]).parts), default=None)
@@ -149,10 +173,9 @@ def infer_recipe(
     packages: list[dict],
     config: dict,
     tools=None,
-    submodules=(),
 ) -> dict:
     prepare, smoke, unresolved = [], [], []
-    cargo = cargo_roots(repo, paths, submodules)
+    cargo = cargo_roots(repo, paths)
     for name in cargo:
         cwd = Path(name).parent.as_posix()
         if (Path(cwd) / "Cargo.lock").as_posix() not in paths:
