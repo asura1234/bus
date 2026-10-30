@@ -66,8 +66,7 @@ async fn wait_for_prompt(runtime: &TerminalRuntime) {
 }
 
 async fn wait_for_launch_input(runtime: &TerminalRuntime) {
-    let deadline =
-        std::time::Instant::now() + crate::server::terminals::agents::DEFAULT_AGENT_START_TIMEOUT;
+    let deadline = std::time::Instant::now() + crate::protocol::api::AGENT_START_TIMEOUT;
     while !runtime.test_launch_input_submitted() {
         assert!(
             runtime.launch_input_error().is_none(),
