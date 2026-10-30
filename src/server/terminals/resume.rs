@@ -322,7 +322,7 @@ impl App {
         else {
             return false;
         };
-        let resume_command = self.record_resume_command(&terminal_id, &argv);
+        self.record_resume_command(&terminal_id, &argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
