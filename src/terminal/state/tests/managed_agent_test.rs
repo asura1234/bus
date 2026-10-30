@@ -77,6 +77,8 @@ fn accepted_session_start_confirms_startup_without_a_ready_screen_rule() {
         (AgentKind::Codex, "codex", "startup"),
         (AgentKind::Claude, "claude", "startup"),
         (AgentKind::Cursor, "cursor", "new"),
+        (AgentKind::Grok, "grok", "new"),
+        (AgentKind::Grok, "grok", "load"),
     ] {
         for state in [
             AgentState::Unknown,

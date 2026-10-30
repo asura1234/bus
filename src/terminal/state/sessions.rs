@@ -151,7 +151,11 @@ impl TerminalState {
         // Provider callbacks carry a sequence; Bus's adopted-session report
         // does not. Restoring saved identity must not prove fresh readiness.
         if seq.is_some()
-            && Self::session_start_source_is_recognized(session_start_source)
+            && Self::session_start_source_is_recognized(
+                &persisted_session.source,
+                &persisted_session.agent,
+                session_start_source,
+            )
             && crate::agents::resume::catalog::is_official_agent_source(
                 &persisted_session.source,
                 &persisted_session.agent,
@@ -178,7 +182,7 @@ impl TerminalState {
         session_ref: &crate::agents::resume::catalog::AgentSessionRef,
         session_start_source: Option<&str>,
     ) -> bool {
-        Self::session_start_source_is_recognized(session_start_source)
+        Self::session_start_source_is_recognized(source, agent_label, session_start_source)
             && self.foreground_agent_confirms_session_owner(source, agent_label, session_ref)
     }
 
@@ -294,14 +298,23 @@ impl TerminalState {
                     "qwen",
                     Some("startup" | "clear" | "resume" | "compact" | "branch")
                 )
+                // Grok 1.0.70 reports /new as new and --resume as load.
+                | ("herdr:grok", "grok", Some("new" | "load"))
                 | ("herdr:antigravity_cli", "agy", None)
         )
     }
 
-    fn session_start_source_is_recognized(session_start_source: Option<&str>) -> bool {
+    fn session_start_source_is_recognized(
+        source: &str,
+        agent_label: &str,
+        session_start_source: Option<&str>,
+    ) -> bool {
         matches!(
             session_start_source,
             Some("startup" | "clear" | "resume" | "compact" | "new" | "fork" | "select")
+        ) || matches!(
+            (source, agent_label, session_start_source),
+            ("herdr:grok", "grok", Some("load"))
         )
     }
 }

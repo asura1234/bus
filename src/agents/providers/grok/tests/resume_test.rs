@@ -101,6 +101,25 @@ fn grok_resume_does_not_duplicate_explicit_runtime_flags() {
 }
 
 #[test]
+fn grok_cold_resume_preserves_explicit_always_approve() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("--always-approve");
+    let spec = f.spec("", true);
+    let (_, additions, _) = capture_args(&spec.hooks, &f.project).unwrap();
+    let options = common::saved_options(
+        crate::agents::providers::ProviderKind::Grok,
+        &spec.hooks.spool,
+    )
+    .unwrap();
+    assert_eq!(
+        common::resumable_options(crate::agents::providers::ProviderKind::Grok, &options),
+        ["--always-approve"]
+    );
+    assert!(!additions.iter().any(|option| option == "--always-approve"));
+}
+
+#[test]
 fn grok_cold_resume_preserves_explicit_runtime_with_literal_startup_tail() {
     let f = Fixture::new();
     f.install();
