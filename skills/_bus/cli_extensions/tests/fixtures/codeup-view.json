@@ -1,0 +1,45 @@
+{
+  "localId": 5,
+  "title": "Fixture request",
+  "description": "Fixture body",
+  "status": "MERGED",
+  "sourceBranch": "feat/fixture",
+  "targetBranch": "main",
+  "detailUrl": "https://codeup.aliyun.com/org/team/project/change/5",
+  "conflictCheckStatus": "NO_CONFLICT",
+  "mergedRevision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "updateTime": "2026-10-26T11:17:00+08:00",
+  "author": {
+    "avatar": "https://example.test/avatar.png",
+    "email": "fixture@example.test",
+    "id": 1,
+    "name": "Fixture name",
+    "state": "active",
+    "userId": "fixture-user-2",
+    "username": "Fixture username"
+  },
+  "reviewers": [
+    {
+      "avatar": "https://example.test/avatar.png",
+      "email": "fixture@example.test",
+      "hasCommented": false,
+      "hasReviewed": true,
+      "id": 1,
+      "name": "Fixture name",
+      "reviewOpinionStatus": "Fixture reviewOpinionStatus",
+      "reviewTime": "Fixture reviewTime",
+      "state": "active",
+      "userId": "fixture-user-2",
+      "username": "Fixture username"
+    }
+  ],
+  "checkList": {
+    "needAttentionItems": [],
+    "requirementRuleItems": [
+      {
+        "itemType": "REVIEWER_APPROVED_CHECK",
+        "pass": true
+      }
+    ]
+  }
+}

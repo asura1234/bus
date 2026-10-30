@@ -1,0 +1,20 @@
+[
+  {
+    "relatedMergeItemType": "MERGE_SOURCE",
+    "versionNo": 1,
+    "commitId": "1111111111111111111111111111111111111111",
+    "patchSetBizId": "patch-0"
+  },
+  {
+    "relatedMergeItemType": "MERGE_SOURCE",
+    "versionNo": 2,
+    "commitId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "patchSetBizId": "patch-1"
+  },
+  {
+    "relatedMergeItemType": "MERGE_TARGET",
+    "versionNo": 1,
+    "commitId": "3333333333333333333333333333333333333333",
+    "patchSetBizId": "patch-2"
+  }
+]
