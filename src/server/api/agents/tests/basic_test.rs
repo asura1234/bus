@@ -366,6 +366,8 @@ async fn guarded_agent_start_rejects_stale_owner_or_lost_prompt_integration_with
                         kind: "codex".into(),
                         pane_id: target,
                         args: vec![],
+                        executable: None,
+                        grok_home: None,
                         timeout_ms: None,
                     },
                 },

@@ -100,6 +100,9 @@ fn occupied_composer_retries_steering_without_changing_the_lead_turn() {
             Provider::Cursor => {
                 json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn","prompt":"lead"})
             }
+            Provider::Grok => {
+                json!({"hookEventName":"before_agent","sessionId":"session","promptId":"turn","prompt":"lead"})
+            }
         };
         record(&dir, provider, hook);
         worker

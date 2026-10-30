@@ -351,6 +351,7 @@ fn resumed_cursor_confirms_readiness_only_after_its_composer_appears() {
         "saved-session"
     );
 }
+#[test]
 fn grok_saved_identity_is_not_ready_before_the_resume_process_starts() {
     for kind in [AgentKind::Grok, AgentKind::Claude] {
         let mut terminal = test_terminal();

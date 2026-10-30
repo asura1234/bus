@@ -1,6 +1,6 @@
 //! Explicit room recovery reuses saved conversations; typed tasks are never replayed.
 use super::{
-    schema, AgentId, AgentRuntimeIdentity, Method, ResponseResult, RoomAgent, RoomId,
+    schema, AgentId, AgentRuntimeIdentity, Method, Provider, ResponseResult, RoomAgent, RoomId,
     RuntimeStatus, Worker,
 };
 use crate::agents::providers::launch;
@@ -152,6 +152,19 @@ impl Worker {
         plan: catalog::AgentResumePlan,
         extras: super::resume::LaunchExtras,
     ) -> Result<(), String> {
+        let (executable, grok_home) = if agent.provider == Provider::Grok {
+            let env = extras.env.iter().cloned().collect();
+            let executable =
+                launch::selected_executable(identity::provider_kind(agent.provider), &env)?
+                    .ok_or("Grok resume has no selected executable")?;
+            let home = env
+                .get("GROK_HOME")
+                .cloned()
+                .ok_or("Grok resume has no validated home")?;
+            (Some(executable), Some(home))
+        } else {
+            (None, None)
+        };
         self.close_resume_terminal(agent)?;
         let created = self
             .transport
@@ -183,7 +196,11 @@ impl Worker {
             .observe_status(agent.id, RuntimeStatus::Launching, super::io::now_ms())
             .map_err(|e| e.to_string())?;
         self.save(state)?;
-        self.watch_resume_startup(agent.id, &plan.argv[0], &args)?;
+        self.watch_resume_startup(
+            agent.id,
+            executable.as_deref().unwrap_or(&plan.argv[0]),
+            &args,
+        )?;
         self.missing_binary_checked.remove(&agent.id);
         let started = self
             .transport
@@ -192,6 +209,8 @@ impl Worker {
                 kind: kind.into(),
                 pane_id: root_pane.pane_id.clone(),
                 args: args.clone(),
+                executable,
+                grok_home,
                 timeout_ms: None,
             }));
         match started {

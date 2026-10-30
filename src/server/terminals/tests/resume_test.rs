@@ -1334,17 +1334,26 @@ fn deferred_managed_identity_survives_two_restore_capture_roundtrips() {
 
 #[test]
 fn original_provider_resume_preserves_argv_with_grok_environment_present() {
-    for (agent, executable) in [("claude", "claude"), ("codex", "codex"), ("cursor", "cursor-agent")] {
+    for (agent, executable) in [
+        ("claude", "claude"),
+        ("codex", "codex"),
+        ("cursor", "cursor-agent"),
+    ] {
         let plan = crate::agents::resume::catalog::AgentResumePlan {
             agent: agent.into(),
             argv: vec![executable.into(), "--resume".into(), "saved-session".into()],
             dedupe_key: format!("{agent}-saved"),
         };
         let extras = vec!["--setting".into(), "literal $() argument".into()];
-        let argv = resume_argv_for_test(&plan, vec![
-            ("GROK_HOME".into(), "/scratch/irrelevant-home".into()),
-            ("PATH".into(), "/scratch/irrelevant-bin:/bin".into()),
-        ], extras.clone()).unwrap();
+        let argv = resume_argv_for_test(
+            &plan,
+            vec![
+                ("GROK_HOME".into(), "/scratch/irrelevant-home".into()),
+                ("PATH".into(), "/scratch/irrelevant-bin:/bin".into()),
+            ],
+            extras.clone(),
+        )
+        .unwrap();
         let expected: Vec<String> = plan.argv.iter().cloned().chain(extras).collect();
         assert_eq!(argv, expected, "{agent}");
     }

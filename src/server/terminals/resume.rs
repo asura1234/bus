@@ -284,23 +284,13 @@ impl App {
             }
             None => plan,
         };
+        let grok_argv = (plan.agent == "grok").then(|| resume_argv(&plan, &extras));
         let (mut argv, env) = resume_launch_inputs(&plan, extras);
-        if plan.agent == "grok" {
-            if argv.first().map(String::as_str) != Some("grok") {
-                return self.suspend_pending_agent_resume(
-                    pane_id, &terminal_id, "Grok resume plan has an unexpected executable",
-                );
-            }
-            let selected = crate::agents::providers::launch::selected_executable(
-                crate::agents::providers::ProviderKind::Grok,
-                &env.iter().cloned().collect(),
-            );
-            match selected {
-                Ok(Some(path)) => argv[0] = path,
-                Ok(None) | Err(_) => {
-                    return self.suspend_pending_agent_resume(
-                        pane_id, &terminal_id, "Grok resume has no selected executable",
-                    );
+        if let Some(result) = grok_argv {
+            match result {
+                Ok(bound) => argv = bound,
+                Err(reason) => {
+                    return self.suspend_pending_agent_resume(pane_id, &terminal_id, &reason)
                 }
             }
         }

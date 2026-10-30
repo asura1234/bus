@@ -176,16 +176,16 @@ mod tests {
             );
             let before = runtime.visible_ansi();
             let completion = runtime
-                .queue_observed_input_submission(
+                .queue_observed_input_with_inspector(
                     Bytes::from_static(b"Bus task"),
                     Bytes::from_static(b"\r"),
                     vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
                     Duration::ZERO,
                     Some(Instant::now() + Duration::from_secs(1)),
-                    super::super::composer::observer(
+                    Box::new(super::super::composer::observer(
                         crate::agents::AgentKind::Grok,
                         "Bus task".into(),
-                    ),
+                    )),
                 )
                 .unwrap();
             let error = completion
@@ -221,13 +221,16 @@ mod tests {
             InputObservation::Empty
         );
         let completion = runtime
-            .queue_observed_input_submission(
+            .queue_observed_input_with_inspector(
                 Bytes::from_static(b"Bus task"),
                 Bytes::from_static(b"\r"),
                 vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
                 Duration::ZERO,
                 Some(Instant::now() + Duration::from_millis(400)),
-                super::super::composer::observer(crate::agents::AgentKind::Grok, "Bus task".into()),
+                Box::new(super::super::composer::observer(
+                    crate::agents::AgentKind::Grok,
+                    "Bus task".into(),
+                )),
             )
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);

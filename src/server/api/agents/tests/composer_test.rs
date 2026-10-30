@@ -17,13 +17,13 @@ async fn grok_login_heading_above_composer_padding_receives_no_input() {
             format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
         );
         let completion = runtime
-            .queue_observed_input_submission(
+            .queue_observed_input_with_inspector(
                 bytes::Bytes::from_static(b"from bus"),
                 bytes::Bytes::from_static(b"\r"),
                 vec![bytes::Bytes::from_static(b"\x01")],
                 Duration::ZERO,
                 Some(Instant::now() + Duration::from_millis(200)),
-                observer(AgentKind::Grok, "from bus".into()),
+                Box::new(observer(AgentKind::Grok, "from bus".into())),
             )
             .unwrap();
         let error = completion

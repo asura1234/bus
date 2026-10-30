@@ -26,7 +26,8 @@ fn agent_start_argv(
     args: &[String],
 ) -> Result<Vec<String>, AgentStartError> {
     let mut args = args.to_vec();
-    let launch = crate::agents::providers::launch::native_provider(crate::agents::agent_label(kind));
+    let launch =
+        crate::agents::providers::launch::native_provider(crate::agents::agent_label(kind));
     if let Some(provider) = launch {
         crate::agents::providers::launch::extend_generated_args(
             provider,
@@ -670,6 +671,8 @@ mod tests {
                 kind: label.into(),
                 pane_id,
                 args: vec![],
+                executable: None,
+                grok_home: None,
                 timeout_ms: None,
             });
             assert!(result.is_ok());

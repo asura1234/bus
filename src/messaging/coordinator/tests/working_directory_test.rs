@@ -8,6 +8,7 @@ fn directory_fixture(
         Provider::ClaudeCode => "claude",
         Provider::Codex => "codex",
         Provider::Cursor => "cursor",
+        Provider::Grok => "grok",
     };
     let mut info = native_info("pane", native, "session");
     info.interactive_ready = true;

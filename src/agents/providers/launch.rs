@@ -117,7 +117,7 @@ pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
             "DISABLE_AUTOUPDATER".into(),
             std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
         )],
-        ProviderKind::Codex | ProviderKind::Cursor => Vec::new(),
+        ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok => Vec::new(),
     }
 }
 
@@ -243,6 +243,7 @@ pub(crate) fn extend_generated_args(
         ProviderKind::Codex => Some("--no-daemon"),
         ProviderKind::Cursor => Some("--disable-auto-update"),
         ProviderKind::ClaudeCode => None,
+        ProviderKind::Grok => None,
     };
     let supplied = flag.filter(|flag| arguments::contains_flag(provider, args, &[*flag]));
     let capture = capture
