@@ -1161,6 +1161,53 @@ fn grok_scrolled_owned_draft_cleanup_accepts_attested_remainder() {
 }
 
 #[test]
+fn grok_suggestion_ghost_is_not_a_developer_draft() {
+    let footer = "  Tab/→:accept suggestion  │  Shift+Tab:mode  │  Ctrl+.:shortcuts";
+    let send =
+        "  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts";
+    let ghost = |body: &str, faint: bool, footer: &str| {
+        let painted = if faint {
+            format!("\x1b[2m{body}\x1b[0m")
+        } else {
+            body.to_owned()
+        };
+        grok_native_composer(&[&painted], footer)
+    };
+
+    let faint = ghost("print the next task", true, footer);
+    assert_eq!(
+        observe(AgentKind::Grok, &faint, "print the next task"),
+        InputObservation::Empty
+    );
+    let solid = ghost("print the next task", false, footer);
+    assert_eq!(
+        observe(AgentKind::Grok, &solid, "print the next task"),
+        InputObservation::Pending
+    );
+    assert_eq!(
+        observe(AgentKind::Grok, &solid, "from bus"),
+        InputObservation::Unavailable
+    );
+    let faint_draft = ghost("print the next task", true, send);
+    assert_eq!(
+        observe(AgentKind::Grok, &faint_draft, "print the next task"),
+        InputObservation::Pending,
+        "faint text without the accept-suggestion hint stays a draft"
+    );
+
+    let captured = "Send the bus reply and verify delivery.";
+    assert_eq!(
+        observe(AgentKind::Grok, &ghost(captured, true, footer), captured),
+        InputObservation::Empty
+    );
+    assert_eq!(
+        observe(AgentKind::Grok, &ghost(captured, false, footer), captured),
+        InputObservation::Pending,
+        "the captured wording without faint styling is a draft"
+    );
+}
+
+#[test]
 fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
     use crate::terminal::runtime::SubmissionInspector;
     // A reply line far above the composer is transcript, not the login

@@ -173,11 +173,35 @@ pub(super) fn input(screen: &str) -> Option<String> {
             .iter()
             .filter(|c| !c.character.is_whitespace() && !matches!(c.character, '❯' | '│'))
             .all(|c| c.faint);
-    if placeholder {
+    // Grok 1.0.70 fills the idle composer with faint ghost text and the
+    // footer "Tab/→:accept suggestion". That is not a developer draft.
+    // Non-faint text, and faint text without that hint, stays typed input.
+    let suggestion = footer.contains("tab/")
+        && footer.contains("accept suggestion")
+        && faint_suggestion(&styled, top, bottom);
+    if placeholder || suggestion {
         Some(String::new())
     } else {
         Some(body)
     }
+}
+
+fn faint_suggestion(styled: &[Vec<super::StyledChar>], top: usize, bottom: usize) -> bool {
+    let mut saw_text = false;
+    for row in &styled[top + 1..bottom] {
+        for cell in row {
+            if cell.character.is_whitespace()
+                || matches!(cell.character, '│' | '╭' | '╮' | '╯' | '╰' | '─' | '❯')
+            {
+                continue;
+            }
+            if !cell.faint {
+                return false;
+            }
+            saw_text = true;
+        }
+    }
+    saw_text
 }
 
 /// Grok 1.0.70 collapses a bracketed paste into a chip. The shared submission
