@@ -101,8 +101,8 @@ impl Worker {
         parsed: &callbacks::Parsed,
     ) -> Result<bool, String> {
         let session = match parsed {
-            callbacks::Parsed::Session { session, .. }
-            | callbacks::Parsed::Started { session, .. }
+            callbacks::Parsed::Session { .. } => return Ok(false),
+            callbacks::Parsed::Started { session, .. }
             | callbacks::Parsed::Final { session, .. }
             | callbacks::Parsed::CompletionCandidate { session, .. }
             | callbacks::Parsed::ReconcileSession { session }
