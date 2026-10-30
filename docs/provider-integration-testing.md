@@ -293,9 +293,14 @@ not submitted. Mark every unrun cell explicitly.
   risky actions. Separately test Bus `--yolo`: it is run-scoped, not saved, and
   must be supplied again on relaunch. Record the generated provider flag and
   check routine work; an attach with a different Bus yolo setting is refused.
-- [ ] Verify no provider global config or hooks were written, no credential
-  copies exist, and `git -C "$scratch/project" status --short` excludes generated
-  project hooks. Stop only the scratch server with `sbus stop`; retain only
+- [ ] `git -C "$scratch/project" status --short` may list `?? .codex/` and
+  `?? .cursor/` after a consented Codex or Cursor add (`.codex/hooks.json` and
+  `.cursor/hooks.json`). Grok writes `.grok/hooks/bus.json` and
+  `.grok/hooks/.bus-hooks.lock`; only those two paths are in `.git/info/exclude`,
+  so they may be absent from that status. Do not delete project hooks to make
+  status empty. The isolation check is no edit to a global provider config
+  (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.grok`, `~/.kimi-code`) and no
+  credential copies. Stop only the scratch server with `sbus stop`; retain only
   authorized, redacted evidence.
 
 ### Separate registry-based cold resume
