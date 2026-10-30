@@ -10,7 +10,10 @@ impl Worker {
         };
         let mut state = self.state.clone();
         let text = crate::utils::restart_record::notice_text(&record);
-        if state.announce_restart(&text, crate::messaging::storage::io::now_ms()) {
+        // A post error must keep outcome.json. The next tick warns and retries.
+        // Nothing to deliver (no live work-room orchestrator) may delete it.
+        let posted = state.announce_restart(&text, crate::messaging::storage::io::now_ms())?;
+        if posted {
             self.save(state)?;
         }
         if path.exists() {

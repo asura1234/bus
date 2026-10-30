@@ -3,8 +3,9 @@ use super::{BusState, RoomKind};
 
 impl BusState {
     /// Posts `text` to every live work room's orchestrator. Rooms without one
-    /// are skipped. Returns whether any notice was queued.
-    pub(crate) fn announce_restart(&mut self, text: &str, now_ms: u64) -> bool {
+    /// are skipped. `Ok(false)` means there was nothing to deliver. A post
+    /// error leaves the caller holding the outcome so it can retry.
+    pub(crate) fn announce_restart(&mut self, text: &str, now_ms: u64) -> Result<bool, String> {
         let rooms: Vec<_> = self
             .rooms()
             .filter(|room| room.kind == RoomKind::Work && !room.deletion_pending)
@@ -15,14 +16,11 @@ impl BusState {
             let Some(orchestrator) = self.notice_orchestrator(room, None) else {
                 continue;
             };
-            if self
-                .post_bus_notice(room, Some(orchestrator), text.to_owned(), now_ms)
-                .is_ok()
-            {
-                posted = true;
-            }
+            self.post_bus_notice(room, Some(orchestrator), text.to_owned(), now_ms)
+                .map_err(|error| error.to_string())?;
+            posted = true;
         }
-        posted
+        Ok(posted)
     }
 }
 
@@ -59,7 +57,7 @@ mod tests {
         state.bind_orchestrator(alpha_orch, alpha).unwrap();
         state.bind_orchestrator(beta_orch, beta).unwrap();
         let text = "Restarted old -> new (by agent:9).";
-        assert!(state.announce_restart(text, 10));
+        assert!(state.announce_restart(text, 10).unwrap());
         let texts = |agent| {
             state
                 .requests()
