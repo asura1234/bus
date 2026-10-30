@@ -133,7 +133,7 @@ fn send(agent: &str, room: &str, to: &str, text: &str) -> Result<(), String> {
 
 fn read_prompt() -> Result<Option<String>, String> {
     let mut draft = String::new();
-    write!(io::stdout(), "\r\n{}\r\n", "─".repeat(60)).map_err(|e| e.to_string())?;
+    write!(io::stdout(), "\r\n").map_err(|e| e.to_string())?;
     loop {
         draw_prompt(&draft)?;
         match event::read().map_err(|e| e.to_string())? {
@@ -163,10 +163,16 @@ fn read_prompt() -> Result<Option<String>, String> {
 
 fn draw_prompt(draft: &str) -> Result<(), String> {
     let columns = crossterm::terminal::size().map_or(80, |(columns, _)| columns);
+    let rows: usize = draft
+        .split('\n')
+        .map(|line| super::fake_agents::screen_rows(&format!("fake> {line}"), columns))
+        .sum();
     write!(
         io::stdout(),
-        "{}",
-        super::fake_agents::prompt_box(draft, "fake", columns)
+        "\r\x1b[Jfake> {}\r\n  scriptable agent\r\n\x1b[{}A\r\x1b[{}C",
+        draft.replace('\n', "\r\n      "),
+        rows + 1,
+        6 + draft.rsplit('\n').next().unwrap_or("").chars().count()
     )
     .map_err(|e| e.to_string())?;
     io::stdout().flush().map_err(|e| e.to_string())

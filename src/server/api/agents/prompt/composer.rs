@@ -274,8 +274,6 @@ fn input_since_launch(
     // Cursor 2026.10.14 has a shaded box; older builds have half-block borders.
     let markers: &[char] = match kind {
         AgentKind::Claude => &['❯'],
-        #[cfg(feature = "dev-tools")]
-        AgentKind::Fake => &['❯'],
         AgentKind::Cursor => &['>', '→'],
         _ => &['›'],
     };
