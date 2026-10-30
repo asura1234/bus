@@ -158,6 +158,60 @@ fn cleared_claude_rebinds_to_its_fresh_session_start() {
 }
 
 #[test]
+fn kimi_clear_reports_its_startup_hook_as_an_authorized_new_session() {
+    struct CaptureSource {
+        inner: FakeTransport,
+        sources: Arc<Mutex<Vec<Option<String>>>>,
+    }
+    impl Transport for CaptureSource {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if let Method::PaneReportAgentSession(params) = &method {
+                self.sources
+                    .lock()
+                    .unwrap()
+                    .push(params.session_start_source.clone());
+            }
+            self.inner.request(method)
+        }
+    }
+    let (mut worker, agent, _, dir, calls) = fixture(Provider::Kimi, vec![]);
+    let sources = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(CaptureSource {
+        inner: FakeTransport {
+            replies: Default::default(),
+            calls,
+            state_path: dir.join("state.json"),
+        },
+        sources: Arc::clone(&sources),
+    });
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Kimi,
+        json!({"hook_event_name":"SessionStart", "session_id":"fresh", "source":"startup"}),
+    );
+    for _ in 0..2 {
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+    }
+    assert_eq!(
+        sources.lock().unwrap().first().and_then(|s| s.as_deref()),
+        Some("new")
+    );
+    let cleared = agent_of(&worker, agent);
+    assert_eq!(
+        cleared.runtime_identity.session_id.as_deref(),
+        Some("fresh")
+    );
+    assert!(!cleared.session_binding_invalidated);
+    assert!(!cleared.session_reset_pending);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn cleared_codex_answers_a_message_sent_into_its_fresh_session() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     worker.state.begin_session_reset(agent).unwrap();
