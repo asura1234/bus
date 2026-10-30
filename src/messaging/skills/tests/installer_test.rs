@@ -106,8 +106,10 @@ fn collisions_report_provider_precedence_without_warning_about_user_scope_itself
     assert_eq!(codex.len(), 1);
     assert!(codex[0].contains("lists both copies"));
     assert!(codex[0].contains("child/.agents/skills/pr"));
-    assert!(warnings_for_launch(ProviderKind::Cursor, &nested, &home)
-        .unwrap()
-        .is_empty());
+    for provider in [ProviderKind::Cursor, ProviderKind::Grok] {
+        assert!(warnings_for_launch(provider, &nested, &home)
+            .unwrap()
+            .is_empty());
+    }
     std::fs::remove_dir_all(home).unwrap();
 }
