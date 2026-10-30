@@ -41,6 +41,7 @@ async fn verified_launch_corrects_first_byte_loss_after_slow_precmd() {
             timeout_ms: None,
         })
         .unwrap_or_else(|error| panic!("{:?}", app.agent_start_error_body(error)));
+        wait_for_launch_input(prompt_runtime(&app)).await;
         wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
         assert!(!prompt_runtime(&app)
             .recent_unwrapped_text(100)
@@ -144,6 +145,7 @@ async fn verified_launch_integrates_api_created_panes_without_a_launch_id() {
         .values()
         .find(|runtime| runtime.has_launch_shell_integration())
         .unwrap();
+    wait_for_launch_input(runtime).await;
     wait_for_text(runtime, "FIXTURE_PROVIDER_RUNNING").await;
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
@@ -335,6 +337,7 @@ async fn verified_launch_fish_preserves_prompt_function_arguments_and_shell() {
             prompt_runtime(&app).visible_text()
         )
     });
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "FISH_PROVIDER_EXIT").await;
     assert_eq!(
         std::fs::read_to_string(dir.join("environment")).unwrap(),

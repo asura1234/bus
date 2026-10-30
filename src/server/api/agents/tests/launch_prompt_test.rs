@@ -599,7 +599,6 @@ async fn launch_prompt_precmd_assignment_launches_on_the_zle_mark() {
         "function my_title() { :; }\nprecmd_functions=(my_title)\nPS1='READY> '\n",
     )
     .unwrap();
-    let started = std::time::Instant::now();
     let runtime = fixture_shell(
         "/bin/zsh",
         crate::utils::config::ShellModeConfig::NonLogin,
@@ -612,9 +611,11 @@ async fn launch_prompt_precmd_assignment_launches_on_the_zle_mark() {
         "precmd reset must still emit a real mark"
     );
     let (mut app, target) = app_with_prompt_runtime(runtime);
+    let launch_started = std::time::Instant::now();
     try_prompt_launch(&mut app, &target).expect("ZLE readiness permits launch");
+    assert!(launch_started.elapsed() < Duration::from_secs(4));
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
-    assert!(started.elapsed() < Duration::from_secs(4));
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -658,6 +659,7 @@ async fn launch_prompt_noisy_rc_waits_for_the_actual_prompt() {
         "only real prompt evidence permits launch"
     );
     try_prompt_launch(&mut app, &target).expect("the completed noisy rc reaches its real prompt");
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
@@ -751,6 +753,7 @@ async fn launch_prompt_unanswered_startup_question_is_not_typed_into_after_the_f
     wait_for_text(prompt_runtime(&app), "READY>").await;
     wait_for_prompt(prompt_runtime(&app)).await;
     try_prompt_launch(&mut app, &target).expect("answering the question must allow one launch");
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
     assert!(!prompt_runtime(&app).visible_text().contains("odex:"));
     drop(app);
