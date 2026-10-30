@@ -52,7 +52,10 @@ def fetch_remote_shas(remote: str, commits: list[str], *, filtered: bool = True)
         init = subprocess.run(['git', 'init', '-q', '--bare', directory], capture_output=True)
         if init.returncode:
             return False, init.stderr.decode(errors='replace')
-        args = ['git', '-C', directory, 'fetch', '--dry-run', '--no-write-fetch-head', '--depth=1']
+        # Protocol v2 can serve a dangling object by SHA after its last remote
+        # ref is deleted. Version 0 uses upload-pack's reachable-want policy.
+        args = ['git', '-c', 'protocol.version=0', '-C', directory, 'fetch',
+                '--dry-run', '--no-write-fetch-head', '--depth=1']
         if filtered:
             args.append('--filter=tree:0')
         result = subprocess.run(
@@ -77,8 +80,8 @@ def remote_confirmed_commits(repo: Path, commits: list[str]) -> set[str]:
         confirmed, error = fetch_remote_shas(url, commits, filtered=False)
     if confirmed:
         return set(commits)
-    # A mixed batch can fail because just one local tip is absent. Distinguish
-    # its published peers only when the server specifically rejected a SHA.
+    # Only the pin and HEAD are probed, so a mixed batch needs at most two
+    # individual fallbacks, regardless of the number of local branches.
     missing_sha = ('not our ref', "couldn't find remote ref", 'unadvertised object')
     if len(commits) == 1 or not any(message in error.lower() for message in missing_sha):
         return set()
@@ -95,8 +98,9 @@ def unpublished_child_work(repo: Path, pin: str, head: str) -> str:
     candidates = git(repo, 'log', '--format=%H %s', '--branches', 'HEAD',
                      '--not', '--remotes').splitlines()
     candidate_shas = {line.split(' ', 1)[0] for line in candidates}
-    local_tips = git(repo, 'for-each-ref', '--format=%(objectname)', 'refs/heads').splitlines()
-    tips = [commit for commit in {pin, head, *local_tips} if commit in candidate_shas]
+    # Other local branch tips remain candidates but are not accepted merely
+    # because their (possibly dangling) objects can be fetched by SHA.
+    tips = [commit for commit in {pin, head} if commit in candidate_shas]
     confirmed = remote_confirmed_commits(repo, tips)
     if confirmed:
         # A served tip proves all of its reachable ancestors are published too.
