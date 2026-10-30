@@ -9,7 +9,7 @@ PR = re.compile(r"(?:\[#\d+ [^\]\n]+\]\(https?://[^\s)]+\)|not opened yet \(bran
 
 
 def line(value):
-    if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+    if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 or 127 <= ord(c) <= 159 or c in "\u2028\u2029" for c in value):
         raise ValueError("fields must be nonempty single-line strings")
     return value.strip()
 
