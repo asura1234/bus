@@ -4,9 +4,8 @@ use super::*;
 /// The OSC title was the idle "grok" title, and the unsent Bus draft sat in
 /// the composer. A live [stop] status line or a Tasks panel with work left
 /// must outrank that idle title.
-const BACKGROUND_TURN: &str = include_str!(
-    "../../../../tests/fixtures/grok-composer/native-1.0.70-background-turn.txt"
-);
+const BACKGROUND_TURN: &str =
+    include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-background-turn.txt");
 
 #[test]
 fn captured_background_turn_is_working_despite_idle_osc() {
