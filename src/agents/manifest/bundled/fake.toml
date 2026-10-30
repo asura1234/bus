@@ -17,7 +17,7 @@ state = "working"
 priority = 970
 region = "bottom_non_empty_lines(12)"
 visible_working = true
-contains = ["Working…", "esc to interrupt"]
+line_regex = ['^\s*fake agent working\s*$']
 
 [[rules]]
 id = "idle"
