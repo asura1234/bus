@@ -57,6 +57,196 @@ fn kimi_clipped_frame_cannot_attest_an_unseen_prefix() {
     }
 }
 
+#[test]
+fn kimi_clipped_blank_frame_is_not_an_empty_composer() {
+    let frame = "╭──────────── ↑ 14 more ─────────────╮\n│ >                                  │\n╰────────────────────────────────────╯\nAsk When Needed";
+    assert_eq!(
+        observe(AgentKind::Kimi, frame, "new Bus task"),
+        InputObservation::Unavailable
+    );
+}
+
+#[tokio::test]
+async fn kimi_editor_never_touches_a_clipped_foreign_draft() {
+    use bytes::Bytes;
+    use std::time::Duration;
+    let directory = crate::utils::test_temp::unique_temp_path("kimi-foreign-draft");
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(53, 24, 16);
+    let frame = "╭──────────── ↑ 14 more ─────────────╮\n│ >                                  │\n╰────────────────────────────────────╯\nAsk When Needed";
+    runtime
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{}", frame.replace('\n', "\r\n")).as_bytes());
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(b"new Bus task"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01")],
+            Duration::ZERO,
+            None,
+            Box::new(preserving_observer(
+                AgentKind::Kimi,
+                "new Bus task".into(),
+                directory.clone(),
+                vec![
+                    Bytes::from_static(b"\x13"),
+                    Bytes::from_static(b"\x07"),
+                    Bytes::from_static(b"\x7f"),
+                ],
+            )),
+        )
+        .unwrap();
+    assert!(completion
+        .recv_timeout(Duration::from_secs(8))
+        .unwrap()
+        .is_err());
+    assert!(writes.try_recv().is_err(), "foreign input received a key");
+    assert!(!directory.exists());
+}
+
+// Exercise the native editor exchange and the submission transaction together.
+#[tokio::test]
+async fn kimi_editor_submits_only_after_complete_draft_readback() {
+    kimi_editor_case(0).await;
+}
+
+#[tokio::test]
+async fn kimi_editor_rejects_a_changed_hidden_prefix() {
+    kimi_editor_case(1).await;
+}
+
+#[tokio::test]
+async fn kimi_editor_does_not_submit_when_the_developer_types_during_transfer() {
+    kimi_editor_case(2).await;
+}
+
+async fn kimi_editor_case(tamper: u8) {
+    use bytes::Bytes;
+    use std::time::Duration;
+    let directory = crate::utils::test_temp::unique_temp_path("kimi-editor-submit");
+    std::fs::create_dir_all(&directory).unwrap();
+    let exchange = directory.join("exchange");
+    let file = directory.join("native-editor.txt");
+    let prompt = format!("long Bus message {}\nlast line\n", "0123456789".repeat(140));
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(53, 24, 32);
+    let draw = |draft: &str| {
+        let flat = draft.replace('\n', " ");
+        let tail = &flat[flat.len().saturating_sub(160)..];
+        let chunks: Vec<_> = tail.as_bytes().chunks(40).collect();
+        let mut frame = if draft.is_empty() {
+            String::from("╭───────────────────────────────────────╮\n")
+        } else {
+            String::from("╭────────────── ↑ 14 more ──────────────╮\n")
+        };
+        if chunks.is_empty() {
+            frame.push_str("│ >  │\n");
+        } else {
+            for (index, chunk) in chunks.iter().enumerate() {
+                frame.push_str(if index == 0 { "│ > " } else { "│   " });
+                frame.push_str(std::str::from_utf8(chunk).unwrap());
+                frame.push_str(" │\n");
+            }
+        }
+        frame.push_str("╰───────────────────────────────────────╯\nAsk When Needed");
+        runtime.test_process_pty_bytes(
+            format!("\x1b[2J\x1b[H{}", frame.replace('\n', "\r\n")).as_bytes(),
+        );
+    };
+    async fn next(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
+        tokio::time::timeout(Duration::from_secs(8), writes.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+    draw("");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::copy_from_slice(prompt.as_bytes()),
+            Bytes::from_static(b"\r"),
+            vec![
+                Bytes::from_static(b"\x01"),
+                Bytes::from_static(b"\x0b"),
+                Bytes::from_static(b"\x15"),
+            ],
+            Duration::ZERO,
+            None,
+            Box::new(preserving_observer(
+                AgentKind::Kimi,
+                prompt.clone(),
+                exchange.clone(),
+                vec![
+                    Bytes::from_static(b"\x13"),
+                    Bytes::from_static(b"\x07"),
+                    Bytes::from_static(b"\x7f"),
+                ],
+            )),
+        )
+        .unwrap();
+    let mut draft = String::new();
+    for round in 0..2 {
+        assert_eq!(
+            next(&mut writes).await.as_ref(),
+            b"\x07",
+            "round {round}: no paste or Enter before editor verification"
+        );
+        std::fs::write(&file, &draft).unwrap();
+        if round == 1 && tamper == 1 {
+            let changed = format!("foreign prefix{}", &draft[4..]);
+            std::fs::write(&file, &changed).unwrap();
+            assert!(crate::platform::draft_editor::test_run_at(&exchange, &file).is_err());
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), changed);
+            draw(&changed);
+            assert!(completion
+                .recv_timeout(Duration::from_secs(8))
+                .unwrap()
+                .is_err());
+            assert!(
+                writes.try_recv().is_err(),
+                "changed draft must not receive Enter or deletion"
+            );
+            std::fs::remove_dir_all(directory).unwrap();
+            return;
+        }
+        crate::platform::draft_editor::test_run_at(&exchange, &file).unwrap();
+        draft = std::fs::read_to_string(&file).unwrap();
+        let marker = draft
+            .strip_prefix(&prompt)
+            .expect("editor must restore exact full prompt")
+            .to_owned();
+        assert!(!marker.is_empty());
+        draw(&draft);
+        let delete = next(&mut writes).await;
+        assert_eq!(delete.as_ref(), vec![0x7f; marker.len()]);
+        draft.truncate(prompt.len());
+        if round == 0 && tamper == 2 {
+            runtime
+                .try_send_developer_bytes(Bytes::from_static(b"typed meanwhile"))
+                .unwrap();
+            draw(&draft);
+            assert!(completion
+                .recv_timeout(Duration::from_secs(8))
+                .unwrap()
+                .is_err());
+            assert!(
+                writes.try_recv().is_err(),
+                "no second editor key or Enter after typing"
+            );
+            std::fs::remove_dir_all(directory).unwrap();
+            return;
+        }
+        draw(&draft);
+    }
+    assert_eq!(draft, prompt);
+    assert_eq!(next(&mut writes).await.as_ref(), b"\r");
+    draw("");
+    completion
+        .recv_timeout(Duration::from_secs(8))
+        .unwrap()
+        .unwrap();
+    assert!(writes.try_recv().is_err(), "must submit once only");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[tokio::test]
 async fn grok_login_heading_above_composer_padding_receives_no_input() {
     use std::time::{Duration, Instant};

@@ -16,7 +16,7 @@ const DIRECTORY: &str = "BUS_DRAFT_EDITOR_DIR";
 const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
 const REQUEST: &str = "request.json";
 const ACK: &str = "ack.json";
-const MAX_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Operation {
