@@ -216,7 +216,7 @@ fn verify_shared_auth(home: &Path, source: &Path) -> Result<(), String> {
 
 fn private_home(source: &Path, cwd: &Path, hooks: &HookContext) -> Result<PathBuf, String> {
     let home = hooks.spool.join("kimi-home");
-    crate::messaging::storage::io::private_dir(&home).map_err(|e| e.to_string())?;
+    crate::platform::fs::private_dir(&home).map_err(|e| e.to_string())?;
     for name in ["device_id", "region"] {
         let path = source.join(name);
         if path.exists() {
@@ -240,8 +240,7 @@ fn private_home(source: &Path, cwd: &Path, hooks: &HookContext) -> Result<PathBu
             };
             if value.get("root").and_then(serde_json::Value::as_str) == cwd.to_str() {
                 let trust_home = home.join("workspace-trust");
-                crate::messaging::storage::io::private_dir(&trust_home)
-                    .map_err(|e| e.to_string())?;
+                crate::platform::fs::private_dir(&trust_home).map_err(|e| e.to_string())?;
                 copy_private_file(&entry.path(), &trust_home.join(entry.file_name()))?;
             }
         }
@@ -365,7 +364,7 @@ pub(crate) fn validate_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<String>, String> {
+pub(crate) fn take_adopted_session(args: &[String]) -> Result<Option<String>, String> {
     if common::argument_positions(ProviderKind::Kimi, args)
         .into_iter()
         .any(|i| {
@@ -488,7 +487,7 @@ pub(crate) fn prepare(
     let cwd = common::canonical_directory(&spec.cwd)?;
     let mut options = common::parse_path_tokens(&spec.extra_args).map_err(|e| e.to_string())?;
     validate_args(&options)?;
-    let adopted_session = take_adopted_session(&mut options)?;
+    let adopted_session = take_adopted_session(&options)?;
     if options.iter().any(|arg| arg == "--auto")
         && options
             .iter()
@@ -607,7 +606,7 @@ mod tests {
         let root = crate::utils::test_temp::unique_temp_path("kimi-legacy-auth");
         let spool = root.join("callbacks/launch");
         let home = spool.join("kimi-home");
-        crate::messaging::storage::io::private_dir(&home.join("credentials")).unwrap();
+        crate::platform::fs::private_dir(&home.join("credentials")).unwrap();
         std::fs::write(home.join("credentials/kimi-code.json"), b"synthetic").unwrap();
         let meta = std::fs::symlink_metadata(&home).unwrap();
         let record = serde_json::json!({"path":home,"device":meta.dev(),"inode":meta.ino()});
@@ -727,7 +726,7 @@ mod tests {
         let spool = root.join("callbacks/launch");
         let home = spool.join("kimi-home");
         let source = root.join("source");
-        crate::messaging::storage::io::private_dir(&home).unwrap();
+        crate::platform::fs::private_dir(&home).unwrap();
         share_auth(&source, &home).unwrap();
         let meta = std::fs::symlink_metadata(&home).unwrap();
         let record =
@@ -748,7 +747,7 @@ mod tests {
         std::fs::create_dir(home.join("oauth")).unwrap();
         assert!(saved_home(&hooks).is_err());
         std::fs::rename(&home, spool.join("old-home")).unwrap();
-        crate::messaging::storage::io::private_dir(&home).unwrap();
+        crate::platform::fs::private_dir(&home).unwrap();
         assert!(saved_home(&hooks).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }

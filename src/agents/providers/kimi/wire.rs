@@ -95,35 +95,48 @@ pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Optio
                 if value.get("agentId").and_then(Value::as_str) == Some("main")
                     && value.get("turnId").and_then(Value::as_u64) == Some(turn_id)
                 {
-                    if agent_outcome.is_none() {
-                        return None;
-                    }
+                    agent_outcome.as_ref()?;
                     turn_reason = Some(value.get("reason")?.as_str()?.to_owned());
                 }
             }
-            "prompt.completed" if owned => {
-                if value.get("agentId").and_then(Value::as_str) == Some("main")
-                    && value.get("promptId").and_then(Value::as_str) == Some(&prompt_id)
-                {
-                    let reason = value.get("reason")?.as_str()?;
-                    return match (agent_outcome.as_deref(), turn_reason.as_deref(), reason) {
-                        (Some("done"), Some("completed"), "completed") => {
-                            Some(answer.map_or(Outcome::NoReply, Outcome::Final))
-                        }
-                        (Some("failed"), Some("failed"), "failed") => Some(Outcome::Failed(
-                            agent_error.unwrap_or_else(|| "Kimi turn failed".into()),
-                        )),
-                        (Some("interrupted"), Some("interrupted"), "interrupted") => {
-                            Some(Outcome::Failed("Kimi turn interrupted".into()))
-                        }
-                        _ => None,
-                    };
-                }
+            "prompt.completed"
+                if owned
+                    && value.get("agentId").and_then(Value::as_str) == Some("main")
+                    && value.get("promptId").and_then(Value::as_str) == Some(&prompt_id) =>
+            {
+                return terminal_outcome(
+                    agent_outcome.as_deref(),
+                    turn_reason.as_deref(),
+                    value.get("reason")?.as_str()?,
+                    answer,
+                    agent_error,
+                );
             }
             _ => {}
         }
     }
     None
+}
+
+fn terminal_outcome(
+    agent: Option<&str>,
+    turn: Option<&str>,
+    prompt: &str,
+    answer: Option<String>,
+    error: Option<String>,
+) -> Option<Outcome> {
+    match (agent, turn, prompt) {
+        (Some("done"), Some("completed"), "completed") => {
+            Some(answer.map_or(Outcome::NoReply, Outcome::Final))
+        }
+        (Some("failed"), Some("failed"), "failed") => Some(Outcome::Failed(
+            error.unwrap_or_else(|| "Kimi turn failed".into()),
+        )),
+        (Some("interrupted"), Some("interrupted"), "interrupted") => {
+            Some(Outcome::Failed("Kimi turn interrupted".into()))
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn resolve(
@@ -261,8 +274,8 @@ mod tests {
         let cwd = root.join("project");
         let session = "session_test";
         let directory = root.join("sessions/wd_project/session_test");
-        crate::messaging::storage::io::private_dir(&cwd).unwrap();
-        crate::messaging::storage::io::private_dir(&directory.join("agents/main")).unwrap();
+        crate::platform::fs::private_dir(&cwd).unwrap();
+        crate::platform::fs::private_dir(&directory.join("agents/main")).unwrap();
         let index = serde_json::json!({
             "sessionId": session,
             "workDir": cwd,

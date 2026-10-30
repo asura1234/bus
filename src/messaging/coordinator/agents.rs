@@ -34,12 +34,14 @@ pub(super) fn first_message_text(
     }
 }
 
+type LaunchBinding = (Option<String>, Option<String>, Option<String>);
+
 fn launch_binding(
     state: &mut super::BusState,
     id: AgentId,
     input: &AddAgent,
     prepared: &launch::PreparedLaunch,
-) -> Result<(Option<String>, Option<String>, Option<String>), String> {
+) -> Result<LaunchBinding, String> {
     let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
     crate::messaging::skills::post_warnings(state, &skill_agent)?;
     let provider = input.provider;
@@ -64,6 +66,19 @@ fn launch_binding(
         None
     };
     Ok((executable, home, kimi_home))
+}
+
+fn bind_launch_orchestrator(
+    state: &mut super::BusState,
+    id: AgentId,
+    room: Option<RoomId>,
+) -> Result<(), String> {
+    if let Some(room) = room {
+        state
+            .bind_orchestrator(id, room)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 impl Worker {
@@ -430,11 +445,7 @@ impl Worker {
             .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
             .map_err(|e| e.to_string())?;
         // Validate the assignment before any consent prompt or launch side effect.
-        if let Some(room) = orchestrates {
-            state
-                .bind_orchestrator(id, room)
-                .map_err(|e| e.to_string())?;
-        }
+        bind_launch_orchestrator(&mut state, id, orchestrates)?;
         if !input.consent_project_hooks {
             let binary = std::env::current_exe().map_err(|e| e.to_string())?;
             if let Some(notice) =

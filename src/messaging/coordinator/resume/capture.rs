@@ -157,25 +157,31 @@ pub(crate) fn load(
         &mut args,
         prompt,
     );
+    Ok(LaunchExtras {
+        env: capture_environment(agent.provider, &hooks)?,
+        args,
+        session: corrected,
+    })
+}
+
+fn capture_environment(
+    provider: ProviderKind,
+    hooks: &HookContext,
+) -> Result<Vec<(String, String)>, String> {
+    match provider {
+        ProviderKind::Grok => {
+            return Ok(crate::agents::providers::grok::launch::environment(hooks)?
+                .into_iter()
+                .collect())
+        }
+        ProviderKind::Kimi => {
+            return Ok(crate::agents::providers::kimi::launch::environment(hooks)?
+                .into_iter()
+                .collect())
+        }
+        _ => {}
+    }
     let mut env = hooks.env();
-    if agent.provider == ProviderKind::Grok {
-        return Ok(LaunchExtras {
-            env: crate::agents::providers::grok::launch::environment(&hooks)?
-                .into_iter()
-                .collect(),
-            args,
-            session: corrected,
-        });
-    }
-    if agent.provider == ProviderKind::Kimi {
-        return Ok(LaunchExtras {
-            env: crate::agents::providers::kimi::launch::environment(&hooks)?
-                .into_iter()
-                .collect(),
-            args,
-            session: corrected,
-        });
-    }
     let mut env: Vec<_> = ["BUS_LAUNCH_ID", "BUS_CALLBACK_DIR"]
         .map(|key| {
             (
@@ -185,14 +191,8 @@ pub(crate) fn load(
             )
         })
         .into();
-    env.extend(crate::agents::providers::launch::runtime_env(
-        agent.provider,
-    ));
-    Ok(LaunchExtras {
-        env,
-        args,
-        session: corrected,
-    })
+    env.extend(crate::agents::providers::launch::runtime_env(provider));
+    Ok(env)
 }
 
 fn saved_session<'a>(
