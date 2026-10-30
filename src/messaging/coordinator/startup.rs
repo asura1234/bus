@@ -108,11 +108,18 @@ impl Worker {
         let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
         let diagnostics = self.startup_diagnostics(&agent);
         let recovery = if agent.runtime_identity.session_id.is_some() {
-            "Repair the configured shell and provider setup, then resume the saved conversation."
+            "Repair the configured shell and provider setup, resume the saved conversation, then resend this message."
         } else {
-            "Repair the configured shell and provider setup, then delete and recreate this sessionless agent and rebrief the retained work."
+            "Repair the configured shell and provider setup, then delete and recreate this sessionless agent. Rebrief it and resend this message."
         };
-        let message = format!("Startup failed before terminal creation: {reason}. Queued work and message IDs are retained. {recovery} Do not resend queued messages to retry a wait.\nStartup diagnostics:\n{diagnostics}");
+        let failure = StartupFailure {
+            reason: format!("before terminal creation: {reason}"),
+            recovery: recovery.into(),
+        };
+        let message = format!(
+            "{} Agent identity retained; never-submitted queued requests closed.\nStartup diagnostics:\n{diagnostics}",
+            failure.notice()
+        );
         let mut state = self.state.clone();
         state
             .set_agent_startup(
@@ -124,9 +131,11 @@ impl Worker {
                     reported: true,
                     native_terminal_id: None,
                     recovery: None,
+                    failure: Some(failure),
                 }),
             )
             .map_err(|error| error.to_string())?;
+        state.abandon_failed_startup_queue(id, io::now_ms());
         state
             .set_agent_error(id, Some(message.clone()))
             .map_err(|error| error.to_string())?;
