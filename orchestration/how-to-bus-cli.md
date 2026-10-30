@@ -197,9 +197,28 @@ Sending provider reset slash commands as messages leaves requests unanswered.
 
 ## UI, settings and cleanup
 
-The UI renders Markdown; copying/quoting keeps raw source. Pasted images live in session attachments/ as absolute paths. History shows PNG/JPEG/GIF-first-frame/WebP images up to eight rows tall when fully visible without a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2 3.7+, inline images in older iTerm2 (TERM_PROGRAM or LC_TERMINAL and version). Kitty moves images with scrolling; older iTerm2 redraws them. tmux, disabled terminal.kitty_graphics, missing/unreadable images and unsupported hosts use clickable file rows. Clicking an image opens file detail.
+The UI renders Markdown; copying/quoting keeps raw source. Pasted images live in
+session attachments/ as absolute paths.
+History shows PNG/JPEG/GIF-first-frame/WebP images up to eight rows tall when
+fully visible without a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2
+3.7+, inline images in older iTerm2 (TERM_PROGRAM or LC_TERMINAL and version).
+Kitty moves images with scrolling; older iTerm2 redraws them. tmux, disabled terminal.kitty_graphics,
+missing/unreadable images and unsupported hosts use clickable file rows. Clicking an image opens file detail.
 
-Enter steers; Option/Alt+Enter queues. Ctrl+J or supported Shift+Enter adds a newline. `bus --help` lists other keyboard shortcuts. Settings exposes details visibility and color-blind mode; `bus settings --help` explains shared defaults. Room sound rings for agent finals/posts, never developer sends. MASTER defaults on, work rooms off; startup/resume has a two-second grace and bursts ring once. YOU alerts have a separate enabled-by-default sound selector and bypass ordinary grace/cooldown/room switches; turning its checkbox off silences only that audio. System default prefers Glass then another installed sound; missing selections fall back. Settings Left/Right or ‹/› previews sounds. All rooms changes every work room and future defaults, preserving each switch/name's other half; differing rooms show [-]/Mixed, and toggling turns all on. Sounds come from system/user sound folders (macOS /System/Library/Sounds, /Library/Sounds, ~/Library/Sounds; Windows %SystemRoot%\Media; Linux /usr/share/sounds, freedesktop first). Missing/failed sounds fall back to Bus's ding honoring ui.sound path/done_path. BUS_DISABLE_SOUND silences audio. See state/settings help for effective versus saved values.
+Enter steers; Option/Alt+Enter queues. Ctrl+J or supported Shift+Enter adds a
+newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
+visibility and color-blind mode; `bus settings --help` explains shared defaults.
+Room sound rings for agent finals/posts, never developer sends. MASTER defaults
+on, work rooms off; startup/resume has a two-second grace and bursts ring once.
+YOU alerts have a separate enabled-by-default sound selector and bypass ordinary
+grace/cooldown/room switches; turning its checkbox off silences only that audio.
+System default prefers Glass then another installed sound; missing selections fall back.
+Settings Left/Right or ‹/› previews sounds. All rooms changes every work room and future defaults,
+preserving each switch/name's other half; differing rooms show [-]/Mixed, and toggling turns all on. Sounds come from system/user sound folders
+(macOS /System/Library/Sounds, /Library/Sounds, ~/Library/Sounds; Windows
+%SystemRoot%\Media; Linux /usr/share/sounds, freedesktop first). Missing/failed
+sounds fall back to Bus's ding honoring ui.sound path/done_path. BUS_DISABLE_SOUND
+silences audio. See state/settings help for effective versus saved values.
 
 Resolve deletion targets with state, prefer IDs, then use --confirm. Read each
 delete command's help for pending deletion and terminals left open. Quit the UI

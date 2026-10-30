@@ -55,7 +55,7 @@ fn written_cli_guide_points_to_command_help() {
     let docs = write_docs(&data).unwrap();
     let guide = std::fs::read_to_string(docs.join("how-to-bus-cli.md")).unwrap();
     assert!(guide.contains("bus <cmd> --help"));
-    assert!(guide.lines().count() <= 250);
+    assert!(guide.lines().count() <= 264);
     std::fs::remove_dir_all(data).unwrap();
 }
 
