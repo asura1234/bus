@@ -60,11 +60,11 @@ class RealWorldShapeTests(Fixture):
         changed = False
         for path in tools.glob("*.py"):
             text = path.read_text()
-            if '["cargo", "build", "--locked"]' in text:
+            if '["cargo", "build", "--locked", *workspace_scope]' in text:
                 path.write_text(
                     text.replace(
-                        '["cargo", "build", "--locked"]',
-                        '["cargo", "check", "--locked"]',
+                        '["cargo", "build", "--locked", *workspace_scope]',
+                        '["cargo", "check", "--locked", *workspace_scope]',
                     )
                 )
                 changed = True
