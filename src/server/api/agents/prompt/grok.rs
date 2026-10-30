@@ -4,7 +4,15 @@ use crate::terminal::runtime::InputObservation;
 
 pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
     let Some(body) = input(screen) else {
-        return InputObservation::Unavailable;
+        // Grok 1.0.70 replaces the composer with its queue pane after it
+        // accepts a prompt submitted mid-turn ("▾ Queued N" under Tasks).
+        // That is acceptance. A dialog that happens to mention the queue
+        // is not, and a still-readable draft stays owned by the caller.
+        return if provider_queued(screen) && crate::agents::dialog::parse(screen).is_none() {
+            InputObservation::Accepted
+        } else {
+            InputObservation::Unavailable
+        };
     };
     if body.is_empty() {
         return InputObservation::Empty;
@@ -72,6 +80,29 @@ fn native_visible_draft(screen: &str, body: &str, expected: &str) -> bool {
 
 fn is_scroll_rail(character: char) -> bool {
     ('▁'..='█').contains(&character)
+}
+
+/// The Tasks-panel header Grok 1.0.70 draws for prompts waiting to run.
+/// Same shape as the manifest rule `queued_prompts_working`: a disclosure
+/// marker, the word Queued, and a count of at least 1, with nothing else
+/// on the line. A transcript sentence does not match.
+fn provider_queued(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix('▾').or_else(|| line.strip_prefix('▸')) else {
+            return false;
+        };
+        let mut parts = rest.split_whitespace();
+        parts.next() == Some("Queued")
+            && parts.next().is_some_and(|count| {
+                count
+                    .chars()
+                    .next()
+                    .is_some_and(|c| ('1'..='9').contains(&c))
+                    && count.chars().skip(1).all(|c| c.is_ascii_digit())
+            })
+            && parts.next().is_none()
+    })
 }
 
 pub(super) fn input(screen: &str) -> Option<String> {
@@ -298,6 +329,39 @@ mod tests {
             observe(&unlabelled, "Bus task"),
             InputObservation::Unavailable
         );
+    }
+
+    #[test]
+    fn grok_queued_pane_without_a_composer_is_accepted() {
+        let queued = "   ▾ Queued 1\n   from bus\n";
+        assert_eq!(input(queued), None);
+        assert_eq!(observe(queued, "from bus"), InputObservation::Accepted);
+        assert_eq!(
+            observe("   ▸ Queued 2\n", "from bus"),
+            InputObservation::Accepted
+        );
+        assert_eq!(
+            observe("   ▾ Queued 0\n", "from bus"),
+            InputObservation::Unavailable
+        );
+        assert_eq!(
+            observe(
+                "Bus closed it because Queued 1 was still waiting\n",
+                "from bus"
+            ),
+            InputObservation::Unavailable
+        );
+        // The draft is still in the composer. The queue header above it is
+        // not acceptance, and must not skip withdrawal.
+        let drafted = "\
+   ▾ Queued 1
+  ╭────────────────────────────────────────────────────────────╮
+  │ ❯ from bus                                                 │
+  ╰──────── Grok 4.7 (high) · always-approve ─╯
+  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts
+";
+        assert_eq!(input(drafted).as_deref(), Some("from bus"));
+        assert_eq!(observe(drafted, "from bus"), InputObservation::Pending);
     }
 
     #[test]

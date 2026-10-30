@@ -5,7 +5,7 @@
 # Offline 1.0.5 evidence confirms boxed composer and Ctrl+X footer; authenticated
 # permission/trust/question cards, long-paste chips and native wakes remain pending.
 id = "grok"
-version = "2026.10.31.1"
+version = "2026.10.31.2"
 min_engine_version = 3
 updated_at = "2026-10-31T00:00:00Z"
 aliases = ["grok-build"]
@@ -145,6 +145,21 @@ any = [
   { line_regex = ['^\s*[▾▸]\s+Tasks\s+[1-9][0-9]*\s*$'] },
   { line_regex = ['^\s*⸬\s+\S'] },
 ]
+
+# Grok 1.0.70 queues a prompt submitted during a turn and shows it under
+# Tasks as "▾ Queued N", with the same disclosure marker as "▾ Tasks N".
+# N >= 1 means that submission was accepted and is waiting to run. The OSC
+# title stays the idle "grok" title until that turn starts, so this must
+# outrank osc_title_idle. Otherwise Bus sees idle, records no_start_hook,
+# and closes the request as reply_not_captured before Grok runs it.
+# Queued 0 is the empty section and must not match.
+[[rules]]
+id = "queued_prompts_working"
+state = "working"
+priority = 1162
+region = "whole_recent"
+visible_working = true
+line_regex = ['^\s*[▾▸]\s+Queued\s+[1-9][0-9]*\s*$']
 
 [[rules]]
 id = "osc_progress_working"

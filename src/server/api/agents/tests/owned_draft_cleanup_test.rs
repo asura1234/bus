@@ -276,6 +276,45 @@ async fn grok_developer_deleted_line_is_not_treated_as_owned_progress() {
     withdraw_grok_owned_draft(Some(&["header"])).await;
 }
 
+/// Enter during a live turn parks the prompt in Grok's own queue. The
+/// composer is gone and "▾ Queued N" is under Tasks. That is acceptance:
+/// Bus must not withdraw the prompt or report the submit as unconfirmed.
+#[tokio::test]
+async fn grok_queued_submission_is_accepted_instead_of_withdrawn() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Grok, true, "");
+    paint_grok(&app, &[]);
+    let expiry = confirmation_expiry(&method);
+    let Method::AgentPromptIfIdle(params) = method else {
+        unreachable!()
+    };
+    let response = start(&mut app, Method::AgentPromptIfIdle(params));
+    assert_eq!(
+        next_write(&mut writes).await,
+        Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+    );
+    paint_grok(&app, &["from bus"]);
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    clock(&app).wait_for_enters(1);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes("\x1b[2J\x1b[H   ▾ Queued 1\r\n   from bus\r\n".as_bytes());
+    clock(&app).advance(expiry);
+    let reply = response.recv_timeout(WAIT).unwrap();
+    assert!(
+        reply.contains("agent_prompted"),
+        "a Grok-queued prompt is an accepted submission: {reply}"
+    );
+    assert!(
+        !reply.contains("may have run"),
+        "acceptance must not be reported as an unconfirmed withdraw: {reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "an accepted queue must not be cleared or retyped"
+    );
+}
+
 /// The composer emptying after Enter is this module's acceptance signal.
 /// Seen before any cleanup key, it must not be reported as Bus clearing it.
 #[tokio::test]

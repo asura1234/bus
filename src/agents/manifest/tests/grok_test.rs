@@ -74,3 +74,42 @@ fn tasks_panel_and_stop_line_outrank_idle_osc_but_zero_tasks_do_not() {
         Some("spinner_status_working")
     );
 }
+
+/// Grok 1.0.70 parks a prompt submitted during a turn under Tasks as
+/// "▾ Queued N". That queue is accepted work waiting to run. An idle OSC
+/// title must not hide it, or Bus closes the request as reply_not_captured
+/// before the queued turn starts. Queued 0 and a transcript sentence are not
+/// that panel.
+#[test]
+fn queued_prompts_outrank_idle_osc_and_zero_does_not() {
+    for screen in ["   ▾ Queued 1\n", "   ▸ Queued 12\n"] {
+        let result = detect_screen_with_osc(AgentKind::Grok, screen, "grok", "4;0;0");
+        assert_eq!(result.state, AgentState::Working, "{screen:?} {result:?}");
+        assert!(result.visible_working, "{result:?}");
+        assert!(!result.visible_idle, "{result:?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("queued_prompts_working"),
+            "{screen:?}"
+        );
+    }
+
+    let zero = detect_screen_with_osc(AgentKind::Grok, "   ▾ Queued 0\n", "grok", "4;0;0");
+    assert_eq!(zero.state, AgentState::Idle, "{zero:?}");
+    assert_eq!(
+        zero.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("osc_title_idle")
+    );
+
+    let prose = detect_screen_with_osc(
+        AgentKind::Grok,
+        "Bus closed it because Queued 1 was still waiting\n",
+        "grok",
+        "4;0;0",
+    );
+    assert_eq!(prose.state, AgentState::Idle, "{prose:?}");
+    assert_ne!(
+        prose.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("queued_prompts_working")
+    );
+}
