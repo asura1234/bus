@@ -293,7 +293,8 @@ fn read_build(path: &Path) -> Option<(String, Option<String>)> {
 }
 
 /// Records the binary that is serving this data directory. A failure must not
-/// stop the server: the next restart then logs the old SHA as unknown.
+/// stop the server: the next restart refuses, because there is no recorded
+/// binary to roll back to.
 pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
     let Some(root) = root else {
         return;
