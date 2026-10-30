@@ -417,13 +417,18 @@ not submitted. Mark every unrun cell explicitly.
   Kimi is not a provider in this build and has no provider fixture directory.
   There is no Kimi `just test-one` filter to run.
 
-  On a scratch server, do not edit the provider's transcript. Only when the
-  provider itself ends the turn with a capacity error, an API error, or a
-  StopFailure, record `sbus message status MESSAGE_ID`. That read is
-  `ok: true` and exit 0. Expect `complete: true`, `requests[].stage`
-  `abandoned`, `reply` null, and `reason` starting with `provider_error: `.
-  Record the full reason. A partial prefix with `stage: replied` fails the
-  check.
+  The `just test-one` filters above are the required proof for a torn
+  transcript, a wrong session, a cancelled record, and `provider_error`.
+  The interrupt above is the safe live close: it yields a `MESSAGE_ID` with
+  `reason` `interrupted`. Bus accepts `--model` as a provider argument and
+  leaves flag and model validation to the provider, so an invalid model is
+  not a Bus-defined `provider_error`. Do not invent one, and do not edit a
+  transcript. A live `provider_error` is opportunistic. When acceptance
+  itself ends a turn with a capacity error, an API error, or a StopFailure,
+  record `sbus message status MESSAGE_ID`. That read is `ok: true` and exit
+  0. Expect `complete: true`, `requests[].stage` `abandoned`, `reply` null,
+  and `reason` starting with `provider_error: `. Record the full reason. A
+  partial prefix with `stage: replied` fails the check.
 
 ## Clear, restart and isolation
 
