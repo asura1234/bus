@@ -93,12 +93,21 @@ pub(super) fn input(screen: &str) -> Option<String> {
     });
     let native_input_footer =
         footer.starts_with("enter:send") && footer.contains("shift+enter/opt+enter:newline");
-    if !legacy_footer && !native_build_footer && !native_input_footer {
-        return None;
-    }
-    let bottom = (0..end)
-        .rev()
-        .find(|&index| !lines[index].trim().is_empty())?;
+    // The welcome screen ends at the model-labelled lower border; other
+    // layouts have a separate footer beneath the frame.
+    let bottom = if lines[end].trim().starts_with('╰')
+        && lines[end].contains(" Grok ")
+        && crate::agents::grok_surface::composer_border(&lines[end])
+    {
+        end
+    } else {
+        if !legacy_footer && !native_build_footer && !native_input_footer {
+            return None;
+        }
+        (0..end)
+            .rev()
+            .find(|&index| !lines[index].trim().is_empty())?
+    };
     if !crate::agents::grok_surface::composer_border(&lines[bottom]) {
         return None;
     }
@@ -212,6 +221,43 @@ mod tests {
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-scrolled.txt");
     const NATIVE_1070_WRAPPED: &str =
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-wrapped.txt");
+
+    const NATIVE_1070_WELCOME: &str =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-welcome.txt");
+
+    #[test]
+    fn grok_1070_welcome_composer_accepts_empty_but_preserves_drafts_and_dialogs() {
+        assert_eq!(
+            observe(NATIVE_1070_WELCOME, "Bus task"),
+            InputObservation::Empty
+        );
+        let draft = NATIVE_1070_WELCOME.replace("│ ❯ ", "│ ❯ developer draft");
+        assert_eq!(observe(&draft, "Bus task"), InputObservation::Unavailable);
+        for dialog in [
+            include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt"),
+            include_str!("../../../../../tests/fixtures/grok-dialog/trust.txt"),
+            include_str!("../../../../../tests/fixtures/grok-dialog/question.txt"),
+        ] {
+            assert_eq!(
+                observe(&format!("{NATIVE_1070_WELCOME}\n{dialog}"), "Bus task"),
+                InputObservation::Unavailable
+            );
+        }
+        let incomplete = NATIVE_1070_WELCOME.replace(" · always-approve ─╯", " · always-approve");
+        assert_eq!(
+            observe(&incomplete, "Bus task"),
+            InputObservation::Unavailable
+        );
+        let unlabelled = NATIVE_1070_WELCOME.lines().map(|line| {
+            if line.contains(" Grok 4.7 (high) · always-approve ─╯") {
+                "  ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
+            } else { line }
+        }).collect::<Vec<_>>().join("\n");
+        assert_eq!(
+            observe(&unlabelled, "Bus task"),
+            InputObservation::Unavailable
+        );
+    }
 
     #[test]
     fn grok_1070_native_ready_composer_accepts_bus_prompt() {
