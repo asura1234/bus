@@ -1,0 +1,1 @@
+{"method":"session/update","params":{"sessionId":"session-cancel-early","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Write 500 numbered lines, each with four Unicode scripts and emoji. Do not use tools."}},"_meta":{}}}

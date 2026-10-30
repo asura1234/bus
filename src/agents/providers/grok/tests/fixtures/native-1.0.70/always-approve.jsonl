@@ -1,0 +1,8 @@
+{"method":"session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Use run_terminal_command to run pwd, then reply exactly Yolo tool completed."}},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Running `pwd` via terminal command, then replying exactly \"Yolo tool completed.\""}},"_meta":{"promptId":"prompt-always-approve","chunkId":2}}}
+{"method":"session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"I'll run `pwd` and then reply with the exact phrase you asked for."}},"_meta":{"promptId":"prompt-always-approve","chunkId":18}}}
+{"method":"session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"tool_call"},"_meta":{"promptId":"prompt-always-approve"}}}
+{"method":"session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"tool_call_update"},"_meta":{"promptId":"prompt-always-approve"}}}
+{"method":"session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"tool_call_update"},"_meta":{"promptId":"prompt-always-approve"}}}
+{"method":"session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Yolo tool completed."}},"_meta":{"promptId":"prompt-always-approve","chunkId":5}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-always-approve","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-always-approve","stop_reason":"end_turn"},"_meta":{}}}

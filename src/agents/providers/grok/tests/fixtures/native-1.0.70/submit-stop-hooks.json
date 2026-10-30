@@ -1,0 +1,16 @@
+[
+  {
+    "hookEventName": "user_prompt_submit",
+    "sessionId": "session-submit-stop",
+    "promptId": "prompt-submit-stop",
+    "prompt": "Reply exactly SUBMIT_HOOK_OK. Do not use tools."
+  },
+  {
+    "hookEventName": "stop",
+    "sessionId": "session-submit-stop",
+    "promptId": "prompt-submit-stop",
+    "reason": "end_turn",
+    "lastAssistantMessage": "SUBMIT_HOOK_OK",
+    "transcriptPath": "<OWNED_SESSION>/updates.jsonl"
+  }
+]

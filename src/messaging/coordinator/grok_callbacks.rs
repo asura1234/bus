@@ -1,5 +1,5 @@
-//! Bounded durable retries for Grok observations. Native completion remains
-//! pending until an authenticated post-gate committed-final adapter is verified.
+//! Bounded durable retries for Grok observations. Native replies require the
+//! owned Build 1.0.70 post-gate transcript record.
 use super::{
     callback, callbacks, AgentId, BusState, CallbackEventKind, CallbackRecordResult, Path,
     RuntimeStatus, Worker,
@@ -270,20 +270,24 @@ impl Worker {
                 );
             }
         }
-        // Native Stop stays a candidate. An idle Notification has no turn
-        // outcome and must never be passed off as a native final marker.
-        tracing::debug!(
-            event = "bus.callback.deferred",
-            reason = "grok_native_adapter_pending",
-            "Native committed-final adapter awaits authenticated evidence"
-        );
+        // Native Stop is a candidate until its owned transcript records the
+        // same prompt's final text followed by turn_completed/end_turn.
+        // An idle Notification has no turn outcome.
         if record
             .value
             .get("hookEventName")
             .and_then(serde_json::Value::as_str)
             == Some("stop")
         {
-            completion::resolve_candidate(&record.value, idle)
+            let resolution = completion::resolve_candidate(&record.value, idle)?;
+            if resolution == CompletionResolution::Pending {
+                tracing::debug!(
+                    event = "bus.callback.deferred",
+                    reason = "grok_native_record_pending",
+                    "Grok transcript has no committed final for this prompt yet"
+                );
+            }
+            Ok(resolution)
         } else {
             Ok(CompletionResolution::Pending)
         }

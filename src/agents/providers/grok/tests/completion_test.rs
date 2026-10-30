@@ -401,3 +401,244 @@ fn grok_native_json_cannot_supply_a_bus_attestation() {
         CompletionResolution::Pending
     );
 }
+
+struct NativeFixture {
+    root: std::path::PathBuf,
+    path: std::path::PathBuf,
+    session: String,
+}
+
+impl NativeFixture {
+    fn new(session: &str, updates: &str) -> Self {
+        let root = crate::utils::test_temp::unique_temp_path("grok-native-1070");
+        let dir = root.join(session);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("updates.jsonl");
+        std::fs::write(&path, updates).unwrap();
+        Self {
+            root,
+            path,
+            session: session.into(),
+        }
+    }
+
+    fn stop(&self, prompt: &str) -> Value {
+        json!({"hookEventName":"stop", "sessionId":self.session,
+            "promptId":prompt, "reason":"end_turn", "transcriptPath":self.path,
+            "lastAssistantMessage":"clipped native hook preview"})
+    }
+}
+
+impl Drop for NativeFixture {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.root).unwrap();
+    }
+}
+
+#[test]
+fn grok_1070_committed_turn_uses_prompt_id_and_full_native_reply() {
+    let fixture = NativeFixture::new(
+        "session-ordinary",
+        include_str!("fixtures/native-1.0.70/ordinary.jsonl"),
+    );
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-ordinary"), true).unwrap(),
+        CompletionResolution::Final {
+            session: "session-ordinary".into(),
+            turn: "prompt-ordinary".into(),
+            text: "GROK_CAPTURE_ORDINARY_OK".into(),
+        }
+    );
+    assert_eq!(
+        resolve_candidate(&fixture.stop("another-prompt"), true).unwrap(),
+        CompletionResolution::Pending
+    );
+}
+
+#[test]
+fn grok_1070_continuation_selects_only_its_own_unicode_answer() {
+    let fixture = NativeFixture::new(
+        "session-unicode-continuation",
+        include_str!("fixtures/native-1.0.70/unicode-continuation.jsonl"),
+    );
+    let expected = (1..=40)
+        .map(|n| format!("{n:02} | 漢字🙂 café Привет مرحبا — final"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-unicode"), true).unwrap(),
+        CompletionResolution::Final {
+            session: "session-unicode-continuation".into(),
+            turn: "prompt-unicode".into(),
+            text: expected,
+        }
+    );
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-continuation"), true).unwrap(),
+        CompletionResolution::Final {
+            session: "session-unicode-continuation".into(),
+            turn: "prompt-continuation".into(),
+            text: "CONTINUATION_2_OK 🙂".into(),
+        }
+    );
+}
+
+#[test]
+fn grok_1070_long_unicode_reply_comes_from_the_native_record() {
+    let fixture = NativeFixture::new(
+        "session-long-unicode",
+        include_str!("fixtures/native-1.0.70/long-unicode-180.jsonl"),
+    );
+    let expected = (1..=180)
+        .map(|n| format!("{n:03} | 漢字🙂 café Привет مرحبا — complete"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(expected.len() > 7_000);
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-long-unicode"), true).unwrap(),
+        CompletionResolution::Final {
+            session: "session-long-unicode".into(),
+            turn: "prompt-long-unicode".into(),
+            text: expected,
+        }
+    );
+}
+
+#[test]
+fn grok_1070_clipped_stop_preview_cannot_truncate_the_committed_answer() {
+    use sha2::{Digest, Sha256};
+
+    let fixture = NativeFixture::new(
+        "session-clipped",
+        include_str!("fixtures/native-1.0.70/clipped-answer.jsonl"),
+    );
+    let hooks: Vec<Value> = serde_json::from_str(include_str!(
+        "fixtures/native-1.0.70/clipped-answer-hooks.json"
+    ))
+    .unwrap();
+    let mut stop = hooks[1].clone();
+    let preview = stop["lastAssistantMessage"].as_str().unwrap().to_owned();
+    assert!(preview.contains("… [+4071 chars]"));
+    stop["transcriptPath"] = json!(fixture.path);
+    let CompletionResolution::Final {
+        session,
+        turn,
+        text,
+    } = resolve_candidate(&stop, true).unwrap()
+    else {
+        panic!("clipped hook preview must not obscure a committed native final");
+    };
+    assert_eq!(session, "session-clipped");
+    assert_eq!(turn, "prompt-clipped");
+    assert_eq!(text.lines().count(), 120);
+    assert!(text.len() > preview.len());
+    assert_eq!(
+        format!("{:x}", Sha256::digest(text.as_bytes())),
+        "a989c9a33d6740ae7733ebfed2b88b1bd28f8439856a686a31ac6d848833f0e5"
+    );
+}
+
+#[test]
+fn grok_1070_tool_preamble_is_not_the_committed_final() {
+    let fixture = NativeFixture::new(
+        "session-tool-final",
+        include_str!("fixtures/native-1.0.70/tool-final.jsonl"),
+    );
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-tool"), true).unwrap(),
+        CompletionResolution::Final {
+            session: "session-tool-final".into(),
+            turn: "prompt-tool".into(),
+            text: "<SCRATCH_PROJECT>".into(),
+        }
+    );
+}
+
+#[test]
+fn grok_1070_blocked_stop_uses_the_post_gate_continuation() {
+    let fixture = NativeFixture::new(
+        "session-gate-continuation",
+        include_str!("fixtures/native-1.0.70/gate-continuation.jsonl"),
+    );
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-gate-continuation"), true).unwrap(),
+        CompletionResolution::Final {
+            session: "session-gate-continuation".into(),
+            turn: "prompt-gate-continuation".into(),
+            text: "GATE_CONTINUED_OK".into(),
+        }
+    );
+}
+
+#[test]
+fn grok_1070_interrupted_stop_gate_has_no_committed_final() {
+    let fixture = NativeFixture::new(
+        "session-gate-cancel",
+        include_str!("fixtures/native-1.0.70/gate-cancel.jsonl"),
+    );
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-gate-cancel"), true).unwrap(),
+        CompletionResolution::Pending
+    );
+}
+
+#[test]
+fn grok_1070_no_approval_tool_turn_still_needs_commit() {
+    let fixture = NativeFixture::new(
+        "session-always-approve",
+        include_str!("fixtures/native-1.0.70/always-approve.jsonl"),
+    );
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-always-approve"), true).unwrap(),
+        CompletionResolution::Final {
+            session: "session-always-approve".into(),
+            turn: "prompt-always-approve".into(),
+            text: "Yolo tool completed.".into(),
+        }
+    );
+}
+
+#[test]
+fn grok_1070_cancel_and_max_turns_never_publish_a_reply() {
+    for (session, prompt, updates) in [
+        (
+            "session-cancel-early",
+            "cancelled-prompt",
+            include_str!("fixtures/native-1.0.70/cancel-early.jsonl"),
+        ),
+        (
+            "session-max-turns-failure",
+            "prompt-cap",
+            include_str!("fixtures/native-1.0.70/max-turns-failure.jsonl"),
+        ),
+    ] {
+        let fixture = NativeFixture::new(session, updates);
+        assert_eq!(
+            resolve_candidate(&fixture.stop(prompt), true).unwrap(),
+            CompletionResolution::Pending
+        );
+    }
+}
+
+#[test]
+fn grok_1070_torn_commit_and_wrong_session_fail_closed() {
+    let fixture = NativeFixture::new(
+        "session-ordinary",
+        include_str!("fixtures/native-1.0.70/ordinary.jsonl"),
+    );
+    let mut bytes = std::fs::read(&fixture.path).unwrap();
+    bytes.pop();
+    std::fs::write(&fixture.path, bytes).unwrap();
+    assert_eq!(
+        resolve_candidate(&fixture.stop("prompt-ordinary"), true).unwrap(),
+        CompletionResolution::Pending
+    );
+    std::fs::write(
+        &fixture.path,
+        include_str!("fixtures/native-1.0.70/ordinary.jsonl"),
+    )
+    .unwrap();
+    let mut wrong = fixture.stop("prompt-ordinary");
+    wrong["sessionId"] = json!("other-session");
+    assert!(resolve_candidate(&wrong, true).is_err());
+}

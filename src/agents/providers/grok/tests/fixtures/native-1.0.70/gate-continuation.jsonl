@@ -1,0 +1,9 @@
+{"method":"session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Reply exactly FIRST_PASS_OK. Do not use tools."}},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"FIRST_PASS_OK"}},"_meta":{"promptId":"prompt-gate-continuation","chunkId":5}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"hook_execution","prompt_id":"prompt-gate-continuation"},"_meta":{}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"hook_annotation"},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"The user wants the exact reply \"GATE_CONTINUED_OK\" with no tools."}},"_meta":{"promptId":"prompt-gate-continuation","chunkId":2}}}
+{"method":"session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"GATE_CONTINUED_OK"}},"_meta":{"promptId":"prompt-gate-continuation","chunkId":8}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"hook_execution","prompt_id":"prompt-gate-continuation"},"_meta":{}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-gate-continuation","stop_reason":"end_turn"},"_meta":{}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-gate-continuation","update":{"sessionUpdate":"hook_execution"},"_meta":{}}}

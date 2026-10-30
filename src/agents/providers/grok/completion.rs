@@ -1,8 +1,5 @@
-//! Grok Stop is a gate attempt, not proof that a turn committed its final.
-//!
-//! The binary-matched 1.0.5 guides document hook envelopes and ACP chunks, but
-//! not the persisted turn-final schema. Unknown evidence deliberately remains
-//! pending. Neither hook_execution success nor an assistant chunk proves finality.
+//! Grok Stop is a gate attempt. Build 1.0.70's owned transcript commits a
+//! reply with a prompt-scoped `turn_completed/end_turn` after its final text.
 use super::hooks;
 use crate::agents::providers::spool::Parsed;
 use serde_json::Value;
@@ -28,11 +25,8 @@ pub(crate) enum CompletionResolution {
     },
 }
 
-/// Trusted Bus evidence, never deserialized from native hook/transcript JSON.
-/// The producer must prove a post-gate committed terminal outcome and complete
-/// text for the current launch/request revision, invalidating success on newer
-/// submits, cancellation, failure, session replacement or ambiguous ownership.
-/// No native producer is approved yet; production candidates supply None.
+/// Trusted Bus evidence for the isolated synthetic driver, never deserialized
+/// from native JSON. Native Build 1.0.70 uses the owned transcript reader below.
 pub(crate) struct CompletionAttestation {
     pub(crate) session: String,
     pub(crate) turn: String,
@@ -106,27 +100,86 @@ pub(crate) fn resolve_candidate(
     let Some(transcript) = read_transcript(Path::new(path), &session)? else {
         return Ok(CompletionResolution::Pending);
     };
+    let mut final_text = None;
+    let mut completed = false;
     for line in transcript.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(row) = serde_json::from_str::<Value>(line) else {
             return Ok(CompletionResolution::Pending);
         };
-        if row.get("method").and_then(Value::as_str) == Some("_x.ai/session/update") {
-            let Some(row_session) = row.pointer("/params/sessionId").and_then(Value::as_str) else {
-                return Ok(CompletionResolution::Pending);
-            };
-            if row_session != session {
-                return Err(
-                    "Grok transcript session differs from its callback; no reply was published."
-                        .into(),
-                );
+        let method = row.get("method").and_then(Value::as_str);
+        if !matches!(method, Some("session/update" | "_x.ai/session/update")) {
+            continue;
+        }
+        let Some(row_session) = row.pointer("/params/sessionId").and_then(Value::as_str) else {
+            return Ok(CompletionResolution::Pending);
+        };
+        if row_session != session {
+            return Err(
+                "Grok transcript session differs from its callback; no reply was published.".into(),
+            );
+        }
+        match row
+            .pointer("/params/update/sessionUpdate")
+            .and_then(Value::as_str)
+        {
+            Some("agent_message_chunk")
+                if row
+                    .pointer("/params/_meta/promptId")
+                    .and_then(Value::as_str)
+                    == Some(turn.as_str()) =>
+            {
+                if completed {
+                    return Ok(CompletionResolution::Pending);
+                }
+                if row
+                    .pointer("/params/update/content/type")
+                    .and_then(Value::as_str)
+                    != Some("text")
+                {
+                    return Ok(CompletionResolution::Pending);
+                }
+                let Some(text) = row
+                    .pointer("/params/update/content/text")
+                    .and_then(Value::as_str)
+                else {
+                    return Ok(CompletionResolution::Pending);
+                };
+                // A tool turn can emit an assistant preamble before its final
+                // answer. Build 1.0.70 writes each whole message as a chunk.
+                final_text = Some(text.to_owned());
             }
+            Some("turn_completed")
+                if row
+                    .pointer("/params/update/prompt_id")
+                    .and_then(Value::as_str)
+                    == Some(turn.as_str()) =>
+            {
+                if completed {
+                    return Ok(CompletionResolution::Pending);
+                }
+                if row
+                    .pointer("/params/update/stop_reason")
+                    .and_then(Value::as_str)
+                    != Some("end_turn")
+                {
+                    return Ok(CompletionResolution::Pending);
+                }
+                completed = true;
+            }
+            _ => {}
         }
     }
-    // Idle is necessary, but a Stop can precede continuation/cancel/failure,
-    // and a successful hook_execution can describe the earlier gate attempt.
-    // Keep this scoped candidate in the spool until committed completion and
-    // final-text ownership can be established from a verified native schema.
-    resolve_attested_completion(&session, &turn, settled_idle, None)
+    if !completed || !settled_idle {
+        return Ok(CompletionResolution::Pending);
+    }
+    let Some(text) = final_text else {
+        return Ok(CompletionResolution::Pending);
+    };
+    Ok(CompletionResolution::Final {
+        session,
+        turn,
+        text,
+    })
 }
 
 /// Read only a bounded, complete JSONL suffix from the callback's session.

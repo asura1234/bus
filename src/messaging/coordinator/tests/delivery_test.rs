@@ -1808,11 +1808,71 @@ fn grok_completion_deferrals_and_retry_expiry_are_diagnosable_without_message_co
         assert!(!marker.exists(), "retired observations must remove their sidecars");
         assert_ne!(worker.state.request(request).unwrap().phase, RequestPhase::Completed);
         let logs = capture.text();
-        for reason in ["grok_not_idle", "grok_candidate", "grok_native_adapter_pending", "grok_attestation_pending", "grok_retry_not_due", "grok_retry_budget_exhausted"] {
+        for reason in ["grok_not_idle", "grok_candidate", "grok_native_record_pending", "grok_attestation_pending", "grok_retry_not_due", "grok_retry_budget_exhausted"] {
             assert!(logs.contains(reason), "missing {reason}: {logs}");
         }
         assert!(!logs.contains("PRIVATE_PROMPT") && !logs.contains("PRIVATE_REPLY"), "{logs}");
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     });
+}
+
+#[test]
+fn grok_1070_native_final_settles_the_exact_bus_request() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
+    let mut state = worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session-submit-stop".into()),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    let prompt = "Reply exactly SUBMIT_HOOK_OK. Do not use tools.";
+    let request = queue(&mut worker, room, agent, prompt);
+    worker.submit_ready().unwrap();
+    let native_dir = dir.join("native/session-submit-stop");
+    std::fs::create_dir_all(&native_dir).unwrap();
+    let transcript = native_dir.join("updates.jsonl");
+    std::fs::write(
+        &transcript,
+        include_str!(
+            "../../../agents/providers/grok/tests/fixtures/native-1.0.70/submit-stop.jsonl"
+        ),
+    )
+    .unwrap();
+    let mut hooks: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../agents/providers/grok/tests/fixtures/native-1.0.70/submit-stop-hooks.json"
+    ))
+    .unwrap();
+    record(&dir, Provider::Grok, hooks.remove(0));
+    consume(&mut worker, agent, &dir);
+    assert!(worker.state.request(request).unwrap().trusted_start_bound);
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, io::now_ms())
+        .unwrap();
+    let mut stop = hooks.remove(0);
+    stop["transcriptPath"] = json!(transcript);
+    record(&dir, Provider::Grok, stop);
+    consume(&mut worker, agent, &dir);
+    assert_ne!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    consume(&mut worker, agent, &dir);
+    let settled = worker.state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert_eq!(settled.reply().unwrap().text, "SUBMIT_HOOK_OK");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
