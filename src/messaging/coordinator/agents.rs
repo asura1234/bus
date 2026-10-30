@@ -19,6 +19,23 @@ pub(crate) struct AddAgent {
     pub(crate) consent_project_hooks: bool,
 }
 
+fn launch_binding(
+    provider: Provider,
+    env: &std::collections::HashMap<String, String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let executable = launch::selected_executable(provider, env)?;
+    let home = if provider == Provider::Grok {
+        Some(
+            env.get("GROK_HOME")
+                .cloned()
+                .ok_or("Grok launch has no validated home")?,
+        )
+    } else {
+        None
+    };
+    Ok((executable, home))
+}
+
 impl Worker {
     pub(super) fn delete_agent(
         &mut self,
@@ -413,12 +430,7 @@ impl Worker {
         )?;
         let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
         crate::messaging::skills::post_warnings(&mut state, &skill_agent)?;
-        let selected_executable = launch::selected_executable(input.provider, &prepared.env)?;
-        let grok_home = prepared
-            .env
-            .get("GROK_HOME")
-            .cloned()
-            .filter(|_| selected_executable.is_some());
+        let (selected_executable, grok_home) = launch_binding(input.provider, &prepared.env)?;
         let identity = self.persist_agent_launch(
             state,
             id,

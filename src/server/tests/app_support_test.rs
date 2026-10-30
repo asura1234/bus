@@ -1436,9 +1436,16 @@ async fn agent_start_original_providers_keep_their_command_without_grok_binding(
             response["result"]["type"], "agent_started",
             "{kind}: {response}"
         );
+        let provider = crate::agents::providers::launch::native_provider(kind).unwrap();
+        let mut expected = vec![executable.into(), "--resume".into(), "saved-session".into()];
+        crate::agents::providers::launch::extend_generated_args(
+            provider,
+            &mut expected,
+            crate::agents::providers::launch::runtime_args(provider),
+        );
         assert_eq!(
             response["result"]["argv"],
-            serde_json::json!([executable, "--resume", "saved-session"]),
+            serde_json::json!(expected),
             "{kind}"
         );
         let command = String::from_utf8(writes.try_recv().unwrap().to_vec()).unwrap();

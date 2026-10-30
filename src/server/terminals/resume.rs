@@ -6,6 +6,8 @@ use ratatui::layout::Rect;
 use crate::messaging::coordinator::resume::{LaunchExtras, NativeResumeContext, NativeResumeFacts};
 use crate::server::app::App;
 
+type ResumeInputs = (Vec<String>, Vec<(String, String)>);
+
 fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeResumeFacts {
     NativeResumeFacts {
         agent_name: terminal.agent_name.clone(),
@@ -240,6 +242,39 @@ impl App {
         pane_infos
     }
 
+    fn prepared_resume_inputs(
+        &mut self,
+        pane_id: crate::utils::ids::PaneId,
+        terminal_id: &crate::utils::ids::TerminalId,
+        plan: &crate::agents::resume::catalog::AgentResumePlan,
+        extras: LaunchExtras,
+    ) -> Option<ResumeInputs> {
+        let grok_argv = (plan.agent == "grok").then(|| resume_argv(plan, &extras));
+        let (mut argv, env) = resume_launch_inputs(plan, extras);
+        if let Some(result) = grok_argv {
+            match result {
+                Ok(bound) => argv = bound,
+                Err(reason) => {
+                    self.suspend_pending_agent_resume(pane_id, terminal_id, &reason);
+                    return None;
+                }
+            }
+        }
+        Some((argv, env))
+    }
+
+    fn record_resume_command(
+        &mut self,
+        terminal_id: &crate::utils::ids::TerminalId,
+        argv: &[String],
+    ) -> String {
+        let command = shell_command_from_argv(argv);
+        if let Some(terminal) = self.state.terminals.get_mut(terminal_id) {
+            terminal.begin_native_resume(command.clone());
+        }
+        command
+    }
+
     fn start_pending_agent_resume(
         &mut self,
         pane_id: crate::utils::ids::PaneId,
@@ -284,20 +319,11 @@ impl App {
             }
             None => plan,
         };
-        let grok_argv = (plan.agent == "grok").then(|| resume_argv(&plan, &extras));
-        let (mut argv, env) = resume_launch_inputs(&plan, extras);
-        if let Some(result) = grok_argv {
-            match result {
-                Ok(bound) => argv = bound,
-                Err(reason) => {
-                    return self.suspend_pending_agent_resume(pane_id, &terminal_id, &reason)
-                }
-            }
-        }
-        let resume_command = shell_command_from_argv(&argv);
-        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-            terminal.begin_native_resume(resume_command.clone());
-        }
+        let Some((argv, env)) = self.prepared_resume_inputs(pane_id, &terminal_id, &plan, extras)
+        else {
+            return false;
+        };
+        let resume_command = self.record_resume_command(&terminal_id, &argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))

@@ -226,7 +226,13 @@ mod tests {
                 Bytes::from_static(b"\r"),
                 vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
                 Duration::ZERO,
-                Some(Instant::now() + Duration::from_millis(400)),
+                Some(
+                    Instant::now()
+                        + crate::protocol::api::submission::maximum_budget(
+                            Duration::ZERO,
+                            b"Bus task",
+                        ),
+                ),
                 Box::new(super::super::composer::observer(
                     crate::agents::AgentKind::Grok,
                     "Bus task".into(),
@@ -244,7 +250,10 @@ mod tests {
         assert_eq!(pasted, Bytes::from_static(b"Bus task"));
         draw(PASTED);
         let error = completion
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(
+                crate::protocol::api::submission::maximum_budget(Duration::ZERO, b"Bus task")
+                    + Duration::from_secs(1),
+            )
             .unwrap()
             .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
