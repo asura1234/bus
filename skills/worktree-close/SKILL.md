@@ -60,7 +60,10 @@ IF <session_cwd> is <worktree_path> or below it
 ========== CHECK FOR UNSAVED WORK ==========
 
 Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/submodule_state.py" inspect --repo "<worktree_path>"`.
-STOP if it fails. Capture initialized paths recursively, each dirty status, gitlink drift, and child unpushed commits.
+STOP if it fails. Capture initialized paths recursively, each dirty status, gitlink drift, and unpublished child work.
+The shared child check includes every local child branch and detached HEAD, excludes commits reachable
+from child remote-tracking refs or tags, and confirms candidate pins with the child origin.
+The parent branch being pushed does not establish that its child commits were published.
 Submodules require force removal even when clean; this is not permission to discard work.
 
 dirty_super = `git -C <worktree_path> status --short`
@@ -84,7 +87,7 @@ unpushed_super = `git -C <worktree_path> log --oneline HEAD --not --remotes`
 
 dirty_subs = every initialized submodule whose dirty status is nonempty
 moved_subs = every initialized submodule whose HEAD differs from the parent index gitlink
-unpushed_subs = each child's `git log --oneline HEAD --not --remotes` result from the recursive inspection
+unpushed_subs = each child's `unpushed` result from the recursive inspection, including local child branches
 needs_force = initialized submodule set is nonempty
 IF any of dirty_super, in_progress, unpushed_super, dirty_subs, moved_subs, unpushed_subs is nonempty
   Print "⚠️ <worktree_path> has work that would be discarded:"

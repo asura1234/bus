@@ -65,7 +65,10 @@ IF rebase_root exists:
 ========== FETCH & REBASE ==========
 
 Run `python3 "$SKILL_DIR/scripts/submodule_state.py" check --repo "<repo>"`.
-IF it fails: STOP before rebasing; preserve dirty or unrecorded initialized-submodule work.
+IF it fails: STOP before rebasing; preserve dirty, unpublished or unrecorded initialized-submodule work.
+The child-work check examines all local child branches and a detached HEAD, excludes commits
+reachable from child remote-tracking refs or tags, and confirms candidate pins with the child origin.
+Do not use the parent branch's publication as evidence that a child commit was published.
 `git fetch origin`
 Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
 `--base "<caller base>"` only when supplied, and always add `--refresh-default --check-branch "<branch>"`.
@@ -136,7 +139,8 @@ REPEAT until rebase completes
 Run `python3 "$SKILL_DIR/scripts/submodule_state.py" sync --repo "<repo>" --before "<pre_rebase_head>"`.
 It consumes policy.submodule_update: recursive checks out recorded pins for initialized paths only;
 none performs no update and fails if a path still differs. It never initializes paths, forces checkout,
-chases a branch tip or moves a child off unpushed/unrecorded work. Only old/new recorded pins are admitted.
+chases a branch tip or moves a child off unpublished/unrecorded work. Only old/new recorded pins are admitted.
+Its before and after checks use the same child-work rule as the pre-rebase check.
 Report any error and STOP before push.
 
 ========== PUSH ==========

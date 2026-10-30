@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
+import tempfile
 
 from rebase_base import git
 from repository_context import read_policy, repository_root
@@ -44,6 +46,43 @@ def recorded_pin(repo: Path, path: str, before: str | None) -> str | None:
     return pins[0] if len(pins) == 1 else None
 
 
+def remote_has_commit(repo: Path, commit: str) -> bool:
+    """Ask the child origin for a SHA without trusting the child's local objects."""
+    remote = subprocess.run(['git', '-C', str(repo), 'remote', 'get-url', 'origin'],
+                            text=True, capture_output=True)
+    if remote.returncode or not remote.stdout.strip():
+        return False
+    # A dry-run from the child itself succeeds for objects it already owns even
+    # when origin cannot serve them. An empty object store forces a remote check.
+    with tempfile.TemporaryDirectory(prefix='bus-child-remote-') as directory:
+        init = subprocess.run(['git', 'init', '-q', '--bare', directory], capture_output=True)
+        if init.returncode:
+            return False
+        result = subprocess.run(
+            ['git', '-C', directory, 'fetch', '--dry-run', '--no-write-fetch-head',
+             remote.stdout.strip(), commit],
+            text=True, capture_output=True, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
+        )
+        return result.returncode == 0
+
+
+def unpublished_child_work(repo: Path, pin: str, head: str) -> str:
+    # Include every local branch, even when the checkout is detached at its pin.
+    # Tags and remote-tracking refs are publication evidence in the local graph.
+    candidates = git(repo, 'log', '--format=%H %s', '--branches', 'HEAD',
+                     '--not', '--remotes', '--tags').splitlines()
+    shallow = git(repo, 'rev-parse', '--is-shallow-repository') == 'true'
+    unpublished = []
+    for line in candidates:
+        commit = line.split(' ', 1)[0]
+        # A fetched-by-SHA pin can be absent from all local advertised refs.
+        # Ask its own origin; the parent branch's publication says nothing about it.
+        if (commit in (pin, head) or shallow) and remote_has_commit(repo, commit):
+            continue
+        unpublished.append(line)
+    return '\n'.join(unpublished)
+
+
 def inspect(repo: Path, prefix: str = '', before: str | None = None) -> list[dict]:
     states = []
     for path in paths(repo):
@@ -57,7 +96,7 @@ def inspect(repo: Path, prefix: str = '', before: str | None = None) -> list[dic
         head = git(full, 'rev-parse', 'HEAD')
         states.append({'path': prefix + path, 'pin': pin, 'head': head,
                        'moved': head != pin, 'unrecorded': head not in (pin, previous),
-                       'unpushed': git(full, 'log', '--format=%H %s', 'HEAD', '--not', '--remotes'),
+                       'unpushed': unpublished_child_work(full, pin, head),
                        'dirty': git(full, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=all')})
         states.extend(inspect(full, prefix + path + '/', previous))
     return states
