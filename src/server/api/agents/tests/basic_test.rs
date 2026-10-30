@@ -368,6 +368,7 @@ async fn guarded_agent_start_rejects_stale_owner_or_lost_prompt_integration_with
                         args: vec![],
                         executable: None,
                         grok_home: None,
+                        kimi_home: None,
                         timeout_ms: None,
                     },
                 },

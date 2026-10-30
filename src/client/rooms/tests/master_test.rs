@@ -960,7 +960,12 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
     assert_eq!(
         choices(&mut ui),
-        [Provider::ClaudeCode, Provider::Cursor, Provider::Grok]
+        [
+            Provider::ClaudeCode,
+            Provider::Cursor,
+            Provider::Grok,
+            Provider::Kimi
+        ]
     );
     // Arrow keys cycle only through the offered providers.
     for code in [
@@ -1011,7 +1016,8 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
             Provider::Codex,
             Provider::ClaudeCode,
             Provider::Cursor,
-            Provider::Grok
+            Provider::Grok,
+            Provider::Kimi
         ]
     );
     ui.action(render::Action::Provider(Provider::Codex));

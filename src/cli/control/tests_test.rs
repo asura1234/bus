@@ -540,7 +540,7 @@ fn commands_route_to_exact_methods_with_string_selectors() {
 
 #[test]
 fn agent_add_maps_launch_options_and_explicit_hook_consent() {
-    for provider in ["claude", "codex", "cursor", "grok"] {
+    for provider in ["claude", "codex", "cursor", "grok", "kimi"] {
         let parsed = command(&[
             "agent",
             "add",

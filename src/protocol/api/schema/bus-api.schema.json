@@ -1221,7 +1221,7 @@
               "type": "array"
             },
             "executable": {
-              "description": "Validated absolute Grok Build alias selected during launch preparation.\nRequired for Grok so shell startup cannot redirect the selected binary.",
+              "description": "Validated absolute provider alias selected during launch preparation.\nRequired for Grok and Kimi so shell startup cannot redirect the binary.",
               "type": [
                 "string",
                 "null"
@@ -1232,6 +1232,13 @@
             },
             "grok_home": {
               "description": "Validated Grok global home, applied again after shell startup.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kimi_home": {
+              "description": "Owner-only Kimi home containing Bus hooks and the session wire.",
               "type": [
                 "string",
                 "null"
@@ -1273,7 +1280,7 @@
               "type": "array"
             },
             "executable": {
-              "description": "Validated absolute Grok Build alias selected during launch preparation.\nRequired for Grok so shell startup cannot redirect the selected binary.",
+              "description": "Validated absolute provider alias selected during launch preparation.\nRequired for Grok and Kimi so shell startup cannot redirect the binary.",
               "type": [
                 "string",
                 "null"
@@ -1281,6 +1288,13 @@
             },
             "grok_home": {
               "description": "Validated Grok global home, applied again after shell startup.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kimi_home": {
+              "description": "Owner-only Kimi home containing Bus hooks and the session wire.",
               "type": [
                 "string",
                 "null"

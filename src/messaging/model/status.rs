@@ -31,7 +31,9 @@ impl RoomAgent {
             || identity.pane_id.is_none()
         {
             Some("terminal_identity_missing")
-        } else if identity.session_id.is_none() && self.provider != Provider::Codex {
+        } else if identity.session_id.is_none()
+            && !matches!(self.provider, Provider::Codex | Provider::Kimi)
+        {
             Some("session_hook_missing")
         } else {
             None

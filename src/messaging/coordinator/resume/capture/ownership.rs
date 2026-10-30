@@ -19,7 +19,7 @@ pub(super) fn unstarted_owner<'a>(
     });
     let agent = owners
         .next()
-        .ok_or("Bus resume has no matching unstarted Codex owner")?;
+        .ok_or("Bus resume has no matching unstarted provider owner")?;
     if owners.next().is_some() {
         return Err("Bus resume unstarted ownership is ambiguous".into());
     }

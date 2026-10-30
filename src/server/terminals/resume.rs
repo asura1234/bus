@@ -248,9 +248,10 @@ impl App {
         plan: &crate::agents::resume::catalog::AgentResumePlan,
         extras: LaunchExtras,
     ) -> Option<ResumeInputs> {
-        let grok_argv = (plan.agent == "grok").then(|| resume_argv(plan, &extras));
+        let provider_argv =
+            matches!(plan.agent.as_str(), "grok" | "kimi").then(|| resume_argv(plan, &extras));
         let (mut argv, env) = resume_launch_inputs(plan, extras);
-        if let Some(result) = grok_argv {
+        if let Some(result) = provider_argv {
             match result {
                 Ok(bound) => argv = bound,
                 Err(reason) => {
@@ -519,16 +520,20 @@ fn resume_argv(
     extras: &LaunchExtras,
 ) -> Result<Vec<String>, String> {
     let mut argv = plan.argv.clone();
-    if plan.agent == "grok" && !extras.env.is_empty() {
-        if argv.first().map(String::as_str) != Some("grok") {
-            return Err("Grok resume plan has an unexpected executable".into());
+    if matches!(plan.agent.as_str(), "grok" | "kimi") && !extras.env.is_empty() {
+        if argv.first().map(String::as_str) != Some(plan.agent.as_str()) {
+            return Err("Provider resume plan has an unexpected executable".into());
         }
         let env = extras.env.iter().cloned().collect();
         argv[0] = crate::agents::providers::launch::selected_executable(
-            crate::agents::providers::ProviderKind::Grok,
+            if plan.agent == "grok" {
+                crate::agents::providers::ProviderKind::Grok
+            } else {
+                crate::agents::providers::ProviderKind::Kimi
+            },
             &env,
         )?
-        .ok_or("Grok resume has no selected executable")?;
+        .ok_or("Provider resume has no selected executable")?;
     }
     argv.extend(extras.args.iter().cloned());
     if plan.agent == "grok" && !extras.env.is_empty() {
@@ -539,6 +544,15 @@ fn resume_argv(
             .map(|(_, value)| value)
             .ok_or("Grok resume has no validated home")?;
         argv = crate::agents::providers::grok::launch::bind_home(argv, std::path::Path::new(home))?;
+    }
+    if plan.agent == "kimi" && !extras.env.is_empty() {
+        let home = extras
+            .env
+            .iter()
+            .find(|(key, _)| key == "KIMI_CODE_HOME")
+            .map(|(_, value)| value)
+            .ok_or("Kimi resume has no private home")?;
+        argv = crate::agents::providers::kimi::launch::bind_home(argv, std::path::Path::new(home))?;
     }
     Ok(argv)
 }

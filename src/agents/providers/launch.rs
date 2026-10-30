@@ -3,7 +3,7 @@
 use super::{
     claude_code, codex, cursor, grok,
     hook_json::{self, HookContext, HookContract},
-    ProviderKind,
+    kimi, ProviderKind,
 };
 use std::{
     collections::HashMap,
@@ -75,18 +75,20 @@ pub(crate) fn selected_executable(
     provider: ProviderKind,
     env: &HashMap<String, String>,
 ) -> Result<Option<String>, String> {
-    if provider != ProviderKind::Grok {
+    if !matches!(provider, ProviderKind::Grok | ProviderKind::Kimi) {
         return Ok(None);
     }
     let directory = env
         .get("PATH")
         .and_then(|path| std::env::split_paths(path).next())
         .filter(|path| path.is_absolute())
-        .ok_or("Grok launch is missing its selected executable directory")?;
-    let path = directory.join("grok");
-    let path = path.to_str().ok_or("Grok executable path is not UTF-8")?;
+        .ok_or("Provider launch is missing its selected executable directory")?;
+    let path = directory.join(provider.executable());
+    let path = path
+        .to_str()
+        .ok_or("Provider executable path is not UTF-8")?;
     if path.chars().any(char::is_control) {
-        return Err("Grok executable path contains control characters".into());
+        return Err("Provider executable path contains control characters".into());
     }
     Ok(Some(path.to_owned()))
 }
@@ -97,6 +99,7 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
         ProviderKind::ClaudeCode => claude_code::launch::runtime_args(),
         ProviderKind::Cursor => cursor::launch::runtime_args(),
         ProviderKind::Grok => grok::launch::runtime_args(),
+        ProviderKind::Kimi => Vec::new(),
     }
 }
 
@@ -105,6 +108,7 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
         "codex" => Some(ProviderKind::Codex),
         "claude" => Some(ProviderKind::ClaudeCode),
         "cursor" => Some(ProviderKind::Cursor),
+        "kimi" => Some(ProviderKind::Kimi),
         _ => None,
     }
 }
@@ -117,7 +121,9 @@ pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
             "DISABLE_AUTOUPDATER".into(),
             std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
         )],
-        ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok => Vec::new(),
+        ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => {
+            Vec::new()
+        }
     }
 }
 
@@ -142,6 +148,7 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
         ),
         ProviderKind::Cursor => ("--force", &["--force", "--yolo", "-f"]),
         ProviderKind::Grok => ("--always-approve", &["--always-approve", "--yolo"]),
+        ProviderKind::Kimi => ("--yolo", &["--yolo", "-y"]),
     };
     if !arguments::contains_flag(provider, args, aliases) {
         // Prefix rather than append: the provider must see it before any
@@ -159,6 +166,7 @@ pub(crate) fn take_adopted_session(
         ProviderKind::ClaudeCode => claude_code::launch::take_adopted_session(args),
         ProviderKind::Cursor => cursor::launch::take_adopted_session(args),
         ProviderKind::Grok => grok::launch::take_adopted_session(args),
+        ProviderKind::Kimi => kimi::launch::take_adopted_session(args),
     }
 }
 
@@ -168,6 +176,7 @@ fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
         ProviderKind::ClaudeCode => claude_code::launch::resume_args(session),
         ProviderKind::Cursor => cursor::launch::resume_args(session),
         ProviderKind::Grok => grok::launch::resume_args(session),
+        ProviderKind::Kimi => kimi::launch::resume_args(session),
     }
 }
 
@@ -244,6 +253,7 @@ pub(crate) fn extend_generated_args(
         ProviderKind::Cursor => Some("--disable-auto-update"),
         ProviderKind::ClaudeCode => None,
         ProviderKind::Grok => None,
+        ProviderKind::Kimi => None,
     };
     let supplied = flag.filter(|flag| arguments::contains_flag(provider, args, &[*flag]));
     let capture = capture
@@ -273,6 +283,9 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
     if provider == ProviderKind::Grok {
         return grok::launch::validate_args(args);
     }
+    if provider == ProviderKind::Kimi {
+        return kimi::launch::validate_args(args);
+    }
     if args.iter().any(|arg| arg.contains('\0')) {
         return Err("Launch arguments cannot contain NUL".into());
     }
@@ -286,6 +299,7 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
             ),
             ProviderKind::Cursor => matches!(arg, "-p" | "--print"),
             ProviderKind::Grok => unreachable!("Grok validates its own arguments"),
+            ProviderKind::Kimi => unreachable!("Kimi validates its own arguments"),
         };
         if incompatible {
             return Err(format!("{} launch argument {arg} disables the interactive terminal or observation hooks Bus needs; see docs/launch-args.md", provider_kind(provider)));
@@ -346,6 +360,9 @@ pub(crate) fn saved_options(provider: ProviderKind, spool: &Path) -> Result<Vec<
 }
 
 pub(crate) fn binary_available(provider: ProviderKind) -> bool {
+    if provider == ProviderKind::Kimi && kimi::launch::source_binary_available() {
+        return true;
+    }
     executable_available(executable(provider))
 }
 
@@ -381,6 +398,7 @@ pub(crate) fn setup_notice(
         ProviderKind::ClaudeCode => None,
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
         ProviderKind::Grok => Some(grok::launch::setup_notice(&root)),
+        ProviderKind::Kimi => None,
     }?;
     (!hook_json::hooks_are_current(&notice.path, HookContract::for_provider(provider), binary))
         .then_some(notice)
@@ -394,6 +412,9 @@ pub(crate) fn prepare(
 ) -> Result<PreparedLaunch, String> {
     if spec.provider == ProviderKind::Grok {
         return grok::launch::prepare(spec, initialize);
+    }
+    if spec.provider == ProviderKind::Kimi {
+        return kimi::launch::prepare(spec, initialize);
     }
     let cwd = canonical_directory(&spec.cwd)?;
     if spec.provider == ProviderKind::Codex {
@@ -445,5 +466,6 @@ pub(crate) fn prepare(
             env: spec.hooks.env(),
         }),
         ProviderKind::Grok => unreachable!("Grok prepares its own launch"),
+        ProviderKind::Kimi => unreachable!("Kimi prepares its own launch"),
     }
 }

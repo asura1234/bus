@@ -39,7 +39,7 @@ fn launch_binding(
     id: AgentId,
     input: &AddAgent,
     prepared: &launch::PreparedLaunch,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>, Option<String>), String> {
     let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
     crate::messaging::skills::post_warnings(state, &skill_agent)?;
     let provider = input.provider;
@@ -54,7 +54,16 @@ fn launch_binding(
     } else {
         None
     };
-    Ok((executable, home))
+    let kimi_home = if provider == Provider::Kimi {
+        Some(
+            env.get("KIMI_CODE_HOME")
+                .cloned()
+                .ok_or("Kimi launch has no private home")?,
+        )
+    } else {
+        None
+    };
+    Ok((executable, home, kimi_home))
 }
 
 impl Worker {
@@ -449,7 +458,8 @@ impl Worker {
             &mut prepared,
             &hooks,
         )?;
-        let (selected_executable, grok_home) = launch_binding(&mut state, id, &input, &prepared)?;
+        let (selected_executable, grok_home, kimi_home) =
+            launch_binding(&mut state, id, &input, &prepared)?;
         let identity = self.persist_agent_launch(
             state,
             id,
@@ -502,6 +512,7 @@ impl Worker {
                 args: prepared.args.clone(),
                 executable: selected_executable,
                 grok_home,
+                kimi_home,
                 timeout_ms: None,
             }));
         match started {
@@ -591,7 +602,7 @@ impl Worker {
         state
             .set_agent_runtime_identity(id, identity.clone())
             .map_err(|e| e.to_string())?;
-        if provider == Provider::ClaudeCode {
+        if matches!(provider, Provider::ClaudeCode | Provider::Kimi) {
             state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
         }
         state
@@ -599,7 +610,7 @@ impl Worker {
                 id,
                 Some(
                     match provider {
-                        Provider::Codex | Provider::Cursor | Provider::Grok => {
+                        Provider::Codex | Provider::Cursor | Provider::Grok | Provider::Kimi => {
                             "Not ready; waiting for the provider terminal."
                         }
                         Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
@@ -676,6 +687,11 @@ impl Worker {
         };
         let text = if input.provider == Provider::Grok && is_orchestrator {
             crate::agents::providers::grok::system_prompt::orchestrator_prompt(&text)?
+        } else if input.provider == Provider::Kimi && spec.is_some() {
+            format!(
+                "{}\n\n{text}",
+                include_str!("../../../orchestration/providers/kimi.md")
+            )
         } else {
             text
         };

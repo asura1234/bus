@@ -210,7 +210,7 @@ retrieve the retained outcome. --confirm is required (default false)."#;
 
 const AGENT_ADD: &str = r#"Launch a worker in a work room, or an orchestrator in MASTER. Current names are
 case-sensitive, trimmed and unique session-wide; a fully deleted name is reusable.
-Providers: claude, codex, cursor. --pwd is the project directory; --args is one
+Providers: claude, codex, cursor, grok, kimi. --pwd is the project directory; --args is one
 provider-argument string. Bus disables startup updates on launches/resumes;
 explicit Claude updater environment settings take precedence.
 Result: {agent_id:NUMBER,stage:"launching"}; launch success is not task completion.
@@ -224,7 +224,7 @@ naming the binary; affected agents and tasks stay saved.
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. New Codex
 orchestrators are refused: background command completion cannot wake Codex.
-Saved Codex orchestrators still resume. Claude/Cursor can orchestrate.
+Saved Codex orchestrators still resume. Claude, Cursor, Grok and Kimi can orchestrate.
 Default prompt is built in (orchestration/prompt.md); --system-prompt TEXT or
 --system-prompt-file PATH replaces it (mutually exclusive). Bus fills {{ROOM_NAME}},
 {{ROOM_ID}}, {{AGENT_NAME}}, {{DOCS}} (the session's <BUS_DATA_DIR>/docs/) and
@@ -233,7 +233,9 @@ workflow-create.md, templates and shipped workflows; see the named-workflows rul
 Bus saves system-prompt.md in the launch's callback folder and passes the prompt
 again on resume. --args combines with Bus-owned prompt arguments.
 Claude gets --append-system-prompt-file; saved Codex gets a developer_instructions
-pointer via -c; Cursor receives a first message. New PWD trust prompts require
+pointer via -c; Cursor and Grok receive a first message. Kimi uses an agent
+file for new sessions and retains it on exact --session resume. Its hooks and
+session files live in an owner-only per-agent home. New PWD trust prompts require
 an explicit answer; Bus does not pre-trust folders.
 
 Adopt an existing session with --args '--resume UUID' (Claude/Cursor) or

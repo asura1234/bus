@@ -9,6 +9,7 @@ fn directory_fixture(
         Provider::Codex => "codex",
         Provider::Cursor => "cursor",
         Provider::Grok => "grok",
+        Provider::Kimi => "kimi",
     };
     let mut info = native_info("pane", native, "session");
     info.interactive_ready = true;
