@@ -1616,7 +1616,7 @@ fn scriptable_fake_crash_leaves_no_final_reply_and_records_exit() {
     session.ok(&[
         "wait",
         "--state",
-        "agents.*.exit_snapshot != null",
+        "agents.*.exit_snapshot.terminal_closed == true",
         "--timeout",
         "30s",
     ]);
