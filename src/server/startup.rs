@@ -101,6 +101,10 @@ pub fn run_server(
             client_socket = %client_socket_path().display(),
             "bus server started"
         );
+        crate::utils::restart_record::write_build_sha(
+            crate::utils::env::bus_data_dir().as_deref(),
+            env!("BUS_BUILD_SHA"),
+        );
         server.stop_without_clients = stop_without_clients;
         print_ready_message(&crate::protocol::api::socket_path(), &client_socket_path());
 

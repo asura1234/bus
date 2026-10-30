@@ -7,6 +7,7 @@ pub(crate) mod logging;
 pub(crate) mod paths;
 pub(crate) mod perf;
 pub(crate) mod render;
+pub(crate) mod restart_record;
 #[path = "paths/socket.rs"]
 pub(crate) mod socket_paths;
 pub(crate) mod text;

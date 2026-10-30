@@ -78,6 +78,25 @@ fn main() -> io::Result<()> {
             cli::help::write_stdout_line(format_args!("bus {}", utils::version::version()));
             Ok(())
         }
+        // One JSON line: embedded build SHA and the providers this binary can launch.
+        Some("--identity") if raw_args.len() == 2 => {
+            platform::begin_cli_output();
+            cli::help::write_stdout_line(format_args!(
+                "{}",
+                utils::restart_record::identity_json()
+            ));
+            Ok(())
+        }
+        // Detached helper spawned by `bus restart` before the server is stopped.
+        Some("--restart-handoff") if raw_args.len() == 2 => {
+            configure_session(&raw_args);
+            cli::restart::run_handoff_entry()
+        }
+        // Headless coordinator for the session a restart just brought back.
+        Some("--session-coordinator") if raw_args.len() == 2 => {
+            configure_session(&raw_args);
+            cli::restart::run_session_coordinator()
+        }
         _ => cli::run(&raw_args[1..]),
     }
 }

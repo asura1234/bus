@@ -224,6 +224,32 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                 .after_help("Example: bus stop"),
         )
         .subcommand(
+            Command::new("restart")
+                .about("Restart the session server onto another Bus binary")
+                .long_about(details::RESTART)
+                .args(run_flags())
+                .arg(
+                    Arg::new("binary")
+                        .long("binary")
+                        .required(true)
+                        .value_name("PATH")
+                        .help("Bus binary that replaces the running server"),
+                )
+                .arg(
+                    Arg::new("confirm")
+                        .long("confirm")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Confirm replacing the running server"),
+                )
+                .arg(
+                    Arg::new("as")
+                        .long("as")
+                        .value_name("WHO")
+                        .help("Agent id recorded as who restarted Bus"),
+                )
+                .after_help("Example: bus restart --binary /path/to/bus --confirm --as 569"),
+        )
+        .subcommand(
             Command::new("perf")
                 .about("Summarize recorded performance; reads files only")
                 .long_about(details::PERF)

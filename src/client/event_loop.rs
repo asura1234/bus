@@ -98,26 +98,30 @@ pub(super) async fn run_client_loop(
                 shell.timer_delay(std::time::Instant::now())
             });
         let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
-        #[cfg(windows)]
-        let event = {
-            tokio::select! {
-                _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
-                ev = stdin_rx.recv(), if stdin_open => match ev {
-                    Some(event) => event,
-                    None => {
-                        stdin_open = false;
-                        ClientLoopEvent::Timer
-                    }
-                },
-                ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
+        let event = if let Some(event) = driver.deferred_event.take() {
+            event
+        } else {
+            #[cfg(windows)]
+            {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
+                    ev = stdin_rx.recv(), if stdin_open => match ev {
+                        Some(event) => event,
+                        None => {
+                            stdin_open = false;
+                            ClientLoopEvent::Timer
+                        }
+                    },
+                    ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
+                }
             }
-        };
-        #[cfg(unix)]
-        let event = {
-            tokio::select! {
-                biased;
-                _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
-                ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
+            #[cfg(unix)]
+            {
+                tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
+                    ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
+                }
             }
         };
 
@@ -127,8 +131,16 @@ pub(super) async fn run_client_loop(
         }
         perf::EVENT_QUEUE.observe(event_rx.len() as u64);
         let _busy = perf::UI_LOOP.enter(perf::event_stage(&event));
-        if driver.handle_event(event, now, &mut client_timer)? {
-            return Ok(());
+        match driver.handle_event(event, now, &mut client_timer) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => match driver.recover_restart(&event_tx, &mut event_rx, &error) {
+                Some(Ok(())) => {}
+                Some(Err(message)) => {
+                    return Err(ClientError::RestartAttach { message });
+                }
+                None => return Err(error),
+            },
         }
     }
     // Clean exit (Ctrl+Q). Send Detach before closing.
@@ -157,6 +169,10 @@ struct ClientLoopDriver {
     state: ClientState,
     #[cfg(unix)]
     will_query_host_cell_size: bool,
+    /// An event taken while draining a stale disconnect, returned to the loop.
+    deferred_event: Option<ClientLoopEvent>,
+    /// ServerDisconnected events that belong to the connection just replaced.
+    ignore_disconnects: u8,
 }
 
 fn start_client_loop(
@@ -214,6 +230,8 @@ fn start_client_loop(
         host_sgr_pixels_active,
         #[cfg(unix)]
         will_query_host_cell_size: cell_size_query,
+        deferred_event: None,
+        ignore_disconnects: 0,
     })
 }
 
@@ -338,6 +356,131 @@ fn start_host_readers(
 }
 
 impl ClientLoopDriver {
+    /// Reconnects when a restart marker is present. `None` means this loss is
+    /// not a restart and the caller should surface the original error.
+    fn recover_restart(
+        &mut self,
+        event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
+        event_rx: &mut crate::utils::perf::queue::Receiver<ClientLoopEvent>,
+        error: &ClientError,
+    ) -> Option<Result<(), String>> {
+        if !matches!(error, ClientError::ConnectionLost(_)) {
+            return None;
+        }
+        if crate::client::restart::restart_in_progress().is_none() {
+            return None;
+        }
+        let marker = match crate::client::restart::wait_for_restart(
+            crate::client::restart::RECONNECT_WAIT,
+            crate::client::restart::restart_in_progress,
+            crate::client::restart::client_socket_ready,
+        ) {
+            Ok(marker) => marker,
+            Err(marker) => {
+                return Some(Err(crate::utils::restart_record::reattach_message(
+                    &marker,
+                    "the server did not become ready",
+                )));
+            }
+        };
+        let socket = crate::utils::socket_paths::client_socket_path();
+        let mut stream = match crate::platform::ipc::connect_local_stream(&socket) {
+            Ok(stream) => stream,
+            Err(connect) => {
+                return Some(Err(crate::utils::restart_record::reattach_message(
+                    &marker,
+                    &connect.to_string(),
+                )));
+            }
+        };
+        let (cols, rows) = self.state.reported_size;
+        let (cell_width_px, cell_height_px) = self.state.reported_cell_size;
+        let exact = self.state.pixel_geometry_exact;
+        let surface = self
+            .state
+            .shell
+            .as_ref()
+            .map(|shell| shell.surface_size(cols, rows))
+            .unwrap_or(crate::protocol::wire::ClientSurfaceSize {
+                cols: cols.max(1),
+                rows: rows.max(1),
+            });
+        if let Err(handshake_error) = handshake::do_handshake(
+            &mut stream,
+            cell_width_px,
+            cell_height_px,
+            exact,
+            surface,
+            false,
+            self.state.mouse_capture_active,
+        ) {
+            return Some(Err(crate::utils::restart_record::reattach_message(
+                &marker,
+                &handshake_error.to_string(),
+            )));
+        }
+        let max_frame_size = if self.state.kitty_graphics_enabled {
+            MAX_GRAPHICS_FRAME_SIZE
+        } else {
+            crate::protocol::wire::MAX_FRAME_SIZE
+        };
+        let transport = match start_endpoint_transport(stream, (), event_tx, max_frame_size) {
+            Ok(transport) => transport,
+            Err(connect) => {
+                return Some(Err(crate::utils::restart_record::reattach_message(
+                    &marker,
+                    &connect.to_string(),
+                )));
+            }
+        };
+        self.write_stream = endpoint::ServerConnection::new(transport);
+        if self.state.shell.is_some()
+            && self
+                .write_stream
+                .send(&ClientMessage::ClientShellFocus { focused: true })
+                .is_err()
+        {
+            return Some(Err(crate::utils::restart_record::reattach_message(
+                &marker,
+                "could not focus the new server",
+            )));
+        }
+        if self
+            .resize(cols, rows, cell_width_px, cell_height_px, exact)
+            .is_err()
+        {
+            return Some(Err(crate::utils::restart_record::reattach_message(
+                &marker,
+                "could not resize onto the new server",
+            )));
+        }
+        self.drain_stale_disconnect(event_rx);
+        self.ignore_disconnects = 1;
+        Some(Ok(()))
+    }
+
+    fn drain_stale_disconnect(
+        &mut self,
+        event_rx: &mut crate::utils::perf::queue::Receiver<ClientLoopEvent>,
+    ) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(100);
+        loop {
+            match event_rx.try_recv() {
+                Ok(ClientLoopEvent::ServerDisconnected) => {}
+                Ok(event) => {
+                    self.deferred_event = Some(event);
+                    break;
+                }
+                Err(_) => {
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
     fn handle_event(
         &mut self,
         event: ClientLoopEvent,
@@ -403,10 +546,14 @@ impl ClientLoopDriver {
                 }
             }
             ClientLoopEvent::ServerDisconnected => {
-                self.write_stream.fail(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "connection was lost",
-                ));
+                if self.ignore_disconnects > 0 {
+                    self.ignore_disconnects -= 1;
+                } else {
+                    self.write_stream.fail(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "connection was lost",
+                    ));
+                }
             }
             ClientLoopEvent::Timer => {
                 client_timer.fired();

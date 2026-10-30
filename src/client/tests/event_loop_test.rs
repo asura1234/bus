@@ -61,6 +61,8 @@ fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
             state,
             #[cfg(unix)]
             will_query_host_cell_size: false,
+            deferred_event: None,
+            ignore_disconnects: 0,
         },
         sent,
     )

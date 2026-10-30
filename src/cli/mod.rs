@@ -5,6 +5,7 @@ pub(crate) mod control;
 pub(crate) mod help;
 pub(crate) mod launch;
 mod perf;
+pub(crate) mod restart;
 mod session_pick;
 mod skills;
 pub(crate) mod stop;
@@ -146,6 +147,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     }
 
     let explicit_root = bus_data_dir();
+    let explicit_data_dir = explicit_root.is_some();
     let base = sessions::default_base_dir().map_err(io::Error::other)?;
     let registry = LocalSessionRegistry::new(base.clone());
     if invocation.action == Action::Sessions {
@@ -185,7 +187,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             return Ok(());
         }
         // Stop targets the same session as control commands.
-        Action::Control(_) | Action::Stop => match explicit_root {
+        Action::Control(_) | Action::Stop | Action::Restart(_) => match explicit_root {
             Some(root) => (root, None),
             None => {
                 let session = last_session(&registry, &invocation.action)?;
@@ -236,6 +238,14 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             // without saving drafts, so quit it first when one is open.
             stop::run()
         }
+        Action::Restart(request) => restart::run(
+            &root,
+            local_session_id.as_deref(),
+            explicit_data_dir,
+            dev,
+            invocation.yolo,
+            &request,
+        ),
         Action::Run | Action::Resume(_) => run_session(&registry, local_session_id, dev),
         Action::Paths => print_paths(&root, &base, dev),
         Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
@@ -423,6 +433,40 @@ mod tests {
         assert_eq!(
             parse_invocation(&args(&["stop", "bus"])).unwrap_err(),
             USAGE
+        );
+    }
+
+    #[test]
+    fn restart_parses_binary_confirm_and_who() {
+        let invocation = parse_invocation(&args(&[
+            "--dev",
+            "restart",
+            "--binary",
+            "/tmp/bus",
+            "--confirm",
+            "--as",
+            "569",
+            "--yolo",
+        ]))
+        .unwrap();
+        assert!(invocation.dev && invocation.yolo);
+        assert_eq!(
+            invocation.action,
+            Action::Restart(crate::cli::session_pick::RestartRequest {
+                binary: Some("/tmp/bus".into()),
+                confirm: true,
+                as_who: Some("569".into()),
+            })
+        );
+        assert_eq!(
+            parse_invocation(&args(&["restart", "--confirm"]))
+                .unwrap()
+                .action,
+            Action::Restart(crate::cli::session_pick::RestartRequest {
+                binary: None,
+                confirm: true,
+                as_who: None,
+            })
         );
     }
 
