@@ -13,67 +13,49 @@ Run `pr_host host`; stop on an unknown host. For Codeup, read `../_bus/docs/code
 ```text
 INPUT = [<pr-number>] [--no-merge] [--poll-seconds N (default 30)] [--max-wait N (default 1800)]
         [--rebase-max-commits N (default 20)] [--hold-before-merge]
-
 repo   = git rev-parse --show-toplevel
 branch = git branch --show-current
 pr     = the number the caller gave; when omitted, take the unique result of `pr_host find --branch <branch>`
 base_branch = the PR's base branch; profile = `pr_host profile` and its `policy` object.
-
 IF not in a Git repository OR branch is empty OR branch IN {main, master}
   STOP "merge-pr runs only on a feature branch."
-
 ========== 1. Take the signals ==========
-
 Run:
   python3 "<skill_dir>/scripts/pr_signals.py" checks --pr <pr>
   python3 "<skill_dir>/scripts/pr_signals.py" scope  --pr <pr>
-
 Capture: HEAD, branch, base, isDraft, mergeable, mergeStateStatus, checkCount,
 pending / passed / failed / **other**, plus this PR's `topLevel` and `files`.
 scope is the first-hand basis for every attribution below; get it first.
-
 -- This section takes a single snapshot only; waiting belongs to section 3, and must come after review handling (guide.md).
-
 The source of truth for `checks` is `statusCheckRollup`, at **per-check** granularity; do not switch back to `gh run list`
 (reasons in guide.md "Per check, not per workflow").
-
 IF checks reports `isDraft == true`
   Run: `pr_host ready --pr <pr>`, then return to this section and retake the signals; continue only after confirming `isDraft == false`.
   If it fails, STOP and report verbatim; do not skip past it.
 -- Reasons in guide.md "Draft becomes ready first, no stop".
 -- `checkCount == 0` does not STOP here: the 0 in the tens of seconds right after a push is temporary; the later wait handles it.
-
 ========== 1b. Converge first when diverged from origin/master ==========
-
 The entry is a **positive enumeration**; only these two states enter this section. It must not be written as a negation (reasons in guide.md "Why the entry must be a positive
 enumeration"):
-
   divergent = (mergeable == "CONFLICTING")
               OR (mergeable == "MERGEABLE" AND mergeStateStatus == "BEHIND")
-
 IF NOT divergent
   Skip this section.
-
 The worktree must be clean (`git status --porcelain --untracked-files=all` is empty); otherwise first hand it to
 `commit-and-push` to land it, or let the developer deal with it.
-
 ahead = `git rev-list --count origin/<base_branch>..HEAD`
-
 IF mergeStateStatus == "BEHIND":        Invoke `rebase-origin-main --base origin/<base_branch>` (pure replay, no conflicts)
 ELSE IF ahead <= rebase_max_commits:    Invoke `rebase-origin-main --base origin/<base_branch>` (necessarily CONFLICTING here)
 ELSE:                                   `git fetch origin` + `git merge origin/<base_branch>`
   Conflicts follow the same tiered handling as `rebase-origin-main`: shared infra (`Cargo.lock`)
   follows its shared-infra rule, and any branch change it discards is recorded in `dropped_shared_infra`; minor conflicts are resolved automatically;
   **major conflicts go to the developer**. After resolving, Invoke `commit-and-push` (route rationale in guide.md "Merge method").
-
 IF the invoked skill asks the developer to rule on a major conflict
   STOP and relay it verbatim.
 IF `dropped_shared_infra` is nonempty
   List each entry: this branch's changes to the lockfile were dropped; this must not pass silently.
-
 Return to section 1 and retake the signals.
 -- Rebase force-pushes: every old review anchor is invalidated and all CI reruns; enter this section only when truly diverged.
-
 ========== 1c. Other non-mergeable states ==========
 
 IF mergeable == "UNKNOWN":
