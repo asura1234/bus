@@ -131,23 +131,7 @@ Read `bus wait --help` and `bus message status --help` for polling, stages,
 stall windows, provider failures, retained last status and exit codes.
 A timeout does not cancel work or authorize a duplicate send. For an uncertain
 submission, inspect transcript and composer before resending; effects may exist.
-
-Provider add, resume and native restart share one interactive-shell launch path.
-Bus-created zsh, bash, fish and PowerShell panes retain normal prompt hooks
-(including direnv) and shell functions. Bus waits for its private primary-editor
-readiness mark, verifies the
-editable command buffer before Enter, and corrects a damaged paste once before
-verifying it again. A line that cannot be verified is left unsubmitted with the
-pane retained for inspection. An existing pane without Bus integration receives
-no launch input; create a new Bus-owned pane instead. Plain sh/dash and shells
-without a supported line editor fail before input with guidance to use one of
-the supported shells.
-
-A confirmed launch failure or missing/replaced agent pane ends `send --async`,
-`wait --async` and bounded waits promptly with `agent_unavailable`. The result
-keeps the message ID, queued request state and `delivery_error` recovery detail.
-Repair the agent, then wait on the existing message; resending creates duplicate work.
-Temporary readiness waits and an unavailable native poll do not prove terminal failure.
+See [agent launch arguments](../docs/launch-args.md#interactive-provider-launch) for command input and launch failure behavior.
 
 Orchestrators run async sends as background tool calls (Claude Code Bash:
 run_in_background; Cursor: background shell with timeout 0), then inspect the
