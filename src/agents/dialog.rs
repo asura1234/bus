@@ -340,6 +340,9 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     if composer::contains(&lines) {
         return None;
     }
+    if let Some(dialog) = grok::startup_trust(&lines) {
+        return Some(dialog);
+    }
     let mut dialog = claude::parse(&lines, &styles)
         .or_else(|| numbered(&lines, &styles))
         .or_else(|| unnumbered(&lines))

@@ -1,6 +1,73 @@
 use super::*;
 
 #[tokio::test]
+async fn grok_native_startup_trust_dialog_writes_only_the_chosen_shortcut() {
+    let screen =
+        include_str!("../../../../../tests/fixtures/grok-dialog/native-1.0.70-startup-trust.txt");
+    for (option, expected) in [(1, b"y".as_slice()), (2, b"n".as_slice())] {
+        let (mut app, _) = app_with_dialog(b"", Some("session"));
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(120, 40);
+        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+        app.state.insert_test_runtime(pane, runtime);
+        // An idle provider report must not make this chooser look ready. The
+        // dialog id is what stops a prompt from being typed into `y`/`n`.
+        // Changing the detected kind drops a name owned by the previous
+        // provider, so put the lookup name back before observe/choose.
+        {
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.set_detected_state(Some(AgentKind::Grok), AgentState::Idle);
+            terminal.set_agent_name("reviewer".into());
+        }
+        let info = app.agent_info(0, pane).unwrap();
+        assert!(info.dialog_id.is_some());
+        assert_eq!(info.agent.as_deref(), Some("grok"));
+        let (respond_to, response) = std::sync::mpsc::channel();
+        assert!(app.handle_deferred_agent_api_request(
+            crate::protocol::api::schema::Request {
+                id: "bootstrap".into(),
+                method: crate::protocol::api::schema::Method::AgentPromptIfIdle(
+                    crate::protocol::api::schema::AgentPromptIfIdleParams {
+                        target: info.pane_id.clone(),
+                        text: "bootstrap and brief".into(),
+                        expected_terminal_id: info.terminal_id.clone(),
+                        expected_pane_id: info.pane_id.clone(),
+                        expected_agent: "grok".into(),
+                        expected_session_id: "session".into(),
+                        steer: false,
+                    },
+                ),
+            },
+            respond_to,
+        ));
+        let rejected = response
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("prompt rejection");
+        assert!(
+            rejected.contains("agent_not_idle"),
+            "startup trust dialog accepted work: {rejected}"
+        );
+        assert!(writes.try_recv().is_err());
+        let observed = observe_dialog(&mut app);
+        let dialog = observed.dialog.as_ref().expect("startup trust dialog");
+        assert_eq!(dialog.options.len(), 2);
+        let result = chosen(&choose(
+            &mut app,
+            &observed,
+            Some("session"),
+            &dialog.digest,
+            option,
+        ));
+        assert!(result.written);
+        assert_eq!(writes.recv().await.unwrap().as_ref(), expected);
+        assert!(writes.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
 async fn grok_native_composer_fences_historical_numbered_dialogs() {
     let capture =
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.5-offline.ansi");

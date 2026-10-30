@@ -2,6 +2,54 @@
 //! Native 1.0.5 card captures are still required before provider acceptance.
 use super::{highlighted, Dialog, DialogKind, DialogOption, QuestionInput, Style};
 
+/// Grok Build 1.0.70 uses a dedicated full-screen startup trust chooser.
+/// Its y/n shortcuts are direct actions, independent of a focused row.
+pub(super) fn startup_trust(lines: &[&str]) -> Option<Dialog> {
+    let end = lines.iter().rposition(|line| !line.trim().is_empty())?;
+    let version = lines[end].trim().strip_prefix("Grok Build")?.trim();
+    if version.is_empty() || !version.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    let title = lines[..end]
+        .iter()
+        .rposition(|line| line.trim() == "Do you trust the contents of this directory?")?;
+    let content: Vec<_> = lines[title + 1..end]
+        .iter()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect();
+    let yes = content.iter().position(|line| line == "Yes, proceed y")?;
+    let no = content.iter().position(|line| line == "No, quit n")?;
+    if yes == 0 || no != yes + 1 || no + 1 != content.len() {
+        return None;
+    }
+    let text = std::iter::once(lines[title].trim().to_owned())
+        .chain(content[..yes].iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let options = [("Yes, proceed", "y"), ("No, quit", "n")]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, key))| DialogOption {
+            number: index as u32 + 1,
+            label: label.into(),
+            selected: false,
+            free_text: false,
+            navigation_key: Some(key),
+            identity_label: None,
+        })
+        .collect();
+    Some(Dialog {
+        kind: DialogKind::Choice,
+        input: None,
+        text,
+        options,
+        hint: None,
+        fingerprint_context: lines[title..=end].join("\n"),
+        tabs: Vec::new(),
+    })
+}
+
 struct Row {
     selector: char,
     glyph: String,
@@ -410,6 +458,47 @@ mod tests {
             &text.iter().map(String::as_str).collect::<Vec<_>>(),
             &styles,
         )
+    }
+
+    // Captured from Grok Build 1.0.70 (`--no-leader --fullscreen --no-auto-update`)
+    // in an untrusted scratch project. GROK_HOME was a private copy with one
+    // harmless SessionStart hook and no trusted_folders.toml, so the real
+    // ~/.grok trust list was not read or written. `y` alone dismisses the screen.
+    const STARTUP_TRUST: &str =
+        include_str!("../../../tests/fixtures/grok-dialog/native-1.0.70-startup-trust.txt");
+
+    #[test]
+    fn grok_native_startup_trust_is_blocked_and_choices_use_native_shortcuts() {
+        let state = detected(STARTUP_TRUST, "grok");
+        assert_eq!(state.state, AgentState::Blocked);
+        assert!(state.visible_blocker);
+        assert!(!state.visible_idle);
+        let dialog = super::super::parse(STARTUP_TRUST).expect("live trust chooser");
+        assert_eq!(dialog.kind, DialogKind::Choice);
+        assert!(dialog
+            .text
+            .contains("Do you trust the contents of this directory?"));
+        assert!(dialog.text.contains("grok-trust-hooks-ywvqfduj/project"));
+        assert_eq!(
+            dialog
+                .options
+                .iter()
+                .map(|o| o.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Yes, proceed", "No, quit"]
+        );
+        assert_eq!(dialog.keys_for(1), Some(vec!["y"]));
+        assert_eq!(dialog.keys_for(2), Some(vec!["n"]));
+    }
+
+    #[test]
+    fn grok_native_startup_trust_rejects_incomplete_or_historical_controls() {
+        let missing = STARTUP_TRUST.replace("No, quit                     n", "");
+        assert!(super::super::parse(&missing).is_none());
+        assert!(detected(&missing, "grok").visible_blocker);
+        let historical = format!("{STARTUP_TRUST}\n{DRAFT}");
+        assert!(super::super::parse(&historical).is_none());
+        assert!(!detected(&historical, "grok").visible_blocker);
     }
 
     #[test]

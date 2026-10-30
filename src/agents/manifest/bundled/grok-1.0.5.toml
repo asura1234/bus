@@ -35,6 +35,19 @@ aliases = ["grok-build"]
 # The startup splash draws its logo with braille characters, so working
 # rules must anchor on the [stop] chip, not on a bare spinner glyph.
 
+# Grok Build 1.0.70 startup trust screen, captured in a private scratch
+# home with an untrusted project and a harmless hook. Keep an incomplete
+# chooser blocked too; a later composer fences historical trust text.
+[[rules]]
+id = "startup_folder_trust"
+state = "blocked"
+priority = 1500
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+line_regex = ['^\s*Do you trust the contents of this directory\?\s*$']
+regex = ['(?m)^\s*Grok Build\s+[0-9][0-9.]*\s*\z']
+not = [{ line_regex = ['^\s*[╭┌]─+[╮┐]\s*$'] }]
+
 # A login is never composer readiness, even with an idle OSC title.
 # The title belongs to a leading control surface, never a line quoted in a
 # previous reply. The last-moment observer separately checks its bounded frame.
