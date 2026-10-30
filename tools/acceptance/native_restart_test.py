@@ -42,7 +42,6 @@ def scenario(binary, root):
            "TERM": "xterm-256color", "SHELL": "/bin/bash",
            "XDG_CONFIG_HOME": str(root / "xdg"), "BUS_LOG": "bus=debug",
            "BUS_TUI_EFFECTS": str(root / "effects.jsonl")}
-    subprocess.run([str(binary), "skills", "install", "--yes"], env=env, check=True, capture_output=True)
     bus = Bus(binary, root, env, workspace=work)
     evidence = {}
     try:

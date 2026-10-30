@@ -56,7 +56,6 @@ def scenario(binary, root, provider, master):
            "BUS_DATA_DIR": str(data), "BUS_TUI_FAKE_AGENT": "1", "TERM": "xterm-256color",
            "SHELL": "/bin/bash", "XDG_CONFIG_HOME": str(root / "xdg"),
            "BUS_TUI_EFFECTS": str(root / "effects.jsonl")}
-    subprocess.run([str(binary), "skills", "install", "--yes"], env=env, check=True, capture_output=True)
     bus = Bus(binary, root, env, workspace=work)
     began = time.monotonic()
     try:
