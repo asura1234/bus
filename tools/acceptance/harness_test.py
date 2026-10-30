@@ -83,8 +83,6 @@ class Bus:
         master = self.master
 
         def pump():  # Keep draining the TUI so it never blocks on output.
-            offer_tail = b""
-            answered_offer = False
             while True:
                 try:
                     if select.select([master], [], [], 0.2)[0]:
@@ -92,12 +90,6 @@ class Bus:
                         if not chunk:
                             break
                         tty_log.write(chunk[-4096:] if len(chunk) > 4096 else chunk)
-                        if not answered_offer:
-                            offer_tail = (offer_tail + chunk)[-64:]
-                            if b"Install? [y/N] " in offer_tail:
-                                # This HOME belongs to the disposable fixture.
-                                os.write(master, b"n\r")
-                                answered_offer = True
                 except OSError:
                     break
             tty_log.close()
@@ -107,11 +99,15 @@ class Bus:
         deadline = time.monotonic() + 30
         while True:
             try:
-                return self.cli("state")
+                state = self.cli("state")
+                if any(room.get("name") == "bus" for room in state.get("rooms", [])):
+                    return state
+                if self.child.poll() is not None or time.monotonic() > deadline:
+                    raise CliError("default bus room did not become ready")
             except CliError:
                 if self.child.poll() is not None or time.monotonic() > deadline:
                     raise
-                time.sleep(0.5)
+            time.sleep(0.5)
 
     def cli(self, *argv, timeout=60, row=None):
         command = [*map(str, argv)]

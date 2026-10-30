@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import os
 import signal
 from pathlib import Path
@@ -20,7 +19,7 @@ def test_e2e_must_not_answer_offer_in_inherited_home(tmp_path):
 import json, os, pathlib, sys, time
 answer = pathlib.Path(os.environ["HOME"]) / "answer"
 if len(sys.argv) > 2 and sys.argv[2] == "state":
- print(json.dumps({"ok": answer.exists(), "result": {}})); sys.exit(0 if answer.exists() else 1)
+ print(json.dumps({"ok": True, "result": {"rooms": [{"name": "bus"}]}})); sys.exit(0)
 print("Install? [y/N] ", end="", flush=True)
 answer.write_text(sys.stdin.readline().strip())
 time.sleep(30)
