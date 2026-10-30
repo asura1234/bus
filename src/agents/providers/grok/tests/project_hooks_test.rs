@@ -280,3 +280,57 @@ fn grok_git_exclude_hardlink_does_not_modify_global_settings() {
         "global Grok settings changed through Git exclude hard link"
     );
 }
+
+#[test]
+fn grok_git_exclude_respects_subdirectory_pwd() {
+    let f = Fixture::new();
+    f.install();
+    assert!(std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .args(["init", "-q"])
+        .status()
+        .unwrap()
+        .success());
+    let child = f.project.join("nested");
+    fs::create_dir(&child).unwrap();
+    let mut spec = f.spec("", true);
+    spec.cwd = child.display().to_string();
+    crate::agents::providers::launch::prepare(&spec, |hooks| {
+        fs::create_dir_all(&hooks.spool).map_err(|e| e.to_string())
+    })
+    .unwrap();
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    let status = String::from_utf8(status.stdout).unwrap();
+    assert!(!status.contains(".grok/hooks/bus.json"), "{status}");
+    assert!(!status.contains(".grok/hooks/.bus-hooks.lock"), "{status}");
+}
+
+#[test]
+fn grok_git_exclude_inside_global_home_is_not_written() {
+    let f = Fixture::new();
+    f.install();
+    let home = f.root.join("home/.grok");
+    fs::create_dir_all(&home).unwrap();
+    let gitdir = home.join("metadata");
+    assert!(std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .arg("init")
+        .arg("-q")
+        .arg("--separate-git-dir")
+        .arg(&gitdir)
+        .status()
+        .unwrap()
+        .success());
+    let exclude = gitdir.join("info/exclude");
+    let before = fs::read(&exclude).unwrap();
+    f.prepare("");
+    assert_eq!(fs::read(exclude).unwrap(), before);
+}
