@@ -133,6 +133,9 @@ pub(crate) trait SubmissionInspector: Send {
     fn editor_frame_readable(&self, _screen: &str) -> bool {
         false
     }
+    fn editor_frame_unchanged(&self, previous: &str, current: &str) -> bool {
+        previous == current
+    }
     fn editor_working(&self, _screen: &str) -> bool {
         false
     }

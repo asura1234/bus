@@ -136,6 +136,13 @@ impl SubmissionInspector for PreservingComposer {
         self.kind == AgentKind::Kimi && input(self.kind, screen).is_some()
     }
 
+    fn editor_frame_unchanged(&self, previous: &str, current: &str) -> bool {
+        previous == current
+            || (self.kind == AgentKind::Kimi
+                && self.expected == "/new"
+                && super::super::kimi::same_new_editor_frame(previous, current))
+    }
+
     fn editor_working(&self, screen: &str) -> bool {
         if self.kind != AgentKind::Kimi {
             return false;

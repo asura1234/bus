@@ -66,6 +66,34 @@ fn kimi_clipped_blank_frame_is_not_an_empty_composer() {
     );
 }
 
+#[test]
+fn kimi_editor_allows_command_menu_repaint_without_trusting_a_changed_composer() {
+    use crate::terminal::runtime::SubmissionInspector;
+    let inspector = preserving_observer(
+        AgentKind::Kimi,
+        "/new".into(),
+        std::path::PathBuf::new(),
+        vec![],
+    );
+    let before = "╭─────────────────────────────────────────────────╮\n│ > /new                                          │\n╰─────────────────────────────────────────────────╯\nAsk When Needed";
+    let menu = "╭─────────────────────────────────────────────────╮\n│ > /new                                          │\n╰─────────────────────────────────────────────────╯\n│   → new         Start a fresh session in        │\n│                 the current workspace           │\nAsk When Needed";
+    assert!(inspector.editor_frame_unchanged(before, menu));
+    assert!(!inspector.editor_frame_unchanged(before, &menu.replace("/new", "/exit")));
+    assert!(!inspector.editor_frame_unchanged(before, &format!("Working…\n{menu}")));
+    assert!(!inspector.editor_frame_unchanged(before, &format!("{menu}\nRun this command?")));
+    assert!(!inspector.editor_frame_unchanged(
+        before,
+        &menu.replace("the current workspace", "another command")
+    ));
+    let ordinary = preserving_observer(
+        AgentKind::Kimi,
+        "ordinary task".into(),
+        std::path::PathBuf::new(),
+        vec![],
+    );
+    assert!(!ordinary.editor_frame_unchanged(before, menu));
+}
+
 #[tokio::test]
 async fn kimi_editor_never_touches_a_clipped_foreign_draft() {
     use bytes::Bytes;

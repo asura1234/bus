@@ -377,12 +377,16 @@ impl ObservedSubmission {
             // Kimi reads the native editor buffer a second time. Verify every
             // byte, including offscreen rows, before permitting Enter.
             exchange.request_verify()?;
-            self.guarded_editor_key(editor.key.clone(), lease, false, |screen| screen == first)?;
+            self.guarded_editor_key(editor.key.clone(), lease, false, |screen| {
+                self.inspect.editor_frame_unchanged(&first, screen)
+            })?;
             self.wait_transfer(|| exchange.acknowledged())?;
             let verified = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
             self.reset_confirmation(delay);
             self.check_deadline()?;
-            self.guarded_editor_key(self.enter.clone(), lease, true, |screen| screen == verified)?;
+            self.guarded_editor_key(self.enter.clone(), lease, true, |screen| {
+                self.inspect.editor_frame_unchanged(&verified, screen)
+            })?;
             self.wait_transfer(|| {
                 if let Some(screen) = self.terminal.visible_ansi_if_complete() {
                     if screen != verified

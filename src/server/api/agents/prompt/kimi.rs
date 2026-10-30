@@ -26,6 +26,60 @@ pub(super) fn input(screen: &str) -> Option<String> {
     Some(rows(screen)?.0.join("\n"))
 }
 
+/// `/new` can open its completion menu after the editor has closed. Only that
+/// known repaint is allowed; the full draft was verified in the native editor
+/// and the input lease must still be held by the caller.
+pub(super) fn same_new_editor_frame(previous: &str, current: &str) -> bool {
+    fn tail(screen: &str) -> Option<(Vec<String>, bool)> {
+        let (draft, clipped) = rows(screen)?;
+        if clipped || draft != ["/new"] {
+            return None;
+        }
+        let lines: Vec<String> = screen
+            .lines()
+            .map(|line| styled_chars(line).iter().map(|c| c.character).collect())
+            .collect();
+        if lines.iter().any(|line| {
+            let line = line.to_lowercase();
+            [
+                "working…",
+                "working...",
+                "trust this folder?",
+                "run this command?",
+                "write this file?",
+                "askuserquestion",
+            ]
+            .iter()
+            .any(|blocker| line.contains(blocker))
+        }) {
+            return None;
+        }
+        let bottom = lines
+            .iter()
+            .rposition(|line| line.trim().starts_with('╰') && line.contains('╯'))?;
+        let mut result = Vec::new();
+        let mut menu = false;
+        let mut remaining = lines[bottom + 1..].iter().peekable();
+        while let Some(line) = remaining.next() {
+            let text = line.trim();
+            if text.starts_with("│   → new") && text.contains("Start a fresh session in") {
+                let continuation = remaining.next()?.trim();
+                if !continuation.starts_with("│                 the current workspace") {
+                    return None;
+                }
+                menu = true;
+            } else if !text.is_empty() {
+                result.push(text.to_owned());
+            }
+        }
+        Some((result, menu))
+    }
+    match (tail(previous), tail(current)) {
+        (Some((a, menu_a)), Some((b, menu_b))) => (menu_a || menu_b) && a == b,
+        _ => false,
+    }
+}
+
 fn matches_rows(rows: &[String], expected: &str) -> bool {
     let Some(first) = rows.first() else {
         return false;
