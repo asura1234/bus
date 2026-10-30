@@ -42,6 +42,11 @@ fn fail(f: &mut Fixture) -> String {
                 f.status(RuntimeStatus::Idle);
                 "Model at capacity (server_overloaded)"
             }
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => {
+                f.record(json!({"event":"failure","session":"session","turn":"turn-1"}));
+                "Fake turn failed."
+            }
         };
     f.consume();
     reason.into()

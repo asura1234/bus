@@ -14,6 +14,8 @@ pub(crate) fn warnings_for_launch(
         ProviderKind::ClaudeCode => (".claude/skills", ".claude/skills"),
         ProviderKind::Codex => (".agents/skills", ".agents/skills"),
         ProviderKind::Cursor => return Ok(Vec::new()),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => return Ok(Vec::new()),
     };
     let user = home.join(user_scope);
     let canonical_user = user.canonicalize().ok();

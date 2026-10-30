@@ -72,6 +72,8 @@ impl NativeServer {
             Provider::ClaudeCode => AgentKind::Claude,
             Provider::Codex => AgentKind::Codex,
             Provider::Cursor => AgentKind::Cursor,
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => AgentKind::Fake,
         };
         let terminal = self.app.state.terminals.get_mut(&terminal_id).unwrap();
         let now = Instant::now();
@@ -624,6 +626,8 @@ impl Delivery {
             Provider::ClaudeCode => AgentKind::Claude,
             Provider::Codex => AgentKind::Codex,
             Provider::Cursor => AgentKind::Cursor,
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => AgentKind::Fake,
         };
         server
             .app

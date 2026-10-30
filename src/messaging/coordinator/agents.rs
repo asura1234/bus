@@ -537,7 +537,7 @@ impl Worker {
         state
             .set_agent_runtime_identity(id, identity.clone())
             .map_err(|e| e.to_string())?;
-        if provider == Provider::ClaudeCode {
+        if provider == Provider::ClaudeCode || launch::provider_kind(provider) == "fake" {
             state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
         }
         state
@@ -549,6 +549,8 @@ impl Worker {
                             "Not ready; waiting for the provider terminal."
                         }
                         Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
+                        #[cfg(feature = "dev-tools")]
+                        Provider::Fake => "Not ready; waiting for provider hook readiness.",
                     }
                     .into(),
                 ),

@@ -105,6 +105,8 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
             ProviderKind::ClaudeCode => fixture.hooks.spool.join("claude-settings.json"),
             ProviderKind::Codex => fixture.root.join(".codex/hooks.json"),
             ProviderKind::Cursor => fixture.root.join(".cursor/hooks.json"),
+            #[cfg(feature = "dev-tools")]
+            ProviderKind::Fake => unreachable!("this fixture covers provider hook files"),
         };
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -118,6 +120,8 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
             }
             ProviderKind::Codex => codex::resume::capture_args(&fixture.hooks, &fixture.root),
             ProviderKind::Cursor => cursor::resume::capture_args(&fixture.hooks, &fixture.root),
+            #[cfg(feature = "dev-tools")]
+            ProviderKind::Fake => unreachable!("this fixture covers provider hook files"),
         }
         .unwrap();
         assert_eq!(actual_path, path);
@@ -129,6 +133,8 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
             ),
             ProviderKind::Codex => assert_eq!(args, codex::launch::runtime_args()),
             ProviderKind::Cursor => assert_eq!(args, cursor::launch::runtime_args()),
+            #[cfg(feature = "dev-tools")]
+            ProviderKind::Fake => unreachable!("this fixture covers provider hook files"),
         }
     }
 }

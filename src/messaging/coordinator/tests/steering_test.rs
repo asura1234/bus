@@ -234,6 +234,10 @@ impl Fixture {
             Provider::Cursor => {
                 json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":turn,"prompt":prompt})
             }
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => {
+                json!({"event":"started","session":"session","turn":turn,"prompt":prompt})
+            }
         };
         self.record(value);
     }
@@ -246,6 +250,8 @@ impl Fixture {
                 self.record(json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":turn,"text":text}));
                 self.record(json!({"hook_event_name":"stop","conversation_id":"session","generation_id":turn,"status":"completed"}));
             }
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => self.record(json!({"event":"final","session":"session","turn":turn,"text":text})),
         }
     }
 

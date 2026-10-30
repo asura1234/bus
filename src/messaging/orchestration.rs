@@ -327,6 +327,8 @@ pub(crate) fn prompt_args(
         Provider::Cursor => {
             crate::agents::providers::cursor::system_prompt::prompt_args(path, adopted)?
         }
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => None,
     })
 }
 

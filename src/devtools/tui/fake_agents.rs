@@ -36,12 +36,17 @@ use std::time::Instant;
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
 const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
+const GENERIC_FAKE: &[&str] = &["bus-fake-agent"];
 
 /// Links each provider name, and each effect stand-in, in `bin_dir` to the
 /// `bus` binary.
 pub(super) fn install(bin_dir: &Path, binary: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(bin_dir)?;
-    for name in PROVIDER_NAMES.iter().chain(super::effects::COMMANDS) {
+    for name in PROVIDER_NAMES
+        .iter()
+        .chain(GENERIC_FAKE)
+        .chain(super::effects::COMMANDS)
+    {
         let link = bin_dir.join(exe_name(name));
         let _ = std::fs::remove_file(&link);
         link_or_copy(binary, &link)?;

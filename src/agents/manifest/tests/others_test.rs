@@ -251,3 +251,15 @@ fn cursor_managed_startup_requires_a_complete_empty_composer_footer() {
         assert!(!detection.visible_idle, "{screen}");
     }
 }
+
+#[cfg(feature = "dev-tools")]
+#[test]
+fn fake_status_ignores_working_text_above_the_live_prompt() {
+    let active = detect_screen(AgentKind::Fake, "fake agent working\n");
+    assert_eq!(active.state, AgentState::Working);
+    let idle = detect_screen(
+        AgentKind::Fake,
+        "fake agent working\nfake> \n  scriptable agent\n",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+}

@@ -73,6 +73,8 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
         ProviderKind::Codex => codex::launch::runtime_args(),
         ProviderKind::ClaudeCode => claude_code::launch::runtime_args(),
         ProviderKind::Cursor => cursor::launch::runtime_args(),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Vec::new(),
     }
 }
 
@@ -81,6 +83,13 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
         "codex" => Some(ProviderKind::Codex),
         "claude" => Some(ProviderKind::ClaudeCode),
         "cursor" => Some(ProviderKind::Cursor),
+        #[cfg(feature = "dev-tools")]
+        "fake"
+            if std::env::var_os("BUS_TUI_FAKE_AGENT").is_some()
+                && std::env::var_os("BUS_TUI_OWNER").is_some() =>
+        {
+            Some(ProviderKind::Fake)
+        }
         _ => None,
     }
 }
@@ -94,6 +103,8 @@ pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
             std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
         )],
         ProviderKind::Codex | ProviderKind::Cursor => Vec::new(),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Vec::new(),
     }
 }
 
@@ -101,6 +112,10 @@ pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
 /// Inspect option positions so a literal prompt or option value is not
 /// mistaken for an explicit bypass. Provider aliases suppress our copy too.
 pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<String>) {
+    #[cfg(feature = "dev-tools")]
+    if provider == ProviderKind::Fake {
+        return;
+    }
     if !crate::utils::env::yolo_enabled() {
         return;
     }
@@ -117,6 +132,8 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
             &["--yolo", "--dangerously-bypass-approvals-and-sandbox"],
         ),
         ProviderKind::Cursor => ("--force", &["--force", "--yolo", "-f"]),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => return,
     };
     if !arguments::contains_flag(provider, args, aliases) {
         // Prefix rather than append: the provider must see it before any
@@ -133,6 +150,8 @@ pub(crate) fn take_adopted_session(
         ProviderKind::Codex => codex::launch::take_adopted_session(args),
         ProviderKind::ClaudeCode => claude_code::launch::take_adopted_session(args),
         ProviderKind::Cursor => cursor::launch::take_adopted_session(args),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Ok(take_resume_option(provider, args)),
     }
 }
 
@@ -141,6 +160,8 @@ fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
         ProviderKind::Codex => codex::launch::resume_args(session),
         ProviderKind::ClaudeCode => claude_code::launch::resume_args(session),
         ProviderKind::Cursor => cursor::launch::resume_args(session),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => vec!["--resume".into(), session.into()],
     }
 }
 
@@ -216,6 +237,8 @@ pub(crate) fn extend_generated_args(
         ProviderKind::Codex => Some("--no-daemon"),
         ProviderKind::Cursor => Some("--disable-auto-update"),
         ProviderKind::ClaudeCode => None,
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => None,
     };
     let supplied = flag.filter(|flag| arguments::contains_flag(provider, args, &[*flag]));
     let capture = capture
@@ -254,6 +277,8 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
                 "-p" | "--print" | "--bg" | "--background" | "--bare" | "--safe-mode"
             ),
             ProviderKind::Cursor => matches!(arg, "-p" | "--print"),
+            #[cfg(feature = "dev-tools")]
+            ProviderKind::Fake => false,
         };
         if incompatible {
             return Err(format!("{} launch argument {arg} disables the interactive terminal or observation hooks Bus needs; see docs/launch-args.md", provider_kind(provider)));
@@ -347,6 +372,8 @@ pub(crate) fn setup_notice(
         ProviderKind::Codex => Some(codex::launch::setup_notice(&root)),
         ProviderKind::ClaudeCode => None,
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => None,
     }?;
     (!hook_json::hooks_are_current(&notice.path, HookContract::for_provider(provider), binary))
         .then_some(notice)
@@ -402,6 +429,13 @@ pub(crate) fn prepare(
     match spec.provider {
         ProviderKind::ClaudeCode => claude_code::launch::prepare(spec, cwd, args, adopted_session),
         ProviderKind::Codex | ProviderKind::Cursor => Ok(PreparedLaunch {
+            cwd,
+            args,
+            adopted_session,
+            env: spec.hooks.env(),
+        }),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Ok(PreparedLaunch {
             cwd,
             args,
             adopted_session,
