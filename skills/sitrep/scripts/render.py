@@ -5,7 +5,7 @@ import re
 import sys
 
 STATUSES = {"planning", "in-development", "test", "review", "blocked"}
-PR = re.compile(r"(?:\[#\d+ (?:[^\[\]\n]|\[[^\[\]\n]*\])+\]\(https?://[^\s)]+\)|not opened yet \(branch: [^)\n]+\))\Z")
+PR = re.compile(r"(?:\[#\d+ (?:\\[^\n]|[^\[\]\\\n]|\[(?:\\[^\n]|[^\[\]\\\n])*\])+\]\(https?://[^\s)]+\)|not opened yet \(branch: [^)\n]+\))\Z")
 
 
 def line(value):

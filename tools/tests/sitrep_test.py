@@ -64,3 +64,11 @@ def test_pr_title_with_bracketed_type_is_a_valid_link():
     result = render(data)
     assert result.returncode == 0, result.stderr
     assert data["ongoing"][0]["pr"] in result.stdout
+
+
+def test_pr_title_with_escaped_brackets_is_a_valid_link():
+    data = report([])
+    data["finished"] = [{"name": "Fix", "tldr": "Merged.", "context": "Complete.", "pr": r"[#12 fix \[unmatched](https://example.com/pr/12)"}]
+    result = render(data)
+    assert result.returncode == 0, result.stderr
+    assert data["finished"][0]["pr"] in result.stdout
