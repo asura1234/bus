@@ -16,11 +16,11 @@ main = first worktree in `git worktree list --porcelain` for repo
 room_id = numeric room ID from bus state (resolve a name uniquely)
 marker = <main>/temp/.bus/sitrep-<room_id>.json
 
-Read marker FIRST. If absent, set since = current UTC time minus 24 hours and
-record the initial-window note for the report. If present, validate its JSON:
-exactly `timestamp` (UTC RFC 3339 string) and `items` (array of strings). If
-unreadable or malformed, stop and report the error; never silently reset it.
-Capture cutoff = current UTC time before collecting evidence.
+Read marker FIRST, before gathering task or PR facts. Run:
+  python3 "$SKILL_DIR/scripts/marker.py" read --main "<main>" --room "<room_id>"
+Capture `since`, `cutoff`, `initial`, `items`, and `revision` from the JSON.
+If it fails, stop and report the error; never silently reset the marker. Serialize
+sitrep runs for a given room. The initial flag means the last 24 hours.
 
 Run `bus state`, identify the room and read its `notes` field. `bus room notes`
 is a write command in current Bus: never invoke it to read. Read recent
@@ -53,8 +53,9 @@ report task in Ongoing with status `in-development` and that note in Context.
 Prepare the format's JSON object in memory and pipe it to:
   python3 "$SKILL_DIR/scripts/render.py"
 If rendering fails, correct the input and rerun; send the renderer's output
-verbatim in chat. Only after producing the report, atomically replace marker
-with JSON containing `timestamp`: cutoff and `items`: stable identifiers of all
-reported tasks/PRs. Create only the marker's parent directory as needed. If the
-marker cannot be written, report that failure and do not claim it was saved.
+verbatim in chat. Only after producing the report, pipe a JSON object containing
+`timestamp`: cutoff, `items`: stable identifiers of all reported tasks/PRs, and
+`revision`: the read result's revision to:
+  python3 "$SKILL_DIR/scripts/marker.py" write --main "<main>" --room "<room_id>"
+If it fails, report the failure and do not claim the marker was saved.
 ```

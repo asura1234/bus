@@ -151,4 +151,5 @@ def test_sitrep_is_installed_for_claude_and_codex(tmp_path):
         skill = home / provider / "skills/sitrep"
         assert (skill / "SKILL.md").is_file()
         assert (skill / "scripts/render.py").is_file()
+        assert (skill / "scripts/marker.py").is_file()
         assert (skill / "references/sitrep-format.md").is_file()
