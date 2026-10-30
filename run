@@ -8,6 +8,7 @@ usage() {
     echo "       ./run prod [Bus arguments]" >&2
     echo "       ./run dev-control <command> [arguments]" >&2
     echo "       ./run tui <verb> [arguments]" >&2
+    echo "       ./run install-skills [--yes]" >&2
     echo "" >&2
     echo "dev builds the dev variant (cargo feature dev-tools: the TUI driver and other" >&2
     echo "test tooling) and launches it with --dev. prod builds the release variant, the" >&2
@@ -19,6 +20,7 @@ usage() {
     echo "  ./run dev sessions" >&2
     echo "  ./run dev-control agent read 3 --source recent --lines 80" >&2
     echo "  ./run tui start" >&2
+    echo "  ./run install-skills --yes" >&2
 }
 
 # Build bus and print the executable Cargo reports for it. Cargo alone knows
@@ -85,6 +87,12 @@ case "${1:-}" in
         binary=$(CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/tui-driver" \
             build_bus --bin bus --features dev-tools) || exit $?
         exec "$binary" --dev tui "$@"
+        ;;
+    install-skills)
+        shift
+        cd "$REPO_ROOT"
+        binary=$(build_bus --bin bus --features dev-tools) || exit $?
+        exec "$binary" skills install "$@"
         ;;
     -h|--help)
         usage
