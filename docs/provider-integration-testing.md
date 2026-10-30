@@ -119,9 +119,16 @@ build actually supports it. Preserve the private root until evidence is saved.
 ## Fresh first launch and dialogs
 
 - [ ] Add a brand-new agent through Bus in a never-trusted project directory;
-  do not pre-trust, warm up its composer, or type in its terminal. Inspect the
-  hook location in the add/setup response and authorize project hooks with
-  `--consent-hooks` (or inspect and use `agent setup-confirm` when pending).
+  do not pre-trust, warm up its composer, or type in its terminal. Add once
+  **without** `--consent-hooks`. Expect `ok: false`, `result: null`, and no
+  `agent_id`. `error.message` is
+  `Project hook setup requires --consent-hooks: MESSAGE (PATH)`. Read `PATH`,
+  then run the same add with `--consent-hooks`. Expect `ok: true` and
+  `result` `{agent_id, stage: "launching"}`. The failed add does not save an
+  agent. `sbus agent setup-confirm AGENT --confirm` is only for an agent that
+  already exists: it sets hook consent and does not install hooks. Without
+  `--confirm` it is rejected with
+  `This command changes or removes work; add --confirm to proceed`.
 - [ ] The folder-trust prompt and ordinary permission prompts must surface as
   actionable Bus dialogs for every provider under test. That includes Kimi
   2.4.0's "Trust this folder?" screen. An agent left "launching", with messages
@@ -139,8 +146,16 @@ build actually supports it. Preserve the private root until evidence is saved.
 
 ```sh
 sbus room create provider-test
+# Missing consent. Expect ok:false, result:null, and no agent_id.
+# error.message is: Project hook setup requires --consent-hooks: MESSAGE (PATH)
+sbus agent add --room ROOM --name new-worker --provider PROVIDER \
+  --pwd "$scratch/project"
+# After reading PATH, the same add installs project hooks:
 sbus agent add --room ROOM --name new-worker --provider PROVIDER \
   --pwd "$scratch/project" --consent-hooks
+# Expect ok:true and result {agent_id, stage:"launching"}.
+# Existing agent only. Records consent and does not install hooks:
+sbus agent setup-confirm new-worker --confirm
 sbus agent dialog new-worker
 sbus agent read new-worker --source visible
 # If a dialog is present and its choice is authorized:
@@ -159,7 +174,10 @@ native records before recovery; do not blindly resend.
 Create the new-provider orchestrator in MASTER and real Codex, Claude and new
 provider workers in its work room. Separately create a Claude orchestrator and
 new-provider worker in a second room. New Codex orchestrators are refused; do
-not claim that role was tested. Use real models and unique markers for each cell:
+not claim that role was tested. Use real models and unique markers for each cell.
+Each add below is the consented retry: run it once without `--consent-hooks`,
+read the hook path from `error.message`, then rerun that command with
+`--consent-hooks`.
 
 ```sh
 sbus room create provider-matrix
@@ -357,7 +375,11 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   agent in a new untrusted project, surface trust as a Bus dialog, and while its
   welcome card is visible have a real Codex agent send a unique message. Require
   the new provider to repeat what it heard and reply successfully. Record IDs,
-  status, screen and exact merged build; delete the smoke agent when authorized.
+  status, screen and exact merged build. Use the same missing-consent add, read
+  the hook path, then add with `--consent-hooks`. When authorized, delete the
+  smoke agent on the live session, not the scratch wrapper:
+  `bus agent delete SMOKE_AGENT --confirm`. Expect `ok: true` and
+  `result.updated: true`. Without `--confirm` the delete is rejected.
 
 ## Testing lessons
 
