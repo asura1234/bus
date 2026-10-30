@@ -152,6 +152,7 @@ impl Worker {
             }
             Err(error) => return Err(error.message),
         }
+        self.requeue_first_message_instructions(id)?;
         Ok(json!({"agent_id": id, "sent": text, "stage": "cleared"}))
     }
 }

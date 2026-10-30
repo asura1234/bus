@@ -130,7 +130,8 @@ const fn supported_prompt_placeholders(template: &str) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OrchestratorSpec {
     /// The work room it orchestrates for its whole life; required, because
-    /// the system prompt names it at launch and is never re-sent.
+    /// the system prompt names it at launch. Clear re-sends that saved prompt
+    /// for Cursor and Grok, which cannot take it as a launch argument.
     pub room: RoomId,
     /// The system prompt text; `None` uses [`DEFAULT_PROMPT`]. `{{...}}`
     /// placeholders in it are filled in.
