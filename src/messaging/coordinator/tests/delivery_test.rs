@@ -1876,3 +1876,32 @@ fn grok_1070_native_final_settles_the_exact_bus_request() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn grok_superseded_failure_does_not_poison_rebound_session() {
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..2 {
+        consume(&mut worker, agent, &dir);
+    }
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"stop_cancelled","sessionId":"session","promptId":"old","reason":"cancelled"}),
+    );
+    consume(&mut worker, agent, &dir);
+    assert_ne!(
+        agent_of(&worker, agent).status,
+        RuntimeStatus::Unavailable,
+        "{:?}",
+        agent_of(&worker, agent).actionable_error
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -255,3 +255,28 @@ fn grok_invalid_global_registry_does_not_authorize_setup() {
         assert!(!f.project.join(".grok").exists(), "{route}");
     }
 }
+
+#[test]
+fn grok_git_exclude_hardlink_does_not_modify_global_settings() {
+    let f = Fixture::new();
+    f.install();
+    assert!(std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .args(["init", "-q"])
+        .status()
+        .unwrap()
+        .success());
+    let global = f.root.join("home/.grok/settings.json");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(&global, b"{}\n").unwrap();
+    let exclude = f.project.join(".git/info/exclude");
+    fs::remove_file(&exclude).unwrap();
+    fs::hard_link(&global, &exclude).unwrap();
+    f.prepare("");
+    assert_eq!(
+        fs::read(&global).unwrap(),
+        b"{}\n",
+        "global Grok settings changed through Git exclude hard link"
+    );
+}
