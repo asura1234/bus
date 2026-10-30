@@ -126,6 +126,8 @@ class ScopeRoundTests(unittest.TestCase):
         for name in (
             "skills/review-pr/scripts/review_round.py",
             "skills/_bus/cli_extensions/pr_goal_context.py",
+            "skills/rebase-origin-main/scripts/repository_context.py",
+            "skills/rebase-origin-main/scripts/rebase_base.py",
             "cli_extensions/review_round_common.py",
             "cli_extensions/review_scope.py",
         ):
