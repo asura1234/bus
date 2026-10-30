@@ -613,7 +613,7 @@ impl Worker {
         }
     }
 
-    fn prepare_agent_prompt(
+    pub(super) fn prepare_agent_prompt(
         &self,
         input: &AddAgent,
         id: AgentId,
@@ -622,6 +622,7 @@ impl Worker {
         prepared: &mut launch::PreparedLaunch,
         hooks: &HookContext,
     ) -> Result<(), String> {
+        let is_orchestrator = spec.is_some();
         let docs = orchestrator::write_docs(&self.data_dir)?;
         let name = state.agent(id).map(|a| a.name.as_str()).unwrap_or_default();
         let onboarding = orchestrator::agent_onboarding(name, id, input.room, &docs);
@@ -641,7 +642,7 @@ impl Worker {
         } else {
             onboarding
         };
-        let text = if input.provider == Provider::Grok {
+        let text = if input.provider == Provider::Grok && is_orchestrator {
             crate::agents::providers::grok::system_prompt::orchestrator_prompt(&text)?
         } else {
             text
@@ -663,7 +664,7 @@ impl Worker {
                         Draft {
                             text: match input.provider {
                                 Provider::Cursor => cursor::system_prompt::prompt_message(&text),
-                                Provider::Grok => {
+                                Provider::Grok if is_orchestrator => {
                                     crate::agents::providers::grok::system_prompt::prompt_message(
                                         &text,
                                     )
