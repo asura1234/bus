@@ -175,6 +175,8 @@ class GenericGateTest(unittest.TestCase):
         self.git("commit", "-qm", "real policy and no temporary directory ignore")
         scanner = SCRIPTS.parents[1] / "worktree-new/scripts/repo_profile.py"
         shutil.copyfile(scanner, self.scanner)
+        for helper in ("repo_support.py", "repo_inference.py"):
+            shutil.copyfile(scanner.parent / helper, self.scanner.parent / helper)
         linked = self.root / "linked"
         self.git("worktree", "add", "-qb", "linked-feature", str(linked))
         result = self.run_gate("--repo", str(linked))
