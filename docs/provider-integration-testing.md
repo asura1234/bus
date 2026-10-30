@@ -222,13 +222,22 @@ native records before recovery; do not blindly resend.
 
 ## Real-model messaging matrix
 
-Create the new-provider orchestrator in MASTER and real Codex, Claude and new
+Create a non-Codex orchestrator in MASTER and real Codex, Claude and new
 provider workers in its work room. Separately create a Claude orchestrator and
-new-provider worker in a second room. New Codex orchestrators are refused; do
-not claim that role was tested. Use real models and unique markers for each cell.
-The block below is each role's successful add. Use the first-add rule for that
-provider and for this project's hook file, and run each name only until the
-first `ok: true`.
+new-provider worker in a second room. Use real models and unique markers for
+each cell. A new Codex orchestrator is refused before hook setup and is not
+saved. Expect `ok: false` and this `error.message`:
+
+`Codex cannot be an orchestrator yet: an orchestrator dispatches work with bus send --async in the background and must be woken when it finishes, but Codex does not start a new turn when a background command exits (openai/codex issues 32188, 50079). Use Claude Code or Cursor as the orchestrator; Codex works fine as a worker.`
+
+Record that refusal. Do not expect `ok: true` or `{agent_id, stage: "launching"}`,
+and do not claim the orchestrator cells passed. The orchestrator is another
+provider listed by `sbus agent add --help`. The check allows every provider
+except Codex, including Grok. If the new provider is Codex, use Claude, Cursor,
+or Grok for `new-orch`.
+The block below records the Codex orchestrator refusal, then each other role's
+successful add. Use the first-add rule for that provider and for this project's
+hook file, and run each saved name only until the first `ok: true`.
 
 `claude-worker` is Claude. The command below is the one add. `--consent-hooks`
 would not change the result. If an unconsented add of that name already
@@ -241,10 +250,11 @@ current. While it is missing or not current, run the command once without
 command as written. Once the file is current, the unconsented add succeeds
 and saves the agent; do not run a second add of `codex-worker`.
 
-`new-orch` and `new-peer` use PROVIDER in the same `$scratch/project` as the
-fresh-launch agent. Claude, and Codex or Cursor whose hook file is already
-current, succeed on one add. Grok whose `.grok/hooks/bus.json` is already
-current fails the unconsented add with
+`new-orch` is not Codex. The hook rule for its provider applies only after
+the orchestrator check allows the add. `new-peer` and `codex-worker` are the
+Codex adds that can succeed. Claude, and Codex or Cursor whose hook file is
+already current, succeed on one worker add. Grok whose `.grok/hooks/bus.json`
+is already current fails the unconsented worker add with
 `Setup confirmation required for PATH. MESSAGE` and does not save the agent;
 retry that name once with `--consent-hooks`. A provider whose hook file is
 still missing uses the `Project hook setup requires --consent-hooks` error,
@@ -252,7 +262,11 @@ then the flagged command. A name that already returned `ok: true` is finished.
 
 ```sh
 sbus room create provider-matrix
-sbus agent add --room master --name new-orch --provider PROVIDER \
+# Refused before hook setup. ok:false, agent not saved. Not an orchestrator-cell pass.
+sbus agent add --room master --name codex-orch --provider codex \
+  --orchestrates provider-matrix --pwd "$scratch/project"
+# ORCH is not codex. Claude, Cursor, or Grok, as agent add --help lists them.
+sbus agent add --room master --name new-orch --provider ORCH \
   --orchestrates provider-matrix --pwd "$scratch/project" --consent-hooks
 sbus agent add --room provider-matrix --name codex-worker --provider codex \
   --pwd "$scratch/project" --consent-hooks
