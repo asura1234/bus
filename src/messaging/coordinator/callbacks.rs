@@ -438,9 +438,7 @@ impl Worker {
         dir: &Path,
         mut state: BusState,
     ) -> Result<CallbackFlow, String> {
-        // `agent clear` started a fresh provider context in this
-        // terminal. Claude and Codex announce it with SessionStart;
-        // Cursor's first new turn names its new conversation.
+        // Clear starts a fresh context; Cursor reports it on its first turn.
         let source = if record.manifest.provider == Provider::Kimi {
             // Kimi 2.4 reports /new as "startup". This path is entered only
             // after Bus recorded a reset and the session actually changed.
