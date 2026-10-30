@@ -3,6 +3,60 @@ use crate::agents::providers::grok::launch::launch_test::Fixture;
 use std::{fs, os::unix::fs::symlink};
 
 #[test]
+fn grok_generated_project_hooks_stay_out_of_git_status_without_hiding_user_settings() {
+    let f = Fixture::new();
+    f.install();
+    let init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .args(["init", "-q"])
+        .status()
+        .unwrap();
+    assert!(init.success());
+    f.prepare("");
+    fs::write(f.project.join(".grok/settings.json"), "{}\n").unwrap();
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    let status = String::from_utf8(status.stdout).unwrap();
+    assert!(status.contains(".grok/settings.json"), "{status}");
+    assert!(!status.contains(".grok/hooks/bus.json"), "{status}");
+    assert!(!status.contains(".grok/hooks/.bus-hooks.lock"), "{status}");
+    let exclude = f.project.join(".git/info/exclude");
+    let before = fs::read(&exclude).unwrap();
+    f.prepare("");
+    assert_eq!(
+        fs::read(exclude).unwrap(),
+        before,
+        "exclude entries duplicated"
+    );
+}
+
+#[test]
+fn grok_git_exclude_symlink_is_never_followed() {
+    let f = Fixture::new();
+    f.install();
+    assert!(std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .args(["init", "-q"])
+        .status()
+        .unwrap()
+        .success());
+    let exclude = f.project.join(".git/info/exclude");
+    let outside = f.root.join("outside-exclude");
+    fs::write(&outside, b"untouched\n").unwrap();
+    fs::remove_file(&exclude).unwrap();
+    symlink(&outside, &exclude).unwrap();
+    f.prepare("");
+    assert_eq!(fs::read(outside).unwrap(), b"untouched\n");
+}
+
+#[test]
 fn grok_hook_transaction_pins_directories_and_rechecks_after_commit() {
     for resume in [false, true] {
         for stage in [Stage::BeforeRename, Stage::AfterRename] {
