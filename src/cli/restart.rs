@@ -868,6 +868,62 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_identity_names_the_serving_sha_and_binary_path() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-refuse-sha");
+        std::fs::create_dir_all(&root).unwrap();
+        let serving = root.join("serving");
+        std::fs::write(&serving, b"bus").unwrap();
+        let recorded = sha(0x11);
+        restart_record::write_json(
+            &restart_record::build_path(&root),
+            &serde_json::json!({ "sha": recorded, "binary": serving.display().to_string() }),
+        )
+        .unwrap();
+        let refuse = root.join("refuse");
+        std::fs::write(
+            &refuse,
+            "#!/bin/sh\necho preflight identity refused >&2\nexit 1\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&refuse, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let error = run(
+            &root,
+            None,
+            true,
+            true,
+            false,
+            &super::super::session_pick::RestartRequest {
+                binary: Some(refuse.display().to_string()),
+                confirm: true,
+                as_who: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--identity"), "{error}");
+        let log = std::fs::read_to_string(restart_record::log_path(&root)).unwrap();
+        let record: RestartLog = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        assert_eq!(record.outcome, "refused");
+        assert_eq!(record.old_sha, recorded);
+        assert_eq!(record.new_binary, refuse.display().to_string());
+        let notice = restart_record::notice_text(&record);
+        assert!(
+            notice.contains(&format!("still serving {recorded}")),
+            "{notice}"
+        );
+        assert!(
+            notice.contains(&format!("{} was not started", refuse.display())),
+            "{notice}"
+        );
+        assert!(!notice.contains("not serving"), "{notice}");
+        assert!(!restart_record::restart_lock_path(&root).exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_refused_restart_keeps_the_log_error() {
         let root = crate::utils::test_temp::unique_temp_path("restart-refuse-log");
         std::fs::create_dir_all(restart_record::log_path(&root)).unwrap();

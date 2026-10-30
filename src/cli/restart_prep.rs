@@ -16,21 +16,21 @@ pub(super) fn begin_handoff(
     request: &RestartRequest,
     new_binary: &Path,
 ) -> io::Result<()> {
+    // Read the serving build before identity. A refusal must name the SHA that
+    // is still running, not a placeholder, and the path that was not started.
+    let serving = serving_target(root);
     let identity =
         super::preflight_binary(new_binary, super::host_free_bytes(root)).map_err(|error| {
+            let (old_binary, old_sha) = match &serving {
+                Ok((binary, sha)) => (binary.as_path(), sha.as_str()),
+                Err(_) => (Path::new(""), "unknown"),
+            };
             record_refused(
                 root,
-                &refused_record(
-                    request,
-                    new_binary,
-                    Path::new(""),
-                    "unknown",
-                    "unknown",
-                    &error,
-                ),
+                &refused_record(request, new_binary, old_binary, old_sha, "unknown", &error),
             )
         })?;
-    let (old_binary, old_sha) = serving_target(root).map_err(|error| {
+    let (old_binary, old_sha) = serving.map_err(|error| {
         record_refused(
             root,
             &refused_record(

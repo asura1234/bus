@@ -118,7 +118,7 @@ pub(crate) fn notice_text(record: &RestartLog) -> String {
         ),
         "refused" => format!(
             "Bus restart was refused before any stop. The server is still running unchanged and still serving {}. {} was not started: {}.",
-            record.old_sha, record.new_sha, record.reason
+            record.old_sha, record.new_binary, record.reason
         ),
         _ => format!(
             "Bus restart failed and the session is not serving {}. {} did not become healthy: {}.",
@@ -375,7 +375,19 @@ mod tests {
             refused_notice.contains("still running unchanged"),
             "{refused_notice}"
         );
-        assert!(refused_notice.contains("still serving"), "{refused_notice}");
+        let old_sha = "a".repeat(40);
+        assert!(
+            refused_notice.contains(&format!("still serving {old_sha}")),
+            "{refused_notice}"
+        );
+        assert!(
+            refused_notice.contains("/new was not started"),
+            "{refused_notice}"
+        );
+        assert!(
+            !refused_notice.contains(&"b".repeat(40)),
+            "{refused_notice}"
+        );
         assert!(!refused_notice.contains("not serving"), "{refused_notice}");
     }
 
