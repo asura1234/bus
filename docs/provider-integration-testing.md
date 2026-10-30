@@ -515,20 +515,23 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   Kimi, while Codex is at a usage limit and Claude orchestrates. Resolve
   findings and repeat affected checks, acceptance and review after any new head.
 - [ ] Do not depend on one provider. If Codex or another model stops on a usage
-  limit, keep a second real model that can send and reply, and continue
-  authoring and review with it. Record which providers actually ran.
+  limit, keep another real model that can send and reply, and continue
+  authoring, review, and live smoke with it. Record which providers actually ran.
 - [ ] After merge and the developer's Bus restart, an authorized operator must
   perform the live smoke before declaring the integration working. Verify the
   live server's binary and merged `build_sha` using its current run_start record;
-  if identity is unavailable, stop and report the smoke blocked. Add a fresh
-  agent in a new untrusted project, surface trust as a Bus dialog, and while its
-  welcome card is visible have a real Codex agent send a unique message. Require
-  the new provider to repeat what it heard and reply successfully. Record IDs,
-  status, screen and exact merged build. Use the first-add result for that
-  provider and for whether the new project's hook file is current. After
-  `ok: true`, do not add that name again. When authorized, delete the
-  smoke agent on the live session, not the scratch wrapper:
-  `bus agent delete SMOKE_AGENT --confirm`. Expect `ok: true` and
+  if identity is unavailable, stop and report the smoke blocked. Add the new
+  provider and one peer that is available now: Codex when it has quota,
+  otherwise Claude, Grok, or Kimi. Record the peer's provider. Use a new
+  untrusted project, surface trust as a Bus dialog, and while the new
+  provider's welcome card is visible have the peer send a unique message.
+  Require the new provider to repeat what it heard and reply. Then have the
+  new provider send a different marker to the peer and require the peer to
+  repeat it and reply. Record IDs, status, screen and exact merged build.
+  Use the first-add result for each provider and for whether the project's
+  hook file is current. After `ok: true`, do not add that name again. When
+  authorized, delete each smoke agent on the live session, not the scratch
+  wrapper: `bus agent delete SMOKE_AGENT --confirm`. Expect `ok: true` and
   `result.updated: true`. Without `--confirm` the delete is rejected.
 
 ## Testing lessons
@@ -546,8 +549,10 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   held messages as `prompt_not_shown`. Send the first message while that card
   is still visible.
 - **2026-10-30 — Codex quota:** Codex hitting its usage limit stopped all
-  authoring. Grok and Kimi took over once their messaging worked. Do not depend
-  on a single provider; keep a second model available for review.
+  authoring. Grok and Kimi took over once their messaging worked. Live smoke
+  pairs the new provider with whichever other provider is available, in both
+  directions: Codex when it has quota, otherwise Claude, Grok, or Kimi.
+  Record which peer ran.
 - **2026-10-31 — Grok busy draft:** a Grok agent busy with a background task was
   treated as idle. Bus typed into the composer, could not confirm the submit,
   and left a draft. Later messages stayed `prompt_not_shown` until a person
