@@ -56,3 +56,11 @@ def test_complete_report_and_invalid_status():
     invalid = render(data)
     assert invalid.returncode != 0
     assert not invalid.stdout
+
+
+def test_pr_title_with_bracketed_type_is_a_valid_link():
+    data = report([])
+    data["ongoing"] = [{"name": "Feature", "tldr": "In review.", "context": "Draft PR.", "status": "review", "pr": "[#141 [feat] add provider](https://github.com/example/repo/pull/141)"}]
+    result = render(data)
+    assert result.returncode == 0, result.stderr
+    assert data["ongoing"][0]["pr"] in result.stdout
