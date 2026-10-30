@@ -2,8 +2,8 @@ use super::*;
 
 /// Captured from Grok 1.0.70 while a clean-first gate was still running.
 /// The OSC title was the idle "grok" title, and the unsent Bus draft sat in
-/// the composer. A live [stop] status line or a Tasks panel with work left
-/// must outrank that idle title.
+/// the composer. A live [stop] status line or a running task row must
+/// outrank that idle title. The Tasks count includes completed rows.
 const BACKGROUND_TURN: &str =
     include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-background-turn.txt");
 
@@ -51,9 +51,14 @@ fn tasks_panel_and_stop_line_outrank_idle_osc_but_zero_tasks_do_not() {
         Some("background_tasks_panel_working")
     );
 
+    // The header count stays after every row is finished. It is not work left.
     let collapsed = "   ▸ Tasks 1\n";
     let collapsed = detect_screen_with_osc(AgentKind::Grok, collapsed, "grok", "4;0;0");
-    assert_eq!(collapsed.state, AgentState::Working, "{collapsed:?}");
+    assert_eq!(collapsed.state, AgentState::Idle, "{collapsed:?}");
+    assert_eq!(
+        collapsed.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("osc_title_idle")
+    );
 
     let zero = detect_screen_with_osc(AgentKind::Grok, "   ▾ Tasks 0\n", "grok", "4;0;0");
     assert_eq!(zero.state, AgentState::Idle, "{zero:?}");
@@ -112,4 +117,125 @@ fn queued_prompts_outrank_idle_osc_and_zero_does_not() {
         prose.matched_rule.as_ref().map(|rule| rule.id.as_str()),
         Some("queued_prompts_working")
     );
+}
+
+#[test]
+fn still_running_background_status_is_working_despite_idle_osc() {
+    // Grok 1.0.70 draws these above the prompt while background work continues
+    // and the turn itself looks idle, including after the [stop] line is gone.
+    let lines = [
+        "◎ 1 command · 2 monitors · 1 loop · 1 subagent still running\n",
+        "◎ 1 command still running · send a message to interrupt\n",
+        "◎ waiting · send a message to interrupt\n",
+    ];
+    for line in lines {
+        let result = detect_screen_with_osc(AgentKind::Grok, line, "grok", "4;0;0");
+        assert_eq!(
+            result.state,
+            AgentState::Working,
+            "background work must not count as idle: {line:?} -> {result:?}"
+        );
+        assert!(result.visible_working, "{line:?} -> {result:?}");
+        assert!(!result.visible_idle, "{line:?} -> {result:?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("still_running_background_status_working"),
+            "{line:?}"
+        );
+    }
+
+    let zero = detect_screen_with_osc(
+        AgentKind::Grok,
+        "◎ 0 commands still running\n",
+        "grok",
+        "4;0;0",
+    );
+    assert_eq!(zero.state, AgentState::Idle, "{zero:?}");
+    assert_eq!(
+        zero.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("osc_title_idle")
+    );
+}
+
+#[test]
+fn watchers_and_native_queue_outrank_idle_osc() {
+    for (screen, rule) in [
+        ("Watchers 1\n", "watchers_working"),
+        ("▾ Watchers 2\n", "watchers_working"),
+        ("▸ Watchers 12\n", "watchers_working"),
+        ("Queued 1\n", "queued_prompts_working"),
+        (
+            "1 command still running\n",
+            "still_running_background_status_working",
+        ),
+        ("1 queued\n", "native_queue_hint_working"),
+        ("queued, Enter to send now\n", "native_queue_hint_working"),
+    ] {
+        let result = detect_screen_with_osc(AgentKind::Grok, screen, "grok", "4;0;0");
+        assert_eq!(result.state, AgentState::Working, "{screen:?} {result:?}");
+        assert!(result.visible_working, "{screen:?} {result:?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some(rule),
+            "{screen:?}"
+        );
+    }
+
+    for screen in [
+        "Watchers 0\n",
+        "Watchers\n",
+        "Reason Paused Watchers Status\n",
+        "0 queued\n",
+        "the draft was queued yesterday\n",
+        "1 command still running in the transcript\n",
+    ] {
+        let result = detect_screen_with_osc(AgentKind::Grok, screen, "grok", "4;0;0");
+        assert_eq!(result.state, AgentState::Idle, "{screen:?} {result:?}");
+        assert!(!result.visible_working, "{screen:?} {result:?}");
+    }
+}
+
+#[test]
+fn cancel_footer_without_stop_line_outranks_idle_osc() {
+    let thinking = "⠹ Thinking…\nEsc:cancel │ Ctrl+.:shortcuts\n";
+    let result = detect_screen_with_osc(AgentKind::Grok, thinking, "grok", "4;0;0");
+    assert_eq!(result.state, AgentState::Working, "{result:?}");
+    assert!(result.visible_working, "{result:?}");
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("esc_cancel_hints_working")
+    );
+
+    let bare = detect_screen_with_osc(AgentKind::Grok, "⠹ Thinking…\n", "grok", "4;0;0");
+    assert_eq!(bare.state, AgentState::Idle, "{bare:?}");
+    assert_eq!(
+        bare.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("osc_title_idle")
+    );
+    let hint_only = detect_screen_with_osc(AgentKind::Grok, "Esc:cancel\n", "grok", "4;0;0");
+    assert_eq!(hint_only.state, AgentState::Idle, "{hint_only:?}");
+}
+
+#[test]
+fn completed_tasks_panel_does_not_hold_delivery() {
+    let done = "▾ Tasks 1\n✓ cargo build\n";
+    let result = detect_screen_with_osc(AgentKind::Grok, done, "grok", "4;0;0");
+    assert_eq!(result.state, AgentState::Idle, "{result:?}");
+    assert!(!result.visible_working, "{result:?}");
+    assert_ne!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_tasks_panel_working")
+    );
+
+    let mixed = "▾ Tasks 2\n✓ cargo build\n⸬ cargo test\n";
+    let mixed = detect_screen_with_osc(AgentKind::Grok, mixed, "grok", "4;0;0");
+    assert_eq!(mixed.state, AgentState::Working, "{mixed:?}");
+    assert!(mixed.visible_working);
+    assert_eq!(
+        mixed.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_tasks_panel_working")
+    );
+
+    let zero = detect_screen_with_osc(AgentKind::Grok, "▾ Tasks 0\n", "grok", "4;0;0");
+    assert_eq!(zero.state, AgentState::Idle, "{zero:?}");
 }
