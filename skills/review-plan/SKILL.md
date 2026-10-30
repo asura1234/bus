@@ -1,6 +1,6 @@
 ---
 name: review-plan
-description: Iteratively and read-only review a plan file that follows the project plan template. Round 1 verifies architecture, completeness, testing, and task-graph safety in full; Round 2+ only reconciles the prior round and reviews the current delta and its direct consequences. Supports stable reviewer lanes, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review or re-review a plan under plans/.
+description: Iteratively and read-only review a plan file that follows the project plan template. Round 1 verifies architecture, completeness, testing, and task-graph safety in full; Round 2+ only reconciles the prior round and reviews the current delta and its direct consequences. Supports stable reviewer lanes, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review or re-review a plan under plans/ or docs/plans/.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Review principles are in [guide.md](./guide.md); the SOT for macro judgment, task-graph safety, admissibility, and verdicts is
@@ -16,7 +16,7 @@ historical file itself.
 
 ```text
 INPUT $ARGUMENTS =
-  [<plan-file>] [--reviewer <lane>] [--devils-advocate]
+  [<plan-file>] [--base <ref>] [--reviewer <lane>] [--devils-advocate]
 
 DEFAULT reviewer = default (only when the prologue can select a lane unambiguously)
 
@@ -35,7 +35,7 @@ MAY:
 
 Run:
   python3 "$SKILL_DIR/../review-plan/scripts/review_round.py" \
-    [<plan-file>] [--reviewer <lane>] [--devils-advocate]
+    [<plan-file>] [--base <ref>] [--reviewer <lane>] [--devils-advocate]
 
 IF exit != 0 AND output says multiple / named lanes make a bare invocation ambiguous:
   IF the developer already gave a lane, or said "use the previous lane" and this conversation has the REVIEWER of the last successful prologue:

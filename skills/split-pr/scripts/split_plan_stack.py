@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from split_plan_git import git, is_ancestor, rev
+from split_plan_git import git, is_ancestor, origin_ref, rev
 from split_plan_model import (
     Part,
     Plan,
@@ -21,9 +21,9 @@ from split_plan_model import (
 
 def restack_commands(plan: Plan, part: Part, target: str) -> list[str]:
     parents = open_parents(plan, part)
-    refs = [ref if ref == plan.base_ref else f"refs/heads/{ref}" for ref in integration_refs(plan, part)]
+    refs = [origin_ref(ref) if ref == plan.base_ref else f"refs/heads/{ref}" for ref in integration_refs(plan, part)]
     if len(refs) <= 1:
-        return [f"git rebase --onto {target} {part.onto} {part.branch}"]
+        return [f"git rebase --onto {origin_ref(target)} {part.onto} {part.branch}"]
     names = ", ".join(([plan.github_base] if integrates_base(plan, part) else []) + [p.id for p in parents])
     commands = [
         f"git switch --detach {refs[0]}",

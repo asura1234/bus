@@ -35,6 +35,10 @@ class ReviewPrRoundTests(unittest.TestCase):
         script = repo / "skills/review-pr/scripts/review_round.py"
         script.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_SCRIPT, script)
+        for name in ("repository_context.py", "rebase_base.py"):
+            helper = repo / "skills/rebase-origin-main/scripts" / name
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / "skills/rebase-origin-main/scripts" / name, helper)
         shared = repo / "skills/_bus/cli_extensions/review_round_common.py"
         shared.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_COMMON, shared)
@@ -52,6 +56,7 @@ class ReviewPrRoundTests(unittest.TestCase):
         self.assertEqual(_run(repo, "git", "commit", "-m", "base").returncode, 0)
         self.assertEqual(_run(repo, "git", "switch", "-c", "feat/review-test").returncode, 0)
 
+        (repo / ".git/info/exclude").write_text("temp/\n")
         goal = repo / "temp/review-pr/feat-review-test/.locked-goal"
         goal.parent.mkdir(parents=True)
         goal.write_text("验证 review-pr 范围\n")

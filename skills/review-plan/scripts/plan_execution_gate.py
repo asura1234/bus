@@ -25,6 +25,8 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main/scripts"))
+
 
 # Co-located sibling script — works when invoked as a file path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -228,7 +230,8 @@ def gate(text: str) -> list[str]:
     failures: list[str] = []
 
     # 0. Plan must be generated from the canonical template.
-    template_path = TEMPLATE_PATH
+    from repository_context import plan_template, repository_root
+    template_path = plan_template(repository_root(), TEMPLATE_PATH)
     if template_path.is_file():
         for tmpl_failure in check_template_match(text, template_path.read_text()):
             failures.append(tmpl_failure)

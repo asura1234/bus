@@ -1,32 +1,29 @@
 ---
 name: commit-and-push
-description: Analyze the current git changes, split them into commits following "each commit does exactly one thing" with lowercase Conventional Commit subjects, and push with an explicit source:destination refspec. Works on a feature branch and pushes to the same-name branch on origin, never upstream; refuses to commit on master (local commits included) unless the developer explicitly asked to commit or push directly to master.
+description: Analyze the current git changes, split them into commits following "each commit does exactly one thing" with the target repository's commit style, and push with an explicit source:destination refspec. Works on a feature branch and pushes to the same-name branch on origin, never upstream; refuses to commit on master (local commits included) unless the developer explicitly asked to commit or push directly to master.
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
-Analyze the current changes, split them into commits following "each commit does exactly one thing", then push to the remote branch. Pure git/gh; runnable by any AI agent (claude / cursor / codex).
+Analyze the current changes, split them into commits following "each commit does exactly one thing", then push to the remote branch. Git; runnable by any AI agent (claude / cursor / codex).
 
 ```
--- Guard: refuse detached HEAD and the protected branch (master / main)
+INPUT = [--base <ref-or-commit>]
+-- Target and policy: use the cwd Git root, never the installed skill directory.
+repo = `git rev-parse --show-toplevel`
+Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/repository_context.py" --repo "<repo>" --optional-base [--base "<caller base>"]`.
+Read its JSON as context; STOP on error. base = context.base; commit_style = context.policy.commit_style.
+Read target repository instructions and its Git/commit policy before staging.
 branch = `git branch --show-current`
-IF branch empty
-  Print "❌ commit and push is not allowed on a detached HEAD."
-  STOP
-
-IF branch IN {main, master} AND the developer did NOT explicitly ask to commit or push directly to master
-  Print "❌ This repo forbids committing on master by default — **local commits are forbidden too**, not only pushes."
-  Print "   Create a feature branch first and rerun: `git checkout --no-track -b feat/<desc> origin/master` (fix/ or chore/ likewise),"
-  Print "   then, after landing, open a PR back to master with /pr."
-  STOP
--- An explicit developer request to commit/push directly to master authorizes the normal commit and
---   `git push origin master:master`; every ownership and validation check below still runs. Never force-push master.
--- Only master/main is listed: it is the only protected branch in this repo. No positive
---   `feat|fix|chore/*` allowlist — the remote has normal working branches without those prefixes
---   (e.g. `codex/*`), and an allowlist would block them too. "Other public/shared branches" cannot be
---   judged mechanically; the developer gates them.
+IF detached: STOP.
+IF the developer did not explicitly authorize committing to this exact protected branch:
+  Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/repository_context.py" --repo "<repo>" --optional-base --check-branch "<branch>"`.
+  IF it fails: STOP; suggest a feature branch from context.base when available, otherwise use target instructions to choose its base.
+Also honor any target-declared protected-branch patterns; do not impose another repo's release patterns.
+An explicit direct-branch request permits an ordinary same-name push, never a force push.
 
 -- Rules
-Commit subject is a lowercase Conventional Commit accepted by `python3 "$SKILL_DIR/../_bus/scripts/conventional_commits.py" --message-file <message-file>`
-  (types: the validator's ALLOWED_TYPES — feat, fix, perf, docs, ci, test, refactor, chore, release)
+Follow commit_style when present; otherwise follow target instructions without inventing a language or format.
+When commit_style == "conventional", validate with the bundled conventional_commits.py command below.
+Other style strings are target-authored instructions, not a closed enum. Never substitute another repository's style.
 Never use `git add -A` or `git add .` — add files individually
 Each commit should do exactly one thing:
   - one feature slice
@@ -74,7 +71,7 @@ Write an execution plan before staging:
   Commit 1:
     Purpose: <one thing>
     Files/hunks: <paths and, if needed, hunk descriptions>
-    Message: <type>: <lowercase summary>
+    Message: <subject following target commit_style>
   Commit 2:
     ...
 
@@ -98,15 +95,15 @@ FOR EACH planned commit group:
     Re-check staged diff.
 
   Compose commit message:
-    title = "<type>: <lowercase summary>"   # optional (scope) and ! allowed per the validator
+    title = subject following target commit_style and instructions
     body  = 2-3 sentence description if useful (reason, issue reference)
     Append the Co-Authored-By trailer per your agent's own convention (if it has one);
       Do NOT hardcode a model name.
-  Validate: `python3 "$SKILL_DIR/../_bus/scripts/conventional_commits.py" --message-file <message-file>`
+  IF commit_style == "conventional": validate with `python3 "$SKILL_DIR/../_bus/scripts/conventional_commits.py" --message-file <message-file>`
     IF it rejects the subject: fix the subject and re-validate before committing.
 
   Run `git commit` with HEREDOC:
-    <type>: <lowercase summary>
+    <subject following target commit_style>
 
     Description (if needed)
 
@@ -116,9 +113,9 @@ FOR EACH planned commit group:
 
 -- Push: ALWAYS origin + explicit refspec <branch>:<branch> (source and destination both pinned) + SSH/HTTPS fallback
 -- Pinning the destination with an explicit refspec takes push.default out of the decision; even if the
---   branch's upstream was mistakenly set to origin/master, a bare `git push` cannot land the commits on master.
+--   branch's upstream was mistakenly set to <context.base>, a bare `git push` cannot land the commits on master.
 --   -u only sets the upstream to the same-name remote branch.
--- Never push to the `upstream` remote (the Herdr source) unless the user explicitly requests that exact remote.
+-- Never change the requested destination remote without explicit caller authority.
 push_cmd = `git push -u origin <current-branch>:<current-branch>`
 
 TRY: run push_cmd

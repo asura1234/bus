@@ -126,6 +126,8 @@ class ScopeRoundTests(unittest.TestCase):
         for name in (
             "skills/review-pr/scripts/review_round.py",
             "skills/_bus/cli_extensions/pr_goal_context.py",
+            "skills/rebase-origin-main/scripts/repository_context.py",
+            "skills/rebase-origin-main/scripts/rebase_base.py",
             "cli_extensions/review_round_common.py",
             "cli_extensions/review_scope.py",
         ):
@@ -133,6 +135,7 @@ class ScopeRoundTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO_ROOT / name, target)
         self.run_command("git", "init", "-b", "main")
+        (self.root / ".git/info/exclude").write_text("temp/\n")
         self.run_command("git", "config", "user.name", "Review Test")
         self.run_command("git", "config", "user.email", "review-test@example.com")
         (self.root / "source.py").write_text("first = 1\nsecond = 2\nthird = 3\n")

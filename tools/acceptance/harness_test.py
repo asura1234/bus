@@ -99,11 +99,15 @@ class Bus:
         deadline = time.monotonic() + 30
         while True:
             try:
-                return self.cli("state")
+                state = self.cli("state")
+                if any(room.get("name") == "bus" for room in state.get("rooms", [])):
+                    return state
+                if self.child.poll() is not None or time.monotonic() > deadline:
+                    raise CliError("default bus room did not become ready")
             except CliError:
                 if self.child.poll() is not None or time.monotonic() > deadline:
                     raise
-                time.sleep(0.5)
+            time.sleep(0.5)
 
     def cli(self, *argv, timeout=60, row=None):
         command = [*map(str, argv)]

@@ -19,7 +19,7 @@ def test_review_scripts_find_bundled_support_and_target_the_callers_repo(tmp_pat
     if binary:
         subprocess.run([binary, "skills", "install", "--yes"], env=env, cwd=tmp_path, capture_output=True, check=True)
     else:
-        for name in ("review-pr", "pr"):
+        for name in ("review-pr", "pr", "rebase-origin-main", "gate-and-fix"):
             shutil.copytree(ROOT / "skills" / name, skills / name)
         shutil.copytree(ROOT / "skills" / "_bus", skills / "_bus")
     repo = tmp_path / "other-repo"
@@ -29,6 +29,7 @@ def test_review_scripts_find_bundled_support_and_target_the_callers_repo(tmp_pat
     (repo / "example.txt").write_text("changed")
     subprocess.run(["git", "add", "example.txt"], cwd=repo, env=env, check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "change"], cwd=repo, env=env, check=True, capture_output=True)
+    (repo / ".git/info/exclude").write_text("temp/\n")
     lock = repo / "temp/review-pr/feature"
     lock.mkdir(parents=True)
     (lock / ".locked-goal").write_text("Test installed skills\n")

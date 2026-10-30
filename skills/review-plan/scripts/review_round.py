@@ -19,6 +19,9 @@ from review_round_support import (
 )
 
 
+from repository_context import require_ignored_artifacts
+
+
 # Lane ownership and round claiming share one implementation with /review-pr, living in the repo-root
 # cli_extensions/. Take them from the real owner instead of relaying through
 # review_round_support — a pass-through re-export would make "who owns these symbols" unclear again.
@@ -34,6 +37,7 @@ from review_round_common import (  # noqa: E402
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("plan", nargs="?", default=None)
+    parser.add_argument("--base", default=None)
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
     # --check: run only the structure/status gate; read-only, creates no round, writes no .last-plan.
@@ -80,7 +84,11 @@ def main(argv: list[str]) -> int:
             return 2
         notes.append(f"未指定计划，沿用本分支上次审查的计划 {rel(plan_path)}")
     else:
-        candidates = detect_branch_plan_docs()
+        try:
+            candidates = detect_branch_plan_docs(args.base)
+        except ValueError as error:
+            print(f"FAIL\n- {error}")
+            return 1
         if len(candidates) == 1:
             plan_path = candidates[0]
             notes.append(f"未指定计划，自动选中本分支改动的唯一计划文档 {rel(plan_path)}")
@@ -124,6 +132,12 @@ def main(argv: list[str]) -> int:
     if args.check:
         print("PASS: 计划满足 /review-plan 前提门禁（模板 / 状态 / 决策 / 目标 / 实施步骤结构）")
         return 0
+
+    try:
+        require_ignored_artifacts(REPO_ROOT, [branch_dir, pointer])
+    except (ValueError, OSError) as error:
+        print(f"FAIL\n- {error}")
+        return 1
 
     # Once the plan passes the prerequisite checks, record it as this branch's "last reviewed plan" for later bare calls
     branch_dir.mkdir(parents=True, exist_ok=True)

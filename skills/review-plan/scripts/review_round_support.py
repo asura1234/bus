@@ -104,6 +104,9 @@ def triage_ledgers(branch_slug: str) -> list[Path]:
     return _triage_ledgers(branch_slug, "plan")
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main/scripts"))
+from repository_context import default_base, plan_template  # noqa: E402
+
 # Shared deterministic plan checks live beside this module.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plan_execution_gate import (  # noqa: E402
@@ -140,20 +143,21 @@ def current_branch() -> str:
     return branch or "_detached_"
 
 
-def detect_branch_plan_docs() -> list[Path]:
-    """Return the unique plans/*.md changed against origin/master, including dirty files."""
+def detect_branch_plan_docs(base: str | None = None) -> list[Path]:
+    """Return changed plan documents against the caller/default base, including dirty files."""
     names: set[str] = set()
-    diff = git("diff", "--name-only", "origin/master...HEAD")
-    if diff.returncode == 0:
-        names.update(diff.stdout.split())
-    for line in git("status", "--porcelain").stdout.splitlines():
-        # A porcelain line looks like 'XY <path>'; strip the status code to get the path; rename/copy looks like 'old -> new', take the new path
-        path = line[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        if path:
-            names.add(path)
-    plans = {REPO_ROOT / n for n in names if n.startswith("plans/") and n.endswith(".md")}
+    diff = git("diff", "--name-only", "-z", f"{default_base(REPO_ROOT, base)}...HEAD")
+    if diff.returncode != 0:
+        raise ValueError(f"cannot discover branch plans: {diff.stderr.strip()}")
+    names.update(path for path in diff.stdout.split("\0") if path)
+    records = iter(git("status", "--porcelain", "-z", "--untracked-files=all").stdout.split("\0"))
+    for record in records:
+        if not record:
+            continue
+        names.add(record[3:])
+        if "R" in record[:2] or "C" in record[:2]:
+            next(records, None)  # -z renames put the old name in the next record.
+    plans = {REPO_ROOT / n for n in names if n.startswith(("plans/", "docs/plans/")) and n.endswith(".md")}
     return sorted(p for p in plans if p.is_file())
 
 
@@ -176,7 +180,7 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
     )
     failures: list[str] = []
 
-    template_path = TEMPLATE_PATH
+    template_path = plan_template(REPO_ROOT, TEMPLATE_PATH)
     if template_path.is_file():
         failures.extend(check_template_match(text, template_path.read_text()))
     else:

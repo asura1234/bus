@@ -8,7 +8,7 @@ What it does:
 
   1. Prereq (unmet prerequisite → FAIL):
      - inside a git work tree, on a named branch that is not main/master
-     - base ref (default origin/master) resolvable
+     - base ref (default refs/remotes/origin/HEAD, falling back to origin/master) resolvable
      - branch mode: committed non-plan diff is non-empty; `plans/**` is excluded
      - --scope mode: a fixed file list / JSON chunk manifest replaces that diff;
        ordinary UTF-8 committed files are reviewed in full, even without branch changes
@@ -113,6 +113,8 @@ from review_scope import (  # noqa: E402
 # Public sibling skills may belong to the user; shared runtime code is Bus-owned.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus"))
 from cli_extensions.pr_goal_context import build_context  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main" / "scripts"))
+from repository_context import default_base  # noqa: E402
 
 
 LOCKED_GOAL_NAME = ".locked-goal"
@@ -194,7 +196,7 @@ def load_locked_review_context(lane_root: Path, plan: Path | None) -> LockedRevi
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--base", default="origin/master")
+    parser.add_argument("--base", default=None)
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
     parser.add_argument("--plan", default=None)
@@ -241,13 +243,20 @@ def main(argv: list[str]) -> int:
             return 2
 
     failures: list[str] = []
+    if args.base is None:
+        try:
+            args.base = default_base(Path.cwd())
+        except ValueError as error:
+            failures.append(str(error))
     branch = git("branch", "--show-current").stdout.strip()
     if not branch:
         failures.append("HEAD 处于 detached 状态——请在具名分支上运行 /review-pr")
     elif branch in ("main", "master"):
         failures.append("当前在 main/master 上，没有可审查的分支变更")
-    if git("rev-parse", "--verify", "--quiet", args.base).returncode != 0:
+    if args.base is not None and git("rev-parse", "--verify", "--quiet", args.base).returncode != 0:
         failures.append(f"base ref '{args.base}' 无法解析（是否需要先 git fetch origin？）")
+    if git("check-ignore", "-q", "temp/review-pr").returncode != 0:
+        failures.append("temp/review-pr must be ignored before writing review artifacts")
 
     diff_text = ""
     if not failures and scope is None:
@@ -257,6 +266,7 @@ def main(argv: list[str]) -> int:
             "--",
             ".",
             ":(exclude)plans/**",
+            ":(exclude)docs/plans/**",
         )
         if diff_proc.returncode != 0:
             failures.append(f"git diff {args.base}...HEAD 失败：{diff_proc.stderr.strip()}")

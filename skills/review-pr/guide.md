@@ -38,10 +38,10 @@ Diff coverage and round boundaries can only further narrow the scope of other di
 
 ## The plan is input, not a code-review target
 
-Committed changes under `plans/**` are all excluded from code-review scope; they do not enter the diff snapshot,
+Committed changes under `plans/**` or `docs/plans/**` are all excluded from code-review scope; they do not enter the diff snapshot,
 delta, touched-file set, findings, sync list, or PR single-purpose judgment. Only an explicitly associated `--plan` is read,
 and only as input for locked goal, non-goals, and archived decisions; the reviewer does not review,
-comment on, or demand fixes to the plan file itself. When the branch has no other committed changes after excluding `plans/**`,
+comment on, or demand fixes to the plan file itself. When the branch has no other committed changes after excluding both plan directories,
 the `review-pr` prologue should fail for having no reviewable code.
 
 ## Round 1 establishes coverage; Round 2+ consumes the delta
@@ -113,6 +113,9 @@ Review added tests under [code-review-guide "Never pad coverage with a tautology
 
 When the claim is about what a user sees or does in the TUI (layout, keys, clicks, focus, styling, opens, sounds),
 prefer proving it by driving the PR's HEAD through the real terminal over reasoning about it, or writing a unit test that mirrors the code.
+Use the target repository's documented isolated acceptance harness. Its actual state, screenshots and
+scoped logs must prove the suspicion; a launch alone proves nothing. Never operate a developer's live session.
+The following adapter applies only when the target profile's gate_command is `just ci` (Bus).
 It complements probes, never replaces one where a probe can show the failure. Two ways, both on a scratch Bus the driver starts:
 
 - drive it directly with the author's already-built dev binary (`bus --dev tui <verb> --name <session> …`) per `docs/tui-driver.md`, saving the session's run folder
@@ -222,3 +225,11 @@ The agent's responsibility ends at writing a legal, complete `review.md`. The ch
 - preserves all other content verbatim.
 
 So the skill no longer asks the model to hand-execute the same "output discipline". The final reply returns the renderer output verbatim.
+
+## Target artifact handoff
+
+Keep forge's exact `temp/review-pr/<branch-slug>/.locked-goal`, `.locked-non-goals` and
+`.locked-origin` handoff; review-pr does not create, move or reinterpret those locks. Its prologue
+uses shared `require_ignored_artifacts(repo, paths)` on the output root and lock paths before any
+round writes. Unignored or tracked state is a configuration failure, with existing locks preserved.
+The caller configures the target's ignore policy; this skill never edits it or invents a second path.

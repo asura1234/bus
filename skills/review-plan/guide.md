@@ -121,3 +121,16 @@ The agent's responsibility ends at writing a valid, complete `review.md`. The ch
 - preserve all other content verbatim.
 
 The skill therefore no longer asks the model to apply the same output discipline by hand. The final reply simply returns the renderer's product verbatim.
+
+## Target plan and artifact conventions
+
+An explicit plan path is authoritative. Auto-discovery accepts changed `plans/**/*.md` and
+`docs/plans/**/*.md` against the caller/default base; filenames are Git paths, including spaces.
+Use the target's `docs/templates/plan-template.md` when present, otherwise the bundled canonical
+template. Task/goal/ownership contracts still apply. Final acceptance comes from the target profile;
+the existing Bus gate ordering applies only in its `just ci` adapter.
+
+Round artifacts and `.last-plan` remain under target `temp/review-plan/<branch-slug>`. The shared
+`require_ignored_artifacts(repo, paths)` helper checks the actual output paths before writes and
+rejects tracked content. It never changes ignore configuration or selects another artifact protocol.
+Read-only `--check` performs no round writes and needs no artifact directory admission.
