@@ -72,3 +72,63 @@ class WorkspaceDepthTests(Fixture):
         self.assertEqual(
             recipe["target_paths"], ["target", "crates/ui/tools/cli/target"]
         )
+
+    def test_submodule_workspace_member_is_included_in_root_package_smoke(self):
+        self.write(
+            "Cargo.toml",
+            '[package]\nname="app"\nversion="0.1.0"\nedition="2021"\n'
+            '[workspace]\nmembers=["external/*"]\nresolver="2"\n',
+        )
+        self.write(
+            "Cargo.lock",
+            'version = 4\n\n[[package]]\nname = "app"\nversion = "0.1.0"\n'
+            '\n[[package]]\nname = "native"\nversion = "0.1.0"\n',
+        )
+        self.write("src/lib.rs", "pub fn root() {}\n")
+        self.commit()
+        source = self.root / "workspace-member-source"
+        source.mkdir()
+        subprocess.check_call(["git", "-C", str(source), "init", "-b", "main"], stdout=subprocess.DEVNULL)
+        subprocess.check_call(["git", "-C", str(source), "config", "user.email", "fixture@example.test"])
+        subprocess.check_call(["git", "-C", str(source), "config", "user.name", "Fixture"])
+        (source / "Cargo.toml").write_text('[package]\nname="native"\nversion="0.1.0"\nedition="2021"\n')
+        (source / "src").mkdir()
+        (source / "src/lib.rs").write_text("pub fn native() {}\n")
+        subprocess.check_call(["git", "-C", str(source), "add", "."])
+        subprocess.check_call(["git", "-C", str(source), "commit", "-qm", "native"])
+        self.git("-c", "protocol.file.allow=always", "submodule", "add", str(source), "external/native")
+        self.commit()
+
+        recipe = self.profile.scan(self.repo, use_cache=False)["recipe"]
+        for subcommand in ("build", "test"):
+            self.assertTrue(
+                any(
+                    item["cwd"] == "external/native"
+                    or (item["cwd"] == "." and "--workspace" in item["argv"])
+                    for item in recipe["smoke"]
+                    if subcommand in item["argv"]
+                ),
+                recipe,
+            )
+
+    def test_package_workspace_honors_explicit_default_members(self):
+        self.write(
+            "Cargo.toml",
+            '[package]\nname="app"\nversion="0.1.0"\n'
+            '[workspace]\nmembers=["crates/*"]\n'
+            'default-members=["crates/native"]\n',
+        )
+        self.write("Cargo.lock", "version = 4\n")
+        self.write(
+            "crates/native/Cargo.toml", '[package]\nname="native"\nversion="0.1.0"\n'
+        )
+        self.commit()
+
+        recipe = self.profile.scan(self.repo, use_cache=False)["recipe"]
+        self.assertEqual(
+            recipe["smoke"],
+            [
+                {"cwd": ".", "argv": ["cargo", "build", "--locked"]},
+                {"cwd": ".", "argv": ["cargo", "test", "--locked"]},
+            ],
+        )

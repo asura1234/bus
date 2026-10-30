@@ -178,6 +178,16 @@ def infer_recipe(
     cargo = cargo_roots(repo, paths)
     for name in cargo:
         cwd = Path(name).parent.as_posix()
+        manifest = tomllib.loads((repo / name).read_text())
+        workspace = manifest.get("workspace", {})
+        # Without default-members, a package workspace selects only its root.
+        workspace_scope = (
+            ["--workspace"]
+            if "package" in manifest
+            and workspace.get("members")
+            and "default-members" not in workspace
+            else []
+        )
         if (Path(cwd) / "Cargo.lock").as_posix() not in paths:
             unresolved.append(
                 f"{name}: locked Cargo dependency resolution requires Cargo.lock"
@@ -185,8 +195,8 @@ def infer_recipe(
         prepare.append(command(["cargo", "fetch", "--locked"], cwd))
         smoke.extend(
             [
-                command(["cargo", "build", "--locked"], cwd),
-                command(["cargo", "test", "--locked"], cwd),
+                command(["cargo", "build", "--locked", *workspace_scope], cwd),
+                command(["cargo", "test", "--locked", *workspace_scope], cwd),
             ]
         )
     root_package = next((p for p in packages if p["path"] == "package.json"), None)
