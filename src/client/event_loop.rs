@@ -367,9 +367,7 @@ impl ClientLoopDriver {
         if !matches!(error, ClientError::ConnectionLost(_)) {
             return None;
         }
-        if crate::client::restart::restart_in_progress().is_none() {
-            return None;
-        }
+        crate::client::restart::restart_in_progress()?;
         let marker = match crate::client::restart::wait_for_restart(
             crate::client::restart::RECONNECT_WAIT,
             crate::client::restart::restart_in_progress,

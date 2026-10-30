@@ -55,7 +55,7 @@ pub(crate) fn step_aside_headless_coordinator(root: &Path) -> bool {
     else {
         return false;
     };
-    if !restart_record::pid_still_live(&record) {
+    if !crate::platform::process_still_live(record.pid, record.birth) {
         return false;
     }
     #[cfg(unix)]
@@ -65,7 +65,7 @@ pub(crate) fn step_aside_headless_coordinator(root: &Path) -> bool {
         }
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
-            if !restart_record::pid_still_live(&record) {
+            if !crate::platform::process_still_live(record.pid, record.birth) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(50));

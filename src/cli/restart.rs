@@ -61,7 +61,7 @@ pub(super) fn run(
     let identity =
         preflight_binary(&new_binary, host_free_bytes(root)).map_err(io::Error::other)?;
     if restart_record::read_live_pid(&restart_record::handoff_pid_path(root))
-        .is_some_and(|record| restart_record::pid_still_live(&record))
+        .is_some_and(|record| crate::platform::process_still_live(record.pid, record.birth))
     {
         return Err(io::Error::other(
             "a bus restart is already in progress for this session",

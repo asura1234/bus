@@ -285,10 +285,6 @@ pub(crate) fn read_live_pid(path: &Path) -> Option<LivePid> {
     serde_json::from_slice(&bytes).ok()
 }
 
-pub(crate) fn pid_still_live(record: &LivePid) -> bool {
-    crate::platform::process_instance(record.pid).is_some_and(|live| live.birth == record.birth)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

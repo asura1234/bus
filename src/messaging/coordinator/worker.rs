@@ -12,6 +12,7 @@ use std::path::Path;
 
 mod callback_spool;
 mod control_reads;
+mod restart_notice;
 use control_reads::interrupts_delivery;
 
 /// How often a tick moves settled history out of `state.json`.
@@ -579,26 +580,6 @@ impl Worker {
                 "Submission could not finish"
             );
         })
-    }
-
-    /// Delivers a restart outcome the helper left on disk, then removes it.
-    /// A failed save leaves the file so the next tick can try again.
-    fn announce_recorded_restart(&mut self) -> Result<(), String> {
-        let path = crate::utils::restart_record::outcome_path(&self.data_dir);
-        let Some(record) = crate::utils::restart_record::read_outcome(&path)? else {
-            return Ok(());
-        };
-        let text = crate::utils::restart_record::notice_text(&record);
-        let mut state = self.state.clone();
-        let posted = state.announce_restart(&text, io::now_ms());
-        if posted {
-            self.save(state)?;
-        }
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
     }
 
     fn consume_all_callbacks(&mut self) -> Result<(), String> {

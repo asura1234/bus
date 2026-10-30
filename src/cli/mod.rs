@@ -135,6 +135,27 @@ fn last_session(
     .map_err(io::Error::other)
 }
 
+fn bind_session_env(root: &std::path::Path, session_id: Option<&str>) -> io::Result<()> {
+    std::env::set_var("BUS_DATA_DIR", root);
+    match session_id {
+        Some(id) => std::env::set_var("BUS_SESSION_ID", id),
+        None => std::env::remove_var("BUS_SESSION_ID"),
+    }
+    for key in [
+        "HERDR_SOCKET_PATH",
+        "HERDR_CLIENT_SOCKET_PATH",
+        "HERDR_CONFIG_PATH",
+    ] {
+        std::env::remove_var(key);
+    }
+    let session = [
+        "bus".to_owned(),
+        "--session".to_owned(),
+        coordinator::DEFAULT_SESSION.to_owned(),
+    ];
+    crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)
+}
+
 fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     let dev = invocation.dev;
     apply_run_environment(dev, invocation.yolo);
@@ -208,24 +229,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         bus_io::private_dir(&root)?;
         require_private_root(&root)?;
     }
-    std::env::set_var("BUS_DATA_DIR", &root);
-    match &local_session_id {
-        Some(id) => std::env::set_var("BUS_SESSION_ID", id),
-        None => std::env::remove_var("BUS_SESSION_ID"),
-    }
-    for key in [
-        "HERDR_SOCKET_PATH",
-        "HERDR_CLIENT_SOCKET_PATH",
-        "HERDR_CONFIG_PATH",
-    ] {
-        std::env::remove_var(key);
-    }
-    let session = vec![
-        "bus".to_owned(),
-        "--session".to_owned(),
-        coordinator::DEFAULT_SESSION.to_owned(),
-    ];
-    crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)?;
+    bind_session_env(&root, local_session_id.as_deref())?;
     match invocation.action {
         // Reads files only, so it also works while the session is hung.
         Action::Control(control_args) if control_args.first().is_some_and(|arg| arg == "perf") => {
