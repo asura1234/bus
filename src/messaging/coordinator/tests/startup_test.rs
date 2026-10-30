@@ -1555,3 +1555,102 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
         }
     }
 }
+
+#[test]
+fn startup_launch_rejection_unsupported_shell_closes_new_sender_work() {
+    let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    state.delete_agent(previous, 0).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        shell_wait_code: Some("agent_shell_integration_unavailable"),
+        ..Default::default()
+    });
+    worker
+        .add_agent(
+            AddAgent {
+                room,
+                name: "unsupported".into(),
+                provider: Provider::Codex,
+                cwd: dir.to_string_lossy().into_owned(),
+                extra_args: String::new(),
+                consent_project_hooks: true,
+            },
+            None,
+            &mpsc::channel().0,
+        )
+        .unwrap_err();
+    let agent = worker
+        .state
+        .agents()
+        .find(|a| a.name == "unsupported")
+        .unwrap()
+        .id;
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "work after known launch rejection",
+    );
+    let request_state = worker.state.request(request).unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        request_state.phase,
+        RequestPhase::Abandoned,
+        "a definitively unsupported shell cannot launch and must close never-submitted sender work"
+    );
+    assert_eq!(
+        request_state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+}
+
+#[test]
+fn startup_launch_rejection_editor_failure_closes_saved_session_work_promptly() {
+    struct NoScreen;
+    impl Transport for NoScreen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            panic!("bound conversation must not be read for editor failure: {method:?}")
+        }
+    }
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker
+        .watch_agent_startup(agent, vec!["codex".into()])
+        .unwrap();
+    let request = queue(&mut worker, room, agent, "queued task");
+    let mut info = serde_json::to_value(native_info("pane", "codex", "session")).unwrap();
+    info["launch_pending"] = json!(true);
+    info["launch_input_error"] =
+        json!("Shell transformed the launch line twice; Enter was not sent");
+    let info = serde_json::from_value(info).unwrap();
+    worker.transport = Box::new(NoScreen);
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 1)
+        .unwrap();
+    let state = worker.state.request(request).unwrap();
+    assert_eq!(state.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .contains("transformed the launch line twice"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

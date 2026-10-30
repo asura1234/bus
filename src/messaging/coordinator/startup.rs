@@ -153,7 +153,7 @@ impl Worker {
         outcome: Result<ResponseResult, crate::messaging::native::TransportError>,
     ) -> Result<(), String> {
         let error = match outcome {
-            Err(error) if matches!(error.code.as_deref(), Some("agent_shell_starting" | "agent_shell_waiting" | "agent_shell_integration_unavailable")) => error,
+            Err(error) if error.definitely_rejected => error,
             other => return self.agent_error(id, format!("Agent start outcome requires inspection of its owned terminal; startup is watched and will not be retried. {other:?}")),
         };
         let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
@@ -167,18 +167,20 @@ impl Worker {
             .agent(id)
             .and_then(|agent| agent.startup.clone())
             .ok_or("Agent startup watch is missing")?;
-        // These native errors precede input. Keep their specific shell evidence
-        // and the reported marker together, so the watchdog cannot replace it
-        // and queued work remains held until actual startup confirmation.
         startup.reported = true;
-        if error.definitely_rejected
-            && error.code.as_deref() != Some("agent_shell_integration_unavailable")
-        {
+        if matches!(
+            error.code.as_deref(),
+            Some("agent_shell_starting" | "agent_shell_waiting")
+        ) {
+            // Shell questions are recoverable before any launch input.
             startup.recovery = Some(StartupRecovery::Unsubmitted { args });
+        } else {
+            startup.failure = Some(startup_failure(&error.message, ""));
         }
         state
             .set_agent_startup(id, Some(startup))
             .map_err(|e| e.to_string())?;
+        state.abandon_failed_startup_queue(id, io::now_ms());
         state
             .set_agent_error(id, Some(message.clone()))
             .map_err(|e| e.to_string())?;
@@ -214,9 +216,11 @@ impl Worker {
                     && (info.name.as_deref() == Some(&name)
                         || super::resume::native_attempt(&agent, info).is_some())
             });
+            let input_error = info.and_then(|info| info.launch_input_error.as_deref());
             let native_error = info
                 .and_then(|info| super::resume::native_attempt(&agent, info))
-                .and_then(|attempt| attempt.error.as_deref());
+                .and_then(|attempt| attempt.error.as_deref())
+                .or(input_error);
             // Codex defers SessionStart until its first prompt. Native
             // interactive confirmation, or a provider already waiting at its
             // own startup dialog, proves it started. Preserve that help wait.
@@ -248,7 +252,12 @@ impl Worker {
                 continue;
             }
             if !startup.reported {
-                let evidence = self.startup_screen(agent.id);
+                let evidence =
+                    if input_error.is_some() && agent.runtime_identity.session_id.is_some() {
+                        "> Conversation screen omitted".into()
+                    } else {
+                        self.startup_screen(agent.id)
+                    };
                 let diagnostics = self.startup_diagnostics(&agent);
                 let reason = if let Some(reason) = native_error {
                     reason

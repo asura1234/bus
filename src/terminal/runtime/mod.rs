@@ -167,7 +167,7 @@ pub struct TerminalRuntime {
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_prompt_generation: Arc<AtomicU64>,
-    launch_input_error: Arc<Mutex<Option<String>>>,
+    launch_input_error: Arc<Mutex<Option<(String, bool)>>>,
     #[cfg(test)]
     launch_input_submitted: Arc<AtomicBool>,
     // Task handles for deterministic shutdown

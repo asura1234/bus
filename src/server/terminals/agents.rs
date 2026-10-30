@@ -500,6 +500,9 @@ impl App {
                     })
             });
         Some(crate::protocol::api::schema::AgentInfo {
+            launch_input_error: self
+                .lookup_runtime_sender(ws_idx, pane_id)
+                .and_then(|runtime| runtime.definite_launch_input_error()),
             native_resume: terminal.native_resume.as_ref().map(|resume| {
                 crate::protocol::api::schema::NativeResumeInfo {
                     name: resume.name.clone(),

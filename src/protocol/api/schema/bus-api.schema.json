@@ -4633,6 +4633,13 @@
             "interactive_ready": {
               "type": "boolean"
             },
+            "launch_input_error": {
+              "description": "Definite launch input failure before Enter, with no screen or message content.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "launch_pending": {
               "type": "boolean"
             },

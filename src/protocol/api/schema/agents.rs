@@ -282,6 +282,9 @@ pub struct AgentInfo {
     /// Absent after interactive confirmation and on ordinary client reattach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_resume: Option<NativeResumeInfo>,
+    /// Definite launch input failure before Enter, with no screen or message content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_input_error: Option<String>,
     pub terminal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

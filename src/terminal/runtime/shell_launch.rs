@@ -148,7 +148,7 @@ impl ShellWriter {
             terminal.launch_shell_prompt_generation(&probe.token),
             Ordering::Release,
         );
-        self.write(Bytes::from_static(b"\r"))
+        Ok(())
     }
 }
 
@@ -162,7 +162,16 @@ impl TerminalRuntime {
         self.launch_input_error
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()
+            .as_ref()
+            .map(|(error, _)| error.clone())
+    }
+
+    pub(crate) fn definite_launch_input_error(&self) -> Option<String> {
+        self.launch_input_error
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .and_then(|(error, enter_attempted)| (!enter_attempted).then(|| error.clone()))
     }
 
     #[cfg(test)]
@@ -223,13 +232,19 @@ impl TerminalRuntime {
         #[cfg(test)]
         let submitted = self.launch_input_submitted.clone();
         std::thread::spawn(move || {
+            let mut enter_attempted = false;
             let result = writer
                 .wait_ready(&probe, &terminal)
                 .and_then(|()| {
                     super::draft_input::DraftInput::acquire_launch(&draft_input, &writer.io)
                 })
                 .and_then(|lease| {
-                    let result = writer.run(&probe, &terminal, &command, &prompt_floor);
+                    let result = writer
+                        .run(&probe, &terminal, &command, &prompt_floor)
+                        .and_then(|()| {
+                            enter_attempted = true;
+                            writer.write(Bytes::from_static(b"\r"))
+                        });
                     if result.is_ok() {
                         lease.restored();
                     }
@@ -242,7 +257,8 @@ impl TerminalRuntime {
             if let Err(error) = result {
                 *input_error
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner()) = Some(error.to_string());
+                    .unwrap_or_else(|error| error.into_inner()) =
+                    Some((error.to_string(), enter_attempted));
                 tracing::warn!(event="bus.agent.launch_input_failed",pane=pane_id,%error,"Launch input was not confirmed; retain the shell for inspection");
             }
         });

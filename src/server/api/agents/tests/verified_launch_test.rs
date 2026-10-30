@@ -210,6 +210,15 @@ async fn verified_launch_never_enters_a_line_transformed_twice() {
         .launch_input_error()
         .unwrap()
         .contains("twice"));
+    let (ws, pane) = app.parse_current_public_pane_id(&target).unwrap();
+    let info = serde_json::to_value(app.agent_info(ws, pane).unwrap()).unwrap();
+    assert!(
+        info["launch_input_error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("twice"),
+        "{info}"
+    );
     // A fresh editor round trip drains every earlier write before checking
     // the accept-line counter; absence is not an arbitrary timed sleep.
     assert!(prompt_runtime(&app)

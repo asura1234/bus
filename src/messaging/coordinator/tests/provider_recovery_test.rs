@@ -733,3 +733,98 @@ fn recovered_provider_records_and_closes_its_next_exit() {
     );
     assert_eq!(closed[0].expected_terminal_id, "new-terminal");
 }
+
+#[test]
+fn startup_launch_rejection_resume_tab_abandons_never_submitted_work() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    struct RejectResumeTab;
+    impl Transport for RejectResumeTab {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::TabCreate(_) => Err(TransportError {
+                    code: Some("tab_create_failed".into()),
+                    message: "login shell is not executable".into(),
+                    definitely_rejected: true,
+                }),
+                Method::PaneCloseIfIdentity(_) => Ok(ResponseResult::Ok {}),
+                other => MissingNative.request(other),
+            }
+        }
+    }
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let hooks = dir.join(".codex/hooks.json");
+    let document = merge_hooks(
+        json!({}),
+        HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(&hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    let request = queue(&mut worker, room, agent, "queued task");
+    worker.transport = Box::new(RejectResumeTab);
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+    assert!(result["agents"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("login shell is not executable"));
+    let request_state = worker.state.request(request).unwrap().clone();
+    let later = queue(&mut worker, room, agent, "work after failed resume");
+    let later_state = worker.state.request(later).unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(later_state.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        later_state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    assert_eq!(
+        request_state.phase,
+        RequestPhase::Abandoned,
+        "definite resume launch creation failure must close never-submitted work"
+    );
+    assert_eq!(
+        request_state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+}
+
+#[test]
+fn startup_launch_rejection_uncertain_resume_tab_retains_queued_work() {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    struct UncertainResumeTab;
+    impl Transport for UncertainResumeTab {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::TabCreate(_) => Err(TransportError {
+                    code: None,
+                    message: "transport lost".into(),
+                    definitely_rejected: false,
+                }),
+                Method::PaneCloseIfIdentity(_) => Ok(ResponseResult::Ok {}),
+                other => MissingNative.request(other),
+            }
+        }
+    }
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let hooks = dir.join(".codex/hooks.json");
+    let document = merge_hooks(
+        json!({}),
+        HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(&hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    let request = queue(&mut worker, room, agent, "queued task");
+    worker.transport = Box::new(UncertainResumeTab);
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
