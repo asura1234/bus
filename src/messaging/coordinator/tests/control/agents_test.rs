@@ -689,6 +689,85 @@ fn agent_clear_restores_reply_instructions_for_first_message_providers() {
 }
 
 #[test]
+fn agent_clear_restores_reply_instructions_for_an_adopted_codex_session() {
+    use std::sync::{Arc, Mutex};
+    struct Prompts(Arc<Mutex<Vec<String>>>);
+    impl Transport for Prompts {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let Method::AgentPromptIfIdle(params) = method else {
+                panic!("agent clear must only type into the idle agent");
+            };
+            self.0.lock().unwrap().push(params.text);
+            let agent = serde_json::from_value(json!({
+                "terminal_id":"terminal", "agent":"codex", "agent_status":"idle",
+                "workspace_id":"workspace", "tab_id":"tab", "pane_id":"pane",
+                "focused":false, "interactive_ready":true, "revision":1
+            }))
+            .unwrap();
+            Ok(ResponseResult::AgentPrompted { agent })
+        }
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "bus-control-clear-adopted-codex-{}-{}",
+        std::process::id(),
+        crate::messaging::storage::io::now_ns()
+    ));
+    let typed = Arc::new(Mutex::new(Vec::new()));
+    let mut worker = Worker::open(dir.clone(), Box::new(Prompts(Arc::clone(&typed)))).unwrap();
+    worker.dev_enabled = true;
+    let room = worker.state.create_room("test").unwrap();
+    let agent = worker
+        .state
+        .create_agent(room, "worker", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    let spool = dir.join("callbacks").join("launch");
+    std::fs::create_dir_all(&spool).unwrap();
+    std::fs::write(
+        spool.join("adopted-session"),
+        "160d1f8b-9023-44b8-9bc7-24333effb185\n",
+    )
+    .unwrap();
+    worker.state.confirm_hook_setup(agent).unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 1)
+        .unwrap();
+    let response = call(
+        &mut worker,
+        "clear-adopted-codex",
+        "agent.clear",
+        json!({"agent":"worker"}),
+    );
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.result["sent"], "/clear");
+    let prompts: Vec<_> = worker
+        .state
+        .requests()
+        .map(|request| request.prompt.text.clone())
+        .collect();
+    assert_eq!(
+        prompts.len(),
+        1,
+        "adopted Codex clear must restore the reply instructions: {prompts:?}"
+    );
+    assert!(prompts[0].contains("bus send --reply-to N"), "{prompts:?}");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn agent_clear_refuses_an_agent_that_is_not_idle_or_still_has_messages() {
     let (mut worker, room, agent, dir) = fixture();
     let launching = call(

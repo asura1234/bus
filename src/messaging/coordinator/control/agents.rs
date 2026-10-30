@@ -156,12 +156,23 @@ impl Worker {
         Ok(json!({"agent_id": id, "sent": text, "stage": "cleared"}))
     }
 
-    /// Cursor and Grok take instructions as a first message. Clear starts a
-    /// fresh context, so the current reply form has to be queued again.
-    /// Launch-arg providers already keep that form in their prompt arguments.
+    /// Providers that cannot take the prompt at launch get it as a first
+    /// message. Clear starts a fresh context, so that text has to be queued
+    /// again. Cursor and Grok never take launch arguments. An adopted Codex
+    /// session replays its original developer instructions and took the same
+    /// first-message path. Claude, and a Codex session Bus started, keep the
+    /// form in their prompt arguments.
     fn requeue_first_message_instructions(&mut self, id: AgentId) -> Result<(), String> {
         let agent = self.state.agent(id).ok_or("Unknown agent")?.clone();
-        if orchestrator::prompt_args(agent.provider, std::path::Path::new("."), false)?.is_some() {
+        let adopted = agent
+            .runtime_identity
+            .launch_id
+            .as_deref()
+            .is_some_and(|launch| {
+                launch::reserved_session(&self.data_dir.join("callbacks").join(launch)).is_some()
+            });
+        if orchestrator::prompt_args(agent.provider, std::path::Path::new("."), adopted)?.is_some()
+        {
             return Ok(());
         }
         let docs = orchestrator::write_docs(&self.data_dir)?;
