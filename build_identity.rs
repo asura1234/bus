@@ -13,6 +13,22 @@ const VENDORED_INPUTS: &[&str] = &[
 
 fn record_build_identity() {
     let manifest = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from);
+    // Cargo otherwise treats identical relative paths in different checkouts as
+    // the same package. Its config resolves this value for the current checkout.
+    println!("cargo:rerun-if-env-changed=BUS_CHECKOUT_ROOT");
+    if let Some(root) = &manifest {
+        println!("cargo:rustc-env=BUS_BUILD_CHECKOUT={}", root.display());
+    }
+    if let Some(root) = manifest.as_ref().filter(|root| root.join(".git").exists()) {
+        let marker = env::var_os("BUS_CHECKOUT_ROOT")
+            .map(PathBuf::from)
+            .expect("BUS_CHECKOUT_ROOT is missing; run Cargo from the checkout so .cargo/config.toml is loaded");
+        assert_eq!(
+            root.canonicalize().expect("canonical checkout path"),
+            marker.canonicalize().expect("canonical BUS_CHECKOUT_ROOT"),
+            "BUS_CHECKOUT_ROOT must identify the current checkout"
+        );
+    }
     let git = |args: &[&str]| {
         // A source archive inside another project must not claim its HEAD.
         // Both ordinary checkouts and worktrees have their own .git entry.
@@ -39,9 +55,7 @@ fn record_build_identity() {
         "cargo:rustc-env=BUS_BUILD_PROFILE={}",
         env::var("PROFILE").unwrap_or_else(|_| "unknown".into())
     );
-    if env::var_os("CARGO_FEATURE_DEV_TOOLS").is_some() {
-        record_dev_build_identity(manifest.as_deref(), &git);
-    }
+    record_build_source_identity(manifest.as_deref(), &git);
     if let Some(path) = git(&["rev-parse", "--git-path", "HEAD"]) {
         println!("cargo:rerun-if-changed={path}");
     }
@@ -63,7 +77,7 @@ fn record_build_identity() {
     }
 }
 
-fn record_dev_build_identity(
+fn record_build_source_identity(
     manifest: Option<&std::path::Path>,
     git: &impl Fn(&[&str]) -> Option<String>,
 ) {
