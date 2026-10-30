@@ -39,7 +39,7 @@ def render(data):
             if "pr" in values and not PR.fullmatch(values["pr"]):
                 raise ValueError("invalid PR/MR link or branch")
             rows.append("- " + values["name"] + "\n" + "\n".join(
-                f"    - {labels[k]}: {values[k]}" for k in keys[1:]))
+                f"  - {labels[k]}: {values[k]}" for k in keys[1:]))
         sections.append("## " + titles[key] + "\n" + ("\n".join(rows) if rows else "None"))
     return "\n\n".join(sections) + "\n"
 

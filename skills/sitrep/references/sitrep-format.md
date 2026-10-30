@@ -30,21 +30,21 @@ None
 
 ## Ongoing
 - Task name
-    - TLDR: One-line summary.
-    - Context: Full evidenced context.
-    - Status: in-development
-    - PR/MR: [#12 Title](https://example.com/pr/12)
+  - TLDR: One-line summary.
+  - Context: Full evidenced context.
+  - Status: in-development
+  - PR/MR: [#12 Title](https://example.com/pr/12)
 
 ## Finished (since the last sitrep)
 - Completed task
-    - TLDR: One-line summary.
-    - Context: Full evidenced context.
-    - PR/MR: [#11 Title](https://example.com/pr/11)
+  - TLDR: One-line summary.
+  - Context: Full evidenced context.
+  - PR/MR: [#11 Title](https://example.com/pr/11)
 
 ## Deferred
 - Deferred task
-    - TLDR: One-line summary.
-    - Context: Full evidenced context.
+  - TLDR: One-line summary.
+  - Context: Full evidenced context.
 ```
 
 Malformed examples include `None for you right now, but ...` in Blockers,

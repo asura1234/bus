@@ -49,9 +49,9 @@ def test_complete_report_and_invalid_status():
     data["deferred"] = [{"name": "Later", "tldr": "On hold.", "context": "Waiting for scheduling."}]
     result = render(data)
     assert result.returncode == 0, result.stderr
-    assert "    - Status: in-development\n    - PR/MR: [#12 Add it](https://example.com/pr/12)" in result.stdout
-    assert "## Finished (since the last sitrep)\n- Fix\n    - TLDR: Merged." in result.stdout
-    assert "## Deferred\n- Later\n    - TLDR: On hold." in result.stdout
+    assert "  - Status: in-development\n  - PR/MR: [#12 Add it](https://example.com/pr/12)" in result.stdout
+    assert "## Finished (since the last sitrep)\n- Fix\n  - TLDR: Merged." in result.stdout
+    assert "## Deferred\n- Later\n  - TLDR: On hold." in result.stdout
     data["ongoing"][0]["status"] = "green"
     invalid = render(data)
     assert invalid.returncode != 0
