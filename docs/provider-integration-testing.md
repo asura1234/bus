@@ -112,7 +112,10 @@ checksum to the source while the slot is held.
 Use `sbus` for **every** later example. The wrapper above is a template: without
 an approved real-provider PATH and login mapping, **stop**, do not run a pretend
 acceptance. Run `sbus --paths` again before mutations and after relaunch; require
-`ok: true` on control commands.
+`ok: true` on control commands. `sbus stop` is outside that envelope: it prints
+`{"stopped":true}` when a server was running, or `{"stopped":false}` when none
+was running, with no `ok` field. Require `stopped: true` after a server this
+scratch started.
 Use only a provider listed by `sbus agent add --help`; Kimi applies once the
 build actually supports it. Preserve the private root until evidence is saved.
 
@@ -367,8 +370,9 @@ not submitted. Mark every unrun cell explicitly.
   Never infer success from the command receipt.
 - [ ] Ctrl+Q the scratch UI, then relaunch `sbus --dev` in the same environment
   and data root. Confirm paths, binary, saved provider session/context and a
-  fresh reply. For a mid-request restart, run `sbus stop` during the turn, then
-  relaunch `sbus --dev` and inspect `sbus message status MESSAGE_ID`.
+  fresh reply. For a mid-request restart, run `sbus stop` during the turn.
+  Expect `{"stopped":true}` and no `ok` field, then relaunch `sbus --dev` and
+  inspect `sbus message status MESSAGE_ID`.
   Explicit `BUS_DATA_DIR` cannot be combined with `bus resume`; this is an
   explicit-root relaunch, not a registry-resume test. Use the separate isolated
   registry procedure below. Machine sleep or Bus restart ends in-flight turns
@@ -388,8 +392,8 @@ not submitted. Mark every unrun cell explicitly.
   so they may be absent from that status. Do not delete project hooks to make
   status empty. The isolation check is no edit to a global provider config
   (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.grok`, `~/.kimi-code`) and no
-  credential copies. Stop only the scratch server with `sbus stop`; retain only
-  authorized, redacted evidence.
+  credential copies. Stop only the scratch server with `sbus stop` and require
+  `{"stopped":true}`. Retain only authorized, redacted evidence.
 
 ### Separate registry-based cold resume
 
