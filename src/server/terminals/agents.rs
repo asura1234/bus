@@ -254,7 +254,7 @@ impl App {
         let runtime = self
             .terminal_runtimes
             .get(&terminal_id)
-            .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
+            .ok_or_else(|| AgentStartError::TargetUnavailableBeforeInput(params.pane_id.clone()))?;
         available_shell_name(runtime).ok_or_else(|| {
             if runtime.waiting_for_shell_prompt() {
                 AgentStartError::ShellStarting(params.pane_id.clone())
@@ -275,11 +275,10 @@ impl App {
         }
 
         let now = Instant::now();
-        let terminal = self
-            .state
-            .terminals
-            .get_mut(&terminal_id)
-            .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
+        let terminal =
+            self.state.terminals.get_mut(&terminal_id).ok_or_else(|| {
+                AgentStartError::TargetUnavailableBeforeInput(params.pane_id.clone())
+            })?;
         terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         runtime.mark_agent_launch();
@@ -333,6 +332,10 @@ impl App {
                 message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then retry the launch."),
             },
             AgentStartError::ShellStarting(target) => self.shell_wait_error_body(&target),
+            AgentStartError::TargetUnavailableBeforeInput(target) => crate::protocol::api::schema::ErrorBody {
+                code: "agent_pane_unavailable_before_input".into(),
+                message: format!("agent target pane {target} has no live terminal; no launch input was sent"),
+            },
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
                 message: format!("agent target pane {target} has no live terminal"),
@@ -624,6 +627,7 @@ pub(in crate::server) enum AgentStartError {
     TargetNotFound(String),
     TargetBusy(String),
     TargetUnavailable(String),
+    TargetUnavailableBeforeInput(String),
     InputFailed(String),
     NoShellEditor(String),
     DuplicateName {

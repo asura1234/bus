@@ -1654,3 +1654,122 @@ fn startup_launch_rejection_editor_failure_closes_saved_session_work_promptly() 
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn definite_launch_rejection_vanished_pane_abandons_new_sender_work() {
+    use crate::messaging::native::BusTransport;
+    use crate::protocol::api::client::ConnectionTarget;
+    struct VanishedPane {
+        fallback: FailedLaunchNative,
+        client: BusTransport,
+    }
+    impl Transport for VanishedPane {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if matches!(method, Method::AgentStart(_)) {
+                return self.client.request_using(method, |_, request, _| {
+                    Ok(json!({"id":request.id,"error":{"code":"agent_pane_not_found","message":"agent target pane pane not found"}}))
+                });
+            }
+            self.fallback.request(method)
+        }
+    }
+    let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    state.delete_agent(previous, 0).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(VanishedPane {
+        fallback: FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            ..Default::default()
+        },
+        client: BusTransport::new(ConnectionTarget::SocketPath("unused".into())),
+    });
+    worker
+        .add_agent(
+            AddAgent {
+                room,
+                name: "vanished".into(),
+                provider: Provider::Codex,
+                cwd: dir.to_string_lossy().into_owned(),
+                extra_args: String::new(),
+                consent_project_hooks: true,
+            },
+            None,
+            &mpsc::channel().0,
+        )
+        .unwrap_err();
+    let agent = worker
+        .state
+        .agents()
+        .find(|a| a.name == "vanished")
+        .unwrap()
+        .id;
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "work after definite pane rejection",
+    );
+    let request_state = worker.state.request(request).unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(request_state.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request_state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+}
+
+#[test]
+fn definite_launch_rejection_after_shell_retry_allows_later_recovery() {
+    struct RejectRetry {
+        fallback: FailedLaunchNative,
+    }
+    impl Transport for RejectRetry {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentStartIfIdentity(_) => Err(TransportError {
+                    code: Some("agent_shell_integration_unavailable".into()),
+                    message: "no shell editor".into(),
+                    definitely_rejected: true,
+                }),
+                other => self.fallback.request(other),
+            }
+        }
+    }
+    let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::Codex);
+    let request = queue(&mut worker, room, agent, "queued before failed retry");
+    worker.transport = Box::new(RejectRetry {
+        fallback: FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            ..Default::default()
+        },
+    });
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    let recovery = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .recovery
+        .clone();
+    let result = worker.resume_room(room).unwrap();
+    let reason = result["agents"][0]["reason"].as_str().unwrap_or("");
+    assert!(
+        recovery.is_none(),
+        "definite failure must clear recovery authority: {recovery:?}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !reason.contains("unconfirmed"),
+        "the native rejection established that no input was sent: {result}"
+    );
+}

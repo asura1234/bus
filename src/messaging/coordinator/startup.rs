@@ -174,7 +174,9 @@ impl Worker {
         ) {
             // Shell questions are recoverable before any launch input.
             startup.recovery = Some(StartupRecovery::Unsubmitted { args });
+            startup.failure = None;
         } else {
+            startup.recovery = None;
             startup.failure = Some(startup_failure(&error.message, ""));
         }
         state
