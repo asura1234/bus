@@ -506,13 +506,14 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
 - [ ] Run `just ci` on the exact head with the current slot/disk policy and the
   clean-first procedure above, including `llvm-cov-target`, on every rerun.
   Record gate failures; a focused pass is not a full gate.
-- [ ] Get two independent reviews of that exact head from the currently
-  authorized reviewer lanes. Each reviewer is a different model from the
-  author and from the other reviewer. Record both reviewer names and the full
-  head SHA they reviewed. The lanes are whoever the orchestrator authorized
-  for this head. On 2026-10-31 those lanes are Grok and Kimi, while Codex is
-  at a usage limit and Claude orchestrates. Resolve findings and repeat
-  affected checks, acceptance and review after any new head.
+- [ ] Get two independent reviews of that exact head. The reviewers are two
+  different agents, and neither authored the change. At least one reviewer
+  runs on a different model from the author. When only two models are
+  available, the second reviewer may use the author's model and must still be
+  a different agent. Record both reviewer agents, their models, and the full
+  head SHA they reviewed. On 2026-10-31 the authorized lanes are Grok and
+  Kimi, while Codex is at a usage limit and Claude orchestrates. Resolve
+  findings and repeat affected checks, acceptance and review after any new head.
 - [ ] Do not depend on one provider. If Codex or another model stops on a usage
   limit, keep a second real model that can send and reply, and continue
   authoring and review with it. Record which providers actually ran.
