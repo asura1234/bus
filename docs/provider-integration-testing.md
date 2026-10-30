@@ -269,9 +269,11 @@ then the flagged command. A name that already returned `ok: true` is finished.
 `--consent-hooks` does not change the result. Create `provider-claude` first.
 Expect `ok: true` and `{agent_id, stage: "launching"}`. A second orchestrator
 on `provider-matrix` fails with `Room {room_id} already has orchestrator agent
-{agent_id}; a work room has at most one orchestrator`. Pointing `new-orch` at
-`provider-claude` after it is saved fails with `Agent {agent_id} already
-orchestrates a room; an orchestrator keeps its room for life`.
+{agent_id}; a work room has at most one orchestrator`. A second `agent add` of
+the saved name `new-orch`, including one with `--orchestrates provider-claude`,
+fails with `Agent name "new-orch" is already used by agent AGENT_ID in room
+ROOM_ID; choose a unique name across all rooms` and leaves `new-orch` on
+`provider-matrix`.
 
 `second-peer` is the new provider in `provider-claude`. Use the same first-add
 rule as `new-peer`. The name is session-unique, so it is a different agent
