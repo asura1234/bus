@@ -106,21 +106,30 @@ impl SubmissionInspector for OwnedComposer {
                     }
                     return observation;
                 }
-                if body == owned.body {
-                    return InputObservation::Pending;
+                if accept_owned_change(&mut owned, body) {
+                    InputObservation::Pending
+                } else {
+                    owned.lost = true;
+                    InputObservation::Other
                 }
-                if let Some(at) = owned
-                    .remainders
-                    .iter()
-                    .position(|remaining| Some(remaining) == body.as_ref())
-                {
-                    owned.remainders.drain(..=at);
-                    owned.body = body;
-                    owned.progress = owned.progress.wrapping_add(1);
-                    return InputObservation::Pending;
+            }
+            // Grok refuses every body that is not the full paste. A line kill
+            // therefore looks unavailable even when it is the remainder of the
+            // draft Bus just typed. Keep clearing only that owned remainder.
+            // A developer edit is not one of those remainders: mark it lost
+            // and leave it. Do not treat a prefix as owned before the full
+            // paste was recognized, or a developer prefix could be submitted.
+            InputObservation::Unavailable if self.kind == AgentKind::Grok => {
+                if owned.lost || owned.body.is_none() {
+                    return InputObservation::Unavailable;
                 }
-                owned.lost = true;
-                InputObservation::Other
+                let body = input(self.kind, screen);
+                if accept_owned_change(&mut owned, body) {
+                    InputObservation::Pending
+                } else {
+                    owned.lost = true;
+                    InputObservation::Unavailable
+                }
             }
             other => other,
         }
@@ -179,6 +188,23 @@ impl SubmissionInspector for OwnedComposer {
             }
         }
     }
+}
+
+fn accept_owned_change(owned: &mut Owned, body: Option<String>) -> bool {
+    if body == owned.body {
+        return true;
+    }
+    let Some(at) = owned
+        .remainders
+        .iter()
+        .position(|remaining| Some(remaining) == body.as_ref())
+    else {
+        return false;
+    };
+    owned.remainders.drain(..=at);
+    owned.body = body;
+    owned.progress = owned.progress.wrapping_add(1);
+    true
 }
 
 fn remaining_prefix(body: &str, text: &str) -> Option<String> {
