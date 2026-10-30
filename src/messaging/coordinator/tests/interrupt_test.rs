@@ -131,6 +131,37 @@ fn the_interrupted_turn_and_the_queue_close_as_interrupted_once_the_agent_is_idl
 }
 
 #[test]
+fn grok_interrupt_presses_ctrl_c_once() {
+    // Grok 1.0.70 ignores Esc. Its working hint is "Press Ctrl+c to cancel
+    // the turn", and a second Ctrl+C escalates toward quit.
+    let mut fixture = Fixture::new(Provider::Grok);
+    fixture.status(RuntimeStatus::Working);
+    let response = interrupt(&mut fixture, json!({"agent": "builder"}));
+    assert!(response.ok, "{response:?}");
+    assert_eq!(
+        response.result["agents"],
+        json!([{
+            "agent_id": fixture.agent,
+            "name": "builder",
+            "outcome": "interrupting",
+            "key": "ctrl+c"
+        }])
+    );
+    assert_eq!(
+        keys(&fixture),
+        [("pane".to_owned(), vec!["ctrl+c".to_owned()])]
+    );
+    assert!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .interrupt_pending
+    );
+}
+
+#[test]
 fn message_status_reports_the_interrupt_reason() {
     let mut fixture = Fixture::new(Provider::Codex);
     let lead = running(&mut fixture, "write the parser", "turn-1");

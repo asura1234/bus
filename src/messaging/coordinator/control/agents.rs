@@ -333,7 +333,8 @@ impl Worker {
                     return Ok(row);
                 };
                 // One press only: a second Esc opens Claude's rewind or
-                // Codex's edit-previous-message, a second Ctrl+C quits Cursor.
+                // Codex's edit-previous-message, and a second Ctrl+C quits
+                // Cursor or escalates Grok's cancel toward quit.
                 let sent =
                     self.transport
                         .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
@@ -385,10 +386,12 @@ impl Worker {
 
 /// The key that stops a running turn, from each provider's own working hint:
 /// Claude Code and Codex show `esc to interrupt`, Cursor `ctrl+c to stop`.
+/// Grok 1.0.70 ignores Esc while a turn is running and shows "Press Ctrl+c
+/// to cancel the turn". Ctrl+C is its cancel key.
 fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
-        Provider::ClaudeCode | Provider::Codex | Provider::Grok => "esc",
-        Provider::Cursor => "ctrl+c",
+        Provider::ClaudeCode | Provider::Codex => "esc",
+        Provider::Cursor | Provider::Grok => "ctrl+c",
     }
 }
 
