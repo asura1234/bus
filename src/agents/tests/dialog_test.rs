@@ -452,6 +452,48 @@ fn unnumbered_options_parse_when_a_confirm_hint_follows() {
     }
 }
 
+// Captured from a fresh real Kimi 2.4.0 agent in an untrusted scratch project.
+const KIMI_TRUST: &str = concat!(
+    " ─────────────────────────────────────────────────────────────────────────────────────────\n",
+    "  Trust this folder?\n",
+    "  ↑↓ navigate · Enter select · Esc exit\n\n",
+    "  /private/tmp/kimi-trust-66127b1/project\n\n",
+    "  No project integrations or instructions to activate.\n\n",
+    "  Trust is remembered for this folder, including future project config changes.\n",
+    "  Tool approvals follow your permission settings.\n\n",
+    "   ❯ Trust and continue\n",
+    "     Exit\n",
+    " ─────────────────────────────────────────────────────────────────────────────────────────\n",
+);
+
+#[test]
+fn kimi_trust_panel_has_choices_even_though_its_hint_is_above_them() {
+    let trust = parse(KIMI_TRUST).unwrap();
+    assert_eq!(
+        labels(&trust),
+        [(1, "Trust and continue", true), (2, "Exit", false)]
+    );
+    assert!(trust
+        .text
+        .contains("/private/tmp/kimi-trust-66127b1/project"));
+    assert_eq!(
+        trust.hint.as_deref(),
+        Some("↑↓ navigate · Enter select · Esc exit")
+    );
+    assert_eq!(trust.keys_for(1), Some(vec!["enter"]));
+    assert_eq!(trust.keys_for(2), Some(vec!["down", "enter"]));
+
+    let exit = KIMI_TRUST
+        .replace("❯ Trust and continue", "  Trust and continue")
+        .replace("     Exit", "   ❯ Exit");
+    assert_eq!(
+        labels(&parse(&exit).unwrap()),
+        [(1, "Trust and continue", false), (2, "Exit", true)]
+    );
+    assert_eq!(parse(&exit).unwrap().keys_for(1), Some(vec!["up", "enter"]));
+    assert!(parse(&KIMI_TRUST.replace("Trust this folder?", "Unrelated question")).is_none());
+}
+
 #[test]
 fn only_the_last_numbered_block_is_live() {
     let screen = format!("Earlier plan:\n❯ 1. Old\n  2. Older\n\nsome output\n\n{CLAUDE_TRUST}");
