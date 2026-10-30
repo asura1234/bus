@@ -28,10 +28,20 @@ coverage, not real-model acceptance. Repeat acceptance for the final head.
   two lines. Atomically acquire an available slot with `mkdir`, install an EXIT
   trap immediately, and use its matching target. Remove only your queue entry.
 
+Create `$scratch` and `$scratch/bin` before taking a slot. Paste the block
+below into one interactive shell, top to bottom. It refuses the copy when
+`scratch` is empty, copies and `cmp`s while the slot is held, releases the
+slot, then starts `sbus --dev`.
+
 ```sh
-# Slot 1, if admitted and free; slot 2 uses the second pair below.
-set -e
-mkdir /tmp/bus-568-build-slot-1 || exit 1
+set -eu
+umask 077
+scratch=$(mktemp -d /private/tmp/bus-provider-test.XXXXXX)
+printf '%s\n' "$scratch"
+mkdir -m 700 "$scratch/data" "$scratch/project" "$scratch/bin" "$scratch/home"
+git -C "$scratch/project" init
+# Slot 1, after you are admitted and it is free. Slot 2 uses the pair below.
+mkdir /tmp/bus-568-build-slot-1
 trap 'rmdir /tmp/bus-568-build-slot-1' EXIT
 export PATH="$HOME/.cargo/bin:$PATH" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3
 export CARGO_TARGET_DIR=/Users/dylanliu/work/.cargo-targets/bus-shared
@@ -39,40 +49,17 @@ export CARGO_TARGET_DIR=/Users/dylanliu/work/.cargo-targets/bus-shared
 # CARGO_TARGET_DIR=/Users/dylanliu/work/.cargo-targets/bus-shared-2
 # Interim shared-target rule: run both cleans immediately after acquisition,
 # before EVERY manual acceptance build, test, or gate, including reruns.
+if [ -z "${scratch:-}" ] || [ ! -d "$scratch/bin" ]; then
+  echo "create \$scratch/bin before the slot; refusing to copy" >&2
+  exit 1
+fi
 nice -n 19 cargo clean -p bus --target-dir "$CARGO_TARGET_DIR"
 nice -n 19 cargo clean -p bus --target-dir "$CARGO_TARGET_DIR/llvm-cov-target"
 nice -n 19 cargo build --locked --features dev-tools
-# Copy the binary to the private run directory before releasing the slot.
 cp "$CARGO_TARGET_DIR/debug/bus" "$scratch/bin/bus"
 cmp "$CARGO_TARGET_DIR/debug/bus" "$scratch/bin/bus"
-# End this shell to release its lock, or clear the trap after rmdir.
-```
-
-A shared target's top-level binary can belong to another worktree even after
-Cargo reports `Fresh`. A copy is not verified merely because Cargo succeeded.
-Verify the **copied binary** and the scratch server's compiled identity before
-adding agents: launch it as below, get `logs` from `sbus --paths`, and read
-`<logs>/perf/client.jsonl` and `server.jsonl` for this run's `run_start` records.
-Both `build_sha` values must equal the full `git rev-parse HEAD`; correlate the
-new records using their PID/time and `sbus state`'s `build.binary` path. Check
-`sbus agent add --help`'s `possible values` includes the new provider. `--version`
-and `state.build` do **not** expose the SHA on current builds. If a record is
-missing, `unknown`, mismatched, or cannot be tied to this run, stop: obtain a
-verified unique-target build or wait for the provenance fix. Never accept a
-short SHA or a guessed binary. Keep the slot until the shared-target copy is
-made; compare its checksum to the source while the slot is held.
-
-### One wrapper for UI and control
-
-Create the scratch tree before the build, set `scratch` to the same absolute
-path in both terminals, and use `sbus` for **every** example in this guide:
-
-```sh
-umask 077
-scratch=$(mktemp -d /private/tmp/bus-provider-test.XXXXXX)
-printf '%s\n' "$scratch"
-mkdir -m 700 "$scratch/data" "$scratch/project" "$scratch/bin" "$scratch/home"
-git -C "$scratch/project" init
+rmdir /tmp/bus-568-build-slot-1
+trap - EXIT
 # After the approved provider login/PATH setup, put its executable directories
 # and non-secret environment in this private script. Do not copy credentials.
 cat > "$scratch/bin/sbus" <<'WRAPPER'
@@ -84,19 +71,36 @@ exec env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin" \
   "$root/bin/bus" "$@"
 WRAPPER
 chmod 700 "$scratch/bin/sbus"
-# In EACH terminal: set scratch to the printed absolute path, then:
-alias sbus="$scratch/bin/sbus"
+alias sbus="$scratch/bin/sbus"  # interactive shell; later examples use sbus
 sbus --paths                    # data must equal $scratch/data
 sbus --dev                      # UI terminal; leave it open
-# Other terminal, same alias and wrapper:
-sbus --paths
-sbus state                      # build.binary must be $scratch/bin/bus
-sbus settings                   # confirm isolated Feishu is unconfigured
 ```
 
-The wrapper is a template: without an approved real-provider PATH and login
-mapping, **stop**, do not run a pretend acceptance. Run `sbus --paths` again
-before mutations and after relaunch; require `ok: true` on control commands.
+In the other terminal, set `scratch` to the printed path and the same alias,
+then run `sbus --paths` and `sbus state`. `build.binary` must be
+`$scratch/bin/bus`. Run `sbus settings` there too.
+
+A shared target's top-level binary can belong to another worktree even after
+Cargo reports `Fresh`. A copy is not verified merely because Cargo succeeded.
+Verify the **copied binary** and the scratch server's compiled identity before
+adding agents: the block above starts `sbus --dev` only after `cmp`. Get `logs`
+from `sbus --paths`, and read `<logs>/perf/client.jsonl` and `server.jsonl` for
+this run's `run_start` records. Both `build_sha` values must equal the full
+`git rev-parse HEAD`; correlate the new records using their PID/time and
+`sbus state`'s `build.binary` path. Check `sbus agent add --help`'s
+`possible values` includes the new provider. `--version` and `state.build` do
+**not** expose the SHA on current builds. If a record is missing, `unknown`,
+mismatched, or cannot be tied to this run, stop: obtain a verified unique-target
+build or wait for the provenance fix. Never accept a short SHA or a guessed
+binary. Keep the slot until the shared-target copy is made; compare its
+checksum to the source while the slot is held.
+
+### One wrapper for UI and control
+
+Use `sbus` for **every** later example. The wrapper above is a template: without
+an approved real-provider PATH and login mapping, **stop**, do not run a pretend
+acceptance. Run `sbus --paths` again before mutations and after relaunch; require
+`ok: true` on control commands.
 Use only a provider listed by `sbus agent add --help`; Kimi applies once the
 build actually supports it. Preserve the private root until evidence is saved.
 
