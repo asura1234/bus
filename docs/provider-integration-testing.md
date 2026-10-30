@@ -362,12 +362,17 @@ not submitted. Mark every unrun cell explicitly.
   alongside it. If the provider's format cannot be unambiguously extracted,
   stop and ask for a verified procedure rather than substituting a preview.
 - [ ] Start a long turn, run `sbus agent interrupt AGENT`, then
-  `sbus message status MESSAGE_ID`. The status read is `ok: true`. When no
-  final was captured before the stop, expect `complete: true`,
-  `requests[].stage` `abandoned`, `reason` `interrupted`, and `reply` null.
-  A reply captured before the stop still settles as `replied`. The interrupt
-  result's `outcome` is `stopped`, `already_idle`, or `failed`; that field is
-  not the output of `sbus stop`.
+  `sbus message status MESSAGE_ID`. The status read is `ok: true`. The
+  expected result is interrupt `outcome` `stopped` and, when no final was
+  captured before the stop, `complete: true`, `requests[].stage` `abandoned`,
+  `reason` `interrupted`, and `reply` null. A reply captured before the stop
+  still settles as `replied`. The turn closes when the provider honors its
+  stop key and Bus next sees the agent idle. Claude, Codex, and Grok are sent
+  Esc; Cursor is sent Ctrl+C. Grok 1.0.70 ignores Esc, so the result is
+  `outcome` `failed` while the agent is still working and the request stays
+  open. Report that as a provider stop-key bug. It is not a pass. Do not
+  require `reason` `interrupted` for that Grok build until the binary under
+  test stops on Esc. Interrupt `outcome` is not the output of `sbus stop`.
 - [ ] Run the fixture filters below with `just test-one FILTER`. Each one is a
   cargo nextest run and follows the slot, disk, and clean-first rules above.
   Do not edit a live transcript or session file to manufacture a negative case.
@@ -433,8 +438,11 @@ not submitted. Mark every unrun cell explicitly.
 
   The `just test-one` filters above are the required proof for a torn
   transcript, a wrong session, a cancelled record, and `provider_error`.
-  The interrupt above is the safe live close: it yields a `MESSAGE_ID` with
-  `reason` `interrupted`. Bus accepts `--model` as a provider argument and
+  The interrupt above is the live close when the provider honors its stop
+  key: `outcome` `stopped`, and the request `abandoned` with `reason`
+  `interrupted`. `outcome: failed` while the agent is still working is the
+  Grok Esc bug; report it, and do not count it as a pass. Bus accepts
+  `--model` as a provider argument and
   leaves flag and model validation to the provider, so an invalid model is
   not a Bus-defined `provider_error`. Do not invent one, and do not edit a
   transcript. A live `provider_error` is opportunistic. When acceptance
