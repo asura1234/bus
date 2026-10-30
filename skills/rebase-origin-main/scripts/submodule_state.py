@@ -101,23 +101,22 @@ def remote_confirmed_commits(repo: Path, commits: list[str]) -> set[str]:
         return set()
     url = remote.stdout.strip()
     tips = remote_ref_tips(url)
-    if tips is None:
+    if not tips:
         return set()
-    if git(repo, 'rev-parse', '--is-shallow-repository') == 'true':
-        with tempfile.TemporaryDirectory(prefix='bus-child-remote-') as directory:
-            probe = Path(directory)
-            init = subprocess.run(['git', 'init', '-q', '--bare', directory], capture_output=True)
-            if init.returncode:
-                return set()
-            objects = Path(git(repo, 'rev-parse', '--absolute-git-dir')) / 'objects'
-            (probe / 'objects/info/alternates').write_text(f'{objects}\n')
-            if not fetch_tips_with_fallback(probe, url, tips):
-                return set()
-            return commits_reachable_from_tips(probe, commits, tips)
+    shallow = git(repo, 'rev-parse', '--is-shallow-repository') == 'true'
     missing = [tip for tip in tips if local_commit(repo, tip) is None]
-    if missing and not fetch_tips_with_fallback(repo, url, missing):
-        return set()
-    return commits_reachable_from_tips(repo, commits, tips)
+    if not shallow and not missing:
+        return commits_reachable_from_tips(repo, commits, tips)
+    with tempfile.TemporaryDirectory(prefix='bus-child-remote-') as directory:
+        probe = Path(directory)
+        init = subprocess.run(['git', 'init', '-q', '--bare', directory], capture_output=True)
+        if init.returncode:
+            return set()
+        objects = Path(git(repo, 'rev-parse', '--absolute-git-dir')) / 'objects'
+        (probe / 'objects/info/alternates').write_text(f'{objects}\n')
+        if not fetch_tips_with_fallback(probe, url, tips if shallow else missing):
+            return set()
+        return commits_reachable_from_tips(probe, commits, tips)
 
 
 def remote_has_commit(repo: Path, commit: str) -> bool:

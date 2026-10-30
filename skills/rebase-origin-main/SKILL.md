@@ -70,8 +70,8 @@ The child-work check examines all local child branches and a detached HEAD, excl
 reachable from child remote-tracking refs or from actual child-origin ref tips. A local tag or
 successfully fetching a SHA alone does not prove publication. Only the recorded pin and current
 HEAD are checked against remote ref tips; other local branches stay conservative unless covered
-by remote-tracking refs. The check fetches missing tips in one tree-filtered batch when needed,
-uses a temporary non-shallow object store for shallow clones, and fails closed.
+by remote-tracking refs. The check fetches tips only into a temporary object store with the
+child's objects as an alternate, never changes the child's config or format, and fails closed.
 Do not use the parent branch's publication as evidence that a child commit was published.
 `git fetch origin`
 Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
