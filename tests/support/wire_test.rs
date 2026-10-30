@@ -189,6 +189,9 @@ fn current_build_version() -> &'static str {
             .trim()
             .strip_prefix("bus ")
             .expect("bus --version should include the binary name")
+            .split_whitespace()
+            .next()
+            .expect("bus --version should include a version")
             .to_owned()
     })
 }
