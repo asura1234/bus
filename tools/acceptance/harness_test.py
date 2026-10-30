@@ -66,20 +66,11 @@ class Bus:
         self.pump_thread = None
 
     def prepare_skills(self):
+        """Refuse the developer's HOME. Skill install is never part of launching a test Bus."""
         home = Path(self.env["HOME"])
         protected = Path(self.env["TEST_BUS_PROTECTED_HOME"])
         if not home.is_absolute() or home.resolve() == protected.resolve():
             raise AssertionError("test isolation refused: acceptance Bus needs its own HOME")
-        result = subprocess.run([str(self.binary), "skills", "status"], env=self.env,
-                                capture_output=True, text=True, check=True)
-        report = json.loads(result.stdout)
-        if (report.get("answer") or {}).get("bundle_hash") == report["bundle_hash"]:
-            return
-        path = home / ".local/share/bus/settings.json"
-        settings = json.loads(path.read_text()) if path.exists() else {}
-        settings["skills_answer"] = {"accepted": False, "bundle_hash": report["bundle_hash"]}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(settings))
 
     def start(self):
         self.prepare_skills()

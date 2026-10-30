@@ -66,7 +66,7 @@ def test_disposable_os_metadata_keeps_bus_ownership(tmp_path, metadata):
     assert review["state"] == "installed"
 
 
-def test_recording_skills_consent_preserves_existing_bus_settings(tmp_path):
+def test_install_leaves_existing_settings_unchanged(tmp_path):
     home = tmp_path / "home"
     data = home / ".local/share/bus"
     data.mkdir(parents=True)
@@ -74,11 +74,9 @@ def test_recording_skills_consent_preserves_existing_bus_settings(tmp_path):
     (data / "settings.json").write_text(json.dumps(settings))
     before = (data / "settings.json").read_bytes()
     result = _bus(home, "install", "--yes", check=False)
-    assert result.returncode != 0
-    assert str(data / "settings.json") in result.stderr
+    assert result.returncode == 0, result.stderr
     assert (data / "settings.json").read_bytes() == before
-    saved = json.loads((data / "settings.json").read_text())
-    assert (saved.get("feishu_recipient"), saved.get("sidebar_width")) == ("ou_mine", 40)
+    assert (home / ".agents/skills/review-pr/SKILL.md").is_file()
 
 
 @pytest.mark.parametrize("name", [".env", ".config/review.toml", "notes.pyc"])

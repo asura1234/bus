@@ -151,17 +151,34 @@ fn copy_files(skill: &Skill, stage: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// An action for a skill this invocation did not replace.
+fn leave_action(state: &str) -> &'static str {
+    match state {
+        "conflict" => "preserved-conflict",
+        "blocked-link" => "blocked-link",
+        _ => "unchanged",
+    }
+}
+
+fn copy_action(state: &str) -> &'static str {
+    if state == "outdated" {
+        "updated"
+    } else {
+        "installed"
+    }
+}
+
 pub(super) fn install_one(
     home: &Path,
     root: &Path,
     provider: &str,
     skill: &Skill,
     manifest: &mut Manifest,
-) -> io::Result<()> {
+) -> io::Result<&'static str> {
     let path = root.join(&skill.name);
     let key = format!("{provider}/{}", skill.name);
-    let state = state(&path, manifest.installed.get(&key), &skill.hash)?;
-    if state == "installed"
+    let observed = state(&path, manifest.installed.get(&key), &skill.hash)?;
+    if observed == "installed"
         && manifest
             .installed
             .get(&key)
@@ -176,8 +193,8 @@ pub(super) fn install_one(
         );
         save_manifest(home, manifest)?;
     }
-    if matches!(state, "conflict" | "installed" | "blocked-link") {
-        return Ok(());
+    if matches!(observed, "conflict" | "installed" | "blocked-link") {
+        return Ok(leave_action(observed));
     }
     bus_io::private_dir(root)?;
     let token = format!("{}-{}", std::process::id(), bus_io::now_ns());
@@ -185,10 +202,11 @@ pub(super) fn install_one(
     let backup = root.join(format!(".bus-backup-{token}"));
     let result = (|| {
         copy_files(skill, &stage)?;
-        if self::state(&path, manifest.installed.get(&key), &skill.hash)? != state {
-            return Ok(());
+        let now = self::state(&path, manifest.installed.get(&key), &skill.hash)?;
+        if now != observed {
+            return Ok(leave_action(now));
         }
-        if state == "outdated" {
+        if observed == "outdated" {
             fs::rename(&path, &backup)?;
         }
         if let Err(error) = fs::rename(&stage, &path) {
@@ -208,7 +226,7 @@ pub(super) fn install_one(
         if backup.exists() {
             fs::remove_dir_all(&backup)?;
         }
-        Ok(())
+        Ok(copy_action(observed))
     })();
     if stage.exists() {
         fs::remove_dir_all(stage)?;

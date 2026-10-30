@@ -27,6 +27,60 @@ fn upgrades_replace_only_matching_owned_trees() {
 }
 
 #[test]
+fn install_reports_installed_updated_unchanged_and_preserved_conflict() {
+    let home = crate::utils::test_temp::unique_temp_path("bus-skill-actions");
+    std::fs::create_dir_all(&home).unwrap();
+    let first = install(&home).unwrap();
+    assert!(first
+        .skills
+        .iter()
+        .all(|skill| skill.action == Some("installed")));
+    let second = install(&home).unwrap();
+    assert!(second
+        .skills
+        .iter()
+        .all(|skill| skill.action == Some("unchanged")));
+
+    let path = home.join(".agents/skills/worktree-new/SKILL.md");
+    let current = std::fs::read(&path).unwrap();
+    std::fs::write(&path, "previous Bus release").unwrap();
+    let manifest_path = home.join(".local/share/bus/skills-manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["installed"]["codex/worktree-new"]["hash"] =
+        serde_json::json!(super::install::tree_hash(path.parent().unwrap()).unwrap());
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let updated = install(&home).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), current);
+    assert!(updated.skills.iter().all(|skill| {
+        skill.action
+            == Some(
+                if skill.provider == "codex" && skill.name == "worktree-new" {
+                    "updated"
+                } else {
+                    "unchanged"
+                },
+            )
+    }));
+
+    let user = home.join(".claude/skills/pr/SKILL.md");
+    std::fs::write(&user, "my custom skill\n").unwrap();
+    let preserved = install(&home).unwrap();
+    assert_eq!(std::fs::read(&user).unwrap(), b"my custom skill\n");
+    let conflict = preserved
+        .skills
+        .iter()
+        .find(|skill| skill.provider == "claude" && skill.name == "pr")
+        .unwrap();
+    assert_eq!(conflict.state, "conflict");
+    assert_eq!(conflict.action, Some("preserved-conflict"));
+    assert!(preserved.skills.iter().any(|skill| {
+        skill.provider == "codex" && skill.name == "pr" && skill.action == Some("unchanged")
+    }));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn corrupt_manifest_stops_before_copying_and_python_caches_do_not_change_ownership() {
     let home = crate::utils::test_temp::unique_temp_path("bus-skill-manifest");
     std::fs::create_dir_all(home.join(".local/share/bus")).unwrap();
@@ -60,6 +114,13 @@ fn symlink_skills_and_symlink_registries_are_never_written_through() {
     symlink(&outside, home.join(".claude/skills/pr")).unwrap();
     let report = install(&home).unwrap();
     assert!(!report.warnings.is_empty());
+    assert!(report
+        .skills
+        .iter()
+        .any(|skill| { skill.provider == "codex" && skill.action == Some("blocked-link") }));
+    assert!(report.skills.iter().any(|skill| {
+        skill.provider == "claude" && skill.name == "pr" && skill.action == Some("blocked-link")
+    }));
     assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
     std::fs::remove_dir_all(home).unwrap();
 }

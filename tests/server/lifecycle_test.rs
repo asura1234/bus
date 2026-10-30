@@ -466,17 +466,6 @@ fn a_socket_path_over_the_unix_limit_fails_fast_with_its_cause() {
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     let home = data.join("test-home");
     std::fs::create_dir_all(&home).unwrap();
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_bus"))
-        .args(["skills", "status"])
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .output()
-        .unwrap();
-    assert!(status.status.success());
-    let report: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
-    let settings = home.join(".local/share/bus");
-    std::fs::create_dir_all(&settings).unwrap();
-    std::fs::write(settings.join("settings.json"), serde_json::to_vec(&serde_json::json!({"skills_answer":{"accepted":false,"bundle_hash":report["bundle_hash"]}})).unwrap()).unwrap();
     cmd.env("HOME", &home);
     cmd.env("USERPROFILE", &home);
     cmd.env("BUS_DATA_DIR", &data);

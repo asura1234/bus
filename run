@@ -91,7 +91,40 @@ case "${1:-}" in
     install-skills)
         shift
         cd "$REPO_ROOT"
+        # A shared CARGO_TARGET_DIR can hand back another checkout's binary.
+        # Use it only when its embedded checkout and HEAD match this tree;
+        # otherwise rebuild into a target directory private to this command.
+        expected_sha=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$REPO_ROOT" rev-parse HEAD) || {
+            echo "Bus install-skills: cannot read this checkout's HEAD." >&2
+            exit 1
+        }
+        expected_root=$(python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$REPO_ROOT")
+        verify_checkout_binary() {
+            local binary="$1" probe_home report
+            [[ -x "$binary" ]] || return 1
+            probe_home=$(mktemp -d "${TMPDIR:-/tmp}/bus-skills-probe.XXXXXX") || return 1
+            chmod 700 "$probe_home" || { rm -rf "$probe_home"; return 1; }
+            if ! report=$(HOME="$probe_home" USERPROFILE="$probe_home" "$binary" skills status 2>/dev/null); then
+                rm -rf "$probe_home"
+                return 1
+            fi
+            rm -rf "$probe_home"
+            EXPECTED_SHA="$expected_sha" EXPECTED_ROOT="$expected_root" python3 -I -c '
+import json, os, sys
+report = json.loads(sys.stdin.read())
+ok = report.get("build_sha") == os.environ["EXPECTED_SHA"] and report.get("source_root") == os.environ["EXPECTED_ROOT"]
+sys.exit(0 if ok else 1)
+' <<<"$report"
+        }
         binary=$(build_bus --bin bus --features dev-tools) || exit $?
+        if ! verify_checkout_binary "$binary"; then
+            echo "Bus install-skills: the built binary is not this checkout; rebuilding into target/install-skills." >&2
+            binary=$(CARGO_TARGET_DIR="$REPO_ROOT/target/install-skills" build_bus --bin bus --features dev-tools) || exit $?
+            if ! verify_checkout_binary "$binary"; then
+                echo "Bus install-skills: rebuilt binary still does not match $expected_root @ $expected_sha." >&2
+                exit 1
+            fi
+        fi
         exec "$binary" skills install "$@"
         ;;
     -h|--help)

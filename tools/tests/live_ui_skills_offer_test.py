@@ -1,4 +1,4 @@
-"""The live driver must reach the room screen in a HOME with no saved skills answer."""
+"""A normal launch must reach the room screen without offering to install skills."""
 import os
 import shutil
 import signal

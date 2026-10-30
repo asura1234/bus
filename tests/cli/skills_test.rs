@@ -47,10 +47,24 @@ fn json(output: Output) -> serde_json::Value {
 fn skills_status_is_read_only_without_a_session_and_install_copies_both_providers() {
     let home = home();
     let status = json(bus(&home, &["skills", "status"]));
-    assert_eq!(status["answer"], serde_json::Value::Null);
+    assert!(
+        status.get("answer").is_none(),
+        "status has no install consent"
+    );
+    assert!(status["build_sha"]
+        .as_str()
+        .is_some_and(|sha| !sha.is_empty()));
+    assert!(status["source_root"]
+        .as_str()
+        .is_some_and(|root| !root.is_empty()));
     assert!(status["skills"].as_array().unwrap().len() >= 30);
     assert!(!home.join(".local").exists(), "status must not write state");
     let installed = json(bus(&home, &["skills", "install", "--yes"]));
+    assert!(installed["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|skill| skill["action"] == "installed"));
     for provider in [".claude", ".agents"] {
         let skill = home.join(provider).join("skills/review-pr/SKILL.md");
         assert!(skill.is_file(), "{}", skill.display());
@@ -74,13 +88,16 @@ fn skills_status_is_read_only_without_a_session_and_install_copies_both_provider
     assert_eq!(manifest["schema"], 1);
     assert_eq!(manifest["bundle_hash"], installed["bundle_hash"]);
     let status = json(bus(&home, &["skills", "status"]));
-    assert_eq!(status["answer"]["accepted"], true);
-    assert_eq!(status["answer"]["bundle_hash"], installed["bundle_hash"]);
+    assert!(
+        status.get("answer").is_none(),
+        "install does not record consent"
+    );
+    assert!(!home.join(".local/share/bus/settings.json").exists());
     assert!(status["skills"]
         .as_array()
         .unwrap()
         .iter()
-        .all(|skill| skill["state"] == "installed"));
+        .all(|skill| { skill["state"] == "installed" && skill.get("action").is_none() }));
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -96,13 +113,29 @@ fn install_never_adopts_or_overwrites_user_skills_or_modified_bus_copies() {
         std::fs::read_to_string(user.join("SKILL.md")).unwrap(),
         "user skill"
     );
+    let preserved = report["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|skill| skill["provider"] == "claude" && skill["name"] == "pr")
+        .unwrap();
+    assert_eq!(preserved["state"], "conflict");
+    assert_eq!(preserved["action"], "preserved-conflict");
     let owned = home.join(".agents/skills/review-pr/SKILL.md");
     std::fs::write(&owned, "user edit of Bus skill").unwrap();
     let report = json(bus(&home, &["skills", "install", "--yes"]));
     assert!(!report["warnings"].as_array().unwrap().is_empty());
     assert_eq!(
-        std::fs::read_to_string(owned).unwrap(),
+        std::fs::read_to_string(&owned).unwrap(),
         "user edit of Bus skill"
     );
+    let edited = report["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|skill| skill["provider"] == "codex" && skill["name"] == "review-pr")
+        .unwrap();
+    assert_eq!(edited["state"], "conflict");
+    assert_eq!(edited["action"], "preserved-conflict");
     std::fs::remove_dir_all(home).unwrap();
 }
