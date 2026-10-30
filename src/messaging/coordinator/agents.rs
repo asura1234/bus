@@ -20,9 +20,15 @@ pub(crate) struct AddAgent {
 }
 
 fn launch_binding(
-    provider: Provider,
-    env: &std::collections::HashMap<String, String>,
+    state: &mut super::BusState,
+    id: AgentId,
+    input: &AddAgent,
+    prepared: &launch::PreparedLaunch,
 ) -> Result<(Option<String>, Option<String>), String> {
+    let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
+    crate::messaging::skills::post_warnings(state, &skill_agent)?;
+    let provider = input.provider;
+    let env = &prepared.env;
     let executable = launch::selected_executable(provider, env)?;
     let home = if provider == Provider::Grok {
         Some(
@@ -428,9 +434,7 @@ impl Worker {
             &mut prepared,
             &hooks,
         )?;
-        let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
-        crate::messaging::skills::post_warnings(&mut state, &skill_agent)?;
-        let (selected_executable, grok_home) = launch_binding(input.provider, &prepared.env)?;
+        let (selected_executable, grok_home) = launch_binding(&mut state, id, &input, &prepared)?;
         let identity = self.persist_agent_launch(
             state,
             id,
