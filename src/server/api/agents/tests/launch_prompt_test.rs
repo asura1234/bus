@@ -44,8 +44,9 @@ async fn wait_for_text(runtime: &TerminalRuntime, text: &str) {
     while !runtime.recent_unwrapped_text(100).contains(text) {
         assert!(
             std::time::Instant::now() < deadline,
-            "missing {text}: {}",
-            runtime.visible_text()
+            "missing {text}: {}; input_error={:?}",
+            runtime.visible_text(),
+            runtime.launch_input_error()
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -59,6 +60,23 @@ async fn wait_for_prompt(runtime: &TerminalRuntime) {
             "no prompt evidence: {}; {}",
             runtime.visible_text(),
             runtime.shell_prompt_diagnostics()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn wait_for_launch_input(runtime: &TerminalRuntime) {
+    let deadline = std::time::Instant::now() + crate::protocol::api::AGENT_START_TIMEOUT;
+    while !runtime.test_launch_input_submitted() {
+        assert!(
+            runtime.launch_input_error().is_none(),
+            "launch input failed: {:?}",
+            runtime.launch_input_error()
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "verified launch input was never submitted: {}",
+            runtime.visible_text()
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -80,6 +98,22 @@ fn fixture_shell_with_launch_identity(
 ) -> TerminalRuntime {
     let mut extra = vec![
         ("HOME".into(), dir.display().to_string()),
+        (
+            "XDG_CONFIG_HOME".into(),
+            dir.join("config").display().to_string(),
+        ),
+        (
+            "XDG_DATA_HOME".into(),
+            dir.join("data").display().to_string(),
+        ),
+        (
+            "XDG_STATE_HOME".into(),
+            dir.join("state").display().to_string(),
+        ),
+        (
+            "XDG_CACHE_HOME".into(),
+            dir.join("cache").display().to_string(),
+        ),
         ("ZDOTDIR".into(), dir.display().to_string()),
         (
             "PATH".into(),
@@ -565,7 +599,6 @@ async fn launch_prompt_precmd_assignment_launches_on_the_zle_mark() {
         "function my_title() { :; }\nprecmd_functions=(my_title)\nPS1='READY> '\n",
     )
     .unwrap();
-    let started = std::time::Instant::now();
     let runtime = fixture_shell(
         "/bin/zsh",
         crate::utils::config::ShellModeConfig::NonLogin,
@@ -578,9 +611,11 @@ async fn launch_prompt_precmd_assignment_launches_on_the_zle_mark() {
         "precmd reset must still emit a real mark"
     );
     let (mut app, target) = app_with_prompt_runtime(runtime);
+    let launch_started = std::time::Instant::now();
     try_prompt_launch(&mut app, &target).expect("ZLE readiness permits launch");
+    assert!(launch_started.elapsed() < Duration::from_secs(4));
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
-    assert!(started.elapsed() < Duration::from_secs(4));
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -624,6 +659,7 @@ async fn launch_prompt_noisy_rc_waits_for_the_actual_prompt() {
         "only real prompt evidence permits launch"
     );
     try_prompt_launch(&mut app, &target).expect("the completed noisy rc reaches its real prompt");
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
@@ -644,7 +680,6 @@ async fn launch_prompt_real_mark_launches_without_an_elapsed_gate() {
             ".zshrc"
         };
         std::fs::write(dir.join(rc), "PS1='READY> '\n").unwrap();
-        let started = std::time::Instant::now();
         let runtime = fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
         wait_for_text(&runtime, "READY>").await;
         wait_for_prompt(&runtime).await;
@@ -653,14 +688,12 @@ async fn launch_prompt_real_mark_launches_without_an_elapsed_gate() {
             "fixture must emit the mark"
         );
         let (mut app, target) = app_with_prompt_runtime(runtime);
+        let launch_started = std::time::Instant::now();
         try_prompt_launch(&mut app, &target)
             .expect("real prompt evidence permits immediate launch");
+        assert!(launch_started.elapsed() < Duration::from_secs(4));
+        wait_for_launch_input(prompt_runtime(&app)).await;
         wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
-        assert!(started.elapsed() < Duration::from_secs(4));
-        eprintln!(
-            "marked {shell} accepted input and ran the provider after {:?}",
-            started.elapsed()
-        );
         drop(app);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -720,6 +753,7 @@ async fn launch_prompt_unanswered_startup_question_is_not_typed_into_after_the_f
     wait_for_text(prompt_runtime(&app), "READY>").await;
     wait_for_prompt(prompt_runtime(&app)).await;
     try_prompt_launch(&mut app, &target).expect("answering the question must allow one launch");
+    wait_for_launch_input(prompt_runtime(&app)).await;
     wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
     assert!(!prompt_runtime(&app).visible_text().contains("odex:"));
     drop(app);
@@ -949,3 +983,75 @@ async fn launch_prompt_relative_shell_uses_the_panes_cwd_for_image_proof() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[tokio::test]
+async fn startup_snapshot_preserves_blank_rows_osc_and_native_identity() {
+    let mut app = app_with_agent();
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.begin_managed_agent(
+        "bus-r1-a2".into(),
+        AgentKind::Codex,
+        std::time::Instant::now(),
+        Duration::ZERO,
+        Duration::from_secs(30),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    let (runtime, _writes) = TerminalRuntime::test_with_channel(80, 24);
+    runtime.test_process_pty_bytes("\x1b]2;⠋ Working\x07\x1b]9;4;1;\x07› Ask Codex to do anything\r\n\r\n  GPT-6.1-Sol xhigh · ~/scratch\r\n  ? for shortcuts".as_bytes());
+    app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+    let target = app.public_pane_id(0, pane).unwrap();
+    let request = |expected: &str| {
+        serde_json::from_value::<crate::protocol::api::schema::Request>(serde_json::json!({
+            "id":"diagnostics", "method":"agent.startup_snapshot",
+            "params":{"pane_id":target,"expected_terminal_id":expected}
+        }))
+        .expect("startup failure must support a guarded native snapshot")
+    };
+    let response = app.handle_api_request(request(terminal_id.as_str()));
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let snapshot = &value["result"]["snapshot"];
+    assert_eq!(snapshot["pane_id"], target);
+    assert_eq!(snapshot["terminal_id"], terminal_id.as_str());
+    assert_eq!(snapshot["native_agent"], "codex");
+    assert_eq!(snapshot["native_name"], "bus-r1-a2");
+    assert_eq!(snapshot["native_status"], "working");
+    assert_eq!(snapshot["osc_title"], "⠋ Working");
+    assert_eq!(snapshot["osc_progress"], "4;1;");
+    assert!(snapshot["screen"]
+        .as_str()
+        .unwrap()
+        .contains("› Ask Codex to do anything\n\n  GPT-6.1-Sol"));
+    let changed: serde_json::Value =
+        serde_json::from_str(&app.handle_api_request(request("replacement"))).unwrap();
+    assert_eq!(changed["error"]["code"], "agent_identity_changed");
+    assert!(!changed.to_string().contains("Ask Codex"));
+}
+
+#[tokio::test]
+async fn startup_snapshot_refuses_a_bound_conversation_screen() {
+    let (app, params, _writes) = claude_agent_with_input("PRIVATE_CONVERSATION_CONTENT");
+    let response = app.handle_agent_startup_snapshot(
+        "privacy".into(),
+        crate::protocol::api::schema::AgentStartupSnapshotParams {
+            pane_id: params.expected_pane_id,
+            expected_terminal_id: params.expected_terminal_id,
+        },
+    );
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(value["error"]["code"], "startup_snapshot_unavailable");
+    assert!(!response.contains("PRIVATE_CONVERSATION_CONTENT"));
+}
+
+#[tokio::test]
+async fn startup_snapshot_does_not_capture_an_unfinished_redraw() {
+    let runtime = TerminalRuntime::test_with_screen_bytes(80, 24, b"startup");
+    runtime.test_process_pty_bytes(b"\x1b[?2026hpartial");
+    assert!(runtime.startup_snapshot().is_none());
+    runtime.test_process_pty_bytes(b"\x1b[?2026l");
+    assert!(runtime.startup_snapshot().unwrap().0.contains("partial"));
+}
+
+#[path = "verified_launch_test.rs"]
+mod verified_launch;

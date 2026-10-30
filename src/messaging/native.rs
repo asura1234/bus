@@ -86,9 +86,14 @@ impl BusTransport {
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
-            let result = response
-                .map(|response| response.result)
-                .map_err(classify_error);
+            let result = response.map(|response| response.result).map_err(|error| {
+                let creation_rejected = matches!(&request.method, Method::TabCreate(_))
+                    && matches!(&error, ApiClientError::ErrorResponse(_));
+                let launch_rejected = launch_rejected_before_input(&request.method, &error);
+                let mut error = classify_error(error);
+                error.definitely_rejected |= creation_rejected || launch_rejected;
+                error
+            });
             tracing::debug!(event = "bus.api.result", api_request_id = %request.id, method = method_name,
                 outcome = if result.is_ok() { "ok" } else { "error" },
                 error_code = ?result.as_ref().err().and_then(|e| e.code.as_deref()),
@@ -98,6 +103,18 @@ impl BusTransport {
             return result;
         }
     }
+}
+
+// AgentStart's validation and shell admission errors precede launch input. Do
+// not infer this for unrelated methods or from a lost/ambiguous response.
+fn launch_rejected_before_input(method: &Method, error: &ApiClientError) -> bool {
+    matches!(
+        method,
+        Method::AgentStart(_) | Method::AgentStartIfIdentity(_)
+    ) && matches!(error, ApiClientError::ErrorResponse(response) if matches!(response.error.code.as_str(),
+            "invalid_agent_name" | "unsupported_agent_kind" | "invalid_agent_argument" |
+            "invalid_agent_timeout" | "agent_name_taken" | "agent_pane_not_found" |
+            "agent_pane_busy" | "agent_pane_unavailable_before_input" | "agent_start_input_failed"))
 }
 
 fn retry_shell_start(
@@ -118,7 +135,7 @@ fn classify_error(error: ApiClientError) -> TransportError {
     // withdrew a paste it never submitted. Every other failure, including an IO
     // error after partial send, leaves submission ownership intact.
     let definitely_rejected = matches!(&error, ApiClientError::ErrorResponse(response) if matches!(response.error.code.as_str(),
-        "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request" | "agent_shell_starting" | "agent_shell_waiting")
+        "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request" | "agent_shell_starting" | "agent_shell_waiting" | "agent_shell_integration_unavailable")
         || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
         || response.error.code == crate::protocol::api::AGENT_COMPOSER_BUSY);
     TransportError {
@@ -325,5 +342,85 @@ mod tests {
         assert!(outcome.unwrap_err().definitely_rejected);
         server.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod creation_failure_tests {
+    use super::*;
+    #[test]
+    fn native_creation_error_is_definite_but_lost_transport_is_uncertain() {
+        for transport_failure in [false, true] {
+            let mut client = BusTransport::new(ConnectionTarget::SocketPath("unused".into()));
+            let method = Method::TabCreate(serde_json::from_value(serde_json::json!({})).unwrap());
+            let error=client.request_using(method,|_,request,_| {
+                if transport_failure { Err(ApiClientError::Io(std::io::Error::other("lost response"))) }
+                else { Ok(serde_json::json!({"id":request.id,"error":{"code":"tab_create_failed","message":"login shell is not executable"}})) }
+            }).unwrap_err();
+            assert_eq!(error.definitely_rejected, !transport_failure);
+        }
+    }
+}
+
+#[cfg(test)]
+mod launch_rejection_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn definite_launch_rejection_classifies_pre_input_without_assuming_transport_outcome() {
+        let start: crate::protocol::api::schema::AgentStartParams = serde_json::from_value(json!({
+            "name":"agent", "kind":"codex", "pane_id":"pane", "args":[]
+        }))
+        .unwrap();
+        for method in [
+            Method::AgentStart(start.clone()),
+            Method::AgentStartIfIdentity(
+                crate::protocol::api::schema::AgentStartIfIdentityParams {
+                    expected_terminal_id: "terminal".into(),
+                    start,
+                },
+            ),
+        ] {
+            for (code, expected) in [
+                ("invalid_agent_name", true),
+                ("unsupported_agent_kind", true),
+                ("invalid_agent_argument", true),
+                ("invalid_agent_timeout", true),
+                ("agent_name_taken", true),
+                ("agent_pane_not_found", true),
+                ("agent_pane_unavailable_before_input", true),
+                ("agent_start_input_failed", true),
+                ("agent_pane_unavailable", false),
+                ("timeout", false),
+            ] {
+                let mut client = BusTransport::new(ConnectionTarget::SocketPath("unused".into()));
+                let error = client
+                    .request_using(method.clone(), |_, request, _| {
+                        Ok(json!({"id": request.id, "error": {"code":code, "message":code}}))
+                    })
+                    .unwrap_err();
+                assert_eq!(error.definitely_rejected, expected, "{code}");
+            }
+        }
+        for code in [
+            "agent_pane_not_found",
+            "agent_start_input_failed",
+            "agent_pane_unavailable_before_input",
+        ] {
+            let mut client = BusTransport::new(ConnectionTarget::SocketPath("unused".into()));
+            let error = client
+                .request_using(
+                    Method::AgentList(crate::protocol::api::schema::EmptyParams {}),
+                    |_, request, _| {
+                        Ok(json!({"id":request.id,"error":{"code":code,"message":code}}))
+                    },
+                )
+                .unwrap_err();
+            assert!(
+                !error.definitely_rejected,
+                "{code} is only safe for launch methods"
+            );
+        }
     }
 }

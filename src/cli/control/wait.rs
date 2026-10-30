@@ -152,7 +152,22 @@ fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
         return Some(Ok(()));
     }
     let settled = |r: &Value| r["stage"] == "replied" || settled_without_reply(r);
-    stalled(status, |r| !settled(r)).map(Err)
+    delivery_failure(status)
+        .or_else(|| stalled(status, |r| !settled(r)))
+        .map(Err)
+}
+
+/// Stop the waiter, retaining requests and their original IDs for recovery.
+fn delivery_failure(status: &Value) -> Option<(&'static str, String)> {
+    let request = status["requests"].as_array()?.iter().find(|request| {
+        !matches!(request["stage"].as_str(), Some("replied" | "abandoned"))
+            && request["delivery_error"].is_string()
+    })?;
+    Some(("agent_unavailable", format!(
+        "Message {} cannot progress for agent {}: {}. Work is retained; inspect bus message status {} and repair the agent before waiting again. Do not resend the message to retry this wait.",
+        status["message_id"], request["agent_name"].as_str().unwrap_or("unknown"),
+        request["delivery_error"].as_str()?, status["message_id"],
+    )))
 }
 
 /// A request settlement closed because its turn ended without a captured
@@ -406,7 +421,9 @@ pub(super) fn execute_with_pause(
             return response;
         }
         let outcome = if deadline.is_some() {
-            abandonment(&response.result, false).map(Err)
+            abandonment(&response.result, false)
+                .or_else(|| delivery_failure(&response.result))
+                .map(Err)
         } else {
             async_outcome(&response.result)
         };

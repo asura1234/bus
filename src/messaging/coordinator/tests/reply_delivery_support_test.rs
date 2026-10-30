@@ -369,11 +369,13 @@ impl Delivery {
     }
 
     pub(crate) fn new(providers: &[Provider], in_master: bool) -> Self {
-        let dir = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "brd-{}-{}",
-            std::process::id(),
-            sequence()
-        ));
+        let unique = crate::utils::test_temp::unique_temp_path("brd");
+        let dir = unique
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join(unique.file_name().unwrap());
         let native = Arc::new(Mutex::new(NativeServer::new()));
         let mut worker = Worker::open(dir.clone(), Box::new(Native(native.clone()))).unwrap();
         worker.dev_enabled = true;

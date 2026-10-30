@@ -291,7 +291,7 @@ fn tab_create_response_includes_root_pane() {
     app.state.active = Some(0);
     app.state.selected = 0;
 
-    let schema::ResponseResult::TabCreated { tab, root_pane } =
+    let schema::ResponseResult::TabCreated { tab, root_pane, .. } =
         app.tab_created_result(0, 1).unwrap()
     else {
         panic!("expected tab_created response");
@@ -814,7 +814,7 @@ async fn pane_split_request_uses_active_focused_pane_when_target_is_omitted() {
 }
 
 #[tokio::test]
-async fn unavailable_agent_start_does_not_mutate_topology() {
+async fn definite_launch_rejection_unavailable_agent_start_does_not_mutate_topology() {
     let mut app = test_app();
     let workspace = Workspace::test_new("agent-start-target");
     let root = workspace.tabs[0].root_pane;
@@ -838,7 +838,10 @@ async fn unavailable_agent_start_does_not_mutate_topology() {
     });
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
-    assert_eq!(response["error"]["code"], "agent_pane_unavailable");
+    assert_eq!(
+        response["error"]["code"],
+        "agent_pane_unavailable_before_input"
+    );
     assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
     assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
 }

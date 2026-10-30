@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
-
 use crate::protocol::api::schema::AgentStartParams;
 use crate::server::{app::App, workspaces::ids::TerminalTargetError};
 
@@ -12,7 +10,7 @@ const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
 
-fn valid_agent_name(name: &str) -> bool {
+pub(crate) fn valid_agent_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some('a'..='z'))
         && name.len() <= 32
@@ -256,8 +254,8 @@ impl App {
         let runtime = self
             .terminal_runtimes
             .get(&terminal_id)
-            .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
-        let shell_name = available_shell_name(runtime).ok_or_else(|| {
+            .ok_or_else(|| AgentStartError::TargetUnavailableBeforeInput(params.pane_id.clone()))?;
+        available_shell_name(runtime).ok_or_else(|| {
             if runtime.waiting_for_shell_prompt() {
                 AgentStartError::ShellStarting(params.pane_id.clone())
             } else {
@@ -267,9 +265,6 @@ impl App {
 
         let args = params.args;
         let argv = agent_start_argv(kind, params.executable, params.grok_home, &args)?;
-        let command = crate::platform::interactive_shell_command(&argv, &shell_name)
-            .ok_or(AgentStartError::InvalidArgument)?;
-        let bytes = crate::server::api::input_encoding::encode_api_submission(runtime, &command);
         let timeout = Duration::from_millis(
             params
                 .timeout_ms
@@ -280,17 +275,20 @@ impl App {
         }
 
         let now = Instant::now();
-        let terminal = self
-            .state
-            .terminals
-            .get_mut(&terminal_id)
-            .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
+        let terminal =
+            self.state.terminals.get_mut(&terminal_id).ok_or_else(|| {
+                AgentStartError::TargetUnavailableBeforeInput(params.pane_id.clone())
+            })?;
         terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         runtime.mark_agent_launch();
-        if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
+        if let Err(err) = runtime.queue_shell_command(&argv, timeout) {
             terminal.clear_agent_name();
-            return Err(AgentStartError::InputFailed(err.to_string()));
+            return Err(if err.kind() == std::io::ErrorKind::Unsupported {
+                AgentStartError::NoShellEditor(err.to_string())
+            } else {
+                AgentStartError::InputFailed(err.to_string())
+            });
         }
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
@@ -334,9 +332,16 @@ impl App {
                 message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then retry the launch."),
             },
             AgentStartError::ShellStarting(target) => self.shell_wait_error_body(&target),
+            AgentStartError::TargetUnavailableBeforeInput(target) => crate::protocol::api::schema::ErrorBody {
+                code: "agent_pane_unavailable_before_input".into(),
+                message: format!("agent target pane {target} has no live terminal; no launch input was sent"),
+            },
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_pane_unavailable".into(),
                 message: format!("agent target pane {target} has no live terminal"),
+            },
+            AgentStartError::NoShellEditor(message) => crate::protocol::api::schema::ErrorBody {
+                code: "agent_shell_integration_unavailable".into(), message,
             },
             AgentStartError::InputFailed(message) => crate::protocol::api::schema::ErrorBody {
                 code: "agent_start_input_failed".into(),
@@ -498,6 +503,9 @@ impl App {
                     })
             });
         Some(crate::protocol::api::schema::AgentInfo {
+            launch_input_error: self
+                .lookup_runtime_sender(ws_idx, pane_id)
+                .and_then(|runtime| runtime.definite_launch_input_error()),
             native_resume: terminal.native_resume.as_ref().map(|resume| {
                 crate::protocol::api::schema::NativeResumeInfo {
                     name: resume.name.clone(),
@@ -619,7 +627,9 @@ pub(in crate::server) enum AgentStartError {
     TargetNotFound(String),
     TargetBusy(String),
     TargetUnavailable(String),
+    TargetUnavailableBeforeInput(String),
     InputFailed(String),
+    NoShellEditor(String),
     DuplicateName {
         name: String,
         candidates: Vec<crate::protocol::api::schema::AgentInfo>,

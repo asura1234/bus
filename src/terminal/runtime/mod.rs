@@ -7,6 +7,7 @@ mod draft_input;
 mod io;
 mod read;
 mod shell_integration;
+mod shell_launch;
 mod shutdown;
 mod submission;
 mod submission_clock;
@@ -165,7 +166,10 @@ pub struct TerminalRuntime {
     managed_launch_pending: Arc<AtomicBool>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
-    launch_prompt_generation: std::cell::Cell<u64>,
+    launch_prompt_generation: Arc<AtomicU64>,
+    launch_input_error: Arc<Mutex<Option<(String, bool)>>>,
+    #[cfg(test)]
+    launch_input_submitted: Arc<AtomicBool>,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
     detect_handle: Option<tokio::task::AbortHandle>,
@@ -231,11 +235,11 @@ impl TerminalRuntime {
     pub(crate) fn mark_agent_launch(&self) {
         self.invalidate_submission_ownership();
         self.launch_prompt_generation
-            .set(self.shell_prompt_generation());
+            .store(self.shell_prompt_generation(), Ordering::Release);
     }
 
     pub(crate) fn launch_returned_to_prompt(&self) -> bool {
-        self.shell_prompt_generation() > self.launch_prompt_generation.get()
+        self.shell_prompt_generation() > self.launch_prompt_generation.load(Ordering::Acquire)
     }
 
     pub fn apply_host_terminal_theme(&self, theme: crate::utils::theme::color::TerminalTheme) {

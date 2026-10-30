@@ -822,7 +822,10 @@ impl TerminalRuntime {
             managed_launch_pending,
             preserve_processes_on_drop: false,
             shell_integration: None,
-            launch_prompt_generation: Cell::new(0),
+            launch_prompt_generation: Arc::new(AtomicU64::new(0)),
+            launch_input_error: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            launch_input_submitted: Arc::new(AtomicBool::new(false)),
             compression,
             detect_handle,
         })

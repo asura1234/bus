@@ -442,24 +442,22 @@ impl Worker {
             hooks.launch_id,
             prepared.adopted_session.clone(),
         )?;
-        let created = self
-            .transport
-            .request(Method::TabCreate(schema::TabCreateParams {
-                workspace_id: None,
-                cwd: Some(prepared.cwd.to_string_lossy().into_owned()),
-                focus: false,
-                label: Some(input.name.clone()),
-                env: prepared.env,
-            }));
+        let created = self.create_agent_tab(&input, &mut prepared);
         let (pane, terminal) = match created {
             Ok(ResponseResult::TabCreated { root_pane, .. }) => {
                 (root_pane.pane_id, root_pane.terminal_id)
+            }
+            Err(error) if error.definitely_rejected => {
+                let argv = std::iter::once(launch::executable(input.provider).to_owned())
+                    .chain(prepared.args.iter().cloned())
+                    .collect();
+                return self.record_failed_launch_creation(id, argv, &error.message);
             }
             other => {
                 return self.agent_error(
                     id,
                     format!("Tab creation outcome requires inspection; no retry. {other:?}"),
-                );
+                )
             }
         };
         let mut state = self.state.clone();
@@ -501,6 +499,21 @@ impl Worker {
             }
             other => self.record_failed_agent_start(id, prepared.args, other),
         }
+    }
+
+    fn create_agent_tab(
+        &mut self,
+        input: &AddAgent,
+        prepared: &mut launch::PreparedLaunch,
+    ) -> Result<ResponseResult, crate::messaging::native::TransportError> {
+        self.transport
+            .request(Method::TabCreate(schema::TabCreateParams {
+                workspace_id: None,
+                cwd: Some(prepared.cwd.to_string_lossy().into_owned()),
+                focus: false,
+                label: Some(input.name.clone()),
+                env: std::mem::take(&mut prepared.env),
+            }))
     }
 
     /// Bus owns messaging identity and routing; providers receive capture facts.

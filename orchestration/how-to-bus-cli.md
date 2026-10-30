@@ -131,6 +131,7 @@ Read `bus wait --help` and `bus message status --help` for polling, stages,
 stall windows, provider failures, retained last status and exit codes.
 A timeout does not cancel work or authorize a duplicate send. For an uncertain
 submission, inspect transcript and composer before resending; effects may exist.
+See [agent launch arguments](../docs/launch-args.md#interactive-provider-launch) for command input and launch failure behavior.
 
 Orchestrators run async sends as background tool calls (Claude Code Bash:
 run_in_background; Cursor: background shell with timeout 0), then inspect the

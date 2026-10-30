@@ -1,3 +1,4 @@
+use super::AgentStartupSnapshotParams;
 use super::{
     AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogObserveParams,
     AgentPromptIfIdleParams, AgentPromptIfUnboundParams, AgentPromptParams, AgentReadParams,
@@ -74,6 +75,8 @@ pub enum Method {
     AgentList(EmptyParams),
     #[serde(rename = "agent.get")]
     AgentGet(AgentTarget),
+    #[serde(rename = "agent.startup_snapshot")]
+    AgentStartupSnapshot(AgentStartupSnapshotParams),
     #[serde(rename = "agent.read")]
     AgentRead(AgentReadParams),
     #[serde(rename = "agent.dialog.observe")]
@@ -185,6 +188,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::TabClose(_) => "tab.close",
         Method::AgentList(_) => "agent.list",
         Method::AgentGet(_) => "agent.get",
+        Method::AgentStartupSnapshot(_) => "agent.startup_snapshot",
         Method::AgentRead(_) => "agent.read",
         Method::AgentDialogObserve(_) => "agent.dialog.observe",
         Method::AgentDialogChoose(_) => "agent.dialog.choose",

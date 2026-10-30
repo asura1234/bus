@@ -63,15 +63,6 @@ pub(in crate::server) fn encode_api_submission_parts(
     (text, runtime.encode_terminal_key(enter.into()))
 }
 
-pub(in crate::server) fn encode_api_submission(
-    runtime: &crate::terminal::TerminalRuntime,
-    text: &str,
-) -> Vec<u8> {
-    let (mut text, enter) = encode_api_submission_parts(runtime, text);
-    text.extend_from_slice(&enter);
-    text
-}
-
 pub(in crate::server) fn encode_api_input(
     runtime: &crate::terminal::TerminalRuntime,
     text: &str,

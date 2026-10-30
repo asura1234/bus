@@ -92,6 +92,20 @@ impl Transport for FailedLaunchNative {
                     "agent_status":"unknown", "revision":1
                 })).unwrap(),
             }),
+            Method::AgentStartupSnapshot(params) => {
+                if self.screen_terminal.is_some() {
+                    return Err(TransportError { code: Some("agent_identity_changed".into()),
+                        message: "Launch terminal is no longer available at its recorded pane".into(),
+                        definitely_rejected: true });
+                }
+                Ok(ResponseResult::AgentStartupSnapshot { snapshot: serde_json::from_value(json!({
+                    "pane_id": params.pane_id, "terminal_id": params.expected_terminal_id,
+                    "native_agent":"codex", "native_name":"bus-r1-a2", "native_status":"working",
+                    "launch_pending":true, "interactive_ready":false,
+                    "screen":"› Ask Codex to do anything\n\n  GPT-6.1-Sol xhigh\n  ? for shortcuts",
+                    "osc_title":"⠋ Working", "osc_progress":"4;1;", "content_revision":2
+                })).unwrap() })
+            }
             Method::PaneRead(_) => Ok(ResponseResult::PaneRead {
                 read: serde_json::from_value(json!({
                     "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1",
@@ -282,7 +296,7 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
         .submit_message_with(
             room,
             Draft {
-                text: "pending work".into(),
+                text: "QUEUED_MESSAGE_MUST_NOT_APPEAR_IN_DIAGNOSTICS".into(),
                 files: vec![],
                 recipient_ids: [agent].into(),
             },
@@ -300,11 +314,7 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
     let failed = worker.state.agent(agent).unwrap();
     assert!(failed.startup.as_ref().unwrap().reported);
     let error = failed.actionable_error.clone().unwrap();
-    assert!(error.contains("Command:") && error.contains("Last screen lines:"));
-    assert_eq!(
-        worker.state.request(request).unwrap().phase,
-        RequestPhase::Abandoned
-    );
+    let message = worker.state.request(request).unwrap().prompt.id;
     let detail = worker
         .state
         .request(request)
@@ -312,6 +322,35 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
         .submission_error
         .clone()
         .unwrap();
+    let status = worker.control_message_at(message, io::now_ms()).unwrap();
+    assert_eq!(
+        status["requests"][0]["stage"], "abandoned",
+        "a definite launch failure must close never-submitted work"
+    );
+    assert_eq!(status["requests"][0]["reason"], "agent_startup_failed");
+    assert_eq!(status["requests"][0]["detail"], detail);
+    assert!(error.contains("Command:") && error.contains("Last screen lines:"));
+    let diagnostics: serde_json::Value = serde_json::from_str(
+        error
+            .split_once("Startup diagnostics:\n")
+            .expect("failure needs native diagnostics")
+            .1,
+    )
+    .unwrap();
+    assert_eq!(diagnostics["native"]["osc_title"], "⠋ Working");
+    assert_eq!(diagnostics["native"]["osc_progress"], "4;1;");
+    assert_eq!(diagnostics["native"]["native_agent"], "codex");
+    assert_eq!(diagnostics["native"]["pane_id"], "pane");
+    assert_eq!(diagnostics["native"]["terminal_id"], "terminal");
+    assert!(diagnostics["native"]["screen"]
+        .as_str()
+        .unwrap()
+        .contains("anything\n\n  GPT"));
+    assert!(!error.contains("QUEUED_MESSAGE_MUST_NOT_APPEAR_IN_DIAGNOSTICS"));
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
     assert!(
         detail.contains("30 seconds") && detail.contains("Resend"),
         "{detail}"
@@ -898,6 +937,10 @@ fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
             error.contains("STARTUP QUESTION"),
             "native evidence reached the worker: {error}"
         );
+        assert!(
+            error.contains("Startup diagnostics:"),
+            "shell readiness failure needs diagnostics: {error}"
+        );
         let agent = worker
             .state
             .agents()
@@ -931,7 +974,7 @@ fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
                 .unwrap()
                 .actionable_error
                 .as_deref(),
-            Some(SHELL_PROMPT_WAIT_ERROR),
+            Some(error.as_str()),
             "watchdog must preserve the actionable shell-wait error"
         );
         worker
@@ -967,7 +1010,7 @@ fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
                 .unwrap()
                 .actionable_error
                 .as_deref(),
-            Some(SHELL_PROMPT_WAIT_ERROR)
+            Some(error.as_str())
         );
         assert_eq!(
             worker.state.agent(agent).unwrap().runtime_identity,
@@ -1511,4 +1554,222 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
             assert_eq!(send.failure_reason.as_deref(), Some("agent_startup_failed"));
         }
     }
+}
+
+#[test]
+fn startup_launch_rejection_unsupported_shell_closes_new_sender_work() {
+    let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    state.delete_agent(previous, 0).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        shell_wait_code: Some("agent_shell_integration_unavailable"),
+        ..Default::default()
+    });
+    worker
+        .add_agent(
+            AddAgent {
+                room,
+                name: "unsupported".into(),
+                provider: Provider::Codex,
+                cwd: dir.to_string_lossy().into_owned(),
+                extra_args: String::new(),
+                consent_project_hooks: true,
+            },
+            None,
+            &mpsc::channel().0,
+        )
+        .unwrap_err();
+    let agent = worker
+        .state
+        .agents()
+        .find(|a| a.name == "unsupported")
+        .unwrap()
+        .id;
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "work after known launch rejection",
+    );
+    let request_state = worker.state.request(request).unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        request_state.phase,
+        RequestPhase::Abandoned,
+        "a definitively unsupported shell cannot launch and must close never-submitted sender work"
+    );
+    assert_eq!(
+        request_state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+}
+
+#[test]
+fn startup_launch_rejection_editor_failure_closes_saved_session_work_promptly() {
+    struct NoScreen;
+    impl Transport for NoScreen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            panic!("bound conversation must not be read for editor failure: {method:?}")
+        }
+    }
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker
+        .watch_agent_startup(agent, vec!["codex".into()])
+        .unwrap();
+    let request = queue(&mut worker, room, agent, "queued task");
+    let mut info = serde_json::to_value(native_info("pane", "codex", "session")).unwrap();
+    info["launch_pending"] = json!(true);
+    info["launch_input_error"] =
+        json!("Shell transformed the launch line twice; Enter was not sent");
+    let info = serde_json::from_value(info).unwrap();
+    worker.transport = Box::new(NoScreen);
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 1)
+        .unwrap();
+    let state = worker.state.request(request).unwrap();
+    assert_eq!(state.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .contains("transformed the launch line twice"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn definite_launch_rejection_vanished_pane_abandons_new_sender_work() {
+    use crate::messaging::native::BusTransport;
+    use crate::protocol::api::client::ConnectionTarget;
+    struct VanishedPane {
+        fallback: FailedLaunchNative,
+        client: BusTransport,
+    }
+    impl Transport for VanishedPane {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if matches!(method, Method::AgentStart(_)) {
+                return self.client.request_using(method, |_, request, _| {
+                    Ok(json!({"id":request.id,"error":{"code":"agent_pane_not_found","message":"agent target pane pane not found"}}))
+                });
+            }
+            self.fallback.request(method)
+        }
+    }
+    let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut state = worker.state.clone();
+    state.delete_agent(previous, 0).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(VanishedPane {
+        fallback: FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            ..Default::default()
+        },
+        client: BusTransport::new(ConnectionTarget::SocketPath("unused".into())),
+    });
+    worker
+        .add_agent(
+            AddAgent {
+                room,
+                name: "vanished".into(),
+                provider: Provider::Codex,
+                cwd: dir.to_string_lossy().into_owned(),
+                extra_args: String::new(),
+                consent_project_hooks: true,
+            },
+            None,
+            &mpsc::channel().0,
+        )
+        .unwrap_err();
+    let agent = worker
+        .state
+        .agents()
+        .find(|a| a.name == "vanished")
+        .unwrap()
+        .id;
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "work after definite pane rejection",
+    );
+    let request_state = worker.state.request(request).unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(request_state.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request_state.failure_reason.as_deref(),
+        Some("agent_startup_failed")
+    );
+}
+
+#[test]
+fn definite_launch_rejection_after_shell_retry_allows_later_recovery() {
+    struct RejectRetry {
+        fallback: FailedLaunchNative,
+    }
+    impl Transport for RejectRetry {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentStartIfIdentity(_) => Err(TransportError {
+                    code: Some("agent_shell_integration_unavailable".into()),
+                    message: "no shell editor".into(),
+                    definitely_rejected: true,
+                }),
+                other => self.fallback.request(other),
+            }
+        }
+    }
+    let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::Codex);
+    let request = queue(&mut worker, room, agent, "queued before failed retry");
+    worker.transport = Box::new(RejectRetry {
+        fallback: FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            ..Default::default()
+        },
+    });
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    let recovery = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .recovery
+        .clone();
+    let result = worker.resume_room(room).unwrap();
+    let reason = result["agents"][0]["reason"].as_str().unwrap_or("");
+    assert!(
+        recovery.is_none(),
+        "definite failure must clear recovery authority: {recovery:?}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !reason.contains("unconfirmed"),
+        "the native rejection established that no input was sent: {result}"
+    );
 }

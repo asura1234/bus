@@ -167,7 +167,9 @@ async fn focus_events_are_forwarded_when_enabled() {
         managed_launch_pending: Arc::new(AtomicBool::new(false)),
         preserve_processes_on_drop: true,
         shell_integration: None,
-        launch_prompt_generation: std::cell::Cell::new(0),
+        launch_prompt_generation: Arc::new(AtomicU64::new(0)),
+        launch_input_error: Arc::new(Mutex::new(None)),
+        launch_input_submitted: Arc::new(AtomicBool::new(false)),
         compression,
         detect_handle: Some(tokio::spawn(async {}).abort_handle()),
     };
@@ -207,7 +209,9 @@ async fn focus_events_are_suppressed_when_disabled() {
         managed_launch_pending: Arc::new(AtomicBool::new(false)),
         preserve_processes_on_drop: true,
         shell_integration: None,
-        launch_prompt_generation: std::cell::Cell::new(0),
+        launch_prompt_generation: Arc::new(AtomicU64::new(0)),
+        launch_input_error: Arc::new(Mutex::new(None)),
+        launch_input_submitted: Arc::new(AtomicBool::new(false)),
         compression,
         detect_handle: Some(tokio::spawn(async {}).abort_handle()),
     };

@@ -1,5 +1,25 @@
 # Agent launch arguments
 
+## Interactive provider launch
+
+Provider add, resume and native restart share one interactive-shell launch path.
+Bus-created zsh, bash, fish and PowerShell panes retain normal prompt hooks
+(including direnv) and shell functions. Bus waits for its private primary-editor
+readiness mark, verifies the editable command buffer before Enter, and corrects
+a damaged paste once before verifying it again. A line that cannot be verified
+is left unsubmitted with the pane retained for inspection. An existing pane
+without Bus integration receives no launch input; create a new Bus-owned pane
+instead. Plain sh/dash and shells without a supported line editor fail before
+input with guidance to use one of the supported shells.
+
+A confirmed startup failure closes sender-authored requests that never reached
+provider input as `agent_startup_failed`; async waits return `message_abandoned`.
+Bus retains their message IDs and failure detail so the sender can inspect and
+explicitly resend after repairing the agent. Other confirmed missing or replaced
+pane failures end unsettled waits with `agent_unavailable` and a `delivery_error`
+while retaining the request for recovery. Temporary readiness waits and an
+unavailable native poll do not prove terminal failure.
+
 ## Run-scoped permission bypass
 
 `bus --yolo` and `./run dev --yolo` add a permission-bypass flag to every

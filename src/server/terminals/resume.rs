@@ -1,6 +1,5 @@
 use std::time::Instant;
 
-use bytes::Bytes;
 use ratatui::layout::Rect;
 
 use crate::messaging::coordinator::resume::{LaunchExtras, NativeResumeContext, NativeResumeFacts};
@@ -323,7 +322,7 @@ impl App {
         else {
             return false;
         };
-        let resume_command = self.record_resume_command(&terminal_id, &argv);
+        self.record_resume_command(&terminal_id, &argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
@@ -371,9 +370,9 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             guard_resumed_agent_launch(terminal, &runtime);
         }
-        let mut input = resume_command;
-        input.push('\r');
-        if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {
+        if let Err(err) =
+            runtime.queue_shell_command(&argv, super::agents::DEFAULT_AGENT_START_TIMEOUT)
+        {
             tracing::warn!(
                 pane = pane_id.raw(),
                 terminal = %terminal_id,
@@ -381,8 +380,8 @@ impl App {
                 err = %err,
                 "failed to send deferred agent resume command to shell"
             );
-            runtime.shutdown();
-            return false;
+            self.terminal_runtimes.insert(terminal_id.clone(), runtime);
+            return self.suspend_pending_agent_resume(pane_id, &terminal_id, &err.to_string());
         }
 
         self.terminal_runtimes.insert(terminal_id.clone(), runtime);

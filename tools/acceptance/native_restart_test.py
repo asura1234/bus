@@ -39,7 +39,7 @@ def scenario(binary, root):
         (fake_bin / name).symlink_to(binary)
     env = {"PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home),
            "BUS_DATA_DIR": str(root / "data"), "BUS_TUI_FAKE_AGENT": "1",
-           "TERM": "xterm-256color", "SHELL": "/bin/sh",
+           "TERM": "xterm-256color", "SHELL": "/bin/bash",
            "XDG_CONFIG_HOME": str(root / "xdg"), "BUS_LOG": "bus=debug",
            "BUS_TUI_EFFECTS": str(root / "effects.jsonl")}
     bus = Bus(binary, root, env, workspace=work)

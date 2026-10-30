@@ -166,6 +166,8 @@ impl Worker {
             (None, None)
         };
         self.close_resume_terminal(agent)?;
+        let mut args = plan.argv[1..].to_vec();
+        args.extend(extras.args);
         let created = self
             .transport
             .request(Method::TabCreate(schema::TabCreateParams {
@@ -174,13 +176,21 @@ impl Worker {
                 focus: false,
                 label: Some(agent.name.clone()),
                 env: extras.env.into_iter().collect(),
-            }))
-            .map_err(|e| e.message)?;
-        let ResponseResult::TabCreated { root_pane, .. } = created else {
-            return Err("Terminal creation outcome needs inspection; no retry".into());
+            }));
+        let root_pane = match created {
+            Ok(ResponseResult::TabCreated { root_pane, .. }) => root_pane,
+            Err(error) if error.definitely_rejected => {
+                let argv = std::iter::once(plan.argv[0].clone())
+                    .chain(args.iter().cloned())
+                    .collect();
+                return self.record_failed_launch_creation(agent.id, argv, &error.message);
+            }
+            other => {
+                return Err(format!(
+                    "Terminal creation outcome needs inspection; no retry. {other:?}"
+                ))
+            }
         };
-        let mut args = plan.argv[1..].to_vec();
-        args.extend(extras.args);
         let mut state = self.state.clone();
         state
             .set_agent_runtime_identity(

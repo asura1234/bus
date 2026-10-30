@@ -99,6 +99,53 @@ impl Worker {
         self.save(state)
     }
 
+    pub(super) fn record_failed_launch_creation(
+        &mut self,
+        id: AgentId,
+        argv: Vec<String>,
+        reason: &str,
+    ) -> Result<(), String> {
+        let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
+        let diagnostics = self.startup_diagnostics(&agent);
+        let recovery = if agent.runtime_identity.session_id.is_some() {
+            "Repair the configured shell and provider setup, resume the saved conversation, then resend this message."
+        } else {
+            "Repair the configured shell and provider setup, then delete and recreate this sessionless agent. Rebrief it and resend this message."
+        };
+        let failure = StartupFailure {
+            reason: format!("before terminal creation: {reason}"),
+            recovery: recovery.into(),
+        };
+        let message = format!(
+            "{} Agent identity retained; never-submitted queued requests closed.\nStartup diagnostics:\n{diagnostics}",
+            failure.notice()
+        );
+        let mut state = self.state.clone();
+        state
+            .set_agent_startup(
+                id,
+                Some(AgentStartup {
+                    command: crate::platform::interactive_shell_command(&argv, "sh")
+                        .ok_or("Invalid launch command")?,
+                    started_at_ms: io::now_ms(),
+                    reported: true,
+                    native_terminal_id: None,
+                    recovery: None,
+                    failure: Some(failure),
+                }),
+            )
+            .map_err(|error| error.to_string())?;
+        state.abandon_failed_startup_queue(id, io::now_ms());
+        state
+            .set_agent_error(id, Some(message.clone()))
+            .map_err(|error| error.to_string())?;
+        state
+            .observe_status(id, super::RuntimeStatus::Unavailable, io::now_ms())
+            .map_err(|error| error.to_string())?;
+        self.save(state)?;
+        Err(message)
+    }
+
     pub(super) fn record_failed_agent_start(
         &mut self,
         id: AgentId,
@@ -106,29 +153,41 @@ impl Worker {
         outcome: Result<ResponseResult, crate::messaging::native::TransportError>,
     ) -> Result<(), String> {
         let error = match outcome {
-            Err(error) if matches!(error.code.as_deref(), Some("agent_shell_starting" | "agent_shell_waiting")) => error,
+            Err(error) if error.definitely_rejected => error,
             other => return self.agent_error(id, format!("Agent start outcome requires inspection of its owned terminal; startup is watched and will not be retried. {other:?}")),
         };
+        let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
+        let message = format!(
+            "{}\nStartup diagnostics:\n{}",
+            error.message,
+            self.startup_diagnostics(&agent)
+        );
         let mut state = self.state.clone();
         let mut startup = state
             .agent(id)
             .and_then(|agent| agent.startup.clone())
             .ok_or("Agent startup watch is missing")?;
-        // These native errors precede input. Keep their specific shell evidence
-        // and the reported marker together, so the watchdog cannot replace it
-        // and queued work remains held until actual startup confirmation.
         startup.reported = true;
-        if error.definitely_rejected {
+        if matches!(
+            error.code.as_deref(),
+            Some("agent_shell_starting" | "agent_shell_waiting")
+        ) {
+            // Shell questions are recoverable before any launch input.
             startup.recovery = Some(StartupRecovery::Unsubmitted { args });
+            startup.failure = None;
+        } else {
+            startup.recovery = None;
+            startup.failure = Some(startup_failure(&error.message, ""));
         }
         state
             .set_agent_startup(id, Some(startup))
             .map_err(|e| e.to_string())?;
+        state.abandon_failed_startup_queue(id, io::now_ms());
         state
-            .set_agent_error(id, Some(error.message.clone()))
+            .set_agent_error(id, Some(message.clone()))
             .map_err(|e| e.to_string())?;
         self.save(state)?;
-        Err(error.message)
+        Err(message)
     }
 
     pub(super) fn cleanup_failed_startups(
@@ -159,9 +218,11 @@ impl Worker {
                     && (info.name.as_deref() == Some(&name)
                         || super::resume::native_attempt(&agent, info).is_some())
             });
+            let input_error = info.and_then(|info| info.launch_input_error.as_deref());
             let native_error = info
                 .and_then(|info| super::resume::native_attempt(&agent, info))
-                .and_then(|attempt| attempt.error.as_deref());
+                .and_then(|attempt| attempt.error.as_deref())
+                .or(input_error);
             // Codex defers SessionStart until its first prompt. Native
             // interactive confirmation, or a provider already waiting at its
             // own startup dialog, proves it started. Preserve that help wait.
@@ -193,7 +254,13 @@ impl Worker {
                 continue;
             }
             if !startup.reported {
-                let evidence = self.startup_screen(agent.id);
+                let evidence =
+                    if input_error.is_some() && agent.runtime_identity.session_id.is_some() {
+                        "> Conversation screen omitted".into()
+                    } else {
+                        self.startup_screen(agent.id)
+                    };
+                let diagnostics = self.startup_diagnostics(&agent);
                 let reason = if let Some(reason) = native_error {
                     reason
                 } else if expired {
@@ -203,7 +270,7 @@ impl Worker {
                 };
                 let failure = startup_failure(reason, &evidence);
                 let text = format!(
-                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}",
+                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
                     failure.notice(), launch::provider_kind(agent.provider), startup.command
                 );
                 startup.failure = Some(failure);

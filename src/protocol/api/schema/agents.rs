@@ -282,6 +282,9 @@ pub struct AgentInfo {
     /// Absent after interactive confirmation and on ordinary client reattach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_resume: Option<NativeResumeInfo>,
+    /// Definite launch input failure before Enter, with no screen or message content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_input_error: Option<String>,
     pub terminal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -359,4 +362,29 @@ pub struct AgentSessionInfo {
 pub enum AgentSessionRefKind {
     Id,
     Path,
+}
+
+/// Capture only the exact owned launch terminal; never follow a replacement pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentStartupSnapshotParams {
+    pub pane_id: String,
+    pub expected_terminal_id: String,
+}
+
+/// Native startup evidence, independent of coordinator readiness interpretation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentStartupSnapshot {
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub native_agent: Option<String>,
+    pub native_name: Option<String>,
+    pub native_status: AgentStatus,
+    pub launch_pending: bool,
+    pub interactive_ready: bool,
+    /// Visible startup rows, including empty rows; no scrollback or request payloads.
+    pub screen: String,
+    pub osc_title: String,
+    pub osc_progress: String,
+    pub content_revision: u64,
+    pub input_error: Option<String>,
 }

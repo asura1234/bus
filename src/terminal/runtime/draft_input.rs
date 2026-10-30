@@ -60,13 +60,31 @@ impl DraftInput {
         state: &SharedDraftInput,
         io: &PaneRuntimeIo,
     ) -> io::Result<DraftInputLease> {
+        Self::acquire_inner(state, io, true)
+    }
+
+    /// Launch input has its own positive prompt and empty-buffer witness. It
+    /// must not delay a shell startup answer by the provider-draft quiet window.
+    pub(super) fn acquire_launch(
+        state: &SharedDraftInput,
+        io: &PaneRuntimeIo,
+    ) -> io::Result<DraftInputLease> {
+        Self::acquire_inner(state, io, false)
+    }
+
+    fn acquire_inner(
+        state: &SharedDraftInput,
+        io: &PaneRuntimeIo,
+        require_quiet: bool,
+    ) -> io::Result<DraftInputLease> {
         let mut input = state
             .lock()
             .map_err(|_| io::Error::other("pane input lock poisoned"))?;
         if input.buffered.is_some()
-            || input.last_key.is_some_and(|at| {
-                io.submission_clock().now().saturating_duration_since(at) < DRAFT_QUIET_WINDOW
-            })
+            || require_quiet
+                && input.last_key.is_some_and(|at| {
+                    io.submission_clock().now().saturating_duration_since(at) < DRAFT_QUIET_WINDOW
+                })
         {
             return Err(io::Error::other(
                 super::submission::PromptNotShown::ComposerBusy,
