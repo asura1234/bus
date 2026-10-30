@@ -62,7 +62,8 @@ IF <session_cwd> is <worktree_path> or below it
 Run `python3 "$SKILL_DIR/../rebase-origin-main/scripts/submodule_state.py" inspect --repo "<worktree_path>"`.
 STOP if it fails. Capture initialized paths recursively, each dirty status, gitlink drift, and unpublished child work.
 The shared child check includes every local child branch and detached HEAD, excludes commits reachable
-from child remote-tracking refs or tags, and confirms candidate pins with the child origin.
+from child remote-tracking refs or SHAs confirmed by the child origin, including their ancestors.
+A local tag alone is not publication evidence; the remote probe is shallow, batched and fails closed.
 The parent branch being pushed does not establish that its child commits were published.
 Submodules require force removal even when clean; this is not permission to discard work.
 

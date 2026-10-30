@@ -46,41 +46,63 @@ def recorded_pin(repo: Path, path: str, before: str | None) -> str | None:
     return pins[0] if len(pins) == 1 else None
 
 
-def remote_has_commit(repo: Path, commit: str) -> bool:
-    """Ask the child origin for a SHA without trusting the child's local objects."""
-    remote = subprocess.run(['git', '-C', str(repo), 'remote', 'get-url', 'origin'],
-                            text=True, capture_output=True)
-    if remote.returncode or not remote.stdout.strip():
-        return False
-    # A dry-run from the child itself succeeds for objects it already owns even
-    # when origin cannot serve them. An empty object store forces a remote check.
+def fetch_remote_shas(remote: str, commits: list[str], *, filtered: bool = True) -> tuple[bool, str]:
+    """Probe remote availability from an empty object store, without local refs."""
     with tempfile.TemporaryDirectory(prefix='bus-child-remote-') as directory:
         init = subprocess.run(['git', 'init', '-q', '--bare', directory], capture_output=True)
         if init.returncode:
-            return False
+            return False, init.stderr.decode(errors='replace')
+        args = ['git', '-C', directory, 'fetch', '--dry-run', '--no-write-fetch-head', '--depth=1']
+        if filtered:
+            args.append('--filter=tree:0')
         result = subprocess.run(
-            ['git', '-C', directory, 'fetch', '--dry-run', '--no-write-fetch-head',
-             remote.stdout.strip(), commit],
+            [*args, remote, *commits],
             text=True, capture_output=True, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
         )
-        return result.returncode == 0
+        return result.returncode == 0, result.stderr
+
+
+def remote_confirmed_commits(repo: Path, commits: list[str]) -> set[str]:
+    """Confirm candidate tips in one small fetch; fail closed on remote errors."""
+    commits = sorted(set(commits))
+    if not commits:
+        return set()
+    remote = subprocess.run(['git', '-C', str(repo), 'remote', 'get-url', 'origin'],
+                            text=True, capture_output=True)
+    if remote.returncode or not remote.stdout.strip():
+        return set()
+    url = remote.stdout.strip()
+    confirmed, error = fetch_remote_shas(url, commits)
+    if not confirmed and 'filter' in error.lower() and 'not our ref' not in error.lower():
+        confirmed, error = fetch_remote_shas(url, commits, filtered=False)
+    if confirmed:
+        return set(commits)
+    # A mixed batch can fail because just one local tip is absent. Distinguish
+    # its published peers only when the server specifically rejected a SHA.
+    missing_sha = ('not our ref', "couldn't find remote ref", 'unadvertised object')
+    if len(commits) == 1 or not any(message in error.lower() for message in missing_sha):
+        return set()
+    return {commit for commit in commits if fetch_remote_shas(url, [commit])[0]}
+
+
+def remote_has_commit(repo: Path, commit: str) -> bool:
+    return commit in remote_confirmed_commits(repo, [commit])
 
 
 def unpublished_child_work(repo: Path, pin: str, head: str) -> str:
-    # Include every local branch, even when the checkout is detached at its pin.
-    # Tags and remote-tracking refs are publication evidence in the local graph.
+    # Local branches and detached HEAD are work sources. Only remote-tracking
+    # refs and SHAs confirmed by the child origin are publication evidence.
     candidates = git(repo, 'log', '--format=%H %s', '--branches', 'HEAD',
-                     '--not', '--remotes', '--tags').splitlines()
-    shallow = git(repo, 'rev-parse', '--is-shallow-repository') == 'true'
-    unpublished = []
-    for line in candidates:
-        commit = line.split(' ', 1)[0]
-        # A fetched-by-SHA pin can be absent from all local advertised refs.
-        # Ask its own origin; the parent branch's publication says nothing about it.
-        if (commit in (pin, head) or shallow) and remote_has_commit(repo, commit):
-            continue
-        unpublished.append(line)
-    return '\n'.join(unpublished)
+                     '--not', '--remotes').splitlines()
+    candidate_shas = {line.split(' ', 1)[0] for line in candidates}
+    local_tips = git(repo, 'for-each-ref', '--format=%(objectname)', 'refs/heads').splitlines()
+    tips = [commit for commit in {pin, head, *local_tips} if commit in candidate_shas]
+    confirmed = remote_confirmed_commits(repo, tips)
+    if confirmed:
+        # A served tip proves all of its reachable ancestors are published too.
+        candidates = git(repo, 'log', '--format=%H %s', '--branches', 'HEAD',
+                         '--not', '--remotes', *sorted(confirmed)).splitlines()
+    return '\n'.join(candidates)
 
 
 def inspect(repo: Path, prefix: str = '', before: str | None = None) -> list[dict]:

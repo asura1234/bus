@@ -67,7 +67,9 @@ IF rebase_root exists:
 Run `python3 "$SKILL_DIR/scripts/submodule_state.py" check --repo "<repo>"`.
 IF it fails: STOP before rebasing; preserve dirty, unpublished or unrecorded initialized-submodule work.
 The child-work check examines all local child branches and a detached HEAD, excludes commits
-reachable from child remote-tracking refs or tags, and confirms candidate pins with the child origin.
+reachable from child remote-tracking refs or SHAs confirmed by the child origin. A local tag
+alone does not prove publication; a confirmed SHA also covers its reachable ancestors.
+The remote probe batches candidate tips in a shallow, tree-filtered fetch and fails closed.
 Do not use the parent branch's publication as evidence that a child commit was published.
 `git fetch origin`
 Run `python3 "<SKILL_DIR>/scripts/rebase_base.py" --repo "<repo>"`, adding
