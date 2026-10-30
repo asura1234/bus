@@ -180,7 +180,12 @@ fn collect_rows(lines: &[&str], first: usize, footer: usize) -> Option<Vec<Row>>
         } else {
             // A wrapped label must stay within the same gutter, at its label column.
             // Malformed options are not continuations, even when deeply indented.
+            // Grok 1.0.70 pads the command-approval card with an empty ┃ row
+            // under the options. That gutter is not a label.
             let inner = line.trim_start().strip_prefix('┃')?;
+            if inner.trim().is_empty() {
+                continue;
+            }
             let last = rows.last_mut()?;
             let column = line.chars().take_while(|c| c.is_whitespace()).count()
                 + 1
@@ -457,6 +462,8 @@ mod tests {
     };
 
     const PERMISSION: &str = include_str!("../../../tests/fixtures/grok-dialog/permission.txt");
+    const APPROVAL: &str =
+        include_str!("../../../tests/fixtures/grok-dialog/native-1.0.70-command-approval.txt");
     const TRUST: &str = include_str!("../../../tests/fixtures/grok-dialog/trust.txt");
     const QUESTION: &str = include_str!("../../../tests/fixtures/grok-dialog/question.txt");
     const TEXT: &str = include_str!("../../../tests/fixtures/grok-dialog/free-text.txt");
@@ -544,6 +551,22 @@ mod tests {
         let state = detected(&missing, "grok");
         assert!(state.visible_blocker);
         assert!(!state.visible_idle);
+    }
+
+    #[test]
+    fn grok_1070_command_approval_card_parses_the_focused_proceed_row() {
+        let dialog = card(APPROVAL).expect("command approval card");
+        assert_eq!(dialog.kind, DialogKind::Choice);
+        assert_eq!(dialog.selected(), Some(3));
+        assert!(dialog
+            .options
+            .iter()
+            .any(|option| option.selected && option.label.contains("Yes, proceed")));
+        assert_eq!(dialog.keys_for(3), Some(vec!["enter"]));
+        assert!(super::super::parse(APPROVAL).is_some());
+        let detected = detected(APPROVAL, "grok");
+        assert_eq!(detected.state, AgentState::Blocked, "{detected:?}");
+        assert!(detected.visible_blocker, "{detected:?}");
     }
 
     #[test]
