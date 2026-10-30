@@ -1,0 +1,59 @@
+
+  ~/w/grok-e2e-236-g/project                                                                                                                                         48K / 256K │ [Dashboard]
+
+
+     ❯ [Bus message 4; answer with bus send --reply-to 4 --as 3 --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:"replied" before claiming delivery; if it   6:42 AM
+       fails, check the existing answer with bus message status 4 before resending]
+       Bus: this is your system prompt; Bus could not set it at launch for this provider or session. Follow it for the rest of this session, then reply briefly that you are …
+
+
+     ◆ Thought for 0.3s
+
+     I'll read the Bus guides first, then send a short ready reply to message 4.                                                                                                    6:42 AM
+
+     ◈ Explored 2 files, ran 6 commands
+
+     Ready. Reply to message 4 is delivered: ok:true, stage:"replied".                                                                                                              6:43 AM
+
+     Worked for 33s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯ [Bus message 6; answer with bus send --reply-to 6 --as 3 --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:"replied" before claiming delivery; if it fails,     │
+  │   check the existing answer with bus message status 6 before resending]                                                                                                                 │
+  │   Run this shell command now and wait until it exits: sleep 150                                                                                                                         │
+  │   Do not background it. Do not use any other tool first. When it exits, reply with exactly PROBE_DONE.                                                                                  │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) · always-approve ─╯
+
+  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts

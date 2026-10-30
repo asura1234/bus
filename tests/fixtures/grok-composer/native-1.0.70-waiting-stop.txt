@@ -1,0 +1,59 @@
+
+  ~/w/grok-e2e-236-g/project                                                                                                                                         48K / 256K │ [Dashboard]
+
+
+     ❯ [Bus message 6; answer with bus send --reply-to 6 --as 3 --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:"replied" before claiming delivery; if it   6:43 AM
+       fails, check the existing answer with bus message status 6 before resending]
+       Run this shell command now and wait until it exits: sleep 150 …
+
+
+
+
+
+
+
+
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+                                                                                                                                                                                              █
+
+   ⠸ Waiting for response… 0.6s                                                                                                                                            0.6s ⇣48.6k [stop]
+
+  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                                                                                                                                       │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) · always-approve ─╯
+
+  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:shortcuts

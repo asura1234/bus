@@ -386,8 +386,8 @@ impl Worker {
 
 /// The key that stops a running turn, from each provider's own working hint:
 /// Claude Code and Codex show `esc to interrupt`, Cursor `ctrl+c to stop`.
-/// Grok 1.0.70 ignores Esc while a turn is running and shows "Press Ctrl+c
-/// to cancel the turn". Ctrl+C is its cancel key.
+/// Grok 1.0.70 ignores Esc. Its foreground footer is `Ctrl+c:cancel`, and one
+/// Ctrl+C clears `[stop]`. A second Ctrl+C paints `Ctrl+c:press again to quit`.
 fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
         Provider::ClaudeCode | Provider::Codex => "esc",

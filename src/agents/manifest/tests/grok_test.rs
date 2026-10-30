@@ -239,3 +239,81 @@ fn completed_tasks_panel_does_not_hold_delivery() {
     let zero = detect_screen_with_osc(AgentKind::Grok, "▾ Tasks 0\n", "grok", "4;0;0");
     assert_eq!(zero.state, AgentState::Idle, "{zero:?}");
 }
+
+/// Grok 1.0.70 foreground shell, captured while one Ctrl+C was about to be
+/// sent. The status line is a braille spinner plus `[stop]`, and the footer
+/// is `Ctrl+c:cancel` with `Ctrl+b:send to bg`.
+const FOREGROUND_STOP: &str =
+    include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-foreground-stop.txt");
+
+/// The same turn on the next sample. The transcript says the user cancelled
+/// it, `[stop]` is gone, and the footer no longer offers `Ctrl+c:cancel`.
+const FOREGROUND_CANCELLED: &str =
+    include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-foreground-cancelled.txt");
+
+/// `Waiting for response… [stop]` with footer `Ctrl+c:cancel`, captured at
+/// 0.6s. One Ctrl+C unsends that submission.
+const WAITING_STOP: &str =
+    include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-stop.txt");
+
+/// The sample after that Ctrl+C. `[stop]` is gone and the prompt is back in
+/// the composer with `Enter:send`.
+const WAITING_UNSENT: &str =
+    include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt");
+
+/// Second Ctrl+C on a foreground shell. It arms quit. It is not a working turn.
+const PRESS_AGAIN: &str =
+    include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-press-again.txt");
+
+#[test]
+fn captured_foreground_cancel_clears_stop_and_stays_idle() {
+    assert!(FOREGROUND_STOP.contains("[stop]"));
+    assert!(FOREGROUND_STOP.contains("Ctrl+c:cancel"));
+    assert!(FOREGROUND_STOP.contains("Ctrl+b:send to bg"));
+    assert!(FOREGROUND_STOP.contains("Wait 150 seconds in the foreground"));
+    let working = detect_screen_with_osc(AgentKind::Grok, FOREGROUND_STOP, "grok", "4;0;0");
+    assert_eq!(working.state, AgentState::Working, "{working:?}");
+    assert!(working.visible_working, "{working:?}");
+    assert!(!working.visible_idle, "{working:?}");
+    assert_eq!(
+        working.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("spinner_status_working"),
+        "{working:?}"
+    );
+
+    assert!(FOREGROUND_CANCELLED.contains("Turn cancelled by user"));
+    assert!(!FOREGROUND_CANCELLED.contains("[stop]"));
+    assert!(!FOREGROUND_CANCELLED.contains("Ctrl+c:cancel"));
+    let idle = detect_screen_with_osc(AgentKind::Grok, FOREGROUND_CANCELLED, "grok", "4;0;0");
+    assert_eq!(idle.state, AgentState::Idle, "{idle:?}");
+    assert!(!idle.visible_working, "{idle:?}");
+    assert_eq!(
+        idle.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("osc_title_idle"),
+        "{idle:?}"
+    );
+
+    assert!(WAITING_STOP.contains("Waiting for response"));
+    assert!(WAITING_STOP.contains("[stop]"));
+    assert!(WAITING_STOP.contains("Ctrl+c:cancel"));
+    assert!(!WAITING_STOP.contains("Ctrl+b:send to bg"));
+    let waiting = detect_screen_with_osc(AgentKind::Grok, WAITING_STOP, "grok", "4;0;0");
+    assert_eq!(waiting.state, AgentState::Working, "{waiting:?}");
+    assert_eq!(
+        waiting.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("spinner_status_working"),
+        "{waiting:?}"
+    );
+
+    assert!(WAITING_UNSENT.contains("Enter:send"));
+    assert!(!WAITING_UNSENT.contains("[stop]"));
+    let unsent = detect_screen_with_osc(AgentKind::Grok, WAITING_UNSENT, "grok", "4;0;0");
+    assert_eq!(unsent.state, AgentState::Idle, "{unsent:?}");
+    assert!(!unsent.visible_working, "{unsent:?}");
+
+    assert!(PRESS_AGAIN.contains("Ctrl+c:press again to quit"));
+    assert!(!PRESS_AGAIN.contains("[stop]"));
+    let quit = detect_screen_with_osc(AgentKind::Grok, PRESS_AGAIN, "grok", "4;0;0");
+    assert_eq!(quit.state, AgentState::Idle, "{quit:?}");
+    assert!(!quit.visible_working, "{quit:?}");
+}
