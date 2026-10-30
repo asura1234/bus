@@ -152,3 +152,38 @@ pub(super) fn verify(root: &Dir, folder: Option<&Dir>, base: &Path) -> Result<()
     }
     Ok(())
 }
+
+// Refuse Git exclude writes inside global Grok directories or through a
+// registered global file alias. Call before creating the leaf and again with
+// the opened leaf before writing to it.
+pub(super) fn verify_exclude(
+    target: &Dir,
+    base: &Path,
+    leaf: Option<&fs::File>,
+) -> Result<(), String> {
+    let configured = configured_paths(base)?;
+    let mut sources = vec![base.to_owned(), base.join("hooks")];
+    sources.extend(configured.iter().cloned());
+    sources.extend(
+        configured
+            .iter()
+            .map(|path| path.join("hooks"))
+            .filter(|path| path.is_dir()),
+    );
+    for source in sources {
+        if let Some(directory) = existing_directory(&source)? {
+            if target.within(&directory)? {
+                return Err("Git exclude overlaps global Grok configuration".into());
+            }
+            if leaf.is_some() {
+                for entry in fs::read_dir(&source).map_err(|e| e.to_string())? {
+                    let path = entry.map_err(|e| e.to_string())?.path();
+                    reject_shared(&canonical(&path)?, leaf)?;
+                }
+            }
+        } else {
+            reject_shared(&source, leaf)?;
+        }
+    }
+    Ok(())
+}

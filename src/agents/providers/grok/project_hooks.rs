@@ -8,8 +8,6 @@ pub(super) enum Mode {
 }
 
 #[cfg(unix)]
-mod exclude;
-#[cfg(unix)]
 mod unix;
 
 pub(super) fn update<T>(
@@ -28,7 +26,7 @@ pub(super) fn update<T>(
             .and_then(Path::parent)
             .and_then(Path::parent)
         {
-            if let Err(error) = exclude::ensure(root) {
+            if let Err(error) = unix::ensure_exclude(root, &result.3) {
                 tracing::warn!(root = %root.display(), %error,
                     "Could not exclude Bus-generated Grok hooks from Git status");
             }

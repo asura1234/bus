@@ -4,8 +4,14 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 #[path = "dirs.rs"]
 mod dirs;
+#[path = "exclude.rs"]
+mod exclude;
 #[path = "roots.rs"]
 mod roots;
+
+pub(super) fn ensure_exclude(root: &Path, home: &Path) -> Result<(), String> {
+    exclude::ensure(root, home)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {

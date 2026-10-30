@@ -334,3 +334,23 @@ fn grok_git_exclude_inside_global_home_is_not_written() {
     f.prepare("");
     assert_eq!(fs::read(exclude).unwrap(), before);
 }
+
+#[test]
+fn grok_git_exclude_matching_global_symlink_is_not_written() {
+    let f = Fixture::new();
+    f.install();
+    assert!(std::process::Command::new("git")
+        .arg("-C")
+        .arg(&f.project)
+        .args(["init", "-q"])
+        .status()
+        .unwrap()
+        .success());
+    let exclude = f.project.join(".git/info/exclude");
+    let before = fs::read(&exclude).unwrap();
+    let global = f.root.join("home/.grok/settings.json");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    symlink(&exclude, &global).unwrap();
+    f.prepare("");
+    assert_eq!(fs::read(&global).unwrap(), before);
+}

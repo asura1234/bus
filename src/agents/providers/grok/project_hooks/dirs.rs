@@ -67,7 +67,7 @@ impl Dir {
         Ok(dir)
     }
 
-    fn open_at(&self, component: &OsStr, flags: libc::c_int) -> Result<File, String> {
+    pub(super) fn open_at(&self, component: &OsStr, flags: libc::c_int) -> Result<File, String> {
         let component = name(component)?;
         // SAFETY: live directory descriptor, NUL-terminated single component,
         // and mode supplied for O_CREAT. Returned descriptor is uniquely owned.
