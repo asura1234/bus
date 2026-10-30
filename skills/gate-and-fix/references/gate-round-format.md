@@ -7,7 +7,7 @@ consumer use `list` to enumerate failed gates or `show` to read a selected gate 
 ````markdown
 # Gate-and-Fix Round
 
-- Schema: `2`
+- Schema: `3`
 - Round: `<positive integer>`
 - Base: `<immutable commit SHA>`
 - Head: `<commit SHA>`
@@ -21,7 +21,7 @@ consumer use `list` to enumerate failed gates or `show` to read a selected gate 
 
 ### <lowercase-kebab gate name> — PASS|FAIL
 
-- Command: `<exact argv>`
+- Command argv: ["<executable>", "<argument>"]
 - Exit code: `<integer|launch-error>`
 - Duration: `<non-negative integer>ms`
 
@@ -56,3 +56,8 @@ failed gate name per line. For each listed gate, run
 `show --artifact <path> --base <base> --gate <name> --stream stdout|stderr`. `show` writes only the
 selected complete captured stream to stdout, without a separator or final newline; consumers must
 not hand-decode the Base64 Markdown.
+
+Command argv is a single-line JSON array of strings, with a nonempty executable as its first
+argument. JSON escapes preserve newline, backtick, quote, Unicode and empty-argument values
+losslessly. Invalid JSON, a non-array, an empty array, a non-string member or an empty executable
+is malformed. There is no schema-2 compatibility path.

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
-import shlex
 from dataclasses import dataclass
 from typing import Sequence
 
 
 _LOG_ENCODING = "base64-utf8"
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class GateResult:
 @dataclass(frozen=True)
 class ArtifactGate:
     name: str
+    argv: tuple[str, ...]
     passed: bool
     stdout: str
     stderr: str
@@ -83,7 +84,7 @@ def render_round(
             [
                 f"### {result.name} — {status}",
                 "",
-                f"- Command: `{shlex.join(result.argv)}`",
+                f"- Command argv: {json.dumps(result.argv, ensure_ascii=True)}",
                 f"- Exit code: `{exit_code}`",
                 f"- Duration: `{result.duration_ms}ms`",
                 "",
@@ -176,8 +177,14 @@ def _parse_round(artifact: str, *, expected_base: str) -> tuple[str, dict[str, A
         status = match.group(2)
         index += 1
         index = _expect(lines, index, "")
-        if index >= len(lines) or not re.fullmatch(r"- Command: `[^`]+`", lines[index]):
+        if index >= len(lines) or not lines[index].startswith("- Command argv: "):
             raise ValueError("artifact Command is invalid")
+        try:
+            argv = json.loads(lines[index].removeprefix("- Command argv: "))
+        except ValueError as error:
+            raise ValueError("artifact Command argv is invalid JSON") from error
+        if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv) or not argv[0]:
+            raise ValueError("artifact Command argv must be a nonempty string array with an executable")
         index += 1
         if index >= len(lines) or not re.fullmatch(r"- Exit code: `(?:-?[0-9]+|launch-error)`", lines[index]):
             raise ValueError("artifact Exit code is invalid")
@@ -195,6 +202,7 @@ def _parse_round(artifact: str, *, expected_base: str) -> tuple[str, dict[str, A
         index, stderr = _parse_log(lines, index, "stderr", allow_eof=True)
         gates[gate_name] = ArtifactGate(
             name=gate_name,
+            argv=tuple(argv),
             passed=status == "PASS",
             stdout=stdout,
             stderr=stderr,

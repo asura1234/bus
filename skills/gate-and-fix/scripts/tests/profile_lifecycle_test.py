@@ -19,7 +19,7 @@ import gate_process  # noqa: E402
 
 def repository(root):
     for argv in (
-        ("init", "-q"), ("config", "user.email", "fixture@example.test"),
+        ("init", "-q", "-b", "feature"), ("config", "user.email", "fixture@example.test"),
         ("config", "user.name", "fixture"),
     ):
         subprocess.run(("git", *argv), cwd=root, check=True)
@@ -254,6 +254,7 @@ class ProfileLifecycleTest(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 patch.object(gate, "select_gates", return_value=gates),
+                patch.object(gate, "gate_policy", return_value=("just ci", True)),
                 patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target"),
                                        "CARGO_LLVM_COV_TARGET_DIR": str(root / "target")}),
                 contextlib.redirect_stdout(stdout),
@@ -305,7 +306,7 @@ class ProfileLifecycleTest(unittest.TestCase):
                              "--artifact-root", str(root / "temp/artifacts")]
                 script = (
                     f"import sys;sys.path.insert(0,{str(Path(quality.__file__).parent)!r});"
-                    "import gate_and_fix as g;"
+                    "import gate_and_fix as g;g.gate_policy=lambda *a:('just ci',True);"
                     f"g.select_gates=lambda *a,**kw:[g.Gate('unit',(sys.executable,'-c',{command!r}),requires_exclusive_execution=True)];"
                     f"sys.exit(g.main({gate_args!r}))"
                 )
