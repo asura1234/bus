@@ -139,7 +139,7 @@ fn grok_report_destinations_and_native_evidence_limit_are_explicit() {
         "autonomous final belongs in the work room",
         "Do not replace an earlier MASTER answer with a later worker wake",
         "bus send --room master --as ORCH --to human --text",
-        "Native background-task wake verification is pending because Grok is not signed in",
+        "Native background-task wake verification remains pending on this branch",
         "not waived",
         "Synthetic fixtures",
     ] {

@@ -103,8 +103,8 @@ instructions, reconcile durable Bus state and pending bootstrap delivery, and
 do not replay tasks merely because launch or bootstrap happened again.
 Conversation resume does not resurrect operating-system background processes.
 
-Native background-task wake verification is pending because Grok is not signed
-in; it is not waived. Native acceptance requires a synthetic sleeping shell to
+Native background-task wake verification remains pending on this branch; it is
+not waived. Native acceptance requires a synthetic sleeping shell to
 finish after a genuine idle gap, followed by a second model turn and matching
 final with zero additional keyboard input. A completion toast is insufficient.
 Synthetic fixtures and fakes prove only the Bus contract; they cannot establish
