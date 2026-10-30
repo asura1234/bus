@@ -35,6 +35,26 @@ aliases = ["grok-build"]
 # The startup splash draws its logo with braille characters, so working
 # rules must anchor on the [stop] chip, not on a bare spinner glyph.
 
+# Grok Build 1.0.70 startup trust screen, captured in a private scratch
+# home with an untrusted project and a harmless hook. Any reliable live
+# part (the question, Yes, or No) stays blocked while the version line is
+# still the end of the screen. A complete composer directly above that
+# version line is the live frame, so historical trust text does not block.
+# A box edge alone in scrollback is not a composer.
+[[rules]]
+id = "startup_folder_trust"
+state = "blocked"
+priority = 1500
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+regex = ['(?m)^\s*Grok Build\s+[0-9][0-9.]*\s*\z']
+any = [
+  { line_regex = ['^\s*Do you trust the contents of this directory\?\s*$'] },
+  { line_regex = ['^\s*Yes, proceed\s+y\s*$'] },
+  { line_regex = ['^\s*No, quit\s+n\s*$'] },
+]
+not = [{ regex = ['(?s)\s*[╭┌]─+[╮┐]\s*\n\s*│\s*❯[^\n]*\n(?:[^\n]*\n)*?\s*[╰└][^\n]*[╯┘]\s*Grok Build\s+[0-9][0-9.]*\s*\z'] }]
+
 # A login is never composer readiness, even with an idle OSC title.
 # The title belongs to a leading control surface, never a line quoted in a
 # previous reply. The last-moment observer separately checks its bounded frame.
