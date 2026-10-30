@@ -107,9 +107,12 @@ build actually supports it. Preserve the private root until evidence is saved.
   hook location in the add/setup response and authorize project hooks with
   `--consent-hooks` (or inspect and use `agent setup-confirm` when pending).
 - [ ] The folder-trust prompt and ordinary permission prompts must surface as
-  actionable Bus dialogs. Observe `sbus agent dialog AGENT` and
-  `sbus agent read AGENT --source visible`; choose only an authorized option
-  using its fresh fingerprint. Re-observe after a stale fingerprint.
+  actionable Bus dialogs for every provider under test. That includes Kimi
+  2.4.0's "Trust this folder?" screen. An agent left "launching", with messages
+  abandoned as `agent_launching`, fails this check. Observe
+  `sbus agent dialog AGENT` and `sbus agent read AGENT --source visible`;
+  choose only an authorized option using its fresh fingerprint. Re-observe
+  after a stale fingerprint.
 - [ ] While the welcome card is still above the composer, send the first
   message through Bus. After resolving any dialog through Bus, it must reach
   the model and get the unique marker back without a manual terminal keypress.
@@ -188,6 +191,12 @@ or an attributed send by the tester proves neither model initiation nor wake.
 Also send a long prompt clipped in a narrow composer: prove the complete text
 was submitted, not merely a visible suffix, and an unrelated/edited draft was
 not submitted. Mark every unrun cell explicitly.
+
+- [ ] Deliver while the agent is busy: a turn in progress, tool use, or a
+  background task still running. Bus must submit that message or keep it
+  queued, and must not leave text in the composer. A draft left behind, so
+  later messages stay `prompt_not_shown` until a person clears the box, fails
+  the test.
 
 ## Reply capture and failure
 
@@ -317,6 +326,9 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   Record gate failures; a focused pass is not a full gate.
 - [ ] Get independent Claude and Codex reviews on that head. Resolve findings
   and repeat affected checks, acceptance and review after any new head.
+- [ ] Do not depend on one provider. If Codex or another model stops on a usage
+  limit, keep a second real model that can send and reply, and continue
+  authoring and review with it. Record which providers actually ran.
 - [ ] After merge and the developer's Bus restart, an authorized operator must
   perform the live smoke before declaring the integration working. Verify the
   live server's binary and merged `build_sha` using its current run_start record;
@@ -337,3 +349,18 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   prompt and idle-only checks. Verify full prompt ownership and committed finals.
 - **2026-10-30 — interruption:** machine sleep or Bus restart can end in-flight
   turns as `reply_not_captured`; rerun interrupted acceptance in a fresh instance.
+- **2026-10-30 — Grok welcome card:** the welcome card hid the composer, so Bus
+  held messages as `prompt_not_shown`. Send the first message while that card
+  is still visible.
+- **2026-10-30 — Codex quota:** Codex hitting its usage limit stopped all
+  authoring. Grok and Kimi took over once their messaging worked. Do not depend
+  on a single provider; keep a second model available for review.
+- **2026-10-31 — Grok busy draft:** a Grok agent busy with a background task was
+  treated as idle. Bus typed into the composer, could not confirm the submit,
+  and left a draft. Later messages stayed `prompt_not_shown` until a person
+  cleared the box. Deliver while the agent is busy and require that no draft
+  remains.
+- **2026-10-31 — Kimi trust:** Kimi 2.4.0's "Trust this folder?" screen was not
+  detected. Agents stayed "launching" and messages were abandoned as
+  `agent_launching`. The fresh-launch test must cover each provider's trust
+  prompt as a Bus dialog.
