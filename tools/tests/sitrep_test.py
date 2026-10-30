@@ -72,3 +72,55 @@ def test_pr_title_with_escaped_brackets_is_a_valid_link():
     result = render(data)
     assert result.returncode == 0, result.stderr
     assert data["finished"][0]["pr"] in result.stdout
+
+
+def test_empty_finished_is_exactly_none():
+    result = render(report([]))
+    assert result.returncode == 0, result.stderr
+    finished = result.stdout.split("## Deferred")[0].split("## Finished (since the last sitrep)\n", 1)[1]
+    assert finished == "None\n\n"
+
+
+@pytest.mark.parametrize("item", [
+    {"name": "Feature", "tldr": "Waiting to merge.", "context": "Approved.", "pr": "[#12 Add it](https://example.com/pr/12)"},
+    {"name": "Feature", "tldr": "Gate-green.", "context": "Ready but unmerged.", "pr": "[#12 Add it](https://example.com/pr/12)"},
+    {"name": "Feature", "tldr": "Approved.", "context": "Reviewers signed off.", "pr": "[#12 Add it](https://example.com/pr/12)"},
+    {"name": "None", "tldr": "none merged, but work is ready.", "context": "Still open.", "pr": "[#12 Add it](https://example.com/pr/12)"},
+    {"name": "Feature", "tldr": "Shipped.", "context": "No pull request.", "pr": "not opened yet (branch: feat/sitrep-skill)"},
+    {"name": "Fix", "tldr": "Merged.", "context": "Shipped today.", "pr": "[#11 Fix it](https://example.com/pr/11)"},
+])
+def test_finished_rejects_items_without_merge_evidence(item):
+    data = report([])
+    data["finished"] = [item]
+    result = render(data)
+    assert result.returncode != 0
+    assert not result.stdout
+
+
+def test_finished_accepts_only_a_merged_pr_or_landed_commit():
+    merged = report([])
+    merged["finished"] = [{"name": "Fix", "tldr": "Merged.", "context": "Shipped today.", "pr": "merged [#11 Fix it](https://example.com/pr/11)"}]
+    merged_result = render(merged)
+    assert merged_result.returncode == 0, merged_result.stderr
+    assert merged_result.stdout.split("## Deferred")[0].endswith(
+        "## Finished (since the last sitrep)\n- Fix\n  - TLDR: Merged.\n  - Context: Shipped today.\n  - PR/MR: merged [#11 Fix it](https://example.com/pr/11)\n\n"
+    )
+    landed = report([])
+    sha = "7cd03ec7a69d4881223643e68064f69edc385369"
+    landed["finished"] = [{"name": "Fix", "tldr": "Landed.", "context": "On the default branch.", "pr": f"landed {sha}"}]
+    landed_result = render(landed)
+    assert landed_result.returncode == 0, landed_result.stderr
+    assert f"  - PR/MR: landed {sha}\n" in landed_result.stdout
+
+
+def test_unmerged_work_stays_under_ongoing():
+    data = report([])
+    data["ongoing"] = [{"name": "Feature", "tldr": "Waiting to merge.", "context": "Approved and gate-green.", "status": "review", "pr": "[#12 Add it](https://example.com/pr/12)"}]
+    ongoing = render(data)
+    assert ongoing.returncode == 0, ongoing.stderr
+    assert "Waiting to merge." in ongoing.stdout.split("## Finished")[0]
+    data["ongoing"] = []
+    data["finished"] = [{"name": "Feature", "tldr": "Waiting to merge.", "context": "Approved and gate-green.", "pr": "merged [#12 Add it](https://example.com/pr/12)"}]
+    finished = render(data)
+    assert finished.returncode != 0
+    assert not finished.stdout
