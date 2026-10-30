@@ -145,9 +145,6 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         return run_tui(dev, args);
     }
 
-    if matches!(invocation.action, Action::Run | Action::Resume(_)) {
-        skills::on_launch();
-    }
     let explicit_root = bus_data_dir();
     let base = sessions::default_base_dir().map_err(io::Error::other)?;
     let registry = LocalSessionRegistry::new(base.clone());

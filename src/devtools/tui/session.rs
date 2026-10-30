@@ -208,8 +208,6 @@ impl SessionPaths {
         ] {
             create_private_dir(&dir)?;
         }
-        // The automation-owned HOME explicitly declines the interactive installer.
-        crate::messaging::skills::record_answer(&self.home_dir(), false)?;
         Ok(())
     }
 
