@@ -5,7 +5,7 @@ use std::io::Write;
 
 /// A raw final lets acceptance tests exercise protocols that depend on a prefix.
 pub(super) fn reply(prompt: &str) -> String {
-    // Bus's per-request reply instructions are transport metadata, not the work to echo.
+    // The short deliverable header and the legacy reply hint are transport metadata, not the work to echo.
     let prompt = prompt
         .split_inclusive('\n')
         .filter(|line| !bus_message_header(line))

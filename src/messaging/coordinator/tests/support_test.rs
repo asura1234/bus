@@ -410,7 +410,7 @@ pub(in crate::messaging::coordinator) fn test_request_payload(
         .map(|prompt| test_prompt_content(&prompt))
 }
 
-/// Provider fixtures submit the complete frozen delivery, including Bus's correlation instruction.
+/// Provider fixtures submit the complete frozen delivery, including the short correlation header.
 pub(in crate::messaging::coordinator) fn delivered_test_prompt(
     state: &BusState,
     prompt: &str,
