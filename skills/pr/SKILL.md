@@ -5,6 +5,8 @@ description: Feature-branch PR workflow. Land uncommitted work, rebase onto orig
 
 # PR
 
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md.
+
 ```text
 INPUT $ARGUMENTS = [--plan <plan-file>]... [--origin <file>] [--relock <file>] [--lock-only] [--verification <file>]
 plans = every plan path the developer supplied this time, in order of appearance; never guess from diff, commits, or historical state.
@@ -71,7 +73,7 @@ IF `temp/review-pr/<branch_slug>/.locked-goal` and `.locked-non-goals` already e
     Reuse them unchanged: pass them as `--goal-file` / `--non-goal-file` with no `--origin-file`; the script keeps the
     recorded origin, and accepts a lock from before origins existed only unchanged. Only relock re-locks.
 ELSE IF plans nonempty:
-  Run `python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" --output
+  Run `python3 "$SKILL_DIR/../_bus/cli_extensions/pr_goal_context.py" --branch "<branch>" --output
   "<ignored-temp-goal-context>"`, appending `--plan "<path>"` once per plan in original order
   (and `--origin-file "<origin>"` when origin is given).
 ELSE:
@@ -83,7 +85,7 @@ ELSE:
     write the goal as the origin's ask in one sentence, keeping its areas and items, and the non-goals the origin
     excludes (otherwise `无`).
   Write them into ignored temp files, then Run:
-    python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" \
+    python3 "$SKILL_DIR/../_bus/cli_extensions/pr_goal_context.py" --branch "<branch>" \
       --output "<ignored-temp-goal-context>" --goal-file "<goal-file>" \
       --non-goal-file "<non-goal-file>" --origin-file "<origin>"
 IF command fails: STOP; never hand-parse plans or create the lock yourself.
@@ -141,7 +143,7 @@ IF verification given AND any line names a commit other than `head`:
 
 ========== WRITE BODY ==========
 
-Read(references/pr-template.md) and Read(`.github/pull_request_template.md`)
+Read(`$SKILL_DIR/../_bus/docs/pr-template.md`) and Read(`$SKILL_DIR/../_bus/docs/pull-request-template.md`)
 Write the English title and narrative under one hard constraint: **the narrative may come only from the
 immutable `copy_diff` / `copy_commits`; goal and non-goals come only from GOAL_CONTEXT_FILE.** Never re-derive
 from the live worktree, live `HEAD`, or the mutable `origin/master`.
@@ -159,9 +161,9 @@ Fill every section of the GitHub template, in its order:
 
 Write `body_file` under ignored `temp/`, then run:
 
-  python3 skills/pr/scripts/pr_format_check.py --phase <phase> \
-    --template skills/pr/references/pr-template.md \
-    --body-template .github/pull_request_template.md --title "<title>" \
+  python3 "$SKILL_DIR/../_bus/cli_extensions/pr_format_check.py" --phase <phase> \
+    --template "$SKILL_DIR/../_bus/docs/pr-template.md" \
+    --body-template "$SKILL_DIR/../_bus/docs/pull-request-template.md" --title "<title>" \
     --body-file "<body-file>" --goal-context-file "<GOAL_CONTEXT_FILE>" \
     --locked-goal-file "<LOCKED_GOAL_FILE>"
 

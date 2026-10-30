@@ -1,6 +1,14 @@
 use super::*;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+/// Set a validated, existing HOME before portable-pty resolves its child cwd.
+pub fn configure_fixture_home(command: &mut CommandBuilder, home: &Path) {
+    super::fixture_paths::prepare_fixture_home(home)
+        .expect("prepare scratch HOME before PTY spawn");
+    command.env("HOME", home);
+    command.env("USERPROFILE", home);
+}
+
 pub struct SpawnedBus {
     _master: Option<Box<dyn MasterPty + Send>>,
     pub child: Box<dyn Child + Send + Sync>,
@@ -74,6 +82,7 @@ pub fn spawn_bus_with_options(
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", socket_path);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", shell);

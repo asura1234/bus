@@ -18,7 +18,7 @@ selected rules. Python retains Ruff E9,F and has no complexity lint policy.
   - `create.md`: how to draft and revise a workflow (the `workflow-create` skill points here)
   - `template.md`, `auto-merge-pr.md`, `bug-fix.md`, `cross-repo-feature.md`
   - `investigation-report-template.md`, `bug-triage-table-template.md`: bug-fix investigation and triage templates
-- `skills/`: agent workflow skills; `.agents/skills` and `.claude/skills` link here
+- `skills/`: canonical agent workflow skills, embedded in the binary and copied to user scope by `bus skills install`; `_bus` carries shared support assets. There are no repo-scope skill registries.
   - `skill-architecture.md`: the shared skill contract
   - one folder per skill: `SKILL.md`, `guide.md`, `references/` and the skill's own `scripts/` (quality lanes, review lanes, PR signals,
     ledgers and plan checks stay with the skill that runs them; their tests are `scripts/tests/*_test.py`)

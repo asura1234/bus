@@ -2,10 +2,10 @@
 name: workflow-create
 description: Draft or revise a Bus room's workflow.md with the developer - goal, a mermaid graph of steps, participants, coordination, gates and decision rules. Use when an orchestrator starts a room, or when a failure or a requirement change means the plan no longer matches reality.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # workflow-create
 
-Read and follow [the workflow guide](../../workflows/create.md) to draft or
+Read and follow [the workflow guide](../_bus/workflows/create.md) to draft or
 revise a room workflow with the developer. The guide owns the steps, template
 references, coordination rules and revision process.
 

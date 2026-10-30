@@ -411,6 +411,8 @@ impl Worker {
             &mut prepared,
             &hooks,
         )?;
+        let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
+        crate::messaging::skills::post_warnings(&mut state, &skill_agent)?;
         let identity = self.persist_agent_launch(
             state,
             id,

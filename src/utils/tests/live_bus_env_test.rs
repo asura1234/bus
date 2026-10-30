@@ -30,6 +30,11 @@ const DROPPED: &str = "BUS_TEST_INHERITED_ENV_DROPPED";
 // Runs before main, while the process is still single-threaded.
 #[ctor::ctor(unsafe)]
 fn drop_inherited_live_bus_variables() {
+    if std::env::var_os("TEST_BUS_PROTECTED_HOME").is_none() {
+        if let Some(home) = std::env::home_dir() {
+            std::env::set_var("TEST_BUS_PROTECTED_HOME", home);
+        }
+    }
     if std::env::var_os(DROPPED).is_some() {
         return;
     }

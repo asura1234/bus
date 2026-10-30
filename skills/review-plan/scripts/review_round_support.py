@@ -73,23 +73,24 @@ Exit codes:
   0 — pass; 1 — prereq failed ("FAIL" + "- <reason>" lines); 2 — usage error
 
 Usage:
-    python3 skills/review-plan/scripts/review_round.py [<plan.md>] \
+    python3 "$SKILL_DIR/scripts/review_round.py" [<plan.md>] \
         [--reviewer <lane>] [--devils-advocate]
-    python3 skills/review-plan/scripts/review_round.py <plan.md> --check   # structure/status gate only, read-only; can verify a plan whose review is complete
+    python3 "$SKILL_DIR/scripts/review_round.py" <plan.md> --check   # structure/status gate only, read-only; can verify a plan whose review is complete
 """
 
 import re
 import sys
+import subprocess
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+REPO_ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip() or Path.cwd()).resolve()
 
 # Lane ownership, round claiming, and ledger discovery share one implementation with the other review
 # skill in the repo-root cli_extensions/. This part used to exist
 # as a byte-identical copy in each of two skills, and its drift fails silently: a wrong lane only makes a
 # reviewer read someone else's PREV_REVIEWS, with no red light at all.
-sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus" / "cli_extensions"))
 from review_round_common import (  # noqa: E402
     git,
 )

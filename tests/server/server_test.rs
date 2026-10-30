@@ -121,6 +121,7 @@ pane_scrollbars = false
         cmd.arg("server");
         cmd.env("XDG_CONFIG_HOME", config_home);
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+        support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
         cmd.env("HERDR_SOCKET_PATH", api_socket_path);
         cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
         cmd.env("HERDR_CONFIG_PATH", config_home.join("bus/config.toml"));

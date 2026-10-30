@@ -26,7 +26,8 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from pr_goal_context import parse_context, split_h2_sections
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus"))
+from cli_extensions.pr_goal_context import parse_context, split_h2_sections  # noqa: E402
 
 
 SELF_TEST_SECTION = "自测 / Agent 测"
@@ -41,8 +42,7 @@ _CHECKBOX_PREFIX = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*")
 _CHECKBOX = re.compile(r"^- \[([ x])\] (\S.*)$")
 # A required box is ticked only on evidence: the head it proves and the report that proves it.
 _BOX_EVIDENCE = re.compile(r"head `[0-9a-f]{7,40}`.*report `[^`]+`")
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_BODY_TEMPLATE = REPO_ROOT / ".github" / "pull_request_template.md"
+DEFAULT_BODY_TEMPLATE = Path(__file__).resolve().parents[2] / "_bus/docs/pull-request-template.md"
 
 
 def _lines_outside_fences(text: str) -> list[str]:

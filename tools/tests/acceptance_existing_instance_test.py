@@ -252,8 +252,8 @@ class EndToEndEnvironmentTests(unittest.TestCase):
         env = e2e.scrubbed_env({"PATH": "/bin", "HOME": "/home/me", "BUS_DATA_DIR": "/developer", "BUS_DEV": "1",
                                 "HERDR_SOCKET_PATH": "/sock", "HERDR_ENV": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
                                 "CLAUDECODE": "1", "CODEX_HOME": "/codex"}, "/run/data")
-        self.assertEqual(env, {"PATH": "/bin", "HOME": "/home/me", "CODEX_HOME": "/codex",
-                               "BUS_DATA_DIR": "/run/data", "TERM": "xterm-256color"})
+        self.assertEqual(env, {"PATH": "/bin", "HOME": "/run/data-home", "USERPROFILE": "/run/data-home",
+                               "TEST_BUS_PROTECTED_HOME": "/home/me", "BUS_DATA_DIR": "/run/data", "TERM": "xterm-256color"})
 
     def test_binary_is_the_debug_bus_build_or_an_explicit_path(self):
         with tempfile.TemporaryDirectory() as root:

@@ -54,14 +54,9 @@ class SkillMigrationContractTest(unittest.TestCase):
                 entrypoint = SKILLS / name / "SKILL.md"
                 self.assertLessEqual(len(entrypoint.read_text().splitlines()), 250)
 
-    def test_agent_registries_are_derived_links(self) -> None:
+    def test_agent_registries_do_not_shadow_user_installs(self) -> None:
         for registry in (REPO / ".agents" / "skills", REPO / ".claude" / "skills"):
-            for name in CANONICAL_SKILLS:
-                with self.subTest(registry=registry, skill=name):
-                    link = registry / name
-                    self.assertTrue(link.is_symlink())
-                    self.assertEqual(link.readlink(), Path("../../skills") / name)
-                    self.assertTrue((link / "SKILL.md").is_file())
+            self.assertFalse(registry.exists(), f"repo skills shadow user copies: {registry}")
 
     def test_shared_workflow_sources_exist(self) -> None:
         required = (
@@ -129,6 +124,8 @@ class SkillMigrationContractTest(unittest.TestCase):
             "skills/e2e-test/references/e2e-run-report-format.md",
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
+            "skills/_bus/docs/pr-template.md",
+            "skills/_bus/docs/pull-request-template.md",
             "skills/split-pr/references/split-plan-format.md",
         }
         actual = {

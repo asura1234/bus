@@ -170,6 +170,7 @@ fn client_receives_notify_on_agent_state_change() {
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
+    support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", &api_socket);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
@@ -327,6 +328,7 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
+    support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", &api_socket);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");

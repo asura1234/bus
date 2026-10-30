@@ -2,8 +2,8 @@
 
 This guide holds the workflow principles of `/review-plan`. The architecture judgment, task-graph safety, admissibility,
 stop rule, and verdict of plan review are all defined by the
-[Plan Review Guide](../../docs/guides/plan-review-guide.md); report fields and order are all defined by the
-[Review Format](../../docs/guides/review-format.md).
+[Plan Review Guide](../_bus/docs/guides/plan-review-guide.md); report fields and order are all defined by the
+[Review Format](../_bus/docs/guides/review-format.md).
 
 ## Keep formal review separate from free discussion
 
@@ -23,7 +23,7 @@ has no worktree yet, its author first creates the feature worktree with
 slot, coordinated with the owner. This skill remains read-only over plans and
 repository content; reports stay under ignored `temp/review-plan/`. If a separate
 investigation needs test probes, follow the test-only write and saved-patch/restore
-lifecycle in [Parallel writes](../../orchestration/parallel-writes.md#reviews-and-investigations),
+lifecycle in [Parallel writes](../_bus/orchestration/parallel-writes.md#reviews-and-investigations),
 without changing production files or the plan.
 
 ## A lane is one independent viewpoint

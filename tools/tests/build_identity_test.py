@@ -21,7 +21,7 @@ class BuildIdentityTests(unittest.TestCase):
         harness = directory / "harness.rs"
         harness.write_text(
             "mod production {\n"
-            f"include!({json.dumps((ROOT / 'build.rs').as_posix())});\n"
+            f"include!({json.dumps((ROOT / 'build_identity.rs').as_posix())});\n"
             "pub fn record() { record_build_identity(); }\n"
             "}\nfn main() { production::record(); }\n"
         )
@@ -160,7 +160,7 @@ class BuildIdentityTests(unittest.TestCase):
         )
         (self.repo / "build.rs").write_text(
             "mod production {\n"
-            f"include!({json.dumps((ROOT / 'build.rs').as_posix())});\n"
+            f"include!({json.dumps((ROOT / 'build_identity.rs').as_posix())});\n"
             "pub fn record() { record_build_identity(); }\n}\n"
             "fn main() { production::record(); }\n"
         )
@@ -234,7 +234,7 @@ class BuildIdentityTests(unittest.TestCase):
         )
         (self.repo / "build.rs").write_text(
             "mod production {\n"
-            f"include!({json.dumps((ROOT / 'build.rs').as_posix())});\n"
+            f"include!({json.dumps((ROOT / 'build_identity.rs').as_posix())});\n"
             "pub fn record() { record_build_identity(); }\n}\n"
             "fn main() { production::record(); }\n"
         )
@@ -333,7 +333,7 @@ class BuildIdentityTests(unittest.TestCase):
         )
         (self.repo / "build.rs").write_text(
             "mod production {\n"
-            f"include!({json.dumps((ROOT / 'build.rs').as_posix())});\n"
+            f"include!({json.dumps((ROOT / 'build_identity.rs').as_posix())});\n"
             "pub fn record() { record_build_identity(); }\n}\n"
             "fn main() { production::record(); }\n"
         )
@@ -393,7 +393,7 @@ class BuildIdentityCacheProbeTests(BuildIdentityTests):
         )
         (root / "build.rs").write_text(
             "mod production {\n"
-            f"include!({json.dumps((ROOT / 'build.rs').as_posix())});\n"
+            f"include!({json.dumps((ROOT / 'build_identity.rs').as_posix())});\n"
             "pub fn record() { record_build_identity(); }\n}\n"
             "fn main() { production::record(); }\n"
         )

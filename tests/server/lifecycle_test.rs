@@ -82,6 +82,7 @@ fn spawn_server(config_home: &Path, runtime_dir: &Path, api_socket_path: &Path) 
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", api_socket_path);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
@@ -314,6 +315,7 @@ fn duplicate_server_start_fails_gracefully() {
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
+    support::configure_fixture_home(&mut cmd, &runtime_dir.join("home"));
     cmd.env("HERDR_SOCKET_PATH", &api_socket);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
@@ -462,6 +464,21 @@ fn a_socket_path_over_the_unix_limit_fails_fast_with_its_cause() {
         })
         .unwrap();
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
+    let home = data.join("test-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["skills", "status"])
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    let settings = home.join(".local/share/bus");
+    std::fs::create_dir_all(&settings).unwrap();
+    std::fs::write(settings.join("settings.json"), serde_json::to_vec(&serde_json::json!({"skills_answer":{"accepted":false,"bundle_hash":report["bundle_hash"]}})).unwrap()).unwrap();
+    cmd.env("HOME", &home);
+    cmd.env("USERPROFILE", &home);
     cmd.env("BUS_DATA_DIR", &data);
     cmd.env("SHELL", "/bin/sh");
     for key in [
@@ -494,6 +511,8 @@ fn a_socket_path_over_the_unix_limit_fails_fast_with_its_cause() {
         .unwrap_or_default();
     let _ = std::process::Command::new(env!("CARGO_BIN_EXE_bus"))
         .arg("stop")
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("BUS_DATA_DIR", &data)
         .output();
     cleanup_test_base(&base);

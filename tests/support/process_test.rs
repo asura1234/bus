@@ -6,6 +6,9 @@ use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "../../src/utils/launch_guard/paths.rs"]
+mod fixture_paths;
+
 #[path = "spawn_test.rs"]
 mod spawn;
 pub use spawn::*;

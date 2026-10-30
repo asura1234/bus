@@ -2,7 +2,7 @@
 name: gate-and-fix
 description: Use on a feature branch that is getting ready to commit, when lint, unit, integration, coverage, and diff gates must pass and failures must be remediated from complete failure evidence (the main agent decides whether to fix them itself or dispatch subagents), committing and pushing round by round until the branch converges.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Gate and Fix
 
 Read [guide.md](guide.md) and [gate-round-format.md](references/gate-round-format.md) completely.
@@ -26,7 +26,7 @@ artifact_root = temp/gate-and-fix/<branch_slug>
 round = 1
 LOOP:
   Run:
-    python3 skills/gate-and-fix/scripts/gate_and_fix.py \
+    python3 "$SKILL_DIR/../gate-and-fix/scripts/gate_and_fix.py" \
       --repo "<repo>" --base "<base>" --round "<round>" \
       --artifact-root "<artifact_root>"
 
@@ -35,7 +35,7 @@ LOOP:
     STOP with stderr; do not read an old artifact.
 
   Run:
-    python3 skills/gate-and-fix/scripts/gate_and_fix.py verify \
+    python3 "$SKILL_DIR/../gate-and-fix/scripts/gate_and_fix.py" verify \
       --artifact "<artifact>" --base "<resolved base commit>"
   IF verification fails
     STOP with the artifact; do not infer an outcome from Markdown.
@@ -45,7 +45,7 @@ LOOP:
   Assert verifier output is FAIL.
 
   Run:
-    python3 skills/gate-and-fix/scripts/gate_and_fix.py list \
+    python3 "$SKILL_DIR/../gate-and-fix/scripts/gate_and_fix.py" list \
       --artifact "<artifact>" --base "<resolved base commit>"
   IF list fails
     STOP with the artifact; do not infer failed gates from Markdown.
@@ -53,7 +53,7 @@ LOOP:
 
   FOR each listed failed gate and each stream IN {stdout, stderr}
     Run:
-      python3 skills/gate-and-fix/scripts/gate_and_fix.py show \
+      python3 "$SKILL_DIR/../gate-and-fix/scripts/gate_and_fix.py" show \
         --artifact "<artifact>" --base "<resolved base commit>" \
         --gate "<gate>" --stream "<stream>"
     Capture its exact stdout as that stream's remediation evidence.

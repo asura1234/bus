@@ -125,11 +125,11 @@ class ScopeRoundTests(unittest.TestCase):
         self.root = Path(temporary.name)
         for name in (
             "skills/review-pr/scripts/review_round.py",
-            "skills/pr/scripts/pr_goal_context.py",
+            "skills/_bus/cli_extensions/pr_goal_context.py",
             "cli_extensions/review_round_common.py",
             "cli_extensions/review_scope.py",
         ):
-            target = self.root / name
+            target = self.root / ("skills/_bus/" + name if name.startswith("cli_extensions/") else name)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO_ROOT / name, target)
         self.run_command("git", "init", "-b", "main")

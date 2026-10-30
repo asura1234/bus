@@ -2,7 +2,7 @@
 name: split-pr
 description: Split a multi-purpose Bus branch into single-purpose branches from an explicit base, as parallel PRs, a stacked PR train, or a mix of both, with dependencies proven by git and builds. Restack the branches after a parent changes or lands. Use when asked to split a PR, divide a branch into multiple PRs, stack PRs, or restack a PR train.
 ---
-
+Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Split PR
 
 ```text
@@ -11,7 +11,7 @@ INPUT $ARGUMENTS = [split] [--base origin/<branch>] [--publish] [--multi-parent 
 mode = restack when the first word is `restack`, otherwise split.
 --publish: open or update PRs. Without it, branches stay local.
 
-HELPER  H = python3 skills/split-pr/scripts/split_plan.py
+HELPER  H = python3 "$SKILL_DIR/../split-pr/scripts/split_plan.py"
 PLAN    temp/split-pr/<source-branch with / replaced by ->/plan.json
 
 RULES
@@ -148,17 +148,17 @@ or a root part when base_ref is not origin/master (`pr` only targets master):
       ERROR unless that SHA equals the local branch tip (a resumed publish);
     ELSE: git push origin refs/heads/<branch>:refs/heads/<branch>
     Write goal and non-goal files from this part's purpose, then:
-      python3 skills/pr/scripts/pr_goal_context.py --branch <branch> \
+      python3 "$SKILL_DIR/../_bus/cli_extensions/pr_goal_context.py" --branch <branch> \
         --output <ctx> --goal-file <goal> --non-goal-file <non-goals> \
         --origin-file <origin>
     (origin = the source branch's temp/review-pr/<source-slug>/.locked-origin, else the
     confirmed split plan's entry for this part)
-    Read skills/pr/references/pr-template.md and .github/pull_request_template.md.
+    Read "$SKILL_DIR/../_bus/docs/pr-template.md" and "$SKILL_DIR/../_bus/docs/pull-request-template.md".
     Write a Draft body (its self-test boxes `- [ ] <name> — pending`) from
     git diff <onto>...<branch> only, with `H stack PLAN --part <id>` output as
     a bullet in 摘要, then:
-      python3 skills/pr/scripts/pr_format_check.py --phase draft \
-        --template skills/pr/references/pr-template.md --title "<title>" \
+      python3 "$SKILL_DIR/../_bus/cli_extensions/pr_format_check.py" --phase draft \
+        --template "$SKILL_DIR/../_bus/docs/pr-template.md" --title "<title>" \
         --body-file <body> --goal-context-file <ctx> --locked-goal-file <locked goal>
     existing = gh pr list --head <branch> --base <base_branch> --state open --json number
     IF existing: gh pr edit <number> --title "<title>" --body-file <body>
