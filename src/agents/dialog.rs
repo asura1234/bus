@@ -14,6 +14,7 @@ mod composer;
 mod fingerprint;
 pub(crate) use fingerprint::trace as trace_fingerprint;
 mod grok;
+mod kimi;
 mod style;
 mod title;
 
@@ -346,7 +347,8 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     if let Some(dialog) = grok::startup_trust(&lines) {
         return Some(dialog);
     }
-    let mut dialog = claude::parse(&lines, &styles)
+    let mut dialog = kimi::parse(&lines)
+        .or_else(|| claude::parse(&lines, &styles))
         .or_else(|| numbered(&lines, &styles))
         .or_else(|| unnumbered(&lines))
         .or_else(|| text_question(&lines))?;
