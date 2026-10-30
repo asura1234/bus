@@ -44,6 +44,7 @@ nice -n 19 cargo clean -p bus --target-dir "$CARGO_TARGET_DIR/llvm-cov-target"
 nice -n 19 cargo build --locked --features dev-tools
 # Copy the binary to the private run directory before releasing the slot.
 cp "$CARGO_TARGET_DIR/debug/bus" "$scratch/bin/bus"
+cmp "$CARGO_TARGET_DIR/debug/bus" "$scratch/bin/bus"
 # End this shell to release its lock, or clear the trap after rmdir.
 ```
 
@@ -69,6 +70,7 @@ path in both terminals, and use `sbus` for **every** example in this guide:
 ```sh
 umask 077
 scratch=$(mktemp -d /private/tmp/bus-provider-test.XXXXXX)
+printf '%s\n' "$scratch"
 mkdir -m 700 "$scratch/data" "$scratch/project" "$scratch/bin" "$scratch/home"
 git -C "$scratch/project" init
 # After the approved provider login/PATH setup, put its executable directories
