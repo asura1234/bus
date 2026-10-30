@@ -734,6 +734,18 @@ def test_profile_honors_checked_in_override_without_scan_cache(tmp_path):
     assert not (repo / "temp").exists()
 
 
+def test_profile_survives_unrelated_manifest_hazard(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    override = repo / ".bus/repo.toml"
+    override.parent.mkdir(parents=True)
+    override.write_text('gate_command = "just ci"\nrequire_exact_head_gate = true\n')
+    (repo / "package.json").write_text("{}")
+    (repo / "package-lock.json").write_text("{}")
+    (repo / "yarn.lock").write_text("")
+    assert pr_host.repository_policy(repo) == {"gate_command": "just ci", "require_exact_head_gate": True}
+
+
 def test_profile_ignores_stale_cache_without_rewriting_it(tmp_path):
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)

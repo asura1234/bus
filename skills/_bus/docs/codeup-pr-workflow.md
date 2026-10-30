@@ -13,7 +13,7 @@
   `ALIBABA_CLOUD_YUNXIAO_ORGANIZATION_ID` 缺省时取仓库路径第一段。脚本只经子进程环境传递令牌，
   报错时抹掉令牌；令牌不得出现在命令行、PR 正文、评论、日志或仓库文件里。
 - Git over HTTPS 需要凭据时，按命令临时注入（例如一次性 `credential.helper`），不写入 git config。
-  用 `python3 "<skills dir>/worktree-new/scripts/repo_profile.py" scan --no-cache --repo "<repo>"`
+  用 `python3 "<skills dir>/worktree-new/scripts/repo_profile.py" policy --repo "<repo>"`
   读取 `policy.submodule_update`；为 `none` 时 fetch 加 `--no-recurse-submodules`，为 `recursive` 时按该策略更新子模块。
 
 ## 平台映射

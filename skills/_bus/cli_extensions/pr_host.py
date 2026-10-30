@@ -164,7 +164,7 @@ def repository_policy(repo: Path | None = None) -> dict:
     target = Path(repo).resolve() if repo is not None else Path.cwd()
     try:
         done = subprocess.run(
-            [sys.executable, str(scanner), "scan", "--no-cache", "--repo", str(target)],
+            [sys.executable, str(scanner), "policy", "--repo", str(target)],
             capture_output=True, text=True, check=False,
         )
     except OSError as error:
