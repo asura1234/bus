@@ -199,6 +199,8 @@ impl Rig {
             Provider::Cursor => "cursor",
             Provider::Grok => "grok",
             Provider::Kimi => "kimi",
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => "fake",
         };
         let dir = crate::utils::test_temp::unique_temp_path("bus-auto-ui");
         let native = Arc::new(Mutex::new(Native {

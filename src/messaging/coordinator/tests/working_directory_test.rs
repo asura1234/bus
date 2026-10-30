@@ -10,6 +10,8 @@ fn directory_fixture(
         Provider::Cursor => "cursor",
         Provider::Grok => "grok",
         Provider::Kimi => "kimi",
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => "fake",
     };
     let mut info = native_info("pane", native, "session");
     info.interactive_ready = true;

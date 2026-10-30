@@ -356,6 +356,8 @@ impl Fixture {
                 .join("callbacks/owned-launch/claude-settings.json"),
             Provider::Codex => self.project.join(".codex/hooks.json"),
             Provider::Cursor => self.project.join(".cursor/hooks.json"),
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => unreachable!("this fixture covers provider hook files"),
         }
     }
 
@@ -379,6 +381,8 @@ impl Fixture {
                     "stop",
                 ],
             ),
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => unreachable!("this fixture covers provider hook files"),
         };
         let command = format!(
             "{} --bus-callback {adapter}",
@@ -719,6 +723,8 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
                 Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),
                 Provider::Cursor =>
                     crate::agents::providers::launch::runtime_args(Provider::Cursor),
+                #[cfg(feature = "dev-tools")]
+                Provider::Fake => unreachable!("this fixture covers provider hook files"),
             }
         );
         assert_eq!(fixture.plan, original);
@@ -1205,6 +1211,8 @@ fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched
                 fixture.hook_path().to_string_lossy().into_owned(),
             ],
             Provider::Cursor => crate::agents::providers::launch::runtime_args(Provider::Cursor),
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => unreachable!("this fixture covers provider hook files"),
         });
         assert_eq!(
             fixture.load().unwrap().args,
