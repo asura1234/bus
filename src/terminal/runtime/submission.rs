@@ -2,7 +2,7 @@
 mod diagnostics;
 mod preservation;
 mod recovery;
-pub(crate) use preservation::DraftPreservation;
+pub(crate) use preservation::{DraftPreservation, EditorSubmission};
 
 use super::submission_clock::SubmissionClock;
 use super::{io::PaneRuntimeIo, TerminalRuntime};
@@ -103,6 +103,15 @@ pub(crate) trait SubmissionInspector: Send {
     }
     fn preservation_budget(&self) -> Duration {
         Duration::ZERO
+    }
+    fn editor_submission(&self) -> Option<EditorSubmission> {
+        None
+    }
+    fn editor_frame_readable(&self, _screen: &str) -> bool {
+        false
+    }
+    fn editor_working(&self, _screen: &str) -> bool {
+        false
     }
 }
 

@@ -19,6 +19,13 @@ pub(crate) enum DraftPreservation {
     },
 }
 
+pub(crate) struct EditorSubmission {
+    pub(crate) text: String,
+    pub(crate) directory: PathBuf,
+    pub(crate) key: Bytes,
+    pub(crate) backspace: Bytes,
+}
+
 impl ObservedSubmission {
     pub(super) fn run_preserving_draft(
         &self,
@@ -43,6 +50,9 @@ impl ObservedSubmission {
         let preservation = self.inspect.draft_preservation_with_cursor(&screen, cursor);
         match initial {
             InputObservation::Empty if preservation.is_none() => {
+                if let Some(editor) = self.inspect.editor_submission() {
+                    return self.submit_through_editor(editor, delay, lease);
+                }
                 let result = self.run(text, delay);
                 if self
                     .inspect
@@ -221,6 +231,180 @@ impl ObservedSubmission {
     fn editor_handoff(&self, exchange: &Exchange, key: &Bytes) -> io::Result<()> {
         self.transfer_key(key.clone())?;
         self.wait_transfer(|| exchange.acknowledged())
+    }
+
+    /// Queue a key only while both the rendered composer and the input lease
+    /// still match the evidence used to authorize it.
+    fn guarded_editor_key(
+        &self,
+        key: Bytes,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+        confirmation: bool,
+        valid: impl FnOnce(&str) -> bool,
+    ) -> io::Result<()> {
+        let deadline = if confirmation {
+            self.deadline.get()
+        } else {
+            self.hard_deadline
+        };
+        if self.clock.now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Editor transfer expired",
+            ));
+        }
+        let guard = self
+            .content_lock
+            .lock()
+            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+        let screen = self
+            .terminal
+            .visible_ansi_if_complete()
+            .ok_or_else(|| io::Error::other("Composer repaint is incomplete"))?;
+        if !valid(&screen) {
+            return Err(io::Error::other("Composer changed during editor transfer"));
+        }
+        if self.clock.now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Editor transfer expired",
+            ));
+        }
+        if confirmation {
+            self.diagnostics.enter(&key, self.clock.now());
+        }
+        let completion = lease.with_unedited(|| {
+            self.io.queue_input_write_scoped(
+                key,
+                Bytes::new(),
+                Duration::ZERO,
+                Some(deadline),
+                &self.scope,
+            )
+        })?;
+        drop(guard);
+        let result = completion
+            .recv_timeout(self.clock.remaining(deadline))
+            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
+            .and_then(|result| result);
+        if confirmation {
+            self.diagnostics.entered(&result, self.clock.now());
+        }
+        result
+    }
+
+    fn checked_editor_marker(
+        &self,
+        exchange: &Exchange,
+        backspace: &Bytes,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<String> {
+        self.wait_transfer(|| {
+            if lease.edited() {
+                return Err(io::Error::other(
+                    "Developer input changed during editor transfer",
+                ));
+            }
+            Ok(self
+                .terminal
+                .visible_ansi_if_complete()
+                .is_some_and(|screen| {
+                    self.inspect
+                        .restoration_marker_visible(&screen, exchange.marker())
+                }))
+        })?;
+        let mut keys = Vec::with_capacity(backspace.len() * exchange.marker().len());
+        for _ in exchange.marker().bytes() {
+            keys.extend_from_slice(backspace);
+        }
+        self.guarded_editor_key(Bytes::from(keys), lease, false, |screen| {
+            self.inspect
+                .restoration_marker_visible(screen, exchange.marker())
+        })?;
+        let mut result = None;
+        self.wait_transfer(|| {
+            if lease.edited() {
+                return Err(io::Error::other(
+                    "Developer input changed during editor transfer",
+                ));
+            }
+            if let Some(screen) = self.terminal.visible_ansi_if_complete() {
+                if self.inspect.editor_frame_readable(&screen)
+                    && !self
+                        .inspect
+                        .restoration_marker_visible(&screen, exchange.marker())
+                {
+                    result = Some(screen);
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })?;
+        result.ok_or_else(|| io::Error::other("Editor frame is unavailable"))
+    }
+
+    fn submit_through_editor(
+        &self,
+        editor: EditorSubmission,
+        delay: Duration,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<()> {
+        if editor.text.len() as u64 > crate::platform::draft_editor::MAX_BYTES {
+            lease.restored();
+            return Err(io::Error::other(
+                "Prompt exceeds the 2 MiB editor exchange limit",
+            ));
+        }
+        let exchange = self
+            .exchange(editor.directory)
+            .inspect_err(|_| lease.restored())?;
+        exchange
+            .save_recovery(&editor.text)
+            .inspect_err(|_| lease.restored())?;
+        let transfer = (|| {
+            exchange.request_restore()?;
+            self.guarded_editor_key(editor.key.clone(), lease, false, |screen| {
+                self.inspect.observe(screen) == InputObservation::Empty
+            })?;
+            self.wait_transfer(|| exchange.acknowledged())?;
+            let first = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
+
+            // Kimi reads the native editor buffer a second time. Verify every
+            // byte, including offscreen rows, before permitting Enter.
+            exchange.request_verify()?;
+            self.guarded_editor_key(editor.key.clone(), lease, false, |screen| screen == first)?;
+            self.wait_transfer(|| exchange.acknowledged())?;
+            let verified = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
+            self.reset_confirmation(delay);
+            self.check_deadline()?;
+            self.guarded_editor_key(self.enter.clone(), lease, true, |screen| screen == verified)?;
+            self.wait_transfer(|| {
+                if let Some(screen) = self.terminal.visible_ansi_if_complete() {
+                    if screen != verified
+                        && (self.inspect.observe(&screen) == InputObservation::Empty
+                            || self.inspect.editor_working(&screen))
+                    {
+                        return Ok(true);
+                    }
+                }
+                if self.check_deadline().is_err() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Kimi submission may have run; inspect the transcript before resending",
+                    ));
+                }
+                Ok(false)
+            })?;
+            lease.restored();
+            if let Err(error) = exchange.remove_recovery() {
+                self.recovery_log(&exchange, &error);
+            }
+            Ok(())
+        })();
+        if let Err(error) = &transfer {
+            self.recovery_log(&exchange, error);
+        }
+        transfer
     }
 
     fn remove_marker(&self, exchange: &Exchange, backspace: &Bytes) -> io::Result<()> {

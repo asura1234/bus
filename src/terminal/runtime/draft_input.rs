@@ -128,6 +128,23 @@ impl DraftInput {
 }
 
 impl DraftInputLease {
+    /// Serialize the final ownership check and a queued provider key with
+    /// every developer or external input that can invalidate this lease.
+    pub(super) fn with_unedited<T>(&self, action: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("pane input lock poisoned"))?;
+        if state.revision != self.revision {
+            return Err(io::Error::other(
+                "Developer input changed during draft transfer",
+            ));
+        }
+        let result = action();
+        drop(state);
+        result
+    }
+
     pub(super) fn restored(&self) {
         self.replay_safe.set(true);
     }

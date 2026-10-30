@@ -1,12 +1,13 @@
 //! Preserve complete native objects for Claude; exact editor text elsewhere.
 use super::{input, ownership::OwnedComposer, AgentKind, InputObservation};
-use crate::terminal::runtime::{DraftPreservation, SubmissionInspector};
+use crate::terminal::runtime::{DraftPreservation, EditorSubmission, SubmissionInspector};
 use bytes::Bytes;
 use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 pub(super) struct PreservingComposer {
     kind: AgentKind,
     owned: OwnedComposer,
+    expected: String,
     directory: PathBuf,
     keys: Vec<Bytes>,
     native_draft: Mutex<Option<NativeDraft>>,
@@ -26,7 +27,8 @@ impl PreservingComposer {
     ) -> Self {
         Self {
             kind,
-            owned: OwnedComposer::new(kind, expected),
+            owned: OwnedComposer::new(kind, expected.clone()),
+            expected,
             directory,
             keys,
             native_draft: Mutex::new(None),
@@ -104,6 +106,44 @@ impl SubmissionInspector for PreservingComposer {
         crate::protocol::api::submission::DRAFT_TRANSFER_BUDGET
     }
 
+    fn editor_submission(&self) -> Option<EditorSubmission> {
+        (self.kind == AgentKind::Kimi && self.keys.len() == 3).then(|| EditorSubmission {
+            text: self.expected.replace("\r\n", "\n").replace('\r', "\n"),
+            directory: self.directory.clone(),
+            key: self.keys[1].clone(),
+            backspace: self.keys[2].clone(),
+        })
+    }
+
+    fn editor_frame_readable(&self, screen: &str) -> bool {
+        self.kind == AgentKind::Kimi && input(self.kind, screen).is_some()
+    }
+
+    fn editor_working(&self, screen: &str) -> bool {
+        if self.kind != AgentKind::Kimi {
+            return false;
+        }
+        let plain = screen
+            .lines()
+            .map(|line| {
+                super::styled_chars(line)
+                    .iter()
+                    .map(|c| c.character)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detected = crate::agents::manifest::detect_with_osc(
+            self.kind,
+            crate::agents::manifest::DetectionInput {
+                screen: &plain,
+                osc_title: "",
+                osc_progress: "",
+            },
+        );
+        detected.visible_working && !detected.visible_blocker
+    }
+
     fn draft_preservation(&self, screen: &str) -> Option<DraftPreservation> {
         self.choose(screen, false)
     }
@@ -143,7 +183,16 @@ impl SubmissionInspector for PreservingComposer {
     }
 
     fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
-        input(self.kind, screen).is_some_and(|body| body.ends_with(marker))
+        input(self.kind, screen).is_some_and(|body| {
+            if self.kind == AgentKind::Kimi {
+                body.chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>()
+                    .ends_with(marker)
+            } else {
+                body.ends_with(marker)
+            }
+        })
     }
 }
 

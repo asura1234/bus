@@ -12,7 +12,7 @@ mod shutdown;
 mod submission;
 mod submission_clock;
 pub(crate) use submission::{
-    DraftPreservation, InputObservation, PromptNotShown, SubmissionInspector,
+    DraftPreservation, EditorSubmission, InputObservation, PromptNotShown, SubmissionInspector,
 };
 #[cfg(test)]
 pub(crate) use submission_clock::{SubmissionClock, NATIVE_TEST_TIMEOUT};

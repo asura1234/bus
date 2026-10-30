@@ -3,9 +3,14 @@ use super::styled_chars;
 use crate::terminal::runtime::InputObservation;
 
 pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
-    let Some(rows) = rows(screen) else {
+    let Some((rows, clipped)) = rows(screen) else {
         return InputObservation::Unavailable;
     };
+    // A visible suffix never establishes ownership of hidden rows, even if
+    // it happens to equal the whole requested message.
+    if clipped {
+        return InputObservation::Unavailable;
+    }
     if rows.len() == 1 && rows[0].is_empty() {
         return InputObservation::Empty;
     }
@@ -18,7 +23,7 @@ pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
 }
 
 pub(super) fn input(screen: &str) -> Option<String> {
-    Some(rows(screen)?.join("\n"))
+    Some(rows(screen)?.0.join("\n"))
 }
 
 fn matches_rows(rows: &[String], expected: &str) -> bool {
@@ -52,7 +57,7 @@ fn matches_rows(rows: &[String], expected: &str) -> bool {
     positions.contains(&expected.len())
 }
 
-fn rows(screen: &str) -> Option<Vec<String>> {
+fn rows(screen: &str) -> Option<(Vec<String>, bool)> {
     let lines: Vec<String> = screen
         .lines()
         .map(|line| styled_chars(line).iter().map(|c| c.character).collect())
@@ -85,5 +90,9 @@ fn rows(screen: &str) -> Option<Vec<String>> {
         let continuation = line.trim_start().strip_prefix("│   ")?;
         rows.push(continuation.strip_suffix('│')?.trim_end().to_owned());
     }
-    Some(rows)
+    let clipped = [top, bottom].iter().any(|&index| {
+        let line = &lines[index];
+        (line.contains('↑') || line.contains('↓')) && line.contains("more")
+    });
+    Some((rows, clipped))
 }
