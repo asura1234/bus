@@ -19,6 +19,29 @@ pub(crate) struct AddAgent {
     pub(crate) consent_project_hooks: bool,
 }
 
+fn launch_binding(
+    state: &mut super::BusState,
+    id: AgentId,
+    input: &AddAgent,
+    prepared: &launch::PreparedLaunch,
+) -> Result<(Option<String>, Option<String>), String> {
+    let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
+    crate::messaging::skills::post_warnings(state, &skill_agent)?;
+    let provider = input.provider;
+    let env = &prepared.env;
+    let executable = launch::selected_executable(provider, env)?;
+    let home = if provider == Provider::Grok {
+        Some(
+            env.get("GROK_HOME")
+                .cloned()
+                .ok_or("Grok launch has no validated home")?,
+        )
+    } else {
+        None
+    };
+    Ok((executable, home))
+}
+
 impl Worker {
     pub(super) fn delete_agent(
         &mut self,
@@ -411,8 +434,7 @@ impl Worker {
             &mut prepared,
             &hooks,
         )?;
-        let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
-        crate::messaging::skills::post_warnings(&mut state, &skill_agent)?;
+        let (selected_executable, grok_home) = launch_binding(&mut state, id, &input, &prepared)?;
         let identity = self.persist_agent_launch(
             state,
             id,
@@ -453,7 +475,9 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         self.save(state)?;
         // This identity is durable before start. A missing response must not launch twice.
-        let mut argv = vec![launch::executable(input.provider).to_owned()];
+        let mut argv = vec![selected_executable
+            .clone()
+            .unwrap_or_else(|| launch::executable(input.provider).to_owned())];
         argv.extend(prepared.args.iter().cloned());
         self.watch_agent_startup(id, argv)?;
         let started = self
@@ -463,6 +487,8 @@ impl Worker {
                 kind: identity::provider_kind(input.provider).label().into(),
                 pane_id: pane.clone(),
                 args: prepared.args.clone(),
+                executable: selected_executable,
+                grok_home,
                 timeout_ms: None,
             }));
         match started {
@@ -545,7 +571,7 @@ impl Worker {
                 id,
                 Some(
                     match provider {
-                        Provider::Codex | Provider::Cursor => {
+                        Provider::Codex | Provider::Cursor | Provider::Grok => {
                             "Not ready; waiting for the provider terminal."
                         }
                         Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
@@ -591,7 +617,7 @@ impl Worker {
         }
     }
 
-    fn prepare_agent_prompt(
+    pub(super) fn prepare_agent_prompt(
         &self,
         input: &AddAgent,
         id: AgentId,
@@ -600,6 +626,7 @@ impl Worker {
         prepared: &mut launch::PreparedLaunch,
         hooks: &HookContext,
     ) -> Result<(), String> {
+        let is_orchestrator = spec.is_some();
         let docs = orchestrator::write_docs(&self.data_dir)?;
         let name = state.agent(id).map(|a| a.name.as_str()).unwrap_or_default();
         let onboarding = orchestrator::agent_onboarding(name, id, input.room, &docs);
@@ -619,6 +646,11 @@ impl Worker {
         } else {
             onboarding
         };
+        let text = if input.provider == Provider::Grok && is_orchestrator {
+            crate::agents::providers::grok::system_prompt::orchestrator_prompt(&text)?
+        } else {
+            text
+        };
         let adopted = prepared.adopted_session.is_some();
         let path = orchestrator::write_prompt(&hooks.spool, &text)?;
         match orchestrator::prompt_args(input.provider, &path, adopted)? {
@@ -636,6 +668,11 @@ impl Worker {
                         Draft {
                             text: match input.provider {
                                 Provider::Cursor => cursor::system_prompt::prompt_message(&text),
+                                Provider::Grok if is_orchestrator => {
+                                    crate::agents::providers::grok::system_prompt::prompt_message(
+                                        &text,
+                                    )
+                                }
                                 _ => orchestrator::prompt_message(&text),
                             },
                             files: Vec::new(),

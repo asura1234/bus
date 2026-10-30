@@ -100,6 +100,9 @@ fn occupied_composer_retries_steering_without_changing_the_lead_turn() {
             Provider::Cursor => {
                 json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn","prompt":"lead"})
             }
+            Provider::Grok => {
+                json!({"hookEventName":"before_agent","sessionId":"session","promptId":"turn","prompt":"lead"})
+            }
         };
         record(&dir, provider, hook);
         worker
@@ -223,6 +226,9 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
             .unwrap()
             .trim_end();
         let callback = match provider {
+            crate::agents::providers::ProviderKind::Grok => {
+                panic!("This fixture covers the original providers; use dedicated Grok tests")
+            }
             Provider::ClaudeCode => json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "session",
@@ -1636,4 +1642,311 @@ fn message_status_retains_native_withdrawal_detail_after_uncertain_settlement() 
             .is_some_and(|value| value.contains(detail)),
         "{status}"
     );
+}
+
+#[test]
+fn grok_cleared_after_an_idle_turn_keeps_its_fresh_session_available() {
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    // A finished turn's gate and the session's idle ping, with no Bus request open.
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"stop","sessionId":"session","promptId":"own-turn","reason":"end_turn"}),
+    );
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"notification","notificationType":"idle_prompt","sessionId":"session"}),
+    );
+    consume(&mut worker, agent, &dir);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..3 {
+        consume(&mut worker, agent, &dir);
+    }
+    let cleared = agent_of(&worker, agent);
+    assert_eq!(
+        cleared.runtime_identity.session_id.as_deref(),
+        Some("fresh")
+    );
+    assert_ne!(
+        cleared.status,
+        RuntimeStatus::Unavailable,
+        "{:?}",
+        cleared.actionable_error
+    );
+    assert_eq!(cleared.actionable_error, None);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn grok_reset_retires_known_old_observations_after_reopen_but_rejects_foreign_sessions() {
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..2 {
+        consume(&mut worker, agent, &dir);
+    }
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    // Opening intentionally invalidates cached Idle; model the fresh poll.
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    for value in [
+        json!({"hookEventName":"stop","sessionId":"session","promptId":"old","reason":"end_turn"}),
+        json!({"hookEventName":"notification","notificationType":"idle_prompt","sessionId":"session"}),
+        json!({"hookEventName":"session_start","sessionId":"session","source":"new"}),
+        json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":"old","prompt":"old"}),
+        json!({"hookEventName":"stop_cancelled","sessionId":"session","promptId":"old","reason":"cancelled"}),
+        json!({"hookEventName":"stop_failure","sessionId":"session","promptId":"old","error":"server_error"}),
+    ] {
+        record(&dir, Provider::Grok, value);
+    }
+    consume(&mut worker, agent, &dir);
+    assert_ne!(
+        agent_of(&worker, agent).status,
+        RuntimeStatus::Unavailable,
+        "{:?}",
+        agent_of(&worker, agent)
+    );
+    assert!(
+        crate::agents::providers::spool::records(&dir.join("callbacks/launch"))
+            .unwrap()
+            .is_empty()
+    );
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"stop","sessionId":"foreign","promptId":"other","reason":"end_turn"}),
+    );
+    consume(&mut worker, agent, &dir);
+    assert_eq!(agent_of(&worker, agent).status, RuntimeStatus::Unavailable);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn grok_owned_pending_stop_survives_until_cancel_or_failure_without_publishing_success() {
+    for event in ["stop_cancelled", "stop_failure"] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
+        let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
+        worker.submit_ready().unwrap();
+        record(
+            &dir,
+            Provider::Grok,
+            json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":"turn","prompt":"PRIVATE_PROMPT"}),
+        );
+        record(
+            &dir,
+            Provider::Grok,
+            json!({"hookEventName":"stop","sessionId":"session","promptId":"turn","reason":"end_turn","lastAssistantMessage":"PRIVATE_REPLY"}),
+        );
+        consume(&mut worker, agent, &dir);
+        assert!(worker.state.request(request).unwrap().trusted_start_bound);
+        assert_ne!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            crate::agents::providers::spool::records(&dir.join("callbacks/launch"))
+                .unwrap()
+                .len(),
+            1
+        );
+        record(
+            &dir,
+            Provider::Grok,
+            json!({"hookEventName":event,"sessionId":"session","promptId":"turn","reason":"user_interrupt","error":"server_error"}),
+        );
+        consume(&mut worker, agent, &dir);
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Abandoned
+        );
+        assert!(worker
+            .state
+            .request(request)
+            .unwrap()
+            .pending_final
+            .is_none());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn grok_completion_deferrals_and_retry_expiry_are_diagnosable_without_message_contents() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
+        let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
+        worker.submit_ready().unwrap();
+        record(&dir, Provider::Grok, json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":"turn","prompt":"PRIVATE_PROMPT"}));
+        consume(&mut worker, agent, &dir);
+        worker.state.observe_status(agent, RuntimeStatus::Working, io::now_ms()).unwrap();
+        record(&dir, Provider::Grok, json!({"hookEventName":"stop","sessionId":"session","promptId":"turn","reason":"end_turn","lastAssistantMessage":"PRIVATE_REPLY"}));
+        consume(&mut worker, agent, &dir);
+        worker.state.observe_status(agent, RuntimeStatus::Idle, io::now_ms()).unwrap();
+        consume(&mut worker, agent, &dir);
+        consume(&mut worker, agent, &dir);
+        let spool = dir.join("callbacks/launch");
+        let pending = callbacks::records(&spool).unwrap();
+        assert_eq!(pending.len(), 1, "owned same-session proof remains pending");
+        let marker = pending[0].0.with_extension("grok-retry");
+        std::fs::write(&marker, br#"{"attempts":8,"next_at":0}"#).unwrap();
+        consume(&mut worker, agent, &dir);
+        assert!(callbacks::records(&spool).unwrap().is_empty());
+        assert!(!marker.exists(), "retired observations must remove their sidecars");
+        assert_ne!(worker.state.request(request).unwrap().phase, RequestPhase::Completed);
+        let logs = capture.text();
+        for reason in ["grok_not_idle", "grok_candidate", "grok_native_record_pending", "grok_attestation_pending", "grok_retry_not_due", "grok_retry_budget_exhausted"] {
+            assert!(logs.contains(reason), "missing {reason}: {logs}");
+        }
+        assert!(!logs.contains("PRIVATE_PROMPT") && !logs.contains("PRIVATE_REPLY"), "{logs}");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
+#[test]
+fn grok_1070_native_final_settles_the_exact_bus_request() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
+    let mut state = worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session-submit-stop".into()),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    let prompt = "Reply exactly SUBMIT_HOOK_OK. Do not use tools.";
+    let request = queue(&mut worker, room, agent, prompt);
+    worker.submit_ready().unwrap();
+    let native_dir = dir.join("native/session-submit-stop");
+    std::fs::create_dir_all(&native_dir).unwrap();
+    let transcript = native_dir.join("updates.jsonl");
+    std::fs::write(
+        &transcript,
+        include_str!(
+            "../../../agents/providers/grok/tests/fixtures/native-1.0.70/submit-stop.jsonl"
+        ),
+    )
+    .unwrap();
+    let mut hooks: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../agents/providers/grok/tests/fixtures/native-1.0.70/submit-stop-hooks.json"
+    ))
+    .unwrap();
+    record(&dir, Provider::Grok, hooks.remove(0));
+    consume(&mut worker, agent, &dir);
+    assert!(worker.state.request(request).unwrap().trusted_start_bound);
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, io::now_ms())
+        .unwrap();
+    let mut stop = hooks.remove(0);
+    stop["transcriptPath"] = json!(transcript);
+    record(&dir, Provider::Grok, stop);
+    consume(&mut worker, agent, &dir);
+    assert_ne!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    consume(&mut worker, agent, &dir);
+    let settled = worker.state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert_eq!(settled.reply().unwrap().text, "SUBMIT_HOOK_OK");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn grok_superseded_failure_does_not_poison_rebound_session() {
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..2 {
+        consume(&mut worker, agent, &dir);
+    }
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"stop_cancelled","sessionId":"session","promptId":"old","reason":"cancelled"}),
+    );
+    consume(&mut worker, agent, &dir);
+    assert_ne!(
+        agent_of(&worker, agent).status,
+        RuntimeStatus::Unavailable,
+        "{:?}",
+        agent_of(&worker, agent).actionable_error
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn grok_resume_of_superseded_session_is_not_silently_retired() {
+    // Grok 1.0.70 `/resume <id>` reloads a session in place and reports
+    // session_start source=load. After a Bus clear (session -> fresh), resuming
+    // the old session moves the pane off the session Bus follows.
+    let (mut worker, agent, _room, dir, _) = fixture(Provider::Grok, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"fresh","source":"new"}),
+    );
+    for _ in 0..2 {
+        consume(&mut worker, agent, &dir);
+    }
+    assert_eq!(
+        agent_of(&worker, agent)
+            .runtime_identity
+            .session_id
+            .as_deref(),
+        Some("fresh")
+    );
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"session_start","sessionId":"session","source":"load"}),
+    );
+    consume(&mut worker, agent, &dir);
+    let state = agent_of(&worker, agent);
+    assert!(
+        state.status == RuntimeStatus::Unavailable
+            || state.runtime_identity.session_id.as_deref() == Some("session"),
+        "pane resumed the superseded session but Bus still follows {:?} with status {:?}",
+        state.runtime_identity.session_id,
+        state.status
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -1,0 +1,3 @@
+{"method":"session/update","params":{"sessionId":"session-ordinary","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Reply exactly: GROK_CAPTURE_ORDINARY_OK. Do not use tools."}},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-ordinary","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"GROK_CAPTURE_ORDINARY_OK"}},"_meta":{"promptId":"prompt-ordinary","chunkId":9}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-ordinary","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-ordinary","stop_reason":"end_turn"},"_meta":{}}}

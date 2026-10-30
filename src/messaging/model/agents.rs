@@ -72,6 +72,7 @@ impl BusState {
                 compactions: Compactions::default(),
                 last_compaction_callback: None,
                 session_reset_pending: false,
+                superseded_session_id: None,
                 interrupt_pending: false,
                 status_since_ms: 0,
                 observed_at_ms: 0,
@@ -336,6 +337,7 @@ impl BusState {
         if previous.as_deref() != Some(&session) {
             agent.claude_shells = None;
         }
+        agent.superseded_session_id = previous.clone();
         agent.session_reset_pending = false;
         agent.compactions = Compactions::default();
         // A message already sent into the fresh context was recorded under the

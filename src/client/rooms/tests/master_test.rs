@@ -958,7 +958,10 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     ui.action(render::Action::NewAgent);
     typed(&mut ui, "orch");
     key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
-    assert_eq!(choices(&mut ui), [Provider::ClaudeCode, Provider::Cursor]);
+    assert_eq!(
+        choices(&mut ui),
+        [Provider::ClaudeCode, Provider::Cursor, Provider::Grok]
+    );
     // Arrow keys cycle only through the offered providers.
     for code in [
         KeyCode::Down,
@@ -1004,7 +1007,12 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
     assert_eq!(
         choices(&mut ui),
-        [Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
+        [
+            Provider::Codex,
+            Provider::ClaudeCode,
+            Provider::Cursor,
+            Provider::Grok
+        ]
     );
     ui.action(render::Action::Provider(Provider::Codex));
     if let Some(forms::Form::Agent { cwd, args, .. }) = &mut ui.form {

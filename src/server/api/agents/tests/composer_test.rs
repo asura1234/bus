@@ -1,5 +1,46 @@
 use super::*;
 
+#[tokio::test]
+async fn grok_login_heading_above_composer_padding_receives_no_input() {
+    use std::time::{Duration, Instant};
+
+    let empty = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
+    for (heading, gap) in [
+        ("Log in to Grok", 0),
+        ("Log in to Grok", 13),
+        ("Login with Grok", 13),
+    ] {
+        let screen = format!("{heading}\n{}{empty}", "\n".repeat(gap));
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 30, 16);
+        runtime.test_process_pty_bytes(
+            format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
+        );
+        let completion = runtime
+            .queue_observed_input_with_inspector(
+                bytes::Bytes::from_static(b"from bus"),
+                bytes::Bytes::from_static(b"\r"),
+                vec![bytes::Bytes::from_static(b"\x01")],
+                Duration::ZERO,
+                Some(Instant::now() + Duration::from_millis(200)),
+                Box::new(observer(AgentKind::Grok, "from bus".into())),
+            )
+            .unwrap();
+        let error = completion
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            writes.try_recv().is_err(),
+            "login composer with {gap} padding lines received editing keys, paste or Enter"
+        );
+        assert!(
+            crate::terminal::runtime::PromptNotShown::is(&error),
+            "{error}"
+        );
+    }
+}
+
 #[test]
 fn captured_claude_subagent_footer_is_an_empty_composer() {
     let captured = include_str!("fixtures/claude_subagent_footer.txt");
@@ -1063,3 +1104,22 @@ mod stale_own_paste;
 
 #[path = "late_own_paste_test.rs"]
 mod late_own_paste;
+
+#[test]
+fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
+    use crate::terminal::runtime::SubmissionInspector;
+    // A reply line far above the composer is transcript, not the login
+    // surface; the live composer below it must stay observable for delivery.
+    let empty = include_str!("../../../../../tests/fixtures/grok-composer/empty.txt");
+    for body_lines in [0, 1, 14] {
+        let screen = format!(
+            "◆ The deploy step failed with:\n\nLogin required\n\n{}\n{empty}",
+            "Re-authenticate the CLI, then retry.\n".repeat(body_lines)
+        );
+        assert_eq!(
+            observer(AgentKind::Grok, "next task".into()).observe(&screen),
+            crate::terminal::runtime::InputObservation::Empty,
+            "{body_lines} body lines"
+        );
+    }
+}

@@ -6,6 +6,8 @@ use ratatui::layout::Rect;
 use crate::messaging::coordinator::resume::{LaunchExtras, NativeResumeContext, NativeResumeFacts};
 use crate::server::app::App;
 
+type ResumeInputs = (Vec<String>, Vec<(String, String)>);
+
 fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeResumeFacts {
     NativeResumeFacts {
         agent_name: terminal.agent_name.clone(),
@@ -240,6 +242,39 @@ impl App {
         pane_infos
     }
 
+    fn prepared_resume_inputs(
+        &mut self,
+        pane_id: crate::utils::ids::PaneId,
+        terminal_id: &crate::utils::ids::TerminalId,
+        plan: &crate::agents::resume::catalog::AgentResumePlan,
+        extras: LaunchExtras,
+    ) -> Option<ResumeInputs> {
+        let grok_argv = (plan.agent == "grok").then(|| resume_argv(plan, &extras));
+        let (mut argv, env) = resume_launch_inputs(plan, extras);
+        if let Some(result) = grok_argv {
+            match result {
+                Ok(bound) => argv = bound,
+                Err(reason) => {
+                    self.suspend_pending_agent_resume(pane_id, terminal_id, &reason);
+                    return None;
+                }
+            }
+        }
+        Some((argv, env))
+    }
+
+    fn record_resume_command(
+        &mut self,
+        terminal_id: &crate::utils::ids::TerminalId,
+        argv: &[String],
+    ) -> String {
+        let command = shell_command_from_argv(argv);
+        if let Some(terminal) = self.state.terminals.get_mut(terminal_id) {
+            terminal.begin_native_resume(command.clone());
+        }
+        command
+    }
+
     fn start_pending_agent_resume(
         &mut self,
         pane_id: crate::utils::ids::PaneId,
@@ -284,11 +319,11 @@ impl App {
             }
             None => plan,
         };
-        let (argv, env) = resume_launch_inputs(&plan, extras);
-        let resume_command = shell_command_from_argv(&argv);
-        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-            terminal.begin_native_resume(resume_command.clone());
-        }
+        let Some((argv, env)) = self.prepared_resume_inputs(pane_id, &terminal_id, &plan, extras)
+        else {
+            return false;
+        };
+        let resume_command = self.record_resume_command(&terminal_id, &argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
@@ -478,6 +513,51 @@ fn shell_command_from_argv(argv: &[String]) -> String {
         .map(|part| shell_quote(part))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn resume_argv(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    extras: &LaunchExtras,
+) -> Result<Vec<String>, String> {
+    let mut argv = plan.argv.clone();
+    if plan.agent == "grok" && !extras.env.is_empty() {
+        if argv.first().map(String::as_str) != Some("grok") {
+            return Err("Grok resume plan has an unexpected executable".into());
+        }
+        let env = extras.env.iter().cloned().collect();
+        argv[0] = crate::agents::providers::launch::selected_executable(
+            crate::agents::providers::ProviderKind::Grok,
+            &env,
+        )?
+        .ok_or("Grok resume has no selected executable")?;
+    }
+    argv.extend(extras.args.iter().cloned());
+    if plan.agent == "grok" && !extras.env.is_empty() {
+        let home = extras
+            .env
+            .iter()
+            .find(|(key, _)| key == "GROK_HOME")
+            .map(|(_, value)| value)
+            .ok_or("Grok resume has no validated home")?;
+        argv = crate::agents::providers::grok::launch::bind_home(argv, std::path::Path::new(home))?;
+    }
+    Ok(argv)
+}
+
+#[cfg(test)]
+fn resume_argv_for_test(
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    env: Vec<(String, String)>,
+    args: Vec<String>,
+) -> Result<Vec<String>, String> {
+    resume_argv(
+        plan,
+        &LaunchExtras {
+            env,
+            args,
+            session: None,
+        },
+    )
 }
 
 fn shell_quote(value: &str) -> String {

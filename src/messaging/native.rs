@@ -142,7 +142,7 @@ mod tests {
         let outcome = client.request_using(
             Method::AgentStart(crate::protocol::api::schema::AgentStartParams {
                 name: "slow".into(), kind: "codex".into(), pane_id: "w1:p1".into(),
-                args: vec![], timeout_ms: None,
+                args: vec![], executable: None, grok_home: None, timeout_ms: None,
             }),
             |_, request, _| {
                 Ok(if started.elapsed() < Duration::from_secs(7) {
@@ -166,6 +166,8 @@ mod tests {
             kind: "claude".into(),
             pane_id: "w1:p2".into(),
             args: vec![],
+            executable: None,
+            grok_home: None,
             timeout_ms: None,
         };
         for start in [
@@ -247,6 +249,8 @@ mod tests {
                 kind: "claude".into(),
                 pane_id: "w1:p2".into(),
                 args: vec![],
+                executable: None,
+                grok_home: None,
                 timeout_ms: None,
             },
         ));

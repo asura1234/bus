@@ -1,6 +1,7 @@
 //! Explicit recovery of a provider command rejected before input, retaining its pane.
 use super::{
-    io, schema, AgentRuntimeIdentity, Method, ResponseResult, RoomAgent, RuntimeStatus, Worker,
+    io, schema, AgentRuntimeIdentity, Method, Provider, ResponseResult, RoomAgent, RuntimeStatus,
+    Worker,
 };
 use crate::messaging::{identity, model::StartupRecovery};
 
@@ -17,6 +18,31 @@ impl Worker {
         } = &agent.runtime_identity
         else {
             return Err("Saved launch terminal identity is incomplete; no retry was sent".into());
+        };
+        let (executable, grok_home) = if agent.provider == Provider::Grok {
+            let launch_id = agent
+                .runtime_identity
+                .launch_id
+                .as_deref()
+                .ok_or("Saved Grok launch identity is missing; no retry was sent")?;
+            let hooks = crate::agents::providers::hook_json::HookContext {
+                binary: std::env::current_exe().map_err(|e| e.to_string())?,
+                spool: self.data_dir.join("callbacks").join(launch_id),
+                launch_id: launch_id.into(),
+            };
+            let env = crate::agents::providers::grok::launch::environment(&hooks)?;
+            let executable = crate::agents::providers::launch::selected_executable(
+                identity::provider_kind(agent.provider),
+                &env,
+            )?
+            .ok_or("Saved Grok executable is missing; no retry was sent")?;
+            let home = env
+                .get("GROK_HOME")
+                .cloned()
+                .ok_or("Saved Grok home is missing; no retry was sent")?;
+            (Some(executable), Some(home))
+        } else {
+            (None, None)
         };
         let mut state = self.state.clone();
         let mut startup = state
@@ -48,6 +74,8 @@ impl Worker {
                     kind: identity::provider_kind(agent.provider).label().into(),
                     pane_id: pane.clone(),
                     args: args.clone(),
+                    executable,
+                    grok_home,
                     timeout_ms: None,
                 },
             },

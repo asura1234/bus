@@ -20,6 +20,8 @@ enum CallbackFlow {
 
 #[path = "callback_binding.rs"]
 mod binding;
+#[path = "grok_callbacks.rs"]
+mod grok_callbacks;
 #[path = "provider_turns.rs"]
 mod provider_turns;
 #[path = "reports.rs"]
@@ -84,20 +86,6 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         self.save_callback_state(state)?;
         Ok(true)
-    }
-
-    /// The provider session the native server attributes to `pane`.
-    pub(super) fn native_session(&mut self, pane: &str) -> Result<Option<String>, String> {
-        match self
-            .transport
-            .request(Method::AgentGet(schema::AgentTarget {
-                target: pane.to_owned(),
-            }))
-            .map_err(|e| e.message)?
-        {
-            ResponseResult::AgentInfo { agent } => Ok(agent.agent_session.map(|s| s.value)),
-            _ => Err("Unexpected native agent response".into()),
-        }
     }
 
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
@@ -381,6 +369,12 @@ impl Worker {
                 Some(prompt),
                 CallbackEventKind::PromptStarted,
             )),
+            Parsed::CompletionCandidate { session, turn } => {
+                return self.grok_completion_callback(id, state, path, record, session, Some(turn));
+            }
+            Parsed::ReconcileSession { session } => {
+                return self.grok_completion_callback(id, state, path, record, session, None);
+            }
             Parsed::Final {
                 session,
                 turn,
@@ -513,11 +507,16 @@ impl Worker {
         parsed: &Parsed,
         mut state: BusState,
     ) -> Result<ControlFlow<CallbackFlow, BusState>, String> {
+        if self.retire_superseded_grok_observation(id, dir, path, record, parsed)? {
+            return Ok(ControlFlow::Break(CallbackFlow::Next));
+        }
         let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
         let callback_session = match parsed {
             Parsed::Session { session, .. }
             | Parsed::Started { session, .. }
             | Parsed::Final { session, .. }
+            | Parsed::CompletionCandidate { session, .. }
+            | Parsed::ReconcileSession { session }
             | Parsed::BackgroundPending { session, .. }
             | Parsed::Failure { session, .. }
             | Parsed::Completed { session, .. }
@@ -730,6 +729,7 @@ fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
                     | Parsed::BackgroundPending { session, turn }
                     | Parsed::Response { session, turn, .. }
                     | Parsed::Completed { session, turn }
+                    | Parsed::CompletionCandidate { session, turn }
                     | Parsed::Failure { session, turn, .. },
                 ) => Some((session.clone(), turn.clone())),
                 _ => None,

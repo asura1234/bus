@@ -90,7 +90,7 @@ fn capture_tab(
         });
         let label = terminal.and_then(|terminal| terminal.manual_label.clone());
         let (agent_name, managed_agent_kind) = terminal
-            .filter(|terminal| !terminal.managed_agent_launch_pending() || resume.is_some())
+            .filter(|terminal| !terminal.managed_agent_identity_unestablished() || resume.is_some())
             .map(|terminal| {
                 (
                     terminal

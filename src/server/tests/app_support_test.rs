@@ -831,6 +831,8 @@ async fn unavailable_agent_start_does_not_mutate_topology() {
             kind: "pi".into(),
             pane_id,
             args: Vec::new(),
+            executable: None,
+            grok_home: None,
             timeout_ms: Some(1_000),
         }),
     });
@@ -873,6 +875,8 @@ async fn failed_agent_start_input_rolls_back_and_can_retry() {
             kind: "codex".into(),
             pane_id: pane_id.clone(),
             args: vec!["resume".into(), "codex-session".into()],
+            executable: None,
+            grok_home: None,
             timeout_ms: Some(4_000),
         }),
     };
@@ -921,6 +925,120 @@ async fn failed_agent_start_input_rolls_back_and_can_retry() {
         app.state.terminals[&terminal_id].agent_name.as_deref(),
         Some("worker")
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn grok_start_invokes_selected_executable_despite_shell_shadowing() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = crate::utils::test_temp::unique_temp_path("bus-grok-selected ' executable");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let selected = scratch.join("grok");
+    std::fs::write(
+        &selected,
+        "#!/bin/sh\nprintf 'selected|%s|' \"$GROK_HOME\"; printf '%s\\n' \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let mut app = test_app();
+    let workspace = Workspace::test_new("grok-bound-command");
+    let pane = workspace.tabs[0].root_pane;
+    app.state.workspaces = vec![workspace];
+    app.state.ensure_test_terminals();
+    app.state.active = Some(0);
+    app.state.selected = 0;
+    let terminal = app.state.workspaces[0].tabs[0].panes[&pane]
+        .attached_terminal_id
+        .clone();
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 4);
+    app.terminal_runtimes.insert(terminal, runtime);
+    let params = serde_json::from_value(serde_json::json!({
+        "name": "grok-test", "kind": "grok", "pane_id": app.public_pane_id(0, pane).unwrap(),
+        "args": ["--fullscreen", "literal $() argument"], "timeout_ms": 4000,
+        "executable": selected, "grok_home": scratch.join("validated home"),
+    }))
+    .unwrap();
+    let response = app.handle_api_request(schema::Request {
+        id: "bound-grok".into(),
+        method: schema::Method::AgentStart(params),
+    });
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["type"],
+        "agent_started",
+        "{response}"
+    );
+    let command = String::from_utf8(writes.try_recv().unwrap().to_vec()).unwrap();
+    let output = std::process::Command::new("/bin/zsh")
+        .args([
+            "-f",
+            "-c",
+            &format!(
+                "export GROK_HOME=/shell/override\ngrok() {{ print shell-function-shadow; }}\n{}",
+                command.trim_end_matches('\r')
+            ),
+        ])
+        .env("PATH", &scratch)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "selected|{}|--fullscreen\nliteral $() argument\n",
+            scratch.join("validated home").display()
+        )
+    );
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn grok_start_rejects_unbound_executable_or_home_before_input() {
+    for (executable, home) in [
+        (None, Some("/valid/home")),
+        (Some("relative/grok"), Some("/valid/home")),
+        (Some("/bin/other"), Some("/valid/home")),
+        (Some("/bad\npath/grok"), Some("/valid/home")),
+        (Some("/selected/grok"), None),
+        (Some("/selected/grok"), Some("relative-home")),
+        (Some("/selected/grok"), Some("/bad\nhome")),
+    ] {
+        let mut app = test_app();
+        let workspace = Workspace::test_new("grok-invalid-command");
+        let pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let terminal = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 4);
+        app.terminal_runtimes.insert(terminal.clone(), runtime);
+        let params = serde_json::from_value(serde_json::json!({
+            "name": "grok-test", "kind": "grok", "pane_id": app.public_pane_id(0, pane).unwrap(),
+            "executable": executable, "grok_home": home,
+        }))
+        .unwrap();
+        let response = app.handle_api_request(schema::Request {
+            id: "unbound-grok".into(),
+            method: schema::Method::AgentStart(params),
+        });
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["error"]["code"],
+            "invalid_agent_argument",
+            "{response}"
+        );
+        assert!(writes.try_recv().is_err());
+        assert!(app.state.terminals[&terminal].agent_name.is_none());
+    }
 }
 
 #[test]
@@ -1279,3 +1397,60 @@ mod config_reload;
 mod startup;
 #[path = "theme_test.rs"]
 mod theme;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_start_original_providers_keep_their_command_without_grok_binding() {
+    for (kind, executable) in [
+        ("claude", "claude"),
+        ("codex", "codex"),
+        ("cursor", "cursor-agent"),
+    ] {
+        let mut app = test_app();
+        let workspace = Workspace::test_new("original-provider-command");
+        let pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let terminal = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(120, 40, 4);
+        app.terminal_runtimes.insert(terminal, runtime);
+        // Old callers omit the newly introduced fields. Capture PTY input only;
+        // no provider process or user configuration is opened by this fixture.
+        let params = serde_json::from_value(serde_json::json!({
+            "name": "original-worker", "kind": kind,
+            "pane_id": app.public_pane_id(0, pane).unwrap(),
+            "args": ["--resume", "saved-session"], "timeout_ms": 4000,
+        }))
+        .unwrap();
+        let response = app.handle_api_request(schema::Request {
+            id: "original-provider".into(),
+            method: schema::Method::AgentStart(params),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            response["result"]["type"], "agent_started",
+            "{kind}: {response}"
+        );
+        let provider = crate::agents::providers::launch::native_provider(kind).unwrap();
+        let mut expected = vec![executable.into(), "--resume".into(), "saved-session".into()];
+        crate::agents::providers::launch::extend_generated_args(
+            provider,
+            &mut expected,
+            crate::agents::providers::launch::runtime_args(provider),
+        );
+        assert_eq!(
+            response["result"]["argv"],
+            serde_json::json!(expected),
+            "{kind}"
+        );
+        let command = String::from_utf8(writes.try_recv().unwrap().to_vec()).unwrap();
+        assert!(command.contains(executable), "{kind}: {command}");
+        assert!(!command.contains("GROK_HOME"), "{kind}: {command}");
+        assert!(!command.contains("/usr/bin/env"), "{kind}: {command}");
+    }
+}

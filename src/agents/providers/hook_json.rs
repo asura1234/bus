@@ -54,6 +54,7 @@ pub(crate) struct HookContract {
 impl HookContract {
     pub(crate) const fn for_provider(provider: ProviderKind) -> Self {
         match provider {
+            ProviderKind::Grok => super::grok::HOOK_CONTRACT,
             ProviderKind::Codex => Self {
                 adapter: "codex-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop"],
@@ -208,15 +209,19 @@ pub(crate) fn rebind_owned_hooks(
 ) -> Result<(), String> {
     let document: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    let owned = hook_entries(contract, binary).iter().all(|(event, _)| {
-        document["hooks"][*event]
-            .as_array()
-            .is_some_and(|group| group.iter().any(|entry| is_owned_entry(entry, contract)))
-    });
-    if !owned {
+    if !has_owned_hooks(&document, contract) {
         return Err("Bus hooks are missing; existing configuration was kept".into());
     }
     install_hooks(path, contract, binary)
+}
+
+/// Require an exact Bus-owned entry for every event before a resume rebind.
+pub(crate) fn has_owned_hooks(document: &Value, contract: HookContract) -> bool {
+    contract.events.iter().all(|event| {
+        document["hooks"][*event]
+            .as_array()
+            .is_some_and(|group| group.iter().any(|entry| is_owned_entry(entry, contract)))
+    })
 }
 
 pub(crate) fn install_hooks(

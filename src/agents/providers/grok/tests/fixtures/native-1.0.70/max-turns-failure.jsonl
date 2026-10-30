@@ -1,0 +1,6 @@
+{"method":"session/update","params":{"sessionId":"session-max-turns-failure","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Use run_terminal_command to run pwd. Then answer with exactly the working directory."}},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-max-turns-failure","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"I'll run `pwd` and report the working directory."}},"_meta":{"promptId":"prompt-cap","chunkId":11}}}
+{"method":"session/update","params":{"sessionId":"session-max-turns-failure","update":{"sessionUpdate":"tool_call"},"_meta":{"promptId":"prompt-cap"}}}
+{"method":"session/update","params":{"sessionId":"session-max-turns-failure","update":{"sessionUpdate":"tool_call_update"},"_meta":{"promptId":"prompt-cap"}}}
+{"method":"session/update","params":{"sessionId":"session-max-turns-failure","update":{"sessionUpdate":"tool_call_update"},"_meta":{"promptId":"prompt-cap"}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-max-turns-failure","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-cap","stop_reason":"cancelled"},"_meta":{}}}

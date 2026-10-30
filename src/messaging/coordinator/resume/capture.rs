@@ -147,6 +147,15 @@ pub(crate) fn load(
         prompt,
     );
     let mut env = hooks.env();
+    if agent.provider == ProviderKind::Grok {
+        return Ok(LaunchExtras {
+            env: crate::agents::providers::grok::launch::environment(&hooks)?
+                .into_iter()
+                .collect(),
+            args,
+            session: corrected,
+        });
+    }
     let mut env: Vec<_> = ["BUS_LAUNCH_ID", "BUS_CALLBACK_DIR"]
         .map(|key| {
             (
@@ -194,10 +203,11 @@ fn capture_args(
     hooks: &HookContext,
     project: &Path,
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
-    use crate::agents::providers::{claude_code, codex, cursor};
+    use crate::agents::providers::{claude_code, codex, cursor, grok};
     match identity::provider_kind(provider) {
         ProviderKind::ClaudeCode => claude_code::resume::capture_args(hooks, project),
         ProviderKind::Codex => codex::resume::capture_args(hooks, project),
         ProviderKind::Cursor => cursor::resume::capture_args(hooks, project),
+        ProviderKind::Grok => grok::resume::capture_args(hooks, project),
     }
 }

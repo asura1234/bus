@@ -16,6 +16,10 @@ pub(crate) enum Parsed {
         turn: String,
         prompt: String,
     },
+    /// A stop-gate observation requiring committed completion evidence.
+    CompletionCandidate { session: String, turn: String },
+    /// Session-level idle signal: reconciliation trigger, never final proof.
+    ReconcileSession { session: String },
     /// A final reply carried by the completion hook itself.
     Final {
         session: String,
@@ -53,6 +57,8 @@ impl Parsed {
             Self::Session { .. } => "session",
             Self::Started { .. } => "started",
             Self::Final { .. } => "final",
+            Self::CompletionCandidate { .. } => "completion_candidate",
+            Self::ReconcileSession { .. } => "reconcile_session",
             Self::BackgroundPending { .. } => "background_pending",
             Self::Response { .. } => "cursor_response",
             Self::Completed { .. } => "cursor_stop",

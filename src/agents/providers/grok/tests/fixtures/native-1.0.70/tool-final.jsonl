@@ -1,0 +1,7 @@
+{"method":"session/update","params":{"sessionId":"session-tool-final","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Use run_terminal_command to run pwd, then reply with the path only."}},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-tool-final","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"I'll run `pwd` and reply with the path only."}},"_meta":{"promptId":"prompt-tool","chunkId":12}}}
+{"method":"session/update","params":{"sessionId":"session-tool-final","update":{"sessionUpdate":"tool_call"},"_meta":{"promptId":"prompt-tool"}}}
+{"method":"session/update","params":{"sessionId":"session-tool-final","update":{"sessionUpdate":"tool_call_update"},"_meta":{"promptId":"prompt-tool"}}}
+{"method":"session/update","params":{"sessionId":"session-tool-final","update":{"sessionUpdate":"tool_call_update"},"_meta":{"promptId":"prompt-tool"}}}
+{"method":"session/update","params":{"sessionId":"session-tool-final","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"<SCRATCH_PROJECT>"}},"_meta":{"promptId":"prompt-tool","chunkId":18}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-tool-final","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-tool","stop_reason":"end_turn"},"_meta":{}}}

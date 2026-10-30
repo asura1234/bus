@@ -1,0 +1,22 @@
+
+  /U/d/w/b/t/grok-e2e-1070/project
+
+
+  Resume session                              ctrl+r
+  New worktree                                ctrl+w
+  Changelog
+  Quit                                        ctrl+q
+
+  Grok 4.7 is here!
+  Select 'Grok 4.7' under /model.
+
+
+
+   Tip: Use Shift+Tab to cycle between modes like
+   Plan mode.
+
+  ╭────────────────────────────────────────────────╮
+  │ ❯                                              │
+  ╰───────────── Grok 4.7 (high) · always-approve ─╯
+
+                                  Grok Build  1.0.70

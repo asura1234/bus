@@ -77,6 +77,8 @@ fn accepted_session_start_confirms_startup_without_a_ready_screen_rule() {
         (AgentKind::Codex, "codex", "startup"),
         (AgentKind::Claude, "claude", "startup"),
         (AgentKind::Cursor, "cursor", "new"),
+        (AgentKind::Grok, "grok", "new"),
+        (AgentKind::Grok, "grok", "load"),
     ] {
         for state in [
             AgentState::Unknown,
@@ -350,4 +352,21 @@ fn resumed_cursor_confirms_readiness_only_after_its_composer_appears() {
             .value,
         "saved-session"
     );
+}
+#[test]
+fn grok_saved_identity_is_not_ready_before_the_resume_process_starts() {
+    for kind in [AgentKind::Grok, AgentKind::Claude] {
+        let mut terminal = test_terminal();
+        terminal.restore_managed_agent("restored".into(), kind);
+        terminal.pending_agent_resume_plan =
+            Some(crate::agents::resume::catalog::AgentResumePlan {
+                agent: crate::agents::agent_label(kind).into(),
+                argv: vec!["not-started".into()],
+                dedupe_key: "saved-session".into(),
+            });
+        assert!(terminal.managed_agent_launch_pending());
+        assert!(!terminal.managed_agent_interactive_ready());
+        terminal.pending_agent_resume_plan = None;
+        assert!(terminal.managed_agent_interactive_ready());
+    }
 }

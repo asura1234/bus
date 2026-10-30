@@ -1,0 +1,6 @@
+{"method":"_x.ai/session/update","params":{"sessionId":"session-submit-stop","update":{"sessionUpdate":"hook_execution","prompt_id":"prompt-submit-stop"},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-submit-stop","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Reply exactly SUBMIT_HOOK_OK. Do not use tools."}},"_meta":{}}}
+{"method":"session/update","params":{"sessionId":"session-submit-stop","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"SUBMIT_HOOK_OK"}},"_meta":{"promptId":"prompt-submit-stop","chunkId":5}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-submit-stop","update":{"sessionUpdate":"hook_execution","prompt_id":"prompt-submit-stop"},"_meta":{}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-submit-stop","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-submit-stop","stop_reason":"end_turn"},"_meta":{}}}
+{"method":"_x.ai/session/update","params":{"sessionId":"session-submit-stop","update":{"sessionUpdate":"hook_execution"},"_meta":{}}}

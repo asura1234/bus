@@ -197,6 +197,7 @@ impl Rig {
             Provider::ClaudeCode => "claude",
             Provider::Codex => "codex",
             Provider::Cursor => "cursor",
+            Provider::Grok => "grok",
         };
         let dir = crate::utils::test_temp::unique_temp_path("bus-auto-ui");
         let native = Arc::new(Mutex::new(Native {

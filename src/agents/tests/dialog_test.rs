@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn grok_current_card_remains_visible_below_historical_numbered_composer() {
+    let draft = include_str!("../../../tests/fixtures/grok-composer/draft.txt");
+    let permission = include_str!("../../../tests/fixtures/grok-dialog/permission.txt");
+    let current = parse(permission).expect("accepted synthetic permission fixture");
+    let with_history = parse(&format!("{draft}\n{permission}"))
+        .expect("historical numbered composer must not hide the current permission card");
+    assert_eq!(with_history.text, current.text);
+    assert_eq!(with_history.options, current.options);
+    assert_eq!(with_history.keys_for(1), Some(vec!["enter"]));
+}
+
 fn labels(dialog: &Dialog) -> Vec<(u32, &str, bool)> {
     dialog
         .options
