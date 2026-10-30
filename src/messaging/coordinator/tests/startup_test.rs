@@ -315,11 +315,20 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
     assert!(failed.startup.as_ref().unwrap().reported);
     let error = failed.actionable_error.clone().unwrap();
     let message = worker.state.request(request).unwrap().prompt.id;
+    let detail = worker
+        .state
+        .request(request)
+        .unwrap()
+        .submission_error
+        .clone()
+        .unwrap();
     let status = worker.control_message_at(message, io::now_ms()).unwrap();
     assert_eq!(
-        status["requests"][0]["delivery_error"], error,
-        "a retained launch failure must stop its queued/async waiters"
+        status["requests"][0]["stage"], "abandoned",
+        "a definite launch failure must close never-submitted work"
     );
+    assert_eq!(status["requests"][0]["reason"], "agent_startup_failed");
+    assert_eq!(status["requests"][0]["detail"], detail);
     assert!(error.contains("Command:") && error.contains("Last screen lines:"));
     let diagnostics: serde_json::Value = serde_json::from_str(
         error
@@ -342,13 +351,6 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
         worker.state.request(request).unwrap().phase,
         RequestPhase::Abandoned
     );
-    let detail = worker
-        .state
-        .request(request)
-        .unwrap()
-        .submission_error
-        .clone()
-        .unwrap();
     assert!(
         detail.contains("30 seconds") && detail.contains("Resend"),
         "{detail}"

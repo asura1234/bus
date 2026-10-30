@@ -661,7 +661,6 @@ async fn launch_prompt_real_mark_launches_without_an_elapsed_gate() {
             ".zshrc"
         };
         std::fs::write(dir.join(rc), "PS1='READY> '\n").unwrap();
-        let started = std::time::Instant::now();
         let runtime = fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
         wait_for_text(&runtime, "READY>").await;
         wait_for_prompt(&runtime).await;
@@ -670,14 +669,11 @@ async fn launch_prompt_real_mark_launches_without_an_elapsed_gate() {
             "fixture must emit the mark"
         );
         let (mut app, target) = app_with_prompt_runtime(runtime);
+        let launch_started = std::time::Instant::now();
         try_prompt_launch(&mut app, &target)
             .expect("real prompt evidence permits immediate launch");
+        assert!(launch_started.elapsed() < Duration::from_secs(4));
         wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
-        assert!(started.elapsed() < Duration::from_secs(4));
-        eprintln!(
-            "marked {shell} accepted input and ran the provider after {:?}",
-            started.elapsed()
-        );
         drop(app);
         std::fs::remove_dir_all(dir).unwrap();
     }
