@@ -125,3 +125,79 @@ fn sidebar_width_change_clamped_to_the_same_geometry_sends_no_resize() {
 #[cfg(unix)]
 #[path = "slow_terminal_test.rs"]
 mod slow_terminal;
+
+#[cfg(unix)]
+#[test]
+fn a_restart_stop_shutdown_is_not_a_final_client_exit() {
+    use interprocess::local_socket::traits::Listener as _;
+
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    crate::utils::paths::clear_explicit_session_for_test();
+    let root = crate::utils::test_temp::unique_temp_path("restart-shutdown");
+    std::fs::create_dir_all(&root).unwrap();
+    let socket = root.join("client.sock");
+    let sha = "ab".repeat(20);
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::build_path(&root),
+        &serde_json::json!({ "sha": sha, "binary": "/tmp/bus" }),
+    )
+    .unwrap();
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::marker_path(&root),
+        &crate::utils::restart_record::RestartMarker {
+            binary: "/tmp/bus".into(),
+            session_id: None,
+            explicit_data_dir: true,
+            data_dir: root.display().to_string(),
+            dev: true,
+            yolo: false,
+        },
+    )
+    .unwrap();
+    let saved = [
+        ("BUS_DATA_DIR", std::env::var_os("BUS_DATA_DIR")),
+        (
+            crate::utils::env::SOCKET_PATH_ENV_VAR,
+            std::env::var_os(crate::utils::env::SOCKET_PATH_ENV_VAR),
+        ),
+        (
+            crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
+            std::env::var_os(crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR),
+        ),
+    ];
+    std::env::set_var("BUS_DATA_DIR", &root);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
+    std::env::set_var(
+        crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
+        &socket,
+    );
+    let listener = crate::platform::ipc::bind_local_listener(&socket).unwrap();
+    let accept = std::thread::spawn(move || {
+        for _ in 0..6 {
+            if listener.accept().is_err() {
+                break;
+            }
+        }
+    });
+    let (mut driver, _) = driver(80);
+    let (event_tx, mut event_rx) = crate::utils::perf::queue::channel(8);
+    let error = ClientError::ServerShutdown {
+        reason: Some("server is shutting down".into()),
+    };
+    let result = driver.recover_restart(&event_tx, &mut event_rx, &error);
+    for _ in 0..6 {
+        let _ = crate::platform::ipc::connect_local_stream(&socket);
+    }
+    let _ = accept.join();
+    for (key, value) in saved {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(
+        result.is_some(),
+        "a restart stop must not be a final client exit"
+    );
+}

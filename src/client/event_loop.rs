@@ -364,7 +364,12 @@ impl ClientLoopDriver {
         event_rx: &mut crate::utils::perf::queue::Receiver<ClientLoopEvent>,
         error: &ClientError,
     ) -> Option<Result<(), String>> {
-        if !matches!(error, ClientError::ConnectionLost(_)) {
+        // A restart stop sends ServerShutdown after the socket closes. That is
+        // the same loss as ConnectionLost while restarts/in-progress exists.
+        if !matches!(
+            error,
+            ClientError::ConnectionLost(_) | ClientError::ServerShutdown { .. }
+        ) {
             return None;
         }
         crate::client::restart::restart_in_progress()?;

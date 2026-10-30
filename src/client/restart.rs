@@ -44,8 +44,16 @@ pub(crate) fn wait_for_restart(
 }
 
 pub(crate) fn client_socket_ready() -> bool {
-    crate::platform::ipc::connect_local_stream(&crate::utils::socket_paths::client_socket_path())
-        .is_ok()
+    if crate::platform::ipc::connect_local_stream(&crate::utils::socket_paths::client_socket_path())
+        .is_err()
+    {
+        return false;
+    }
+    let Some(root) = crate::utils::env::bus_data_dir() else {
+        return false;
+    };
+    restart_record::read_build_sha(&restart_record::build_path(&root))
+        .is_some_and(|sha| restart_record::valid_build_sha(&sha))
 }
 
 /// SIGTERM the headless coordinator this restart started, and only that
