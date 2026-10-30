@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 use super::session_pick::RestartRequest;
 use crate::utils::restart_record::{self, Identity, RestartLog, RestartMarker, MIN_FREE_BYTES};
 
+#[path = "restart_prep.rs"]
+mod prep;
+
 const CONFIRM: &str = "This command changes or removes work; add --confirm to proceed";
 pub(crate) const HEALTH_TIMEOUT: Duration = Duration::from_secs(45);
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -63,70 +66,55 @@ pub(super) fn run(
         ));
     };
     let new_binary = PathBuf::from(binary);
-    let identity =
-        preflight_binary(&new_binary, host_free_bytes(root)).map_err(io::Error::other)?;
-    if restart_record::read_live_pid(&restart_record::handoff_pid_path(root))
-        .is_some_and(|record| crate::platform::process_still_live(record.pid, record.birth))
-    {
-        return Err(io::Error::other(
-            "a bus restart is already in progress for this session",
+    let owner = crate::platform::process_instance(std::process::id())
+        .ok_or_else(|| io::Error::other("could not read this process"))?;
+    if let Err(error) = prep::acquire_restart_lock(
+        root,
+        &restart_record::LivePid {
+            pid: owner.pid,
+            birth: owner.birth,
+        },
+    ) {
+        return Err(prep::record_refused(
+            root,
+            &prep::refused_record(
+                request,
+                &new_binary,
+                Path::new(""),
+                "unknown",
+                "unknown",
+                &error,
+            ),
         ));
     }
-    let invoked = std::env::current_exe()
-        .map_err(|error| io::Error::other(format!("could not find this bus binary: {error}")))?;
-    // Roll back to the binary that is actually serving, which may differ from
-    // the CLI path used to type `bus restart`.
-    let old_binary =
-        restart_record::read_build_binary(&restart_record::build_path(root)).unwrap_or(invoked);
-    let old_sha = current_sha(root);
-    let plan = HandoffPlan {
-        root: root.to_path_buf(),
-        old_binary,
-        new_binary,
-        old_sha: old_sha.clone(),
-        new_sha: identity.sha.clone(),
-        who: restart_record::who_label(
-            request.as_who.as_deref(),
-            std::env::var("USER").ok().as_deref(),
-        ),
-        session_id: session_id.map(str::to_owned),
+    match prep::begin_handoff(
+        root,
+        session_id,
         explicit_data_dir,
         dev,
         yolo,
-    };
-    restart_record::write_json(&restart_record::handoff_path(root), &plan)
-        .map_err(io::Error::other)?;
-    let pid = spawn_helper().map_err(|error| {
-        let _ = std::fs::remove_file(restart_record::handoff_path(root));
-        io::Error::other(error)
-    })?;
-    if let Some(live) = crate::platform::process_instance(pid) {
-        let _ = restart_record::write_json(
-            &restart_record::handoff_pid_path(root),
-            &restart_record::LivePid {
-                pid: live.pid,
-                birth: live.birth,
-            },
-        );
+        request,
+        &new_binary,
+    ) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            prep::release_restart_lock(root);
+            let _ = std::fs::remove_file(restart_record::handoff_path(root));
+            Err(error)
+        }
     }
-    super::help::write_stdout_line(format_args!(
-        "{}",
-        serde_json::json!({
-            "ok": true,
-            "stage": "handoff",
-            "pid": pid,
-            "old_sha": plan.old_sha,
-            "new_sha": plan.new_sha,
-            "session_id": plan.session_id,
-        })
-    ));
-    Ok(())
 }
 
 pub(crate) fn preflight_binary(
     binary: &Path,
     free: Result<u64, String>,
 ) -> Result<Identity, String> {
+    if !binary.is_absolute() {
+        return Err(format!(
+            "binary path must be absolute: {}",
+            binary.display()
+        ));
+    }
     if !binary.is_file() {
         return Err(format!("binary does not exist: {}", binary.display()));
     }
@@ -197,43 +185,8 @@ fn run_identity(binary: &Path) -> Result<String, String> {
 }
 
 fn host_free_bytes(root: &Path) -> Result<u64, String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let path = std::ffi::CString::new(root.as_os_str().as_bytes())
-            .map_err(|_| "data directory path contains a NUL".to_owned())?;
-        let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
-            return Err(format!(
-                "could not read free disk space: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let stats = unsafe { stats.assume_init() };
-        Ok(
-            (u128::from(stats.f_bavail) * u128::from(stats.f_frsize)).min(u128::from(u64::MAX))
-                as u64,
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = root;
-        Err("could not read free disk space".to_owned())
-    }
-}
-
-fn current_sha(root: &Path) -> String {
-    if let Some(sha) = restart_record::read_build_sha(&restart_record::build_path(root)) {
-        if restart_record::valid_build_sha(&sha) {
-            return sha;
-        }
-    }
-    let own = env!("BUS_BUILD_SHA");
-    if restart_record::valid_build_sha(own) {
-        own.to_owned()
-    } else {
-        "unknown".to_owned()
-    }
+    crate::utils::disk_space::available_bytes(root)
+        .map_err(|error| format!("could not read free disk space: {error}"))
 }
 
 fn spawn_helper() -> Result<u32, String> {
@@ -253,12 +206,18 @@ fn spawn_helper() -> Result<u32, String> {
 pub(crate) fn run_handoff_entry() -> io::Result<()> {
     let root = crate::utils::env::bus_data_dir()
         .ok_or_else(|| io::Error::other("BUS_DATA_DIR is required for a restart handoff"))?;
+    let _ = crate::utils::logging::init_file_logging_at(
+        root.clone(),
+        "herdr-server.log",
+        &super::logging_options(),
+    );
     let bytes = std::fs::read(restart_record::handoff_path(&root)).map_err(|error| {
         io::Error::other(format!("restart handoff request is missing: {error}"))
     })?;
     let plan: HandoffPlan = serde_json::from_slice(&bytes).map_err(|error| {
         io::Error::other(format!("restart handoff request is invalid: {error}"))
     })?;
+    let _ = prep::assign_restart_lock(&root, std::process::id());
     if let Some(live) = crate::platform::process_instance(std::process::id()) {
         let _ = restart_record::write_json(
             &restart_record::handoff_pid_path(&root),
@@ -270,8 +229,16 @@ pub(crate) fn run_handoff_entry() -> io::Result<()> {
     }
     let mut effects = LiveHandoff;
     execute_handoff(&plan, &mut effects);
+    prep::release_restart_lock(&root);
     let _ = std::fs::remove_file(restart_record::handoff_path(&root));
     let _ = std::fs::remove_file(restart_record::handoff_pid_path(&root));
+    let persist = restart_record::persist_error_path(&root);
+    if persist.exists() {
+        let detail = std::fs::read_to_string(&persist).unwrap_or_default();
+        return Err(io::Error::other(format!(
+            "restart record was not stored: {detail}"
+        )));
+    }
     Ok(())
 }
 
@@ -339,7 +306,10 @@ pub(crate) fn execute_handoff(plan: &HandoffPlan, effects: &mut impl HandoffIo) 
     }
     match effects.start(&plan.new_binary) {
         Ok(pid) => match effects.healthy(pid, &plan.new_sha) {
-            Ok(()) => finish(plan, effects, "restarted", &plan.new_binary, String::new()),
+            Ok(()) => match ensure_coordinator(effects, &plan.new_binary) {
+                Ok(()) => finish(plan, effects, "restarted", &plan.new_binary, String::new()),
+                Err(error) => rollback(plan, effects, pid, format!("coordinator: {error}")),
+            },
             Err(reason) => rollback(plan, effects, pid, reason),
         },
         Err(reason) => rollback(plan, effects, 0, reason),
@@ -359,21 +329,40 @@ fn rollback(
     match effects.start(&plan.old_binary) {
         Ok(pid) => match effects.healthy(pid, &plan.old_sha) {
             Ok(()) => finish(plan, effects, "rolled_back", &plan.old_binary, reason),
-            Err(rollback_reason) => finish(
-                plan,
-                effects,
-                "rolled_back",
-                &plan.old_binary,
-                format!("{reason}; rollback failed: {rollback_reason}"),
-            ),
+            Err(rollback_reason) => {
+                effects.kill(pid);
+                finish(
+                    plan,
+                    effects,
+                    "rollback_failed",
+                    &plan.old_binary,
+                    format!("{reason}; rollback failed: {rollback_reason}"),
+                )
+            }
         },
         Err(rollback_reason) => finish(
             plan,
             effects,
-            "rolled_back",
+            "rollback_failed",
             &plan.old_binary,
             format!("{reason}; rollback failed: {rollback_reason}"),
         ),
+    }
+}
+
+fn ensure_coordinator(effects: &mut impl HandoffIo, binary: &Path) -> Result<(), String> {
+    if effects.control_socket_up() {
+        return Ok(());
+    }
+    match effects.spawn_coordinator(binary) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if error.contains("Another Bus coordinator owns this data directory")
+                && effects.control_socket_up() =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -384,17 +373,14 @@ fn finish(
     serving: &Path,
     mut reason: String,
 ) -> RestartLog {
-    let server_up = outcome == "restarted" || !reason.contains("rollback failed");
-    if server_up && !effects.control_socket_up() {
-        if let Err(error) = effects.spawn_coordinator(serving) {
-            if !(error.contains("Another Bus coordinator owns this data directory")
-                && effects.control_socket_up())
-            {
-                if reason.is_empty() {
-                    reason = format!("coordinator: {error}");
+    if matches!(outcome, "restarted" | "rolled_back" | "rollback_failed") {
+        if let Err(error) = ensure_coordinator(effects, serving) {
+            if outcome != "restarted" {
+                reason = if reason.is_empty() {
+                    format!("coordinator: {error}")
                 } else {
-                    reason = format!("{reason} coordinator: {error}");
-                }
+                    format!("{reason}; coordinator: {error}")
+                };
             }
         }
     }
@@ -412,10 +398,37 @@ fn finish(
         outcome: outcome.to_owned(),
         reason,
     };
-    let _ = restart_record::append_log(&restart_record::log_path(&plan.root), &record);
-    let _ = restart_record::write_json(&restart_record::outcome_path(&plan.root), &record);
+    if let Err(error) = persist_restart_record(&plan.root, &record) {
+        tracing::error!(%error, "restart attempt was not stored");
+    }
     let _ = std::fs::remove_file(restart_record::marker_path(&plan.root));
     record
+}
+
+fn persist_restart_record(root: &Path, record: &RestartLog) -> Result<(), String> {
+    let log_result = restart_record::append_log(&restart_record::log_path(root), record);
+    let outcome_result = restart_record::write_json(&restart_record::outcome_path(root), record);
+    if log_result.is_ok() && outcome_result.is_ok() {
+        let _ = std::fs::remove_file(restart_record::persist_error_path(root));
+        return Ok(());
+    }
+    let body = format!(
+        "restart attempt was not stored\nlog: {log_result:?}\noutcome: {outcome_result:?}\nrecord: {}\n",
+        serde_json::to_string(record).unwrap_or_default()
+    );
+    let path = restart_record::persist_error_path(root);
+    let wrote = std::fs::write(&path, &body).map_err(|error| error.to_string());
+    let primary = log_result
+        .err()
+        .or(outcome_result.err())
+        .unwrap_or_default();
+    match wrote {
+        Ok(()) => Err(primary),
+        Err(error) => Err(format!(
+            "{primary}; could not write {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 fn marker_for(plan: &HandoffPlan, binary: &Path) -> RestartMarker {
@@ -739,12 +752,202 @@ mod tests {
         effects.starts.push_back(Err("new binary missing".into()));
         effects.starts.push_back(Err("old binary missing".into()));
         let record = execute_handoff(&plan, &mut effects);
-        assert_eq!(record.outcome, "rolled_back");
+        assert_eq!(record.outcome, "rollback_failed");
         assert!(record.reason.contains("new binary missing"));
         assert!(record
             .reason
             .contains("rollback failed: old binary missing"));
-        assert!(effects.coordinators.is_empty());
+        assert_eq!(effects.coordinators, vec![plan.old_binary.clone()]);
+        let notice = restart_record::notice_text(&record);
+        assert!(!notice.contains("rolled back"), "{notice}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_unhealthy_rollback_server_is_stopped_and_not_described_as_serving() {
+        let root = crate::utils::test_temp::unique_temp_path("handoff-unhealthy-back");
+        std::fs::create_dir_all(&root).unwrap();
+        let plan = plan(&root);
+        let mut effects = fake();
+        effects.starts.push_back(Ok(7));
+        effects.starts.push_back(Ok(8));
+        let record = execute_handoff(&plan, &mut effects);
+        assert_eq!(record.outcome, "rollback_failed");
+        assert!(effects.killed.contains(&8), "{:?}", effects.killed);
+        let notice = restart_record::notice_text(&record);
+        assert!(!notice.contains("rolled back to"), "{notice}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn handoff_rejects_success_without_messaging_coordinator() {
+        let root = crate::utils::test_temp::unique_temp_path("handoff-no-coord");
+        std::fs::create_dir_all(&root).unwrap();
+        let plan = plan(&root);
+        let mut effects = fake();
+        effects.starts.push_back(Ok(7));
+        effects.starts.push_back(Ok(8));
+        effects.healthy_shas.push(plan.new_sha.clone());
+        effects.healthy_shas.push(plan.old_sha.clone());
+        effects.coordinator_error = Some("coordinator could not start".into());
+        let record = execute_handoff(&plan, &mut effects);
+        assert_eq!(record.outcome, "rolled_back");
+        assert_eq!(effects.killed, vec![7]);
+        assert_eq!(
+            effects.started,
+            vec![plan.new_binary.clone(), plan.old_binary.clone()]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn failed_rollback_has_distinct_outcome() {
+        let root = crate::utils::test_temp::unique_temp_path("handoff-distinct");
+        std::fs::create_dir_all(&root).unwrap();
+        let plan = plan(&root);
+        let mut effects = fake();
+        effects.starts.push_back(Err("new binary missing".into()));
+        effects.starts.push_back(Err("old binary missing".into()));
+        let record = execute_handoff(&plan, &mut effects);
+        assert_ne!(record.outcome, "rolled_back");
+        let notice = restart_record::notice_text(&record);
+        assert!(!notice.contains("rolled back"), "{notice}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn preflight_refuses_a_binary_path_that_is_not_absolute() {
+        let error = preflight_binary(Path::new("bus"), Ok(MIN_FREE_BYTES)).unwrap_err();
+        assert!(error.contains("absolute"), "{error}");
+    }
+
+    #[test]
+    fn restart_refuses_without_a_recorded_serving_binary() {
+        let root = crate::utils::test_temp::unique_temp_path("serving-missing");
+        std::fs::create_dir_all(&root).unwrap();
+        let missing = super::prep::serving_target(&root).unwrap_err();
+        assert!(missing.contains("no recorded binary"), "{missing}");
+        let sha = sha(0x11);
+        let gone = root.join("gone");
+        restart_record::write_json(
+            &restart_record::build_path(&root),
+            &serde_json::json!({ "sha": sha, "binary": gone.display().to_string() }),
+        )
+        .unwrap();
+        let deleted = super::prep::serving_target(&root).unwrap_err();
+        assert!(deleted.contains("no recorded binary"), "{deleted}");
+        std::fs::write(&gone, b"bin").unwrap();
+        restart_record::write_json(
+            &restart_record::build_path(&root),
+            &serde_json::json!({ "sha": "short", "binary": gone.display().to_string() }),
+        )
+        .unwrap();
+        let bad_sha = super::prep::serving_target(&root).unwrap_err();
+        assert!(bad_sha.contains("no recorded build SHA"), "{bad_sha}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_attempt_log_is_durable() {
+        let root = crate::utils::test_temp::unique_temp_path("handoff-log-dir");
+        std::fs::create_dir_all(restart_record::log_path(&root)).unwrap();
+        let plan = plan(&root);
+        let mut effects = fake();
+        effects.starts.push_back(Ok(7));
+        effects.healthy_shas.push(plan.new_sha.clone());
+        effects.control_up = true;
+        let record = execute_handoff(&plan, &mut effects);
+        assert_eq!(record.outcome, "restarted");
+        let saved = std::fs::read_to_string(restart_record::persist_error_path(&root)).unwrap();
+        assert!(saved.contains("restarted"), "{saved}");
+        assert!(
+            saved.contains("not stored") || saved.contains("log:"),
+            "{saved}"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_refused_restart_keeps_the_log_error() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-refuse-log");
+        std::fs::create_dir_all(restart_record::log_path(&root)).unwrap();
+        let error = run(
+            &root,
+            None,
+            true,
+            true,
+            false,
+            &super::super::session_pick::RestartRequest {
+                binary: Some("bus".into()),
+                confirm: true,
+                as_who: None,
+            },
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("absolute"), "{text}");
+        assert!(text.contains("log.jsonl"), "{text}");
+        assert!(!restart_record::restart_lock_path(&root).exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn restart_lock_admits_only_one_live_owner() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = crate::platform::process_instance(std::process::id()).unwrap();
+        let live = restart_record::LivePid {
+            pid: owner.pid,
+            birth: owner.birth,
+        };
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let root = root.clone();
+            let live = live.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                super::prep::acquire_restart_lock(&root, &live)
+            }));
+        }
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert!(results.iter().any(|result| {
+            result
+                .as_ref()
+                .is_err_and(|error| error.contains("already in progress"))
+        }));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_stale_restart_lock_can_be_replaced() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-stale-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        restart_record::write_json(
+            &restart_record::restart_lock_path(&root),
+            &restart_record::LivePid {
+                pid: u32::MAX,
+                birth: 1,
+            },
+        )
+        .unwrap();
+        let owner = crate::platform::process_instance(std::process::id()).unwrap();
+        super::prep::acquire_restart_lock(
+            &root,
+            &restart_record::LivePid {
+                pid: owner.pid,
+                birth: owner.birth,
+            },
+        )
+        .unwrap();
+        let held =
+            restart_record::read_live_pid(&restart_record::restart_lock_path(&root)).unwrap();
+        assert_eq!(held.pid, owner.pid);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

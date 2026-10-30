@@ -219,8 +219,9 @@ read; delete it yourself if its old API key is no longer needed.
 Without `--dev` the command is refused, and `bus --help` does not list it.
 Before it, every room's orchestrator asks its working agents to pause: commit and
 push, stop builds and tests, release slot locks, then stop, and waits for each to
-confirm. Only then restart. After the outcome notice (old SHA to new SHA, or a
-rollback and why), tell them to resume. An in-flight turn that has not reported
+confirm. Only then restart. After the outcome notice (old SHA to new SHA, a
+rollback and why, or a failed restart that is not serving), tell them to resume.
+An in-flight turn that has not reported
 is interrupted; persisted messages stay and each provider resumes as it does today.
 The same package version's TUI reconnects; a different one prints the command.
 Every attempt is appended to `restarts/log.jsonl`. See `bus --dev restart --help`.

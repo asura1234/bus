@@ -134,53 +134,5 @@ impl Worker {
 
 #[cfg(not(test))]
 fn available_bytes(data_dir: &Path) -> std::io::Result<u64> {
-    // The TUI driver owns this marker and an isolated data dir. Its dev build
-    // measures only this fixture, so scratch acceptance never reads real capacity.
-    #[cfg(feature = "dev-tools")]
-    if std::env::var_os("BUS_TUI_OWNER").is_some() {
-        return match std::fs::read_to_string(data_dir.join("disk-free-bytes")) {
-            Ok(value) => value
-                .trim()
-                .parse()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(u64::MAX),
-            Err(error) => Err(error),
-        };
-    }
-    volume_available_bytes(data_dir)
-}
-
-#[cfg(all(unix, not(test)))]
-fn volume_available_bytes(data_dir: &Path) -> std::io::Result<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::ffi::CString::new(data_dir.as_os_str().as_bytes())?;
-    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: path is NUL-terminated, and statvfs initializes stats on success.
-    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: statvfs returned success above. bavail excludes reserved blocks.
-    let stats = unsafe { stats.assume_init() };
-    Ok((u128::from(stats.f_bavail) * u128::from(stats.f_frsize)).min(u128::from(u64::MAX)) as u64)
-}
-
-#[cfg(all(windows, not(test)))]
-fn volume_available_bytes(data_dir: &Path) -> std::io::Result<u64> {
-    use std::os::windows::ffi::OsStrExt;
-    let path: Vec<_> = data_dir.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut available = 0;
-    // SAFETY: path is a terminated UTF-16 string and available is writable.
-    if unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
-            path.as_ptr(),
-            &mut available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    } == 0
-    {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(available)
-    }
+    crate::utils::disk_space::available_bytes(data_dir)
 }

@@ -23,7 +23,7 @@ pub(crate) struct RestartLog {
     pub(crate) new_sha: String,
     pub(crate) old_binary: String,
     pub(crate) new_binary: String,
-    /// `restarted` or `rolled_back`.
+    /// `restarted`, `rolled_back`, `rollback_failed`, or `refused`.
     pub(crate) outcome: String,
     pub(crate) reason: String,
 }
@@ -76,6 +76,14 @@ pub(crate) fn coordinator_pid_path(root: &Path) -> PathBuf {
     restarts_dir(root).join("coordinator.pid")
 }
 
+pub(crate) fn restart_lock_path(root: &Path) -> PathBuf {
+    restarts_dir(root).join("lock")
+}
+
+pub(crate) fn persist_error_path(root: &Path) -> PathBuf {
+    restarts_dir(root).join("persist-error.txt")
+}
+
 pub(crate) fn valid_build_sha(sha: &str) -> bool {
     sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -92,21 +100,26 @@ pub(crate) fn who_label(agent: Option<&str>, user: Option<&str>) -> String {
 }
 
 pub(crate) fn notice_text(record: &RestartLog) -> String {
-    if record.outcome == "restarted" {
-        let notice = format!(
-            "Restarted {} -> {} (by {}).",
-            record.old_sha, record.new_sha, record.who
-        );
-        if record.reason.is_empty() {
-            notice
-        } else {
-            format!("{notice} {}", record.reason)
+    match record.outcome.as_str() {
+        "restarted" => {
+            let notice = format!(
+                "Restarted {} -> {} (by {}).",
+                record.old_sha, record.new_sha, record.who
+            );
+            if record.reason.is_empty() {
+                notice
+            } else {
+                format!("{notice} {}", record.reason)
+            }
         }
-    } else {
-        format!(
+        "rolled_back" => format!(
             "Bus restart rolled back to {}. {} did not become healthy: {}.",
             record.old_sha, record.new_sha, record.reason
-        )
+        ),
+        _ => format!(
+            "Bus restart failed and the session is not serving {}. {} did not become healthy: {}.",
+            record.old_sha, record.new_sha, record.reason
+        ),
     }
 }
 
@@ -202,9 +215,23 @@ pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<(), Stri
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let body = serde_json::to_vec(value).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("tmp");
+    let temporary = unique_temp_path(path);
     std::fs::write(&temporary, &body).map_err(|error| error.to_string())?;
-    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+    std::fs::rename(&temporary, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        error.to_string()
+    })
+}
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("record");
+    let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(".{name}.{}.{seq}.tmp", std::process::id()))
 }
 
 pub(crate) fn read_outcome(path: &Path) -> Result<Option<RestartLog>, String> {
@@ -322,6 +349,14 @@ mod tests {
                 "b".repeat(40)
             )
         );
+        let failed = RestartLog {
+            outcome: "rollback_failed".into(),
+            reason: "server exited".into(),
+            ..rolled
+        };
+        let failed_notice = notice_text(&failed);
+        assert!(!failed_notice.contains("rolled back"), "{failed_notice}");
+        assert!(failed_notice.contains("not serving"));
     }
 
     #[test]
