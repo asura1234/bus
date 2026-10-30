@@ -47,6 +47,28 @@ fn kimi_240_idle_composer_is_ready_and_working_status_is_busy() {
     assert!(!detection.visible_idle);
 }
 
+#[test]
+fn kimi_idle_composer_remains_ready_with_background_tasks() {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    for tasks in ["[1 task running]", "[2 tasks running]"] {
+        let frame = format!(
+            "╭──────────────────────────────────────────────────╮\n│ >                                                │\n╰──────────────────────────────────────────────────╯\nAsk When Needed  K2.8 Preview thinking: max  {tasks}\n                               context: 3% (24.4k/1M)"
+        );
+        let detection = evaluate_loaded_manifest(
+            DetectionInput {
+                screen: &frame,
+                osc_title: "",
+                osc_progress: "",
+            },
+            &loaded,
+            true,
+        );
+        assert_eq!(detection.state, AgentState::Idle, "{tasks}");
+        assert!(detection.visible_idle, "{tasks}");
+    }
+}
+
 // Reduced to the live control lines captured from Cursor Agent
 // v2026.09.10-fd3934a, pane w1:p8, on 2026-09-13. Question wording and the
 // transcript above the chooser are deliberately not detection invariants.
