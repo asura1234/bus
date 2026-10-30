@@ -52,15 +52,24 @@ impl BusState {
     /// Freeze attribution with the rendered text so typing, retries and callback
     /// matching agree, including after a rename or a coordinator restart.
     pub(crate) fn render_request_payload(&mut self, id: RequestId) -> Option<String> {
-        let request = self.requests.get(&id)?;
-        if let Some(text) = &request.submitted_payload {
-            return Some(text.clone());
-        }
-        let mut text = request.prompt.rendered_payload();
-        let message_id = request.prompt.id.0;
-        // Bus notices need no reply. Deliverable messages keep only a short header;
-        // the reply form lives in the agent system prompt and `bus send --help`.
-        if request.prompt.author != Author::Bus {
+        let (mut text, message_id, author) = {
+            let request = self.requests.get(&id)?;
+            if let Some(text) = &request.submitted_payload {
+                return Some(text.clone());
+            }
+            (
+                request.prompt.rendered_payload(),
+                request.prompt.id.0,
+                request.prompt.author.clone(),
+            )
+        };
+        // Header suppression follows the notice kind. Bus-signed notices and
+        // agent-signed outcome-only notices (No reply/abandoned, retired idle)
+        // need no reply. Deliverable messages keep only a short header; the
+        // reply form lives in the agent system prompt and `bus send --help`.
+        let outcome_only = self.outcome_only_notice(id);
+        if author != Author::Bus && !outcome_only {
+            let request = self.requests.get(&id)?;
             if let Author::Agent(sender) = request.prompt.author {
                 let identity = request
                     .sender_identity

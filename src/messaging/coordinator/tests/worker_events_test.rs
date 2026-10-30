@@ -143,6 +143,24 @@ fn abandoned_request_reports_reason_including_developer_authored_requests() {
 }
 
 #[test]
+fn abandoned_outcome_notice_has_no_deliverable_header() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "unanswered work");
+    let mut state = f.worker.state.clone();
+    state
+        .recover_idle_request(source, io::now_ms() - 4_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let text = &f.calls.lock().unwrap()[0];
+    assert!(text.contains("No reply (abandoned:"), "{text}");
+    assert!(
+        !text.contains("[Bus message "),
+        "a no-reply outcome must not look deliverable: {text}"
+    );
+}
+
+#[test]
 fn reply_not_captured_then_late_final_keeps_the_actual_result() {
     let mut f = Fixture::new();
     let orch = f.orch;

@@ -179,6 +179,29 @@ impl BusState {
         text
     }
 
+    /// A routed notice made only of no-reply outcomes. A reply, late final, or
+    /// exit in the same notice stays deliverable and keeps the short header.
+    pub(super) fn outcome_only_notice(&self, id: RequestId) -> bool {
+        if self
+            .reply_routes
+            .values()
+            .any(|route| route.notification() == Some(id))
+        {
+            return false;
+        }
+        let mut matched = false;
+        for event in self.worker_events.values() {
+            if event.route.notification() != Some(id) {
+                continue;
+            }
+            if !matches!(event.kind, WorkerEventKind::Outcome | WorkerEventKind::Idle) {
+                return false;
+            }
+            matched = true;
+        }
+        matched
+    }
+
     /// A post-flush acknowledgement can remove one component without erasing
     /// another event sharing its queued message. Submitted payloads are immutable.
     pub(super) fn refresh_worker_notification(
