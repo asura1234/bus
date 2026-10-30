@@ -127,6 +127,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             "skills/_bus/docs/pr-template.md",
             "skills/_bus/docs/pull-request-template.md",
             "skills/split-pr/references/split-plan-format.md",
+            "skills/worktree-new/references/repo-profile-format.md",
         }
         actual = {
             path.relative_to(REPO).as_posix()
