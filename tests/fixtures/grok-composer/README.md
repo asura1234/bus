@@ -10,7 +10,9 @@ The version-matching keyboard guide documents Ctrl+X as the non-Kitty shortcut.
 numbered instructions. `pasted.txt` is an explicitly hypothetical collapsed chip;
 its exact rendering and count semantics have no authenticated evidence.
 
-Only a complete current composer frame with normal mode footer is readable.
+Only a complete current composer frame with the normal-mode footer is readable.
+The welcome-card layout is the exception: its frame ends on the model-labelled
+lower border (`╰` … `Grok <model>`) and has no footer beneath it.
 A live card, parked card, modal, incomplete frame or login is unavailable. Plain
 unrelated drafts return Unavailable: the shared runtime clears Other drafts,
 so that observation would overwrite developer input. Only exact visible text
