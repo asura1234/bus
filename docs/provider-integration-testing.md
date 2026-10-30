@@ -122,13 +122,13 @@ build actually supports it. Preserve the private root until evidence is saved.
 ## Fresh first launch and dialogs
 
 - [ ] Add a brand-new agent through Bus in a never-trusted project directory;
-  do not pre-trust, warm up its composer, or type in its terminal. Add once
-  **without** `--consent-hooks`. Expect `ok: false`, `result: null`, and no
-  `agent_id`. `error.message` is
-  `Project hook setup requires --consent-hooks: MESSAGE (PATH)`. Read `PATH`,
-  then run the same add with `--consent-hooks`. Expect `ok: true` and
-  `result` `{agent_id, stage: "launching"}`. The failed add does not save an
-  agent. `sbus agent setup-confirm AGENT --confirm` is only for an agent that
+  do not pre-trust, warm up its composer, or type in its terminal. Use the
+  first-add result for that provider and for whether its project hook file is
+  already current. A current file is one installation would leave unchanged;
+  a missing or different file is not current. After any add that returns
+  `ok: true`, do not add that name again. The repeat fails with
+  `Agent name "NAME" is already used by agent AGENT_ID in room ROOM_ID; choose a unique name across all rooms`.
+  `sbus agent setup-confirm AGENT --confirm` is only for an agent that
   already exists: it sets hook consent and does not install hooks. Without
   `--confirm` it is rejected with
   `This command changes or removes work; add --confirm to proceed`.
@@ -147,16 +147,64 @@ build actually supports it. Preserve the private root until evidence is saved.
 - [ ] Run normal permission and no-prompt cases separately; no-prompt cannot
   substitute for testing trust and permission dialogs.
 
+Claude has no project-hook notice. Add it once, with or without
+`--consent-hooks`. Expect `ok: true` and `result`
+`{agent_id, stage: "launching"}`. The agent is saved. Do not run the add again.
+
+Codex (`.codex/hooks.json`), Cursor (`.cursor/hooks.json`), and Grok
+(`.grok/hooks/bus.json`), while that file is missing or not current: add once
+**without** `--consent-hooks`. Expect `ok: false`, `result: null`, and no
+`agent_id`. `error.message` is
+`Project hook setup requires --consent-hooks: MESSAGE (PATH)`. That attempt
+does not save the agent. Read `PATH`, then run the same add with
+`--consent-hooks`. Expect `ok: true` and
+`result` `{agent_id, stage: "launching"}`.
+
+Once a Codex or Cursor hook file is current, skip that missing-hook check. An
+add without `--consent-hooks` succeeds and saves the agent. Add the name once.
+
+Once `.grok/hooks/bus.json` is current, an add without `--consent-hooks` still
+fails and still does not save the agent. `error.message` is
+`Setup confirmation required for PATH. MESSAGE`. Retry that same name once
+with `--consent-hooks`, then stop.
+
+Run only the sequence that matches the provider under test. A fresh
+`$scratch/project` has no hook files, so Codex, Cursor, and Grok take the
+missing-file sequence. Continue with the dialog commands for the agent that
+returned `ok: true`.
+
 ```sh
+# Claude, or Codex/Cursor after its hook file is current. One add.
 sbus room create provider-test
-# Missing consent. Expect ok:false, result:null, and no agent_id.
-# error.message is: Project hook setup requires --consent-hooks: MESSAGE (PATH)
 sbus agent add --room ROOM --name new-worker --provider PROVIDER \
   --pwd "$scratch/project"
-# After reading PATH, the same add installs project hooks:
+# Expect ok:true and {agent_id, stage:"launching"}. Do not add new-worker again.
+```
+
+```sh
+# Codex, Cursor, or Grok while its hook file is missing or not current.
+sbus room create provider-test
+sbus agent add --room ROOM --name new-worker --provider PROVIDER \
+  --pwd "$scratch/project"
+# Expect ok:false, result:null, no agent_id, and
+# Project hook setup requires --consent-hooks: MESSAGE (PATH)
 sbus agent add --room ROOM --name new-worker --provider PROVIDER \
   --pwd "$scratch/project" --consent-hooks
-# Expect ok:true and result {agent_id, stage:"launching"}.
+# Expect ok:true and {agent_id, stage:"launching"}. Do not add new-worker again.
+```
+
+```sh
+# Grok after .grok/hooks/bus.json is current. The first command does not save.
+sbus room create provider-test
+sbus agent add --room ROOM --name new-worker --provider grok \
+  --pwd "$scratch/project"
+# Expect ok:false and Setup confirmation required for PATH. MESSAGE
+sbus agent add --room ROOM --name new-worker --provider grok \
+  --pwd "$scratch/project" --consent-hooks
+# Expect ok:true. Do not add new-worker again.
+```
+
+```sh
 # Existing agent only. Records consent and does not install hooks:
 sbus agent setup-confirm new-worker --confirm
 sbus agent dialog new-worker
@@ -178,9 +226,29 @@ Create the new-provider orchestrator in MASTER and real Codex, Claude and new
 provider workers in its work room. Separately create a Claude orchestrator and
 new-provider worker in a second room. New Codex orchestrators are refused; do
 not claim that role was tested. Use real models and unique markers for each cell.
-Each add below is the consented retry: run it once without `--consent-hooks`,
-read the hook path from `error.message`, then rerun that command with
-`--consent-hooks`.
+The block below is each role's successful add. Use the first-add rule for that
+provider and for this project's hook file, and run each name only until the
+first `ok: true`.
+
+`claude-worker` is Claude. The command below is the one add. `--consent-hooks`
+would not change the result. If an unconsented add of that name already
+returned `ok: true`, do not run the command again.
+
+`codex-worker` is the first Codex add unless `.codex/hooks.json` is already
+current. While it is missing or not current, run the command once without
+`--consent-hooks`, expect
+`Project hook setup requires --consent-hooks: MESSAGE (PATH)`, then run the
+command as written. Once the file is current, the unconsented add succeeds
+and saves the agent; do not run a second add of `codex-worker`.
+
+`new-orch` and `new-peer` use PROVIDER in the same `$scratch/project` as the
+fresh-launch agent. Claude, and Codex or Cursor whose hook file is already
+current, succeed on one add. Grok whose `.grok/hooks/bus.json` is already
+current fails the unconsented add with
+`Setup confirmation required for PATH. MESSAGE` and does not save the agent;
+retry that name once with `--consent-hooks`. A provider whose hook file is
+still missing uses the `Project hook setup requires --consent-hooks` error,
+then the flagged command. A name that already returned `ok: true` is finished.
 
 ```sh
 sbus room create provider-matrix
@@ -188,8 +256,9 @@ sbus agent add --room master --name new-orch --provider PROVIDER \
   --orchestrates provider-matrix --pwd "$scratch/project" --consent-hooks
 sbus agent add --room provider-matrix --name codex-worker --provider codex \
   --pwd "$scratch/project" --consent-hooks
+# Claude: this single command is the whole add. Do not run it twice.
 sbus agent add --room provider-matrix --name claude-worker --provider claude \
-  --pwd "$scratch/project" --consent-hooks
+  --pwd "$scratch/project"
 sbus agent add --room provider-matrix --name new-peer --provider PROVIDER \
   --pwd "$scratch/project" --consent-hooks
 ```
@@ -454,8 +523,9 @@ separate from the explicit-root relaunch and does not rescue an interrupted run.
   agent in a new untrusted project, surface trust as a Bus dialog, and while its
   welcome card is visible have a real Codex agent send a unique message. Require
   the new provider to repeat what it heard and reply successfully. Record IDs,
-  status, screen and exact merged build. Use the same missing-consent add, read
-  the hook path, then add with `--consent-hooks`. When authorized, delete the
+  status, screen and exact merged build. Use the first-add result for that
+  provider and for whether the new project's hook file is current. After
+  `ok: true`, do not add that name again. When authorized, delete the
   smoke agent on the live session, not the scratch wrapper:
   `bus agent delete SMOKE_AGENT --confirm`. Expect `ok: true` and
   `result.updated: true`. Without `--confirm` the delete is rejected.
