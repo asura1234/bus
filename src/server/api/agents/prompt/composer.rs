@@ -32,6 +32,9 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
     if kind == AgentKind::Grok {
         return super::grok::observe(screen, expected);
     }
+    if kind == AgentKind::Kimi {
+        return super::kimi::observe(screen, expected);
+    }
     let plain = screen
         .lines()
         .map(|line| {
@@ -213,6 +216,9 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
 fn input(kind: AgentKind, screen: &str) -> Option<String> {
     if kind == AgentKind::Grok {
         return super::grok::input(screen);
+    }
+    if kind == AgentKind::Kimi {
+        return super::kimi::input(screen);
     }
     let styled: Vec<_> = screen.lines().map(styled_chars).collect();
     let lines: Vec<String> = styled

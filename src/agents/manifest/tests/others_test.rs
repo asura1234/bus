@@ -1,5 +1,52 @@
 use super::*;
 
+#[test]
+fn kimi_240_idle_composer_is_ready_and_working_status_is_busy() {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    let idle = "No session yet — one will be created on your first message.\n╭────────────────────────────╮\n│ >                         │\n╰────────────────────────────╯\nAsk When Needed  K2.8 Preview thinking: max\ncontext: 0% (0/1M)";
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: idle,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Idle);
+    assert!(detection.visible_idle);
+
+    let working = format!("⠋ Working…\n{idle}");
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: &working,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Working);
+    assert!(detection.visible_working);
+
+    let draft = idle.replace(
+        "│ >                         │",
+        "│ > unowned draft           │",
+    );
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: &draft,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Unknown);
+    assert!(!detection.visible_idle);
+}
+
 // Reduced to the live control lines captured from Cursor Agent
 // v2026.09.10-fd3934a, pane w1:p8, on 2026-09-13. Question wording and the
 // transcript above the chooser are deliberately not detection invariants.

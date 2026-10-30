@@ -9,6 +9,7 @@ use std::time::Duration;
 
 mod composer;
 mod grok;
+mod kimi;
 
 #[cfg(test)]
 pub(super) use crate::protocol::api::submission::SUBMIT_DELAY as AGENT_PROMPT_SUBMIT_DELAY;
@@ -108,7 +109,7 @@ pub(super) fn check_unbound_prompt_identity_and_idle(
 ) -> Result<(), (&'static str, &'static str)> {
     if agent.terminal_id != params.expected_terminal_id
         || agent.pane_id != params.expected_pane_id
-        || agent.agent.as_deref() != Some("codex")
+        || !matches!(agent.agent.as_deref(), Some("codex" | "kimi"))
         || agent.name.as_deref() != Some(params.expected_managed_name.as_str())
         || params.expected_managed_name.is_empty()
         || agent.agent_session.is_some()
@@ -486,7 +487,11 @@ fn queue_prompt_input(
     if !observe
         || !matches!(
             kind,
-            AgentKind::Codex | AgentKind::Claude | AgentKind::Cursor | AgentKind::Grok
+            AgentKind::Codex
+                | AgentKind::Claude
+                | AgentKind::Cursor
+                | AgentKind::Grok
+                | AgentKind::Kimi
         )
     {
         return runtime.queue_user_input_submission(
