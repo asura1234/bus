@@ -1631,3 +1631,65 @@ fn scriptable_fake_crash_leaves_no_final_reply_and_records_exit() {
         "{status}"
     );
 }
+
+#[test]
+fn scriptable_fake_resumes_without_reusing_prior_turns() {
+    let session = Session::start("f-resume");
+    let work = session_dir(&session.0).join("work");
+    let script = work.join("resume.json");
+    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_RESUME_7","actions":[{"type":"reply","text":"ONCE_7"}]}]}"#).unwrap();
+    let args = format!("--script {}", script.display());
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "resume-worker",
+            "--provider",
+            "fake",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--args",
+            &args,
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let send = |text: &str| {
+        let (code, sent) = parse(scratch_bus(
+            &session,
+            &[
+                "send",
+                "--room",
+                "bus",
+                "--to",
+                "resume-worker",
+                "--text",
+                text,
+            ],
+        ));
+        assert_eq!(code, 0, "{sent}");
+        let id = sent["result"]["message_id"].to_string();
+        session.ok(&["wait", "--message", &id, "--timeout", "30s"])
+    };
+    assert!(send("CASE_RESUME_7").to_string().contains("ONCE_7"));
+    let before = bus_state(&session)["agents"][0]["runtime_identity"]["session_id"].clone();
+    session.ok(&["restart"]);
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.0.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    assert_eq!(
+        bus_state(&session)["agents"][0]["runtime_identity"]["session_id"],
+        before
+    );
+    assert!(send("after restart").to_string().contains("fake reply:"));
+    let repeated = send("CASE_RESUME_7");
+    assert!(repeated.to_string().contains("fake reply:"), "{repeated}");
+    assert!(!repeated.to_string().contains("ONCE_7"), "{repeated}");
+}
